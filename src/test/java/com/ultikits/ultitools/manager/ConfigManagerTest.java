@@ -12,6 +12,8 @@ import static org.mockito.Mockito.when;
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -209,6 +211,71 @@ class ConfigManagerTest {
         void shouldReturnNormallyForEmptyPackage() {
             assertDoesNotThrow(() -> configManager.registerAll(mockPlugin,
                     "com.ultikits.testfixtures.configempty", getClass().getClassLoader()));
+        }
+    }
+
+    /**
+     * #358 Part 1: a refused module's second {@code @ConfigEntity} class must not leave an
+     * earlier, already-registered sibling stranded in {@code pluginConfigMap}. Fixtures live
+     * under {@code com.ultikits.testfixtures.configstranded} - see that package's javadoc.
+     */
+    @Nested
+    @DisplayName("多个 @ConfigEntity 类中一个校验失败时的注册表清理 (#358 Part 1)")
+    class StrandedEntityTests {
+
+        @BeforeEach
+        void stubConfigFile() {
+            ConfigFileStubs.stubConfigFolder(mockPlugin, tempDir);
+        }
+
+        @Test
+        @DisplayName("两个都合法的类应该都注册成功")
+        void bothValidClassesRegisterBoth() {
+            assertDoesNotThrow(() -> configManager.registerAll(mockPlugin,
+                    "com.ultikits.testfixtures.configstranded.ok", getClass().getClassLoader()));
+
+            Map<String, AbstractConfigEntity> configs = configManager.getAllConfigEntities(mockPlugin);
+            assertThat(configs).isNotNull()
+                    .containsOnlyKeys("config/stranded-first.yml", "config/stranded-second.yml");
+        }
+
+        @Test
+        @DisplayName("唯一一个校验失败的类不应该留下任何条目，也不应该写文件")
+        void soleFailingClassLeavesNoEntryAndNoWrite() throws Exception {
+            File badFile = new File(tempDir, "config/stranded-bad.yml");
+            Files.createDirectories(badFile.getParentFile().toPath());
+            Files.write(badFile.toPath(), "count: 999\n".getBytes(StandardCharsets.UTF_8));
+            byte[] beforeBytes = Files.readAllBytes(badFile.toPath());
+
+            assertThatThrownBy(() -> configManager.registerAll(mockPlugin,
+                    "com.ultikits.testfixtures.configstranded.bad", getClass().getClassLoader()))
+                    .isInstanceOf(ConfigurationException.class);
+
+            Map<String, AbstractConfigEntity> configs = configManager.getAllConfigEntities(mockPlugin);
+            assertThat(configs == null || configs.isEmpty())
+                    .as("the single failing class must leave no entry")
+                    .isTrue();
+            assertThat(Files.readAllBytes(badFile.toPath()))
+                    .as("validation must not write the operator's file")
+                    .isEqualTo(beforeBytes);
+        }
+
+        @Test
+        @DisplayName("一个模块里第二个类校验失败时，先注册成功的类不应该遗留在注册表里")
+        void secondFailingClassStrandsNoEarlierEntry() throws Exception {
+            File badFile = new File(tempDir, "config/stranded-bad.yml");
+            Files.createDirectories(badFile.getParentFile().toPath());
+            Files.write(badFile.toPath(), "count: 999\n".getBytes(StandardCharsets.UTF_8));
+
+            assertThatThrownBy(() -> configManager.registerAll(mockPlugin,
+                    "com.ultikits.testfixtures.configstranded", getClass().getClassLoader()))
+                    .isInstanceOf(ConfigurationException.class);
+
+            Map<String, AbstractConfigEntity> configs = configManager.getAllConfigEntities(mockPlugin);
+            assertThat(configs == null || configs.isEmpty())
+                    .as("no entry from any class in this scan should survive a refusal, "
+                            + "regardless of which class failed or scan order")
+                    .isTrue();
         }
     }
 
