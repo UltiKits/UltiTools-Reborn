@@ -562,9 +562,9 @@
     "since": "6.3.0",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "Compatibility shim only (D-17) -- measured 0 external callers across every published module JAR and every local module/plugin source. CloudSession#commit(TokenEntity) on CloudSession#current() is the real guard; the {@code generation} parameter is accepted only so this signature still compiles against any (nonexistent) caller. Scheduled for removal by plan 16-09.",
+    "replacement": "Compatibility shim only (D-17) -- measured 0 external callers across every published module JAR and every local module/plugin source. CloudSession#commit(TokenEntity) on CloudSession#current() is the real guard; the {@code generation} parameter is accepted only so this signature still compiles against any (nonexistent) caller. Removed by plan 16-09 -- within the same 6.3.0 development cycle it was added in; this member never appeared in any released jar (WR-05, 16-REVIEW-cloud.md).",
     "status": "REMOVED",
-    "removedIn": "6.4.0"
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.utils.CloudAuthManager#currentCredentialGeneration()",
@@ -574,9 +574,9 @@
     "since": "6.3.0",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "Compatibility shim only (D-17) -- measured 0 external callers across every published module JAR and every local module/plugin source. CloudSession identity replaced this counter outright; nothing in this package reads or advances a generation to decide currency any more. Scheduled for removal by plan 16-09.",
+    "replacement": "Compatibility shim only (D-17) -- measured 0 external callers across every published module JAR and every local module/plugin source. CloudSession identity replaced this counter outright; nothing in this package reads or advances a generation to decide currency any more. Removed by plan 16-09 -- within the same 6.3.0 development cycle it was added in; this member never appeared in any released jar (WR-05, 16-REVIEW-cloud.md).",
     "status": "REMOVED",
-    "removedIn": "6.4.0"
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.utils.CloudAuthManager#invalidateCredentialOperations()",
@@ -586,9 +586,9 @@
     "since": "6.3.0",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "Compatibility shim only (D-17) -- measured 0 external callers across every published module JAR and every local module/plugin source. Delegates to CloudSession#current()'s own CloudSession#invalidate() rather than advancing a counter that no longer exists. Scheduled for removal by plan 16-09.",
+    "replacement": "Compatibility shim only (D-17) -- measured 0 external callers across every published module JAR and every local module/plugin source. Delegates to CloudSession#current()'s own CloudSession#invalidate() rather than advancing a counter that no longer exists. Removed by plan 16-09 -- within the same 6.3.0 development cycle it was added in; this member never appeared in any released jar (WR-05, 16-REVIEW-cloud.md).",
     "status": "REMOVED",
-    "removedIn": "6.4.0"
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.utils.CloudAuthManager#startPolling(java.lang.String,java.util.function.Consumer,long)",
@@ -598,9 +598,9 @@
     "since": "6.3.0",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "Compatibility shim only (D-17) -- measured 0 external callers across every published module JAR and every local module/plugin source. The {@code generation} parameter is accepted and ignored; polling always runs on CloudSession#current(). Scheduled for removal by plan 16-09.",
+    "replacement": "Compatibility shim only (D-17) -- measured 0 external callers across every published module JAR and every local module/plugin source. The {@code generation} parameter is accepted and ignored; polling always runs on CloudSession#current(). Removed by plan 16-09 -- within the same 6.3.0 development cycle it was added in; this member never appeared in any released jar (WR-05, 16-REVIEW-cloud.md).",
     "status": "REMOVED",
-    "removedIn": "6.4.0"
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.utils.PluginInitiationUtils#activateCloudIfCurrent(long)",
@@ -610,9 +610,9 @@
     "since": "6.3.0",
     "forRemoval": true,
     "removeIn": "6.4.0",
-    "replacement": "Compatibility shim only (D-17) -- measured 0 external callers across every published module JAR and every local module/plugin source. Delegates to activateCloudIfCurrent(CloudSession) against CloudSession#current(); {@code generation} is accepted only so this signature still compiles against any (nonexistent) caller. Scheduled for removal by plan 16-09.",
+    "replacement": "Compatibility shim only (D-17) -- measured 0 external callers across every published module JAR and every local module/plugin source. Delegates to activateCloudIfCurrent(CloudSession) against CloudSession#current(); {@code generation} is accepted only so this signature still compiles against any (nonexistent) caller. Removed by plan 16-09 -- within the same 6.3.0 development cycle it was added in; this member never appeared in any released jar (WR-05, 16-REVIEW-cloud.md).",
     "status": "REMOVED",
-    "removedIn": "6.4.0"
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.utils.SecurityPolicy#addDangerousClass(java.lang.String)",
