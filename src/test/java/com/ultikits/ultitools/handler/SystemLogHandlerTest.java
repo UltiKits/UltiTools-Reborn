@@ -238,4 +238,62 @@ class SystemLogHandlerTest {
                 eq("plugin:MyPlugin"), eq(thrown));
         verify(mockErc).reportError(eq(thrown), eq("MyPlugin"), org.mockito.ArgumentMatchers.any());
     }
+
+    // ==================== Gate-2 P2: enabling "debug" must lower the handler's own JUL floor ====================
+
+    @Test
+    void testDebugNotInEnabledLevelsFineRecordNeverReachesTransmitter() {
+        // Control: "debug" is NOT in the default enabledLevels ({info, warning, error}) -- a FINE
+        // record should not be delivered, same as before this fix.
+        LogRecord record = new LogRecord(Level.FINE, "Fine, debug not enabled");
+        record.setLoggerName("plugin.MyPlugin");
+
+        handler.publish(record);
+
+        verifyNoInteractions(mockTransmitter);
+    }
+
+    @Test
+    void testEnablingDebugViaSetEnabledLevelsLetsFineRecordsThrough() {
+        // Gate-2 P2: before this fix, java.util.logging.Handler#isLoggable(record) (called from
+        // shouldProcessRecord BEFORE this class's own enabledLevels check) rejected FINE records
+        // outright, because the handler's own level floor stayed at Level.INFO regardless of
+        // what enabledLevels said -- so a panel request enabling "debug" had no observable effect.
+        java.util.Set<String> withDebug = new java.util.HashSet<>(handler.getEnabledLevels());
+        withDebug.add("debug");
+        handler.setEnabledLevels(withDebug);
+
+        LogRecord record = new LogRecord(Level.FINE, "Fine, debug now enabled");
+        record.setLoggerName("plugin.MyPlugin");
+
+        handler.publish(record);
+
+        verify(mockTransmitter).sendLog(eq("debug"), eq("Fine, debug now enabled"), eq("plugin:MyPlugin"), isNull());
+    }
+
+    @Test
+    void testAddEnabledLevelDebugAlsoLowersTheHandlerFloor() {
+        LogRecord record = new LogRecord(Level.FINEST, "Finest, via addEnabledLevel");
+        record.setLoggerName("plugin.MyPlugin");
+
+        handler.addEnabledLevel("debug");
+        handler.publish(record);
+
+        verify(mockTransmitter).sendLog(eq("debug"), eq("Finest, via addEnabledLevel"), eq("plugin:MyPlugin"), isNull());
+    }
+
+    @Test
+    void testRemovingDebugRestoresTheHandlerFloorToInfo() {
+        handler.addEnabledLevel("debug");
+        handler.removeEnabledLevel("debug");
+
+        LogRecord record = new LogRecord(Level.FINE, "Fine, debug removed again");
+        record.setLoggerName("plugin.MyPlugin");
+
+        handler.publish(record);
+
+        // Restored to the INFO floor -- the record never reaches isLoggable's threshold at all,
+        // let alone the (now again debug-less) enabledLevels check.
+        verifyNoInteractions(mockTransmitter);
+    }
 }

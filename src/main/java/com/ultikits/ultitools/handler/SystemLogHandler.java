@@ -25,7 +25,7 @@ public class SystemLogHandler extends Handler {
     private final UltiPanelLogTransmitter logTransmitter;
 
     // Log-level filter configuration
-    @Getter @Setter
+    @Getter
     private Set<String> enabledLevels;
 
     // Excluded-logger configuration
@@ -71,7 +71,39 @@ public class SystemLogHandler extends Handler {
         // Apply the minimum level
         setLevel(minimumLevel);
     }
-    
+
+    /**
+     * Sets the panel-facing set of enabled log levels, and re-synchronises this handler's own
+     * {@code java.util.logging} level floor to match ({@link #syncHandlerLevelWithEnabledLevels()}).
+     *
+     * @param enabledLevels the new enabled-level set
+     */
+    public void setEnabledLevels(Set<String> enabledLevels) {
+        this.enabledLevels = enabledLevels;
+        syncHandlerLevelWithEnabledLevels();
+    }
+
+    /**
+     * Gate-2 finding: {@link #shouldProcessRecord(LogRecord)} calls {@link #isLoggable(LogRecord)}
+     * -- the base {@code Handler}'s own check against {@link #getLevel()} -- BEFORE this class's
+     * own {@link #enabledLevels} filter ever runs. {@link #getLevel()} defaults to
+     * {@link Level#INFO} ({@link #minimumLevel}), which rejects JUL {@code FINE}/{@code FINER}/
+     * {@code FINEST} records outright -- the levels {@link #mapLogLevel(Level)} maps to
+     * {@code "debug"}. So a panel request enabling {@code "debug"} in {@link #enabledLevels} used
+     * to have no effect: no debug-shaped record could ever reach the mapping step that would have
+     * recognised it. Called after every mutation of {@link #enabledLevels} (the setter above,
+     * {@link #addEnabledLevel(String)}, {@link #removeEnabledLevel(String)}, and
+     * {@link #loadConfiguration()}'s own direct mutation) so the handler's own floor tracks
+     * whether {@code "debug"} is currently enabled.
+     */
+    private void syncHandlerLevelWithEnabledLevels() {
+        if (enabledLevels != null && enabledLevels.contains("debug")) {
+            setLevel(Level.FINEST);
+        } else {
+            setLevel(minimumLevel);
+        }
+    }
+
     /**
      * Loads configuration from the config file.
      */
@@ -83,6 +115,7 @@ public class SystemLogHandler extends Handler {
                 for (String level : UltiTools.getInstance().getConfig().getStringList("ultipanel.logging.levels")) {
                     enabledLevels.add(level.toLowerCase());
                 }
+                syncHandlerLevelWithEnabledLevels();
             }
 
             // Load the excluded-logger configuration
@@ -373,6 +406,7 @@ public class SystemLogHandler extends Handler {
     public void addEnabledLevel(String level) {
         if (level != null) {
             enabledLevels.add(level.toLowerCase());
+            syncHandlerLevelWithEnabledLevels();
         }
     }
 
@@ -382,6 +416,7 @@ public class SystemLogHandler extends Handler {
     public void removeEnabledLevel(String level) {
         if (level != null) {
             enabledLevels.remove(level.toLowerCase());
+            syncHandlerLevelWithEnabledLevels();
         }
     }
 

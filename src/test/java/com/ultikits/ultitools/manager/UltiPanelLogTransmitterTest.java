@@ -462,6 +462,29 @@ class UltiPanelLogTransmitterTest {
             assertThat(restarted).isNotNull();
             assertThat(isCancelled(restarted)).isFalse();
         }
+
+        @Test
+        @DisplayName("Gate-2 P2: 禁用批量发送前，会先把已排队（未达 batchSize 阈值）的记录发出去，而不是丢在队列里")
+        void disablingBatchingFlushesAlreadyQueuedEntriesFirst() throws Exception {
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+            // batchSize defaults to 10; queue fewer than that so addToBatch's own size-threshold
+            // send never fires on its own.
+            logTransmitter.sendLog("info", "queued-1", "test", null);
+            logTransmitter.sendLog("info", "queued-2", "test", null);
+
+            Field queueField = UltiPanelLogTransmitter.class.getDeclaredField("logQueue");
+            queueField.setAccessible(true);
+            assertThat(((java.util.Collection<?>) queueField.get(logTransmitter)))
+                    .as("precondition: entries are genuinely queued, not yet sent")
+                    .isNotEmpty();
+
+            logTransmitter.setBatchEnabled(false);
+
+            assertThat(((java.util.Collection<?>) queueField.get(logTransmitter)))
+                    .as("Gate-2 P2: the queue must be empty after disabling -- nothing left stranded")
+                    .isEmpty();
+            verify(mockWebSocketClient, org.mockito.Mockito.atLeastOnce()).sendMessage(any(JsonObject.class));
+        }
     }
 
     @Nested

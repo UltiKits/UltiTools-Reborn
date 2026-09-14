@@ -864,6 +864,13 @@ class ServerMonitorManagerTest {
             return ((Collection<?>) queueField.get(transmitter)).size();
         }
 
+        /** Gate-2 P1 tests: reflectively backdate lastLogFlushMs to simulate elapsed time deterministically. */
+        private void setLastLogFlushMs(ServerMonitorManager manager, long value) throws Exception {
+            Field field = ServerMonitorManager.class.getDeclaredField("lastLogFlushMs");
+            field.setAccessible(true);
+            field.set(manager, value);
+        }
+
         @Test
         @DisplayName("logs 禁用时：batch_update 无 logs 成员，仍带 status/metrics，传输器队列未被排空")
         void logsDisabledNoLogsMemberAndQueueUnchanged() throws Exception {
@@ -936,6 +943,64 @@ class ServerMonitorManagerTest {
                 JsonObject data = sent.getValue().getAsJsonObject("data");
 
                 assertThat(data.has("logs")).as("logs 开启且队列非空时应带 logs 成员").isTrue();
+            } finally {
+                transmitter.shutdown();
+            }
+        }
+
+        @Test
+        @DisplayName("Gate-2 P1: interval 大于 5 秒时（如 15000ms），logs 排空遵循传输器自己配置的 interval，而不是每 5 秒 tick 都排空")
+        void logsRespectTheTransmittersConfiguredIntervalNotTheFixedFiveSecondTick() throws Exception {
+            UltiPanelWebSocketClient transmitterClient = mock(UltiPanelWebSocketClient.class);
+            lenient().when(transmitterClient.isConnected()).thenReturn(true);
+            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(transmitterClient, "test-server");
+            try {
+                transmitter.setIntervalMs(15000); // longer than the hardcoded 5s batch_update tick
+                transmitter.info("queued line", "test");
+                when(mockLogStreamManagerForBatch.getLogTransmitter()).thenReturn(transmitter);
+
+                // A prior tick flushed 5 seconds ago -- well under the configured 15-second interval.
+                setLastLogFlushMs(serverMonitorManager, System.currentTimeMillis() - 5000);
+
+                invokeSendBatchUpdate(serverMonitorManager);
+
+                ArgumentCaptor<JsonObject> sent = ArgumentCaptor.forClass(JsonObject.class);
+                verify(mockWebSocketClient).sendMessage(sent.capture());
+                JsonObject data = sent.getValue().getAsJsonObject("data");
+
+                assertThat(data.has("logs"))
+                        .as("only 5 seconds have passed against a configured 15-second interval")
+                        .isFalse();
+                assertThat(queueSizeOf(transmitter))
+                        .as("the queued line must still be waiting, not silently dropped")
+                        .isEqualTo(1);
+            } finally {
+                transmitter.shutdown();
+            }
+        }
+
+        @Test
+        @DisplayName("Gate-2 P1 对照：一旦经过完整的已配置 interval，logs 排空照常发生")
+        void logsFlushOnceTheConfiguredIntervalHasElapsed() throws Exception {
+            UltiPanelWebSocketClient transmitterClient = mock(UltiPanelWebSocketClient.class);
+            lenient().when(transmitterClient.isConnected()).thenReturn(true);
+            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(transmitterClient, "test-server");
+            try {
+                transmitter.setIntervalMs(15000);
+                transmitter.info("queued line", "test");
+                when(mockLogStreamManagerForBatch.getLogTransmitter()).thenReturn(transmitter);
+
+                // A prior tick flushed 16 seconds ago -- past the configured 15-second interval.
+                setLastLogFlushMs(serverMonitorManager, System.currentTimeMillis() - 16000);
+
+                invokeSendBatchUpdate(serverMonitorManager);
+
+                ArgumentCaptor<JsonObject> sent = ArgumentCaptor.forClass(JsonObject.class);
+                verify(mockWebSocketClient).sendMessage(sent.capture());
+                JsonObject data = sent.getValue().getAsJsonObject("data");
+
+                assertThat(data.has("logs")).as("16 seconds have passed, past the 15-second interval").isTrue();
+                assertThat(queueSizeOf(transmitter)).as("the queue was drained").isZero();
             } finally {
                 transmitter.shutdown();
             }

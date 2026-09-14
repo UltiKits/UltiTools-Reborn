@@ -82,6 +82,21 @@ public class ServerMonitorManager {
     private BukkitTask snapshotTask;
 
     /**
+     * Wall-clock timestamp of the last time queued logs were actually drained into a
+     * {@code batch_update} message, in external-drain mode (Gate-2 finding: with monitoring
+     * enabled -- the shipped default -- {@link #sendBatchUpdate()} runs on its own hardcoded
+     * 5-second tick, completely independent of {@link UltiPanelLogTransmitter}'s own configured
+     * batch-send interval.
+     * Before this field existed, that meant the panel's live {@code batchConfig.interval} action
+     * (#432) had NO observable effect whenever monitoring was on, because the monitor drained the
+     * queue every 5 seconds regardless of what interval was configured. Gating the drain itself by
+     * this timestamp makes the configured interval govern how often logs actually go out, even
+     * though {@code sendBatchUpdate()} itself still ticks every 5 seconds for status/metrics).
+     * Starts at {@code 0} so the very first tick after {@link #startMonitoring()} always drains.
+     */
+    private volatile long lastLogFlushMs = 0L;
+
+    /**
      * The file whose filesystem backs the {@code diskUsage} metric -- the server root (the working
      * directory the Paper process was started in), matching {@link FileOperationManager}'s own
      * {@code serverRoot} convention. Package-private and mutable only so tests can point it at a
@@ -188,6 +203,7 @@ public class ServerMonitorManager {
         }
 
         isMonitoring = true;
+        lastLogFlushMs = 0L; // always drain on the first tick of a fresh monitoring session
         // If the previous stopMonitoring() shut the pool down, swap in a fresh one -- see the
         // note on the field.
         if (scheduler == null || scheduler.isShutdown()) {
@@ -646,9 +662,19 @@ public class ServerMonitorManager {
             if (Capability.LOGS.isEnabled()) {
                 LogStreamManager lsm = UltiTools.getInstance().getLogStreamManager();
                 if (lsm != null && lsm.getLogTransmitter() != null) {
-                    JsonArray logs = lsm.getLogTransmitter().drainQueue(50);
-                    if (logs.size() > 0) {
-                        data.add("logs", logs);
+                    UltiPanelLogTransmitter transmitter = lsm.getLogTransmitter();
+                    long now = System.currentTimeMillis();
+                    // Gate-2 P1: honour the transmitter's own configured interval even though
+                    // this method's own tick is a hardcoded 5 seconds -- see lastLogFlushMs's
+                    // javadoc. Entries keep accumulating in the queue between flushes (bounded by
+                    // UltiPanelLogTransmitter's own MAX_QUEUE_SIZE overflow protection); nothing
+                    // is lost, delivery is just batched at the configured cadence.
+                    if (now - lastLogFlushMs >= transmitter.getIntervalMs()) {
+                        JsonArray logs = transmitter.drainQueue(50);
+                        if (logs.size() > 0) {
+                            data.add("logs", logs);
+                        }
+                        lastLogFlushMs = now;
                     }
                 }
             }

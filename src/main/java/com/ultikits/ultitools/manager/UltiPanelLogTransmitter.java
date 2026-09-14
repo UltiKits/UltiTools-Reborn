@@ -264,6 +264,14 @@ public class UltiPanelLogTransmitter {
         if (batchEnabled) {
             startBatchSender();
         } else {
+            // Gate-2 finding: cancelling the scheduled sender with entries still queued (fewer
+            // than batchSize, so addToBatch's own size-threshold send never fired) used to strand
+            // them -- new records after this point go out immediately (batching is now off), while
+            // the older queued ones sat unsent until batching was re-enabled or shutdown() ran,
+            // arriving late and out of order. Flush whatever is already queued BEFORE cancelling
+            // its only consumer, so disabling batching means "deliver what's pending now, then send
+            // immediately from here on" rather than "silently defer some records indefinitely."
+            flushLogs();
             stopBatchSender();
         }
     }
