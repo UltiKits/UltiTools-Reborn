@@ -897,8 +897,14 @@ final class CloudSession {
             if (UltiTools.getInstance().getLogStreamManager() != null) {
                 if (Capability.LOGS.isEnabled()) {
                     synchronized (LOG_WIRING_LOCK) {
-                        UltiTools.getInstance().getLogStreamManager().initialize(webSocketClient);
+                        // Ownership is recorded BEFORE calling initialize(), not after: this
+                        // method's own outer try/catch means a later step inside initialize()
+                        // throwing (its handler attachment happens early, well before its own
+                        // final steps) must not silently skip the ownership record -- the handler
+                        // it already attached is still this session's to own and eventually
+                        // detach, whether or not initialize() itself ran to completion.
                         logStreamOwner = this;
+                        UltiTools.getInstance().getLogStreamManager().initialize(webSocketClient);
                     }
                 } else {
                     PluginInitiationUtils.logSkippedCapability(Capability.LOGS);

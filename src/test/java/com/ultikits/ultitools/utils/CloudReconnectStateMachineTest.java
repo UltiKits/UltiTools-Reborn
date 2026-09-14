@@ -60,6 +60,15 @@ class CloudReconnectStateMachineTest {
             // 此时静态字段还是 null。改成 answer 之后求值推迟到真正被调用时，那时已经发布完毕。
             lenient().when(ultiTools.getLogStreamManager())
                     .thenAnswer(invocation -> LogStreamManager.getInstance());
+            // CloudSession#wireManagers() 对这两个 manager 的取用没有 null 判空（与
+            // ServerPropertiesManager/PlayerEventManager 不同）——不打桩的话，任何真正走完整
+            // wireManagers() 路径（本类新增的 #465 用例需要）的用例都会在这里 NPE，被外层那个
+            // 大 try/catch 吞掉，永远走不到日志流那一步。16-10 补丁新增，此前本类的用例都只走
+            // initializeManagers() 的闸门检查本身，从未真正跑完整段接线。
+            lenient().when(ultiTools.getCommandExecutionManager())
+                    .thenReturn(mock(com.ultikits.ultitools.manager.CommandExecutionManager.class));
+            lenient().when(ultiTools.getFileOperationManager())
+                    .thenReturn(mock(com.ultikits.ultitools.manager.FileOperationManager.class));
         });
         // CloudSession.current 是 JVM 级静态（surefire 未配 forkCount，issue #250），每个用例
         // 从一个全新、未失效、没有任何调度或客户端的会话开始，不依赖上一个用例或上一个测试类
@@ -194,6 +203,51 @@ class CloudReconnectStateMachineTest {
             assertThat(countFrameworkHandlersOnRootLogger())
                     .as("「云功能已关闭」应当包含不再劫持 root logger")
                     .isZero();
+        }
+
+        @Test
+        @DisplayName("#465（16-10 补丁）：一个已经被取代的旧会话，迟到的第二次拆线不得摘掉新会话"
+                + "刚刚装好的日志 handler")
+        void staleInvalidateOfASupersededSessionDoesNotDetachTheReplacementsLogHandler() {
+            // 1. 旧会话真正接好线（走完整的 wireManagers() 路径，而不是像本类其它用例那样直接
+            //    调 LogStreamManager.getInstance().initialize(...)）——只有这样才会记下
+            //    logStreamOwner = sessionOld，本用例要验的正是这份记录起作用。
+            CloudSession sessionOld = CloudSession.current();
+            PluginInitiationUtils.initializeManagers();
+            assertThat(countFrameworkHandlersOnRootLogger())
+                    .as("前置条件：旧会话已经接好了自己的日志 handler")
+                    .isEqualTo(1);
+
+            // 2. 旧会话第一次、正常地被拆线（例如一次真正的重连预算耗尽）——它当时确实是
+            //    logStreamOwner，所以这次关闭合法生效。
+            PluginInitiationUtils.disableCloud();
+            assertThat(countFrameworkHandlersOnRootLogger())
+                    .as("前置条件：旧会话第一次被拆线之后，日志 handler 已经摘掉")
+                    .isZero();
+
+            // 3. 一次新的登录换上全新会话，并接好它自己的日志流——这是 issue #465 描述的
+            //    「replacement session has completed onOpen」。
+            CloudSession sessionNew = CloudSession.startNew();
+            PluginInitiationUtils.initializeManagers();
+            assertThat(countFrameworkHandlersOnRootLogger())
+                    .as("前置条件：新会话已经接好了自己的日志 handler")
+                    .isEqualTo(1);
+
+            // 4. 复现 issue #465：一次迟到的重连耗尽回调，为 sessionOld（一个早已被取代、自己
+            //    也早已失效过一次的会话）再次调用 disableCloud(sessionOld)——doDisableCloud()
+            //    自己的注释就说明了这一步"总是无条件执行，不管当前性"：session::invalidate()
+            //    不看 currency 就会再跑一次，包括里面的日志流关闭步骤。
+            PluginInitiationUtils.disableCloud(sessionOld);
+
+            assertThat(countFrameworkHandlersOnRootLogger())
+                    .as("#465：迟到的旧会话第二次拆线，不得摘掉新会话刚刚装好的日志 handler")
+                    .isEqualTo(1);
+
+            // sessionNew 参与前置条件断言之外，本身也是本用例要证明「新会话不受影响」的对象——
+            // 显式确认它自己也还认为自己是当前会话，没有被这次针对 sessionOld 的调用误伤。
+            assertThat(sessionNew.isCurrent())
+                    .as("新会话不应被这次针对旧会话的迟到拆线连带影响")
+                    .isTrue();
         }
 
         @Test
