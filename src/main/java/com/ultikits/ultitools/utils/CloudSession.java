@@ -48,6 +48,38 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
  * credential that authorised them. Session identity can, and does: invalidating a session tears
  * down everything it owns in one call, so no separate teardown-ordering discipline is needed for
  * any of the five timing windows issue #298 named.
+ * <p>
+ * <b>Global lock order (16-10 gap-closure addendum, issues #465/#466).</b> Four locks are involved
+ * across this class, {@link CloudAuthManager} and {@link PluginInitiationUtils}, and every method
+ * that takes more than one of them <b>must</b> acquire them in this fixed order -- outer to inner:
+ * <ol>
+ * <li>{@code CloudAuthManager.class} -- held for the duration of
+ * {@link CloudAuthManager#logout()} only; never nested with any of the three locks below at the
+ * same time in the current code (its own call into {@link #invalidate()} and into the
+ * {@code synchronized (CloudSession.class)} block inside
+ * {@code PluginInitiationUtils#doDisableCloud} run sequentially, not nested), but documented here
+ * so a future change that DOES nest it keeps this same relative order rather than inventing one.</li>
+ * <li>{@code CloudSession.class} -- held by {@link #startNew()} and by
+ * {@link CloudAuthManager#login} (16-10 gap-closure addendum, issue #466) for its own
+ * re-check-through-replacement region.</li>
+ * <li>a specific session's own monitor ({@code synchronized (this)} / {@code synchronized(session)})
+ * -- held by {@link #commit(TokenEntity)}, {@link #invalidate()}, {@link #startPolling}, the two
+ * scheduler start/stop pairs, and by every caller in {@code PluginInitiationUtils} that needs to
+ * read-then-act on a session's currency ({@code reinitWebSocket}'s second confirmation,
+ * {@code activateCloudIfCurrent}, {@code doDisableCloud}'s two global-manager steps).</li>
+ * <li>{@link #LOG_WIRING_LOCK} (16-10 gap-closure addendum, issue #465) -- the innermost lock,
+ * held only inside {@link #shutdownLogStreamManager()} and inside {@link #wireManagers()}'s own
+ * {@code LOGS} branch, both of which are themselves only ever reached from within a
+ * {@code synchronized (this)} region ({@link #invalidate()} and {@link #initializeManagers()}
+ * respectively) -- so this lock is never acquired without the session monitor already held, and
+ * never used to acquire anything further.</li>
+ * </ol>
+ * {@link #startNew()}'s own order -- {@code CloudSession.class} outer, the replaced session's
+ * monitor inner -- is the anchor every other method's order is chosen to match; inverting it
+ * anywhere (acquiring a session monitor first, then trying to enter a {@code synchronized
+ * (CloudSession.class)} block while still holding it) is exactly the AB-BA deadlock issue #466
+ * fixed. No method in this package acquires a session monitor and then blocks trying to acquire
+ * {@code CloudSession.class} it does not already hold.
  *
  * @since 6.3.0
  */
@@ -110,6 +142,39 @@ final class CloudSession {
      */
     private final ExponentialBackoffStrategy backoff = ExponentialBackoffStrategy.withMaxAttempts(MAX_REINIT_ATTEMPTS);
 
+    /**
+     * The innermost lock in this class's documented lock order (see the class javadoc) -- guards
+     * {@link #logStreamOwner} only. A dedicated lock object, not {@code this}/a session monitor and
+     * not {@code CloudSession.class}: the ownership check it protects must be readable from
+     * {@link #shutdownLogStreamManager()} (called from {@link #invalidate()}, under the tearing-down
+     * session's own monitor) while comparing against whichever session's monitor
+     * {@link #wireManagers()} (called from {@link #initializeManagers()}, under the wiring
+     * session's own, possibly DIFFERENT, monitor) last held when it wrote it -- two different
+     * sessions' monitors can never be compared against each other directly, so the ownership record
+     * itself needs its own lock, held only ever as the innermost one (16-10 gap-closure addendum,
+     * issue #465).
+     */
+    private static final Object LOG_WIRING_LOCK = new Object();
+
+    /**
+     * Which session's log-stream wiring is currently installed on the JVM-wide
+     * {@link com.ultikits.ultitools.manager.LogStreamManager} singleton, or {@code null} if no
+     * session has ever wired it (or the last session to do so has already cleanly detached it).
+     * Guarded exclusively by {@link #LOG_WIRING_LOCK}.
+     * <p>
+     * <b>Deliberately tolerant of {@code null}, not "unowned means owned by nobody, so skip."</b> A
+     * great many call paths in this package's own tests (and at least one production path this
+     * class does not control -- a direct {@code LogStreamManager.getInstance().initialize(...)} call
+     * bypassing {@link #wireManagers()} entirely) install log-stream wiring WITHOUT ever routing
+     * through this class, so this field can legitimately be {@code null} even while a handler is, in
+     * fact, attached. {@link #shutdownLogStreamManager()} therefore only ever refuses to shut down
+     * when this field names ANOTHER, specific, still-current session -- never merely because it is
+     * unset -- so every pre-existing "logout detaches the handler" guarantee this class already made
+     * before issue #465 continues to hold exactly as before for every caller that never populates
+     * this field.
+     */
+    private static CloudSession logStreamOwner;
+
     // No explicit constructor: this class needs none, and the implicit no-arg constructor the
     // compiler generates is already package-private (matching this top-level class's own default
     // visibility) -- exactly what an explicit `CloudSession() {}` used to spell out redundantly
@@ -157,6 +222,14 @@ final class CloudSession {
      */
     static void resetForTesting() {
         current = new CloudSession();
+        // 16-10 gap-closure addendum: logStreamOwner is a second JVM-wide static this class owns
+        // (issue #465) -- left unset, a leftover reference from a previous test class would make
+        // shutdownLogStreamManager() wrongly believe a DIFFERENT session still owns the wiring and
+        // skip a shutdown this fresh test genuinely expects, exactly the "no forkCount" leak issue
+        // #250 already documents for #current itself.
+        synchronized (LOG_WIRING_LOCK) {
+            logStreamOwner = null;
+        }
     }
 
     // ---- Commit / invalidate: the contract D-18 requires ----
@@ -219,13 +292,36 @@ final class CloudSession {
      * manager (unmocked in the majority of this package's tests) exactly like
      * {@link #closeWebSocketClient()} already tolerates a {@code null} client -- neither condition
      * is an error, both are simply nothing to tear down.
+     * <p>
+     * <b>16-10 gap-closure addendum, issue #465:</b> before this fix, this step ran unconditionally
+     * whenever ANY session invalidated -- including a stale, already-superseded session's own
+     * redundant second invalidation (e.g. a delayed reconnect-exhaustion callback for an old session
+     * arriving after a replacement session had already completed its own handshake and wired its own
+     * log handler). Because {@link com.ultikits.ultitools.manager.LogStreamManager} is a JVM-wide
+     * singleton, that unconditional shutdown would detach the REPLACEMENT session's own,
+     * currently-valid wiring -- with no later handshake ever coming to re-attach it, since the
+     * replacement session's own {@code onOpen} had already run. Gating on {@link #logStreamOwner}
+     * (held under {@link #LOG_WIRING_LOCK}, the innermost lock in this class's documented order)
+     * closes that: this session's own teardown only ever shuts the manager down if it is the one
+     * that most recently wired it (or nothing has ever recorded ownership at all -- see
+     * {@link #logStreamOwner}'s own javadoc for why an unset owner must still shut down, not skip).
+     * A session that finds a DIFFERENT, specific owner recorded leaves the manager alone and does
+     * NOT clear the record -- the owning session's own eventual teardown is what does that.
      */
     private void shutdownLogStreamManager() {
         try {
-            com.ultikits.ultitools.manager.LogStreamManager logStreamManager =
-                UltiTools.getInstance().getLogStreamManager();
-            if (logStreamManager != null) {
-                logStreamManager.shutdown();
+            synchronized (LOG_WIRING_LOCK) {
+                if (logStreamOwner != null && logStreamOwner != this) {
+                    // A different, still-current session's own wiring is installed -- this
+                    // (older, already-superseded) session's teardown must not detach it (#465).
+                    return;
+                }
+                com.ultikits.ultitools.manager.LogStreamManager logStreamManager =
+                    UltiTools.getInstance().getLogStreamManager();
+                if (logStreamManager != null) {
+                    logStreamManager.shutdown();
+                }
+                logStreamOwner = null;
             }
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.FINE,
@@ -794,10 +890,16 @@ final class CloudSession {
             }
 
             // Wire up the log stream manager — while logs is disabled, SystemLogHandler is never
-            // attached to the root logger
+            // attached to the root logger. Records this session as the log-stream owner (16-10
+            // gap-closure addendum, issue #465) under the same LOG_WIRING_LOCK
+            // shutdownLogStreamManager() checks, so a later, stale teardown from a DIFFERENT
+            // (already-superseded) session can recognise this wiring is not its own to detach.
             if (UltiTools.getInstance().getLogStreamManager() != null) {
                 if (Capability.LOGS.isEnabled()) {
-                    UltiTools.getInstance().getLogStreamManager().initialize(webSocketClient);
+                    synchronized (LOG_WIRING_LOCK) {
+                        UltiTools.getInstance().getLogStreamManager().initialize(webSocketClient);
+                        logStreamOwner = this;
+                    }
                 } else {
                     PluginInitiationUtils.logSkippedCapability(Capability.LOGS);
                 }
