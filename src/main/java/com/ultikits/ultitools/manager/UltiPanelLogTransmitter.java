@@ -368,61 +368,79 @@ public class UltiPanelLogTransmitter {
     /**
      * Sends the batched logs.
      * When externalDrainMode is true, only drops entries that exceed the queue cap and does not send.
+     * <p>
+     * Gate-2 finding (round 10): this method is ALSO reached directly, on the scheduler's own
+     * thread, by the periodically-firing {@link #batchSenderTask}. Before this fix, that call was
+     * completely unsynchronized -- a live {@code batchConfig.enabled: false} update could hold
+     * {@link #batchModeLock} across its own {@link #flushLogs()} call while the scheduled task
+     * fired concurrently on the scheduler's thread and called this method too, both polling the
+     * SAME {@link #logQueue} and both calling {@code webSocketClient.sendMessage(...)}
+     * independently -- interleaving queue polls between two frames with no ordering guarantee
+     * between the two {@code sendMessage} calls. Synchronizing the whole body on
+     * {@link #batchModeLock} serializes the scheduled tick against {@code setBatchEnabled(false)}'s
+     * own flush, against {@link #flushLogs()} however else it is reached (it now also acquires
+     * this same lock, see its own javadoc), and against {@code sendLog}'s own dispatch decision
+     * (reentrant when this method is reached via {@code addToBatch}'s size-threshold trigger,
+     * since that call chain already holds the lock). No new deadlock risk: this method never
+     * acquires any OTHER lock, so it can only ever be the innermost link in any lock chain that
+     * reaches it.
      */
     private void sendBatch() {
-        if (logQueue.isEmpty()) {
-            return;
-        }
+        synchronized (batchModeLock) {
+            if (logQueue.isEmpty()) {
+                return;
+            }
 
-        // Under external drain mode, only enforce queue-overflow protection (already handled by
-        // addToBatch), do not send
-        if (externalDrainMode.get()) {
-            return;
-        }
+            // Under external drain mode, only enforce queue-overflow protection (already handled
+            // by addToBatch), do not send
+            if (externalDrainMode.get()) {
+                return;
+            }
 
-        if (!webSocketClient.isConnected()) {
-            return;
-        }
+            if (!webSocketClient.isConnected()) {
+                return;
+            }
 
-        try {
-            JsonArray logs = new JsonArray();
+            try {
+                JsonArray logs = new JsonArray();
 
-            // Pull logs out of the queue
-            for (int i = 0; i < batchSize && !logQueue.isEmpty(); i++) {
-                JsonObject log = logQueue.poll();
-                if (log != null) {
-                    logs.add(log);
+                // Pull logs out of the queue
+                for (int i = 0; i < batchSize && !logQueue.isEmpty(); i++) {
+                    JsonObject log = logQueue.poll();
+                    if (log != null) {
+                        logs.add(log);
+                    }
                 }
+
+                if (logs.size() > 0) {
+                    // Send the batched-log message
+                    JsonObject batchMessage = new JsonObject();
+                    batchMessage.addProperty("type", "log_batch");
+                    batchMessage.addProperty("serverId", serverId);
+                    batchMessage.add("data", logs);
+                    batchMessage.addProperty("timestamp", System.currentTimeMillis());
+
+                    webSocketClient.sendMessage(batchMessage);
+
+                    // Gate-2 finding (round 6): this diagnostic USED to log via
+                    // UltiTools.getInstance().getLogger() at Level.FINE. That logger is the shared
+                    // PLUGIN logger (Bukkit's JavaPlugin#getLogger()), not a per-class logger named
+                    // after this class -- so SystemLogHandler#shouldProcessRecord's class-name-based
+                    // loop-prevention check (which matches on loggerName.contains("...")) could never
+                    // catch it. Before this plan, that was harmless because the handler's own JUL
+                    // level floor stayed at Level.INFO, silently dropping this FINE record before it
+                    // ever reached shouldProcessRecord. #433/CR-02 (this same PR) made "debug"
+                    // genuinely lower that floor to Level.FINEST -- so this record became reachable
+                    // for the first time, and with batchConfig.size:1 it recursively re-triggered
+                    // this very method (send -> log FINE -> SystemLogHandler -> sendLog -> addToBatch
+                    // -> threshold reached -> sendBatch -> log FINE -> ...) until StackOverflowError.
+                    // Removed rather than routed around the loop guard -- this line's information
+                    // value (a batch-size count) does not justify carrying a self-recursion hazard.
+                }
+
+            } catch (Exception e) {
+                System.err.println("[UltiPanel] 发送批量日志失败: " + e.getMessage());
             }
-
-            if (logs.size() > 0) {
-                // Send the batched-log message
-                JsonObject batchMessage = new JsonObject();
-                batchMessage.addProperty("type", "log_batch");
-                batchMessage.addProperty("serverId", serverId);
-                batchMessage.add("data", logs);
-                batchMessage.addProperty("timestamp", System.currentTimeMillis());
-
-                webSocketClient.sendMessage(batchMessage);
-
-                // Gate-2 finding (round 6): this diagnostic USED to log via
-                // UltiTools.getInstance().getLogger() at Level.FINE. That logger is the shared
-                // PLUGIN logger (Bukkit's JavaPlugin#getLogger()), not a per-class logger named
-                // after this class -- so SystemLogHandler#shouldProcessRecord's class-name-based
-                // loop-prevention check (which matches on loggerName.contains("...")) could never
-                // catch it. Before this plan, that was harmless because the handler's own JUL
-                // level floor stayed at Level.INFO, silently dropping this FINE record before it
-                // ever reached shouldProcessRecord. #433/CR-02 (this same PR) made "debug"
-                // genuinely lower that floor to Level.FINEST -- so this record became reachable
-                // for the first time, and with batchConfig.size:1 it recursively re-triggered
-                // this very method (send -> log FINE -> SystemLogHandler -> sendLog -> addToBatch
-                // -> threshold reached -> sendBatch -> log FINE -> ...) until StackOverflowError.
-                // Removed rather than routed around the loop guard -- this line's information
-                // value (a batch-size count) does not justify carrying a self-recursion hazard.
-            }
-
-        } catch (Exception e) {
-            System.err.println("[UltiPanel] 发送批量日志失败: " + e.getMessage());
         }
     }
 
@@ -560,19 +578,37 @@ public class UltiPanelLogTransmitter {
     /**
      * Immediately sends every log currently in the queue.
      * Temporarily disables external drain mode to make sure the logs actually get sent.
+     * <p>
+     * Gate-2 finding (round 10): now ALSO acquires {@link #batchModeLock} as the OUTERMOST lock,
+     * before the external coordination lock below -- {@link #sendBatch()} (which this method
+     * reaches via {@link #doFlushLogs()}) is itself now synchronized on {@link #batchModeLock}
+     * (see its own javadoc), so without this method also acquiring it first, a caller that had NOT
+     * already taken {@link #batchModeLock} (e.g. {@link #shutdown()}, or {@link
+     * com.ultikits.ultitools.handler.SystemLogHandler#flush()}/{@code close()}) would acquire the
+     * coordination lock FIRST and only then try for {@link #batchModeLock} inside {@code
+     * sendBatch()} -- the reverse of the order every other path in this class already establishes
+     * ({@link #batchModeLock} before {@code logDrainLock}, see {@link
+     * #setExternalDrainCoordinationLock(Object)}'s own javadoc), and a reverse-order acquisition
+     * on two different threads is exactly how a lock-ordering deadlock happens. Taking {@link
+     * #batchModeLock} first here keeps every acquisition path in this class consistent with that
+     * one order, so this addition introduces no new deadlock risk -- verified by enumerating every
+     * lock-acquiring path in this class and {@code ServerMonitorManager} (see this plan's gate
+     * record).
      */
     public void flushLogs() {
-        // Gate-2 finding (round 9): coordinate with ServerMonitorManager's own drain paths, when
-        // wired up, so a disable-time flush (setBatchEnabled(false)) cannot interleave with
-        // either of the monitor's own drains and reorder the backlog -- see
-        // externalDrainCoordinationLock's own javadoc.
-        Object coordinationLock = externalDrainCoordinationLock;
-        if (coordinationLock != null) {
-            synchronized (coordinationLock) {
+        synchronized (batchModeLock) {
+            // Gate-2 finding (round 9): coordinate with ServerMonitorManager's own drain paths,
+            // when wired up, so a disable-time flush (setBatchEnabled(false)) cannot interleave
+            // with either of the monitor's own drains and reorder the backlog -- see
+            // externalDrainCoordinationLock's own javadoc.
+            Object coordinationLock = externalDrainCoordinationLock;
+            if (coordinationLock != null) {
+                synchronized (coordinationLock) {
+                    doFlushLogs();
+                }
+            } else {
                 doFlushLogs();
             }
-        } else {
-            doFlushLogs();
         }
     }
 

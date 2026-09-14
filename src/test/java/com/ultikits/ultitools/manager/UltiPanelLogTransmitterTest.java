@@ -551,6 +551,98 @@ class UltiPanelLogTransmitterTest {
                 worker.join(5000);
             }
         }
+
+        @Test
+        @DisplayName("Gate-2 P2 (round 10): sendBatch() 现在也持有 batchModeLock -- 证明调度线程自己触发的 tick 会被并发的 flush 挡住")
+        void sendBatchNowHoldsBatchModeLockBlockingAConcurrentScheduledTickWhileFlushing() throws Exception {
+            // Arrange: a queued record, and a direct handle on the private sendBatch() method --
+            // standing in for the scheduler's own periodic call to it.
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+            Field queueField = UltiPanelLogTransmitter.class.getDeclaredField("logQueue");
+            queueField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            java.util.Queue<JsonObject> queue = (java.util.Queue<JsonObject>) queueField.get(logTransmitter);
+            JsonObject entry = new JsonObject();
+            entry.addProperty("message", "queued");
+            queue.offer(entry);
+
+            Method sendBatchMethod = UltiPanelLogTransmitter.class.getDeclaredMethod("sendBatch");
+            sendBatchMethod.setAccessible(true);
+
+            Field lockField = UltiPanelLogTransmitter.class.getDeclaredField("batchModeLock");
+            lockField.setAccessible(true);
+            Object lock = lockField.get(logTransmitter);
+
+            CountDownLatch workerStarted = new CountDownLatch(1);
+            CountDownLatch workerDone = new CountDownLatch(1);
+            Thread worker = new Thread(() -> {
+                workerStarted.countDown();
+                try {
+                    sendBatchMethod.invoke(logTransmitter);
+                } catch (Exception e) {
+                    org.junit.jupiter.api.Assertions.fail(e);
+                }
+                workerDone.countDown();
+            });
+
+            try {
+                synchronized (lock) {
+                    worker.start();
+                    assertThat(workerStarted.await(5, TimeUnit.SECONDS)).isTrue();
+                    // Before round 10, sendBatch() was completely unsynchronized -- the scheduler's
+                    // own tick could run concurrently with a disable-time flush (which holds
+                    // batchModeLock across its own doFlushLogs()/sendBatch() loop) and interleave
+                    // queue polls between the two, sending frames in an unrecoverable order.
+                    assertThat(workerDone.await(300, TimeUnit.MILLISECONDS))
+                            .as("sendBatch() must block on batchModeLock while it is held elsewhere")
+                            .isFalse();
+                    verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
+                }
+                assertThat(workerDone.await(5, TimeUnit.SECONDS))
+                        .as("sendBatch() must proceed once the lock is released")
+                        .isTrue();
+                verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
+            } finally {
+                worker.join(5000);
+            }
+        }
+
+        @Test
+        @DisplayName("Gate-2 P2 (round 10): flushLogs() 现在也把 batchModeLock 当作最外层锁获取 -- 即便没有外部 coordination lock")
+        void flushLogsNowAcquiresBatchModeLockAsTheOutermostLockEvenWithoutAnExternalCoordinationLock() throws Exception {
+            // No setExternalDrainCoordinationLock call -- proves batchModeLock alone, not the
+            // round-9 coordination lock, is what now guards flushLogs()/sendBatch() against the
+            // scheduler's own concurrent tick.
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            Field lockField = UltiPanelLogTransmitter.class.getDeclaredField("batchModeLock");
+            lockField.setAccessible(true);
+            Object lock = lockField.get(logTransmitter);
+
+            CountDownLatch workerStarted = new CountDownLatch(1);
+            CountDownLatch workerDone = new CountDownLatch(1);
+            Thread worker = new Thread(() -> {
+                workerStarted.countDown();
+                logTransmitter.flushLogs();
+                workerDone.countDown();
+            });
+
+            try {
+                synchronized (lock) {
+                    worker.start();
+                    assertThat(workerStarted.await(5, TimeUnit.SECONDS)).isTrue();
+                    assertThat(workerDone.await(300, TimeUnit.MILLISECONDS))
+                            .as("flushLogs() must block on batchModeLock while it is held elsewhere, "
+                                    + "even with no external coordination lock wired up")
+                            .isFalse();
+                }
+                assertThat(workerDone.await(5, TimeUnit.SECONDS))
+                        .as("flushLogs() must proceed once the lock is released")
+                        .isTrue();
+            } finally {
+                worker.join(5000);
+            }
+        }
     }
 
     @Nested
