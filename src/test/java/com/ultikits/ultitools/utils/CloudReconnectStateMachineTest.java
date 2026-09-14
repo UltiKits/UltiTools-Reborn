@@ -329,10 +329,10 @@ class CloudReconnectStateMachineTest {
 
             synchronized (session) {
                 worker.start();
-                assertThat(started.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                assertThat(started.await(5, TimeUnit.SECONDS))
                         .as("探针线程本身要真的跑起来，否则下面那条断言是空转")
                         .isTrue();
-                assertThat(finished.await(300, java.util.concurrent.TimeUnit.MILLISECONDS))
+                assertThat(finished.await(300, TimeUnit.MILLISECONDS))
                         .as("持有会话监视器期间，disableCloud 整体必须进不去")
                         .isFalse();
                 assertThat(countFrameworkHandlersOnRootLogger())
@@ -341,7 +341,7 @@ class CloudReconnectStateMachineTest {
                         .isEqualTo(1);
             }
 
-            assertThat(finished.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            assertThat(finished.await(5, TimeUnit.SECONDS))
                     .as("释放锁之后应当立刻放行")
                     .isTrue();
             worker.join(1000);
@@ -669,15 +669,15 @@ class CloudReconnectStateMachineTest {
 
             synchronized (session) {
                 worker.start();
-                assertThat(started.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                assertThat(started.await(5, TimeUnit.SECONDS))
                         .as("探针线程本身要真的跑起来，否则下面那条断言是空转")
                         .isTrue();
-                assertThat(finished.await(300, java.util.concurrent.TimeUnit.MILLISECONDS))
+                assertThat(finished.await(300, TimeUnit.MILLISECONDS))
                         .as("持有会话监视器期间，第二次确认到建连这段必须进不去")
                         .isFalse();
             }
 
-            assertThat(finished.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            assertThat(finished.await(5, TimeUnit.SECONDS))
                     .as("释放锁之后应当立刻放行")
                     .isTrue();
             worker.join(1000);
@@ -703,15 +703,15 @@ class CloudReconnectStateMachineTest {
 
             synchronized (CloudSession.class) {
                 worker.start();
-                assertThat(started.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                assertThat(started.await(5, TimeUnit.SECONDS))
                         .as("探针线程本身要真的跑起来，否则下面那条断言是空转")
                         .isTrue();
-                assertThat(finished.await(300, java.util.concurrent.TimeUnit.MILLISECONDS))
+                assertThat(finished.await(300, TimeUnit.MILLISECONDS))
                         .as("持有 CloudSession.class 期间，查有效性到拆全局管理器这段必须进不去")
                         .isFalse();
             }
 
-            assertThat(finished.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            assertThat(finished.await(5, TimeUnit.SECONDS))
                     .as("释放锁之后应当立刻放行")
                     .isTrue();
             worker.join(1000);
@@ -947,15 +947,15 @@ class CloudReconnectStateMachineTest {
 
                 synchronized (lock) {
                     worker.start();
-                    assertThat(started.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                    assertThat(started.await(5, TimeUnit.SECONDS))
                             .as("探针线程本身要真的跑起来，否则下面那条断言是空转")
                             .isTrue();
-                    assertThat(finished.await(300, java.util.concurrent.TimeUnit.MILLISECONDS))
+                    assertThat(finished.await(300, TimeUnit.MILLISECONDS))
                             .as("持有会话监视器期间，这个动作必须进不去")
                             .isFalse();
                 }
 
-                assertThat(finished.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                assertThat(finished.await(5, TimeUnit.SECONDS))
                         .as("释放锁之后应当立刻放行")
                         .isTrue();
                 worker.join(1000);
@@ -971,6 +971,10 @@ class CloudReconnectStateMachineTest {
         @Test
         @DisplayName("startNew / login / initializeManagers / disableCloud 四类操作并发混跑 200 轮，"
                 + "ThreadMXBean 必须报告零死锁且全部任务在超时内完成")
+        // PMD.JUnitTestsShouldIncludeAssert: 真正的断言在 runOneStressRound() 这个共享私有方法里
+        // （lock-order-freedom 压测的主体逻辑），与本仓库 CLAUDE.md「Suppressing PMD in tests」
+        // 一节记录的既有情形相同——PMD 不认得断言活在共享辅助方法里的形式。
+        @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
         void concurrentSessionLifecycleOperationsNeverDeadlock() throws Exception {
             // login() 会走到 requestMagicLink() 的网络调用——固定成空字符串，让它在本地失败得
             // 又快又确定，不去碰真实网络，也不会因为网络延迟拖慢本压测。
