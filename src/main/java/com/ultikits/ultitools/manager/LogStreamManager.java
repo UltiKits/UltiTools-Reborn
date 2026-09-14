@@ -2,6 +2,8 @@ package com.ultikits.ultitools.manager;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.handler.SystemLogHandler;
@@ -14,6 +16,13 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.server.ServerLoadEvent;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
@@ -28,7 +37,15 @@ import org.jetbrains.annotations.ApiStatus;
  */
 @ApiStatus.Internal
 public class LogStreamManager implements Listener {
-    
+
+    /**
+     * The only level names {@link SystemLogHandler} ever recognises -- exactly the vocabulary
+     * its own level mapping can produce ("info"/"warning"/"error"/"debug"), so a level a client
+     * asks to enable can always actually be reached by a published record's mapped level.
+     */
+    private static final Set<String> VALID_LOG_LEVELS =
+            new HashSet<>(Arrays.asList("info", "warning", "error", "debug"));
+
     private static LogStreamManager instance;
     private UltiPanelWebSocketClient webSocketClient;
     private final AtomicBoolean streaming = new AtomicBoolean(false);
@@ -212,32 +229,78 @@ public class LogStreamManager implements Listener {
     
     /**
      * Handles a configuration update.
+     * <p>
+     * #433: a request naming an unrecognised level rejects the WHOLE request (previously-applied
+     * levels are left untouched) rather than partially applying the recognised entries -- a
+     * client that made a typo should not silently end up with a different filter than it asked
+     * for. An empty {@code levels} array is applied literally: it is a request for zero levels,
+     * so zero levels are enabled and nothing is delivered until the client sets levels again --
+     * this framework's own front end never actually sends this field today (measured against
+     * both {@code UltiPanelFrontend} and {@code ultipanel-api-worker} while planning this fix),
+     * so there is no real product behaviour to match, and applying the request literally is the
+     * one reading that never has to guess what the caller "really" meant.
      */
     private void handleConfigUpdate(JsonObject data, String clientId) {
         try {
+            List<String> changes = new ArrayList<>();
+
             // Update the log-level configuration
             if (data.has("levels") && systemLogHandler != null) {
-                // The log-level configuration could be updated dynamically here
-                UltiTools.getInstance().getLogger().info("[UltiPanel] 收到日志级别配置更新请求");
+                JsonElement levelsElement = data.get("levels");
+                if (levelsElement != null && levelsElement.isJsonArray()) {
+                    JsonArray levelsArray = levelsElement.getAsJsonArray();
+                    Set<String> requestedLevels = new LinkedHashSet<>();
+                    for (JsonElement levelElement : levelsArray) {
+                        String rawLevel = (levelElement == null || levelElement.isJsonNull())
+                                ? null : levelElement.getAsString();
+                        String normalizedLevel = rawLevel == null
+                                ? null : rawLevel.toLowerCase(Locale.ROOT);
+                        if (normalizedLevel == null || !VALID_LOG_LEVELS.contains(normalizedLevel)) {
+                            // Reject the whole request -- previously-applied levels survive.
+                            sendErrorResponse(clientId, "Unrecognized log level: " + rawLevel);
+                            return;
+                        }
+                        requestedLevels.add(normalizedLevel);
+                    }
+                    systemLogHandler.setEnabledLevels(requestedLevels);
+                    changes.add(requestedLevels.isEmpty()
+                            ? "levels updated to an empty set (no log records will be delivered "
+                                    + "until levels are set again)"
+                            : "levels updated to " + requestedLevels);
+                }
             }
 
             // Update the batch-send configuration
             if (data.has("batchConfig") && logTransmitter != null) {
                 JsonObject batchConfig = data.getAsJsonObject("batchConfig");
+                boolean batchChanged = false;
                 if (batchConfig.has("enabled") && !batchConfig.get("enabled").isJsonNull()) {
                     logTransmitter.setBatchEnabled(batchConfig.get("enabled").getAsBoolean());
+                    batchChanged = true;
                 }
                 if (batchConfig.has("size") && !batchConfig.get("size").isJsonNull()) {
                     logTransmitter.setBatchSize(batchConfig.get("size").getAsInt());
+                    batchChanged = true;
                 }
                 if (batchConfig.has("interval") && !batchConfig.get("interval").isJsonNull()) {
                     logTransmitter.setIntervalMs(batchConfig.get("interval").getAsInt());
+                    batchChanged = true;
                 }
-                UltiTools.getInstance().getLogger().info("[UltiPanel] 批量发送配置已更新");
+                if (batchChanged) {
+                    changes.add("batch settings updated");
+                    UltiTools.getInstance().getLogger().info("[UltiPanel] 批量发送配置已更新");
+                }
             }
-            
-            sendStreamResponse(clientId, "config_updated", "Configuration updated successfully");
-            
+
+            if (changes.isEmpty()) {
+                // #433: a config action naming neither levels nor batchConfig changed nothing --
+                // say so, rather than answering the same "success" a real change would get.
+                sendStreamResponse(clientId, "config_unchanged", "No configuration changes were requested");
+                return;
+            }
+
+            sendStreamResponse(clientId, "config_updated", "Configuration updated: " + String.join("; ", changes));
+
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().warning("[UltiPanel] 更新配置失败: " + e.getMessage());
             sendErrorResponse(clientId, "Failed to update configuration: " + e.getMessage());
