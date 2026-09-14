@@ -380,10 +380,10 @@ class LogStreamManagerTest {
         }
 
         @Test
-        @DisplayName("处理带 levels 的 config action")
+        @DisplayName("处理带 levels 的 config action -- 级别列表实际被应用到 handler 上 (#433)")
         void shouldHandleConfigWithLevels() throws Exception {
             setWebSocketClient(mockWebSocketClient);
-            
+
             // 需要设置 systemLogHandler
             SystemLogHandler mockHandler = mock(SystemLogHandler.class);
             setSystemLogHandler(mockHandler);
@@ -400,8 +400,10 @@ class LogStreamManagerTest {
 
             logStreamManager.handleLogStreamMessage(data);
 
-            // 验证日志记录
-            verify(mockLogger).info(contains("收到日志级别配置更新请求"));
+            // The request is actually applied to the handler's enabled levels, not merely logged.
+            verify(mockHandler).setEnabledLevels(org.mockito.ArgumentMatchers.argThat(set ->
+                    set != null && set.size() == 3
+                            && set.contains("info") && set.contains("warning") && set.contains("error")));
         }
     }
 
@@ -643,6 +645,132 @@ class LogStreamManagerTest {
             assertDoesNotThrow(() -> publishRecord("pause-it-zero-subscribers"));
 
             verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
+        }
+    }
+
+    // ==================== 日志级别过滤集成测试 (issue #433) ====================
+    @Nested
+    @DisplayName("日志级别过滤集成测试 -- 面板的 config action 必须实际过滤投递，而不仅仅是记一行收到请求")
+    class LevelFilterIntegrationTests {
+
+        @BeforeEach
+        void forceImmediateSendMode() {
+            // Same technique as PauseDeliveryIntegrationTests: a forwarded record reaches
+            // webSocketClient.sendMessage() synchronously instead of waiting on the batch
+            // scheduler.
+            when(mockConfig.contains("ultipanel.logging.batch.enabled")).thenReturn(true);
+            when(mockConfig.getBoolean("ultipanel.logging.batch.enabled", true)).thenReturn(false);
+        }
+
+        private JsonObject configActionWithLevels(String... levels) {
+            JsonObject data = new JsonObject();
+            data.addProperty("action", "config");
+            data.addProperty("clientId", "client-levels");
+            JsonArray levelsArray = new JsonArray();
+            for (String level : levels) {
+                levelsArray.add(level);
+            }
+            data.add("levels", levelsArray);
+            return data;
+        }
+
+        private void publishRecord(String levelJava, String message) {
+            Logger.getLogger("").log(new LogRecord(Level.parse(levelJava), message));
+        }
+
+        @Test
+        @DisplayName("只保留 error 级别后，info 记录不再送达，error 记录仍会送达")
+        void onlyErrorLevelFiltersOutInfoButDeliversError() {
+            logStreamManager.initialize(mockWebSocketClient);
+            logStreamManager.handleLogStreamMessage(configActionWithLevels("error"));
+            reset(mockWebSocketClient); // drop the config_updated response itself
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            publishRecord("INFO", "level-filter-info-suppressed");
+            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
+
+            publishRecord("SEVERE", "level-filter-error-delivered");
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient, times(1)).sendMessage(captor.capture());
+            assertThat(captor.getValue().getAsJsonObject("data").get("message").getAsString())
+                    .isEqualTo("level-filter-error-delivered");
+        }
+
+        @Test
+        @DisplayName("设置全部级别后，之前被过滤的级别重新恢复投递")
+        void allLevelsRestoresDeliveryForEveryLevel() {
+            logStreamManager.initialize(mockWebSocketClient);
+            logStreamManager.handleLogStreamMessage(configActionWithLevels("error"));
+            logStreamManager.handleLogStreamMessage(
+                    configActionWithLevels("info", "warning", "error", "debug"));
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            publishRecord("INFO", "level-filter-info-restored");
+
+            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
+        }
+
+        @Test
+        @DisplayName("空级别列表被逐字应用：不再投递任何记录，且响应说明了这一点")
+        void emptyLevelListAppliedLiterallyDeliversNothing() {
+            logStreamManager.initialize(mockWebSocketClient);
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            logStreamManager.handleLogStreamMessage(configActionWithLevels());
+            verify(mockWebSocketClient).sendMessage(captor.capture());
+            JsonObject data = captor.getValue().getAsJsonObject("data");
+            assertThat(data.get("status").getAsString()).isEqualTo("config_updated");
+            assertThat(data.get("message").getAsString()).contains("empty");
+
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+            publishRecord("SEVERE", "level-filter-empty-list-suppressed");
+            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
+        }
+
+        @Test
+        @DisplayName("无法识别的级别名被拒绝，响应中点名该值，且之前生效的级别保持不变")
+        void unrecognizedLevelIsRejectedNamingTheValueAndKeepsPreviousLevels() {
+            logStreamManager.initialize(mockWebSocketClient);
+            logStreamManager.handleLogStreamMessage(configActionWithLevels("error"));
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            logStreamManager.handleLogStreamMessage(configActionWithLevels("error", "not-a-level"));
+            verify(mockWebSocketClient).sendMessage(captor.capture());
+            JsonObject data = captor.getValue().getAsJsonObject("data");
+            assertThat(data.get("message").getAsString()).contains("not-a-level");
+
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            // Previous levels (["error"] only) must still be in effect.
+            publishRecord("INFO", "level-filter-rejected-info-still-suppressed");
+            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
+            publishRecord("SEVERE", "level-filter-rejected-error-still-delivered");
+            verify(mockWebSocketClient, times(1)).sendMessage(any(JsonObject.class));
+        }
+
+        @Test
+        @DisplayName("既没有 levels 也没有 batchConfig 的 config action：响应说明没有任何变化")
+        void configActionWithNeitherLevelsNorBatchSaysNothingChanged() {
+            logStreamManager.initialize(mockWebSocketClient);
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            JsonObject data = new JsonObject();
+            data.addProperty("action", "config");
+            data.addProperty("clientId", "client-nochange");
+
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            logStreamManager.handleLogStreamMessage(data);
+            verify(mockWebSocketClient).sendMessage(captor.capture());
+            JsonObject respData = captor.getValue().getAsJsonObject("data");
+            assertThat(respData.get("status").getAsString()).isEqualTo("config_unchanged");
         }
     }
 
