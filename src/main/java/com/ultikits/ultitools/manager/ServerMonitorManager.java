@@ -19,6 +19,7 @@ import java.lang.management.OperatingSystemMXBean;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.ToLongFunction;
 import java.util.logging.Level;
 import org.jetbrains.annotations.ApiStatus;
@@ -93,8 +94,40 @@ public class ServerMonitorManager {
      * this timestamp makes the configured interval govern how often logs actually go out, even
      * though {@code sendBatchUpdate()} itself still ticks every 5 seconds for status/metrics).
      * Starts at {@code 0} so the very first tick after {@link #startMonitoring()} always drains.
+     * <p>
+     * {@link AtomicLong}, not a plain {@code volatile long} (Gate-2 finding, round 4): two
+     * independently-scheduled tasks ({@link #sendBatchUpdate()}'s 5-second tick and
+     * {@link #maybeSendLogsOnly()}'s 1-second tick) can become due in the SAME window (e.g. a
+     * 1000ms configured interval), and {@code volatile} only guarantees visibility, not that a
+     * "read, compare, then write" sequence is atomic -- both threads could pass the elapsed-time
+     * check before either updates the field, both call {@link UltiPanelLogTransmitter#drainQueue}
+     * concurrently against the same queue, and split one batch of records across two separate
+     * {@code log_batch}/{@code batch_update} frames with interleaved {@code poll()} calls,
+     * scrambling delivery order across the two frames. {@link #claimLogFlushWindow(long, int)}
+     * uses {@link AtomicLong#compareAndSet} so only ONE of the two competing callers ever wins a
+     * given window; the loser skips draining entirely rather than draining a partial, racing
+     * subset.
      */
-    private volatile long lastLogFlushMs = 0L;
+    private final AtomicLong lastLogFlushMs = new AtomicLong(0L);
+
+    /**
+     * Atomically claims the current log-flush window if (and only if) {@code intervalMs} has
+     * elapsed since the last successful claim, advancing {@link #lastLogFlushMs} to {@code now}
+     * as part of the same compare-and-set. Returns {@code false} without side effects if the
+     * interval has not elapsed, OR if a concurrently-running competing task already claimed this
+     * exact window first (Gate-2 finding, round 4 -- see {@link #lastLogFlushMs}'s own javadoc).
+     *
+     * @param now the caller's own {@link System#currentTimeMillis()} snapshot
+     * @param intervalMs the currently configured batch-send interval
+     * @return {@code true} only for the caller that should proceed to drain and send
+     */
+    private boolean claimLogFlushWindow(long now, int intervalMs) {
+        long previous = lastLogFlushMs.get();
+        if (now - previous < intervalMs) {
+            return false;
+        }
+        return lastLogFlushMs.compareAndSet(previous, now);
+    }
 
     /**
      * The file whose filesystem backs the {@code diskUsage} metric -- the server root (the working
@@ -203,7 +236,7 @@ public class ServerMonitorManager {
         }
 
         isMonitoring = true;
-        lastLogFlushMs = 0L; // always drain on the first tick of a fresh monitoring session
+        lastLogFlushMs.set(0L); // always drain on the first tick of a fresh monitoring session
         // If the previous stopMonitoring() shut the pool down, swap in a fresh one -- see the
         // note on the field.
         if (scheduler == null || scheduler.isShutdown()) {
@@ -218,7 +251,14 @@ public class ServerMonitorManager {
             }
         }, 20L); // Wait 1 second
 
-        // Enable the log transmitter's external drain mode (logs will be sent uniformly via batch_update)
+        // Enable the log transmitter's external drain mode (logs will be sent uniformly via
+        // batch_update). Defensive only -- the PRIMARY point this is applied from is
+        // LogStreamManager#initialize() itself (Gate-2 finding, round 4): wireManagers() calls
+        // startMonitoring() BEFORE the very first transmitter exists, so this check would see
+        // null and never retry on first boot, and every reconnect rebuilds a fresh transmitter
+        // through initialize() while this method early-returns above (isMonitoring already
+        // true) without ever reaching that new instance. This call stays here only for the case
+        // where a transmitter genuinely already exists when startMonitoring() runs.
         LogStreamManager lsm = UltiTools.getInstance().getLogStreamManager();
         if (lsm != null && lsm.getLogTransmitter() != null) {
             lsm.getLogTransmitter().setExternalDrainMode(true);
@@ -679,13 +719,14 @@ public class ServerMonitorManager {
                     // this method's own tick is a hardcoded 5 seconds -- see lastLogFlushMs's
                     // javadoc. Entries keep accumulating in the queue between flushes (bounded by
                     // UltiPanelLogTransmitter's own MAX_QUEUE_SIZE overflow protection); nothing
-                    // is lost, delivery is just batched at the configured cadence.
-                    if (now - lastLogFlushMs >= transmitter.getIntervalMs()) {
+                    // is lost, delivery is just batched at the configured cadence. Gate-2 round 4:
+                    // claimLogFlushWindow() atomically decides the winner against
+                    // maybeSendLogsOnly()'s own competing 1-second task -- only the winner drains.
+                    if (claimLogFlushWindow(now, transmitter.getIntervalMs())) {
                         JsonArray logs = transmitter.drainQueue(50);
                         if (logs.size() > 0) {
                             data.add("logs", logs);
                         }
-                        lastLogFlushMs = now;
                     }
                 }
             }
@@ -718,19 +759,11 @@ public class ServerMonitorManager {
      * Checks the log-drain interval gate at a 1-second granularity, independent of
      * {@link #sendBatchUpdate()}'s own fixed 5-second tick (Gate-2 finding, round 3).
      * <p>
-     * Both this method and {@link #sendBatchUpdate()} read and write the SAME
-     * {@link #lastLogFlushMs} field, so this is race-safe by construction: whichever of the two
-     * scheduled tasks reaches the {@code now - lastLogFlushMs >= intervalMs} check first drains
-     * the queue and advances {@code lastLogFlushMs}; the other sees the interval has not elapsed
-     * yet and no-ops. There is no lock because both run on the same single-threaded
-     * {@link #scheduler} pool -- {@code newScheduledThreadPool(2)} gives two worker threads, but
-     * {@code ScheduledExecutorService} still executes each individually-scheduled task's
-     * successive firings serially; the two DIFFERENT scheduled tasks (this one and
-     * {@code sendBatchUpdate}) sharing that pool can still interleave with each other, but the
-     * {@code volatile long} field makes each individual read-then-write atomic enough for a
-     * "don't drain twice" gate (a rare double-drain in the race window would merely double-count
-     * an empty queue, not lose or duplicate log entries -- {@link UltiPanelLogTransmitter#drainQueue}
-     * is itself safe to call with nothing queued).
+     * Both this method and {@link #sendBatchUpdate()} call {@link #claimLogFlushWindow(long, int)}
+     * against the SAME {@link #lastLogFlushMs} field, so only one of the two competing scheduled
+     * tasks ever drains for a given window (Gate-2 finding, round 4 -- see
+     * {@link #lastLogFlushMs}'s own javadoc for why a plain {@code volatile long} check-then-write
+     * was not race-safe here).
      * <p>
      * Sends a {@code batch_update} message carrying ONLY {@code data.logs} when logs are both due
      * and non-empty -- not a new message type: the Worker's own handler
@@ -752,12 +785,11 @@ public class ServerMonitorManager {
             }
             UltiPanelLogTransmitter transmitter = lsm.getLogTransmitter();
             long now = System.currentTimeMillis();
-            if (now - lastLogFlushMs < transmitter.getIntervalMs()) {
+            if (!claimLogFlushWindow(now, transmitter.getIntervalMs())) {
                 return;
             }
 
             JsonArray logs = transmitter.drainQueue(50);
-            lastLogFlushMs = now;
             if (logs.size() == 0) {
                 return;
             }

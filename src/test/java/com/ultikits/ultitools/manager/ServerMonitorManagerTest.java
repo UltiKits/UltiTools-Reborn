@@ -13,7 +13,13 @@ import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
@@ -875,7 +881,7 @@ class ServerMonitorManagerTest {
         private void setLastLogFlushMs(ServerMonitorManager manager, long value) throws Exception {
             Field field = ServerMonitorManager.class.getDeclaredField("lastLogFlushMs");
             field.setAccessible(true);
-            field.set(manager, value);
+            ((java.util.concurrent.atomic.AtomicLong) field.get(manager)).set(value);
         }
 
         @Test
@@ -1096,6 +1102,48 @@ class ServerMonitorManagerTest {
                         .isFalse();
             } finally {
                 transmitter.shutdown();
+            }
+        }
+
+        @Test
+        @DisplayName("Gate-2 P2 (round 4): claimLogFlushWindow 在并发竞争同一窗口时只有一个调用者能成功 claim -- 确定性压力测试，不依赖 sleep")
+        void claimLogFlushWindowIsRaceSafeUnderConcurrentContention() throws Exception {
+            Method claimMethod = ServerMonitorManager.class.getDeclaredMethod(
+                    "claimLogFlushWindow", long.class, int.class);
+            claimMethod.setAccessible(true);
+
+            int threadCount = 20;
+            long now = System.currentTimeMillis();
+            ExecutorService pool = Executors.newFixedThreadPool(threadCount);
+            CountDownLatch ready = new CountDownLatch(threadCount);
+            CountDownLatch go = new CountDownLatch(1);
+            List<Future<Boolean>> results = new ArrayList<>();
+            try {
+                for (int i = 0; i < threadCount; i++) {
+                    results.add(pool.submit(() -> {
+                        ready.countDown();
+                        go.await();
+                        // All threads race to claim the SAME window (interval=1000, well elapsed
+                        // since lastLogFlushMs starts at 0) at as close to the same instant as
+                        // the test harness can force deterministically.
+                        return (Boolean) claimMethod.invoke(serverMonitorManager, now, 1000);
+                    }));
+                }
+                ready.await();
+                go.countDown();
+
+                long successCount = 0;
+                for (Future<Boolean> f : results) {
+                    if (Boolean.TRUE.equals(f.get())) {
+                        successCount++;
+                    }
+                }
+                assertThat(successCount)
+                        .as("exactly one of the 20 racing callers must win the claim -- a plain "
+                                + "volatile check-then-write let more than one through (Gate-2 round 4)")
+                        .isEqualTo(1);
+            } finally {
+                pool.shutdownNow();
             }
         }
     }

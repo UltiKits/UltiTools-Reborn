@@ -901,6 +901,10 @@ class LogStreamManagerTest {
 
         @Test
         @DisplayName("Gate-2: 一个请求同时带合法 levels 与非法 batchConfig 时，levels 也不能生效 -- 两段都必须先校验完再应用")
+        // The assertion is expressed as a Mockito verify(never()) call, which PMD's
+        // JUnitTestsShouldIncludeAssert rule does not recognise as an assertion -- deliberate,
+        // per this repository's own documented pattern (CLAUDE.md "Suppressing PMD in tests").
+        @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
         void invalidBatchConfigAlsoPreventsAnAccompanyingValidLevelsChangeFromApplying() throws Exception {
             SystemLogHandler mockHandler = mock(SystemLogHandler.class);
             setSystemLogHandler(mockHandler);
@@ -925,8 +929,8 @@ class LogStreamManagerTest {
             // Gate-2 finding: before this fix, `levels` was applied before `batchConfig` was
             // validated, so this exact request left the level filter changed while reporting a
             // whole-request failure. Now: neither section is applied.
-            org.mockito.Mockito.verify(mockHandler, never())
-                    .setEnabledLevels(org.mockito.ArgumentMatchers.any());
+            verify(mockHandler, never())
+                    .setEnabledLevels(any());
         }
     }
 
@@ -1807,6 +1811,45 @@ class LogStreamManagerTest {
             // Assert
             UltiPanelLogTransmitter transmitter = logStreamManager.getLogTransmitter();
             assertThat(transmitter.isBatchEnabled()).isFalse();
+        }
+
+        @Test
+        @DisplayName("Gate-2 P1 (round 4): monitoring 已经处于 active 状态时，initialize 给新建的 transmitter 打开 externalDrainMode")
+        void initializeEnablesExternalDrainModeWhenMonitoringIsAlreadyActive() throws Exception {
+            ServerMonitorManager mockServerMonitorManager = mock(ServerMonitorManager.class);
+            when(mockServerMonitorManager.isMonitoring()).thenReturn(true);
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+                lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+                lenient().when(ultiTools.getConfig()).thenReturn(mockConfig);
+                lenient().when(ultiTools.getServerMonitorManager()).thenReturn(mockServerMonitorManager);
+            });
+            when(mockConfig.contains(anyString())).thenReturn(false);
+
+            logStreamManager.initialize(mockWebSocketClient);
+
+            assertThat(logStreamManager.getLogTransmitter().isExternalDrainMode())
+                    .as("wireManagers() calls startMonitoring() BEFORE the first transmitter "
+                            + "exists, and every reconnect rebuilds a fresh transmitter here while "
+                            + "startMonitoring() itself early-returns on isMonitoring() already "
+                            + "being true -- initialize() must be the one place that applies it")
+                    .isTrue();
+        }
+
+        @Test
+        @DisplayName("Gate-2 P1 (round 4) 对照: monitoring 未激活时，initialize 不会给新建的 transmitter 打开 externalDrainMode")
+        void initializeDoesNotEnableExternalDrainModeWhenMonitoringIsNotActive() throws Exception {
+            ServerMonitorManager mockServerMonitorManager = mock(ServerMonitorManager.class);
+            when(mockServerMonitorManager.isMonitoring()).thenReturn(false);
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+                lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
+                lenient().when(ultiTools.getConfig()).thenReturn(mockConfig);
+                lenient().when(ultiTools.getServerMonitorManager()).thenReturn(mockServerMonitorManager);
+            });
+            when(mockConfig.contains(anyString())).thenReturn(false);
+
+            logStreamManager.initialize(mockWebSocketClient);
+
+            assertThat(logStreamManager.getLogTransmitter().isExternalDrainMode()).isFalse();
         }
     }
 

@@ -101,6 +101,21 @@ public class LogStreamManager implements Listener {
         String serverId = getServerId();
         this.logTransmitter = new UltiPanelLogTransmitter(client, serverId);
 
+        // Gate-2 finding (round 4): externalDrainMode must be re-applied to EVERY freshly-created
+        // transmitter, not only once from ServerMonitorManager#startMonitoring(). wireManagers()
+        // calls startMonitoring() BEFORE this method on first boot, so the very first transmitter
+        // did not exist yet when startMonitoring() tried to enable drain mode on it -- the
+        // (defensive, still-present) call there saw a null transmitter and never retried. Every
+        // reconnect after the first calls THIS method again to build a fresh transmitter, while
+        // startMonitoring() itself early-returns on isMonitoring() already being true, so it would
+        // never reach a later transmitter either. Querying monitoring state here, at the one place
+        // a transmitter is actually constructed, covers both the first-boot ordering and every
+        // reconnect -- without needing to reorder wireManagers() or special-case reconnects.
+        ServerMonitorManager serverMonitorManager = UltiTools.getInstance().getServerMonitorManager();
+        if (serverMonitorManager != null && serverMonitorManager.isMonitoring()) {
+            this.logTransmitter.setExternalDrainMode(true);
+        }
+
         // Load the batch-send settings from the config file
         loadBatchConfiguration();
 
@@ -248,96 +263,41 @@ public class LogStreamManager implements Listener {
     private void handleConfigUpdate(JsonObject data, String clientId) {
         try {
             // ---------- Parse and validate every present section; apply nothing yet ----------
-            boolean levelsPresent = false;
-            Set<String> requestedLevels = null;
-            if (data.has("levels") && systemLogHandler != null) {
-                JsonElement levelsElement = data.get("levels");
-                if (levelsElement != null && levelsElement.isJsonArray()) {
-                    levelsPresent = true;
-                    JsonArray levelsArray = levelsElement.getAsJsonArray();
-                    requestedLevels = new LinkedHashSet<>();
-                    for (JsonElement levelElement : levelsArray) {
-                        String rawLevel = (levelElement == null || levelElement.isJsonNull())
-                                ? null : levelElement.getAsString();
-                        String normalizedLevel = rawLevel == null
-                                ? null : rawLevel.toLowerCase(Locale.ROOT);
-                        if (normalizedLevel == null || !VALID_LOG_LEVELS.contains(normalizedLevel)) {
-                            // Reject the whole request -- nothing (from either section) is applied.
-                            sendErrorResponse(clientId, "Unrecognized log level: " + rawLevel);
-                            return;
-                        }
-                        requestedLevels.add(normalizedLevel);
-                    }
-                } else {
-                    // Gate-2 finding (round 3): a `levels` field present but NOT a JSON array
-                    // (a string, object, or null) used to silently leave levelsPresent false --
-                    // the malformed section was dropped rather than rejected, so an accompanying
-                    // valid batchConfig would still apply and report config_updated, silently
-                    // ignoring the requested (malformed) level change. Reject the whole request
-                    // instead, matching #433's own "reject the whole request" precedent for an
-                    // unrecognised level value.
-                    sendErrorResponse(clientId, "Failed to update configuration: 'levels' must be "
-                            + "a JSON array of level names");
-                    return;
-                }
+            // Extracted into parseAndValidateLevels/parseAndValidateBatchConfig (Codacy Gate-2
+            // finding: this method's own NPath complexity peaked at 117301 against a threshold
+            // of 200 once both sections' parsing/validation lived inline here).
+            LevelsSection levels = new LevelsSection();
+            if (!parseAndValidateLevels(data, clientId, levels)) {
+                return; // rejection response already sent
             }
-
-            boolean batchConfigPresent = false;
-            Boolean newEnabled = null;
-            Integer newSize = null;
-            Integer newInterval = null;
-            if (data.has("batchConfig") && logTransmitter != null) {
-                batchConfigPresent = true;
-                JsonObject batchConfig = data.getAsJsonObject("batchConfig");
-
-                if (batchConfig.has("enabled") && !batchConfig.get("enabled").isJsonNull()) {
-                    newEnabled = batchConfig.get("enabled").getAsBoolean();
-                }
-                if (batchConfig.has("size") && !batchConfig.get("size").isJsonNull()) {
-                    newSize = batchConfig.get("size").getAsInt();
-                    if (newSize < 1) {
-                        // Gate-2 finding: a size below 1 makes sendBatch()'s own
-                        // `for (int i = 0; i < batchSize; ...)` loop consume nothing, so a
-                        // negative/zero size silently stalls delivery rather than being rejected.
-                        sendErrorResponse(clientId, "Failed to update configuration: Batch size "
-                                + "must be at least 1, got: " + newSize);
-                        return;
-                    }
-                }
-                if (batchConfig.has("interval") && !batchConfig.get("interval").isJsonNull()) {
-                    newInterval = batchConfig.get("interval").getAsInt();
-                    if (newInterval < UltiPanelLogTransmitter.MIN_INTERVAL_MS) {
-                        sendErrorResponse(clientId, "Failed to update configuration: Batch interval "
-                                + "must be at least " + UltiPanelLogTransmitter.MIN_INTERVAL_MS
-                                + "ms, got: " + newInterval);
-                        return;
-                    }
-                }
+            BatchConfigSection batchConfig = new BatchConfigSection();
+            if (!parseAndValidateBatchConfig(data, clientId, batchConfig)) {
+                return; // rejection response already sent
             }
 
             // ---------- Both sections validated -- now apply ----------
             List<String> changes = new ArrayList<>();
 
-            if (levelsPresent) {
-                systemLogHandler.setEnabledLevels(requestedLevels);
-                changes.add(requestedLevels.isEmpty()
+            if (levels.present) {
+                systemLogHandler.setEnabledLevels(levels.levels);
+                changes.add(levels.levels.isEmpty()
                         ? "levels updated to an empty set (no log records will be delivered "
                                 + "until levels are set again)"
-                        : "levels updated to " + requestedLevels);
+                        : "levels updated to " + levels.levels);
             }
 
-            if (batchConfigPresent) {
+            if (batchConfig.present) {
                 boolean batchChanged = false;
-                if (newEnabled != null) {
-                    logTransmitter.setBatchEnabled(newEnabled);
+                if (batchConfig.enabled != null) {
+                    logTransmitter.setBatchEnabled(batchConfig.enabled);
                     batchChanged = true;
                 }
-                if (newSize != null) {
-                    logTransmitter.setBatchSize(newSize);
+                if (batchConfig.size != null) {
+                    logTransmitter.setBatchSize(batchConfig.size);
                     batchChanged = true;
                 }
-                if (newInterval != null) {
-                    logTransmitter.setIntervalMs(newInterval);
+                if (batchConfig.interval != null) {
+                    logTransmitter.setIntervalMs(batchConfig.interval);
                     batchChanged = true;
                 }
                 if (batchChanged) {
@@ -359,6 +319,117 @@ public class LogStreamManager implements Listener {
             UltiTools.getInstance().getLogger().warning("[UltiPanel] 更新配置失败: " + e.getMessage());
             sendErrorResponse(clientId, "Failed to update configuration: " + e.getMessage());
         }
+    }
+
+    /** Parsed, validated {@code levels} section of a config-update request; {@link #present} is false if absent. */
+    private static final class LevelsSection {
+        boolean present;
+        Set<String> levels;
+    }
+
+    /** Parsed, validated {@code batchConfig} section; each field is null when not present in the request. */
+    private static final class BatchConfigSection {
+        boolean present;
+        Boolean enabled;
+        Integer size;
+        Integer interval;
+    }
+
+    /**
+     * Parses and validates the {@code levels} array from a config-update request into
+     * {@code out}, WITHOUT applying it (extracted from {@link #handleConfigUpdate(JsonObject,
+     * String)}, Codacy Gate-2 NPath complexity finding). {@code out.present} stays {@code false}
+     * if {@code levels} is absent from the request or {@link #systemLogHandler} is not yet wired
+     * -- that is not a rejection.
+     * <p>
+     * Rejects (sends the error response itself, matching this class's own established
+     * "validator sends its own rejection" convention) the WHOLE request if {@code levels} is
+     * present but not a JSON array (Gate-2 round 3), or if any entry is not one of
+     * {@link #VALID_LOG_LEVELS} (#433) -- previously-applied levels survive either way.
+     *
+     * @return {@code true} if absent or valid; {@code false} if rejected -- the caller must
+     *         return immediately without applying anything from either section
+     */
+    private boolean parseAndValidateLevels(JsonObject data, String clientId, LevelsSection out) {
+        if (!data.has("levels") || systemLogHandler == null) {
+            return true;
+        }
+        JsonElement levelsElement = data.get("levels");
+        if (levelsElement == null || !levelsElement.isJsonArray()) {
+            // Gate-2 finding (round 3): a `levels` field present but NOT a JSON array (a string,
+            // object, or null) used to silently leave levelsPresent false -- the malformed
+            // section was dropped rather than rejected, so an accompanying valid batchConfig
+            // would still apply and report config_updated, silently ignoring the requested
+            // (malformed) level change. Reject the whole request instead, matching #433's own
+            // "reject the whole request" precedent for an unrecognised level value.
+            sendErrorResponse(clientId, "Failed to update configuration: 'levels' must be "
+                    + "a JSON array of level names");
+            return false;
+        }
+
+        out.present = true;
+        JsonArray levelsArray = levelsElement.getAsJsonArray();
+        out.levels = new LinkedHashSet<>();
+        for (JsonElement levelElement : levelsArray) {
+            String rawLevel = (levelElement == null || levelElement.isJsonNull())
+                    ? null : levelElement.getAsString();
+            String normalizedLevel = rawLevel == null
+                    ? null : rawLevel.toLowerCase(Locale.ROOT);
+            if (normalizedLevel == null || !VALID_LOG_LEVELS.contains(normalizedLevel)) {
+                // Reject the whole request -- nothing (from either section) is applied.
+                sendErrorResponse(clientId, "Unrecognized log level: " + rawLevel);
+                return false;
+            }
+            out.levels.add(normalizedLevel);
+        }
+        return true;
+    }
+
+    /**
+     * Parses and validates the {@code batchConfig} object from a config-update request into
+     * {@code out}, WITHOUT applying it (extracted from {@link #handleConfigUpdate(JsonObject,
+     * String)}, Codacy Gate-2 NPath complexity finding). {@code out.present} stays {@code false}
+     * if {@code batchConfig} is absent from the request or {@link #logTransmitter} is not yet
+     * wired -- that is not a rejection.
+     * <p>
+     * WR-01/WR-02: every present field is validated before any is applied -- a rejected
+     * {@code size} or {@code interval} must not leave the OTHER fields in this same
+     * {@code batchConfig} object already applied.
+     *
+     * @return {@code true} if absent or valid; {@code false} if rejected -- the caller must
+     *         return immediately without applying anything from either section
+     */
+    private boolean parseAndValidateBatchConfig(JsonObject data, String clientId, BatchConfigSection out) {
+        if (!data.has("batchConfig") || logTransmitter == null) {
+            return true;
+        }
+        out.present = true;
+        JsonObject batchConfig = data.getAsJsonObject("batchConfig");
+
+        if (batchConfig.has("enabled") && !batchConfig.get("enabled").isJsonNull()) {
+            out.enabled = batchConfig.get("enabled").getAsBoolean();
+        }
+        if (batchConfig.has("size") && !batchConfig.get("size").isJsonNull()) {
+            out.size = batchConfig.get("size").getAsInt();
+            if (out.size < 1) {
+                // Gate-2 finding: a size below 1 makes sendBatch()'s own
+                // `for (int i = 0; i < batchSize; ...)` loop consume nothing, so a
+                // negative/zero size silently stalls delivery rather than being rejected.
+                sendErrorResponse(clientId, "Failed to update configuration: Batch size "
+                        + "must be at least 1, got: " + out.size);
+                return false;
+            }
+        }
+        if (batchConfig.has("interval") && !batchConfig.get("interval").isJsonNull()) {
+            out.interval = batchConfig.get("interval").getAsInt();
+            if (out.interval < UltiPanelLogTransmitter.MIN_INTERVAL_MS) {
+                sendErrorResponse(clientId, "Failed to update configuration: Batch interval "
+                        + "must be at least " + UltiPanelLogTransmitter.MIN_INTERVAL_MS
+                        + "ms, got: " + out.interval);
+                return false;
+            }
+        }
+        return true;
     }
     
     /**

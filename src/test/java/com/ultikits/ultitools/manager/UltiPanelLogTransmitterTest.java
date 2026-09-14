@@ -483,7 +483,7 @@ class UltiPanelLogTransmitterTest {
             assertThat(((java.util.Collection<?>) queueField.get(logTransmitter)))
                     .as("Gate-2 P2: the queue must be empty after disabling -- nothing left stranded")
                     .isEmpty();
-            verify(mockWebSocketClient, org.mockito.Mockito.atLeastOnce()).sendMessage(any(JsonObject.class));
+            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
         }
     }
 
