@@ -5,6 +5,7 @@ import java.io.StringWriter;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
@@ -40,16 +41,26 @@ public class UltiPanelLogTransmitter {
     private final AtomicBoolean externalDrainMode = new AtomicBoolean(false);
 
     // Batch-send configuration
-    @Getter @Setter
-    private boolean batchEnabled = true;
+    @Getter
+    private boolean batchEnabled = true; // setter below (#432) -- starts/stops the scheduled sender
     @Getter @Setter
     private int batchSize = 10;
-    @Getter @Setter
-    private int intervalMs = 5000; // 5-second interval
+    @Getter
+    private int intervalMs = 5000; // 5-second interval; setter below (#432) reschedules the sender
 
     // Batch-send queue and scheduler
     private final ConcurrentLinkedQueue<JsonObject> logQueue;
     private final ScheduledExecutorService batchScheduler;
+
+    /**
+     * The currently-scheduled batch-send task, or {@code null} while batching is disabled.
+     * <p>
+     * Tracked so {@link #setIntervalMs(int)} and {@link #setBatchEnabled(boolean)} can cancel and
+     * resubmit it -- before #432, the interval was baked into the one
+     * {@code scheduleWithFixedDelay} call the constructor made, and the setter only mutated the
+     * field without ever touching the already-running task.
+     */
+    private volatile ScheduledFuture<?> batchSenderTask;
 
     /**
      * Constructor.
@@ -175,11 +186,73 @@ public class UltiPanelLogTransmitter {
     }
 
     /**
-     * Starts the batch-send task.
+     * (Re)starts the batch-send task at the current {@link #intervalMs}. Cancels whatever task
+     * was previously scheduled first, so this is safe to call to both start fresh and reschedule
+     * (#432).
      */
     private void startBatchSender() {
-        batchScheduler.scheduleWithFixedDelay(this::sendBatch, 
+        if (batchSenderTask != null) {
+            batchSenderTask.cancel(false);
+        }
+        batchSenderTask = batchScheduler.scheduleWithFixedDelay(this::sendBatch,
             intervalMs, intervalMs, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Cancels the currently-scheduled batch-send task, if any, and clears the reference.
+     */
+    private void stopBatchSender() {
+        if (batchSenderTask != null) {
+            batchSenderTask.cancel(false);
+            batchSenderTask = null;
+        }
+    }
+
+    /**
+     * Sets the batch-send interval, in milliseconds, and -- unlike the field it replaces as a
+     * plain Lombok setter -- reschedules the already-running batch-send task to actually use it
+     * (#432). A no-op, deliberately not touching the scheduler, when the requested value equals
+     * the current one, so a live-config-update round-trip that resends the same value does not
+     * churn the scheduler. Has no effect on the scheduler while batching is disabled (there is no
+     * running task to reschedule); the new value still takes effect the next time batching is
+     * enabled.
+     *
+     * @param intervalMs the new interval; must be positive
+     * @throws IllegalArgumentException if {@code intervalMs} is zero or negative -- the previous
+     *         interval is left in effect
+     */
+    public void setIntervalMs(int intervalMs) {
+        if (intervalMs <= 0) {
+            throw new IllegalArgumentException("Batch interval must be positive, got: " + intervalMs);
+        }
+        if (intervalMs == this.intervalMs) {
+            return;
+        }
+        this.intervalMs = intervalMs;
+        if (batchSenderTask != null) {
+            startBatchSender();
+        }
+    }
+
+    /**
+     * Enables or disables batched delivery, and -- unlike the field it replaces as a plain Lombok
+     * setter -- actually starts or stops the scheduled batch-send task to match (#432): disabling
+     * cancels it outright rather than leaving it running with nothing useful to flush; re-enabling
+     * starts a fresh one at the current {@link #intervalMs}. A no-op when the requested value
+     * equals the current one.
+     *
+     * @param batchEnabled whether batched delivery should be active
+     */
+    public void setBatchEnabled(boolean batchEnabled) {
+        if (batchEnabled == this.batchEnabled) {
+            return;
+        }
+        this.batchEnabled = batchEnabled;
+        if (batchEnabled) {
+            startBatchSender();
+        } else {
+            stopBatchSender();
+        }
     }
 
     /**
