@@ -1205,6 +1205,49 @@ class ServerMonitorManagerTest {
                 pool.shutdownNow();
             }
         }
+
+        @Test
+        @DisplayName("Gate-2 P2 (round 7): logDrainLock 持有期间，drainLogsNow() 的并发调用必须等待 -- 证明三条排空路径共享同一把互斥锁")
+        void logDrainLockBlocksConcurrentDrainLogsNowWhileHeld() throws Exception {
+            Field lockField = ServerMonitorManager.class.getDeclaredField("logDrainLock");
+            lockField.setAccessible(true);
+            Object lock = lockField.get(serverMonitorManager);
+
+            when(UltiTools.getInstance().getConfig())
+                    .thenReturn(configWith(Capability.LOGS.getConfigPath(), true));
+            UltiPanelWebSocketClient transmitterClient = mock(UltiPanelWebSocketClient.class);
+            lenient().when(transmitterClient.isConnected()).thenReturn(true);
+            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(transmitterClient, "test-server");
+            try {
+                transmitter.info("queued line", "test");
+                when(mockLogStreamManagerForBatch.getLogTransmitter()).thenReturn(transmitter);
+
+                CountDownLatch workerStarted = new CountDownLatch(1);
+                CountDownLatch workerDone = new CountDownLatch(1);
+                Thread worker = new Thread(() -> {
+                    workerStarted.countDown();
+                    serverMonitorManager.drainLogsNow();
+                    workerDone.countDown();
+                });
+
+                try {
+                    synchronized (lock) {
+                        worker.start();
+                        assertThat(workerStarted.await(5, TimeUnit.SECONDS)).isTrue();
+                        assertThat(workerDone.await(300, TimeUnit.MILLISECONDS))
+                                .as("drainLogsNow() must block on logDrainLock while it is held elsewhere")
+                                .isFalse();
+                    }
+                    assertThat(workerDone.await(5, TimeUnit.SECONDS))
+                            .as("drainLogsNow() must proceed once the lock is released")
+                            .isTrue();
+                } finally {
+                    worker.join(5000);
+                }
+            } finally {
+                transmitter.shutdown();
+            }
+        }
     }
 
     /**

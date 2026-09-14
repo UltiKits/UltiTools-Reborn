@@ -431,46 +431,79 @@ public class LogStreamManager implements Listener {
         out.present = true;
         JsonObject batchConfig = data.getAsJsonObject("batchConfig");
 
-        if (batchConfig.has("enabled") && !batchConfig.get("enabled").isJsonNull()) {
-            // Gate-2 finding (round 6): Gson's getAsBoolean() on a JSON STRING silently applies
-            // Boolean.parseBoolean, which returns false for any non-"true" string (e.g.
-            // "disabled" -> false) instead of rejecting a malformed value -- a typo would
-            // silently disable batching rather than being refused.
-            JsonElement enabledElement = batchConfig.get("enabled");
-            if (!enabledElement.isJsonPrimitive() || !enabledElement.getAsJsonPrimitive().isBoolean()) {
-                sendErrorResponse(clientId, "Failed to update configuration: "
-                        + "'batchConfig.enabled' must be a boolean");
-                return false;
-            }
-            out.enabled = enabledElement.getAsBoolean();
+        return parseAndValidateBatchEnabled(batchConfig, clientId, out)
+                && parseAndValidateBatchSize(batchConfig, clientId, out)
+                && parseAndValidateBatchInterval(batchConfig, clientId, out);
+    }
+
+    /**
+     * Parses and validates {@code batchConfig.enabled} into {@code out} -- extracted from
+     * {@link #parseAndValidateBatchConfig(JsonObject, String, BatchConfigSection)} alongside its
+     * two siblings (Codacy Gate-2 NPath complexity finding, round 7: the combined method peaked
+     * at 540 against a threshold of 200 once the round-6 strict-type checks were added inline).
+     */
+    private boolean parseAndValidateBatchEnabled(JsonObject batchConfig, String clientId, BatchConfigSection out) {
+        if (!batchConfig.has("enabled") || batchConfig.get("enabled").isJsonNull()) {
+            return true;
         }
-        if (batchConfig.has("size") && !batchConfig.get("size").isJsonNull()) {
-            Integer parsedSize = parseStrictInt(batchConfig.get("size"), "batchConfig.size", clientId);
-            if (parsedSize == null) {
-                return false;
-            }
-            out.size = parsedSize;
-            if (out.size < 1) {
-                // Gate-2 finding: a size below 1 makes sendBatch()'s own
-                // `for (int i = 0; i < batchSize; ...)` loop consume nothing, so a
-                // negative/zero size silently stalls delivery rather than being rejected.
-                sendErrorResponse(clientId, "Failed to update configuration: Batch size "
-                        + "must be at least 1, got: " + out.size);
-                return false;
-            }
+        // Gate-2 finding (round 6): Gson's getAsBoolean() on a JSON STRING silently applies
+        // Boolean.parseBoolean, which returns false for any non-"true" string (e.g.
+        // "disabled" -> false) instead of rejecting a malformed value -- a typo would
+        // silently disable batching rather than being refused.
+        JsonElement enabledElement = batchConfig.get("enabled");
+        if (!enabledElement.isJsonPrimitive() || !enabledElement.getAsJsonPrimitive().isBoolean()) {
+            sendErrorResponse(clientId, "Failed to update configuration: "
+                    + "'batchConfig.enabled' must be a boolean");
+            return false;
         }
-        if (batchConfig.has("interval") && !batchConfig.get("interval").isJsonNull()) {
-            Integer parsedInterval = parseStrictInt(batchConfig.get("interval"), "batchConfig.interval", clientId);
-            if (parsedInterval == null) {
-                return false;
-            }
-            out.interval = parsedInterval;
-            if (out.interval < UltiPanelLogTransmitter.MIN_INTERVAL_MS) {
-                sendErrorResponse(clientId, "Failed to update configuration: Batch interval "
-                        + "must be at least " + UltiPanelLogTransmitter.MIN_INTERVAL_MS
-                        + "ms, got: " + out.interval);
-                return false;
-            }
+        out.enabled = enabledElement.getAsBoolean();
+        return true;
+    }
+
+    /**
+     * Parses and validates {@code batchConfig.size} into {@code out} -- see
+     * {@link #parseAndValidateBatchEnabled(JsonObject, String, BatchConfigSection)}'s javadoc for
+     * why this is a separate method.
+     */
+    private boolean parseAndValidateBatchSize(JsonObject batchConfig, String clientId, BatchConfigSection out) {
+        if (!batchConfig.has("size") || batchConfig.get("size").isJsonNull()) {
+            return true;
+        }
+        Integer parsedSize = parseStrictInt(batchConfig.get("size"), "batchConfig.size", clientId);
+        if (parsedSize == null) {
+            return false;
+        }
+        out.size = parsedSize;
+        if (out.size < 1) {
+            // Gate-2 finding: a size below 1 makes sendBatch()'s own
+            // `for (int i = 0; i < batchSize; ...)` loop consume nothing, so a
+            // negative/zero size silently stalls delivery rather than being rejected.
+            sendErrorResponse(clientId, "Failed to update configuration: Batch size "
+                    + "must be at least 1, got: " + out.size);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Parses and validates {@code batchConfig.interval} into {@code out} -- see
+     * {@link #parseAndValidateBatchEnabled(JsonObject, String, BatchConfigSection)}'s javadoc for
+     * why this is a separate method.
+     */
+    private boolean parseAndValidateBatchInterval(JsonObject batchConfig, String clientId, BatchConfigSection out) {
+        if (!batchConfig.has("interval") || batchConfig.get("interval").isJsonNull()) {
+            return true;
+        }
+        Integer parsedInterval = parseStrictInt(batchConfig.get("interval"), "batchConfig.interval", clientId);
+        if (parsedInterval == null) {
+            return false;
+        }
+        out.interval = parsedInterval;
+        if (out.interval < UltiPanelLogTransmitter.MIN_INTERVAL_MS) {
+            sendErrorResponse(clientId, "Failed to update configuration: Batch interval "
+                    + "must be at least " + UltiPanelLogTransmitter.MIN_INTERVAL_MS
+                    + "ms, got: " + out.interval);
+            return false;
         }
         return true;
     }

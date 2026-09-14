@@ -111,6 +111,21 @@ public class ServerMonitorManager {
     private final AtomicLong lastLogFlushMs = new AtomicLong(0L);
 
     /**
+     * Guards the ACTUAL drain-and-send operation ({@link #drainAndSendLogsOnly}) across all
+     * THREE paths that can trigger one: {@link #sendBatchUpdate()}'s 5-second tick,
+     * {@link #maybeSendLogsOnly()}'s 1-second tick, and {@link #drainLogsNow()}'s size-triggered,
+     * event-driven call (Gate-2 finding, round 7). {@link #claimLogFlushWindow(long, int)}'s CAS
+     * only arbitrates between the two TIME-based paths against each other; {@code drainLogsNow()}
+     * deliberately does not participate in that CAS at all (it is not time-gated), so without a
+     * separate mutual-exclusion lock it could run concurrently with whichever time-based path just
+     * won the CAS, and the two would poll() the same queue at once, splitting one logical batch
+     * across two frames with no ordering guarantee between them. This lock is orthogonal to the
+     * CAS: the CAS decides WHETHER a time-based path may proceed at all; this lock decides that
+     * only ONE drain (whichever path triggered it) is ever in flight at a time.
+     */
+    private final Object logDrainLock = new Object();
+
+    /**
      * The file whose filesystem backs the {@code diskUsage} metric -- the server root (the working
      * directory the Paper process was started in), matching {@link FileOperationManager}'s own
      * {@code serverRoot} convention. Package-private and mutable only so tests can point it at a
@@ -723,14 +738,23 @@ public class ServerMonitorManager {
                     // claimLogFlushWindow() atomically decides the winner against
                     // maybeSendLogsOnly()'s own competing 1-second task -- only the winner drains.
                     if (claimLogFlushWindow(now, transmitter.getIntervalMs())) {
-                        // Gate-2 finding (round 5): drainQueue's own cap must follow the
-                        // transmitter's configured batchSize, not a hardcoded constant -- now
-                        // that externalDrainMode is reliably enabled (round 4's init-order fix),
-                        // this WAS the path a live batchConfig.size change actually went through,
-                        // and a hardcoded value here silently overrode it.
-                        JsonArray logs = transmitter.drainQueue(transmitter.getBatchSize());
-                        if (logs.size() > 0) {
-                            data.add("logs", logs);
+                        // Gate-2 finding (round 7): the drainQueue call itself must be mutually
+                        // exclusive against drainLogsNow()'s size-triggered, non-interval-gated
+                        // drain (and against maybeSendLogsOnly()'s own drain, via the same lock in
+                        // drainAndSendLogsOnly) -- see logDrainLock's own javadoc. This is a
+                        // SEPARATE inline drain (not routed through drainAndSendLogsOnly) because
+                        // its result is folded into this method's own combined status/metrics/
+                        // logs message rather than sent as its own logs-only frame.
+                        synchronized (logDrainLock) {
+                            // Gate-2 finding (round 5): drainQueue's own cap must follow the
+                            // transmitter's configured batchSize, not a hardcoded constant -- now
+                            // that externalDrainMode is reliably enabled (round 4's init-order fix),
+                            // this WAS the path a live batchConfig.size change actually went through,
+                            // and a hardcoded value here silently overrode it.
+                            JsonArray logs = transmitter.drainQueue(transmitter.getBatchSize());
+                            if (logs.size() > 0) {
+                                data.add("logs", logs);
+                            }
                         }
                     }
                 }
@@ -851,23 +875,30 @@ public class ServerMonitorManager {
      * `case 'batch_update'`) already guards every field with {@code if (batch.X)}, so a partial
      * batch_update is an already-supported shape, not a protocol change. Callers are responsible
      * for their own connectivity/capability checks and for advancing {@link #lastLogFlushMs}.
+     * <p>
+     * Holds {@link #logDrainLock} for its whole body (Gate-2 finding, round 7): the poll-and-send
+     * sequence itself must be mutually exclusive across all three callers, not just gated by
+     * {@link #claimLogFlushWindow(long, int)}'s CAS (which only arbitrates the two TIME-based
+     * callers against each other and is not even consulted by {@link #drainLogsNow()}).
      */
     private void drainAndSendLogsOnly(UltiPanelLogTransmitter transmitter) {
-        // Gate-2 finding (round 5): follow the transmitter's own configured batchSize rather
-        // than a hardcoded constant.
-        JsonArray logs = transmitter.drainQueue(transmitter.getBatchSize());
-        if (logs.size() == 0) {
-            return;
-        }
+        synchronized (logDrainLock) {
+            // Gate-2 finding (round 5): follow the transmitter's own configured batchSize rather
+            // than a hardcoded constant.
+            JsonArray logs = transmitter.drainQueue(transmitter.getBatchSize());
+            if (logs.size() == 0) {
+                return;
+            }
 
-        JsonObject message = new JsonObject();
-        message.addProperty("type", "batch_update");
-        message.addProperty("serverId", webSocketClient.getServerId());
-        message.addProperty("timestamp", System.currentTimeMillis());
-        JsonObject data = new JsonObject();
-        data.add("logs", logs);
-        message.add("data", data);
-        webSocketClient.sendMessage(message);
+            JsonObject message = new JsonObject();
+            message.addProperty("type", "batch_update");
+            message.addProperty("serverId", webSocketClient.getServerId());
+            message.addProperty("timestamp", System.currentTimeMillis());
+            JsonObject data = new JsonObject();
+            data.add("logs", logs);
+            message.add("data", data);
+            webSocketClient.sendMessage(message);
+        }
     }
 
     /**
