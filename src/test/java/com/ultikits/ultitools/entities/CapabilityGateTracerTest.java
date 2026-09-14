@@ -128,6 +128,36 @@ class CapabilityGateTracerTest {
         return message;
     }
 
+    /**
+     * The Worker's own acknowledgement shape for {@code upload_config} -- {@code
+     * {message, serverId, configType}}, per {@code PluginInitiationUtils#handleConfigUpload}'s own
+     * javadoc.
+     */
+    private static JsonObject uploadConfigAckMessage() {
+        JsonObject data = new JsonObject();
+        data.addProperty("message", "Configuration upload_config processed successfully");
+        data.addProperty("serverId", "test-server-uuid");
+        data.addProperty("configType", "plugin_config");
+        JsonObject message = new JsonObject();
+        message.addProperty("type", "upload_config");
+        message.add("data", data);
+        return message;
+    }
+
+    /** A genuine write-request shape for {@code upload_config} -- no {@code message} field. */
+    private static JsonObject uploadConfigWriteRequestMessage() {
+        JsonObject data = new JsonObject();
+        data.addProperty("configType", "plugin_config");
+        data.addProperty("configName", "config.yml");
+        data.add("configContent", new JsonObject());
+        data.addProperty("format", "yaml");
+        data.addProperty("backup", false);
+        JsonObject message = new JsonObject();
+        message.addProperty("type", "upload_config");
+        message.add("data", data);
+        return message;
+    }
+
     @Nested
     @DisplayName("Capability.isEnabled() 的出厂默认值")
     class NoConfigDefaults {
@@ -253,6 +283,46 @@ class CapabilityGateTracerTest {
             // recordFileDecision() from its own isPathAllowed() check, so
             // dispatchWithCapabilityGate must not also record one here.
             verify(mockRemoteActionLog, never()).record(any());
+        }
+    }
+
+    @Nested
+    @DisplayName("upload_config 的 resolver (Gate-2 finding, round 11)")
+    class UploadConfigResolver {
+
+        @Test
+        @DisplayName("Worker 的确认回执（带 message 字段）解析为 NONE -- 绕过网关，即便 file-write 出厂默认关闭")
+        void ackShapeResolvesToNoneAndBypassesTheGateEvenWithFileWriteDisabledByDefault() throws Exception {
+            // Before this fix, upload_config was gated by a FIXED Capability.FILE_WRITE constant
+            // -- with the shipped default (file-write: false), the Worker's own acknowledgement of
+            // this server's own outbound uploadConfig() push never reached handleConfigUpload's
+            // "message"-presence recognition at all: it was denied and recorded as a DENIED write
+            // for a message that was never attempting to write anything.
+            invokeHandleInboundMessage(uploadConfigAckMessage());
+
+            // Capability.NONE bypasses the gate entirely -- no capability_denied is sent, and
+            // dispatchWithCapabilityGate's own record() call is never reached for a NONE entry.
+            verify(mockPanelWs, never()).sendMessage(any());
+            verify(mockRemoteActionLog, never()).record(any());
+        }
+
+        @Test
+        @DisplayName("真正的写入请求（无 message 字段）仍解析为 FILE_WRITE（默认关闭 -> 拒绝）")
+        void writeRequestShapeStillResolvesToFileWriteAndIsDeniedByDefault() throws Exception {
+            invokeHandleInboundMessage(uploadConfigWriteRequestMessage());
+
+            ArgumentCaptor<JsonObject> sent = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockPanelWs, times(1)).sendMessage(sent.capture());
+            JsonObject response = sent.getValue();
+            assertThat(response.get("type").getAsString()).isEqualTo("capability_denied");
+            assertThat(response.getAsJsonObject("data").get("capability").getAsString())
+                    .isEqualTo("FILE_WRITE");
+
+            ArgumentCaptor<RemoteActionLog.Entry> entryCaptor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
+            verify(mockRemoteActionLog, times(1)).record(entryCaptor.capture());
+            RemoteActionLog.Entry entry = entryCaptor.getValue();
+            assertThat(entry.getCapability()).isEqualTo("FILE_WRITE");
+            assertThat(entry.getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
         }
     }
 

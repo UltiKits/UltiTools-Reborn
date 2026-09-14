@@ -56,6 +56,15 @@ public class ServerMonitorManager {
     private static final long SNAPSHOT_INTERVAL_TICKS = 100L;
 
     /**
+     * Polling granularity for {@link #maybeSendLogsOnly()}'s scheduled check, in milliseconds
+     * (Gate-2 finding, round 11). Narrowed from 1 second to bound the worst-case overshoot past a
+     * configured {@code batchConfig.interval} to roughly this value, rather than up to a full
+     * second -- see the call site's own comment for the numeric evidence and the reasoning for not
+     * instead dynamically rescheduling this task to track the transmitter's own live interval.
+     */
+    private static final long LOG_FLUSH_POLL_INTERVAL_MS = 100L;
+
+    /**
      * A server-state snapshot sampled on the main thread; the async send thread only ever reads
      * it.
      * <p>
@@ -299,12 +308,28 @@ public class ServerMonitorManager {
         // lastLogFlushMs, but that gate was only ever CHECKED on sendBatchUpdate()'s own fixed
         // 5-second tick, so a configured interval was still quantized up to a multiple of 5
         // seconds (1000ms drained no faster than every 5s; 7000ms drained roughly every 10s,
-        // not 7). This second task checks the SAME lastLogFlushMs gate at a finer, 1-second
-        // granularity, independent of sendBatchUpdate()'s own tick -- see
-        // maybeSendLogsOnly()'s own javadoc for why sharing the one field is race-safe and
-        // does not double-send. Cancelled implicitly by stopMonitoring()'s scheduler.shutdown(),
-        // same as the task above -- neither is tracked in its own field.
-        scheduler.scheduleAtFixedRate(this::maybeSendLogsOnly, 1, 1, TimeUnit.SECONDS);
+        // not 7). This second task checks the SAME lastLogFlushMs gate at a finer granularity,
+        // independent of sendBatchUpdate()'s own tick -- see maybeSendLogsOnly()'s own javadoc
+        // for why sharing the one field is race-safe and does not double-send. Cancelled
+        // implicitly by stopMonitoring()'s scheduler.shutdown(), same as the task above --
+        // neither is tracked in its own field.
+        //
+        // Gate-2 finding (round 11): the ORIGINAL granularity here was a flat 1-second tick, which
+        // itself still rounds delivery UP to its own next tick for any configured interval that is
+        // not a whole multiple of one second -- a 1500ms interval drained roughly every 2000ms, and
+        // a 1001ms interval could take nearly twice its own requested value. Rather than replace
+        // this fixed-rate check with a dynamically-rescheduled task tracking the transmitter's own
+        // live interval (the reviewer's other suggested option) -- which would need new live
+        // rescheduling wiring between this class and UltiPanelLogTransmitter every time
+        // setIntervalMs() runs, for a purely cosmetic latency improvement on a log-streaming
+        // feature, not a correctness path -- this task's own polling granularity is narrowed from
+        // 1 second to LOG_FLUSH_POLL_INTERVAL_MS, tightening the worst-case overshoot bound from up
+        // to ~1000ms to up to ~100ms against any interval at or above MIN_INTERVAL_MS (1000ms):
+        // roughly a 10x reduction, at the cost of a 10x cheaper-call frequency increase on a
+        // no-op-in-the-common-case CAS check (claimLogFlushWindow returns false immediately
+        // whenever the interval has not yet elapsed).
+        scheduler.scheduleAtFixedRate(this::maybeSendLogsOnly,
+                LOG_FLUSH_POLL_INTERVAL_MS, LOG_FLUSH_POLL_INTERVAL_MS, TimeUnit.MILLISECONDS);
 
         // Start the TPS calculation + CPU sampling task (every second)
         tpsTask = Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), this::updateTpsAndCpu, 0L, 20L);
@@ -798,8 +823,9 @@ public class ServerMonitorManager {
     }
 
     /**
-     * Checks the log-drain interval gate at a 1-second granularity, independent of
-     * {@link #sendBatchUpdate()}'s own fixed 5-second tick (Gate-2 finding, round 3).
+     * Checks the log-drain interval gate at a {@link #LOG_FLUSH_POLL_INTERVAL_MS} granularity
+     * (narrowed from 1 second in round 11), independent of {@link #sendBatchUpdate()}'s own fixed
+     * 5-second tick (Gate-2 finding, round 3).
      * <p>
      * Both this method and {@link #sendBatchUpdate()} call {@link #claimLogFlushWindow(long, int)}
      * against the SAME {@link #lastLogFlushMs} field, so only one of the two competing scheduled

@@ -491,7 +491,17 @@ public class PluginInitiationUtils {
                 (message, data) -> handleBackupProgress(data)));
 
         // Config-management messages — the handler performs no second-layer decision.
-        handlers.put("upload_config", InboundHandlerEntry.of(Capability.FILE_WRITE, VerdictRecorder.GATE,
+        //
+        // Gate-2 finding (round 11): upload_config is NOT gated by a fixed constant like most
+        // entries -- it carries traffic in BOTH directions on the same type (see
+        // handleConfigUpload's own javadoc), and only the write-request direction actually needs
+        // FILE_WRITE. A fixed Capability.FILE_WRITE here denied the Worker's own acknowledgement
+        // of the server's OWN outbound uploadConfig() push under the shipped default
+        // (file-write: false) -- the acknowledgement never reached handleConfigUpload's
+        // "message"-presence recognition at all, and was instead recorded as a DENIED write in
+        // the action log for a message that was never attempting to write anything.
+        handlers.put("upload_config", InboundHandlerEntry.resolved(
+                PluginInitiationUtils::resolveUploadConfigCapability, VerdictRecorder.GATE,
                 (message, data) -> handleConfigUpload(data)));
         handlers.put("update_config", InboundHandlerEntry.of(Capability.FILE_WRITE, VerdictRecorder.GATE,
                 (message, data) -> handleConfigUpdate(data)));
@@ -529,6 +539,33 @@ public class PluginInitiationUtils {
     private static Capability resolveFileOperationCapability(JsonObject data) {
         String operation = data != null ? readString(data, "operation") : null;
         return resolveFileOperationCapability(operation);
+    }
+
+    /**
+     * Resolves {@code upload_config}'s required capability from the message's own shape (Gate-2
+     * finding, round 11) -- {@code upload_config} carries traffic in BOTH directions on the same
+     * type (see {@link #handleConfigUpload}'s own javadoc): {@link #uploadConfig} sends the
+     * server's own aggregated config UP on every reconnect, and the Worker's generic
+     * {@code response.type = message.type} echo sends the acknowledgement of that push back down
+     * this SAME inbound type. Only the genuine write-request direction needs
+     * {@link Capability#FILE_WRITE}; the acknowledgement is a protocol echo carrying no
+     * operator-facing policy and resolves to {@link Capability#NONE}, same as this class's other
+     * echo/acknowledgement entries ({@code server_properties_result}, {@code auth_complete}).
+     * <p>
+     * Uses the SAME presence-only heuristic {@link #handleConfigUpload} itself uses to recognise
+     * the acknowledgement ({@code data.has("message")}) -- deliberately the one heuristic, not two
+     * independently-maintained copies of it; see that method's own javadoc for the heuristic's
+     * documented fragility against a future second real producer.
+     *
+     * @param data the message's {@code data} object, possibly {@code null}
+     * @return {@link Capability#NONE} for the acknowledgement shape, {@link Capability#FILE_WRITE}
+     *         otherwise
+     */
+    private static Capability resolveUploadConfigCapability(JsonObject data) {
+        if (data != null && data.has("message")) {
+            return Capability.NONE;
+        }
+        return Capability.FILE_WRITE;
     }
 
     /**

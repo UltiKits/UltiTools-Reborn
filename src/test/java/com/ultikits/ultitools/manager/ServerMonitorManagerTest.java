@@ -748,12 +748,31 @@ class ServerMonitorManagerTest {
         void shouldLogStartMessage() {
             // Arrange
             when(mockWebSocketClient.isConnected()).thenReturn(true);
-            
+
             // Act
             serverMonitorManager.startMonitoring();
-            
+
             // Assert
             verify(mockLogger).log(any(java.util.logging.Level.class), org.mockito.ArgumentMatchers.contains("启动"));
+        }
+
+        @Test
+        @DisplayName("Gate-2 P2 (round 11): maybeSendLogsOnly 的调度粒度被收紧到 LOG_FLUSH_POLL_INTERVAL_MS（100ms），不再是 1 秒")
+        void logsOnlyPollingGranularityIsNarrowedToOneHundredMillis() throws Exception {
+            // Pins the round-11 fix at the constant level: the worst-case overshoot past a
+            // configured batchConfig.interval (e.g. a 1500ms interval draining every ~2000ms
+            // under the OLD 1-second granularity) is bounded by this value instead. Verified as a
+            // constant rather than by observing real scheduled-task timing, since the fix is
+            // exactly the scheduling period passed to scheduleAtFixedRate -- a wall-clock test
+            // here would be slower and flakier for no additional coverage.
+            Field field = ServerMonitorManager.class.getDeclaredField("LOG_FLUSH_POLL_INTERVAL_MS");
+            field.setAccessible(true);
+            long pollIntervalMs = (long) field.get(null);
+
+            assertThat(pollIntervalMs)
+                    .as("must be tighter than the OLD 1-second granularity this fix replaces")
+                    .isLessThan(1000L)
+                    .isPositive();
         }
     }
 
