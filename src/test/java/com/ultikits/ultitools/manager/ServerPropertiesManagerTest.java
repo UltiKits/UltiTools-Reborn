@@ -9,6 +9,7 @@ import static org.mockito.Mockito.verify;
 
 import java.io.*;
 import java.lang.reflect.Field;
+import java.nio.file.Files;
 import java.util.*;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -375,6 +376,104 @@ class ServerPropertiesManagerTest {
             manager.handleServerProperties(setAllRequest(Collections.singletonMap("rcon.password", "hacked")));
 
             assertThat(captureMessage(socket).get("success").getAsBoolean()).isFalse();
+        }
+    }
+
+    /**
+     * A key on {@link ServerPropertiesManager}'s allowlist that the RUNNING server's own
+     * {@code server.properties} does not have -- D-15, the SAFE_KEYS issue.
+     *
+     * <p>{@code SAFE_KEYS} is a ceiling across every Paper version this framework supports
+     * (14 declared; only a subset exists on any one Paper version), not a per-server promise.
+     * Writing a key Paper does not read on this server's version is silently ignored by the
+     * platform -- the property lands in the operator's own file (Java's {@code Properties} does
+     * not validate against Paper's schema) but Paper never reads it back, so the change appears
+     * to succeed and never takes effect. This must be refused before it happens, with a reason
+     * distinguishable from "not allowlisted" and "no properties file".
+     */
+    @Nested
+    @DisplayName("白名单里但当前服务器版本没有的键 -- D-15, SAFE_KEYS issue")
+    class AbsentAllowlistedKeyRejection {
+
+        private JsonObject setRequest(String key, String value) {
+            JsonObject data = new JsonObject();
+            data.addProperty("action", "set");
+            data.addProperty("key", key);
+            data.addProperty("value", value);
+            return data;
+        }
+
+        @Test
+        @DisplayName("写一个在白名单但文件里没有的键：被拒绝，且文件字节不变")
+        void writingAnAbsentAllowlistedKeyIsRejectedAndFileStaysByteIdentical() throws IOException {
+            // simulation-distance is on SAFE_KEYS but not written by setUp()'s fixture file.
+            byte[] before = Files.readAllBytes(propsFile.toPath());
+
+            UltiPanelWebSocketClient socket = attachSocket();
+            manager.handleServerProperties(setRequest("simulation-distance", "8"));
+
+            JsonObject message = captureMessage(socket);
+            assertThat(message.get("success").getAsBoolean()).isFalse();
+            assertThat(message.get("reason").getAsString()).isEqualTo("This server version has no such key");
+
+            byte[] after = Files.readAllBytes(propsFile.toPath());
+            assertThat(after).isEqualTo(before);
+            assertThat(manager.getSafeProperties()).doesNotContainKey("simulation-distance");
+        }
+
+        @Test
+        @DisplayName("不在白名单的键仍按既有理由被拒，与新理由不同")
+        void keyNotOnTheAllowlistIsStillRejectedWithTheExistingReason() {
+            UltiPanelWebSocketClient socket = attachSocket();
+            manager.handleServerProperties(setRequest("rcon.password", "hacked"));
+
+            JsonObject message = captureMessage(socket);
+            assertThat(message.get("success").getAsBoolean()).isFalse();
+            assertThat(message.get("reason").getAsString()).isEqualTo("Key is not in the allowed list");
+        }
+
+        @Test
+        @DisplayName("三种拒绝理由互不相同：不在白名单 / 白名单里但文件没有 / 没有配置文件")
+        void theThreeRefusalReasonsAreDistinguishableFromOneAnother() throws IOException {
+            UltiPanelWebSocketClient socket1 = attachSocket();
+            manager.handleServerProperties(setRequest("rcon.password", "hacked"));
+            String notAllowlisted = captureMessage(socket1).get("reason").getAsString();
+
+            UltiPanelWebSocketClient socket2 = attachSocket();
+            manager.handleServerProperties(setRequest("simulation-distance", "8"));
+            String absentFromFile = captureMessage(socket2).get("reason").getAsString();
+
+            assertThat(propsFile.delete()).isTrue();
+            UltiPanelWebSocketClient socket3 = attachSocket();
+            manager.handleServerProperties(setRequest("motd", "New MOTD"));
+            String noFile = captureMessage(socket3).get("reason").getAsString();
+
+            assertThat(Arrays.asList(notAllowlisted, absentFromFile, noFile)).doesNotHaveDuplicates();
+        }
+
+        @Test
+        @DisplayName("读结果只包含文件里实际存在的键——今天已经是对的，这里只是钉住不让后续改动悄悄破坏它")
+        void readResultOnlyContainsKeysActuallyPresentInTheFile() {
+            Map<String, String> props = manager.getSafeProperties();
+
+            assertThat(props).containsKey("motd");
+            // simulation-distance is on SAFE_KEYS but is not one of the keys setUp() writes.
+            assertThat(props).doesNotContainKey("simulation-distance");
+        }
+
+        @Test
+        @DisplayName("白名单本身的内容没有被删减")
+        void allowlistContentIsUnchanged() throws Exception {
+            Field field = ServerPropertiesManager.class.getDeclaredField("SAFE_KEYS");
+            field.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Set<String> safeKeys = (Set<String>) field.get(null);
+
+            assertThat(safeKeys).containsExactlyInAnyOrder(
+                    "motd", "max-players", "view-distance", "simulation-distance",
+                    "spawn-protection", "difficulty", "gamemode", "pvp",
+                    "allow-nether", "allow-flight", "spawn-animals", "spawn-monsters",
+                    "spawn-npcs", "enable-command-block");
         }
     }
 }
