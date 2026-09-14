@@ -33,6 +33,17 @@ import lombok.Getter;
 
 /**
  * Abstract class representing a configuration entity.
+ * <p>
+ * Precondition for subclasses (#363): the constructor must be cheap and free of side effects.
+ * Every {@link #validateFields()} call - reached from {@link #init(UltiToolsPlugin)}, {@link
+ * #reload()}, and {@link #updateProperties(com.google.gson.JsonObject)} - constructs and
+ * discards a second, throwaway instance of this class via {@link #ensureConstructable()} to
+ * prove the class still supports one of the framework's two documented construction idioms.
+ * That means every configuration load, every reload, and every accepted panel write
+ * constructs this class one extra time. A constructor that opens a file, registers a listener,
+ * or otherwise does real work pays that cost again on every one of those events, purely to be
+ * thrown away. The documented {@code super(configFilePath)}-only idiom is unaffected - it is a
+ * single, trivial reflective call.
  */
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Config binder writes/reads private @ConfigEntry fields -- see 08-GATE05-TRIAGE.md
 @Getter
