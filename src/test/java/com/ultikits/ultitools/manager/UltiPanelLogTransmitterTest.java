@@ -363,6 +363,82 @@ class UltiPanelLogTransmitterTest {
         }
     }
 
+    // ==================== batch 调度器重调度测试 (issue #432) ====================
+    @Nested
+    @DisplayName("batch 调度器重调度测试 -- 修改 interval/batchEnabled 必须实际驱动调度器，而不只是改字段")
+    class BatchSchedulerReschedulingTests {
+
+        /**
+         * Typed {@code Object}, not {@code ScheduledFuture}, so every assertion below resolves
+         * AssertJ's plain {@code assertThat(Object)} overload rather than colliding with its
+         * separate, ambiguity-causing {@code assertThat(Future)} overload.
+         */
+        private Object currentTask() throws Exception {
+            Field field = UltiPanelLogTransmitter.class.getDeclaredField("batchSenderTask");
+            field.setAccessible(true);
+            return field.get(logTransmitter);
+        }
+
+        private boolean isCancelled(Object task) {
+            return ((java.util.concurrent.Future<?>) task).isCancelled();
+        }
+
+        @Test
+        @DisplayName("设置新的 interval 会取消旧的调度任务并提交一个新的 -- 观察任务本身，而不是读回字段")
+        void settingNewIntervalCancelsAndResubmitsTheScheduledTask() throws Exception {
+            Object before = currentTask();
+            assertThat(before).isNotNull();
+            assertThat(isCancelled(before)).isFalse();
+
+            logTransmitter.setIntervalMs(10000);
+
+            Object after = currentTask();
+            assertThat(after).isNotSameAs(before);
+            assertThat(isCancelled(before)).isTrue();
+            assertThat(after).isNotNull();
+            assertThat(isCancelled(after)).isFalse();
+        }
+
+        @Test
+        @DisplayName("设置成当前已有的 interval 值不应该扰动调度器 -- 同一个任务实例")
+        void settingSameIntervalDoesNotChurnTheScheduler() throws Exception {
+            Object before = currentTask();
+
+            logTransmitter.setIntervalMs(logTransmitter.getIntervalMs());
+
+            Object after = currentTask();
+            assertThat(after).isSameAs(before);
+        }
+
+        @Test
+        @DisplayName("非正数的 interval 被拒绝，并保留之前生效的值")
+        void nonPositiveIntervalIsRejectedAndThePreviousValueSurvives() {
+            int before = logTransmitter.getIntervalMs();
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> logTransmitter.setIntervalMs(0))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(logTransmitter.getIntervalMs()).isEqualTo(before);
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> logTransmitter.setIntervalMs(-500))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(logTransmitter.getIntervalMs()).isEqualTo(before);
+        }
+
+        @Test
+        @DisplayName("禁用批量发送会停止调度任务；重新以当前 interval 启用会重新启动它")
+        void disablingBatchingStopsTheSenderReEnablingStartsItAgain() throws Exception {
+            assertThat(currentTask()).isNotNull();
+
+            logTransmitter.setBatchEnabled(false);
+            assertThat(currentTask()).isNull();
+
+            logTransmitter.setBatchEnabled(true);
+            Object restarted = currentTask();
+            assertThat(restarted).isNotNull();
+            assertThat(isCancelled(restarted)).isFalse();
+        }
+    }
+
     @Nested
     @DisplayName("addToBatch 测试")
     class AddToBatchTests {
