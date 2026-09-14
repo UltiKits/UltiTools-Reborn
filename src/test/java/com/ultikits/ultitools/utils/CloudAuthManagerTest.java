@@ -917,6 +917,105 @@ class CloudAuthManagerTest {
                     .as("前置条件：本用例这次 login 调用的拆线确实跑完了，不是被跳过")
                     .isFalse();
         }
+
+        @Test
+        @DisplayName("round-14 外部评审（P2）：两次几乎同时发起的 login 调用，后到的那一次不得撤销"
+                + "先到的那次刚刚装好、已经在轮询的新会话")
+        void secondOverlappingLoginDoesNotInvalidateTheFirstOnesFreshSession() throws Exception {
+            setSessionField("token", null);
+            CloudSession sessionAtCheck = CloudSession.current();
+
+            // 复现评审给出的确切场景：ApiRateLimiter.isAllowed() 自己的 check-then-set
+            // 不是原子的（分开的 ConcurrentHashMap get + put），所以两次几乎同时发起的
+            // @RunAsync login() 调用可能都基于同一个 sessionAtCheck 通过限流检查。这里不去
+            // 复现限流器本身的那道竞争（真要在两个真实线程之间跨线程打桩 ApiRateLimiter 这个
+            // 静态方法，会撞上 Mockito 静态 mock 线程限定的限制——本文件其它用例已经踩过这个坑），
+            // 而是直接复现两次调用「都基于同一个 sessionAtCheck 认为自己可以继续」这个前提本身：
+            // T1 卡在持锁区域内部（借 onRequesting 钩子），T2 在 T1 released 之前就已经真的
+            // 排队等在同一把锁外面。
+            CountDownLatch t1ReachedLock = new CountDownLatch(1);
+            CountDownLatch t2Attempted = new CountDownLatch(1);
+            CountDownLatch releaseT1 = new CountDownLatch(1);
+
+            AtomicReference<String> t1ErrorMessage = new AtomicReference<>();
+            Thread t1 = new Thread(() -> CloudAuthManager.login(
+                    () -> { },
+                    remaining -> { },
+                    () -> {
+                        // 此刻 T1 已经拿到 CloudSession.class + sessionAtCheck 这两把锁。
+                        t1ReachedLock.countDown();
+                        try {
+                            assertThat(releaseT1.await(5, TimeUnit.SECONDS))
+                                    .as("本用例必须主动放行 T1，不能超时")
+                                    .isTrue();
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    },
+                    url -> { },
+                    t1ErrorMessage::set),
+                    "login-round14-t1");
+            t1.setDaemon(true);
+            t1.start();
+
+            assertThat(t1ReachedLock.await(5, TimeUnit.SECONDS))
+                    .as("T1 必须先真的拿到锁、卡在 onRequesting 钩子里")
+                    .isTrue();
+
+            // T1 自己那次 isLoginAllowed() 调用已经消耗掉了限流令牌——T2 若不重置，会在还没碰到
+            // 锁之前就先被限流短路掉，测的就成了限流器而不是这里要补的那个洞。真实场景里 T2 能
+            // 绕过限流，靠的是 isAllowed() 自己那个非原子的 check-then-set 竞争；这里直接重置，
+            // 等价地制造出「T2 也认为自己被放行了」这个前提，不去复现限流器内部的竞争本身。
+            ApiRateLimiter.resetAll();
+
+            AtomicBoolean t2AlreadyLoggedInCalled = new AtomicBoolean(false);
+            AtomicReference<String> t2ErrorMessage = new AtomicReference<>();
+            Thread t2 = new Thread(() -> {
+                t2Attempted.countDown();
+                CloudAuthManager.login(
+                        () -> t2AlreadyLoggedInCalled.set(true),
+                        remaining -> { },
+                        () -> { },
+                        url -> { },
+                        t2ErrorMessage::set);
+            }, "login-round14-t2");
+            t2.setDaemon(true);
+            t2.start();
+            assertThat(t2Attempted.await(5, TimeUnit.SECONDS)).isTrue();
+            // 给 T2 一个公平的机会真正排队到同一把锁外面——它此刻必须被 T1 挡住，进不去。
+            t2.join(300);
+            assertThat(t2.isAlive())
+                    .as("前置条件：T2 此刻必须还卡在锁外面，还没跑完")
+                    .isTrue();
+
+            releaseT1.countDown();
+            t1.join(5000);
+            assertThat(t1.isAlive()).as("T1 必须已经跑完").isFalse();
+
+            CloudSession sessionAfterT1 = CloudSession.current();
+            assertThat(sessionAfterT1)
+                    .as("前置条件：T1 必须已经真的换上了它自己的新会话")
+                    .isNotSameAs(sessionAtCheck);
+
+            t2.join(5000);
+            assertThat(t2.isAlive()).as("T2 必须已经跑完").isFalse();
+
+            assertThat(t2AlreadyLoggedInCalled)
+                    .as("T2 自己的复检（针对它自己那份、早已过期的 sessionAtCheck 快照）"
+                            + "正确地判定为「未登录」——这与它最终该不该继续替换会话是两件事")
+                    .isFalse();
+            assertThat(t2ErrorMessage.get())
+                    .as("round-14：T2 发现自己的 sessionAtCheck 早已不是 current()，"
+                            + "必须安全地报错退出，而不是继续往下走")
+                    .isNotNull();
+
+            assertThat(CloudSession.current())
+                    .as("round-14：T2 绝不能撤销 T1 刚刚装好的新会话——这正是评审要补的那个洞")
+                    .isSameAs(sessionAfterT1);
+            assertThat(sessionAfterT1.isCurrent())
+                    .as("round-14：T1 的新会话必须仍然有效，没有被 T2 误伤")
+                    .isTrue();
+        }
     }
 
     // =========================================================================

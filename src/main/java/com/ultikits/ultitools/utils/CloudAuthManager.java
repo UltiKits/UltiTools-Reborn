@@ -98,6 +98,25 @@ public class CloudAuthManager {
                     onAlreadyLoggedIn.run();
                     return;
                 }
+                // 16-10 gap-closure addendum (round-14 review, PR #464), P2: make the replacement
+                // conditional on sessionAtCheck still being CloudSession.current() -- reachable
+                // because ApiRateLimiter#isAllowed's own check-then-set is a separate
+                // ConcurrentHashMap get() and put(), not atomic, so two overlapping @RunAsync
+                // login() invocations can both pass the rate-limit check against the SAME captured
+                // sessionAtCheck before either reaches this lock. Without this check, the SECOND
+                // thread to acquire the lock would still act on ITS OWN (now stale) sessionAtCheck
+                // reference and call CloudSession#startNew() unconditionally -- which reads
+                // CloudSession.current() fresh, finds the FIRST thread's brand-new (already
+                // requesting/about-to-poll) session installed there, and invalidates THAT instead of
+                // the intended target. The first thread's magic-link URL would then be printed to
+                // the operator, but startPolling() silently refuses to poll an invalidated session,
+                // producing a link that can never complete. This read is stable for the rest of this
+                // block: only startNew() can change current(), and it is also synchronized on
+                // CloudSession.class, which this thread already holds.
+                if (sessionAtCheck != CloudSession.current()) {
+                    onError.accept("Another login attempt is already in progress; please try again");
+                    return;
+                }
                 onRequesting.run();
                 // Round-1 external review finding, first pass (PR #464): CloudSession#startNew()
                 // alone only tears down the session's OWN resources (schedulers, WebSocket client)
