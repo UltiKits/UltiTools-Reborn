@@ -325,13 +325,17 @@ final class CloudSession {
      * {@code credentials.json} is unwritable or the underlying file is corrupt -- the old
      * shape returned before ever reaching the in-memory clear, so {@link #token} stayed set to
      * the value this session (already invalidated by the caller's {@code logout()}) still
-     * believed was valid. {@link #hasValidToken()} does not consult {@link #invalidated} at all,
-     * so every subsequent {@code /ulticloud login} kept reporting "Already logged in" against a
-     * session nothing could ever make current again, until the server restarted. The disk write
-     * and the in-memory clear are two independent effects with no ordering relationship the
-     * caller can rely on to fix this the other way around, so the in-memory half is moved into a
-     * {@code finally} block: it now always runs, whether the disk write succeeds, fails with a
-     * propagated exception, or is never reached at all.
+     * believed was valid. At the time of this finding, {@link #hasValidToken()} did not consult
+     * {@link #invalidated} at all (see round-10's own fix on that method for the separate,
+     * independent gap this exposed), so every subsequent {@code /ulticloud login} kept reporting
+     * "Already logged in" against a session nothing could ever make current again, until the
+     * server restarted. The disk write and the in-memory clear are two independent effects with
+     * no ordering relationship the caller can rely on to fix this the other way around, so the
+     * in-memory half is moved into a {@code finally} block: it now always runs, whether the disk
+     * write succeeds, fails with a propagated exception, or is never reached at all. This remains
+     * correct and necessary on its own even after round-10's fix -- this method is package-private
+     * and callable directly (as this class's own tests do) on a session that has not itself been
+     * invalidated yet, a case round-10's {@link #invalidated} check does not cover.
      *
      * @throws IOException if the underlying write fails
      */
@@ -343,10 +347,23 @@ final class CloudSession {
         }
     }
 
-    /** @return {@code true} if this session holds a non-expired token with an access token */
+    /**
+     * @return {@code true} if this session has not been invalidated AND holds a non-expired token
+     *         with an access token
+     */
+    // Round-10 external review finding (16-10, PR #464): this check used to consult only the
+    // token's own shape, never invalidated. PluginInitiationUtils#reinitWebSocket's exhaustion
+    // branch invalidates a session (via disableCloud(session)) while deliberately leaving its
+    // token in memory -- clearing the credential is logout's job, not exhaustion's, so this is not
+    // itself a bug in that branch. But without an invalidated check here, an operator whose
+    // session had already exhausted its reconnect budget would see /ulticloud login report
+    // "Already logged in" and /ulticloud status report "Connected", directly contradicting the
+    // exhaustion message that told them to run login to recover -- the socket and managers were
+    // already torn down, only the in-memory token shape still looked fine. isCurrent() is the same
+    // invalidated flag every other gate in this class already checks.
     boolean hasValidToken() {
         TokenEntity current = this.token;
-        return current != null && current.getAccess_token() != null && !current.isExpired();
+        return isCurrent() && current != null && current.getAccess_token() != null && !current.isExpired();
     }
 
     // ---- Loading from disk (startup) ----

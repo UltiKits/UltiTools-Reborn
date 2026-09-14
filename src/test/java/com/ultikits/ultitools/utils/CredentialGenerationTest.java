@@ -573,4 +573,44 @@ class CredentialGenerationTest {
                     .isFalse();
         }
     }
+
+    /**
+     * Round-10 external review finding (16-10, PR #464): {@link CloudSession#hasValidToken()}
+     * used to consult only the token's own shape, never {@link CloudSession#invalidate()}'s own
+     * {@code invalidated} flag. {@code PluginInitiationUtils#reinitWebSocket}'s exhaustion branch
+     * invalidates a session while deliberately leaving its token in memory -- clearing the
+     * credential is logout's job, not exhaustion's -- so an operator whose session had already
+     * exhausted its reconnect budget saw {@code /ulticloud login} report "Already logged in" and
+     * {@code /ulticloud status} report "Connected", directly contradicting the exhaustion message
+     * that told them to run login to recover.
+     */
+    @Nested
+    @DisplayName("hasValidToken reports false once the session is invalidated, even with an unexpired token still in memory")
+    class HasValidTokenRejectsInvalidatedSessions {
+
+        @Test
+        @DisplayName("an invalidated session with a still-unexpired token must report hasValidToken()==false")
+        void invalidatedSessionWithUnexpiredTokenReportsNoValidToken() throws Exception {
+            CloudSession session = CloudSession.current();
+            assertThat(session.commit(someToken())).isTrue();
+            assertThat(session.hasValidToken())
+                    .as("precondition: the session must actually hold a valid token before "
+                            + "invalidating it can prove anything about the invalidated check")
+                    .isTrue();
+
+            // Mirrors PluginInitiationUtils.reinitWebSocket's exhaustion branch: disableCloud(session)
+            // invalidates the session but does NOT clear its token (only logout's clearPersisted()
+            // does that) -- markInvalidatedForTesting() reproduces exactly that effect on the token
+            // field without driving the full reinit state machine.
+            session.markInvalidatedForTesting();
+
+            assertThat(session.hasValidToken())
+                    .as("an invalidated session must never report a valid token -- otherwise "
+                            + "/ulticloud login says \"Already logged in\" and /ulticloud status says "
+                            + "\"Connected\" against a session whose socket and managers are already "
+                            + "torn down, exactly contradicting the exhaustion message telling the "
+                            + "operator to run login to recover")
+                    .isFalse();
+        }
+    }
 }
