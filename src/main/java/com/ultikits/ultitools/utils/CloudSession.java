@@ -16,7 +16,10 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.entities.TokenEntity;
+import com.ultikits.ultitools.websocket.ExponentialBackoffStrategy;
+import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 /**
  * The single owner of one UltiCloud login's entire lifetime.
@@ -59,6 +62,13 @@ final class CloudSession {
     private static final long TOKEN_REFRESH_THRESHOLD_SECONDS = 2 * 60 * 60L;
     /** Basic auth header for OAuth2 client credentials (client:112233) */
     private static final String OAUTH2_BASIC_AUTH = "Basic Y2xpZW50OjExMjIzMw==";
+    /**
+     * The global cap on outer reinit attempts. Once exceeded, the state machine enters a terminal
+     * state and only {@code /ulticloud login} or a restart recovers it. Package-private (not
+     * private) so {@link PluginInitiationUtils#reinitWebSocket(CloudSession)} can name it in its own
+     * "gave up after %d attempts" log line -- the two classes are in the same package.
+     */
+    static final int MAX_REINIT_ATTEMPTS = 10;
 
     /** The current session. Never {@code null} -- initialised eagerly so every static facade
      * method on {@link CloudAuthManager} always has something to delegate to, even before any
@@ -117,6 +127,28 @@ final class CloudSession {
     private ScheduledExecutorService refreshExecutor;
     private ScheduledFuture<?> refreshTask;
 
+    /**
+     * This session's own WebSocket client, or {@code null} if none is connected. Task 2 of plan
+     * 16-08 moved this off {@code PluginInitiationUtils}'s static {@code panelWS} field -- the
+     * client dies with the session that built it ({@link #invalidate()} disconnects and clears it),
+     * so a reconnect-exhaustion callback or a late handshake checked against THIS session can never
+     * disagree with what client is actually installed here.
+     */
+    private volatile UltiPanelWebSocketClient webSocketClient;
+
+    /**
+     * The global budget and backoff for this session's outer reconnection (reinit loop).
+     * <p>
+     * The client's own limit of 5 attempts is a <b>per-instance</b> cap, and
+     * {@code PluginInitiationUtils.reinitWebSocket} builds a brand-new client instance every time --
+     * so the per-instance cap places no constraint at all on the whole, which is exactly how the
+     * loop became unbounded (issue #181). This strategy spans client instances instead; only one
+     * successful {@code onOpen} resets it. Being a fresh field on every new session is also what
+     * makes D-16's "the old session's backoff counter does not carry over" true for free -- a new
+     * session's budget starts at zero attempts by construction, with no reset call needed.
+     */
+    private final ExponentialBackoffStrategy backoff = ExponentialBackoffStrategy.withMaxAttempts(MAX_REINIT_ATTEMPTS);
+
     /** Package-private -- constructed only by {@link #startNew()} and by tests in this package. */
     CloudSession() {
     }
@@ -146,11 +178,15 @@ final class CloudSession {
 
     /**
      * Marks this session invalid and tears down everything it owns: the poll and refresh
-     * schedulers. Safe to call on a session that never started either (a freshly constructed
-     * session with nothing scheduled yet) and safe to call more than once -- both are exercised
-     * directly by this class's own tests, independently of the static {@link #current()} holder.
+     * schedulers, and (as of plan 16-08 Task 2) the WebSocket client. Safe to call on a session
+     * that never started any of those (a freshly constructed session with nothing scheduled and no
+     * client yet) and safe to call more than once -- both are exercised directly by this class's
+     * own tests, independently of the static {@link #current()} holder.
      */
     synchronized void invalidate() {
+        // RED-PHASE STUB (plan 16-08 Task 2): deliberately omits closing/clearing the WebSocket
+        // client so CloudReconnectStateMachineTest's new SessionOwnsTransportAndBackoff tests fail
+        // intentionally before the real teardown is implemented.
         invalidated = true;
         stopPolling();
         stopTokenRefreshScheduler();
@@ -166,6 +202,29 @@ final class CloudSession {
     /** @return the token this session currently holds, or {@code null} */
     TokenEntity getToken() {
         return token;
+    }
+
+    /** @return this session's WebSocket client, or {@code null} if none is connected */
+    UltiPanelWebSocketClient getWebSocketClient() {
+        return webSocketClient;
+    }
+
+    /**
+     * Installs {@code client} as this session's WebSocket client, replacing (without closing) any
+     * previous one. Callers that need the previous client closed first should read
+     * {@link #getWebSocketClient()}, close it themselves, and only then call this.
+     *
+     * @param client the client to install, or {@code null} to clear the reference without closing it
+     */
+    void setWebSocketClient(UltiPanelWebSocketClient client) {
+        this.webSocketClient = client;
+    }
+
+    /**
+     * @return this session's own reconnect backoff strategy -- never shared with any other session
+     */
+    ExponentialBackoffStrategy getBackoff() {
+        return backoff;
     }
 
     /**
@@ -525,6 +584,102 @@ final class CloudSession {
         if (refreshExecutor != null) {
             refreshExecutor.shutdown();
             refreshExecutor = null;
+        }
+    }
+
+    // ---- Panel-manager wiring (moved here from PluginInitiationUtils by plan 16-08 Task 2) ----
+
+    /**
+     * Wires all WebSocket managers up to this session's connection, but only if this session is
+     * still current.
+     * <p>
+     * This method hangs off {@code onConnectHandler} (via
+     * {@code PluginInitiationUtils.onWebSocketOpened} → {@code PluginInitiationUtils.initializeManagers()}
+     * → here), and an in-flight handshake can still land after {@code /ulticloud logout}. Without a
+     * guard, the listeners {@code disableCloud()} just tore down would be reinstalled verbatim by
+     * this late-arriving onOpen — the exact same "no one owns the decision" defect from #181/#223,
+     * resurfacing in a different place.
+     * <p>
+     * <b>Checking {@link #isCurrent()} alone is not enough.</b> That would be only a read taken
+     * outside a lock: after it reads true but before this method actually wires anything up,
+     * {@link #invalidate()} could cut in on another thread, tear everything down cleanly, and then
+     * this method would continue on and wire the listeners right back up. So both this method and
+     * {@link #invalidate()} synchronize on {@code this} (this session's own monitor, replacing the
+     * former global lifecycle lock — see the two review rounds on PR #264 for the
+     * original race), which is why the currency check below is safe to trust once taken: teardown
+     * either has not started yet or has already run to completion by the time this returns from the
+     * check, never caught in the middle.
+     */
+    synchronized void initializeManagers() {
+        if (!isCurrent()) {
+            UltiTools.getInstance().getLogger().log(Level.FINE,
+                "云连接已关闭，跳过管理器初始化（这是一次登出之后迟到的握手）");
+            return;
+        }
+        wireManagers();
+    }
+
+    /**
+     * The actual wiring performed by {@link #initializeManagers()}. Callers must hold this
+     * session's own monitor (i.e. call only from a {@code synchronized(this)} context).
+     * <p>
+     * D-11/D-12: the four outbound capabilities ({@code monitoring}/{@code logs}/
+     * {@code player-events}/{@code server-properties}) decide here, via
+     * {@link Capability#isEnabled()}, whether to <b>start collecting</b> data at all — not whether
+     * to discard it at the send-side after collection. The latter would still leave data already
+     * gathered into memory, just never transmitted, and D-12 explicitly rejects that
+     * "exposed but not transmitted" shape. Every client-reference wiring call is deliberately kept
+     * unconditional: assigning a client reference by itself starts no collection, and running it
+     * unconditionally is what guarantees every manager getter is always non-null and every manager
+     * always exists (D-11) — the dispatch table has two manager-getter dereferences with no null
+     * check.
+     */
+    private void wireManagers() {
+        try {
+            // Wire up the server monitor manager — reference assignment is kept separate from
+            // "whether to start monitoring"; see this method's javadoc
+            UltiTools.getInstance().getServerMonitorManager().setWebSocketClient(webSocketClient);
+            if (Capability.MONITORING.isEnabled()) {
+                // Start monitoring (sends status immediately and then periodically)
+                UltiTools.getInstance().getServerMonitorManager().startMonitoring();
+            } else {
+                PluginInitiationUtils.logSkippedCapability(Capability.MONITORING);
+            }
+
+            // Wire up the command execution manager
+            UltiTools.getInstance().getCommandExecutionManager().setWebSocketClient(webSocketClient);
+
+            // Wire up the file operation manager
+            UltiTools.getInstance().getFileOperationManager().setWebSocketClient(webSocketClient);
+
+            // Wire up the server properties manager
+            if (UltiTools.getInstance().getServerPropertiesManager() != null) {
+                UltiTools.getInstance().getServerPropertiesManager().setWebSocketClient(webSocketClient);
+            }
+
+            // Wire up the log stream manager — while logs is disabled, SystemLogHandler is never
+            // attached to the root logger
+            if (UltiTools.getInstance().getLogStreamManager() != null) {
+                if (Capability.LOGS.isEnabled()) {
+                    UltiTools.getInstance().getLogStreamManager().initialize(webSocketClient);
+                } else {
+                    PluginInitiationUtils.logSkippedCapability(Capability.LOGS);
+                }
+            }
+
+            // Wire up the player event manager — while player-events is disabled, the Bukkit
+            // listener is never registered
+            if (UltiTools.getInstance().getPlayerEventManager() != null) {
+                if (Capability.PLAYER_EVENTS.isEnabled()) {
+                    UltiTools.getInstance().getPlayerEventManager().initialize(webSocketClient);
+                } else {
+                    PluginInitiationUtils.logSkippedCapability(Capability.PLAYER_EVENTS);
+                }
+            }
+
+            UltiTools.getInstance().getLogger().log(Level.FINE, "所有WebSocket管理器已初始化并启动监控");
+        } catch (Exception e) {
+            UltiTools.getInstance().getLogger().log(Level.WARNING, "初始化管理器时出错: " + e.getMessage(), e);
         }
     }
 }
