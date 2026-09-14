@@ -115,6 +115,31 @@ final class CloudSession {
     private volatile TokenEntity token;
     private volatile boolean invalidated;
 
+    /**
+     * The nearest ancestor session's last-known token, or {@code null} if either there is no
+     * ancestor (this is the first session ever created) or that ancestor never itself held a
+     * token. Set only by {@link #startNew()}, consulted only by {@link #clearPersisted()} as a
+     * fallback when THIS session's own {@link #token} is {@code null} -- deliberately never
+     * consulted by {@link #hasValidToken()} or any other connection-status gate (D-18's own
+     * invariant is unchanged: a session with no token of its own is not "connected", regardless of
+     * what an ancestor once held).
+     * <p>
+     * <b>16-10 gap-closure addendum (round-13 review, PR #464), P1:</b> without this, a session
+     * exhausted by {@code reinitWebSocket}'s budget (which deliberately leaves its own
+     * {@link #token} unset-but-still-in-memory -- clearing the credential is logout's job, not
+     * exhaustion's, per {@link #hasValidToken()}'s own round-10 note) that is then replaced by
+     * {@code /ulticloud login} via {@link #startNew()} left its still-valid, still-persisted
+     * credential unreachable by any LATER {@code /ulticloud logout} call: the new (blank) session
+     * has no token of its own, so {@link TokenStore#clearIfMatches(TokenEntity)}'s compare-and-delete
+     * had nothing to compare against, and {@code logout()} reported "nothing to clear" while the
+     * old credential survived on disk -- a subsequent restart would reload and reconnect with it
+     * despite the operator's explicit logout. Chained forward across however many blank sessions
+     * intervene (each inherits the nearest non-null ancestor value, not just its immediate
+     * predecessor's own possibly-{@code null} field), so the credential stays reachable no matter
+     * how many replacements happen before a logout finally runs.
+     */
+    private volatile TokenEntity predecessorToken;
+
     private ScheduledExecutorService pollExecutor;
     private ScheduledFuture<?> pollTask;
     private ScheduledExecutorService refreshExecutor;
@@ -206,6 +231,11 @@ final class CloudSession {
     static synchronized CloudSession startNew() {
         CloudSession previous = current;
         CloudSession next = new CloudSession();
+        // 16-10 gap-closure addendum (round-13 review), P1: carry the nearest non-null ancestor
+        // token forward -- see #predecessorToken's own javadoc for why. Reads `previous.token`
+        // before `previous.invalidate()` below touches anything (invalidate() never clears
+        // `token` itself, but reading it first keeps this independent of that fact).
+        next.predecessorToken = previous.token != null ? previous.token : previous.predecessorToken;
         current = next;
         previous.invalidate();
         return next;
@@ -375,6 +405,20 @@ final class CloudSession {
         return token;
     }
 
+    /**
+     * @return {@code true} if {@link #clearPersisted()} has something to compare-and-delete on
+     *         this session -- either this session's own {@link #token}, or (round-13 review, P1)
+     *         the nearest ancestor's {@link #predecessorToken} -- {@code false} only if BOTH are
+     *         {@code null}, meaning there is genuinely nothing on disk this session's lineage is
+     *         responsible for. {@code CloudAuthManager#logout()} gates its "nothing to clear" early
+     *         return on this, not on {@link #getToken()} alone, so a session that never itself held
+     *         a token but replaced one that did (exhaustion followed by {@code /ulticloud login})
+     *         still reaches {@link #clearPersisted()} for that predecessor's sake.
+     */
+    boolean hasAnythingToClear() {
+        return token != null || predecessorToken != null;
+    }
+
     /** @return this session's WebSocket client, or {@code null} if none is connected */
     UltiPanelWebSocketClient getWebSocketClient() {
         return webSocketClient;
@@ -432,14 +476,27 @@ final class CloudSession {
      * correct and necessary on its own even after round-10's fix -- this method is package-private
      * and callable directly (as this class's own tests do) on a session that has not itself been
      * invalidated yet, a case round-10's {@link #invalidated} check does not cover.
+     * <p>
+     * <b>Round-13 external review finding (16-10 gap-closure addendum, PR #464), P1:</b> if THIS
+     * session never itself held a token (the common shape after {@code /ulticloud login} replaces
+     * an exhausted-but-never-logged-out predecessor -- see {@link #predecessorToken}'s own
+     * javadoc), comparing against {@code token} alone compares against {@code null}, which
+     * {@link TokenStore#clearIfMatches(TokenEntity)} always treats as "no match" -- so the
+     * predecessor's still-persisted, still-valid credential was never reachable by this session's
+     * own logout, surviving on disk despite the operator's explicit intent. Falling back to
+     * {@link #predecessorToken} widens the compare-and-delete's target WITHOUT reopening the
+     * round-1 race that method's own javadoc documents: a concurrent, genuinely newer commit still
+     * writes a different access token value, so the comparison still correctly fails against it
+     * either way.
      *
      * @throws IOException if the underlying write fails
      */
     void clearPersisted() throws IOException {
         try {
-            tokenStore.clearIfMatches(token);
+            tokenStore.clearIfMatches(token != null ? token : predecessorToken);
         } finally {
             this.token = null;
+            this.predecessorToken = null;
         }
     }
 

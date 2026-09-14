@@ -180,7 +180,14 @@ public class CloudAuthManager {
     public static synchronized boolean logout() throws IOException {
         CloudSession tornDown = PluginInitiationUtils.disableCloud(CloudSession.current());
 
-        if (tornDown.getToken() == null) {
+        // 16-10 gap-closure addendum (round-13 review, PR #464), P1: gate on
+        // hasAnythingToClear(), not getToken() == null alone -- see CloudSession#predecessorToken's
+        // own javadoc. A session that never itself held a token but replaced one that did
+        // (reconnect exhaustion followed by /ulticloud login, before any logout ran) must still
+        // reach clearPersisted() below, or the predecessor's still-valid, still-persisted
+        // credential survives on disk despite this explicit logout, and a later restart reloads
+        // and reconnects with it.
+        if (!tornDown.hasAnythingToClear()) {
             return false;
         }
 

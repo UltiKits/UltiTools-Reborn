@@ -1092,6 +1092,98 @@ class CloudAuthManagerTest {
                     .as("留在磁盘上的必须是并发登录自己的 access_token，不是 sBefore 的")
                     .isEqualTo("fresh-login-access-token");
         }
+
+        @Test
+        @DisplayName("round-13 外部评审（P1）：耗尽的旧会话被 /ulticloud login 换掉之后，"
+                + "后续 logout 仍必须清掉旧会话留在磁盘上的那份凭证")
+        void logoutClearsAnExhaustedPredecessorsCredentialEvenThoughTheCurrentSessionNeverHeldOne()
+                throws Exception {
+            // 1. 旧会话（sessionA）真正登录过，磁盘上有它自己的凭证。
+            CloudSession sessionA = CloudSession.current();
+            sessionA.commit(buildTokenWithExp(3600L));
+            CredentialStore.ReadResult beforeExhaustion = CredentialStore.read();
+            assertThat(beforeExhaustion.data())
+                    .as("前置条件：磁盘上得先真的有旧会话这份凭证")
+                    .containsKey("cloud_token");
+
+            // 2. 重连预算耗尽——只使会话失效，不清凭证（这是 exhaustion 自己的既定语义，
+            //    见 CloudSession#hasValidToken() 的 round-10 说明）。
+            PluginInitiationUtils.disableCloud(sessionA);
+            assertThat(sessionA.isCurrent())
+                    .as("前置条件：旧会话此刻确实已经失效")
+                    .isFalse();
+
+            // 3. 操作员按提示 /ulticloud login——换上一个全新、此刻还没有自己凭证的会话
+            //    （sessionB）。HttpRequestUtils 的 base URL 已在 resetStaticState() 里固定成空，
+            //    所以这次魔法链接请求会快速失败，但会话替换本身（startNew()）已经真实发生。
+            CloudAuthManager.login(() -> { }, remaining -> { }, () -> { }, url -> { }, error -> { });
+            CloudSession sessionB = CloudSession.current();
+            assertThat(sessionB).isNotSameAs(sessionA);
+            assertThat(sessionB.getToken())
+                    .as("前置条件：新会话此刻确实还没有它自己的凭证")
+                    .isNull();
+
+            // 4. 操作员紧接着 /ulticloud logout——round-13 评审之前，sessionB.getToken()==null
+            //    会让 logout() 直接短路返回 false，从不触碰磁盘，把 sessionA 的凭证原样留在原地。
+            boolean hadCredential = CloudAuthManager.logout();
+
+            assertThat(hadCredential)
+                    .as("round-13：即便当前会话自己从没持有过凭证，只要它的上一任会话留了一份"
+                            + "还没被清掉的凭证在磁盘上，这次 logout 就必须报告「确实清掉了」")
+                    .isTrue();
+
+            CredentialStore.ReadResult afterLogout = CredentialStore.read();
+            assertThat(afterLogout.data())
+                    .as("round-13：旧会话（已被耗尽、又被 login 换掉）留在磁盘上的凭证，"
+                            + "必须被这次 logout 真正清掉，不能在重启之后被悄悄重新加载并重连")
+                    .doesNotContainKey("cloud_token");
+        }
+    }
+
+    // =========================================================================
+    // 11b. resumeSavedCredentialOnStartup() Tests — round-13 外部评审（16-10 补丁）
+    // =========================================================================
+
+    @Nested
+    @DisplayName("resumeSavedCredentialOnStartup 方法测试（round-13 外部评审，P2）")
+    class ResumeSavedCredentialOnStartupTests {
+
+        @Test
+        @DisplayName("round-13 外部评审（P2）：会话已因重连耗尽失效时（例如同一 classloader 内的"
+                + " /reload），必须先换上新会话再加载磁盘凭证，不能加载到即将被替换掉的旧会话上")
+        void replacesAnInvalidatedSessionBeforeLoadingTheSavedCredentialOntoIt() throws Exception {
+            // 1. 旧会话真正登录过，磁盘上有它自己的（未过期）凭证。
+            CloudSession sessionBeforeExhaustion = CloudSession.current();
+            sessionBeforeExhaustion.commit(buildTokenWithExp(3600L));
+            CredentialStore.ReadResult saved = CredentialStore.read();
+            assertThat(saved.data())
+                    .as("前置条件：磁盘上得先真的有这份未过期的凭证")
+                    .containsKey("cloud_token");
+
+            // 2. 重连预算耗尽——会话失效，凭证仍留在磁盘上（exhaustion 自己的既定语义）。
+            PluginInitiationUtils.disableCloud(sessionBeforeExhaustion);
+            assertThat(sessionBeforeExhaustion.isCurrent())
+                    .as("前置条件：旧会话此刻确实已经失效——这正是本用例要复现的场景")
+                    .isFalse();
+
+            // 3. 同一 classloader 内再次 onEnable()（例如 /reload，而不是真正重启）——
+            //    round-13 评审之前，这里会把凭证加载到 sessionBeforeExhaustion（已失效）上，
+            //    随后 onEnable() 自己那次 enableCloud() 调用才会换会话，白白扔掉刚加载的凭证。
+            PluginInitiationUtils.resumeSavedCredentialOnStartup();
+
+            CloudSession sessionAfterResume = CloudSession.current();
+            assertThat(sessionAfterResume)
+                    .as("round-13：会话必须先被换成一个全新、未失效的会话，不能还是那个已耗尽的旧会话")
+                    .isNotSameAs(sessionBeforeExhaustion);
+            assertThat(sessionAfterResume.isCurrent())
+                    .as("round-13：加载凭证的目标会话必须是有效的")
+                    .isTrue();
+            assertThat(sessionAfterResume.getToken())
+                    .as("round-13：磁盘上的凭证必须被加载到这个新会话上，不能凭空消失")
+                    .isNotNull();
+            assertThat(sessionAfterResume.getToken().getAccess_token())
+                    .isEqualTo(sessionBeforeExhaustion.getToken().getAccess_token());
+        }
     }
 
     // =========================================================================

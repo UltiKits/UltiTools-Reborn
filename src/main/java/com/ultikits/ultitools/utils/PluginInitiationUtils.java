@@ -127,6 +127,17 @@ public class PluginInitiationUtils {
      */
     public static boolean resumeSavedCredentialOnStartup() {
         try {
+            // 16-10 gap-closure addendum (round-13 review, PR #464), P2: replace an invalidated
+            // session BEFORE loading the saved credential onto it, not after. UltiTools#onEnable()
+            // used to call enableCloud() only AFTER this method returned -- if CloudSession#current()
+            // was still the session a prior reconnect exhaustion invalidated (reachable in the same
+            // classloader on a /reload rather than a true restart), loadFromDisk() below would load
+            // the token onto that dead session, only for onEnable()'s later enableCloud() call to
+            // replace it with a blank one moments afterward -- discarding the just-loaded token,
+            // breaking the subsequent WebSocket initialization while startup still logged success.
+            // enableCloud() no-ops (and its backoff reset is harmless) when the session is already
+            // current, so calling it here is safe on every other startup path.
+            enableCloud();
             TokenEntity savedToken = CloudSession.current().loadFromDisk();
             if (savedToken != null) {
                 UltiTools.getInstance().getLogger().log(Level.INFO,
