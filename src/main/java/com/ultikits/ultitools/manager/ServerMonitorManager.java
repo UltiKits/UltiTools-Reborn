@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
@@ -12,11 +13,13 @@ import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitTask;
 
+import java.io.File;
 import java.lang.management.ManagementFactory;
 import java.lang.management.OperatingSystemMXBean;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.ToLongFunction;
 import java.util.logging.Level;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -78,8 +81,44 @@ public class ServerMonitorManager {
     private BukkitTask tpsTask;
     private BukkitTask snapshotTask;
 
+    /**
+     * The file whose filesystem backs the {@code diskUsage} metric -- the server root (the working
+     * directory the Paper process was started in), matching {@link FileOperationManager}'s own
+     * {@code serverRoot} convention. Package-private and mutable only so tests can point it at a
+     * controlled location; production code never reassigns it (D-14, #436).
+     */
+    private File diskUsageRoot = new File(System.getProperty("user.dir"));
+
+    /**
+     * Seam over {@link File#getTotalSpace()}, so "the filesystem reports zero total space" (D-14)
+     * is deterministic in tests without needing an actual zero-capacity filesystem. Defaults to the
+     * real method reference.
+     */
+    private ToLongFunction<File> totalSpaceReader = File::getTotalSpace;
+
+    /** Seam over {@link File#getUsableSpace()}, same rationale as {@link #totalSpaceReader}. */
+    private ToLongFunction<File> usableSpaceReader = File::getUsableSpace;
+
     public ServerMonitorManager() {
         this.scheduler = Executors.newScheduledThreadPool(2);
+    }
+
+    /**
+     * Test seam: point the disk-usage reading at a different root (e.g. a real temp directory).
+     * Production code never calls this.
+     */
+    void setDiskUsageRoot(File diskUsageRoot) {
+        this.diskUsageRoot = diskUsageRoot;
+    }
+
+    /**
+     * Test seam: inject fake total/usable-space readers (e.g. to force the zero-total-space
+     * outcome deterministically, or to pin a known used-percentage without depending on the real
+     * filesystem's actual free space). Production code never calls this.
+     */
+    void setDiskSpaceReaders(ToLongFunction<File> totalSpaceReader, ToLongFunction<File> usableSpaceReader) {
+        this.totalSpaceReader = totalSpaceReader;
+        this.usableSpaceReader = usableSpaceReader;
     }
 
     /**
@@ -668,17 +707,59 @@ public class ServerMonitorManager {
         double memoryUsage = ((double) usedMemory / maxMemory) * 100;
         serverPerformance.addProperty("memoryUsage", Math.round(memoryUsage * 100.0) / 100.0);
 
-        serverPerformance.addProperty("diskUsage", 0.0);
+        serverPerformance.addProperty("diskUsage", computeDiskUsage());
 
         data.add("serverPerformance", serverPerformance);
 
         // Plugin usage
         JsonObject pluginUsage = new JsonObject();
-        pluginUsage.addProperty("enabledPlugins", snapshot.pluginCount);
+        pluginUsage.addProperty("enabledPlugins", countEnabledPlugins(snapshot.plugins));
         pluginUsage.addProperty("loadedWorlds", snapshot.worldCount);
         data.add("pluginUsage", pluginUsage);
 
         return data;
+    }
+
+    /**
+     * The used percentage of the filesystem holding {@link #diskUsageRoot} -- total space minus
+     * usable space, over total space -- rounded to two decimals exactly like {@code memoryUsage}
+     * above (D-14, #436). Reads {@link #totalSpaceReader}/{@link #usableSpaceReader} rather than
+     * calling {@link File#getTotalSpace()}/{@link File#getUsableSpace()} directly, so tests can
+     * pin a deterministic value instead of depending on the real filesystem's actual free space.
+     * A filesystem reporting zero total space is a stated outcome -- {@code 0.0} -- not a division
+     * error.
+     */
+    private double computeDiskUsage() {
+        long total = totalSpaceReader.applyAsLong(diskUsageRoot);
+        if (total <= 0) {
+            return 0.0;
+        }
+        long usable = usableSpaceReader.applyAsLong(diskUsageRoot);
+        double used = ((double) (total - usable) / total) * 100;
+        return Math.round(used * 100.0) / 100.0;
+    }
+
+    /**
+     * Counts entries in {@code plugins} whose {@code enabled} field is {@code true} -- the
+     * per-plugin flag {@link #sampleServerState()} already captures for every installed plugin
+     * (D-14, #437: {@code enabledPlugins} must count plugins that are enabled, not every plugin
+     * installed). Package-private and pure so it is unit-testable directly against a synthetic
+     * {@link JsonArray} without needing a multi-plugin MockBukkit fixture.
+     *
+     * @param plugins the snapshot's plugin array; each element is expected to be a {@link
+     *                JsonObject} carrying a boolean {@code enabled} field
+     * @return the number of entries whose {@code enabled} field is {@code true}; {@code 0} for an
+     *         empty array
+     */
+    static int countEnabledPlugins(JsonArray plugins) {
+        int count = 0;
+        for (JsonElement element : plugins) {
+            JsonObject plugin = element.getAsJsonObject();
+            if (plugin.has("enabled") && plugin.get("enabled").getAsBoolean()) {
+                count++;
+            }
+        }
+        return count;
     }
 
     /**
