@@ -73,11 +73,11 @@ public class ServerPropertiesManager {
 
     /**
      * Why this exists next to {@link #setProperty(String, String)}: the boolean is lossy.
-     * A {@code false} could mean "the key is not on the whitelist", "there is no
-     * server.properties to write to", or "the write itself failed" — three situations
-     * with three different fixes, collapsed into one value. The batch path has to tell
-     * the caller which one happened, so the real outcome is produced here and
-     * {@code setProperty} keeps its original contract by narrowing it.
+     * A {@code false} could mean "the key is not on the whitelist", "the running server
+     * version has no such key", "there is no server.properties to write to", or "the write
+     * itself failed" — four situations with four different fixes, collapsed into one value.
+     * The batch path has to tell the caller which one happened, so the real outcome is
+     * produced here and {@code setProperty} keeps its original contract by narrowing it.
      */
     private WriteOutcome writeProperty(String key, String value) {
         if (!SAFE_KEYS.contains(key)) return WriteOutcome.REJECTED;
@@ -92,6 +92,15 @@ public class ServerPropertiesManager {
             return WriteOutcome.FAILED;
         }
 
+        // D-15 / SAFE_KEYS issue: SAFE_KEYS is a ceiling across every Paper version this
+        // framework supports (plugin.yml declares api-version: 1.19), not a promise that every
+        // key exists on the version actually running. Writing a key Paper does not read is
+        // silently ignored by the platform, so the operator must be told before it happens --
+        // not after a "success" response that never took effect.
+        if (props.getProperty(key) == null) {
+            return WriteOutcome.NOT_PRESENT_ON_THIS_SERVER;
+        }
+
         props.setProperty(key, value);
 
         try (FileOutputStream fos = new FileOutputStream(propsFile)) {
@@ -102,13 +111,39 @@ public class ServerPropertiesManager {
         return WriteOutcome.WRITTEN;
     }
 
+    /**
+     * One line naming why a single-key write did not happen, or {@code null} when it
+     * {@link WriteOutcome#WRITTEN did}. Exposed through {@link #handleSet(JsonObject)}'s
+     * response so a panel operator is told the reason, not just {@code success: false}.
+     */
+    private static String describeOutcome(WriteOutcome outcome) {
+        switch (outcome) {
+            case WRITTEN:
+                return null;
+            case REJECTED:
+                return "Key is not in the allowed list";
+            case NOT_PRESENT_ON_THIS_SERVER:
+                return "This server version has no such key";
+            default:
+                return "Failed to read or write server.properties";
+        }
+    }
+
     /** What actually happened to one key. */
     private enum WriteOutcome {
         /** Written to disk. */
         WRITTEN,
         /** Not on {@link #SAFE_KEYS}; never attempted. */
         REJECTED,
-        /** On the whitelist, but reading or writing the file failed. */
+        /**
+         * On {@link #SAFE_KEYS} (a ceiling across every Paper version this framework supports),
+         * but the running server's own {@code server.properties} has no such key -- an older or
+         * newer Paper version than the one that added it. Writing it anyway would be silently
+         * ignored by the platform, so this is refused rather than written (D-15, SAFE_KEYS
+         * issue).
+         */
+        NOT_PRESENT_ON_THIS_SERVER,
+        /** On the whitelist and present in the file, but reading or writing the file failed. */
         FAILED
     }
 
@@ -226,12 +261,16 @@ public class ServerPropertiesManager {
         String value = data.has("value") ? data.get("value").getAsString() : null;
         if (key == null || value == null) return;
 
-        boolean success = setProperty(key, value);
+        WriteOutcome outcome = writeProperty(key, value);
         JsonObject response = new JsonObject();
         response.addProperty("type", "server_properties_result");
         response.addProperty("action", "set");
-        response.addProperty("success", success);
+        response.addProperty("success", outcome == WriteOutcome.WRITTEN);
         response.addProperty("key", key);
+        String reason = describeOutcome(outcome);
+        if (reason != null) {
+            response.addProperty("reason", reason);
+        }
         sendResponse(response);
     }
 
