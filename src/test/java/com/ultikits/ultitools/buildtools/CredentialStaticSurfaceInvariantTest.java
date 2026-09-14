@@ -136,6 +136,19 @@ class CredentialStaticSurfaceInvariantTest {
     }
 
     @Test
+    @DisplayName("Round 1 外部评审（第五轮）：带 TokenEntity 上界的类型变量必须被抓到，不能因为它是 TypeVariable 而不是 WildcardType 就漏掉")
+    void publicStaticMethodReturningBoundedTypeVariableReportsOneViolation() {
+        List<String> violations = CredentialStaticSurfaceInvariant.evaluate(
+                methodsOf(BoundedTypeVariableOffender.class));
+
+        assertThat(violations)
+                .as("<T extends Iterable<TokenEntity>> 这种上界通过反射拿到的是 TypeVariable，" +
+                        "不是 WildcardType——只处理 WildcardType 的旧版本会漏掉这一种")
+                .hasSize(1)
+                .anySatisfy(v -> assertThat(v).contains("leaked"));
+    }
+
+    @Test
     @DisplayName("WR-03: the field scan mechanism is non-vacuous, pointed at the fixture's permanent offending field")
     void fieldScanMechanismCatchesAFixtureOffender() throws IOException, ClassNotFoundException {
         List<Field> fixtureFields = scanPublicStaticFieldsOfPackage(
@@ -239,6 +252,14 @@ class CredentialStaticSurfaceInvariantTest {
         // Round-1 review, fourth pass (16-10, PR #464): a REIFIED array (TokenEntity[]) is a plain
         // Class with isArray() == true, never a GenericArrayType -- the pre-fix code missed this.
         public static TokenEntity[] leaked() {
+            return null;
+        }
+    }
+
+    static class BoundedTypeVariableOffender {
+        // Round-1 review, fifth pass (16-10, PR #464): a bounded type variable is reified as a
+        // TypeVariable, not a WildcardType -- the pre-fix code's WildcardType branch never fires.
+        public static <T extends Iterable<TokenEntity>> T leaked() {
             return null;
         }
     }

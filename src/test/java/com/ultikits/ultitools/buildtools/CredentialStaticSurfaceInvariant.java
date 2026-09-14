@@ -6,6 +6,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.lang.reflect.TypeVariable;
 import java.lang.reflect.WildcardType;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -292,8 +293,22 @@ public final class CredentialStaticSurfaceInvariant {
             }
             return false;
         }
-        // A plain (non-generic, non-array, non-wildcard) Class other than TokenEntity itself --
-        // already handled by the `type == TokenEntity.class` check above.
+        // Round-1 review, fifth pass (16-10, PR #464): a bounded type variable
+        // (`<T extends Iterable<TokenEntity>> T leaked()`) is reified by reflection as a
+        // TypeVariable, not a WildcardType -- the two are different interfaces even though both
+        // carry bounds, so the WildcardType branch above never catches this. Without this branch, a
+        // bounded generic method parameter or return type could still leak TokenEntity past the
+        // structural guarantee.
+        if (type instanceof TypeVariable<?>) {
+            for (Type bound : ((TypeVariable<?>) type).getBounds()) {
+                if (referencesTokenEntity(bound)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        // A plain (non-generic, non-array, non-wildcard, non-type-variable) Class other than
+        // TokenEntity itself -- already handled by the `type == TokenEntity.class` check above.
         return false;
     }
 }
