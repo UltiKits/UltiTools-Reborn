@@ -580,6 +580,47 @@
                             <exclude>com.ultikits.ultitools.websocket.handlers.LogStreamHandler</exclude>
                             <exclude>com.ultikits.ultitools.websocket.handlers.PongHandler</exclude>
                             <exclude>com.ultikits.ultitools.websocket.handlers.ServerStatusHandler</exclude>
+                            <!-- 16-09-PLAN.md (D-17/D-18, root-cause group "cloud session", part 2
+                                 of 3 for issue #298): CloudAuthManager's fine-grained public statics
+                                 (the generation triple, save/clear/refresh/load, the start/stop
+                                 pairs for polling and refresh) are removed outright, not
+                                 deprecated; CloudSession instance methods now carry that behaviour,
+                                 reached only through the three command-facing entry points login/
+                                 logout/status. Same-release exception clause 2 (shipped, zero
+                                 external callers measured across every published module JAR and
+                                 every local module/plugin/tooling source, with a control query
+                                 proving each search actually worked); see COMPATIBILITY.md and
+                                 compatibility/records/6.3.0.md for the full evidence. The implicit
+                                 public no-arg constructor is also gone (replaced with a private one,
+                                 CloudAuthManager is now @ApiStatus.Internal), hence the constructor
+                                 exclude below. -->
+                            <exclude>com.ultikits.ultitools.utils.CloudAuthManager#CloudAuthManager()</exclude>
+                            <exclude>com.ultikits.ultitools.utils.CloudAuthManager#loadSavedToken()</exclude>
+                            <exclude>com.ultikits.ultitools.utils.CloudAuthManager#refreshToken(java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.utils.CloudAuthManager#saveToken(com.ultikits.ultitools.entities.TokenEntity)</exclude>
+                            <exclude>com.ultikits.ultitools.utils.CloudAuthManager#clearToken()</exclude>
+                            <exclude>com.ultikits.ultitools.utils.CloudAuthManager#currentCredentialGeneration()</exclude>
+                            <exclude>com.ultikits.ultitools.utils.CloudAuthManager#invalidateCredentialOperations()</exclude>
+                            <exclude>com.ultikits.ultitools.utils.CloudAuthManager#commitTokenIfCurrent(com.ultikits.ultitools.entities.TokenEntity, long)</exclude>
+                            <exclude>com.ultikits.ultitools.utils.CloudAuthManager#getCurrentToken()</exclude>
+                            <exclude>com.ultikits.ultitools.utils.CloudAuthManager#hasValidToken()</exclude>
+                            <exclude>com.ultikits.ultitools.utils.CloudAuthManager#requestMagicLink(java.util.function.Consumer)</exclude>
+                            <exclude>com.ultikits.ultitools.utils.CloudAuthManager#startPolling(java.lang.String, java.util.function.Consumer)</exclude>
+                            <exclude>com.ultikits.ultitools.utils.CloudAuthManager#startPolling(java.lang.String, java.util.function.Consumer, long)</exclude>
+                            <exclude>com.ultikits.ultitools.utils.CloudAuthManager#startTokenRefreshScheduler()</exclude>
+                            <exclude>com.ultikits.ultitools.utils.CloudAuthManager#stopTokenRefreshScheduler()</exclude>
+                            <exclude>com.ultikits.ultitools.utils.CloudAuthManager#stopPolling()</exclude>
+                            <!-- Same group: PluginInitiationUtils#loginWithToken(TokenEntity) had to
+                                 stop being a public static accepting a TokenEntity (D-18); it is now
+                                 package-private, reachable cross-package only through the new
+                                 resumeSavedCredentialOnStartup() seam. activateCloudIfCurrent(long)
+                                 was plan 16-08's own compatibility shim for the generation-shaped
+                                 overload, explicitly scheduled for this plan's removal (16-08-
+                                 SUMMARY.md); the CloudSession-parameter overload is new-in-6.3.0 (no
+                                 6.2.5 signature) and needs no exclude even though it also lost
+                                 `public` in this plan. -->
+                            <exclude>com.ultikits.ultitools.utils.PluginInitiationUtils#loginWithToken(com.ultikits.ultitools.entities.TokenEntity)</exclude>
+                            <exclude>com.ultikits.ultitools.utils.PluginInitiationUtils#activateCloudIfCurrent(long)</exclude>
                         </excludes>
                     </parameter>
                 </configuration>

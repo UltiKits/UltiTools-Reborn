@@ -1,15 +1,21 @@
 package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.times;
 
+import java.io.File;
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Consumer;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Logger;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,6 +23,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
+import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.entities.TokenEntity;
 
@@ -24,17 +32,26 @@ import com.ultikits.ultitools.entities.TokenEntity;
  * CloudAuthManager 测试类
  * Tests for the UltiCloud authentication facade and the {@link CloudSession} it delegates to.
  * <p>
- * As of 6.3.0 (plan 16-08, D-16/D-17/D-18) {@code CloudAuthManager} owns no state of its own --
+ * As of 6.3.0 plan 16-08 (D-16/D-17/D-18) {@code CloudAuthManager} owns no state of its own --
  * every field this class used to reflect into directly (the in-memory token, the poll/refresh
  * executors and their scheduled tasks, the timing constants) now lives on {@link CloudSession}.
- * {@link MethodSignatureTests} still targets {@code CloudAuthManager} directly, because its public
- * static delegating facade is unchanged; every other nested class below was retargeted onto
- * {@code CloudSession} (via {@link CloudSession#current()}), since that is where the state it
- * exercises actually lives now.
+ * Plan 16-09 (D-17/D-18) went further and removed every fine-grained public static this class used
+ * to expose: only {@link CloudAuthManager#login}, {@link CloudAuthManager#logout} and
+ * {@link CloudAuthManager#status} remain public, and none of the three accepts or returns a
+ * {@link TokenEntity} or a generation. The former {@code MethodSignatureTests} nested class, which
+ * asserted the now-removed statics' signatures, is gone with them --
+ * {@code CredentialStaticSurfaceInvariantTest} (buildtools) is the structural test that now proves
+ * the surface stays this narrow. Every other nested class below reaches {@link CloudSession}'s
+ * instance state directly (via {@link CloudSession#current()}), since that is where it actually
+ * lives; {@link LoginTests}, {@link LogoutTests} and {@link StatusTests} are new, exercising the
+ * three surviving entry points directly.
  */
 @DisplayName("CloudAuthManager 测试")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class CloudAuthManagerTest {
+
+    @TempDir
+    File dataFolder;
 
     // -------------------------------------------------------------------------
     // Helper utilities
@@ -122,11 +139,37 @@ class CloudAuthManagerTest {
         // issue #250); a fresh, un-invalidated session with nothing scheduled replaces whatever a
         // previous test class left behind, including any leaked poll/refresh executors.
         CloudSession.resetForTesting();
+        // login()'s not-already-logged-in path consults ApiRateLimiter; without resetting it here,
+        // a rate-limit timestamp recorded by one test would leak into the next.
+        ApiRateLimiter.resetAll();
+        // login()'s magic-link request path reads this lazily; forcing it to a deliberately empty
+        // value makes "API URL not configured" a deterministic, network-free branch instead of
+        // depending on env.yml or an uninitialized static.
+        HttpRequestUtils.setBaseUrlForTesting("");
+        // LogoutTests' real (unmocked) logout() calls exercise CloudSession#commit(), which writes
+        // through TokenStore/CredentialStore -- pin both write locations to the temp dir so nothing
+        // lands under this repository's real data folder or ~/.ultikits (mirrors
+        // CredentialGenerationTest's setup).
+        CredentialStore.setTargetPathForTesting(dataFolder.toPath().resolve("credentials.json"));
+        CredentialStore.setOldLocationForTesting(dataFolder.toPath().resolve("pre-migration-data.json"));
+        // LogoutTests' one un-mocked disableCloud() call reaches UltiTools.getInstance().getLogger()
+        // from several teardown steps; every manager getter besides that defaults to Mockito's null,
+        // which doDisableCloud()'s own null-checks and catch-and-log-at-FINE already tolerate.
+        Logger mockLogger = mock(Logger.class);
+        TestHelper.mockUltiToolsInstance(ultiTools -> lenient().when(ultiTools.getLogger()).thenReturn(mockLogger));
     }
 
     @AfterEach
-    void cleanUpStaticState() {
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // clears the UltiTools singleton mocked in setUp
+    void cleanUpStaticState() throws Exception {
         CloudSession.resetForTesting();
+        ApiRateLimiter.resetAll();
+        HttpRequestUtils.resetBaseUrl();
+        CredentialStore.clearTargetPathForTesting();
+        CredentialStore.clearOldLocationForTesting();
+        Field instanceField = com.ultikits.ultitools.UltiTools.class.getDeclaredField("ultiTools");
+        instanceField.setAccessible(true);
+        instanceField.set(null, null);
     }
 
     // =========================================================================
@@ -140,20 +183,20 @@ class CloudAuthManagerTest {
         @Test
         @DisplayName("CloudAuthManager 应该是 public 类 / class should be public")
         void classShouldBePublic() {
-            assertThat(Modifier.isPublic(CloudAuthManager.class.getModifiers())).isTrue();
+            assertThat(java.lang.reflect.Modifier.isPublic(CloudAuthManager.class.getModifiers())).isTrue();
         }
 
         @Test
         @DisplayName("CloudAuthManager 不应该是抽象类 / class should not be abstract")
         void classShouldNotBeAbstract() {
-            assertThat(Modifier.isAbstract(CloudAuthManager.class.getModifiers())).isFalse();
+            assertThat(java.lang.reflect.Modifier.isAbstract(CloudAuthManager.class.getModifiers())).isFalse();
         }
 
         @Test
         @DisplayName("CloudSession 应该拥有一个持有当前令牌的实例字段 / holds an instance field for the current token")
         void sessionTokenFieldShouldExist() throws Exception {
             Field field = CloudSession.class.getDeclaredField("token");
-            assertThat(Modifier.isStatic(field.getModifiers()))
+            assertThat(java.lang.reflect.Modifier.isStatic(field.getModifiers()))
                     .as("the token is now instance state, owned by one session, not a class-wide static")
                     .isFalse();
             assertThat(field.getType()).isEqualTo(TokenEntity.class);
@@ -163,7 +206,7 @@ class CloudAuthManagerTest {
         @DisplayName("CloudSession 应该拥有 pollExecutor 实例字段 / instance field pollExecutor should exist")
         void pollExecutorFieldShouldExist() throws Exception {
             Field field = CloudSession.class.getDeclaredField("pollExecutor");
-            assertThat(Modifier.isStatic(field.getModifiers())).isFalse();
+            assertThat(java.lang.reflect.Modifier.isStatic(field.getModifiers())).isFalse();
             assertThat(ScheduledExecutorService.class.isAssignableFrom(field.getType())).isTrue();
         }
 
@@ -171,7 +214,7 @@ class CloudAuthManagerTest {
         @DisplayName("CloudSession 应该拥有 refreshExecutor 实例字段 / instance field refreshExecutor should exist")
         void refreshExecutorFieldShouldExist() throws Exception {
             Field field = CloudSession.class.getDeclaredField("refreshExecutor");
-            assertThat(Modifier.isStatic(field.getModifiers())).isFalse();
+            assertThat(java.lang.reflect.Modifier.isStatic(field.getModifiers())).isFalse();
             assertThat(ScheduledExecutorService.class.isAssignableFrom(field.getType())).isTrue();
         }
 
@@ -179,14 +222,14 @@ class CloudAuthManagerTest {
         @DisplayName("CloudSession 应该拥有 pollTask 实例字段 / instance field pollTask should exist")
         void pollTaskFieldShouldExist() throws Exception {
             Field field = CloudSession.class.getDeclaredField("pollTask");
-            assertThat(Modifier.isStatic(field.getModifiers())).isFalse();
+            assertThat(java.lang.reflect.Modifier.isStatic(field.getModifiers())).isFalse();
         }
 
         @Test
         @DisplayName("CloudSession 应该拥有 refreshTask 实例字段 / instance field refreshTask should exist")
         void refreshTaskFieldShouldExist() throws Exception {
             Field field = CloudSession.class.getDeclaredField("refreshTask");
-            assertThat(Modifier.isStatic(field.getModifiers())).isFalse();
+            assertThat(java.lang.reflect.Modifier.isStatic(field.getModifiers())).isFalse();
         }
     }
 
@@ -248,129 +291,7 @@ class CloudAuthManagerTest {
     }
 
     // =========================================================================
-    // 3. Method Signature Tests — 方法签名测试
-    // =========================================================================
-
-    @Nested
-    @DisplayName("方法签名测试")
-    class MethodSignatureTests {
-
-        @Test
-        @DisplayName("loadSavedToken 方法应该存在且返回 TokenEntity / should exist and return TokenEntity")
-        void loadSavedTokenMethodShouldExist() throws Exception {
-            Method method = CloudAuthManager.class.getDeclaredMethod("loadSavedToken");
-            assertThat(method).isNotNull();
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
-            assertThat(method.getReturnType()).isEqualTo(TokenEntity.class);
-        }
-
-        @Test
-        @DisplayName("refreshToken 方法应该存在且接受 String 参数 / should accept String and return TokenEntity")
-        void refreshTokenMethodShouldExist() throws Exception {
-            Method method = CloudAuthManager.class.getDeclaredMethod("refreshToken", String.class);
-            assertThat(method).isNotNull();
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
-            assertThat(method.getReturnType()).isEqualTo(TokenEntity.class);
-            assertThat(method.getParameterCount()).isEqualTo(1);
-        }
-
-        @Test
-        @DisplayName("saveToken 方法应该存在且接受 TokenEntity 参数 / should accept TokenEntity and return void")
-        void saveTokenMethodShouldExist() throws Exception {
-            Method method = CloudAuthManager.class.getDeclaredMethod("saveToken", TokenEntity.class);
-            assertThat(method).isNotNull();
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
-            assertThat(method.getReturnType()).isEqualTo(void.class);
-        }
-
-        @Test
-        @DisplayName("clearToken 方法应该存在且返回 void / should exist and return void")
-        void clearTokenMethodShouldExist() throws Exception {
-            Method method = CloudAuthManager.class.getDeclaredMethod("clearToken");
-            assertThat(method).isNotNull();
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
-            assertThat(method.getReturnType()).isEqualTo(void.class);
-        }
-
-        @Test
-        @DisplayName("getCurrentToken 方法应该存在且返回 TokenEntity / should return TokenEntity")
-        void getCurrentTokenMethodShouldExist() throws Exception {
-            Method method = CloudAuthManager.class.getDeclaredMethod("getCurrentToken");
-            assertThat(method).isNotNull();
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
-            assertThat(method.getReturnType()).isEqualTo(TokenEntity.class);
-        }
-
-        @Test
-        @DisplayName("hasValidToken 方法应该存在且返回 boolean / should return boolean")
-        void hasValidTokenMethodShouldExist() throws Exception {
-            Method method = CloudAuthManager.class.getDeclaredMethod("hasValidToken");
-            assertThat(method).isNotNull();
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
-            assertThat(method.getReturnType()).isEqualTo(boolean.class);
-        }
-
-        @Test
-        @DisplayName("startPolling 方法应该存在且接受 String 和 Consumer 参数")
-        void startPollingMethodShouldExist() throws Exception {
-            Method method = CloudAuthManager.class.getDeclaredMethod(
-                "startPolling", String.class, Consumer.class);
-            assertThat(method).isNotNull();
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
-            assertThat(method.getReturnType()).isEqualTo(void.class);
-        }
-
-        @Test
-        @DisplayName("stopPolling 方法应该存在且返回 void / should exist and return void")
-        void stopPollingMethodShouldExist() throws Exception {
-            Method method = CloudAuthManager.class.getDeclaredMethod("stopPolling");
-            assertThat(method).isNotNull();
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
-            assertThat(method.getReturnType()).isEqualTo(void.class);
-        }
-
-        @Test
-        @DisplayName("startTokenRefreshScheduler 方法应该存在且返回 void")
-        void startTokenRefreshSchedulerMethodShouldExist() throws Exception {
-            Method method = CloudAuthManager.class.getDeclaredMethod("startTokenRefreshScheduler");
-            assertThat(method).isNotNull();
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
-            assertThat(method.getReturnType()).isEqualTo(void.class);
-        }
-
-        @Test
-        @DisplayName("stopTokenRefreshScheduler 方法应该存在且返回 void")
-        void stopTokenRefreshSchedulerMethodShouldExist() throws Exception {
-            Method method = CloudAuthManager.class.getDeclaredMethod("stopTokenRefreshScheduler");
-            assertThat(method).isNotNull();
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
-            assertThat(method.getReturnType()).isEqualTo(void.class);
-        }
-
-        @Test
-        @DisplayName("requestMagicLink 方法应该存在且接受 Consumer 参数")
-        void requestMagicLinkMethodShouldExist() throws Exception {
-            Method method = CloudAuthManager.class.getDeclaredMethod(
-                "requestMagicLink", Consumer.class);
-            assertThat(method).isNotNull();
-            assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
-            assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
-            assertThat(method.getReturnType()).isEqualTo(String.class);
-        }
-    }
-
-    // =========================================================================
-    // 4. hasValidToken Tests — hasValidToken 方法测试
+    // 3. hasValidToken Tests — hasValidToken 方法测试（CloudSession 实例方法）
     // =========================================================================
 
     @Nested
@@ -382,7 +303,7 @@ class CloudAuthManagerTest {
         void shouldReturnFalseWhenCurrentTokenIsNull() throws Exception {
             setSessionField("token", null);
 
-            assertThat(CloudAuthManager.hasValidToken()).isFalse();
+            assertThat(CloudSession.current().hasValidToken()).isFalse();
         }
 
         @Test
@@ -393,7 +314,7 @@ class CloudAuthManagerTest {
             token.setExp((System.currentTimeMillis() / 1000L) + 3600L);
             setSessionField("token", token);
 
-            assertThat(CloudAuthManager.hasValidToken()).isFalse();
+            assertThat(CloudSession.current().hasValidToken()).isFalse();
         }
 
         @Test
@@ -403,7 +324,7 @@ class CloudAuthManagerTest {
             TokenEntity expiredToken = buildTokenWithExp(-3600L);
             setSessionField("token", expiredToken);
 
-            assertThat(CloudAuthManager.hasValidToken()).isFalse();
+            assertThat(CloudSession.current().hasValidToken()).isFalse();
         }
 
         @Test
@@ -413,7 +334,7 @@ class CloudAuthManagerTest {
             TokenEntity validToken = buildTokenWithExp(3600L);
             setSessionField("token", validToken);
 
-            assertThat(CloudAuthManager.hasValidToken()).isTrue();
+            assertThat(CloudSession.current().hasValidToken()).isTrue();
         }
 
         @Test
@@ -422,7 +343,7 @@ class CloudAuthManagerTest {
             TokenEntity almostExpiredToken = buildTokenWithExp(1L);
             setSessionField("token", almostExpiredToken);
 
-            assertThat(CloudAuthManager.hasValidToken()).isTrue();
+            assertThat(CloudSession.current().hasValidToken()).isTrue();
         }
 
         @Test
@@ -432,16 +353,16 @@ class CloudAuthManagerTest {
             TokenEntity tokenWithNullExp = buildTokenWithNullExp();
             setSessionField("token", tokenWithNullExp);
 
-            assertThat(CloudAuthManager.hasValidToken()).isTrue();
+            assertThat(CloudSession.current().hasValidToken()).isTrue();
         }
     }
 
     // =========================================================================
-    // 5. getCurrentToken Tests — getCurrentToken 方法测试
+    // 4. getToken Tests — getToken 方法测试（CloudSession 实例方法，原 getCurrentToken）
     // =========================================================================
 
     @Nested
-    @DisplayName("getCurrentToken 方法测试")
+    @DisplayName("getToken 方法测试")
     class GetCurrentTokenTests {
 
         @Test
@@ -449,7 +370,7 @@ class CloudAuthManagerTest {
         void shouldReturnNullWhenNoTokenSet() throws Exception {
             setSessionField("token", null);
 
-            assertThat(CloudAuthManager.getCurrentToken()).isNull();
+            assertThat(CloudSession.current().getToken()).isNull();
         }
 
         @Test
@@ -458,7 +379,7 @@ class CloudAuthManagerTest {
             TokenEntity expectedToken = buildTokenWithExp(3600L);
             setSessionField("token", expectedToken);
 
-            TokenEntity result = CloudAuthManager.getCurrentToken();
+            TokenEntity result = CloudSession.current().getToken();
 
             assertThat(result).isSameAs(expectedToken);
         }
@@ -470,12 +391,12 @@ class CloudAuthManagerTest {
             // Reset to null
             setSessionField("token", null);
 
-            assertThat(CloudAuthManager.getCurrentToken()).isNull();
+            assertThat(CloudSession.current().getToken()).isNull();
         }
     }
 
     // =========================================================================
-    // 6. TokenEntity Helper Tests — TokenEntity 辅助测试
+    // 5. TokenEntity Helper Tests — TokenEntity 辅助测试
     // =========================================================================
 
     @Nested
@@ -543,7 +464,7 @@ class CloudAuthManagerTest {
     }
 
     // =========================================================================
-    // 7. Scheduler Lifecycle Tests — 调度器生命周期测试
+    // 6. Scheduler Lifecycle Tests — 调度器生命周期测试（CloudSession 实例方法）
     // =========================================================================
 
     @Nested
@@ -556,7 +477,7 @@ class CloudAuthManagerTest {
             // The scheduled task body calls UltiTools.getInstance(), but the executor
             // itself is created before the task fires (initial delay = 1 hour).
             // We only check that the executor was created, not that the task ran.
-            CloudAuthManager.startTokenRefreshScheduler();
+            CloudSession.current().startTokenRefreshScheduler();
 
             ScheduledExecutorService executor =
                 (ScheduledExecutorService) getSessionField("refreshExecutor");
@@ -566,8 +487,8 @@ class CloudAuthManagerTest {
         @Test
         @DisplayName("stopTokenRefreshScheduler 之后 refreshExecutor 应为 null")
         void refreshExecutorShouldBeNullAfterStop() throws Exception {
-            CloudAuthManager.startTokenRefreshScheduler();
-            CloudAuthManager.stopTokenRefreshScheduler();
+            CloudSession.current().startTokenRefreshScheduler();
+            CloudSession.current().stopTokenRefreshScheduler();
 
             Object executor = getSessionField("refreshExecutor");
             assertThat(executor).isNull();
@@ -576,8 +497,8 @@ class CloudAuthManagerTest {
         @Test
         @DisplayName("stopTokenRefreshScheduler 之后 refreshTask 应为 null")
         void refreshTaskShouldBeNullAfterStop() throws Exception {
-            CloudAuthManager.startTokenRefreshScheduler();
-            CloudAuthManager.stopTokenRefreshScheduler();
+            CloudSession.current().startTokenRefreshScheduler();
+            CloudSession.current().stopTokenRefreshScheduler();
 
             Object task = getSessionField("refreshTask");
             assertThat(task).isNull();
@@ -591,7 +512,7 @@ class CloudAuthManagerTest {
             setSessionField("refreshTask", null);
 
             // Should not throw any exception
-            CloudAuthManager.stopTokenRefreshScheduler();
+            CloudSession.current().stopTokenRefreshScheduler();
 
             assertThat(getSessionField("refreshExecutor")).isNull();
             assertThat(getSessionField("refreshTask")).isNull();
@@ -600,10 +521,10 @@ class CloudAuthManagerTest {
         @Test
         @DisplayName("连续两次调用 startTokenRefreshScheduler 后只有一个 executor 存在")
         void doubleStartShouldProduceSingleExecutor() throws Exception {
-            CloudAuthManager.startTokenRefreshScheduler();
+            CloudSession.current().startTokenRefreshScheduler();
             // Second call internally invokes stopTokenRefreshScheduler first,
             // so there should be exactly one executor when the method returns.
-            CloudAuthManager.startTokenRefreshScheduler();
+            CloudSession.current().startTokenRefreshScheduler();
 
             ScheduledExecutorService executor =
                 (ScheduledExecutorService) getSessionField("refreshExecutor");
@@ -613,7 +534,7 @@ class CloudAuthManagerTest {
     }
 
     // =========================================================================
-    // 8. Poll Scheduler Lifecycle Tests — 轮询调度器生命周期测试
+    // 7. Poll Scheduler Lifecycle Tests — 轮询调度器生命周期测试（CloudSession 实例方法）
     // =========================================================================
 
     @Nested
@@ -627,7 +548,7 @@ class CloudAuthManagerTest {
             setSessionField("pollTask", null);
 
             // Should not throw
-            CloudAuthManager.stopPolling();
+            CloudSession.current().stopPolling();
 
             assertThat(getSessionField("pollExecutor")).isNull();
             assertThat(getSessionField("pollTask")).isNull();
@@ -641,7 +562,7 @@ class CloudAuthManagerTest {
                 java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
             setSessionField("pollExecutor", fakeExecutor);
 
-            CloudAuthManager.stopPolling();
+            CloudSession.current().stopPolling();
 
             assertThat(getSessionField("pollExecutor")).isNull();
             assertThat(fakeExecutor.isShutdown()).isTrue();
@@ -659,7 +580,7 @@ class CloudAuthManagerTest {
             setSessionField("pollExecutor", fakeExecutor);
             setSessionField("pollTask", fakeTask);
 
-            CloudAuthManager.stopPolling();
+            CloudSession.current().stopPolling();
 
             assertThat(getSessionField("pollTask")).isNull();
             assertThat(fakeTask.isCancelled()).isTrue();
@@ -668,15 +589,15 @@ class CloudAuthManagerTest {
         @Test
         @DisplayName("连续调用两次 stopPolling 不应抛出异常 / double stop should be safe")
         void doubleStopShouldBeSafe() throws Exception {
-            CloudAuthManager.stopPolling();
-            CloudAuthManager.stopPolling(); // second call on already-null state
+            CloudSession.current().stopPolling();
+            CloudSession.current().stopPolling(); // second call on already-null state
 
             assertThat(getSessionField("pollExecutor")).isNull();
         }
     }
 
     // =========================================================================
-    // 9. Combined Scheduler State Tests — 综合调度器状态测试
+    // 8. Combined Scheduler State Tests — 综合调度器状态测试（CloudSession 实例方法）
     // =========================================================================
 
     @Nested
@@ -686,14 +607,14 @@ class CloudAuthManagerTest {
         @Test
         @DisplayName("refresh 调度器启动后停止，executor 应该被关闭 / executor shutdown after stop")
         void executorShouldBeShutDownAfterStop() throws Exception {
-            CloudAuthManager.startTokenRefreshScheduler();
+            CloudSession.current().startTokenRefreshScheduler();
 
             // Capture the executor reference before stopping
             ScheduledExecutorService executorBeforeStop =
                 (ScheduledExecutorService) getSessionField("refreshExecutor");
             assertThat(executorBeforeStop).isNotNull();
 
-            CloudAuthManager.stopTokenRefreshScheduler();
+            CloudSession.current().stopTokenRefreshScheduler();
 
             // The captured reference should now be shut down
             assertThat(executorBeforeStop.isShutdown()).isTrue();
@@ -704,7 +625,7 @@ class CloudAuthManagerTest {
         @Test
         @DisplayName("startTokenRefreshScheduler 创建的是单线程调度器 / should be single-thread")
         void refreshSchedulerShouldUseSingleThread() throws Exception {
-            CloudAuthManager.startTokenRefreshScheduler();
+            CloudSession.current().startTokenRefreshScheduler();
 
             ScheduledExecutorService executor =
                 (ScheduledExecutorService) getSessionField("refreshExecutor");
@@ -717,7 +638,7 @@ class CloudAuthManagerTest {
     }
 
     // =========================================================================
-    // 10. Token State Transition Tests — 令牌状态转换测试
+    // 9. Token State Transition Tests — 令牌状态转换测试（CloudSession 实例方法）
     // =========================================================================
 
     @Nested
@@ -725,40 +646,40 @@ class CloudAuthManagerTest {
     class TokenStateTransitionTests {
 
         @Test
-        @DisplayName("初始时 getCurrentToken 返回 null / null before any token is set")
+        @DisplayName("初始时 getToken 返回 null / null before any token is set")
         void getCurrentTokenReturnsNullInitially() throws Exception {
             setSessionField("token", null);
 
-            assertThat(CloudAuthManager.getCurrentToken()).isNull();
+            assertThat(CloudSession.current().getToken()).isNull();
         }
 
         @Test
-        @DisplayName("设置有效令牌后 getCurrentToken 返回该令牌 / token accessible after injection")
+        @DisplayName("设置有效令牌后 getToken 返回该令牌 / token accessible after injection")
         void getCurrentTokenReturnsInjectedToken() throws Exception {
             TokenEntity token = buildTokenWithExp(3600L);
             setSessionField("token", token);
 
-            assertThat(CloudAuthManager.getCurrentToken()).isEqualTo(token);
+            assertThat(CloudSession.current().getToken()).isEqualTo(token);
         }
 
         @Test
         @DisplayName("hasValidToken 在 null 令牌后设置有效令牌时状态应切换为 true")
         void hasValidTokenTransitionsFromFalseToTrue() throws Exception {
             setSessionField("token", null);
-            assertThat(CloudAuthManager.hasValidToken()).isFalse();
+            assertThat(CloudSession.current().hasValidToken()).isFalse();
 
             setSessionField("token", buildTokenWithExp(3600L));
-            assertThat(CloudAuthManager.hasValidToken()).isTrue();
+            assertThat(CloudSession.current().hasValidToken()).isTrue();
         }
 
         @Test
         @DisplayName("令牌设置后清空 currentToken，hasValidToken 应再次返回 false")
         void hasValidTokenTransitionsFromTrueToFalse() throws Exception {
             setSessionField("token", buildTokenWithExp(3600L));
-            assertThat(CloudAuthManager.hasValidToken()).isTrue();
+            assertThat(CloudSession.current().hasValidToken()).isTrue();
 
             setSessionField("token", null);
-            assertThat(CloudAuthManager.hasValidToken()).isFalse();
+            assertThat(CloudSession.current().hasValidToken()).isFalse();
         }
 
         @Test
@@ -767,17 +688,200 @@ class CloudAuthManagerTest {
             TokenEntity expiredToken = buildTokenWithExp(-7200L); // 2 hours ago
             setSessionField("token", expiredToken);
 
-            assertThat(CloudAuthManager.hasValidToken()).isFalse();
+            assertThat(CloudSession.current().hasValidToken()).isFalse();
         }
 
         @Test
         @DisplayName("将过期令牌替换为有效令牌后 hasValidToken 应返回 true")
         void replacingExpiredTokenWithValidTokenMakesItValid() throws Exception {
             setSessionField("token", buildTokenWithExp(-3600L));
-            assertThat(CloudAuthManager.hasValidToken()).isFalse();
+            assertThat(CloudSession.current().hasValidToken()).isFalse();
 
             setSessionField("token", buildTokenWithExp(3600L));
-            assertThat(CloudAuthManager.hasValidToken()).isTrue();
+            assertThat(CloudSession.current().hasValidToken()).isTrue();
+        }
+    }
+
+    // =========================================================================
+    // 10. login() Tests — 新的三个命令入口之一（plan 16-09）
+    // =========================================================================
+
+    @Nested
+    @DisplayName("login 方法测试（三个命令入口之一，D-17/D-18）")
+    class LoginTests {
+
+        @Test
+        @DisplayName("已登录时只调用 onAlreadyLoggedIn，不发起请求")
+        void alreadyLoggedInSkipsEverythingElse() throws Exception {
+            setSessionField("token", buildTokenWithExp(3600L));
+
+            AtomicBoolean alreadyLoggedInCalled = new AtomicBoolean(false);
+            AtomicBoolean anythingElseCalled = new AtomicBoolean(false);
+
+            CloudAuthManager.login(
+                () -> alreadyLoggedInCalled.set(true),
+                remaining -> anythingElseCalled.set(true),
+                () -> anythingElseCalled.set(true),
+                url -> anythingElseCalled.set(true),
+                error -> anythingElseCalled.set(true));
+
+            assertThat(alreadyLoggedInCalled).isTrue();
+            assertThat(anythingElseCalled)
+                    .as("已登录分支必须短路——不应触碰限流、请求或回调的任何其它分支")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("限流命中时调用 onRateLimited，剩余秒数大于 0")
+        void rateLimitedReportsPositiveRemaining() throws Exception {
+            setSessionField("token", null);
+
+            // First call consumes the rate-limit window (network-free: base URL is forced empty).
+            CloudAuthManager.login(() -> { }, remaining -> { }, () -> { }, url -> { }, error -> { });
+
+            // Second call, immediately after, must be rate-limited.
+            AtomicLong remainingSeconds = new AtomicLong(-1);
+            AtomicBoolean requestingCalled = new AtomicBoolean(false);
+
+            CloudAuthManager.login(
+                () -> { },
+                remainingSeconds::set,
+                () -> requestingCalled.set(true),
+                url -> { },
+                error -> { });
+
+            assertThat(remainingSeconds.get()).isGreaterThan(0);
+            assertThat(requestingCalled)
+                    .as("限流命中时不应继续走到 onRequesting")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("未登录且未限流时：先 onRequesting，再因 API URL 未配置调用 onError")
+        void notLoggedInAndNotRateLimitedRequestsThenReportsMisconfiguration() throws Exception {
+            setSessionField("token", null);
+
+            AtomicBoolean requestingCalled = new AtomicBoolean(false);
+            AtomicReference<String> errorMessage = new AtomicReference<>();
+            AtomicBoolean successCalled = new AtomicBoolean(false);
+
+            CloudAuthManager.login(
+                () -> { },
+                remaining -> { },
+                () -> requestingCalled.set(true),
+                url -> successCalled.set(true),
+                errorMessage::set);
+
+            assertThat(requestingCalled).isTrue();
+            assertThat(errorMessage.get()).isEqualTo("API URL not configured");
+            assertThat(successCalled).isFalse();
+        }
+    }
+
+    // =========================================================================
+    // 11. logout() Tests — 新的三个命令入口之一（plan 16-09）
+    // =========================================================================
+
+    @Nested
+    @DisplayName("logout 方法测试（三个命令入口之一，D-17/D-18）")
+    class LogoutTests {
+
+        @Test
+        @DisplayName("有凭证（即便已过期）时返回 true，且拆线之后当前会话不再持有该凭证")
+        void expiredOrValidTokenStillReportsHadCredential() throws Exception {
+            setSessionField("token", buildTokenWithExp(-3600L)); // expired -- logout does not gate on validity
+
+            boolean hadCredential = CloudAuthManager.logout();
+
+            assertThat(hadCredential).isTrue();
+            assertThat(CloudSession.current().getToken())
+                    .as("logout 之后当前会话（一个全新会话）不应持有旧凭证")
+                    .isNull();
+        }
+
+        @Test
+        @DisplayName("从未登录过时返回 false，但拆线仍然无条件发生")
+        void neverLoggedInReturnsFalseButTeardownStillRuns() throws Exception {
+            setSessionField("token", null);
+
+            try (MockedStatic<PluginInitiationUtils> init = mockStatic(PluginInitiationUtils.class)) {
+                boolean hadCredential = CloudAuthManager.logout();
+
+                init.verify(PluginInitiationUtils::disableCloud, times(1));
+                assertThat(hadCredential)
+                        .as("没有凭证就没什么可清的，但 disableCloud() 的每一步都必须照跑")
+                        .isFalse();
+            }
+        }
+
+        @Test
+        @DisplayName("凭证必须在拆线之后读：拆线期间落地的凭证仍会被看到并清除")
+        void credentialCommittedDuringTeardownIsStillSeenAndCleared() throws Exception {
+            setSessionField("token", null);
+
+            try (MockedStatic<PluginInitiationUtils> init = mockStatic(PluginInitiationUtils.class)) {
+                // Simulate an in-flight magic-link poll committing successfully WHILE
+                // disableCloud() is (nominally) running -- exactly the window logout() must
+                // still catch by reading the credential only after teardown returns.
+                init.when(PluginInitiationUtils::disableCloud).thenAnswer(invocation -> {
+                    CloudSession.current().commit(buildTokenWithExp(3600L));
+                    return null;
+                });
+
+                boolean hadCredential = CloudAuthManager.logout();
+
+                assertThat(hadCredential)
+                        .as("若沿用拆线前的快照，这里会是 false——凭证必须在拆线之后才读")
+                        .isTrue();
+            }
+        }
+    }
+
+    // =========================================================================
+    // 12. status() Tests — 新的三个命令入口之一（plan 16-09）
+    // =========================================================================
+
+    @Nested
+    @DisplayName("status 方法测试（三个命令入口之一，D-17/D-18）")
+    class StatusTests {
+
+        @Test
+        @DisplayName("未连接时返回的快照 connected=false，且不携带用户名或过期时间")
+        void notConnectedReportsDisconnectedSnapshot() throws Exception {
+            setSessionField("token", null);
+
+            CloudAuthManager.CloudStatus status = CloudAuthManager.status();
+
+            assertThat(status.isConnected()).isFalse();
+            assertThat(status.getUserName()).isNull();
+            assertThat(status.getExpirationDate()).isNull();
+        }
+
+        @Test
+        @DisplayName("已连接且有用户名时返回的快照携带该用户名与到期时间")
+        void connectedWithUserNameReportsIt() throws Exception {
+            TokenEntity token = buildTokenWithExp(3600L);
+            token.setUser_name("alice");
+            setSessionField("token", token);
+
+            CloudAuthManager.CloudStatus status = CloudAuthManager.status();
+
+            assertThat(status.isConnected()).isTrue();
+            assertThat(status.getUserName()).isEqualTo("alice");
+            assertThat(status.getExpirationDate()).isEqualTo(token.getExpirationDate());
+        }
+
+        @Test
+        @DisplayName("已连接但用户名为空时返回的快照用户名为 'Unknown'")
+        void connectedWithoutUserNameReportsUnknown() throws Exception {
+            TokenEntity token = buildTokenWithExp(3600L);
+            token.setUser_name(null);
+            setSessionField("token", token);
+
+            CloudAuthManager.CloudStatus status = CloudAuthManager.status();
+
+            assertThat(status.isConnected()).isTrue();
+            assertThat(status.getUserName()).isEqualTo("Unknown");
         }
     }
 }

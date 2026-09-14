@@ -260,7 +260,7 @@ class CredentialGenerationTest {
                 CloudSession sessionAtRefreshStart = CloudSession.current();
 
                 // logout happens while the refresh HTTP call is "in flight"
-                CloudAuthManager.clearToken(); // the only write this scenario should perform
+                CloudSession.startNew().clearPersisted(); // the only write this scenario should perform
 
                 // the refresh call "returns" only now, carrying the session captured before logout
                 boolean committed = sessionAtRefreshStart.commit(someToken());
@@ -289,7 +289,7 @@ class CredentialGenerationTest {
             try (WatchService watcher = newTempFileWatcher(dataFolder)) {
                 CloudSession sessionAtRequestStart = CloudSession.current();
 
-                CloudAuthManager.clearToken(); // the only write this scenario should perform
+                CloudSession.startNew().clearPersisted(); // the only write this scenario should perform
 
                 boolean committed = sessionAtRequestStart.commit(someToken());
 
@@ -315,7 +315,7 @@ class CredentialGenerationTest {
             // teardown has fully finished -- against the brand-new session teardown installed --
             // must not be collateral damage from the teardown's own write.
             try (WatchService watcher = newTempFileWatcher(dataFolder)) {
-                CloudAuthManager.clearToken(); // write 1 -- teardown, nothing to clear yet; installs a fresh session
+                CloudSession.startNew().clearPersisted(); // write 1 -- teardown, nothing to clear yet; installs a fresh session
 
                 CloudSession sessionAfterTeardown = CloudSession.current();
                 boolean committed = sessionAfterTeardown.commit(someToken()); // write 2
@@ -329,7 +329,7 @@ class CredentialGenerationTest {
                 CredentialStore.ReadResult result = CredentialStore.read();
                 assertThat(result.isParsed()).isTrue();
                 assertThat(result.data()).containsKey("cloud_token");
-                assertThat(CloudAuthManager.getCurrentToken()).isNotNull();
+                assertThat(CloudSession.current().getToken()).isNotNull();
             }
         }
 
@@ -348,7 +348,7 @@ class CredentialGenerationTest {
             try (WatchService watcher = newTempFileWatcher(dataFolder)) {
                 CloudSession sessionBeforeBlockingCall = CloudSession.current();
 
-                CloudAuthManager.clearToken(); // write 1
+                CloudSession.startNew().clearPersisted(); // write 1
                 CloudSession sessionAfterLogout = CloudSession.current();
                 assertThat(sessionAfterLogout).isNotSameAs(sessionBeforeBlockingCall);
                 assertThat(sessionBeforeBlockingCall.isCurrent()).isFalse();
@@ -384,7 +384,7 @@ class CredentialGenerationTest {
                 assertThat(committed).isTrue();
 
                 // logout is squeezed in between "commit succeeded" and "activation starts"
-                CloudAuthManager.clearToken(); // write 2
+                CloudSession.startNew().clearPersisted(); // write 2
 
                 boolean cloudEnabledBeforeActivation = PluginInitiationUtils.isCloudEnabled();
                 boolean activated = PluginInitiationUtils.activateCloudIfCurrent(session);

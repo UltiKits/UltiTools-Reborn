@@ -261,7 +261,7 @@ final class CloudSession {
 
     /**
      * Removes the persisted credential from disk and clears this session's in-memory token.
-     * Called by {@code CloudAuthManager.clearToken()} on the freshly-installed session
+     * Called by {@code CloudAuthManager.logout()} (plan 16-09) on the freshly-installed session
      * {@link #startNew()} returns, so the wipe lands on the session that is actually current going
      * forward.
      *

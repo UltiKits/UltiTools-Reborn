@@ -112,14 +112,70 @@ public class PluginInitiationUtils {
     // Phase 06 Codacy remediation commit for the verification).
 
     /**
+     * Attempts to resume a previously-saved UltiCloud credential at startup: loads it from disk on
+     * the current session, and -- unless the startup login is currently rate-limited -- activates
+     * cloud features with it via {@link #loginWithToken(TokenEntity)}. Replaces what used to be
+     * {@code UltiTools.attemptCloudLogin()}'s own inline body; moved here (plan 16-09, D-18) because
+     * {@link #loginWithToken(TokenEntity)} itself had to become package-private (it accepted a
+     * {@link TokenEntity} and was public), and {@code UltiTools} is a different package.
+     *
+     * @return {@code true} if a saved credential was found and successfully activated
+     */
+    public static boolean resumeSavedCredentialOnStartup() {
+        try {
+            TokenEntity savedToken = CloudSession.current().loadFromDisk();
+            if (savedToken != null) {
+                UltiTools.getInstance().getLogger().log(Level.INFO,
+                    "Found saved UltiCloud token, authenticating...");
+                if (ApiRateLimiter.isAllowed("startup-login")) {
+                    return loginWithToken(savedToken);
+                }
+                UltiTools.getInstance().getLogger().log(Level.INFO, "Skipping UltiCloud login (rate limited)");
+            } else {
+                UltiTools.getInstance().getLogger().log(Level.FINE,
+                    "No saved UltiCloud token found. Use /ulticloud login to authenticate.");
+            }
+        } catch (Exception e) {
+            UltiTools.getInstance().getLogger().log(Level.WARNING,
+                "UltiCloud login failed (server will continue without cloud features): " + e.getMessage());
+        }
+        return false;
+    }
+
+    /**
+     * Starts the token-refresh scheduler on the current session. Replaces the direct
+     * {@code CloudAuthManager.startTokenRefreshScheduler()} call {@code UltiTools.onEnable()} used
+     * to make (plan 16-09, D-17/D-18) -- {@link CloudSession} is package-private, so a different
+     * package cannot reach it by name; this is the public seam instead.
+     */
+    public static void startTokenRefreshScheduler() {
+        CloudSession.current().startTokenRefreshScheduler();
+    }
+
+    /**
+     * Stops the current session's token-refresh scheduler and magic-link poller. Replaces the two
+     * direct {@code CloudAuthManager.stopTokenRefreshScheduler()}/{@code stopPolling()} calls
+     * {@code UltiTools.onDisable()} used to make (plan 16-09, D-17/D-18).
+     */
+    public static void stopCredentialSchedulers() {
+        CloudSession.current().stopTokenRefreshScheduler();
+        CloudSession.current().stopPolling();
+    }
+
+    /**
      * Login to UltiPanel using an existing token (from magic-link or saved token).
      * Registers or updates the server without needing username/password.
+     * <p>
+     * Package-private as of plan 16-09 (D-18) -- a public static method accepting a
+     * {@link TokenEntity} is exactly the static bypass D-18's structural invariant forbids. Reached
+     * from a different package only through {@link #resumeSavedCredentialOnStartup()}; within this
+     * package, {@code CloudSession.completeMagicLinkLogin} calls it directly.
      *
      * @param existingToken the pre-authenticated token
      * @return true if server registration/update succeeded
      * @throws IOException if an I/O error occurs
      */
-    public static boolean loginWithToken(TokenEntity existingToken) throws IOException {
+    static boolean loginWithToken(TokenEntity existingToken) throws IOException {
         String uuid = CommonUtils.getUltiToolsUUID();
         int port = org.bukkit.Bukkit.getServer().getPort();
         String domain = "";
@@ -1856,7 +1912,7 @@ public class PluginInitiationUtils {
      *         and activation was abandoned
      * @throws IOException if establishing the connection fails
      */
-    public static boolean activateCloudIfCurrent(CloudSession session) throws IOException {
+    static boolean activateCloudIfCurrent(CloudSession session) throws IOException {
         synchronized (session) {
             if (!session.isCurrent()) {
                 UltiTools.getInstance().getLogger().log(Level.INFO,
@@ -1867,25 +1923,6 @@ public class PluginInitiationUtils {
             session.startTokenRefreshScheduler();
             return true;
         }
-    }
-
-    /**
-     * The single-{@code long} overload of {@link #activateCloudIfCurrent(CloudSession)} that used
-     * to take an explicit credential generation.
-     *
-     * @param generation ignored -- session identity, not a generation, now decides currency
-     * @return {@code true} if activated; {@code false} if the current session has been invalidated
-     * @throws IOException if establishing the connection fails
-     * @deprecated Compatibility shim only (D-17) -- measured 0 external callers across every
-     * published module JAR and every local module/plugin source. Delegates to
-     * {@link #activateCloudIfCurrent(CloudSession)} against {@link CloudSession#current()};
-     * {@code generation} is accepted only so this signature still compiles against any
-     * (nonexistent) caller. Scheduled for removal by plan 16-09.
-     * @removeIn 6.4.0
-     */
-    @Deprecated(since = "6.3.0", forRemoval = true)
-    public static boolean activateCloudIfCurrent(long generation) throws IOException {
-        return activateCloudIfCurrent(CloudSession.current());
     }
 
     /**
