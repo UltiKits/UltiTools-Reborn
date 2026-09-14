@@ -53,6 +53,9 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
  */
 final class CloudSession {
 
+    // All field declarations precede all methods (PMD FieldDeclarationsShouldBeAtStartOfClass) --
+    // moved here in plan 16-10 (Gate 1); no field's own meaning changed, only its position.
+
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final long POLL_INTERVAL_MS = 3000;
     private static final int MAX_POLL_ATTEMPTS = 100; // 5 minutes at 3s intervals
@@ -74,6 +77,45 @@ final class CloudSession {
      * method on {@link CloudAuthManager} always has something to delegate to, even before any
      * login has ever happened. */
     private static volatile CloudSession current = new CloudSession();
+
+    private final TokenStore tokenStore = new TokenStore();
+
+    private volatile TokenEntity token;
+    private volatile boolean invalidated;
+
+    private ScheduledExecutorService pollExecutor;
+    private ScheduledFuture<?> pollTask;
+    private ScheduledExecutorService refreshExecutor;
+    private ScheduledFuture<?> refreshTask;
+
+    /**
+     * This session's own WebSocket client, or {@code null} if none is connected. Task 2 of plan
+     * 16-08 moved this off {@code PluginInitiationUtils}'s static {@code panelWS} field -- the
+     * client dies with the session that built it ({@link #invalidate()} disconnects and clears it),
+     * so a reconnect-exhaustion callback or a late handshake checked against THIS session can never
+     * disagree with what client is actually installed here.
+     */
+    private volatile UltiPanelWebSocketClient webSocketClient;
+
+    /**
+     * The global budget and backoff for this session's outer reconnection (reinit loop).
+     * <p>
+     * The client's own limit of 5 attempts is a <b>per-instance</b> cap, and
+     * {@code PluginInitiationUtils.reinitWebSocket} builds a brand-new client instance every time --
+     * so the per-instance cap places no constraint at all on the whole, which is exactly how the
+     * loop became unbounded (issue #181). This strategy spans client instances instead; only one
+     * successful {@code onOpen} resets it. Being a fresh field on every new session is also what
+     * makes D-16's "the old session's backoff counter does not carry over" true for free -- a new
+     * session's budget starts at zero attempts by construction, with no reset call needed.
+     */
+    private final ExponentialBackoffStrategy backoff = ExponentialBackoffStrategy.withMaxAttempts(MAX_REINIT_ATTEMPTS);
+
+    // No explicit constructor: this class needs none, and the implicit no-arg constructor the
+    // compiler generates is already package-private (matching this top-level class's own default
+    // visibility) -- exactly what an explicit `CloudSession() {}` used to spell out redundantly
+    // (PMD UnnecessaryConstructor, plan 16-10 Gate 1). "Constructed only by startNew() and by tests
+    // in this package" is a fact about who calls it, not about the constructor's own accessibility,
+    // and is already stated in this class's own javadoc above.
 
     /**
      * The session every {@code CloudAuthManager}/{@code PluginInitiationUtils} static facade
@@ -115,42 +157,6 @@ final class CloudSession {
      */
     static void resetForTesting() {
         current = new CloudSession();
-    }
-
-    private final TokenStore tokenStore = new TokenStore();
-
-    private volatile TokenEntity token;
-    private volatile boolean invalidated;
-
-    private ScheduledExecutorService pollExecutor;
-    private ScheduledFuture<?> pollTask;
-    private ScheduledExecutorService refreshExecutor;
-    private ScheduledFuture<?> refreshTask;
-
-    /**
-     * This session's own WebSocket client, or {@code null} if none is connected. Task 2 of plan
-     * 16-08 moved this off {@code PluginInitiationUtils}'s static {@code panelWS} field -- the
-     * client dies with the session that built it ({@link #invalidate()} disconnects and clears it),
-     * so a reconnect-exhaustion callback or a late handshake checked against THIS session can never
-     * disagree with what client is actually installed here.
-     */
-    private volatile UltiPanelWebSocketClient webSocketClient;
-
-    /**
-     * The global budget and backoff for this session's outer reconnection (reinit loop).
-     * <p>
-     * The client's own limit of 5 attempts is a <b>per-instance</b> cap, and
-     * {@code PluginInitiationUtils.reinitWebSocket} builds a brand-new client instance every time --
-     * so the per-instance cap places no constraint at all on the whole, which is exactly how the
-     * loop became unbounded (issue #181). This strategy spans client instances instead; only one
-     * successful {@code onOpen} resets it. Being a fresh field on every new session is also what
-     * makes D-16's "the old session's backoff counter does not carry over" true for free -- a new
-     * session's budget starts at zero attempts by construction, with no reset call needed.
-     */
-    private final ExponentialBackoffStrategy backoff = ExponentialBackoffStrategy.withMaxAttempts(MAX_REINIT_ATTEMPTS);
-
-    /** Package-private -- constructed only by {@link #startNew()} and by tests in this package. */
-    CloudSession() {
     }
 
     // ---- Commit / invalidate: the contract D-18 requires ----

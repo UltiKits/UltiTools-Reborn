@@ -1699,6 +1699,12 @@ public class PluginInitiationUtils {
      *
      * @param session the session whose WebSocket client is being re-initialized
      */
+    // PMD.NPathComplexity: 336 against a 200 threshold, raised from below-threshold by CR-02's
+    // synchronized(session) block (16-10, 16-REVIEW-cloud.md) -- that block is one guard-then-act
+    // sequence, not nested branching; splitting it into a separate method would only move the
+    // count, not reduce the genuine sequential guard-chain (two early-return gates, a refresh
+    // branch, a second confirmation, a try/catch) this method already documents step by step.
+    @SuppressWarnings("PMD.NPathComplexity")
     static void reinitWebSocket(CloudSession session) {
         // Gate one: no more reconnecting after logout.
         // This is the line that makes `/ulticloud logout` actually take effect — before it existed,

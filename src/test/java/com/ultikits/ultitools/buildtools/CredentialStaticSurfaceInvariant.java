@@ -103,6 +103,13 @@ public final class CredentialStaticSurfaceInvariant {
      *         ordered by the method's own {@link Method#toString()} so repeated runs over the same
      *         input produce identical output.
      */
+    // PMD.NPathComplexity: raised well above the 200 threshold by WR-03's generic-type checks
+    // (16-10, 16-REVIEW-cloud.md) layered onto the pre-existing erased-type and generation checks.
+    // The method is a flat sequence of independent per-condition guards over one sorted loop -- no
+    // guard nests inside another -- and the count is the product of those independent checks, the
+    // same shape RegistryLedger.merge()'s own identical suppression already documents in this
+    // codebase, not a measure of genuinely tangled control flow.
+    @SuppressWarnings("PMD.NPathComplexity")
     public static List<String> evaluate(Collection<Method> methods) {
         Objects.requireNonNull(methods, "methods");
 
@@ -234,6 +241,12 @@ public final class CredentialStaticSurfaceInvariant {
      *             {@link Method#getGenericParameterTypes()}, or {@link Field#getGenericType()}
      * @return {@code true} if {@code type} references {@link TokenEntity} anywhere in its structure
      */
+    // PMD.NPathComplexity: the loops over getActualTypeArguments()/getUpperBounds()/getLowerBounds()
+    // each recurse, and PMD's path count for a recursive method does not converge the way it does
+    // for a flat one -- the actual runtime depth is bounded by the type's own nesting, which is
+    // shallow for every real signature in this package (see the class javadoc's worked example,
+    // Optional<List<TokenEntity>>, two levels deep).
+    @SuppressWarnings("PMD.NPathComplexity")
     private static boolean referencesTokenEntity(Type type) {
         if (type == null) {
             return false;

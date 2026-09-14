@@ -26,9 +26,11 @@ final class TokenStore {
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
-    /** Package-private -- only a {@link CloudSession} may construct one. */
-    TokenStore() {
-    }
+    // No explicit constructor: the implicit no-arg constructor the compiler generates is already
+    // package-private, matching this top-level class's own default visibility (PMD
+    // UnnecessaryConstructor, plan 16-10 Gate 1) -- exactly what an explicit `TokenStore() {}` used
+    // to spell out redundantly. "Only a CloudSession may construct one" is already stated in this
+    // class's own javadoc above.
 
     /**
      * Persists {@code token}, replacing whatever {@code cloud_token} entry currently exists in the

@@ -217,6 +217,8 @@ class CredentialStaticSurfaceInvariantTest {
 
     static class GenerationParameterOffender {
         public static void advanceGeneration(long generation) {
+            // Never actually called -- reflected over only, to exercise the name-based
+            // generation-shaped check against a synthetic offender.
         }
     }
 
@@ -295,6 +297,10 @@ class CredentialStaticSurfaceInvariantTest {
             String simpleName = classFile.getFileName().toString();
             String withoutSuffix = simpleName.substring(0, simpleName.length() - ".class".length());
             String fqcn = packageName + "." + withoutSuffix;
+            // The name is not attacker-controlled: it is derived by walking classesRoot's own
+            // compiled package directory on disk. Rationale precedes the marker deliberately -- an
+            // Opengrep marker only counts on its own line or the one immediately above.
+            // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
             Class<?> clazz = Class.forName(fqcn);
             methods.addAll(Arrays.asList(clazz.getDeclaredMethods()));
         }
@@ -324,6 +330,9 @@ class CredentialStaticSurfaceInvariantTest {
             String simpleName = classFile.getFileName().toString();
             String withoutSuffix = simpleName.substring(0, simpleName.length() - ".class".length());
             String fqcn = packageName + "." + withoutSuffix;
+            // Same rationale as scanPublicStaticMethodsOfPackage's identical call above -- the
+            // name is derived from classesRoot's own compiled package directory, not attacker input.
+            // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
             Class<?> clazz = Class.forName(fqcn);
             fields.addAll(Arrays.asList(clazz.getDeclaredFields()));
         }

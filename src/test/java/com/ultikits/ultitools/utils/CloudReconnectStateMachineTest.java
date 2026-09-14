@@ -428,7 +428,7 @@ class CloudReconnectStateMachineTest {
                     .isFalse();
 
             CloudSession newSession = new CloudSession();
-            java.lang.reflect.Field currentField = CloudSession.class.getDeclaredField("current");
+            Field currentField = CloudSession.class.getDeclaredField("current");
             currentField.setAccessible(true);
             currentField.set(null, newSession); // 直接摆出「新会话已装上，旧会话尚未被标记失效」这一刻
             assertThat(oldSession.isCurrent())
@@ -485,7 +485,7 @@ class CloudReconnectStateMachineTest {
             TokenEntity token = new TokenEntity();
             token.setAccess_token("dummy.access.token");
             token.setExp((System.currentTimeMillis() / 1000L) + 3600L);
-            java.lang.reflect.Field tokenField = CloudSession.class.getDeclaredField("token");
+            Field tokenField = CloudSession.class.getDeclaredField("token");
             tokenField.setAccessible(true);
             tokenField.set(session, token);
             return token;
@@ -512,7 +512,7 @@ class CloudReconnectStateMachineTest {
             token.setExp((System.currentTimeMillis() / 1000L) + 3600L); // valid, non-expiring --
             // skips the (out-of-lock) refresh branch entirely, landing straight on the second
             // confirmation this test cares about.
-            java.lang.reflect.Field tokenField = CloudSession.class.getDeclaredField("token");
+            Field tokenField = CloudSession.class.getDeclaredField("token");
             tokenField.setAccessible(true);
             tokenField.set(session, token);
 
