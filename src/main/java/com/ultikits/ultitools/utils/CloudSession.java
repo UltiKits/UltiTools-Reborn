@@ -184,12 +184,18 @@ final class CloudSession {
      * own tests, independently of the static {@link #current()} holder.
      */
     synchronized void invalidate() {
-        // RED-PHASE STUB (plan 16-08 Task 2): deliberately omits closing/clearing the WebSocket
-        // client so CloudReconnectStateMachineTest's new SessionOwnsTransportAndBackoff tests fail
-        // intentionally before the real teardown is implemented.
         invalidated = true;
         stopPolling();
         stopTokenRefreshScheduler();
+        if (webSocketClient != null) {
+            try {
+                webSocketClient.disconnect();
+            } catch (Exception e) {
+                UltiTools.getInstance().getLogger().log(Level.FINE,
+                    "Error disconnecting WebSocket during session invalidation: " + e.getMessage());
+            }
+            webSocketClient = null;
+        }
     }
 
     /**
