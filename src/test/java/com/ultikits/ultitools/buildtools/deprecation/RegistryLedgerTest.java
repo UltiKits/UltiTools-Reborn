@@ -179,4 +179,105 @@ class RegistryLedgerTest {
             assertThat(jsonA1).isEqualTo(jsonB);
         }
     }
+
+    /**
+     * The five behaviours issue #377 and 16-16-PLAN.md Task 2 name as the acceptance set for
+     * "the ledger publishes the release a symbol was actually removed in, not the release it was
+     * scheduled for". The mechanism these pin was already implemented on this branch by 97559d35
+     * (WR-05) before this class existed -- these are characterization tests, not a RED-then-GREEN
+     * pair, because the fix already GREEN here would also be GREEN against {@code origin/alpha}
+     * only for the case WR-05 itself targeted (same-release add-then-remove, covered above by
+     * {@code sameReleaseAddThenRemoveRecordsCurrentVersionNotTheEntrysOwnStaleRemoveIn}). Reasoned
+     * against {@code origin/alpha}'s {@code RegistryLedger} (which has no {@code currentVersion}
+     * parameter at all and always does {@code entry.withRemoved(entry.getRemoveIn())}): the
+     * "later release" test below would fail there (it would assert {@code "6.4.0"}, not
+     * {@code "6.5.0"}), and the "no schedule at all" test would fail there too (it would assert
+     * {@code null}, not {@code "6.3.0"}) -- both would need this class's helper renamed and
+     * {@code origin/alpha}'s three-argument {@code merge} called instead, which is not run here
+     * because that overload no longer exists on this branch.
+     */
+    @Nested
+    @DisplayName("#377: the ledger publishes the actual removal release, not the scheduled one")
+    class Issue377AcceptanceTests {
+
+        @Test
+        @DisplayName("a symbol scheduled for one release and removed in a later one publishes the later one")
+        void symbolScheduledForOneReleaseButRemovedInALaterReleasePublishesTheLaterRelease() {
+            // Scheduled for 6.4.0 (the ordinary deprecation-window convention) but retained past
+            // that release and only actually removed while building 6.5.0.
+            DeprecationEntry priorEntry = deprecatedEntry(
+                    "com.ultikits.ultitools.SomeRetainedClass", "oldMethod", "6.4.0");
+            RegistryLedger prior = RegistryLedger.of(Collections.singletonList(priorEntry));
+            Set<RegistryKey> japicmpRemoved =
+                    new LinkedHashSet<>(Collections.singletonList(priorEntry.getKey()));
+
+            RegistryLedger merged = RegistryLedger.merge(
+                    prior, Collections.emptyList(), japicmpRemoved, "6.5.0");
+
+            DeprecationEntry retained = merged.entries().get(0);
+            assertThat(retained.getRemovedIn())
+                    .as("the actual removal release, not the schedule it slipped past")
+                    .isEqualTo("6.5.0")
+                    .isNotEqualTo(priorEntry.getRemoveIn());
+            assertThat(retained.getRemoveIn())
+                    .as("the original schedule stays readable on the same entry -- withRemoved() "
+                            + "does not overwrite it, so the divergence between what was scheduled "
+                            + "and what actually happened is visible on one object")
+                    .isEqualTo("6.4.0");
+        }
+
+        @Test
+        @DisplayName("a symbol scheduled and removed in the same release publishes that release "
+                + "-- the case that coincides today and must keep working")
+        void symbolScheduledAndRemovedInTheSameReleasePublishesThatRelease() {
+            DeprecationEntry priorEntry = deprecatedEntry(
+                    "com.ultikits.ultitools.SomeOnScheduleClass", "oldMethod", "6.3.0");
+            RegistryLedger prior = RegistryLedger.of(Collections.singletonList(priorEntry));
+            Set<RegistryKey> japicmpRemoved =
+                    new LinkedHashSet<>(Collections.singletonList(priorEntry.getKey()));
+
+            RegistryLedger merged = RegistryLedger.merge(
+                    prior, Collections.emptyList(), japicmpRemoved, "6.3.0");
+
+            assertThat(merged.entries().get(0).getRemovedIn()).isEqualTo("6.3.0");
+        }
+
+        @Test
+        @DisplayName("a symbol removed with no schedule at all publishes the release it was "
+                + "removed in, not an absent value")
+        void symbolRemovedWithNoScheduleAtAllPublishesTheReleaseItWasRemovedInNotNull() {
+            DeprecationEntry priorEntry = DeprecationEntry.builder()
+                    .key(RegistryKey.forMember(
+                            "com.ultikits.ultitools.SomeUnscheduledClass", "oldMethod",
+                            Collections.emptyList()))
+                    .kind(DeprecationEntry.Kind.METHOD)
+                    .since("6.2.0")
+                    .forRemoval(true)
+                    .removeIn(null) // no schedule was ever recorded for this member
+                    .replacement("Use something else.")
+                    .status(DeprecationEntry.Status.ANNOUNCED)
+                    .build();
+            RegistryLedger prior = RegistryLedger.of(Collections.singletonList(priorEntry));
+            Set<RegistryKey> japicmpRemoved =
+                    new LinkedHashSet<>(Collections.singletonList(priorEntry.getKey()));
+
+            RegistryLedger merged = RegistryLedger.merge(
+                    prior, Collections.emptyList(), japicmpRemoved, "6.3.0");
+
+            assertThat(merged.entries().get(0).getRemovedIn())
+                    .as("the release it was actually removed in, published rather than left absent")
+                    .isEqualTo("6.3.0")
+                    .isNotNull();
+        }
+
+        @Test
+        @DisplayName("an empty ledger merges to an empty result without throwing")
+        void emptyLedgerMergesToEmptyResultWithoutThrowing() {
+            RegistryLedger merged = RegistryLedger.merge(
+                    RegistryLedger.empty(), Collections.emptyList(), Collections.emptySet(), "6.3.0");
+
+            assertThat(merged.entries()).isEmpty();
+            assertThat(merged.size()).isZero();
+        }
+    }
 }

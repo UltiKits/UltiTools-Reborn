@@ -74,7 +74,7 @@ public final class DeprecationRegistryGenerator {
     }
 
     private static void run() throws IOException, ReflectiveOperationException {
-        // Read the pom FIRST (WR-05, 16-REVIEW-cloud.md): the current project version is now an
+        // Read the pom FIRST (#377, WR-05, 16-REVIEW-cloud.md): the current project version is now an
         // input to the merge itself, not just to the checks that run after it.
         Document pomDocument = readPomDocument();
         String currentVersion = stripSnapshotSuffix(readProjectVersion(pomDocument));
