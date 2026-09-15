@@ -406,12 +406,17 @@ public final class EconomyUtils {
      * {@code .remove(...)}, reachable from a normal {@code /upm uninstall} command. A module
      * calling this facade from an async command or {@code @Scheduled(async = true)} task can race
      * that mutation and see {@link ConcurrentModificationException} instead of a fallback value.
-     * Snapshotting into a fresh {@link ArrayList} narrows the window (a structural change during
-     * the copy itself cannot throw — {@code ArrayList}'s copy constructor reads via
-     * {@code toArray()}, not a fail-fast iterator), and the catch below treats a raced attempt
-     * exactly like an already-existing case this method documents: unattributable, return
-     * {@code null} — matching this class's "never throws" contract (see {@link #log(String,
-     * boolean)}).
+     * Snapshotting into a fresh {@link ArrayList} narrows the window, but does not close it:
+     * {@code ArrayList}'s copy constructor reads via {@code toArray()}, which itself reads the
+     * live {@code elementData} array and {@code size} field with no synchronization and no
+     * fail-fast modCount check — under a genuine cross-thread race, a structural change mid-copy
+     * can leave a trailing {@code null} in the copied array instead of ever throwing
+     * {@link ConcurrentModificationException} at all (Codex P2, PR #463, follow-up finding), which
+     * would otherwise surface as an uncaught {@link NullPointerException} from
+     * {@code plugin.getClass()} below. Both are the same underlying condition — attribution raced
+     * a concurrent structural change — so both are caught together and treated exactly like an
+     * already-existing case this method documents: unattributable, return {@code null} — matching
+     * this class's "never throws" contract (see {@link #log(String, boolean)}).
      *
      * @return the attributed module's name, or {@code null} when nothing on the framework's own
      *         plugin list is currently reachable (no live {@link UltiTools} instance, no plugin
@@ -435,7 +440,7 @@ public final class EconomyUtils {
                     prefixToModule.putIfAbsent(pkg, plugin.getPluginName());
                 }
             }
-        } catch (ConcurrentModificationException e) {
+        } catch (ConcurrentModificationException | NullPointerException e) {
             return null;
         }
         return attributeModule(Thread.currentThread().getStackTrace(), prefixToModule);
