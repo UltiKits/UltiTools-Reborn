@@ -95,9 +95,21 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * (measured: 0 {@code {n}}-style placeholders anywhere in {@code src/main/resources/lang}
      * or across any {@code i18n(...)} call site; the shipped catalogues use {@code %s}/{@code
      * %d} exclusively).
+     * <p>
+     * Codex round 6, P2: deliberately narrower than the full {@code Formatter} grammar --
+     * {@code %s}/{@code %d} (optionally explicit-indexed) or a literal {@code %%}, with NO flags,
+     * width or precision component. The earlier, more permissive pattern accepted a space as a
+     * flag character, so ordinary text like {@code "Progress: 90% done"} matched {@code "% d"} as
+     * a (bogus) {@code %d} conversion with a space flag -- an operator's customised value
+     * containing an innocent {@code '%'} could be reported as an arity mismatch against
+     * differently-worded bundled text and silently overwritten at runtime, even though the key
+     * carries no real {@code String.format} placeholder at all. Since this framework never emits
+     * anything outside {@code %s}/{@code %d}/{@code %%} (per the measurement above), restricting
+     * the pattern to exactly those forms eliminates the false-positive class rather than patching
+     * the specific "% d" instance -- no genuine placeholder this framework uses stops matching.
      */
     private static final Pattern PLACEHOLDER_PATTERN =
-            Pattern.compile("%(?:(\\d+)\\$)?[-#+ 0,(]*\\d*(?:\\.\\d+)?([a-zA-Z%])");
+            Pattern.compile("%(?:(\\d+)\\$)?([sd%])");
 
     /**
      * A private, independent JSON reader for the D-05 placeholder-arity comparison only -- not a
@@ -569,8 +581,10 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * on a rewording that changed nothing about the message's parameter shape. An unindexed
      * conversion (this framework's own catalogues use only this form) consumes the NEXT
      * sequential position, so two unindexed {@code %s} conversions in one value require arity
-     * two. {@code %%} (a literal percent) and {@code %n} (a line separator) consume no
-     * argument and are excluded.
+     * two. {@code %%} (a literal percent) consumes no argument and is excluded -- {@link
+     * #PLACEHOLDER_PATTERN} itself (Codex round 6, P2) no longer matches anything outside
+     * {@code %s}/{@code %d}/{@code %%} at all, so {@code %n} and every other {@code Formatter}
+     * conversion this framework never emits cannot reach this method to begin with.
      *
      * @param value a language value, or {@code null}
      * @return the highest argument position {@code value}'s {@code String.format} conversions
@@ -585,7 +599,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         int nextImplicitPosition = 1;
         while (matcher.find()) {
             char conversion = matcher.group(2).charAt(0);
-            if (conversion == '%' || conversion == 'n' || conversion == 'N') {
+            if (conversion == '%') {
                 continue;
             }
             String explicitIndex = matcher.group(1);
