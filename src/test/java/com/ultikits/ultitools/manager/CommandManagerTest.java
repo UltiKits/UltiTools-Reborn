@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -1439,6 +1440,55 @@ class CommandManagerTest {
             } catch (NullPointerException e) {
                 // 预期行为 - 有 @CmdExecutor 注解，调用 register 时 getCommandMap() 返回 null
             }
+        }
+    }
+
+    /**
+     * #347: 五参数 register(plugin, class, permission, description, aliases...) 曾经从核心容器
+     * （{@code UltiTools.getInstance().getDependenceManagers().getContext()}）解析命令 bean，
+     * 而不是像两参数重载 register(plugin, class) 那样从模块自己的容器（{@code plugin.getContext()}）
+     * 解析 -- 一个显式传了 permission/description/aliases 的模块作者拿到的却是核心容器里同类型的
+     * bean，不是自己注册的那个实例。
+     */
+    @Nested
+    @DisplayName("register(plugin, class, permission, description, aliases) 容器解析测试 (#347)")
+    class FiveArgRegisterContainerResolutionTests {
+
+        @Test
+        @DisplayName("应该从模块自己的容器解析 bean，而不是核心容器")
+        void resolvesCommandBeanFromModuleContainerNotCoreContainer() {
+            // Arrange -- the module's own container holds ONE instance.
+            SimpleContainer moduleContext = mock(SimpleContainer.class);
+            TestCommandExecutor moduleExecutor = new TestCommandExecutor();
+            when(mockPlugin.getContext()).thenReturn(moduleContext);
+            when(moduleContext.getBean(TestCommandExecutor.class)).thenReturn(moduleExecutor);
+            when(mockPlugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
+
+            // Arrange -- the CORE container holds a DIFFERENT instance of the SAME type, so a
+            // registration path that resolves from the wrong container is observably wrong
+            // rather than accidentally correct (the shadowing case the plan requires).
+            DependenceManagers mockDependenceManagers = mock(DependenceManagers.class);
+            SimpleContainer coreContext = mock(SimpleContainer.class);
+            TestCommandExecutor coreExecutor = new TestCommandExecutor();
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+                when(ultiTools.getLogger()).thenReturn(mockLogger);
+                when(ultiTools.getDependenceManagers()).thenReturn(mockDependenceManagers);
+            });
+            when(mockDependenceManagers.getContext()).thenReturn(coreContext);
+            when(coreContext.getBean(TestCommandExecutor.class)).thenReturn(coreExecutor);
+
+            // Act -- getCommandMap() returns null under MockBukkit, so the eventual NPE is
+            // expected; it happens strictly AFTER the bean-resolution call below is already
+            // observable, so the assertions below are unaffected by it.
+            try {
+                commandManager.register(mockPlugin, TestCommandExecutor.class, "test.perm", "Test desc", "testcmd");
+            } catch (NullPointerException e) {
+                // 预期行为 - getCommandMap() 返回 null
+            }
+
+            // Assert -- the module's container was consulted; the core container never was.
+            verify(moduleContext).getBean(TestCommandExecutor.class);
+            verify(coreContext, never()).getBean(TestCommandExecutor.class);
         }
     }
 
