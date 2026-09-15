@@ -435,15 +435,18 @@ class PanelResponderRegistryTest {
         method.invoke(null, message);
     }
 
-    // PMD.AvoidAccessibilityAlteration: reaches a private static field on PluginInitiationUtils
-    // to swap in a mock WebSocket client between tests — same visibility-boundary rationale.
+    // PMD.AvoidAccessibilityAlteration: reaches a package-private static method on
+    // PluginInitiationUtils to swap in a mock WebSocket client between tests — same
+    // visibility-boundary rationale. As of plan 16-08 Task 2 the client is CloudSession-owned
+    // (package-private, in `utils`), so this different package (`websocket`) cannot even compile
+    // a reference to it; setWebSocketClientForTesting() is the seam PluginInitiationUtils exposes
+    // instead of a raw field.
     @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     private static Object setPanelWs(Object value) throws Exception {
-        Field field = PluginInitiationUtils.class.getDeclaredField("panelWS");
-        field.setAccessible(true);
-        Object previous = field.get(null);
-        field.set(null, value);
-        return previous;
+        Method method = PluginInitiationUtils.class.getDeclaredMethod(
+                "setWebSocketClientForTesting", UltiPanelWebSocketClient.class);
+        method.setAccessible(true);
+        return method.invoke(null, (UltiPanelWebSocketClient) value);
     }
 
     /**
