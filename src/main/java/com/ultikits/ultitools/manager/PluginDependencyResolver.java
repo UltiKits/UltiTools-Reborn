@@ -320,8 +320,8 @@ public class PluginDependencyResolver {
             List<String> declaringModules = entry.getValue();
             if (declaringModules.size() > 1) {
                 logger.warning(String.format(
-                    "Multiple modules declare the same plugin.yml name '%s': %s. "
-                        + "Dependency resolution will resolve this name to '%s' (the module "
+                    "[UltiTools-API] Multiple modules declare the same plugin.yml name '%s': "
+                        + "%s. Dependency resolution will resolve this name to '%s' (the module "
                         + "discovered first); rename one module's plugin.yml name: to remove "
                         + "the ambiguity.",
                     entry.getKey(), declaringModules, declaringModules.get(0)));
