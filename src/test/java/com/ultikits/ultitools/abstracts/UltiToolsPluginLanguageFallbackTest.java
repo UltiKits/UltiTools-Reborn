@@ -932,11 +932,14 @@ class UltiToolsPluginLanguageFallbackTest {
         PosixFileAttributeView view = Files.getFileAttributeView(readOnlyFile.toPath(), PosixFileAttributeView.class);
         Assumptions.assumeTrue(view != null,
                 "Filesystem does not support POSIX file attributes; skipping.");
-        Files.setPosixFilePermissions(readOnlyFile.toPath(), PosixFilePermissions.fromString("r--r--r--"));
+        // Owner-only bits (no group/other) throughout -- deliberately not "r--r--r--"/"rw-r--r--":
+        // Codacy's overly-permissive-file-permission rule flags any OTHERS_READ bit regardless of
+        // context, and owner-only bits are all isOperatorPinnedReadOnly's own logic needs anyway.
+        Files.setPosixFilePermissions(readOnlyFile.toPath(), PosixFilePermissions.fromString("r--------"));
 
         File writableFile = new File(tempDir, "writable.json");
         Files.write(writableFile.toPath(), "{}".getBytes(StandardCharsets.UTF_8));
-        Files.setPosixFilePermissions(writableFile.toPath(), PosixFilePermissions.fromString("rw-r--r--"));
+        Files.setPosixFilePermissions(writableFile.toPath(), PosixFilePermissions.fromString("rw-------"));
 
         UltiToolsPlugin plugin = mock(FixturePlugin.class);
         Method method = UltiToolsPlugin.class.getDeclaredMethod("isOperatorPinnedReadOnly", File.class);
