@@ -40,7 +40,7 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.google.gson.Gson;
-import com.google.gson.JsonSyntaxException;
+import com.google.gson.JsonParseException;
 import com.google.gson.reflect.TypeToken;
 
 import com.ultikits.ultitools.UltiTools;
@@ -660,7 +660,14 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                 }
             }
             return flattened;
-        } catch (JsonSyntaxException e) {
+        } catch (JsonParseException e) {
+            // Codex round 7, P2: JsonParseException is the common superclass of
+            // JsonSyntaxException (malformed JSON) AND JsonIOException -- Gson wraps an
+            // IOException it hits reading from `reader` mid-parse (e.g. a transient filesystem
+            // error on the second read of a customised catalogue) in the latter, which a catch
+            // (JsonSyntaxException) alone does not see, letting it escape
+            // applyPlaceholderArityOverride and abort this whole module's construction, contrary
+            // to this method's own documented empty-map degradation (see its own javadoc).
             return Collections.emptyMap();
         }
     }

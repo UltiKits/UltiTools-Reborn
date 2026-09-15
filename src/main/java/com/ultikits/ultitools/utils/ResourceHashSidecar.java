@@ -23,7 +23,7 @@ import org.jetbrains.annotations.ApiStatus;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonIOException;
-import com.google.gson.JsonSyntaxException;
+import com.google.gson.JsonParseException;
 import com.google.gson.reflect.TypeToken;
 
 /**
@@ -190,9 +190,14 @@ public final class ResourceHashSidecar {
         try (Reader reader = Files.newBufferedReader(file.toPath(), StandardCharsets.UTF_8)) {
             Map<String, String> parsed = GSON.fromJson(reader, ENTRY_MAP_TYPE);
             return parsed != null ? new LinkedHashMap<>(parsed) : new LinkedHashMap<>();
-        } catch (IOException | JsonSyntaxException e) {
+        } catch (IOException | JsonParseException e) {
             // Malformed or unreadable sidecar degrades to "no record" (T-16-04-03) rather than
-            // blocking boot -- see class javadoc.
+            // blocking boot -- see class javadoc. JsonParseException (Codex round 7, P2) is the
+            // common superclass of JsonSyntaxException (malformed JSON) AND JsonIOException --
+            // Gson wraps an IOException it hits reading from `reader` mid-parse (e.g. a network
+            // filesystem hiccup) in the latter, which a catch (IOException | JsonSyntaxException)
+            // alone does not see, letting it escape readRecordedHash/record/recordAll into the
+            // plugin constructor and abort module startup.
             LOGGER.log(Level.WARNING, "Ignoring unreadable resource-hash sidecar " + file.getPath(), e);
             return new LinkedHashMap<>();
         }
