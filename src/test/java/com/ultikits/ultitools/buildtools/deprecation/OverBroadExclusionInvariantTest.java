@@ -32,16 +32,16 @@ import java.util.stream.Stream;
  * which is what gates the build.
  *
  * <p><b>#414 / CR-01: existence is derived from {@code target/classes}' own file existence and
- * per-compilation-unit freshness, NOT from parsing {@code src/main/java} as text.</b> The first
- * attempt at #414 (a regex/brace-depth text scan of {@code .java} source) traded one blind spot for
- * another: it eliminated staleness against a leftover build (the original bug) but became
- * permanently unable to see any annotation-processor-generated type - concretely, every Lombok
- * {@code @Builder}'s generated {@code *Builder} nested class in this codebase never appears as
- * {@code class X {} } (or any form a text scan looks for) anywhere in source, so a class-level
- * exclude naming one would never be flagged over-broad even while the class is very much alive
- * (review CR-01). This revision keeps {@code target/classes} - the only place a synthesized type is
- * visible at all - as the base set, and closes the ORIGINAL #414 hazard with two per-class checks
- * instead of a source-text parse:
+ * per-class freshness against its own source file, NOT from parsing {@code src/main/java} as
+ * text.</b> The first attempt at #414 (a regex/brace-depth text scan of {@code .java} source)
+ * traded one blind spot for another: it eliminated staleness against a leftover build (the
+ * original bug) but became permanently unable to see any annotation-processor-generated type -
+ * concretely, every Lombok {@code @Builder}'s generated {@code *Builder} nested class in this
+ * codebase never appears as {@code class X {} } (or any form a text scan looks for) anywhere in
+ * source, so a class-level exclude naming one would never be flagged over-broad even while the
+ * class is very much alive (review CR-01). This revision keeps {@code target/classes} - the only
+ * place a synthesized type is visible at all - as the base set, and closes the ORIGINAL #414
+ * hazard with two per-class checks instead of a source-text parse:
  * <ol>
  *   <li><b>Top-level source existence.</b> A compiled class's simple name up to (but not including)
  *       its first {@code $} names the compilation unit; if {@code <TopLevelName>.java} no longer
@@ -49,14 +49,25 @@ import java.util.stream.Stream;
  *       from it - is gone, regardless of what {@code target/classes} still holds. This alone closes
  *       the original #414 scenario (a deleted or renamed top-level class leaving stale {@code
  *       .class} files behind).</li>
- *   <li><b>Same-compilation-unit freshness.</b> javac (re)writes every class declared in one source
- *       file together, in one compile invocation, so a nested class's {@code .class} file and its
- *       enclosing top-level class's {@code .class} file share a compile "epoch" - their last-modified
- *       timestamps land within a small window of each other. A STALE nested class - left over
- *       because a nested type was deleted from an otherwise still-existing, still-compiling file -
- *       was written by a much EARLIER compile than the top-level class's own most recent one, so its
- *       timestamp sits far outside that window. See {@link #STALE_TOLERANCE_MILLIS}'s javadoc for
- *       why a symmetric tolerance window is used instead of a strict "not older than" ordering.</li>
+ *   <li><b>Freshness against the source file, not against a sibling class file.</b> A compiled
+ *       class's {@code .class} file can only have been written by a compile that ran chronologically
+ *       AFTER its top-level source file was last saved in its current form - a compiler cannot
+ *       compile content that has not been written yet. So: keep a class only if its own {@code
+ *       .class} file's last-modified time is {@code >=} its top-level {@code .java} file's
+ *       last-modified time. A STALE nested class - left over because a nested type was deleted from
+ *       an otherwise still-existing, still-compiling file - was written by a compile that predates
+ *       the file's later edit (the one that removed the nested type); the source file's own
+ *       last-modified time then moves past it on that later save, so the stale class's timestamp
+ *       falls behind the source's CURRENT timestamp regardless of how soon afterward the file is
+ *       recompiled. An earlier revision of this check compared a nested class's timestamp against
+ *       its top-level class's own {@code .class} file (a tolerance window, "close enough to have
+ *       plausibly been written by the same compile") - reviewed and replaced: measured 1ms of
+ *       same-compile skew is not distinguishable, on timing alone, from a stale artefact left by
+ *       recompiling the SAME outer file within that same window after deleting the nested type (a
+ *       genuinely supported case - non-clean {@code mvn test} immediately after an edit). Comparing
+ *       against the source file's own timestamp has no such race: it is not a "close enough" window
+ *       at all, only a direction, and that direction is enforced by causality (compile output cannot
+ *       predate the input it was compiled from), not by how much wall-clock time elapsed.</li>
  * </ol>
  *
  * <p>The read_first task note's other candidate - reading the compiler plugin's own {@code
@@ -69,28 +80,6 @@ import java.util.stream.Stream;
 @DisplayName("OverBroadExclusionInvariant tests")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class OverBroadExclusionInvariantTest {
-
-    /**
-     * How close two class files' last-modified timestamps must be to be treated as "written by the
-     * same compile." NOT a strict "nested must not be older than top-level" ordering -
-     * <b>measured</b> against this repository's own real, freshly-compiled Lombok {@code @Builder}
-     * classes (four real pairs: {@code CommandContext}, {@code TabCompletionContext}, {@code
-     * WhereCondition}, {@code ServerEntityVO}), every single nested {@code *Builder.class} file's
-     * timestamp was consistently exactly 1ms <em>older</em> than its own outer class's {@code
-     * .class} file, not newer or equal - javac does not guarantee any particular relative write
-     * order across the class files it emits for one compilation unit, only that they land close
-     * together in wall-clock time. A strict ordering check would therefore misclassify every real,
-     * freshly-compiled Lombok builder in this codebase as "stale" - reintroducing a blind spot
-     * exactly like the one this class exists to close, just via a different mechanism. A symmetric
-     * tolerance window avoids that: same-compile-epoch class files land within single-digit
-     * milliseconds of each other regardless of direction, while a genuinely stale leftover (from a
-     * compile that ran before the nested type was deleted, while its still-existing enclosing file
-     * was compiled again afterward) is separated from its top-level class's fresh timestamp by
-     * whatever realistic gap exists between two separate developer edit/compile cycles - at minimum
-     * seconds, ordinarily much more. 60 seconds is comfortably above the measured same-compile skew
-     * (single-digit milliseconds) and comfortably below any plausible two-separate-builds gap.
-     */
-    static final long STALE_TOLERANCE_MILLIS = 60_000L;
 
     @Test
     @DisplayName("a class-level key whose class is present in the build output produces exactly one violation naming that class")
@@ -256,22 +245,26 @@ class OverBroadExclusionInvariantTest {
 
         // The source file exists and is annotated @Builder, but the Builder class itself never
         // appears as text anywhere in it - exactly like the real Lombok-generated case.
-        Files.write(srcRoot.resolve(pkg).resolve("Widget.java"), (
+        Path widgetJava = srcRoot.resolve(pkg).resolve("Widget.java");
+        Files.write(widgetJava, (
                 "package com.example.lombok;\n"
                         + "@lombok.Builder\n"
                         + "public class Widget {\n"
                         + "    private final String name;\n"
                         + "}\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        long sourceSaveMillis = System.currentTimeMillis();
+        Files.setLastModifiedTime(widgetJava, FileTime.fromMillis(sourceSaveMillis));
 
-        // Both class files "compiled together" - same instant.
+        // Both class files compiled after the source was saved - real compiles always are.
         Path outerClass = classesRoot.resolve(pkg).resolve("Widget.class");
         Path builderClass = classesRoot.resolve(pkg).resolve("Widget$WidgetBuilder.class");
         Files.write(outerClass, new byte[] {(byte) 0xCA, (byte) 0xFE, (byte) 0xBA, (byte) 0xBE});
         Files.write(builderClass, new byte[] {(byte) 0xCA, (byte) 0xFE, (byte) 0xBA, (byte) 0xBE});
-        FileTime now = FileTime.fromMillis(System.currentTimeMillis());
-        Files.setLastModifiedTime(outerClass, now);
-        // 1ms earlier, matching this repository's own measured real-world skew direction.
-        Files.setLastModifiedTime(builderClass, FileTime.fromMillis(now.toMillis() - 1));
+        Files.setLastModifiedTime(outerClass, FileTime.fromMillis(sourceSaveMillis + 1000));
+        // 1ms behind the outer class - matching this repository's own measured real-world skew
+        // direction between sibling class files of one compile - but still comfortably AFTER the
+        // source file's save, which is the only comparison this check makes now.
+        Files.setLastModifiedTime(builderClass, FileTime.fromMillis(sourceSaveMillis + 999));
 
         Set<String> classes = scanExistingClasses(srcRoot, classesRoot);
 
@@ -298,8 +291,10 @@ class OverBroadExclusionInvariantTest {
     }
 
     @Test
-    @DisplayName("a stale nested class, left over after being deleted from a source file that still exists and still compiles, is not recognised")
-    void staleNestedClassOlderThanItsToplevelIsNotRecognised(@TempDir Path tempDir) throws IOException {
+    @DisplayName("a stale nested class, left over after being deleted from a source file that still exists and still "
+            + "compiles, is not recognised - even when it is recompiled within milliseconds of the stale artefact "
+            + "(the external-review regression: a same-compile TOLERANCE WINDOW would have missed this)")
+    void staleNestedClassPredatingItsSourcesCurrentSaveIsNotRecognised(@TempDir Path tempDir) throws IOException {
         Path srcRoot = tempDir.resolve("src/main/java");
         Path classesRoot = tempDir.resolve("target/classes");
         Path pkg = Paths.get("com", "example", "shrinking");
@@ -307,23 +302,32 @@ class OverBroadExclusionInvariantTest {
         Files.createDirectories(classesRoot.resolve(pkg));
 
         // Outer.java still exists (and still compiles) but no longer declares Inner - exactly the
-        // scenario a pure top-level-source-existence check cannot catch on its own.
-        Files.write(srcRoot.resolve(pkg).resolve("Outer.java"), (
+        // scenario a pure top-level-source-existence check cannot catch on its own. Its
+        // last-modified time marks the moment Inner was removed and the file resaved.
+        Path outerJava = srcRoot.resolve(pkg).resolve("Outer.java");
+        Files.write(outerJava, (
                 "package com.example.shrinking;\n"
                         + "public class Outer {\n"
                         + "}\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        long sourceSaveMillis = System.currentTimeMillis();
+        Files.setLastModifiedTime(outerJava, FileTime.fromMillis(sourceSaveMillis));
 
         Path outerClass = classesRoot.resolve(pkg).resolve("Outer.class");
         Path staleInnerClass = classesRoot.resolve(pkg).resolve("Outer$Inner.class");
         Files.write(outerClass, new byte[] {0});
         Files.write(staleInnerClass, new byte[] {0});
 
-        // Outer.class was just rewritten by the recompile that dropped Inner; Outer$Inner.class is
-        // a leftover from a much earlier compile - comfortably outside the tolerance window.
-        FileTime freshCompile = FileTime.fromMillis(System.currentTimeMillis());
-        FileTime staleCompile = FileTime.fromMillis(freshCompile.toMillis() - (STALE_TOLERANCE_MILLIS * 10));
-        Files.setLastModifiedTime(outerClass, freshCompile);
-        Files.setLastModifiedTime(staleInnerClass, staleCompile);
+        // Deliberately adversarial timing, not a comfortable margin: the recompile that dropped
+        // Inner happens only 100ms after the save, and the stale Outer$Inner.class is from a
+        // compile only 100ms BEFORE the save - both class files land within 200ms of each other,
+        // comfortably inside what a same-compile-file tolerance window (the earlier revision of
+        // this check) would have treated as "close enough to be the same compile," which is
+        // exactly the false-negative the external review found. This check does not compare the
+        // two class files against each other at all - only each one against the source's own
+        // current timestamp - so the stale one is still correctly dropped regardless of how soon
+        // afterward the recompile happened.
+        Files.setLastModifiedTime(outerClass, FileTime.fromMillis(sourceSaveMillis + 100));
+        Files.setLastModifiedTime(staleInnerClass, FileTime.fromMillis(sourceSaveMillis - 100));
 
         Set<String> classes = scanExistingClasses(srcRoot, classesRoot);
 
@@ -340,19 +344,21 @@ class OverBroadExclusionInvariantTest {
         Path pkg = Paths.get("com", "example", "nested");
         Files.createDirectories(srcRoot.resolve(pkg));
         Files.createDirectories(classesRoot.resolve(pkg));
-        Files.write(srcRoot.resolve(pkg).resolve("Outer.java"), (
+        Path outerJava = srcRoot.resolve(pkg).resolve("Outer.java");
+        Files.write(outerJava, (
                 "package com.example.nested;\n"
                         + "public class Outer {\n"
                         + "    public static class Inner {\n"
                         + "    }\n"
                         + "}\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        FileTime now = FileTime.fromMillis(System.currentTimeMillis());
+        long sourceSaveMillis = System.currentTimeMillis();
+        Files.setLastModifiedTime(outerJava, FileTime.fromMillis(sourceSaveMillis));
         Path outerClass = classesRoot.resolve(pkg).resolve("Outer.class");
         Path innerClass = classesRoot.resolve(pkg).resolve("Outer$Inner.class");
         Files.write(outerClass, new byte[] {0});
         Files.write(innerClass, new byte[] {0});
-        Files.setLastModifiedTime(outerClass, now);
-        Files.setLastModifiedTime(innerClass, now);
+        Files.setLastModifiedTime(outerClass, FileTime.fromMillis(sourceSaveMillis + 100));
+        Files.setLastModifiedTime(innerClass, FileTime.fromMillis(sourceSaveMillis + 100));
 
         Set<String> classes = scanExistingClasses(srcRoot, classesRoot);
 
@@ -416,7 +422,7 @@ class OverBroadExclusionInvariantTest {
             return result;
         }
 
-        Map<String, Long> mtimeMillisByClass = new LinkedHashMap<>();
+        Map<String, Long> classMtimeMillis = new LinkedHashMap<>();
         try (Stream<Path> paths = Files.walk(classesRoot)) {
             paths.filter(Files::isRegularFile)
                     .filter(p -> p.toString().endsWith(".class"))
@@ -425,31 +431,43 @@ class OverBroadExclusionInvariantTest {
                         String withoutSuffix = relative.substring(0, relative.length() - ".class".length());
                         String fqcn = withoutSuffix.replace(java.io.File.separatorChar, '.');
                         try {
-                            mtimeMillisByClass.put(fqcn, Files.getLastModifiedTime(p).toMillis());
+                            classMtimeMillis.put(fqcn, Files.getLastModifiedTime(p).toMillis());
                         } catch (IOException e) {
                             throw new UncheckedIOException(e);
                         }
                     });
         }
 
-        for (Map.Entry<String, Long> entry : mtimeMillisByClass.entrySet()) {
+        // Cache per top-level source file so a compilation unit with many nested classes only
+        // stats its own .java file once.
+        Map<String, Long> sourceMtimeMillisByTopLevel = new LinkedHashMap<>();
+
+        for (Map.Entry<String, Long> entry : classMtimeMillis.entrySet()) {
             String fqcn = entry.getKey();
             String topLevelFqcn = topLevelOf(fqcn);
 
-            Path sourceCandidate = srcRoot.resolve(
-                    topLevelFqcn.replace('.', java.io.File.separatorChar) + ".java");
-            if (!Files.isRegularFile(sourceCandidate)) {
+            Long sourceMtime = sourceMtimeMillisByTopLevel.get(topLevelFqcn);
+            if (sourceMtime == null && !sourceMtimeMillisByTopLevel.containsKey(topLevelFqcn)) {
+                Path sourceCandidate = srcRoot.resolve(
+                        topLevelFqcn.replace('.', java.io.File.separatorChar) + ".java");
+                if (Files.isRegularFile(sourceCandidate)) {
+                    sourceMtime = Files.getLastModifiedTime(sourceCandidate).toMillis();
+                }
+                sourceMtimeMillisByTopLevel.put(topLevelFqcn, sourceMtime);
+            }
+            if (sourceMtime == null) {
                 continue; // (a) top-level source is gone - the original #414 hazard
             }
 
-            Long topLevelMtime = mtimeMillisByClass.get(topLevelFqcn);
-            if (topLevelMtime == null) {
-                continue; // fail closed: can't corroborate this class against its own compilation unit
-            }
-
-            long skew = Math.abs(entry.getValue() - topLevelMtime);
-            if (skew > STALE_TOLERANCE_MILLIS) {
-                continue; // (b) not written in the same compile pass as its still-existing top-level class
+            // (b) causality, not a timing window: a .class file cannot have been compiled from
+            // source content that did not exist yet, so a genuinely current class's compiled
+            // output is never older than its own top-level source file's last save. A stale
+            // leftover - written by a compile that predates the source's later edit removing it -
+            // falls behind the source's CURRENT timestamp regardless of how soon afterward the
+            // file was recompiled, closing the race a same-compile-file tolerance window could not
+            // (reviewed and replaced - see the class javadoc).
+            if (entry.getValue() < sourceMtime) {
+                continue;
             }
 
             result.add(fqcn);
