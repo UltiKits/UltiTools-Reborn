@@ -676,6 +676,52 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
+     * Returns whether {@code file} should be treated as pinned read-only by its operator, and
+     * therefore never refreshed by {@link #writeBytes} -- {@code false} for a file that does not
+     * exist yet (nothing to pin).
+     * <p>
+     * Codex round 8, P2 (discussion_r4012703529): {@code writeBytes}'s atomic move replaces a
+     * DIRECTORY ENTRY, which on POSIX only ever consults the containing directory's write
+     * permission, never the target file's own -- so an untouched file the operator made read-only
+     * (a deliberate hardening signal) was silently overwritten anyway if checked with
+     * {@link Files#isWritable} alone.
+     * <p>
+     * Codex round 10, P2 (discussion on this class, {@code UltiToolsPlugin.java:724} at the time
+     * of the finding): {@link Files#isWritable} alone reflects only this PROCESS's effective
+     * ability to write, which is unconditionally {@code true} under a privileged JVM (root, or
+     * {@code CAP_DAC_OVERRIDE}) regardless of the file's own mode bits -- a server running
+     * privileged would otherwise silently ignore an operator's {@code chmod 0444} pin. This method
+     * therefore also inspects the raw POSIX write bits directly as a fallback signal, independent
+     * of what this particular process happens to be privileged to do: if none of owner/group/other
+     * carries write permission, the operator's intent is unambiguous. A non-POSIX filesystem, or
+     * any failure reading the permissions, falls back to the (already passed) process-relative
+     * answer -- this fallback only ever STRENGTHENS the read-only determination, never weakens it.
+     *
+     * @param file the language file about to be refreshed
+     * @return whether the refresh must be skipped because the file is operator-pinned read-only
+     */
+    private boolean isOperatorPinnedReadOnly(File file) {
+        if (!file.exists()) {
+            return false;
+        }
+        if (!Files.isWritable(file.toPath())) {
+            return true;
+        }
+        try {
+            PosixFileAttributeView view = Files.getFileAttributeView(file.toPath(), PosixFileAttributeView.class);
+            if (view == null) {
+                return false;
+            }
+            Set<PosixFilePermission> permissions = view.readAttributes().permissions();
+            return !permissions.contains(PosixFilePermission.OWNER_WRITE)
+                    && !permissions.contains(PosixFilePermission.GROUP_WRITE)
+                    && !permissions.contains(PosixFilePermission.OTHERS_WRITE);
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /**
      * Writes {@code bytes} to {@code file}, returning whether the write actually succeeded
      * (WR-01) -- the caller must not record a new provenance baseline or log a success line for
      * a write that threw partway through.
@@ -688,40 +734,27 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * the same directory specifically so the final move can be a same-filesystem atomic
      * rename, not a copy.
      * <p>
-     * Codex round 8, P2 (discussion_r4012703529): the atomic move above replaces a DIRECTORY
-     * ENTRY, which on POSIX only ever consults the containing directory's write permission --
-     * never the target file's own permission bits. Two consequences this method now guards
-     * against, both only reachable through this method's one caller ({@link
-     * #resolveLanguageWithProvenance}'s branch 1, "never touched since extraction"):
+     * The atomic move replaces a DIRECTORY ENTRY, which on POSIX only ever consults the
+     * containing directory's write permission -- never the target file's own permission bits or
+     * identity. Two consequences this method now guards against, both only reachable through this
+     * method's one caller ({@link #resolveLanguageWithProvenance}'s branch 1, "never touched since
+     * extraction"):
      * <ol>
-     *   <li>An untouched file the operator made read-only (a deliberate hardening signal) was
-     *       silently overwritten anyway -- the move does not care that the destination is
-     *       read-only. Guarded by refusing to refresh a non-writable {@code file} at all: treat
-     *       it as operator-pinned, log once, and let the caller's existing disk-authoritative
-     *       fallback ({@code readLanguageFile}) keep serving it untouched.</li>
-     *   <li>A writable file's non-default POSIX permissions (e.g. a hardened {@code 0640}) were
-     *       silently replaced by whatever {@link File#createTempFile} defaults to (commonly
-     *       owner-only) the moment the file WAS legitimately refreshed. Guarded by copying the
-     *       original's POSIX permissions onto the temp file before the move.</li>
-     *   <li>Codex round 9, P2 (discussion_r4013501574): permission bits alone are not the whole
-     *       identity of a POSIX file -- a catalogue provisioned by another owner (e.g. root-owned,
-     *       group-writable by the server account) still silently changed OWNER on every refresh,
-     *       since {@link File#createTempFile} always creates a JVM-owned inode and only the
-     *       permission BITS were being copied onto it. Guarded the same way as the read-only case
-     *       above: if the owner/group cannot be faithfully replicated onto the replacement file
-     *       (which an unprivileged JVM process generally cannot do for an owner other than
-     *       itself -- POSIX only allows an unprivileged process to {@code chown} a file's GROUP to
-     *       one it already belongs to, never its USER owner to anyone else), the refresh is
-     *       skipped entirely rather than silently installing a file with the wrong identity.</li>
+     *   <li>An untouched file the operator made read-only was silently overwritten anyway --
+     *       guarded by {@link #isOperatorPinnedReadOnly}; see its own javadoc for the full
+     *       Codex round 8 / round 10 history.</li>
+     *   <li>A writable file's non-default POSIX permissions (e.g. a hardened {@code 0640}), and
+     *       its owner/group (Codex round 9, P2, discussion_r4013501574), were silently replaced by
+     *       whatever {@link File#createTempFile} defaults to the moment the file WAS legitimately
+     *       refreshed. Guarded by {@link #copyPosixAttributesIfSupported}; see its own javadoc.</li>
      * </ol>
-     * Both permission bits and owner/group are attempted together in {@link
-     * #copyPosixAttributesIfSupported}; deliberately POSIX-only for all of it: there is no
-     * portable, dependency-free way to copy ACLs from Java's own file APIs, so a non-POSIX
-     * filesystem's ACLs are NOT preserved by this method -- silently dropping them without saying
-     * so would be worse than the status quo this fix improves on.
+     * Deliberately POSIX-only throughout: there is no portable, dependency-free way to copy ACLs
+     * from Java's own file APIs, so a non-POSIX filesystem's ACLs are NOT preserved by this
+     * method -- silently dropping them without saying so would be worse than the status quo this
+     * fix improves on.
      */
     private boolean writeBytes(File file, byte[] bytes) {
-        if (file.exists() && !Files.isWritable(file.toPath())) {
+        if (isOperatorPinnedReadOnly(file)) {
             getLogger().warn("Language file '" + file.getPath() + "' for module '" + getPluginName()
                     + "' is not writable; treating it as operator-pinned and leaving it untouched "
                     + "instead of refreshing it from the bundled version.");
@@ -1262,6 +1295,15 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         // ResourceHashSidecar.recordAll after the loop, instead of one record(...) call (one
         // read-modify-write cycle of the WHOLE sidecar) per extracted file -- see recordAll's own
         // javadoc for why that was quadratic for a module bundling many resources.
+        //
+        // Codex round 10, P2: recordAll is now called from a `finally` block (below), not as the
+        // last statement inside the try -- if a LATER entry throws before the while loop reaches
+        // it (e.g. File#getCanonicalPath() failing for a malformed name), the exception used to
+        // propagate straight past this call to the outer catch, silently discarding every hash
+        // already accumulated for entries that extracted successfully BEFORE the failure. The
+        // files those entries wrote remain on disk regardless of how the loop ends, so their
+        // provenance must be persisted regardless too -- recordAll is itself a no-op for an empty
+        // map, so this costs nothing on the ordinary all-succeeded path.
         Map<String, String> hashesToRecord = new LinkedHashMap<>();
         try (JarFile jarFile = new JarFile(
                 jar.getPath().startsWith("/") ? jar.getPath() : jar.getPath().substring(1)
@@ -1311,9 +1353,10 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                     }
                 }
             }
-            ResourceHashSidecar.recordAll(new File(resourceFolderPath), hashesToRecord);
         } catch (IOException e) {
             getLogger().error("Failed to save resources from jar", e);
+        } finally {
+            ResourceHashSidecar.recordAll(new File(resourceFolderPath), hashesToRecord);
         }
     }
 

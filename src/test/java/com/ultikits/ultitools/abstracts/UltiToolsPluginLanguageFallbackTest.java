@@ -915,4 +915,34 @@ class UltiToolsPluginLanguageFallbackTest {
         assertThatThrownBy(() -> view.setGroup(rootGroup))
                 .isInstanceOfAny(IOException.class, UnsupportedOperationException.class);
     }
+
+    @Test
+    @DisplayName("isOperatorPinnedReadOnly's POSIX-write-bit fallback classifies a mode-0444 file "
+            + "as pinned independent of Files.isWritable, and a normally-writable file as not "
+            + "pinned (Codex round 10, P2, discussion on UltiToolsPlugin.java:724)")
+    void posixWriteBitFallbackClassifiesModeBitsIndependentOfProcessPrivilege() throws Throwable {
+        // Cannot reproduce the actual privileged-JVM scenario (Files.isWritable returning true
+        // for a 0444 file under root/CAP_DAC_OVERRIDE) without root, which this sandbox does not
+        // have -- in an unprivileged test process Files.isWritable ALREADY agrees with the POSIX
+        // bits for both cases below, so this is a direct unit test of the new fallback signal's
+        // own classification logic, not a demonstration that it changes the observable outcome
+        // here. It documents and locks in the intended behaviour of the added code path.
+        File readOnlyFile = new File(tempDir, "readonly.json");
+        Files.write(readOnlyFile.toPath(), "{}".getBytes(StandardCharsets.UTF_8));
+        PosixFileAttributeView view = Files.getFileAttributeView(readOnlyFile.toPath(), PosixFileAttributeView.class);
+        Assumptions.assumeTrue(view != null,
+                "Filesystem does not support POSIX file attributes; skipping.");
+        Files.setPosixFilePermissions(readOnlyFile.toPath(), PosixFilePermissions.fromString("r--r--r--"));
+
+        File writableFile = new File(tempDir, "writable.json");
+        Files.write(writableFile.toPath(), "{}".getBytes(StandardCharsets.UTF_8));
+        Files.setPosixFilePermissions(writableFile.toPath(), PosixFilePermissions.fromString("rw-r--r--"));
+
+        UltiToolsPlugin plugin = mock(FixturePlugin.class);
+        Method method = UltiToolsPlugin.class.getDeclaredMethod("isOperatorPinnedReadOnly", File.class);
+        method.setAccessible(true);
+
+        assertThat((Boolean) method.invoke(plugin, readOnlyFile)).isTrue();
+        assertThat((Boolean) method.invoke(plugin, writableFile)).isFalse();
+    }
 }
