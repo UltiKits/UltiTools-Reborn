@@ -262,26 +262,22 @@ class OverBroadExclusionInvariantTest {
     }
 
     /**
-     * RED (#414, intentionally the pre-fix behaviour): still walks {@code target/classes},
-     * ignoring {@code srcRoot} entirely - proves the new behaviour tests below fail for the right
-     * reason (a real assertion on wrong data, not a compile error) before the GREEN commit swaps
-     * this body for the real source-tree derivation.
+     * Same derivation as {@link #scanSourceClasses()}, against an explicit root - so a synthetic,
+     * temporary source tree can be scanned in a unit test without touching the real project.
      */
     private static Set<String> scanSourceClasses(Path srcRoot) throws IOException {
-        Path classesRoot = Paths.get("target", "classes");
         Set<String> classNames = new LinkedHashSet<>();
-        if (!Files.isDirectory(classesRoot)) {
+        if (!Files.isDirectory(srcRoot)) {
             return classNames;
         }
-        try (Stream<Path> paths = Files.walk(classesRoot)) {
+        List<Path> javaFiles = new ArrayList<>();
+        try (Stream<Path> paths = Files.walk(srcRoot)) {
             paths.filter(Files::isRegularFile)
-                    .filter(p -> p.toString().endsWith(".class"))
-                    .forEach(p -> {
-                        String relative = classesRoot.relativize(p).toString();
-                        String withoutSuffix = relative.substring(0, relative.length() - ".class".length());
-                        String fqcn = withoutSuffix.replace(java.io.File.separatorChar, '.');
-                        classNames.add(fqcn);
-                    });
+                    .filter(p -> p.toString().endsWith(".java"))
+                    .forEach(javaFiles::add);
+        }
+        for (Path file : javaFiles) {
+            classNames.addAll(classNamesDeclaredIn(file));
         }
         return classNames;
     }
