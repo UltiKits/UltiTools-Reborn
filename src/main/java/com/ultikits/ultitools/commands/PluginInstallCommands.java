@@ -59,7 +59,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
                 text = text.append(Component.text(UltiTools.getInstance().i18n("    安装状态：")).color(TextColor.color(127, 127, 127)));
                 boolean installed = false;
                 for (UltiToolsPlugin installedPlugin : installedPlugins) {
-                    if (installedPlugin.getPluginName().equals(plugin.getName())) {
+                    if (isSameModule(installedPlugin, plugin)) {
                         installed = true;
                         break;
                     }
@@ -285,6 +285,67 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         sender.sendMessage(ChatColor.GREEN + String.format(
             UltiTools.getInstance().i18n("全部更新完成！%d个成功，%d个失败。请重启服务器。"),
             success, failed));
+    }
+
+    /**
+     * Decides whether {@code installedPlugin} (a currently loaded module) and {@code
+     * catalogueEntry} (a directory entry from the UltiCloud catalogue) refer to the SAME module
+     * (#439). The prior check compared {@code installedPlugin.getPluginName()} (the module's
+     * Bukkit {@code plugin.yml} {@code name:}) against {@code catalogueEntry.getName()} (the
+     * catalogue's own display name) with plain string equality -- correct only when the two
+     * strings genuinely agree, which they do not for every module.
+     * <p>
+     * <b>Preferred key: {@code identifyString}.</b> This is the stable identifier {@link
+     * PluginInstallUtils} and {@link com.ultikits.ultitools.manager.UpdateManager} already treat
+     * as this framework's canonical module identity for install/update/version lookups, and it is
+     * the one field {@link PluginEntity} and {@link UltiToolsPlugin} both carry under the same
+     * name. Compared only when BOTH sides carry a non-blank value -- two identify-string-less
+     * entries are never treated as a match on that basis alone, or every such module would appear
+     * installed against every such catalogue entry, which is worse than the bug being fixed.
+     * <p>
+     * <b>Fallback: exact name equality, plus one fixed, deterministic prefix strip.</b> Every
+     * module in this monorepo declares its Bukkit {@code name:} with the literal {@code
+     * "UltiTools-"} vendor prefix ({@code UltiTools-Economy}, {@code UltiTools-Menu}, ...), while
+     * the catalogue's own display name omits it -- exactly #439's two named modules. Stripping
+     * that one fixed prefix before comparing is a single deterministic transform, not a
+     * similarity/fuzzy heuristic: it accepts precisely the pairs that differ by nothing, or by
+     * exactly that one literal prefix, and rejects every other pair -- including one that merely
+     * shares a prefix or substring (a catalogue name that only resembles a loaded module's, such
+     * as one ending in {@code "Pro"}, is rejected, not matched).
+     *
+     * @param installedPlugin a currently loaded module
+     * @param catalogueEntry  a directory entry from the catalogue
+     * @return {@code true} iff the two are judged to refer to the same module
+     */
+    static boolean isSameModule(UltiToolsPlugin installedPlugin, PluginEntity catalogueEntry) {
+        String moduleIdentify = installedPlugin.getIdentifyString();
+        String catalogueIdentify = catalogueEntry.getIdentifyString();
+        if (isNonBlank(moduleIdentify) && isNonBlank(catalogueIdentify)
+                && moduleIdentify.equals(catalogueIdentify)) {
+            return true;
+        }
+
+        String runtimeName = installedPlugin.getPluginName();
+        String catalogueName = catalogueEntry.getName();
+        if (runtimeName == null || catalogueName == null) {
+            return false;
+        }
+        if (runtimeName.equals(catalogueName)) {
+            return true;
+        }
+        return stripVendorPrefix(runtimeName).equals(catalogueName);
+    }
+
+    private static boolean isNonBlank(String value) {
+        return value != null && !value.isEmpty();
+    }
+
+    private static final String VENDOR_PREFIX = "UltiTools-";
+
+    private static String stripVendorPrefix(String runtimeName) {
+        return runtimeName.startsWith(VENDOR_PREFIX)
+                ? runtimeName.substring(VENDOR_PREFIX.length())
+                : runtimeName;
     }
 
     @Override
