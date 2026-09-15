@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
@@ -12,11 +13,14 @@ import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitTask;
 
+import java.io.File;
 import java.lang.management.ManagementFactory;
 import java.lang.management.OperatingSystemMXBean;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.ToLongFunction;
 import java.util.logging.Level;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -52,6 +56,15 @@ public class ServerMonitorManager {
     private static final long SNAPSHOT_INTERVAL_TICKS = 100L;
 
     /**
+     * Polling granularity for {@link #maybeSendLogsOnly()}'s scheduled check, in milliseconds
+     * (Gate-2 finding, round 11). Narrowed from 1 second to bound the worst-case overshoot past a
+     * configured {@code batchConfig.interval} to roughly this value, rather than up to a full
+     * second -- see the call site's own comment for the numeric evidence and the reasoning for not
+     * instead dynamically rescheduling this task to track the transmitter's own live interval.
+     */
+    private static final long LOG_FLUSH_POLL_INTERVAL_MS = 100L;
+
+    /**
      * A server-state snapshot sampled on the main thread; the async send thread only ever reads
      * it.
      * <p>
@@ -78,8 +91,127 @@ public class ServerMonitorManager {
     private BukkitTask tpsTask;
     private BukkitTask snapshotTask;
 
+    /**
+     * Wall-clock timestamp of the last time queued logs were actually drained into a
+     * {@code batch_update} message, in external-drain mode (Gate-2 finding: with monitoring
+     * enabled -- the shipped default -- {@link #sendBatchUpdate()} runs on its own hardcoded
+     * 5-second tick, completely independent of {@link UltiPanelLogTransmitter}'s own configured
+     * batch-send interval.
+     * Before this field existed, that meant the panel's live {@code batchConfig.interval} action
+     * (#432) had NO observable effect whenever monitoring was on, because the monitor drained the
+     * queue every 5 seconds regardless of what interval was configured. Gating the drain itself by
+     * this timestamp makes the configured interval govern how often logs actually go out, even
+     * though {@code sendBatchUpdate()} itself still ticks every 5 seconds for status/metrics).
+     * Starts at {@code 0} so the very first tick after {@link #startMonitoring()} always drains.
+     * <p>
+     * {@link AtomicLong}, not a plain {@code volatile long} (Gate-2 finding, round 4): two
+     * independently-scheduled tasks ({@link #sendBatchUpdate()}'s 5-second tick and
+     * {@link #maybeSendLogsOnly()}'s 1-second tick) can become due in the SAME window (e.g. a
+     * 1000ms configured interval), and {@code volatile} only guarantees visibility, not that a
+     * "read, compare, then write" sequence is atomic -- both threads could pass the elapsed-time
+     * check before either updates the field, both call {@link UltiPanelLogTransmitter#drainQueue}
+     * concurrently against the same queue, and split one batch of records across two separate
+     * {@code log_batch}/{@code batch_update} frames with interleaved {@code poll()} calls,
+     * scrambling delivery order across the two frames. {@link #claimLogFlushWindow(long, int)}
+     * uses {@link AtomicLong#compareAndSet} so only ONE of the two competing callers ever wins a
+     * given window; the loser skips draining entirely rather than draining a partial, racing
+     * subset.
+     */
+    private final AtomicLong lastLogFlushMs = new AtomicLong(0L);
+
+    /**
+     * Guards the ACTUAL drain-and-send operation ({@link #drainAndSendLogsOnly}) across all
+     * THREE paths that can trigger one: {@link #sendBatchUpdate()}'s 5-second tick,
+     * {@link #maybeSendLogsOnly()}'s 1-second tick, and {@link #drainLogsNow()}'s size-triggered,
+     * event-driven call (Gate-2 finding, round 7). {@link #claimLogFlushWindow(long, int)}'s CAS
+     * only arbitrates between the two TIME-based paths against each other; {@code drainLogsNow()}
+     * deliberately does not participate in that CAS at all (it is not time-gated), so without a
+     * separate mutual-exclusion lock it could run concurrently with whichever time-based path just
+     * won the CAS, and the two would poll() the same queue at once, splitting one logical batch
+     * across two frames with no ordering guarantee between them. This lock is orthogonal to the
+     * CAS: the CAS decides WHETHER a time-based path may proceed at all; this lock decides that
+     * only ONE drain (whichever path triggered it) is ever in flight at a time.
+     */
+    private final Object logDrainLock = new Object();
+
+    /**
+     * The file whose filesystem backs the {@code diskUsage} metric -- the server root (the working
+     * directory the Paper process was started in), matching {@link FileOperationManager}'s own
+     * {@code serverRoot} convention. Package-private and mutable only so tests can point it at a
+     * controlled location; production code never reassigns it (D-14, #436).
+     */
+    private File diskUsageRoot = new File(System.getProperty("user.dir"));
+
+    /**
+     * Seam over {@link File#getTotalSpace()}, so "the filesystem reports zero total space" (D-14)
+     * is deterministic in tests without needing an actual zero-capacity filesystem. Defaults to the
+     * real method reference.
+     */
+    private ToLongFunction<File> totalSpaceReader = File::getTotalSpace;
+
+    /**
+     * Seam over {@link File#getFreeSpace()} (WR-03) -- includes space reserved for the
+     * filesystem's own root/superuser allocation, matching what {@code df}'s own {@code Use%}
+     * column treats as "used" (total minus this value). Distinct from {@link #usableSpaceReader}
+     * ({@link File#getUsableSpace()}), which EXCLUDES that reservation -- the two diverge on a
+     * real ext4 volume with a nonzero reserved-block percentage.
+     */
+    private ToLongFunction<File> freeSpaceReader = File::getFreeSpace;
+
+    /** Seam over {@link File#getUsableSpace()}, same rationale as {@link #totalSpaceReader}. */
+    private ToLongFunction<File> usableSpaceReader = File::getUsableSpace;
+
     public ServerMonitorManager() {
         this.scheduler = Executors.newScheduledThreadPool(2);
+    }
+
+    /**
+     * Exposes {@link #logDrainLock} so {@link LogStreamManager#initialize} can wire
+     * {@link UltiPanelLogTransmitter#setExternalDrainCoordinationLock} to the SAME lock object
+     * this class's own drain paths already synchronize on (Gate-2 finding, round 9).
+     * Package-private -- this is internal cross-class coordination, not a public API.
+     */
+    Object getLogDrainLock() {
+        return logDrainLock;
+    }
+
+    /**
+     * Atomically claims the current log-flush window if (and only if) {@code intervalMs} has
+     * elapsed since the last successful claim, advancing {@link #lastLogFlushMs} to {@code now}
+     * as part of the same compare-and-set. Returns {@code false} without side effects if the
+     * interval has not elapsed, OR if a concurrently-running competing task already claimed this
+     * exact window first (Gate-2 finding, round 4 -- see {@link #lastLogFlushMs}'s own javadoc).
+     *
+     * @param now the caller's own {@link System#currentTimeMillis()} snapshot
+     * @param intervalMs the currently configured batch-send interval
+     * @return {@code true} only for the caller that should proceed to drain and send
+     */
+    private boolean claimLogFlushWindow(long now, int intervalMs) {
+        long previous = lastLogFlushMs.get();
+        if (now - previous < intervalMs) {
+            return false;
+        }
+        return lastLogFlushMs.compareAndSet(previous, now);
+    }
+
+    /**
+     * Test seam: point the disk-usage reading at a different root (e.g. a real temp directory).
+     * Production code never calls this.
+     */
+    void setDiskUsageRoot(File diskUsageRoot) {
+        this.diskUsageRoot = diskUsageRoot;
+    }
+
+    /**
+     * Test seam: inject fake total/free/usable-space readers (e.g. to force the
+     * zero-total-space outcome deterministically, or to pin a known used-percentage without
+     * depending on the real filesystem's actual free space). Production code never calls this.
+     */
+    void setDiskSpaceReaders(ToLongFunction<File> totalSpaceReader, ToLongFunction<File> freeSpaceReader,
+            ToLongFunction<File> usableSpaceReader) {
+        this.totalSpaceReader = totalSpaceReader;
+        this.freeSpaceReader = freeSpaceReader;
+        this.usableSpaceReader = usableSpaceReader;
     }
 
     /**
@@ -138,6 +270,7 @@ public class ServerMonitorManager {
         }
 
         isMonitoring = true;
+        lastLogFlushMs.set(0L); // always drain on the first tick of a fresh monitoring session
         // If the previous stopMonitoring() shut the pool down, swap in a fresh one -- see the
         // note on the field.
         if (scheduler == null || scheduler.isShutdown()) {
@@ -152,17 +285,51 @@ public class ServerMonitorManager {
             }
         }, 20L); // Wait 1 second
 
-        // Enable the log transmitter's external drain mode (logs will be sent uniformly via batch_update)
+        // Enable the log transmitter's external drain mode (logs will be sent uniformly via
+        // batch_update). Defensive only -- the PRIMARY point this is applied from is
+        // LogStreamManager#initialize() itself (Gate-2 finding, round 4): wireManagers() calls
+        // startMonitoring() BEFORE the very first transmitter exists, so this check would see
+        // null and never retry on first boot, and every reconnect rebuilds a fresh transmitter
+        // through initialize() while this method early-returns above (isMonitoring already
+        // true) without ever reaching that new instance. This call stays here only for the case
+        // where a transmitter genuinely already exists when startMonitoring() runs.
         LogStreamManager lsm = UltiTools.getInstance().getLogStreamManager();
         if (lsm != null && lsm.getLogTransmitter() != null) {
             lsm.getLogTransmitter().setExternalDrainMode(true);
         }
 
         // Send a batch_update every 5 seconds (includes status and metrics; includes plugins
-        // every 12th tick; includes logs every time).
+        // every 12th tick; includes logs every time it is due per lastLogFlushMs).
         // Note: this thread **only sends** -- every piece of Bukkit state comes from the
         // main-thread-sampled snapshot. See issue #179.
         scheduler.scheduleAtFixedRate(this::sendBatchUpdate, 5, 5, TimeUnit.SECONDS);
+
+        // Gate-2 finding (round 3): sendBatchUpdate()'s own logs inclusion is gated by
+        // lastLogFlushMs, but that gate was only ever CHECKED on sendBatchUpdate()'s own fixed
+        // 5-second tick, so a configured interval was still quantized up to a multiple of 5
+        // seconds (1000ms drained no faster than every 5s; 7000ms drained roughly every 10s,
+        // not 7). This second task checks the SAME lastLogFlushMs gate at a finer granularity,
+        // independent of sendBatchUpdate()'s own tick -- see maybeSendLogsOnly()'s own javadoc
+        // for why sharing the one field is race-safe and does not double-send. Cancelled
+        // implicitly by stopMonitoring()'s scheduler.shutdown(), same as the task above --
+        // neither is tracked in its own field.
+        //
+        // Gate-2 finding (round 11): the ORIGINAL granularity here was a flat 1-second tick, which
+        // itself still rounds delivery UP to its own next tick for any configured interval that is
+        // not a whole multiple of one second -- a 1500ms interval drained roughly every 2000ms, and
+        // a 1001ms interval could take nearly twice its own requested value. Rather than replace
+        // this fixed-rate check with a dynamically-rescheduled task tracking the transmitter's own
+        // live interval (the reviewer's other suggested option) -- which would need new live
+        // rescheduling wiring between this class and UltiPanelLogTransmitter every time
+        // setIntervalMs() runs, for a purely cosmetic latency improvement on a log-streaming
+        // feature, not a correctness path -- this task's own polling granularity is narrowed from
+        // 1 second to LOG_FLUSH_POLL_INTERVAL_MS, tightening the worst-case overshoot bound from up
+        // to ~1000ms to up to ~100ms against any interval at or above MIN_INTERVAL_MS (1000ms):
+        // roughly a 10x reduction, at the cost of a 10x cheaper-call frequency increase on a
+        // no-op-in-the-common-case CAS check (claimLogFlushWindow returns false immediately
+        // whenever the interval has not yet elapsed).
+        scheduler.scheduleAtFixedRate(this::maybeSendLogsOnly,
+                LOG_FLUSH_POLL_INTERVAL_MS, LOG_FLUSH_POLL_INTERVAL_MS, TimeUnit.MILLISECONDS);
 
         // Start the TPS calculation + CPU sampling task (every second)
         tpsTask = Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), this::updateTpsAndCpu, 0L, 20L);
@@ -588,42 +755,188 @@ public class ServerMonitorManager {
                 data.add("plugins", getCurrentPluginArray());
             }
 
-            // Drain logs from the log transmitter -- whether to drain is decided by the LOGS
-            // capability switch (D-12). The gate must sit before drainQueue(...), not after the
-            // result is obtained only to be thrown away: drain-then-discard is still the shape of
-            // "already collected into memory, just not sent out", which D-12 explicitly rejects
-            // as a half-measure disable.
-            if (Capability.LOGS.isEnabled()) {
-                LogStreamManager lsm = UltiTools.getInstance().getLogStreamManager();
-                if (lsm != null && lsm.getLogTransmitter() != null) {
-                    JsonArray logs = lsm.getLogTransmitter().drainQueue(50);
-                    if (logs.size() > 0) {
-                        data.add("logs", logs);
+            // Gate-2 finding (round 9): logDrainLock is now held from the logs-drain all the way
+            // through this method's own final sendMessage() call, not just the drainQueue() call
+            // -- fresh evidence showed a size-triggered caller could otherwise acquire the lock
+            // AFTER this method released it (right after draining) but BEFORE this method's own
+            // combined frame -- which carries those same just-drained, OLDER records -- actually
+            // reached webSocketClient.sendMessage(), so a newer logs-only frame could be sent
+            // first. Widening the lock to cover the send closes that window; the errors-drain in
+            // between is harmless to include (it does not itself race against anything).
+            synchronized (logDrainLock) {
+                // Drain logs from the log transmitter -- whether to drain is decided by the LOGS
+                // capability switch (D-12). The gate must sit before drainQueue(...), not after
+                // the result is obtained only to be thrown away: drain-then-discard is still the
+                // shape of "already collected into memory, just not sent out", which D-12
+                // explicitly rejects as a half-measure disable.
+                if (Capability.LOGS.isEnabled()) {
+                    LogStreamManager lsm = UltiTools.getInstance().getLogStreamManager();
+                    if (lsm != null && lsm.getLogTransmitter() != null) {
+                        UltiPanelLogTransmitter transmitter = lsm.getLogTransmitter();
+                        long now = System.currentTimeMillis();
+                        // Gate-2 P1: honour the transmitter's own configured interval even though
+                        // this method's own tick is a hardcoded 5 seconds -- see lastLogFlushMs's
+                        // javadoc. Entries keep accumulating in the queue between flushes (bounded
+                        // by UltiPanelLogTransmitter's own MAX_QUEUE_SIZE overflow protection);
+                        // nothing is lost, delivery is just batched at the configured cadence.
+                        // Gate-2 round 4: claimLogFlushWindow() atomically decides the winner
+                        // against maybeSendLogsOnly()'s own competing 1-second task -- only the
+                        // winner drains.
+                        if (claimLogFlushWindow(now, transmitter.getIntervalMs())) {
+                            // Gate-2 finding (round 5): drainQueue's own cap must follow the
+                            // transmitter's configured batchSize, not a hardcoded constant -- now
+                            // that externalDrainMode is reliably enabled (round 4's init-order
+                            // fix), this WAS the path a live batchConfig.size change actually went
+                            // through, and a hardcoded value here silently overrode it.
+                            JsonArray logs = transmitter.drainQueue(transmitter.getBatchSize());
+                            if (logs.size() > 0) {
+                                data.add("logs", logs);
+                            }
+                        }
                     }
                 }
-            }
 
-            // Drain errors from the error report collector -- deliberately unaffected by any
-            // Capability (D-07): error-reporting keeps its own pre-existing
-            // ultipanel.logging.error-reporting.enabled key and its pre-existing default; moving
-            // it under the capability switch would silently change a key an operator may already
-            // have set by hand. ErrorReportCollector already gates on that key itself at the
-            // collection layer, so draining an empty queue just yields an empty array.
-            ErrorReportCollector erc = UltiTools.getInstance().getErrorReportCollector();
-            if (erc != null) {
-                JsonArray errors = erc.drainErrors(10);
-                if (errors.size() > 0) {
-                    data.add("errors", errors);
+                // Drain errors from the error report collector -- deliberately unaffected by any
+                // Capability (D-07): error-reporting keeps its own pre-existing
+                // ultipanel.logging.error-reporting.enabled key and its pre-existing default;
+                // moving it under the capability switch would silently change a key an operator
+                // may already have set by hand. ErrorReportCollector already gates on that key
+                // itself at the collection layer, so draining an empty queue just yields an
+                // empty array.
+                ErrorReportCollector erc = UltiTools.getInstance().getErrorReportCollector();
+                if (erc != null) {
+                    JsonArray errors = erc.drainErrors(10);
+                    if (errors.size() > 0) {
+                        data.add("errors", errors);
+                    }
                 }
-            }
 
-            message.add("data", data);
-            webSocketClient.sendMessage(message);
+                message.add("data", data);
+                webSocketClient.sendMessage(message);
+            }
 
             tickCount++;
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.WARNING,
                 "Failed to send batch update: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Checks the log-drain interval gate at a {@link #LOG_FLUSH_POLL_INTERVAL_MS} granularity
+     * (narrowed from 1 second in round 11), independent of {@link #sendBatchUpdate()}'s own fixed
+     * 5-second tick (Gate-2 finding, round 3).
+     * <p>
+     * Both this method and {@link #sendBatchUpdate()} call {@link #claimLogFlushWindow(long, int)}
+     * against the SAME {@link #lastLogFlushMs} field, so only one of the two competing scheduled
+     * tasks ever drains for a given window (Gate-2 finding, round 4 -- see
+     * {@link #lastLogFlushMs}'s own javadoc for why a plain {@code volatile long} check-then-write
+     * was not race-safe here).
+     * <p>
+     * Sends a {@code batch_update} message carrying ONLY {@code data.logs} when logs are both due
+     * and non-empty -- not a new message type: the Worker's own handler
+     * (`websocket-server.ts` `case 'batch_update'`) already guards every field with
+     * {@code if (batch.X)}, so a partial batch_update is an already-supported shape, not a
+     * protocol change.
+     */
+    private void maybeSendLogsOnly() {
+        try {
+            if (webSocketClient == null || !webSocketClient.isConnected()) {
+                return;
+            }
+            if (!Capability.LOGS.isEnabled()) {
+                return;
+            }
+            LogStreamManager lsm = UltiTools.getInstance().getLogStreamManager();
+            if (lsm == null || lsm.getLogTransmitter() == null) {
+                return;
+            }
+            UltiPanelLogTransmitter transmitter = lsm.getLogTransmitter();
+            long now = System.currentTimeMillis();
+            if (!claimLogFlushWindow(now, transmitter.getIntervalMs())) {
+                return;
+            }
+
+            drainAndSendLogsOnly(transmitter);
+        } catch (Exception e) {
+            UltiTools.getInstance().getLogger().log(Level.WARNING,
+                "Failed to send log-only batch update: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Immediately drains and sends whatever is currently queued, without waiting for either
+     * {@link #sendBatchUpdate()}'s 5-second tick or {@link #maybeSendLogsOnly()}'s 1-second tick
+     * (Gate-2 finding, round 6). Registered as {@link UltiPanelLogTransmitter}'s
+     * {@code externalSizeThresholdCallback} from {@link LogStreamManager#initialize}: under
+     * external drain mode, {@code addToBatch()}'s own size-threshold trigger is otherwise
+     * silently swallowed by {@code sendBatch()}'s own early return, so a configured
+     * {@code batchSize} never shortened delivery latency while monitoring was active, and a
+     * sustained burst could fill the transmitter's queue cap and start discarding old entries
+     * despite repeatedly crossing the threshold.
+     * <p>
+     * Deliberately does NOT go through {@link #claimLogFlushWindow(long, int)}'s interval gate:
+     * that gate rate-limits the two TIME-based tasks against the configured interval, but this
+     * trigger is queue-DEPTH-based, a different reason to drain, and the whole point is to bypass
+     * waiting for the interval when the queue is already at capacity risk. {@code drainQueue} is
+     * safe to call concurrently with the other two tasks ({@code ConcurrentLinkedQueue#poll} is
+     * atomic per call) -- a near-simultaneous interval-triggered drain and this size-triggered one
+     * would, at worst, split one burst across two frames rather than lose or duplicate any entry.
+     * {@link #lastLogFlushMs} is still advanced afterwards so the interval-based tasks do not
+     * immediately re-fire for the records this call already sent.
+     */
+    void drainLogsNow() {
+        try {
+            if (webSocketClient == null || !webSocketClient.isConnected()) {
+                return;
+            }
+            if (!Capability.LOGS.isEnabled()) {
+                return;
+            }
+            LogStreamManager lsm = UltiTools.getInstance().getLogStreamManager();
+            if (lsm == null || lsm.getLogTransmitter() == null) {
+                return;
+            }
+            UltiPanelLogTransmitter transmitter = lsm.getLogTransmitter();
+            drainAndSendLogsOnly(transmitter);
+            lastLogFlushMs.set(System.currentTimeMillis());
+        } catch (Exception e) {
+            UltiTools.getInstance().getLogger().log(Level.WARNING,
+                "Failed to send size-triggered log batch: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Drains up to {@code transmitter}'s configured {@code batchSize} and, if non-empty, sends a
+     * {@code batch_update} message carrying ONLY {@code data.logs} -- shared by
+     * {@link #maybeSendLogsOnly()} and {@link #drainLogsNow()} (Gate-2 finding, round 6
+     * extraction). Not a new message type: the Worker's own handler (`websocket-server.ts`
+     * `case 'batch_update'`) already guards every field with {@code if (batch.X)}, so a partial
+     * batch_update is an already-supported shape, not a protocol change. Callers are responsible
+     * for their own connectivity/capability checks and for advancing {@link #lastLogFlushMs}.
+     * <p>
+     * Holds {@link #logDrainLock} for its whole body (Gate-2 finding, round 7): the poll-and-send
+     * sequence itself must be mutually exclusive across all three callers, not just gated by
+     * {@link #claimLogFlushWindow(long, int)}'s CAS (which only arbitrates the two TIME-based
+     * callers against each other and is not even consulted by {@link #drainLogsNow()}).
+     */
+    private void drainAndSendLogsOnly(UltiPanelLogTransmitter transmitter) {
+        synchronized (logDrainLock) {
+            // Gate-2 finding (round 5): follow the transmitter's own configured batchSize rather
+            // than a hardcoded constant.
+            JsonArray logs = transmitter.drainQueue(transmitter.getBatchSize());
+            if (logs.size() == 0) {
+                return;
+            }
+
+            JsonObject message = new JsonObject();
+            message.addProperty("type", "batch_update");
+            message.addProperty("serverId", webSocketClient.getServerId());
+            message.addProperty("timestamp", System.currentTimeMillis());
+            JsonObject data = new JsonObject();
+            data.add("logs", logs);
+            message.add("data", data);
+            webSocketClient.sendMessage(message);
         }
     }
 
@@ -668,17 +981,70 @@ public class ServerMonitorManager {
         double memoryUsage = ((double) usedMemory / maxMemory) * 100;
         serverPerformance.addProperty("memoryUsage", Math.round(memoryUsage * 100.0) / 100.0);
 
-        serverPerformance.addProperty("diskUsage", 0.0);
+        serverPerformance.addProperty("diskUsage", computeDiskUsage());
 
         data.add("serverPerformance", serverPerformance);
 
         // Plugin usage
         JsonObject pluginUsage = new JsonObject();
-        pluginUsage.addProperty("enabledPlugins", snapshot.pluginCount);
+        pluginUsage.addProperty("enabledPlugins", countEnabledPlugins(snapshot.plugins));
         pluginUsage.addProperty("loadedWorlds", snapshot.worldCount);
         data.add("pluginUsage", pluginUsage);
 
         return data;
+    }
+
+    /**
+     * The used percentage of the filesystem holding {@link #diskUsageRoot}, matching {@code df}'s
+     * own {@code Use%} convention (WR-03) rather than a straight {@code (total - usable) / total}:
+     * {@code used = total - free} (via {@link #freeSpaceReader}, {@link File#getFreeSpace()} --
+     * INCLUDES space reserved for the filesystem's own root/superuser allocation), and the
+     * percentage is {@code used / (used + avail)} with {@code avail} from
+     * {@link #usableSpaceReader} ({@link File#getUsableSpace()} -- EXCLUDES that reservation).
+     * The earlier {@code (total - usable) / total} formula measured roughly one percentage point
+     * higher than {@code df} on a real ext4 volume with its default ~5% reserved-block
+     * allocation, at or past this metric's own documented one-point UAT tolerance -- see this
+     * plan's gate record for the real-machine measurement. Rounded to two decimals exactly like
+     * {@code memoryUsage} above (D-14, #436). A filesystem reporting zero total space, or a
+     * used+avail denominator of zero, is a stated outcome -- {@code 0.0} -- not a division error.
+     */
+    private double computeDiskUsage() {
+        long total = totalSpaceReader.applyAsLong(diskUsageRoot);
+        if (total <= 0) {
+            return 0.0;
+        }
+        long free = freeSpaceReader.applyAsLong(diskUsageRoot);
+        long usable = usableSpaceReader.applyAsLong(diskUsageRoot);
+        long used = total - free;
+        long denominator = used + usable;
+        if (denominator <= 0) {
+            return 0.0;
+        }
+        double usedPercent = ((double) used / denominator) * 100;
+        return Math.round(usedPercent * 100.0) / 100.0;
+    }
+
+    /**
+     * Counts entries in {@code plugins} whose {@code enabled} field is {@code true} -- the
+     * per-plugin flag {@link #sampleServerState()} already captures for every installed plugin
+     * (D-14, #437: {@code enabledPlugins} must count plugins that are enabled, not every plugin
+     * installed). Package-private and pure so it is unit-testable directly against a synthetic
+     * {@link JsonArray} without needing a multi-plugin MockBukkit fixture.
+     *
+     * @param plugins the snapshot's plugin array; each element is expected to be a {@link
+     *                JsonObject} carrying a boolean {@code enabled} field
+     * @return the number of entries whose {@code enabled} field is {@code true}; {@code 0} for an
+     *         empty array
+     */
+    static int countEnabledPlugins(JsonArray plugins) {
+        int count = 0;
+        for (JsonElement element : plugins) {
+            JsonObject plugin = element.getAsJsonObject();
+            if (plugin.has("enabled") && plugin.get("enabled").getAsBoolean()) {
+                count++;
+            }
+        }
+        return count;
     }
 
     /**
