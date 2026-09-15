@@ -100,14 +100,41 @@ public class GuiScheduler {
      * <p>
      * If already on the main thread, runs immediately.
      * Otherwise, schedules it to run on the main thread.
+     * <p>
+     * <b>Gate-2 Codex finding, PR #478 round 1:</b> this is the path {@link GuiRenderer#initialize}
+     * drives the FIRST build through, and {@link GuiRenderer#performBuild}'s own off-main-thread
+     * re-entrant guard -- neither passes through {@link #executeFrame()}'s try/catch, which is
+     * where {@link RenderDepthExceededException} reporting (WR-01) lived until now. Since
+     * mounting is where the depth guard (CR-01) actually fires, and mounting happens on the very
+     * first build, that build's own trip is the MORE common case to miss, not an edge case. Both
+     * branches below now report it; only the already-on-main-thread branch re-throws afterward
+     * (preserving the existing "the caller of {@code runOnMainThread()} sees the exception
+     * synchronously" contract {@link GuiRenderer#initialize} and every CR-01 test depend on) --
+     * the off-thread branch's caller could never observe the deferred task's exception anyway
+     * (Bukkit's own scheduler runs it later), so there is nothing to preserve there beyond adding
+     * the report.
      *
      * @param task the task to run
      */
     public void runOnMainThread(@NotNull Runnable task) {
         if (isOnMainThread()) {
-            task.run();
+            try {
+                task.run();
+            } catch (RenderDepthExceededException e) {
+                reportRenderDepthExceeded(e);
+                throw e;
+            }
         } else {
-            Bukkit.getScheduler().runTask(plugin, task);
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                try {
+                    task.run();
+                } catch (RenderDepthExceededException e) {
+                    reportRenderDepthExceeded(e);
+                    // Deliberately not re-thrown: this runs on Bukkit's own scheduler thread,
+                    // asynchronously from whoever called runOnMainThread() -- there is no
+                    // caller left to propagate to, exactly as before this fix.
+                }
+            });
         }
     }
 
