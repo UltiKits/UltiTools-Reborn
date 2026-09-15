@@ -32,20 +32,20 @@ class PluginInitiationUtilsWebSocketTest {
         }
 
         @Test
-        @DisplayName("应该有静态的 panelWS 字段")
+        @DisplayName("WebSocket 客户端应该是 CloudSession 的实例字段（16-08 Task 2 起，不再是 PluginInitiationUtils 的静态字段）")
         void shouldHavePanelWSField() throws NoSuchFieldException {
-            Field field = PluginInitiationUtils.class.getDeclaredField("panelWS");
-            
-            assertThat(Modifier.isStatic(field.getModifiers())).isTrue();
+            Field field = CloudSession.class.getDeclaredField("webSocketClient");
+
+            assertThat(Modifier.isStatic(field.getModifiers())).isFalse();
             assertThat(Modifier.isPrivate(field.getModifiers())).isTrue();
         }
 
         @Test
-        @DisplayName("应该有静态的 token 字段")
+        @DisplayName("令牌应该是 CloudSession 的实例字段（16-08 Task 1 起，不再是 PluginInitiationUtils 的静态字段）")
         void shouldHaveTokenField() throws NoSuchFieldException {
-            Field field = PluginInitiationUtils.class.getDeclaredField("token");
-            
-            assertThat(Modifier.isStatic(field.getModifiers())).isTrue();
+            Field field = CloudSession.class.getDeclaredField("token");
+
+            assertThat(Modifier.isStatic(field.getModifiers())).isFalse();
             assertThat(Modifier.isPrivate(field.getModifiers())).isTrue();
         }
     }
@@ -204,10 +204,11 @@ class PluginInitiationUtilsWebSocketTest {
         }
 
         @Test
-        @DisplayName("getPanelWebsocketClient 方法应该存在")
+        @DisplayName("getPanelWebsocketClient 方法应该存在（16-08 Task 2 起接受一个 TokenEntity 参数，不再读静态字段）")
         void getPanelWebsocketClientMethodShouldExist() throws NoSuchMethodException {
-            Method method = PluginInitiationUtils.class.getDeclaredMethod("getPanelWebsocketClient");
-            
+            Method method = PluginInitiationUtils.class.getDeclaredMethod(
+                    "getPanelWebsocketClient", com.ultikits.ultitools.entities.TokenEntity.class);
+
             assertThat(Modifier.isStatic(method.getModifiers())).isTrue();
             assertThat(Modifier.isPrivate(method.getModifiers())).isTrue();
         }
@@ -393,23 +394,23 @@ class PluginInitiationUtilsWebSocketTest {
         }
 
         @Test
-        @DisplayName("panelWS 字段应该可以被 reinitWebSocket 访问")
+        @DisplayName("WebSocket 客户端字段应该可以被 reinitWebSocket(session) 访问（16-08 Task 2 起在 CloudSession 上）")
         void panelWSFieldShouldBeAccessibleByReinitWebSocket() throws NoSuchFieldException {
-            Field field = PluginInitiationUtils.class.getDeclaredField("panelWS");
+            Field field = CloudSession.class.getDeclaredField("webSocketClient");
 
             assertThat(field.getType().getName())
                 .isEqualTo("com.ultikits.ultitools.websocket.UltiPanelWebSocketClient");
-            assertThat(Modifier.isStatic(field.getModifiers())).isTrue();
+            assertThat(Modifier.isStatic(field.getModifiers())).isFalse();
         }
 
         @Test
-        @DisplayName("token 字段应该可以被 reinitWebSocket 使用")
+        @DisplayName("令牌字段应该可以被 reinitWebSocket(session) 使用（16-08 Task 1 起在 CloudSession 上）")
         void tokenFieldShouldBeUsableByReinitWebSocket() throws NoSuchFieldException {
-            Field field = PluginInitiationUtils.class.getDeclaredField("token");
+            Field field = CloudSession.class.getDeclaredField("token");
 
             assertThat(field.getType().getName())
                 .isEqualTo("com.ultikits.ultitools.entities.TokenEntity");
-            assertThat(Modifier.isStatic(field.getModifiers())).isTrue();
+            assertThat(Modifier.isStatic(field.getModifiers())).isFalse();
         }
     }
 

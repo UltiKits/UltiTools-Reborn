@@ -61,8 +61,6 @@ import com.ultikits.ultitools.manager.ServerPropertiesManager;
 import com.ultikits.ultitools.manager.UpdateManager;
 import com.ultikits.ultitools.listeners.UpdateJoinListener;
 import com.ultikits.ultitools.events.EventBus;
-import com.ultikits.ultitools.utils.ApiRateLimiter;
-import com.ultikits.ultitools.utils.CloudAuthManager;
 import com.ultikits.ultitools.utils.Metrics;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.utils.SecurityPolicy;
@@ -278,7 +276,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
             // down.
             PluginInitiationUtils.enableCloud();
             initWebSocket();
-            CloudAuthManager.startTokenRefreshScheduler();
+            PluginInitiationUtils.startTokenRefreshScheduler();
         }
 
         registerCommands();
@@ -462,21 +460,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
     }
 
     private boolean attemptCloudLogin() {
-        try {
-            com.ultikits.ultitools.entities.TokenEntity savedToken = CloudAuthManager.loadSavedToken();
-            if (savedToken != null) {
-                getLogger().log(Level.INFO, "Found saved UltiCloud token, authenticating...");
-                if (ApiRateLimiter.isAllowed("startup-login")) {
-                    return PluginInitiationUtils.loginWithToken(savedToken);
-                }
-                getLogger().log(Level.INFO, "Skipping UltiCloud login (rate limited)");
-            } else {
-                getLogger().log(Level.FINE, "No saved UltiCloud token found. Use /ulticloud login to authenticate.");
-            }
-        } catch (Exception e) {
-            getLogger().log(Level.WARNING, "UltiCloud login failed (server will continue without cloud features): " + e.getMessage());
-        }
-        return false;
+        // Delegated to PluginInitiationUtils.resumeSavedCredentialOnStartup() (plan 16-09, D-18):
+        // loadSavedToken() and loginWithToken(TokenEntity) both had to stop being public statics
+        // that accept/return a TokenEntity across a package boundary, so this method's old inline
+        // body (load, log, rate-limit check, activate) moved to a package-private-reachable seam.
+        return PluginInitiationUtils.resumeSavedCredentialOnStartup();
     }
 
     private void initWebSocket() {
@@ -564,8 +552,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
             panelResponderRegistry.shutdown();
         }
 
-        CloudAuthManager.stopTokenRefreshScheduler();
-        CloudAuthManager.stopPolling();
+        PluginInitiationUtils.stopCredentialSchedulers();
         if (dependenceManagers != null) {
             dependenceManagers.closeAdventure();
         }

@@ -9,10 +9,7 @@ import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdSender;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.annotations.command.RunAsync;
-import com.ultikits.ultitools.entities.TokenEntity;
-import com.ultikits.ultitools.utils.ApiRateLimiter;
 import com.ultikits.ultitools.utils.CloudAuthManager;
-import com.ultikits.ultitools.utils.PluginInitiationUtils;
 
 /**
  * Commands for UltiCloud authentication via magic link.
@@ -29,31 +26,26 @@ public class CloudLoginCommand extends BaseCommandExecutor {
     @CmdMapping(format = "login")
     @RunAsync
     public void login(@CmdSender CommandSender sender) {
-        if (CloudAuthManager.hasValidToken()) {
-            sender.sendMessage(ChatColor.YELLOW + "Already logged in to UltiCloud. Use /ulticloud logout first to re-login.");
-            return;
-        }
-
-        if (!ApiRateLimiter.isLoginAllowed()) {
-            long remaining = ApiRateLimiter.getRemainingCooldown("login", 60_000);
-            sender.sendMessage(ChatColor.RED + "Please wait " + remaining + " seconds before trying again.");
-            return;
-        }
-
-        sender.sendMessage(ChatColor.AQUA + "Requesting login link from UltiCloud...");
-
-        String url = CloudAuthManager.requestMagicLink(error -> {
-            sender.sendMessage(ChatColor.RED + "Failed to get login link: " + error);
-        });
-
-        if (url != null) {
-            sender.sendMessage(ChatColor.GREEN + "========================================");
-            sender.sendMessage(ChatColor.GREEN + " Open this URL in your browser to login:");
-            sender.sendMessage(ChatColor.AQUA + " " + url);
-            sender.sendMessage(ChatColor.GREEN + "========================================");
-            sender.sendMessage(ChatColor.GRAY + "The link will expire in 5 minutes.");
-            sender.sendMessage(ChatColor.GRAY + "Waiting for authentication...");
-        }
+        // Decision logic (already-logged-in / rate-limit / request / poll) lives behind
+        // CloudAuthManager.login() as of plan 16-09 (D-17/D-18) -- this method now only supplies
+        // the exact same message strings as callbacks, so /ulticloud login's console output is
+        // byte-for-byte unchanged.
+        CloudAuthManager.login(
+            () -> sender.sendMessage(ChatColor.YELLOW
+                + "Already logged in to UltiCloud. Use /ulticloud logout first to re-login."),
+            remaining -> sender.sendMessage(ChatColor.RED
+                + "Please wait " + remaining + " seconds before trying again."),
+            () -> sender.sendMessage(ChatColor.AQUA + "Requesting login link from UltiCloud..."),
+            url -> {
+                sender.sendMessage(ChatColor.GREEN + "========================================");
+                sender.sendMessage(ChatColor.GREEN + " Open this URL in your browser to login:");
+                sender.sendMessage(ChatColor.AQUA + " " + url);
+                sender.sendMessage(ChatColor.GREEN + "========================================");
+                sender.sendMessage(ChatColor.GRAY + "The link will expire in 5 minutes.");
+                sender.sendMessage(ChatColor.GRAY + "Waiting for authentication...");
+            },
+            error -> sender.sendMessage(ChatColor.RED + "Failed to get login link: " + error)
+        );
     }
 
     @CmdMapping(format = "logout")
@@ -68,35 +60,19 @@ public class CloudLoginCommand extends BaseCommandExecutor {
         // implementation replied "Not currently logged in" at this point and exited, leaving the
         // operator with no option but a restart.
         //
-        // Credential validity cannot gate lifecycle teardown. Instead this checks "is there
-        // anything to clear": teardown runs unconditionally (every step of disableCloud() is
-        // idempotent against "was never running"), and clearing the credential only happens when
-        // one is actually stored.
+        // Credential validity cannot gate lifecycle teardown. CloudAuthManager.logout() (plan
+        // 16-09) performs the "tear down unconditionally, then clear only if a credential
+        // existed" sequence and reports which branch to print -- see its own javadoc for why
+        // teardown must run first and the credential is read only afterward. See issue #223.
         try {
-            // Tear down the state machine first, then clear the credential.
-            //
-            // The order matters: clearing the credential alone only denies the reconnect loop a
-            // valid token, it does not stop the loop -- reconnection keeps hitting the panel with
-            // the now-void credential, the 401 loop keeps running, and measured behaviour shows
-            // only a fresh login or a server restart actually stops it. The claim "Cloud features
-            // are now disabled" was not true until this fix. See issue #223.
-            PluginInitiationUtils.disableCloud();
+            boolean hadCredential = CloudAuthManager.logout();
 
-            // The credential must be read **after** teardown. Reading it before teardown risks a
-            // stale snapshot: an in-flight magic-link poll can still complete successfully in
-            // between, so a "no credential before teardown" reading would send this into the
-            // don't-clear branch while data.json already holds a usable token that reconnects
-            // automatically on the next restart. disableCloud()'s first action is to invalidate
-            // any in-flight operation, so what teardown returns to is already the final state.
-            TokenEntity existing = CloudAuthManager.getCurrentToken();
-
-            if (existing == null) {
+            if (!hadCredential) {
                 sender.sendMessage(ChatColor.YELLOW + "Not currently logged in to UltiCloud.");
                 sender.sendMessage(ChatColor.GRAY + "Cloud features have been stopped regardless.");
                 return;
             }
 
-            CloudAuthManager.clearToken();
             sender.sendMessage(ChatColor.GREEN + "Successfully logged out of UltiCloud. Cloud features are now disabled.");
             sender.sendMessage(ChatColor.GRAY + "Use /ulticloud login to re-authenticate.");
         } catch (Exception e) {
@@ -106,12 +82,11 @@ public class CloudLoginCommand extends BaseCommandExecutor {
 
     @CmdMapping(format = "status")
     public void status(@CmdSender CommandSender sender) {
-        if (CloudAuthManager.hasValidToken()) {
-            TokenEntity token = CloudAuthManager.getCurrentToken();
-            String username = token.getUser_name() != null ? token.getUser_name() : "Unknown";
-            sender.sendMessage(ChatColor.GREEN + "UltiCloud: Connected as " + username);
-            if (token.getExpirationDate() != null) {
-                sender.sendMessage(ChatColor.GRAY + "Token expires: " + token.getExpirationDate().toString());
+        CloudAuthManager.CloudStatus status = CloudAuthManager.status();
+        if (status.isConnected()) {
+            sender.sendMessage(ChatColor.GREEN + "UltiCloud: Connected as " + status.getUserName());
+            if (status.getExpirationDate() != null) {
+                sender.sendMessage(ChatColor.GRAY + "Token expires: " + status.getExpirationDate().toString());
             }
         } else {
             sender.sendMessage(ChatColor.YELLOW + "UltiCloud: Not connected");

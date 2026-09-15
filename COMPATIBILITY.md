@@ -182,6 +182,31 @@ above instead of waiting a full MINOR:
 Full reasoning and evidence for all eight live in
 [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md).
 
+**One further exception, added by plan 16-09 (D-17, root-cause group "cloud session," part 2 of 3
+for issue #298) after the seven above:** `utils.CloudAuthManager`'s fine-grained public statics —
+`loadSavedToken()`, `refreshToken(String)`, `saveToken(TokenEntity)`, `clearToken()`,
+`currentCredentialGeneration()`, `invalidateCredentialOperations()`,
+`commitTokenIfCurrent(TokenEntity, long)`, `getCurrentToken()`, `hasValidToken()`,
+`requestMagicLink(Consumer<String>)`, both `startPolling(String, Consumer<TokenEntity>)` overloads,
+`startTokenRefreshScheduler()`, `stopTokenRefreshScheduler()`, `stopPolling()`, and the class's own
+implicit public no-arg constructor — plus `utils.PluginInitiationUtils#loginWithToken(TokenEntity)`
+and `#activateCloudIfCurrent(long)` — clause 2, zero external callers. Measured 2026-09-14 across
+every module repository under `Modules/` (the 15 active modules, the discontinued `UltiBot`, and
+the non-product `ultikits-module-parent`) plus `Tooling/UltiTools-External-Example`: `grep -rlI
+"CloudAuthManager" --include=*.java` and the same for `"PluginInitiationUtils"`,
+`"loginWithToken"`, and `"activateCloudIfCurrent"` each return **0** files across all 17
+repositories, against a control query for `"UltiToolsPlugin"` over the same roots returning **173**
+files (proving the search itself works — a bare zero is not evidence on its own). Separately,
+`strings`-scanning the one downstream consumer jar available locally
+(`UltiTools-External-Example-1.0.0.jar`) for the literal string `CloudAuthManager` also returns
+**0**, against a control string (`UltiToolsAPI`, the class that jar's `onEnable()` actually calls)
+returning **1** — confirming the jar-level probe methodology works and the class name is genuinely
+absent from that consumer's compiled bytecode, not merely absent from its source tree. The three
+command-facing entry points `CloudAuthManager.login(...)`/`.logout()`/`.status()` are the
+replacement surface; the class is now `@ApiStatus.Internal`. Full reasoning, the complete member
+list with its own javap output against the 6.2.5 baseline, and the downstream-author paragraph are
+in [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md)'s own entry for this removal.
+
 ### Measurement notes carried forward from the 6.3.0 survey
 
 How reference counts were measured (informing which removals were low-risk, though never the
