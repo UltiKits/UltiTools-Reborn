@@ -7,8 +7,10 @@ import static org.mockito.Mockito.lenient;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -497,6 +499,65 @@ class AbstractConfigEntityTest {
         // getDeclaredFields()，于是父类字段读得出、写不进。
         assertThat(entity.getImplicitPath()).isEqualTo("from-parent");
         assertThat(entity.getChildValue()).isEqualTo("from-child");
+    }
+
+    // ==================== reload() 的注释保留顺序 (#357) ====================
+    //
+    // reload() 过去直接调用裸的 YamlConfiguration.loadConfiguration(file) 静态工厂，
+    // 该工厂在返回前已经在内部完成解析，所以之后再设置 parseComments(true) 根本作用不到
+    // 这次读取——于是 reload() 之后紧跟的 save() 会把这份已丢失注释的内存态写回操作员的文件。
+    // 这里测的是 reload() 后紧跟 save() 这条真正会破坏内容的序列，不是 reload() 单独调用。
+
+    @Test
+    @DisplayName("reload() 之后紧跟 save()，操作员文件里的注释应该原样保留 (#357)")
+    void reloadThenSavePreservesOperatorComments() throws Exception {
+        TestConfigEntity entity = new TestConfigEntity("test-config.yml");
+        // 文件不存在：init() 会把缺失的键连同它们的注释一起写入 (D-07/D-09)。
+        entity.init(mockPlugin);
+
+        File savedFile = new File(tempDir.toFile(), "test-config.yml");
+        YamlConfiguration beforeReload = new YamlConfiguration();
+        beforeReload.options().parseComments(true);
+        beforeReload.load(savedFile);
+        assertThat(beforeReload.getComments("test.string"))
+                .as("init() must have written the comment before reload() runs, or this test proves nothing")
+                .containsExactly("Test string config");
+
+        entity.reload();
+        entity.save();
+
+        YamlConfiguration afterReloadThenSave = new YamlConfiguration();
+        afterReloadThenSave.options().parseComments(true);
+        afterReloadThenSave.load(savedFile);
+        assertThat(afterReloadThenSave.getComments("test.string"))
+                .as("reload() must parse comments the same way init() does, or the save() right "
+                        + "after it silently strips them")
+                .containsExactly("Test string config");
+        assertThat(afterReloadThenSave.getComments("test.int"))
+                .containsExactly("Test integer config");
+    }
+
+    // paper-api 1.21.11's own default for options().parseComments() is `true` unless the
+    // operator explicitly sets -DPaper.parseYamlCommentsByDefault=false (that boolean is a
+    // static final field, evaluated once per JVM at class-load - it cannot be flipped mid-test
+    // without a fresh classloader). Under this repository's actual test JVM, reload()'s old
+    // bare-factory call and the fixed explicit sequence are therefore behaviourally identical -
+    // the destructive symptom is only observable under that named platform flag, exactly as
+    // #357 itself records. The genuinely discriminating, environment-independent proof is this
+    // source-shape assertion: it fails against the pre-fix source (the bare call, and the
+    // pre-fix comment that names it) and passes once neither remains anywhere in the file.
+    @Test
+    @DisplayName("reload() 不应该再直接调用裸的 YamlConfiguration.loadConfiguration(File) 静态工厂 (#357)")
+    void reloadNoLongerUsesTheBareStaticFactory() throws IOException {
+        Path sourceFile = Paths.get("src", "main", "java", "com", "ultikits", "ultitools",
+                "abstracts", "AbstractConfigEntity.java");
+        String source = new String(Files.readAllBytes(sourceFile), StandardCharsets.UTF_8);
+        assertThat(source)
+                .as("reload() must build its own parser and enable comment parsing before "
+                        + "load() runs, the same way init() does - the bare static factory "
+                        + "parses the file inside itself before returning, so parseComments"
+                        + "(true) could never reach that read (#357)")
+                .doesNotContain("YamlConfiguration.loadConfiguration(");
     }
 
     @Test
