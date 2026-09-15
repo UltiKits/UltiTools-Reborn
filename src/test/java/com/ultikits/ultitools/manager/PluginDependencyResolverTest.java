@@ -637,6 +637,63 @@ class PluginDependencyResolverTest {
         }
 
         @Test
+        @DisplayName("a duplicate plugin.yml name that also equals another module's simple class "
+                + "name reports THAT CLASS as the actual winner, not the first plugin.yml declarer")
+        void duplicatePluginYmlNameEqualToASimpleClassNameReportsTheClassAsWinner() throws Exception {
+            // JarModuleTarget's OWN alias comes only from its simple class name (buildAliasMap's
+            // FIRST loop, which always runs before any plugin.yml name: is considered) -- giving
+            // it an UNRELATED plugin.yml name: here keeps that separate from the collision below.
+            Class<? extends UltiToolsPlugin> classNamedTarget = loadJarBackedFixture(
+                "target-classname-winner.jar", JarModuleTarget.class, "name: SomeOtherIrrelevantName\n");
+            Class<? extends UltiToolsPlugin> first = loadJarBackedFixture(
+                "dup-c.jar", JarModuleDuplicateNameA.class, "name: JarModuleTarget\n");
+            Class<? extends UltiToolsPlugin> second = loadJarBackedFixture(
+                "dup-d.jar", JarModuleDuplicateNameB.class, "name: JarModuleTarget\n");
+
+            Logger dupLogger = Logger.getLogger(
+                "PluginDependencyResolverTest.duplicatePluginYmlNameEqualToASimpleClassName");
+            dupLogger.setUseParentHandlers(false);
+            List<LogRecord> captured = new ArrayList<>();
+            Handler handler = new Handler() {
+                @Override
+                public void publish(LogRecord record) {
+                    captured.add(record);
+                }
+
+                @Override
+                public void flush() {
+                    // No-op: records are captured synchronously in publish().
+                }
+
+                @Override
+                public void close() {
+                    // No-op: nothing held open that needs releasing.
+                }
+            };
+            dupLogger.addHandler(handler);
+            PluginDependencyResolver dupResolver = new PluginDependencyResolver(dupLogger);
+
+            List<Class<? extends UltiToolsPlugin>> result = dupResolver.resolve(
+                Arrays.asList(classNamedTarget, first, second));
+
+            assertEquals(3, result.size());
+
+            boolean warnedTheRealWinner = captured.stream().anyMatch(record ->
+                record.getMessage() != null
+                    && record.getMessage().contains("JarModuleTarget")
+                    && record.getMessage().contains("JarModuleDuplicateNameA")
+                    && record.getMessage().contains("JarModuleDuplicateNameB")
+                    && record.getMessage().contains("resolve this name to 'JarModuleTarget'"));
+            assertTrue(warnedTheRealWinner,
+                "the alias map's FIRST loop (simple class names) always runs before any "
+                    + "plugin.yml name: is considered, so 'JarModuleTarget' -- the class -- wins "
+                    + "the alias here, NOT 'JarModuleDuplicateNameA' even though it is the first "
+                    + "plugin.yml declarer; the WARNING must name the class that actually wins, "
+                    + "not the naive 'first declarer' answer. Captured records: "
+                    + captured.stream().map(LogRecord::getMessage).collect(java.util.stream.Collectors.toList()));
+        }
+
+        @Test
         @DisplayName("resolution order for every previously-successful case is unchanged by the "
                 + "widened diagnostic")
         void resolutionOrderForPreviouslySuccessfulCasesIsUnchanged() throws Exception {
