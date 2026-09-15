@@ -5,6 +5,8 @@ import com.ultikits.ultitools.abstracts.command.CommandContext;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import org.jetbrains.annotations.ApiStatus;
+
 /**
  * Manages a chain of validators that are executed in order.
  * Thread-safe implementation supporting dynamic validator registration.
@@ -88,11 +90,14 @@ public final class ValidatorChain {
      * without running the full chain -- calls this too, instead of re-declaring the same one-line
      * condition a second time (WR-02, #413).
      *
+     * This method is framework-internal and is not a supported extension point for module authors.
+     *
      * @param validator the validator to check
      * @param context   the command context
      * @return {@code true} iff {@code validator} should be asked to validate this context
      * @since 6.3.0
      */
+    @ApiStatus.Internal
     public static boolean isApplicable(CommandValidator validator, CommandContext context) {
         return validator.shouldValidate(context);
     }
