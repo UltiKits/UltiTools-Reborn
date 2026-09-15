@@ -289,14 +289,61 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * #resolveLanguageWithProvenance} decides which bytes/dictionary this method returns, and
      * {@link Language#withFallback} (unchanged) still owns filling a key this dictionary lacks
      * entirely.
+     * <p>
+     * 16-05 / CodeQL {@code java/zipslip} alert #11 (CWE-22): {@code code} is only lightly
+     * restricted by {@link com.ultikits.ultitools.interfaces.Localized#languageCodeOf(String)}'s
+     * character allowlist when it comes from a scanned jar/directory entry -- and not restricted
+     * at all when it comes from a hostile {@code config.yml language:} value, since {@link
+     * #resolveLanguageCode()} returns an unmatched configured code UNCHANGED whenever {@link
+     * com.ultikits.ultitools.interfaces.Localized#supported()} is empty. This is therefore the
+     * last line of defence: before this file is read (or, deeper in {@link
+     * #resolveLanguageWithProvenance}, overwritten), its canonical path must stay inside {@code
+     * <folderPath>/lang}'s own canonical path -- mirroring the guard {@link #saveResources()}
+     * already applies to extracted jar entries. A violation degrades to the same {@code null}
+     * (“not loadable”) outcome as a missing file, never a thrown exception.
      */
     private Language loadLanguageFromDisk(String folderPath, String code, String extension) {
-        File file = new File(folderPath + File.separator + "lang" + File.separator + code + extension);
+        File langDir = new File(folderPath, "lang");
+        File file = new File(langDir, code + extension);
+        if (!isWithinDirectory(langDir, file)) {
+            getLogger().warn("Module '" + getPluginName() + "' resolved a language code that would "
+                    + "escape its lang/ directory ('" + langDir + "'); refusing to load or write '"
+                    + file + "'.");
+            return null;
+        }
         if (!file.exists()) {
             return null;
         }
         String resourcePath = "lang/" + code + extension;
         return resolveLanguageWithProvenance(folderPath, file, resourcePath, extension);
+    }
+
+    /**
+     * Verifies that {@code candidate}'s canonical path is contained within {@code baseDir}'s own
+     * canonical path -- the same Zip Slip guard {@link #saveResources()} already applies to
+     * extracted jar entries, generalized here for every other place an untrusted language code is
+     * turned into a {@link File} (16-05 / CodeQL {@code java/zipslip} alert #11, CWE-22). Neither
+     * {@code baseDir} nor {@code candidate} needs to exist: {@link File#getCanonicalPath()} is
+     * defined for a non-existent path too, normalizing {@code ..} segments lexically wherever the
+     * real filesystem does not need to be consulted (the same property {@code saveResources()}
+     * already relies on for a file it is about to create).
+     * <p>
+     * Returns {@code false} (never throws) on any I/O failure resolving either canonical path,
+     * since an uncanonicalizable path is not a basis for trusting containment either.
+     *
+     * @param baseDir   the directory {@code candidate} must resolve inside
+     * @param candidate the file built from an untrusted language code
+     * @return whether {@code candidate}'s canonical path is {@code baseDir}'s canonical path or a
+     *         descendant of it
+     */
+    private static boolean isWithinDirectory(File baseDir, File candidate) {
+        try {
+            String canonicalBase = baseDir.getCanonicalPath() + File.separator;
+            String canonicalCandidate = candidate.getCanonicalPath() + File.separator;
+            return canonicalCandidate.startsWith(canonicalBase);
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     /**
@@ -621,6 +668,16 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         File location = resolveCodeSourceFile(src.getLocation());
         if (location.isDirectory()) {
             File resource = new File(location, resourcePath.replace('/', File.separatorChar));
+            // 16-05 / CodeQL java/zipslip alert #11: resourcePath is built by the caller as
+            // "lang/" + code + extension from the same untrusted code loadLanguageFromDisk
+            // guards -- mirror that guard here so this directory-CodeSource branch cannot be
+            // used to read outside the module's own resource folder either.
+            if (!isWithinDirectory(location, resource)) {
+                getLogger().warn("Module '" + getPluginName() + "' resolved an embedded resource "
+                        + "path that would escape its resource folder ('" + location + "'); "
+                        + "refusing to read '" + resource + "'.");
+                return null;
+            }
             if (!resource.isFile()) {
                 return null;
             }
@@ -674,7 +731,18 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         if (location.isDirectory()) {
             // Exploded classpath (dev workspace, IDE launch, test) -- Localized.scanLangResources()
             // already treats this shape as first-class; loadLanguageFromJar must not disagree.
-            File resource = new File(location, "lang" + File.separator + code + extension);
+            File langDir = new File(location, "lang");
+            File resource = new File(langDir, code + extension);
+            // 16-05 / CodeQL java/zipslip alert #11: same guard as loadLanguageFromDisk -- code
+            // reaches this branch either lightly restricted (via Localized.languageCodeOf's
+            // allowlist) or not restricted at all (a hostile config.yml language: value), so the
+            // file boundary is still enforced here rather than trusted from upstream.
+            if (!isWithinDirectory(langDir, resource)) {
+                getLogger().warn("Module '" + getPluginName() + "' resolved a language code that "
+                        + "would escape its lang/ directory ('" + langDir + "'); refusing to load '"
+                        + resource + "'.");
+                return null;
+            }
             if (!resource.isFile()) {
                 return null;
             }

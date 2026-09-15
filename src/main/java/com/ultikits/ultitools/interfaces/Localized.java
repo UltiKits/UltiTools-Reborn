@@ -30,19 +30,74 @@ public interface Localized {
     String[] LANGUAGE_EXTENSIONS = {".json", ".yml", ".yaml"};
 
     /**
-     * Returns {@code fileName} without its language extension, or {@code null} if it has none.
+     * Returns {@code fileName} without its language extension, or {@code null} if it has none --
+     * or if the remainder is not itself a plain language-code token.
+     * <p>
+     * <b>16-05 / CodeQL {@code java/zipslip} alert #11 (CWE-22).</b> The returned value is not
+     * merely displayed: {@code UltiToolsPlugin} combines it directly into a {@link java.io.File}
+     * path (e.g. {@code lang/<code>.json}) with no other sanitisation, and this method is fed raw
+     * jar-entry names by {@link #scanLangJar(File)} as well as raw on-disk filenames by {@link
+     * #scanLangDirectory(File)}. Before this fix, a jar entry named {@code lang/..\..\evil.json}
+     * (or the URL-decoded equivalent {@code lang/../../evil.json}) survived unchanged as the code
+     * {@code ..\..\evil}, which a downstream sink could then resolve outside the module's own
+     * {@code lang/} directory.
+     * <p>
+     * The remainder is therefore also checked against a character allowlist -- {@code
+     * [A-Za-z0-9][A-Za-z0-9_-]*} -- before being accepted as a code at all: it must start with an
+     * ASCII letter or digit, and every character must be an ASCII letter, digit, {@code '_'} or
+     * {@code '-'}. This is deliberately a character allowlist, not a BCP-47 (or any other)
+     * language-tag grammar: every code this framework or any of its shipped modules actually uses
+     * ({@code en}, {@code zh}, {@code en_US}, {@code zh-CN}, ...) matches it, and no plausible
+     * language code needs a {@code '.'}, {@code '/'}, {@code '\'} or any other character this
+     * allowlist rejects. A candidate failing the allowlist returns {@code null} -- exactly the
+     * same "not a language file" outcome as a name with no recognised extension at all -- so a
+     * caller cannot tell "wrong extension" apart from "rejected as unsafe", by design: neither is
+     * a case a caller needs to react to differently.
      *
      * @param fileName a file or jar-entry name, without any directory part
-     * @return the language code, or {@code null} when the name is not a language file
+     * @return the language code, or {@code null} when the name is not a language file or its
+     *         stripped remainder is not a safe language-code token
      * @since 6.3.0
      */
     static String languageCodeOf(String fileName) {
         for (String extension : LANGUAGE_EXTENSIONS) {
             if (fileName.endsWith(extension) && fileName.length() > extension.length()) {
-                return fileName.substring(0, fileName.length() - extension.length());
+                String code = fileName.substring(0, fileName.length() - extension.length());
+                return isSafeLanguageCode(code) ? code : null;
             }
         }
         return null;
+    }
+
+    /**
+     * Checks {@code code} against the character allowlist {@link #languageCodeOf(String)}
+     * documents: non-empty, starting with an ASCII letter or digit, every character thereafter an
+     * ASCII letter, digit, {@code '_'} or {@code '-'}.
+     * <p>
+     * Exposed as {@code public static} for the same reason {@link #scanLangJar(File)} and {@link
+     * #scanLangDirectory(File)} are -- interface methods cannot be non-public before Java 9, so
+     * this is a direct test seam rather than API meant for module authors to call.
+     *
+     * @param code the candidate language code, already stripped of its extension
+     * @return whether {@code code} is safe to treat as a language code
+     * @since 6.3.0
+     */
+    static boolean isSafeLanguageCode(String code) {
+        if (code.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < code.length(); i++) {
+            char c = code.charAt(i);
+            boolean asciiAlphanumeric = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+            if (asciiAlphanumeric) {
+                continue;
+            }
+            if (i > 0 && (c == '_' || c == '-')) {
+                continue;
+            }
+            return false;
+        }
+        return true;
     }
     /**
      * Get the language code of the plugin module.
