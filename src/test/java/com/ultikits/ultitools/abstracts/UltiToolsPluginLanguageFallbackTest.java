@@ -23,15 +23,20 @@ import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -788,5 +793,65 @@ class UltiToolsPluginLanguageFallbackTest {
 
         assertThat(language.getLocalizedText("known")).isEqualTo("Progress: 90% done");
         verify(fixture.mockLogger, never()).warning(anyString());
+    }
+
+    @Test
+    @DisplayName("an untouched file the operator made read-only is treated as pinned -- not "
+            + "refreshed, not rewritten, one WARNING (discussion_r4012703529, Codex round 8, P2)")
+    void readOnlyUntouchedFileIsTreatedAsOperatorPinnedAndNotRefreshed() throws Throwable {
+        // Branch 1 (recorded hash == disk hash: "never touched since extraction") would normally
+        // overwrite from the jar here, since the bundled content changed (v1 -> v2). But the
+        // OPERATOR has made the file read-only -- a deliberate signal writeBytes must respect.
+        // Before this fix, writeBytes' atomic move only consulted the DIRECTORY's write
+        // permission (a rename replaces a directory entry, never touching the target file's own
+        // permission bits), so it silently succeeded anyway: the read-only protection was
+        // discarded, v2 landed, and the file came out owner-writable again.
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"greeting\":\"Hi v2\"}", "{\"greeting\":\"Hi v1\"}");
+        File diskFile = new File(fixture.resourceFolder, "lang" + File.separator + "en.json");
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", ResourceHashSidecar.sha256(diskFile));
+        byte[] originalBytes = Files.readAllBytes(diskFile.toPath());
+
+        assertThat(diskFile.setWritable(false)).isTrue();
+        try {
+            Language language = resolveProvenanceLanguage(fixture);
+
+            // Not refreshed: the file keeps its original (v1) content...
+            assertThat(language.getLocalizedText("greeting")).isEqualTo("Hi v1");
+            assertThat(Files.readAllBytes(diskFile.toPath())).isEqualTo(originalBytes);
+            // ...no success-shaped INFO log, since nothing was actually refreshed...
+            verify(fixture.mockLogger, never()).info(anyString());
+            // ...and exactly one WARNING naming the module, explaining why.
+            verify(fixture.mockLogger, times(1)).warning(argThat((String msg) -> msg.contains("TestModule")));
+        } finally {
+            diskFile.setWritable(true);
+        }
+    }
+
+    @Test
+    @DisplayName("a successful refresh preserves the original file's POSIX permissions instead of "
+            + "replacing them with createTempFile's process-owned defaults "
+            + "(discussion_r4012703529, Codex round 8, P2)")
+    void refreshPreservesOriginalPosixPermissions() throws Throwable {
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"greeting\":\"Hi v2\"}", "{\"greeting\":\"Hi v1\"}");
+        File diskFile = new File(fixture.resourceFolder, "lang" + File.separator + "en.json");
+        PosixFileAttributeView view = Files.getFileAttributeView(diskFile.toPath(), PosixFileAttributeView.class);
+        Assumptions.assumeTrue(view != null,
+                "Filesystem does not support POSIX file attributes; skipping this permission-"
+                        + "preservation test (the read-only-pinning test above still covers the "
+                        + "portable, non-POSIX-specific half of this finding).");
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", ResourceHashSidecar.sha256(diskFile));
+
+        // Deliberately distinctive: File.createTempFile's default (commonly rw------- / 0600)
+        // must NOT survive the refresh -- this permission set adds group-read, which a naive
+        // "just create a new temp file" implementation would silently drop.
+        Set<PosixFilePermission> distinctivePermissions = PosixFilePermissions.fromString("rw-r-----");
+        Files.setPosixFilePermissions(diskFile.toPath(), distinctivePermissions);
+
+        Language language = resolveProvenanceLanguage(fixture);
+
+        assertThat(language.getLocalizedText("greeting")).isEqualTo("Hi v2");
+        assertThat(Files.getPosixFilePermissions(diskFile.toPath())).isEqualTo(distinctivePermissions);
     }
 }
