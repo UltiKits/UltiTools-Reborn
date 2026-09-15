@@ -295,23 +295,57 @@ public class PluginInstallCommands extends BaseCommandExecutor {
      * catalogue's own display name) with plain string equality -- correct only when the two
      * strings genuinely agree, which they do not for every module.
      * <p>
-     * <b>Preferred key: {@code identifyString}.</b> This is the stable identifier {@link
+     * <b>Preferred key, but inert today: {@code identifyString}.</b> This is the field {@link
      * PluginInstallUtils} and {@link com.ultikits.ultitools.manager.UpdateManager} already treat
-     * as this framework's canonical module identity for install/update/version lookups, and it is
-     * the one field {@link PluginEntity} and {@link UltiToolsPlugin} both carry under the same
-     * name. Compared only when BOTH sides carry a non-blank value -- two identify-string-less
-     * entries are never treated as a match on that basis alone, or every such module would appear
+     * as this framework's stable module identity for install/update/version lookups, and the one
+     * field {@link PluginEntity} and {@link UltiToolsPlugin} both carry under the same name.
+     * Compared only when BOTH sides carry a non-blank value -- two identify-string-less entries
+     * are never treated as a match on that basis alone, or every such module would appear
      * installed against every such catalogue entry, which is worse than the bug being fixed.
+     * <b>Measured as of 6.3.0 (WR-01, `16-REVIEW-command.md`): zero of the seventeen module
+     * directories under {@code Modules/} declare {@code identify-string:} in {@code plugin.yml}</b>
+     * (verified: {@code grep -rl "identify-string:" Modules/*&#47;src/main/resources/plugin.yml}
+     * returns nothing), so {@code installedPlugin.getIdentifyString()} is {@code null} for every
+     * module that exists today, including both modules #439 names, and this branch does not fire
+     * for any of them. It exists so a module that DOES declare one -- and any future migration
+     * toward {@code identify-string:}-based identity -- is matched correctly without this method
+     * needing to change again; today it is aspirational, not load-bearing.
      * <p>
-     * <b>Fallback: exact name equality, plus one fixed, deterministic prefix strip.</b> Every
-     * module in this monorepo declares its Bukkit {@code name:} with the literal {@code
-     * "UltiTools-"} vendor prefix ({@code UltiTools-Economy}, {@code UltiTools-Menu}, ...), while
-     * the catalogue's own display name omits it -- exactly #439's two named modules. Stripping
-     * that one fixed prefix before comparing is a single deterministic transform, not a
-     * similarity/fuzzy heuristic: it accepts precisely the pairs that differ by nothing, or by
-     * exactly that one literal prefix, and rejects every other pair -- including one that merely
-     * shares a prefix or substring (a catalogue name that only resembles a loaded module's, such
-     * as one ending in {@code "Pro"}, is rejected, not matched).
+     * <b>What actually fires today: exact name equality, plus one fixed, deterministic prefix
+     * strip.</b> Measured (WR-01): only 4 of the 15 active modules declare a Bukkit {@code
+     * name:} carrying the literal {@code "UltiTools-"} prefix -- {@code UltiTools-Chat}
+     * ({@code Modules/UltiChat/src/main/resources/plugin.yml:1}), {@code UltiTools-Economy}
+     * ({@code Modules/UltiEconomy/.../plugin.yml:1}), {@code UltiTools-Kits}
+     * ({@code Modules/UltiKits/.../plugin.yml:1}), and {@code UltiTools-Menu}
+     * ({@code Modules/UltiMenu/.../plugin.yml:1}) -- the last two ARE #439's own two named
+     * modules. The other 11 modules declare their bare folder name with no prefix at all (e.g.
+     * {@code UltiLogin}, {@code UltiWorlds}). This is NOT a declared or tool-enforced convention: {@code
+     * Tooling/ultikits-cli/src/lib/templates.ts:152} templates {@code name:} directly from the
+     * author-supplied module name with no prefix logic, and {@code
+     * Tooling/UltiTools-Maven-Archetype} ships no {@code plugin.yml} template at all -- it is
+     * simply each of these 4 authors' own historical choice. Stripping that one fixed prefix
+     * before comparing is a single deterministic transform, not a similarity/fuzzy heuristic: it
+     * accepts precisely the pairs that differ by nothing, or by exactly that one literal prefix,
+     * and rejects every other pair -- including one that merely shares a prefix or substring (a
+     * catalogue name that only resembles a loaded module's, such as one ending in {@code "Pro"},
+     * is rejected, not matched).
+     * <p>
+     * <b>Residual collision risk (WR-01), disclosed rather than papered over:</b> because no
+     * stable identifier is populated on either side today, a THIRD-PARTY module that names itself
+     * {@code UltiTools-Foo} in its own {@code plugin.yml} -- nothing stops an unrelated author
+     * from choosing that name -- would be reported installed against a different, unrelated
+     * author's unaffiliated catalogue entry literally named {@code Foo}, because neither {@code
+     * UltiToolsPlugin} nor {@code PluginEntity} exposes anything else (a developer/author ID, a
+     * catalogue row ID) that this method could cross-check to tell them apart; {@code
+     * PluginEntity#getDeveloperId()} has no counterpart accessor anywhere on {@code
+     * UltiToolsPlugin}. This is a real, narrow false-positive path, not a hypothetical this method
+     * closes. It is still strictly better than the defect being fixed: today, EVERY module whose
+     * name doesn't already match its catalogue display name byte-for-byte is unconditionally
+     * reported not installed, a guaranteed false negative for real, correctly-loaded modules;
+     * the collision above requires an unrelated third party to first choose a name that claims
+     * affiliation with this framework. Closing it for real needs a stable identifier populated on
+     * both sides -- exactly the {@code identifyString} path above, once it is populated -- not a
+     * looser name heuristic.
      *
      * @param installedPlugin a currently loaded module
      * @param catalogueEntry  a directory entry from the catalogue

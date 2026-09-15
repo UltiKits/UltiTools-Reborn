@@ -1444,18 +1444,19 @@ class CommandManagerTest {
     }
 
     /**
-     * #347: 五参数 register(plugin, class, permission, description, aliases...) 曾经从核心容器
-     * （{@code UltiTools.getInstance().getDependenceManagers().getContext()}）解析命令 bean，
-     * 而不是像两参数重载 register(plugin, class) 那样从模块自己的容器（{@code plugin.getContext()}）
-     * 解析 -- 一个显式传了 permission/description/aliases 的模块作者拿到的却是核心容器里同类型的
-     * bean，不是自己注册的那个实例。
+     * #347: the five-argument register(plugin, class, permission, description, aliases...) used
+     * to resolve the command bean from the CORE container ({@code UltiTools.getInstance()
+     * .getDependenceManagers().getContext()}) instead of the module's own container ({@code
+     * plugin.getContext()}), the way the two-argument overload register(plugin, class) already
+     * does -- a module author who explicitly passes permission/description/aliases got back a
+     * core-container bean of the same type, not the instance they registered themselves.
      */
     @Nested
-    @DisplayName("register(plugin, class, permission, description, aliases) 容器解析测试 (#347)")
+    @DisplayName("register(plugin, class, permission, description, aliases) container resolution (#347)")
     class FiveArgRegisterContainerResolutionTests {
 
         @Test
-        @DisplayName("应该从模块自己的容器解析 bean，而不是核心容器")
+        @DisplayName("should resolve the bean from the module's own container, not the core container")
         void resolvesCommandBeanFromModuleContainerNotCoreContainer() {
             // Arrange -- the module's own container holds ONE instance.
             SimpleContainer moduleContext = mock(SimpleContainer.class);
@@ -1483,7 +1484,7 @@ class CommandManagerTest {
             try {
                 commandManager.register(mockPlugin, TestCommandExecutor.class, "test.perm", "Test desc", "testcmd");
             } catch (NullPointerException e) {
-                // 预期行为 - getCommandMap() 返回 null
+                // Expected: getCommandMap() returns null under MockBukkit
             }
 
             // Assert -- the module's container was consulted; the core container never was.
