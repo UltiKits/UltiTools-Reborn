@@ -132,9 +132,6 @@ public class MyPlugin extends UltiToolsPlugin {
     public boolean registerSelf() {
         return true;  // Commands, listeners, services are all auto-registered!
     }
-
-    @Override
-    public void unregisterSelf() { }
 }
 ```
 
@@ -180,9 +177,6 @@ A complete UltiTools module in under 50 lines:
 public class MyPlugin extends UltiToolsPlugin {
     @Override
     public boolean registerSelf() { return true; }
-
-    @Override
-    public void unregisterSelf() { }
 }
 ```
 
