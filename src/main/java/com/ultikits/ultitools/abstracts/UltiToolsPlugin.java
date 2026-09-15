@@ -1147,7 +1147,14 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                             }
                         }
                         hashesToRecord.put(fileName, ResourceHashSidecar.sha256(outFile));
-                    } catch (IOException ex) {
+                    } catch (IOException | UncheckedIOException ex) {
+                        // Codex round 5, P1: ResourceHashSidecar.sha256(File) wraps a read
+                        // failure in UncheckedIOException (a RuntimeException), which an
+                        // IOException-only catch here does NOT catch -- so a resource that was
+                        // successfully extracted but could not be reopened for hashing (e.g. a
+                        // write-only default ACL, or a filesystem error on the second open) let
+                        // that exception escape saveResources() entirely and abort this whole
+                        // module's construction, even though the file itself extracted fine.
                         UltiTools.getInstance().getLogger().log(Level.WARNING, "Could not save " + outFile.getName() + " to " + outFile);
                     }
                 }

@@ -2,11 +2,13 @@ package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -131,6 +133,30 @@ class ResourceHashSidecarTest {
         Files.write(copy.toPath(), bytes);
 
         assertThat(ResourceHashSidecar.sha256(original)).isEqualTo(ResourceHashSidecar.sha256(copy));
+    }
+
+    @Test
+    @DisplayName("sha256(File) on an unreadable file throws UncheckedIOException specifically -- "
+            + "NOT a checked IOException (Codex round 5, P1). UltiToolsPlugin#saveResources()'s own "
+            + "catch clause used to catch only IOException, so this exact type let a "
+            + "post-extraction hash failure escape and abort module construction even though the "
+            + "resource had already extracted successfully; its catch clause now also catches "
+            + "UncheckedIOException. A full write-then-unreadable reproduction through "
+            + "saveResources() itself would need native umask/ACL control JVM file APIs do not "
+            + "expose, so this test pins the exact type gap at its source instead.")
+    void sha256ThrowsUncheckedIOExceptionSpecificallyForAnUnreadableFile() throws IOException {
+        File file = new File(tempDir, "unreadable.json");
+        Files.write(file.toPath(), "{}".getBytes(StandardCharsets.UTF_8));
+        assertThat(file.setReadable(false)).isTrue();
+        try {
+            assertThatThrownBy(() -> ResourceHashSidecar.sha256(file))
+                    .isInstanceOf(UncheckedIOException.class)
+                    // A catch (IOException e) clause does NOT catch UncheckedIOException --
+                    // it is a RuntimeException wrapping one, not a subtype of IOException itself.
+                    .isNotInstanceOf(IOException.class);
+        } finally {
+            file.setReadable(true);
+        }
     }
 
     @Test
