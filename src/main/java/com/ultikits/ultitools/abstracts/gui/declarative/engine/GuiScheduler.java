@@ -184,8 +184,23 @@ public class GuiScheduler {
                 if (isOnMainThread()) {
                     task.run();
                 } else {
-                    // Not on the main thread -- reschedule
-                    Bukkit.getScheduler().runTask(plugin, task);
+                    // Not on the main thread -- reschedule. Self-swept sibling of the
+                    // runOnMainThread() off-thread gap (rounds 1-3 above): this hands the SAME
+                    // task to Bukkit's own scheduler for later, so it needs the identical
+                    // wrapping -- a raw, unwrapped hand-off here would silently lose both the
+                    // console diagnostic and the ErrorReportCollector report for a task that
+                    // throws when Bukkit actually runs it.
+                    Runnable capturedTask = task;
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        try {
+                            capturedTask.run();
+                        } catch (RenderDepthExceededException e) {
+                            logFrameTaskError(e);
+                            reportRenderDepthExceeded(e);
+                        } catch (Exception e) {
+                            logFrameTaskError(e);
+                        }
+                    });
                     break; // Handle only one; the rest are handled on the next tick
                 }
             } catch (RenderDepthExceededException e) {
