@@ -176,6 +176,55 @@ class ResourceHashSidecarTest {
     }
 
     @Test
+    @DisplayName("a transient read failure on an EXISTING sidecar aborts the write instead of "
+            + "wiping every previously recorded hash (Codex round 9, P2, discussion on "
+            + "ResourceHashSidecar.java:155)")
+    void transientReadFailureOnExistingSidecarAbortsWriteRatherThanWipingPriorEntries() throws IOException {
+        // Before this fix: readAll() degrades ANY read failure to an empty map (correct for
+        // readRecordedHash's own contract -- T-16-04-03), but record()/recordAll() then WROTE
+        // that empty-derived map straight back, permanently discarding every previously recorded
+        // hash over what may be a purely transient failure (e.g. a momentary network-filesystem
+        // hiccup). The atomic move itself only needs the containing DIRECTORY's write
+        // permission, never the target file's own -- so the replacement succeeds even while the
+        // sidecar file itself is unreadable, silently completing the data loss.
+        ResourceHashSidecar.record(tempDir, "lang/en.json", "hash-en-v1");
+        File sidecarFile = new File(tempDir, ".ultitools-resource-hashes.json");
+        byte[] beforeBytes = Files.readAllBytes(sidecarFile.toPath());
+
+        assertThat(sidecarFile.setReadable(false)).isTrue();
+        try {
+            ResourceHashSidecar.record(tempDir, "lang/zh.json", "hash-zh-v1");
+        } finally {
+            assertThat(sidecarFile.setReadable(true)).isTrue();
+        }
+
+        // The sidecar must be byte-for-byte untouched -- not overwritten with a partial map.
+        assertThat(Files.readAllBytes(sidecarFile.toPath())).isEqualTo(beforeBytes);
+        assertThat(ResourceHashSidecar.readRecordedHash(tempDir, "lang/en.json")).contains("hash-en-v1");
+    }
+
+    @Test
+    @DisplayName("recordAll(...) has the identical abort-on-existing-read-failure behaviour as "
+            + "record(...) (Codex round 9, P2)")
+    void recordAllAbortsOnTransientReadFailureOfExistingSidecarToo() throws IOException {
+        ResourceHashSidecar.record(tempDir, "lang/en.json", "hash-en-v1");
+        File sidecarFile = new File(tempDir, ".ultitools-resource-hashes.json");
+        byte[] beforeBytes = Files.readAllBytes(sidecarFile.toPath());
+
+        Map<String, String> newEntries = new LinkedHashMap<>();
+        newEntries.put("lang/zh.json", "hash-zh-v1");
+        assertThat(sidecarFile.setReadable(false)).isTrue();
+        try {
+            ResourceHashSidecar.recordAll(tempDir, newEntries);
+        } finally {
+            assertThat(sidecarFile.setReadable(true)).isTrue();
+        }
+
+        assertThat(Files.readAllBytes(sidecarFile.toPath())).isEqualTo(beforeBytes);
+        assertThat(ResourceHashSidecar.readRecordedHash(tempDir, "lang/en.json")).contains("hash-en-v1");
+    }
+
+    @Test
     @DisplayName("two different resource paths do not collide")
     void recordDoesNotCollideAcrossDifferentResourcePaths() {
         ResourceHashSidecar.record(tempDir, "lang/en.json", "hash-en");
