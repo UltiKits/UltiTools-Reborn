@@ -202,6 +202,8 @@ class FrameworkAnnotationWiringTest {
     private static final class FixtureConfigurationWithStrayBeanMethod {
         @Bean
         void strayBean() {
+            // Deliberately empty -- this fixture's only purpose is to BE a stray @Bean method
+            // for strayBeanMethodOnFixtureIsDetected to find; it is never invoked.
         }
     }
 
@@ -235,6 +237,10 @@ class FrameworkAnnotationWiringTest {
     private Set<Class<?>> classesFor(Set<String> classNames) throws ClassNotFoundException {
         Set<Class<?>> classes = new LinkedHashSet<>();
         for (String name : classNames) {
+            // classNames is never attacker-controllable here: every call site passes a
+            // compile-time-constant Set<String> literal declared in this same test class
+            // (CONFIGURATIONS above), never anything derived from external input.
+            // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
             classes.add(Class.forName(name, false, getClass().getClassLoader()));
         }
         return classes;

@@ -155,19 +155,33 @@ public class GuiScheduler {
                     Bukkit.getScheduler().runTask(plugin, task);
                     break; // Handle only one; the rest are handled on the next tick
                 }
-            } catch (Exception e) {
-                plugin.getLogger().warning("Error executing GUI frame task: " + e.getMessage());
-                e.printStackTrace();
+            } catch (RenderDepthExceededException e) {
                 // WR-01: route a depth-guard trip into ErrorReportCollector so it reaches the
                 // panel's error dashboard, not only the server console -- consistent with every
-                // other exception-reporting path this framework documents. Scoped to this one
-                // exception type deliberately: a blanket "report every GUI frame exception"
-                // change is a wider behaviour change than this fix's own finding asked for.
-                if (e instanceof RenderDepthExceededException) {
-                    reportRenderDepthExceeded((RenderDepthExceededException) e);
-                }
+                // other exception-reporting path this framework documents. A dedicated catch
+                // clause (rather than an instanceof check inside the generic one below) also
+                // keeps this scoped to exactly this one exception type: a blanket "report every
+                // GUI frame exception" change is a wider behaviour change than this fix's own
+                // finding asked for.
+                logFrameTaskError(e);
+                reportRenderDepthExceeded(e);
+            } catch (Exception e) {
+                logFrameTaskError(e);
             }
         }
+    }
+
+    /**
+     * The console-visible half of a GUI frame task's failure -- a warning naming the task plus
+     * a full stack trace. Shared by every catch clause in {@link #executeFrame()} so the two log
+     * lines cannot drift between the exception types that also do additional reporting
+     * ({@link RenderDepthExceededException}) and those that do not.
+     *
+     * @param e the failure to log
+     */
+    private void logFrameTaskError(Exception e) {
+        plugin.getLogger().warning("Error executing GUI frame task: " + e.getMessage());
+        e.printStackTrace();
     }
 
     /**

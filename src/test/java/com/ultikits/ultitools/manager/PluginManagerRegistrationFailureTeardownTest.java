@@ -51,13 +51,12 @@ class PluginManagerRegistrationFailureTeardownTest {
 
     private PluginManager pluginManager;
     private TaskManager taskManager;
-    private JavaPlugin mockHostPlugin;
 
     @BeforeEach
     void setUp() throws Exception {
         MockBukkitHelper.ensureCleanState();
         MockBukkit.mock();
-        mockHostPlugin = MockBukkit.createMockPlugin();
+        JavaPlugin mockHostPlugin = MockBukkit.createMockPlugin();
 
         ListenerManager listenerManager = mock(ListenerManager.class);
         EventBus eventBus = mock(EventBus.class);
