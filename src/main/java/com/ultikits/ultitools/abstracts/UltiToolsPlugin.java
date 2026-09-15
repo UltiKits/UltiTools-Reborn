@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.io.OutputStream;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFileAttributes;
 import java.nio.file.attribute.PosixFilePermission;
 import java.lang.reflect.Type;
 import java.net.JarURLConnection;
@@ -701,12 +702,23 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      *   <li>A writable file's non-default POSIX permissions (e.g. a hardened {@code 0640}) were
      *       silently replaced by whatever {@link File#createTempFile} defaults to (commonly
      *       owner-only) the moment the file WAS legitimately refreshed. Guarded by copying the
-     *       original's POSIX permissions onto the temp file before the move, via {@link
-     *       #copyPosixPermissionsIfSupported}.</li>
+     *       original's POSIX permissions onto the temp file before the move.</li>
+     *   <li>Codex round 9, P2 (discussion_r4013501574): permission bits alone are not the whole
+     *       identity of a POSIX file -- a catalogue provisioned by another owner (e.g. root-owned,
+     *       group-writable by the server account) still silently changed OWNER on every refresh,
+     *       since {@link File#createTempFile} always creates a JVM-owned inode and only the
+     *       permission BITS were being copied onto it. Guarded the same way as the read-only case
+     *       above: if the owner/group cannot be faithfully replicated onto the replacement file
+     *       (which an unprivileged JVM process generally cannot do for an owner other than
+     *       itself -- POSIX only allows an unprivileged process to {@code chown} a file's GROUP to
+     *       one it already belongs to, never its USER owner to anyone else), the refresh is
+     *       skipped entirely rather than silently installing a file with the wrong identity.</li>
      * </ol>
-     * Deliberately POSIX-only: there is no portable, dependency-free way to copy ACLs from Java's
-     * own file APIs, so a non-POSIX filesystem's ACLs are NOT preserved by this method -- silently
-     * dropping them without saying so would be worse than the status quo this fix improves on.
+     * Both permission bits and owner/group are attempted together in {@link
+     * #copyPosixAttributesIfSupported}; deliberately POSIX-only for all of it: there is no
+     * portable, dependency-free way to copy ACLs from Java's own file APIs, so a non-POSIX
+     * filesystem's ACLs are NOT preserved by this method -- silently dropping them without saying
+     * so would be worse than the status quo this fix improves on.
      */
     private boolean writeBytes(File file, byte[] bytes) {
         if (file.exists() && !Files.isWritable(file.toPath())) {
@@ -719,7 +731,13 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         File tempFile = null;
         try {
             tempFile = File.createTempFile(file.getName(), ".tmp", parentDir);
-            copyPosixPermissionsIfSupported(file, tempFile);
+            if (!copyPosixAttributesIfSupported(file, tempFile)) {
+                // Codex round 9, P2: the replacement file's owner/group could not be made to
+                // match the original -- refusing to refresh rather than silently installing a
+                // file with the wrong identity. The WARNING explaining why was already logged by
+                // copyPosixAttributesIfSupported.
+                return false;
+            }
             Files.write(tempFile.toPath(), bytes);
             Files.move(tempFile.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING,
                     StandardCopyOption.ATOMIC_MOVE);
@@ -739,33 +757,70 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
-     * Copies {@code source}'s POSIX permissions onto {@code target} if the filesystem exposes a
-     * {@link PosixFileAttributeView} for it, so {@link #writeBytes}'s atomic move does not
-     * silently replace an untouched-but-non-default-permission file's permissions with {@link
-     * File#createTempFile}'s own defaults (Codex round 8, P2, discussion_r4012703529). A no-op --
-     * never an error -- on a non-POSIX filesystem ({@code view == null}), or on any failure to
-     * read or apply the permissions: this is a best-effort improvement layered onto the write it
-     * must never abort.
+     * Copies {@code source}'s POSIX permissions AND owner/group onto {@code target} if the
+     * filesystem exposes a {@link PosixFileAttributeView} for it, so {@link #writeBytes}'s atomic
+     * move does not silently replace an untouched file's identity with {@link
+     * File#createTempFile}'s own defaults (Codex rounds 8 and 9, P2, discussion_r4012703529 and
+     * discussion_r4013501574).
+     * <p>
+     * Permission bits are best-effort: a failure to read or apply them is logged and otherwise
+     * ignored, matching the original round-8 fix -- this is a genuine improvement layered onto
+     * the write, not something the write must abort over.
+     * <p>
+     * Owner/group are NOT best-effort, and this is the round-9 addition: an unprivileged JVM
+     * process can generally {@code chown} a file's GROUP to one it already belongs to, but never
+     * its USER owner to a different user at all -- so attempting to replicate a foreign owner
+     * onto {@code target} will typically fail. Rather than silently leave {@code target} owned by
+     * the JVM process (changing the file's identity on every refresh), a failure to match BOTH
+     * owner and group after the attempt makes this method return {@code false}, which {@link
+     * #writeBytes} treats as "do not refresh at all" -- the same conservative choice already made
+     * for a read-only file.
      *
-     * @param source the file whose current permissions should be preserved
+     * @param source the file whose current permissions and owner/group should be preserved
      * @param target the newly created temp file about to be moved into {@code source}'s place
+     * @return {@code true} if the refresh may proceed ({@code source} does not exist yet, the
+     *         filesystem is not POSIX, or {@code target} now matches {@code source}'s owner and
+     *         group); {@code false} if {@code target}'s identity could not be made to match and
+     *         the refresh must be skipped
      */
-    private void copyPosixPermissionsIfSupported(File source, File target) {
+    private boolean copyPosixAttributesIfSupported(File source, File target) {
         if (!source.exists()) {
-            return;
+            return true;
         }
         try {
             PosixFileAttributeView sourceView =
                     Files.getFileAttributeView(source.toPath(), PosixFileAttributeView.class);
             if (sourceView == null) {
-                return;
+                return true;
             }
-            Set<PosixFilePermission> permissions = sourceView.readAttributes().permissions();
-            Files.setPosixFilePermissions(target.toPath(), permissions);
+            PosixFileAttributes sourceAttributes = sourceView.readAttributes();
+            Set<PosixFilePermission> permissions = sourceAttributes.permissions();
+            try {
+                Files.setPosixFilePermissions(target.toPath(), permissions);
+            } catch (IOException e) {
+                getLogger().warn("Could not preserve file permissions while refreshing '" + source.getPath()
+                        + "' for module '" + getPluginName() + "'; the refreshed file may not match the "
+                        + "original's permissions.");
+            }
+            PosixFileAttributeView targetView =
+                    Files.getFileAttributeView(target.toPath(), PosixFileAttributeView.class);
+            try {
+                targetView.setGroup(sourceAttributes.group());
+                targetView.setOwner(sourceAttributes.owner());
+                return true;
+            } catch (IOException | UnsupportedOperationException e) {
+                getLogger().warn("Language file '" + source.getPath() + "' for module '" + getPluginName()
+                        + "' is owned by '" + sourceAttributes.owner().getName() + ":"
+                        + sourceAttributes.group().getName() + "', which this process cannot replicate "
+                        + "onto the refreshed file; skipping the refresh instead of silently changing "
+                        + "the file's ownership.");
+                return false;
+            }
         } catch (IOException | UnsupportedOperationException e) {
             getLogger().warn("Could not preserve file permissions while refreshing '" + source.getPath()
                     + "' for module '" + getPluginName() + "'; the refreshed file may not match the "
                     + "original's permissions.");
+            return true;
         }
     }
 

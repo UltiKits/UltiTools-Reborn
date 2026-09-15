@@ -2,6 +2,7 @@ package com.ultikits.ultitools.abstracts;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.atLeastOnce;
@@ -23,7 +24,9 @@ import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.attribute.GroupPrincipal;
 import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFileAttributes;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Arrays;
@@ -853,5 +856,63 @@ class UltiToolsPluginLanguageFallbackTest {
 
         assertThat(language.getLocalizedText("greeting")).isEqualTo("Hi v2");
         assertThat(Files.getPosixFilePermissions(diskFile.toPath())).isEqualTo(distinctivePermissions);
+    }
+
+    @Test
+    @DisplayName("a successful refresh preserves the original file's owner and group, not just "
+            + "its permission bits (discussion_r4013501574, Codex round 9, P2)")
+    void refreshPreservesOriginalOwnerAndGroup() throws Throwable {
+        // Cannot be a RED-then-GREEN pair: both the source file and the replacement temp file are
+        // created by this SAME test process, so the owner/group already trivially match before
+        // this fix existed too -- File.createTempFile only ever produces a foreign owner when the
+        // source file was provisioned by a genuinely different user (Codex's own example: a
+        // root-provisioned, group-writable catalogue), which cannot be constructed without root
+        // in this sandbox. This is a real regression guard exercising the new self-chown code
+        // path, not a demonstration that the old code was broken; the sibling test below
+        // separately establishes the OS-level assumption the abort-on-mismatch branch relies on.
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"greeting\":\"Hi v2\"}", "{\"greeting\":\"Hi v1\"}");
+        File diskFile = new File(fixture.resourceFolder, "lang" + File.separator + "en.json");
+        PosixFileAttributeView view = Files.getFileAttributeView(diskFile.toPath(), PosixFileAttributeView.class);
+        Assumptions.assumeTrue(view != null,
+                "Filesystem does not support POSIX file attributes; skipping.");
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", ResourceHashSidecar.sha256(diskFile));
+
+        PosixFileAttributes before = view.readAttributes();
+
+        Language language = resolveProvenanceLanguage(fixture);
+
+        assertThat(language.getLocalizedText("greeting")).isEqualTo("Hi v2");
+        PosixFileAttributes after = Files.readAttributes(diskFile.toPath(), PosixFileAttributes.class);
+        assertThat(after.owner()).isEqualTo(before.owner());
+        assertThat(after.group()).isEqualTo(before.group());
+    }
+
+    @Test
+    @DisplayName("sanity check: an unprivileged process cannot chown a file's group to one it "
+            + "does not belong to -- the OS-level assumption "
+            + "copyPosixAttributesIfSupported's abort-on-ownership-mismatch branch relies on "
+            + "(discussion_r4013501574, Codex round 9, P2)")
+    void unprivilegedProcessCannotChgrpToAGroupItDoesNotBelongTo() throws Throwable {
+        File probe = new File(tempDir, "chgrp-probe.txt");
+        Files.write(probe.toPath(), "x".getBytes(StandardCharsets.UTF_8));
+        PosixFileAttributeView view = Files.getFileAttributeView(probe.toPath(), PosixFileAttributeView.class);
+        Assumptions.assumeTrue(view != null,
+                "Filesystem does not support POSIX file attributes; skipping.");
+
+        GroupPrincipal rootGroup;
+        try {
+            rootGroup = probe.toPath().getFileSystem().getUserPrincipalLookupService()
+                    .lookupPrincipalByGroupName("root");
+        } catch (IOException e) {
+            Assumptions.abort("Could not resolve the 'root' group on this system; skipping. " + e);
+            return;
+        }
+        Assumptions.assumeFalse(rootGroup.equals(view.readAttributes().group()),
+                "This test process's own primary group is already 'root'; cannot demonstrate a "
+                        + "denial -- skipping (running as root/similarly privileged).");
+
+        assertThatThrownBy(() -> view.setGroup(rootGroup))
+                .isInstanceOfAny(IOException.class, UnsupportedOperationException.class);
     }
 }
