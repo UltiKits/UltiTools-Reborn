@@ -142,22 +142,26 @@ class RemovalConsistencyEvaluatorTest {
         }
 
         @Test
-        @DisplayName("an empty report with ONLY class-level exclude keys reports nothing - whole-class excludes were "
-                + "already exempt from STALE_EXCLUSION and stay exempt from the new guard too")
-        void emptyReportWithOnlyClassLevelExcludesReportsNothing() {
+        @DisplayName("WR-03 widened: an empty report reports the infrastructure finding even when every exclude key is "
+                + "class-level - whole-class excludes are exempt from STALE_EXCLUSION specifically, not from the "
+                + "unconditional 'no comparison ran' signal")
+        void emptyReportWithOnlyClassLevelExcludesStillReportsInfrastructureFinding() {
             Set<RegistryKey> excludeKeys = new HashSet<>(Collections.singletonList(
                     RegistryKey.forClass("com.ultikits.ultitools.aop.CglibProxyFactory")));
 
             List<RemovalConsistencyEvaluator.Finding> findings = RemovalConsistencyEvaluator.evaluate(
                     excludeKeys, JapicmpReportReader.Report.empty(), RegistryLedger.empty(), "6.2.5");
 
-            assertThat(findings).isEmpty();
+            assertThat(findings)
+                    .extracting(RemovalConsistencyEvaluator.Finding::getKind)
+                    .containsExactly(RemovalConsistencyEvaluator.Finding.Kind.REPORT_MISSING_OR_EMPTY);
         }
 
         @Test
-        @DisplayName("an empty report with an unregistered member-level exclude that IS already tracked by the registry "
-                + "reports nothing - the registry entry alone is sufficient, exactly as with a non-empty report")
-        void emptyReportWithRegistryTrackedMemberLevelExcludeReportsNothing() {
+        @DisplayName("WR-03 widened (the review's own named scenario): an empty report reports the infrastructure finding "
+                + "even when every member-level exclude is already registry-tracked - 'no comparison ran' is itself "
+                + "worth reporting, not merely a per-key gap-filler that a fully-covered registry can silently absorb")
+        void emptyReportWithRegistryTrackedMemberLevelExcludeStillReportsInfrastructureFinding() {
             RegistryKey key = RegistryKey.forMember(
                     "com.ultikits.ultitools.Foo", "trackedMember", Collections.emptyList());
             RegistryLedger registry = RegistryLedger.of(Collections.singletonList(removedEntry(key, "6.3.0")));
@@ -168,8 +172,8 @@ class RemovalConsistencyEvaluatorTest {
 
             assertThat(findings)
                     .extracting(RemovalConsistencyEvaluator.Finding::getKind)
-                    .doesNotContain(RemovalConsistencyEvaluator.Finding.Kind.REPORT_MISSING_OR_EMPTY,
-                            RemovalConsistencyEvaluator.Finding.Kind.STALE_EXCLUSION);
+                    .containsExactly(RemovalConsistencyEvaluator.Finding.Kind.REPORT_MISSING_OR_EMPTY)
+                    .doesNotContain(RemovalConsistencyEvaluator.Finding.Kind.STALE_EXCLUSION);
         }
     }
 
@@ -280,8 +284,11 @@ class RemovalConsistencyEvaluatorTest {
     class DualSourceTransitionTests {
 
         @Test
-        @DisplayName("Test 7: source-gone AND report-REMOVED agreement produces a removed transition with no exclude findings")
-        void agreementProducesRemovedTransitionWithNoFindings() {
+        @DisplayName("Test 7: source-gone AND report-REMOVED agreement produces a removed transition with no "
+                + "exclude-specific findings (WR-03: an empty Report.empty() fixture here still surfaces the "
+                + "unconditional infrastructure finding, since this evaluate() call's report genuinely has zero "
+                + "entries - this test's own point is that no ADDITIONAL, exclude-specific finding rides along)")
+        void agreementProducesRemovedTransitionWithNoExcludeSpecificFindings() {
             RegistryKey key = RegistryKey.forMember("com.ultikits.ultitools.Foo", "bar", Collections.emptyList());
             RegistryLedger prior = RegistryLedger.of(Collections.singletonList(announcedEntry(key, "6.3.0")));
 
@@ -299,7 +306,9 @@ class RemovalConsistencyEvaluatorTest {
             List<RemovalConsistencyEvaluator.Finding> findings =
                     RemovalConsistencyEvaluator.evaluate(excludeKeys, JapicmpReportReader.Report.empty(), merged, "6.2.5");
 
-            assertThat(findings).isEmpty();
+            assertThat(findings)
+                    .extracting(RemovalConsistencyEvaluator.Finding::getKind)
+                    .containsExactly(RemovalConsistencyEvaluator.Finding.Kind.REPORT_MISSING_OR_EMPTY);
         }
 
         @Test
@@ -346,12 +355,18 @@ class RemovalConsistencyEvaluatorTest {
     class EmptyInputTests {
 
         @Test
-        @DisplayName("Test 10: empty excludes, empty report and empty registry together produce a clean verdict, not a throw")
-        void emptyInputsProduceCleanVerdict() {
+        @DisplayName("Test 10 (WR-03 widened): empty excludes, empty report and empty registry together do not "
+                + "throw, and now correctly surface the unconditional REPORT_MISSING_OR_EMPTY finding rather than a "
+                + "vacuous clean verdict - 'no comparison ran' is itself worth reporting even when nothing else "
+                + "this call was given happens to depend on it")
+        void emptyInputsDoNotThrowAndReportTheEmptyReport() {
             List<RemovalConsistencyEvaluator.Finding> findings = RemovalConsistencyEvaluator.evaluate(
                     Collections.emptySet(), JapicmpReportReader.Report.empty(), RegistryLedger.empty(), "6.2.5");
 
-            assertThat(findings).isNotNull().isEmpty();
+            assertThat(findings)
+                    .isNotNull()
+                    .extracting(RemovalConsistencyEvaluator.Finding::getKind)
+                    .containsExactly(RemovalConsistencyEvaluator.Finding.Kind.REPORT_MISSING_OR_EMPTY);
         }
     }
 
@@ -434,12 +449,16 @@ class RemovalConsistencyEvaluatorTest {
         }
 
         @Test
-        @DisplayName("empty exclude set, empty report and empty registry with a baseline present yields an empty list, not a throw")
-        void emptyInputsWithBaselineYieldNoFindings() {
+        @DisplayName("empty exclude set, empty report and empty registry with a baseline present does not throw, "
+                + "and (WR-03 widened) still surfaces the unconditional empty-report finding")
+        void emptyInputsWithBaselineYieldOnlyTheEmptyReportFinding() {
             List<RemovalConsistencyEvaluator.Finding> findings = RemovalConsistencyEvaluator.evaluate(
                     Collections.emptySet(), JapicmpReportReader.Report.empty(), RegistryLedger.empty(), "6.3.0");
 
-            assertThat(findings).isNotNull().isEmpty();
+            assertThat(findings)
+                    .isNotNull()
+                    .extracting(RemovalConsistencyEvaluator.Finding::getKind)
+                    .containsExactly(RemovalConsistencyEvaluator.Finding.Kind.REPORT_MISSING_OR_EMPTY);
         }
     }
 
@@ -448,12 +467,16 @@ class RemovalConsistencyEvaluatorTest {
     class Task2PinningTests {
 
         @Test
-        @DisplayName("empty exclude set, empty ledger and empty report yields an empty finding list")
-        void emptyExcludeSetEmptyLedgerEmptyReportYieldsEmptyFindings() {
+        @DisplayName("empty exclude set, empty ledger and empty report (WR-03 widened) yields only the "
+                + "unconditional empty-report finding, not a vacuously empty list")
+        void emptyExcludeSetEmptyLedgerEmptyReportYieldsOnlyTheEmptyReportFinding() {
             List<RemovalConsistencyEvaluator.Finding> findings = RemovalConsistencyEvaluator.evaluate(
                     Collections.emptySet(), JapicmpReportReader.Report.empty(), RegistryLedger.empty(), "6.3.0");
 
-            assertThat(findings).isNotNull().isEmpty();
+            assertThat(findings)
+                    .isNotNull()
+                    .extracting(RemovalConsistencyEvaluator.Finding::getKind)
+                    .containsExactly(RemovalConsistencyEvaluator.Finding.Kind.REPORT_MISSING_OR_EMPTY);
         }
 
         @Test
