@@ -983,8 +983,13 @@ class UltiToolsPluginLanguageFallbackTest {
         byte[] originalBytes = Files.readAllBytes(diskFile.toPath());
 
         // Simulates an operator-managed shared-translations layout: lang/en.json is a symlink to
-        // a separate real file carrying the same bytes as the recorded baseline.
-        File linkTarget = new File(fixture.resourceFolder, "shared-en.json");
+        // a separate real file carrying the same bytes as the recorded baseline. The target must
+        // stay WITHIN lang/ -- loadLanguageFromDisk's own 16-05 zip-slip containment guard
+        // resolves a symlink's canonical path (following the link, including at the final path
+        // component) and rejects anything whose target escapes lang/'s own canonical path; a
+        // target outside lang/ would be refused as an escape attempt before ever reaching
+        // writeBytes, which is a different code path than the one this test targets.
+        File linkTarget = new File(fixture.resourceFolder, "lang" + File.separator + "shared-en.json");
         Files.write(linkTarget.toPath(), originalBytes);
         Files.delete(diskFile.toPath());
         try {

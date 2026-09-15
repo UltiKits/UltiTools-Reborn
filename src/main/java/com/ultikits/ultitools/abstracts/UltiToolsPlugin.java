@@ -607,7 +607,19 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             }
             String explicitIndex = matcher.group(1);
             if (explicitIndex != null) {
-                highestPosition = Math.max(highestPosition, Integer.parseInt(explicitIndex));
+                int position = Integer.parseInt(explicitIndex);
+                if (position == 0) {
+                    // Codex round 11, P2: java.util.Formatter argument indexes are 1-based --
+                    // String.format throws IllegalFormatArgumentIndexException for index 0, so
+                    // "%0$s" is exactly as malformed as an oversized index (round 3), not "no
+                    // placeholder at all". Math.max(highestPosition, 0) would otherwise never
+                    // raise highestPosition above 0, making this value compare EQUAL in arity to
+                    // one with no placeholder whatsoever -- the malformed value would then
+                    // survive completely unflagged. Reuse the same NumberFormatException signal
+                    // applyPlaceholderArityOverride's catch clause already treats as malformed.
+                    throw new NumberFormatException("Formatter argument index must be >= 1, was 0");
+                }
+                highestPosition = Math.max(highestPosition, position);
             } else {
                 highestPosition = Math.max(highestPosition, nextImplicitPosition);
                 nextImplicitPosition++;
@@ -736,9 +748,9 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * <p>
      * The atomic move replaces a DIRECTORY ENTRY, which on POSIX only ever consults the
      * containing directory's write permission -- never the target file's own permission bits or
-     * identity. Two consequences this method now guards against, both only reachable through this
-     * method's one caller ({@link #resolveLanguageWithProvenance}'s branch 1, "never touched since
-     * extraction"):
+     * identity, and not what the entry itself even IS. Three consequences this method now guards
+     * against, all only reachable through this method's one caller ({@link
+     * #resolveLanguageWithProvenance}'s branch 1, "never touched since extraction"):
      * <ol>
      *   <li>An untouched file the operator made read-only was silently overwritten anyway --
      *       guarded by {@link #isOperatorPinnedReadOnly}; see its own javadoc for the full
@@ -747,6 +759,15 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      *       its owner/group (Codex round 9, P2, discussion_r4013501574), were silently replaced by
      *       whatever {@link File#createTempFile} defaults to the moment the file WAS legitimately
      *       refreshed. Guarded by {@link #copyPosixAttributesIfSupported}; see its own javadoc.</li>
+     *   <li>Codex round 11, P2 (discussion on this class at the time of the finding): a symlinked
+     *       language file (an operator-managed shared-translations layout, e.g. {@code
+     *       lang/en.json} pointing at a shared store) had the LINK ITSELF replaced by a regular
+     *       file, silently breaking the layout on the next refresh. Guarded by checking {@link
+     *       Files#isSymbolicLink} before doing anything and skipping the refresh entirely --
+     *       preserving the link's TARGET content through this mechanism is out of scope for this
+     *       fix (relative-vs-absolute links, a target shared by multiple language files, etc.);
+     *       the conservative "never touch it" choice already made for a read-only file applies
+     *       here too.</li>
      * </ol>
      * Deliberately POSIX-only throughout: there is no portable, dependency-free way to copy ACLs
      * from Java's own file APIs, so a non-POSIX filesystem's ACLs are NOT preserved by this
@@ -758,6 +779,18 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             getLogger().warn("Language file '" + file.getPath() + "' for module '" + getPluginName()
                     + "' is not writable; treating it as operator-pinned and leaving it untouched "
                     + "instead of refreshing it from the bundled version.");
+            return false;
+        }
+        if (Files.isSymbolicLink(file.toPath())) {
+            // Codex round 11, P2 (discussion on UltiToolsPlugin.java:776 at the time of the
+            // finding): the atomic move below replaces a DIRECTORY ENTRY -- for a symlink, that
+            // means replacing the LINK ITSELF with a regular file, not updating or preserving it,
+            // silently breaking an operator-managed catalogue layout (e.g. lang/en.json symlinked
+            // to a shared translations store) on the next refresh. Treat a symlink exactly like a
+            // read-only file: skip the refresh entirely rather than destroy the link.
+            getLogger().warn("Language file '" + file.getPath() + "' for module '" + getPluginName()
+                    + "' is a symbolic link; treating it as operator-pinned and leaving it "
+                    + "untouched instead of replacing the link with a regular file.");
             return false;
         }
         File parentDir = file.getParentFile();
