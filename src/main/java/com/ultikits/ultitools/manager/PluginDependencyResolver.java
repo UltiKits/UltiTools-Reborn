@@ -289,12 +289,22 @@ public class PluginDependencyResolver {
 
     /**
      * Detects two or more nodes declaring the same {@code plugin.yml} {@code name:} and logs one
-     * WARNING per colliding name, naming every module that declared it (#361 / IN-02).
+     * WARNING per colliding name, naming every module that declared it (#361).
      * <p>
      * This does not change which module wins the alias - that is still whichever comes first in
      * {@code nodes} iteration order (discovery order), exactly as before. It only makes the
      * operator aware that a pick happened, instead of the dependency graph silently depending on
      * filesystem directory-listing order with nothing logged.
+     * <p>
+     * <b>IN-01 (gate-1 review, 16-REVIEW-residue.md):</b> "discovery order" here is deterministic
+     * GIVEN a deterministic {@code nodes} iteration order, but this class's only production
+     * caller, {@code PluginManager.init(ClassLoader)}, builds its input list from a raw
+     * {@code File.listFiles()} call with no sort - measured non-alphabetical and
+     * non-creation-order on this environment's filesystem (see #476). This WARNING's named
+     * "winner" is therefore only as reproducible as that upstream order; not a regression this
+     * change introduces (resolution already picked "whichever came first" before this fix), and
+     * not addressed here deliberately - sorting the upstream list would itself be a load-order
+     * behaviour change on existing installs, requiring its own decision. Tracked as #476.
      */
     private void warnOnDuplicatePluginYmlNames(Map<String, PluginNode> nodes) {
         Map<String, List<String>> declaringModulesByYmlName = new LinkedHashMap<>();

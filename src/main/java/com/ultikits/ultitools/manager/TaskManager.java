@@ -24,6 +24,18 @@ import org.jetbrains.annotations.ApiStatus;
  * <p>
  * Scans beans for {@link Scheduled} annotated methods and registers them
  * as Bukkit tasks. Automatically cancels all tasks when a plugin is unloaded.
+ * <p>
+ * <b>Thread-confinement assumption (IN-02, gate-1 review, 16-REVIEW-residue.md):</b>
+ * {@link #pluginTasks}/{@link #externalTasks}/{@link #coreTasks} are plain, non-concurrent
+ * collections ({@code HashMap}/{@code ArrayList}). {@link #scanAndSchedule(Object, Consumer)}
+ * mutates them synchronously, once per successfully-scheduled task, inside its own scan loop
+ * (#410) - every current call site ({@code PluginManager.onPluginRegistered},
+ * {@link #registerScheduledMethodsCore(Object)}, {@link #registerScheduledMethodsExternal(String,
+ * Object)}) runs during plugin loading on the main thread, so this is safe today, but nothing
+ * enforces it. A future caller invoking any {@code registerScheduledMethods*} entry point from
+ * an async context would race these collections with no compile-time or runtime signal - the
+ * same main-thread-only contract {@link com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiScheduler}'s
+ * own class javadoc documents explicitly for its collections.
  *
  * @since 6.2.0
  */
