@@ -421,14 +421,21 @@ public final class EconomyUtils {
 
     /**
      * Pure: given a stack trace and a map from package prefix to module name, returns the module
-     * name of the first frame whose class name starts with one of the map's prefixes, or
+     * name attributed to the first (most-recent) frame that matches ANY mapped prefix, or
      * {@code null} when no frame matches — including the empty-input cases (a null/empty stack, or
      * an empty prefix map, as when no module is registered yet). Package-private so
      * {@code EconomyUtilsReportingTest} can unit-test the attribution logic itself with synthetic
      * input, independent of a live {@link UltiTools} instance or real registered modules.
+     * <p>
+     * When a single frame matches more than one mapped prefix — e.g. two registered modules declare
+     * nested scan roots {@code "com.example"} and {@code "com.example.shop"}, and the frame's class
+     * is under {@code com.example.shop} — the <b>most specific (longest) matching prefix wins</b>,
+     * independent of {@code prefixToModule}'s iteration/insertion order (Codex P2, PR #463, #482).
+     * Selecting by insertion order alone let module *load* order silently decide attribution for a
+     * frame that unambiguously belongs to the more specific package.
      *
      * @param stack          the stack trace to search, most-recent frame first
-     * @param prefixToModule package prefix to module name, in preference order
+     * @param prefixToModule package prefix to module name; order does not affect the result
      * @return the attributed module name, or {@code null} when nothing matches
      */
     static String attributeModule(StackTraceElement[] stack, Map<String, String> prefixToModule) {
@@ -437,14 +444,25 @@ public final class EconomyUtils {
         }
         for (StackTraceElement frame : stack) {
             String className = frame.getClassName();
+            String bestPrefix = null;
+            String bestModule = null;
             for (Map.Entry<String, String> entry : prefixToModule.entrySet()) {
                 String pkg = entry.getKey();
                 // [Rule 1 fix, Codex P2, 16-07]: a raw String#startsWith("com.example.foo") also
                 // matches the unrelated sibling package "com.example.foobar" -- require an actual
                 // package boundary (either an exact match, or the prefix followed by '.').
-                if (className.equals(pkg) || className.startsWith(pkg + ".")) {
-                    return entry.getValue();
+                boolean matches = className.equals(pkg) || className.startsWith(pkg + ".");
+                if (matches && (bestPrefix == null || pkg.length() > bestPrefix.length())) {
+                    // [Rule 1 fix, Codex P2, PR #463/#482]: when this frame also matches a
+                    // shorter/broader prefix already seen (e.g. "com.example" vs
+                    // "com.example.shop"), keep the longer one -- the most specific package is the
+                    // frame's actual owner, regardless of which entry the map iterates first.
+                    bestPrefix = pkg;
+                    bestModule = entry.getValue();
                 }
+            }
+            if (bestModule != null) {
+                return bestModule;
             }
         }
         return null;
