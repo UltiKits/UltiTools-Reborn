@@ -33,6 +33,7 @@ import com.ultikits.ultitools.abstracts.ConfigFileStubs;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
+import com.ultikits.ultitools.annotations.config.Range;
 import com.ultikits.ultitools.exceptions.ConfigurationException;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
@@ -276,6 +277,114 @@ class ConfigManagerTest {
                     .as("no entry from any class in this scan should survive a refusal, "
                             + "regardless of which class failed or scan order")
                     .isTrue();
+        }
+    }
+
+    /**
+     * 测试用配置实体 - 参与批次原子性测试的第一个文件，字段没有约束，始终能通过校验。
+     */
+    @ConfigEntity("config/batch-ok.yml")
+    public static class BatchConfigEntityA extends AbstractConfigEntity {
+        @ConfigEntry(path = "value", comment = "A value with no constraint")
+        private String value = "default";
+
+        public BatchConfigEntityA(String configFilePath) {
+            super(configFilePath);
+        }
+
+        public String getValue() {
+            return value;
+        }
+    }
+
+    /**
+     * 测试用配置实体 - 参与批次原子性测试的第二个文件，字段约束在 [1, 10]，用来在批次里
+     * 制造一次必然的拒绝。
+     */
+    @ConfigEntity("config/batch-bad.yml")
+    public static class BatchConfigEntityB extends AbstractConfigEntity {
+        @ConfigEntry(path = "count", comment = "A count constrained to [1, 10]")
+        @Range(min = 1, max = 10)
+        private int count = 5;
+
+        public BatchConfigEntityB(String configFilePath) {
+            super(configFilePath);
+        }
+    }
+
+    /**
+     * gate-1 CR-02 (#358 Part 2): {@code loadFromJson(String)}'s multi-file batch must validate
+     * every touched entity before persisting any of them.
+     */
+    @Nested
+    @DisplayName("loadFromJson(全量) 批次原子性测试 (gate-1 CR-02, #358 Part 2)")
+    class LoadFromJsonBatchAtomicityTests {
+
+        @BeforeEach
+        void stubConfigFile() {
+            ConfigFileStubs.stubConfigFolder(mockPlugin, tempDir);
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<UltiToolsPlugin, Map<String, AbstractConfigEntity>> pluginConfigMap() throws Exception {
+            Field mapField = ConfigManager.class.getDeclaredField("pluginConfigMap");
+            mapField.setAccessible(true);
+            return (Map<UltiToolsPlugin, Map<String, AbstractConfigEntity>>) mapField.get(configManager);
+        }
+
+        @Test
+        @DisplayName("批次里第二个文件的更新违反约束时，第一个文件不应该被写入磁盘或改变内存值")
+        void secondFileRefusalLeavesFirstFileUntouched() throws Exception {
+            BatchConfigEntityA entityA = new BatchConfigEntityA("config/batch-ok.yml");
+            entityA.init(mockPlugin);
+            BatchConfigEntityB entityB = new BatchConfigEntityB("config/batch-bad.yml");
+            entityB.init(mockPlugin);
+
+            Map<String, AbstractConfigEntity> configMap = new HashMap<>();
+            configMap.put("config/batch-ok.yml", entityA);
+            configMap.put("config/batch-bad.yml", entityB);
+            pluginConfigMap().put(mockPlugin, configMap);
+
+            File fileA = new File(tempDir, "config/batch-ok.yml");
+            byte[] beforeBytes = Files.readAllBytes(fileA.toPath());
+
+            // configEntityMap.keySet() (a plain HashMap) iterates in an unspecified order, so
+            // this batch does not rely on which file is scanned first - the point of the fix is
+            // that NEITHER file is persisted until BOTH have validated, so order cannot matter.
+            String json = "{\"TestPlugin\":{\"config/batch-ok.yml\":{\"value\":\"updated\"},"
+                    + "\"config/batch-bad.yml\":{\"count\":999}}}";
+
+            assertThatThrownBy(() -> configManager.loadFromJson(json))
+                    .isInstanceOf(ConfigurationException.class);
+
+            assertThat(Files.readAllBytes(fileA.toPath()))
+                    .as("entity A's file must be byte-identical - the batch must not persist ANY "
+                            + "entity until every entity in it has validated")
+                    .isEqualTo(beforeBytes);
+            assertThat(entityA.getValue())
+                    .as("entity A's in-memory field must also be unchanged, not just its file")
+                    .isEqualTo("default");
+        }
+
+        @Test
+        @DisplayName("批次里所有文件都合法时，两个都应该被应用并写入磁盘")
+        void bothFilesValidAppliesBoth() throws Exception {
+            BatchConfigEntityA entityA = new BatchConfigEntityA("config/batch-ok.yml");
+            entityA.init(mockPlugin);
+            BatchConfigEntityB entityB = new BatchConfigEntityB("config/batch-bad.yml");
+            entityB.init(mockPlugin);
+
+            Map<String, AbstractConfigEntity> configMap = new HashMap<>();
+            configMap.put("config/batch-ok.yml", entityA);
+            configMap.put("config/batch-bad.yml", entityB);
+            pluginConfigMap().put(mockPlugin, configMap);
+
+            String json = "{\"TestPlugin\":{\"config/batch-ok.yml\":{\"value\":\"updated\"},"
+                    + "\"config/batch-bad.yml\":{\"count\":7}}}";
+
+            assertDoesNotThrow(() -> configManager.loadFromJson(json));
+
+            assertThat(entityA.getValue()).isEqualTo("updated");
         }
     }
 
