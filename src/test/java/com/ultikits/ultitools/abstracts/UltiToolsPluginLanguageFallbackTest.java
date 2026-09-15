@@ -741,4 +741,27 @@ class UltiToolsPluginLanguageFallbackTest {
         assertThat(language.getLocalizedText("known")).isEqualTo("Uses %2$s only");
         verify(fixture.mockLogger, times(1)).warning(argThat((String msg) -> msg.contains("known")));
     }
+
+    @Test
+    @DisplayName("an oversized explicit format-argument index does not abort resolution -- forces "
+            + "the bundled value for that key instead of propagating (Codex round 3, P2)")
+    void oversizedExplicitFormatIndexDoesNotAbortResolutionAndForcesBundledValue() throws Throwable {
+        // Integer.parseInt("999999999999999999") overflows int and throws NumberFormatException.
+        // Before this fix, placeholderArity let that exception propagate uncaught out of
+        // applyPlaceholderArityOverride, resolveLanguageWithProvenance, and ultimately this whole
+        // module's language resolution -- aborting startup over a single malformed, possibly
+        // never-formatted disk-side translation value.
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"known\":\"safe bundled value\",\"other\":\"stable\"}",
+                "{\"known\":\"Uses %999999999999999999$s\",\"other\":\"stable-customised\"}");
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
+
+        Language language = resolveProvenanceLanguage(fixture);
+
+        // The malformed key falls back to the bundled (jar) value rather than aborting...
+        assertThat(language.getLocalizedText("known")).isEqualTo("safe bundled value");
+        // ...while every other key is completely unaffected.
+        assertThat(language.getLocalizedText("other")).isEqualTo("stable-customised");
+        verify(fixture.mockLogger, times(1)).warning(argThat((String msg) -> msg.contains("known")));
+    }
 }

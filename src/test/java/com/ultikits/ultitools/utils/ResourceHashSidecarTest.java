@@ -181,6 +181,35 @@ class ResourceHashSidecarTest {
     }
 
     @Test
+    @DisplayName("a write failure never loses a previously recorded hash (Codex round 3, P2: "
+            + "writeAll must be atomic, not a direct truncating write)")
+    void recordWriteFailureNeverLosesPreviouslyRecordedHash() throws IOException {
+        ResourceHashSidecar.record(tempDir, "lang/en.json", "hash-en-v1");
+        File sidecarFile = new File(tempDir, ".ultitools-resource-hashes.json");
+        assertThat(sidecarFile).isFile();
+        byte[] beforeBytes = Files.readAllBytes(sidecarFile.toPath());
+
+        // Removing WRITE from the containing directory blocks creating/renaming a directory
+        // entry -- exactly what the fixed (temp-file + atomic-move) implementation needs to
+        // stage its write -- without touching the sidecar FILE's own permissions, which a direct
+        // truncating write only needs. This is the same fault-injection idiom
+        // UltiToolsPluginLanguageFallbackTest.overwriteWriteFailureDoesNotRecordJarHashOrLogSuccess
+        // already uses for writeBytes()'s identical atomic-replace contract.
+        assertThat(tempDir.setWritable(false)).isTrue();
+        try {
+            ResourceHashSidecar.record(tempDir, "lang/zh.json", "hash-zh-v1");
+        } finally {
+            assertThat(tempDir.setWritable(true)).isTrue();
+        }
+
+        // The failed write must never have touched the real sidecar file at all -- not the
+        // previously recorded entry, and not by adding the new one either.
+        assertThat(Files.readAllBytes(sidecarFile.toPath())).isEqualTo(beforeBytes);
+        assertThat(ResourceHashSidecar.readRecordedHash(tempDir, "lang/en.json")).contains("hash-en-v1");
+        assertThat(ResourceHashSidecar.readRecordedHash(tempDir, "lang/zh.json")).isEmpty();
+    }
+
+    @Test
     @DisplayName("saveResources() records a hash for every file it extracts under all three prefixes, "
             + "and none for a file it skipped")
     void saveResourcesRecordsHashForEveryExtractedFileAcrossAllThreePrefixesAndSkipsAlreadyPresentFiles()
