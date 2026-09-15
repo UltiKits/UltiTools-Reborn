@@ -249,6 +249,14 @@ public class GuiScheduler {
      * Runs every pending task immediately (blocking until complete).
      * <p>
      * <b>Note:</b> this method may only be called on the main thread.
+     * <p>
+     * <b>Gate-2 Codex finding, PR #478 round 3:</b> a {@link RenderDepthExceededException} from a
+     * queued task now reaches {@link ErrorReportCollector} here too, matching
+     * {@link #executeFrame()} and {@link #runOnMainThread}'s on-main-thread branch -- neither of
+     * those catches ran for a task drained through this method. Still re-thrown immediately
+     * afterward, preserving this method's own documented synchronous-drain contract (and,
+     * unchanged from before this fix, still skipping the {@code isScheduled.set(false)} below on
+     * that path -- not a new gap this fix introduces or is scoped to close).
      *
      * @throws IllegalStateException if not on the main thread
      */
@@ -259,7 +267,12 @@ public class GuiScheduler {
 
         Runnable task;
         while ((task = pendingTasks.poll()) != null) {
-            task.run();
+            try {
+                task.run();
+            } catch (RenderDepthExceededException e) {
+                reportRenderDepthExceeded(e);
+                throw e;
+            }
         }
         isScheduled.set(false);
     }
