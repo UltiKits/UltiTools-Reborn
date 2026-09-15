@@ -6,9 +6,12 @@ import org.bukkit.OfflinePlayer;
 import org.bukkit.plugin.RegisteredServiceProvider;
 
 import javax.annotation.Nullable;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.ConcurrentModificationException;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -396,10 +399,24 @@ public final class EconomyUtils {
      * module's own scan packages, using the same {@link Thread#getStackTrace()} idiom
      * {@code SystemLogHandler} already relies on for trigger inference — no {@code StackWalker},
      * since this project's bytecode target is Java 8.
+     * <p>
+     * [Rule 1 fix, Codex P2, PR #463]: {@code pluginManager.getPluginList()} is
+     * {@code PluginManager}'s live, unsynchronized {@code ArrayList} (returned directly by its
+     * {@code @Getter}) — {@code PluginInstallUtils#uninstallPlugin} mutates that same list via
+     * {@code .remove(...)}, reachable from a normal {@code /upm uninstall} command. A module
+     * calling this facade from an async command or {@code @Scheduled(async = true)} task can race
+     * that mutation and see {@link ConcurrentModificationException} instead of a fallback value.
+     * Snapshotting into a fresh {@link ArrayList} narrows the window (a structural change during
+     * the copy itself cannot throw — {@code ArrayList}'s copy constructor reads via
+     * {@code toArray()}, not a fail-fast iterator), and the catch below treats a raced attempt
+     * exactly like an already-existing case this method documents: unattributable, return
+     * {@code null} — matching this class's "never throws" contract (see {@link #log(String,
+     * boolean)}).
      *
      * @return the attributed module's name, or {@code null} when nothing on the framework's own
      *         plugin list is currently reachable (no live {@link UltiTools} instance, no plugin
-     *         manager, or no registered module's scan package appears anywhere on the stack)
+     *         manager, no registered module's scan package appears anywhere on the stack, or the
+     *         plugin list raced a concurrent structural change during attribution)
      */
     private static String attributeCallingModule() {
         UltiTools instance = UltiTools.getInstance();
@@ -411,10 +428,15 @@ public final class EconomyUtils {
             return null;
         }
         Map<String, String> prefixToModule = new LinkedHashMap<>();
-        for (UltiToolsPlugin plugin : pluginManager.getPluginList()) {
-            for (String pkg : pluginManager.getPluginScanPackages(plugin.getClass())) {
-                prefixToModule.putIfAbsent(pkg, plugin.getPluginName());
+        try {
+            List<UltiToolsPlugin> pluginsSnapshot = new ArrayList<>(pluginManager.getPluginList());
+            for (UltiToolsPlugin plugin : pluginsSnapshot) {
+                for (String pkg : pluginManager.getPluginScanPackages(plugin.getClass())) {
+                    prefixToModule.putIfAbsent(pkg, plugin.getPluginName());
+                }
             }
+        } catch (ConcurrentModificationException e) {
+            return null;
         }
         return attributeModule(Thread.currentThread().getStackTrace(), prefixToModule);
     }
