@@ -153,7 +153,36 @@ CURRENT_BASELINE="$(grep -m1 -oP '(?<=<japicmp\.baseline\.version>)[^<]+(?=</jap
 note "advancing japicmp.baseline.version ${CURRENT_BASELINE} -> ${CANDIDATE_VERSION}, flipping ignoreMissingOldVersion to false, emptying <excludes>"
 perl -i -pe "s/<japicmp\\.baseline\\.version>\\Q${CURRENT_BASELINE}\\E<\\/japicmp\\.baseline\\.version>/<japicmp.baseline.version>${CANDIDATE_VERSION}<\\/japicmp.baseline.version>/" pom.xml
 perl -i -pe "s/<ignoreMissingOldVersion>true<\\/ignoreMissingOldVersion>/<ignoreMissingOldVersion>false<\\/ignoreMissingOldVersion>/" pom.xml
-perl -i -0777 -pe "s/(<artifactId>japicmp-maven-plugin<\\/artifactId>.*?)<excludes>.*?<\\/excludes>/\$1<excludes><\\/excludes>/s" pom.xml
+# #477: the earlier one-line plain-text regex above (s/(<artifactId>...).*?<excludes>.*?<\/excludes>/.../)
+# matched a LITERAL "<excludes>" mentioned in prose inside the japicmp block's own explanatory
+# XML comment ("the <excludes> block below is the source of truth for the live count"), not the
+# real opening tag - its non-greedy search stops at the first textual occurrence, comment or not.
+# That swallowed everything from the comment sentence through the real closing </excludes> (285+
+# lines), leaving an unterminated XML comment and a pom.xml Maven's parser rejected outright. Fix:
+# mask every XML comment's content to same-length whitespace (preserving line/byte positions, the
+# same masking technique this repository's own build-tooling test helpers already use) before
+# searching, then splice the real, now-unambiguous <excludes>...</excludes> span out of the
+# ORIGINAL (unmasked) text at the position the masked search found. Captures $1/$2/$3 into plain
+# lexical copies before the nested substitution below runs - a nested `=~ s///` on $2 resets
+# Perl's numbered match variables ($1/$2/$3) to reflect ITS OWN (capture-group-less) match, so
+# reading $1/$3 from the outer match AFTER that nested op silently returns empty strings instead
+# of "<!--"/"-->".
+perl -0777 -i -e '
+my $content = do { local $/; <> };
+(my $masked = $content) =~ s{(<!--)(.*?)(-->)}{
+    my ($open, $body, $close) = ($1, $2, $3);
+    $body =~ s/[^\n]/ /g;
+    $open . $body . $close;
+}gse;
+if ($masked =~ /<artifactId>japicmp-maven-plugin<\/artifactId>.*?(<excludes>.*?<\/excludes>)/s) {
+    my $start = $-[1];
+    my $end = $+[1];
+    substr($content, $start, $end - $start) = "<excludes></excludes>";
+} else {
+    die "excludes block for japicmp-maven-plugin not found (comment-aware match failed)\n";
+}
+print $content;
+' pom.xml
 
 grep -q "<japicmp.baseline.version>${CANDIDATE_VERSION}</japicmp.baseline.version>" pom.xml \
     || die_fail "Failed to advance japicmp.baseline.version to ${CANDIDATE_VERSION} -- pom.xml mutation did not match."
