@@ -324,9 +324,17 @@ class CommandManagerKnownCommandsCleanupTest {
                     .as("unloading the EARLIER module must not resolve/remove the LATER module's "
                             + "live command just because they share a namespaced key")
                     .isSameAs(laterCommand);
+
+            // Bukkit's own SimpleCommandMap#register gives the bare "shared" slot exclusively
+            // to whichever PluginCommand registered FIRST (PluginCommand#canBeOverriden()
+            // defaults to false, so the later, colliding primary/alias registration attempt
+            // is rejected outright -- it never held the bare key at all, only the namespaced
+            // one asserted above). Freeing that bare slot when the earlier module unloads is
+            // therefore correct, not a regression: it was always the earlier module's key.
             assertThat(realCommandMap.getCommand("shared"))
-                    .as("the later module's command must still be dispatchable by its bare label too")
-                    .isSameAs(laterCommand);
+                    .as("the bare label belonged solely to the earlier (now-unloaded) module and "
+                            + "must be freed, not silently kept alive")
+                    .isNull();
         }
     }
 
