@@ -56,7 +56,7 @@ import java.util.stream.Stream;
  *       because a nested type was deleted from an otherwise still-existing, still-compiling file -
  *       was written by a much EARLIER compile than the top-level class's own most recent one, so its
  *       timestamp sits far outside that window. See {@link #STALE_TOLERANCE_MILLIS}'s javadoc for
-     *   why a symmetric tolerance window is used instead of a strict "not older than" ordering.</li>
+ *       why a symmetric tolerance window is used instead of a strict "not older than" ordering.</li>
  * </ol>
  *
  * <p>The read_first task note's other candidate - reading the compiler plugin's own {@code
@@ -411,61 +411,50 @@ class OverBroadExclusionInvariantTest {
      * temporary project tree can be scanned in a unit test without touching the real project.
      */
     private static Set<String> scanExistingClasses(Path srcRoot, Path classesRoot) throws IOException {
-        // RED (CR-01, intentionally the pre-fix behaviour): still a pure text scan of srcRoot,
-        // ignoring classesRoot and the existence/freshness check entirely - proves the new
-        // Lombok-@Builder-shaped tests below fail for the right reason (a real assertion, not a
-        // compile error) before the GREEN commit swaps this body for the real algorithm.
-        Set<String> classNames = new LinkedHashSet<>();
-        if (!Files.isDirectory(srcRoot)) {
-            return classNames;
+        Set<String> result = new LinkedHashSet<>();
+        if (!Files.isDirectory(classesRoot)) {
+            return result;
         }
-        java.util.List<Path> javaFiles = new java.util.ArrayList<>();
-        try (Stream<Path> paths = Files.walk(srcRoot)) {
+
+        Map<String, Long> mtimeMillisByClass = new LinkedHashMap<>();
+        try (Stream<Path> paths = Files.walk(classesRoot)) {
             paths.filter(Files::isRegularFile)
-                    .filter(p -> p.toString().endsWith(".java"))
-                    .forEach(javaFiles::add);
-        }
-        java.util.regex.Pattern typeOpen = java.util.regex.Pattern.compile(
-                "\\b(?:class|interface|enum|@\\s*interface)\\s+(\\w+)");
-        java.util.regex.Pattern packageDecl = java.util.regex.Pattern.compile(
-                "(?m)^\\s*package\\s+([\\w.]+)\\s*;");
-        for (Path file : javaFiles) {
-            String source = new String(Files.readAllBytes(file), java.nio.charset.StandardCharsets.UTF_8);
-            java.util.regex.Matcher pkgMatcher = packageDecl.matcher(source);
-            String packageName = pkgMatcher.find() ? pkgMatcher.group(1) : "";
-            java.util.regex.Matcher typeMatcher = typeOpen.matcher(source);
-            java.util.List<String> stack = new java.util.ArrayList<>();
-            java.util.List<Integer> depthStack = new java.util.ArrayList<>();
-            int depth = 0;
-            String pendingName = null;
-            int nextMatchStart = typeMatcher.find() ? typeMatcher.start() : -1;
-            for (int i = 0; i < source.length(); i++) {
-                if (i == nextMatchStart) {
-                    pendingName = typeMatcher.group(1);
-                    nextMatchStart = typeMatcher.find() ? typeMatcher.start() : -1;
-                }
-                char c = source.charAt(i);
-                if (c == '{') {
-                    depth++;
-                    if (pendingName != null) {
-                        stack.add(pendingName);
-                        depthStack.add(depth);
-                        String chain = String.join("$", stack);
-                        classNames.add(packageName.isEmpty() ? chain : packageName + "." + chain);
-                        pendingName = null;
-                    }
-                } else if (c == '}') {
-                    if (!depthStack.isEmpty() && depthStack.get(depthStack.size() - 1) == depth) {
-                        depthStack.remove(depthStack.size() - 1);
-                        if (!stack.isEmpty()) {
-                            stack.remove(stack.size() - 1);
+                    .filter(p -> p.toString().endsWith(".class"))
+                    .forEach(p -> {
+                        String relative = classesRoot.relativize(p).toString();
+                        String withoutSuffix = relative.substring(0, relative.length() - ".class".length());
+                        String fqcn = withoutSuffix.replace(java.io.File.separatorChar, '.');
+                        try {
+                            mtimeMillisByClass.put(fqcn, Files.getLastModifiedTime(p).toMillis());
+                        } catch (IOException e) {
+                            throw new UncheckedIOException(e);
                         }
-                    }
-                    depth--;
-                }
-            }
+                    });
         }
-        return classNames;
+
+        for (Map.Entry<String, Long> entry : mtimeMillisByClass.entrySet()) {
+            String fqcn = entry.getKey();
+            String topLevelFqcn = topLevelOf(fqcn);
+
+            Path sourceCandidate = srcRoot.resolve(
+                    topLevelFqcn.replace('.', java.io.File.separatorChar) + ".java");
+            if (!Files.isRegularFile(sourceCandidate)) {
+                continue; // (a) top-level source is gone - the original #414 hazard
+            }
+
+            Long topLevelMtime = mtimeMillisByClass.get(topLevelFqcn);
+            if (topLevelMtime == null) {
+                continue; // fail closed: can't corroborate this class against its own compilation unit
+            }
+
+            long skew = Math.abs(entry.getValue() - topLevelMtime);
+            if (skew > STALE_TOLERANCE_MILLIS) {
+                continue; // (b) not written in the same compile pass as its still-existing top-level class
+            }
+
+            result.add(fqcn);
+        }
+        return result;
     }
 
     private static String topLevelOf(String fqcn) {
