@@ -952,4 +952,86 @@ class PluginInstallCommandsTest {
             assertThat(result).isTrue();
         }
     }
+
+    /**
+     * Gate-2 Codex review round 1 (three P2 findings on the #439 fix, all with a concrete failure
+     * scenario):
+     * <ul>
+     *   <li>the installed branch's uninstall click command used the catalogue's display name, but
+     *       {@code PluginInstallUtils#uninstallPlugin} matches only the loaded module's own
+     *       runtime name -- for exactly the newly-recognised display-name-mismatch case this fix
+     *       exists to handle, clicking "uninstall" would silently fail;</li>
+     *   <li>two non-blank but DIFFERENT {@code identifyString} values fell through to the name/
+     *       prefix fallback instead of being treated as an authoritative "not the same module";</li>
+     *   <li>the {@code identifyString} comparison was case-sensitive, unlike {@code
+     *       PluginInstallUtils#normalizeIdentifyString}'s trim+lowercase convention used
+     *       everywhere else identify strings are compared.</li>
+     * </ul>
+     */
+    @Nested
+    @DisplayName("gate-2 Codex round 1: uninstall identity, conflicting IDs, ID normalisation")
+    class GateTwoCodexRoundOneTests {
+
+        @Test
+        @DisplayName("resolves the loaded module's own runtime name for uninstall, not the catalogue's display name")
+        void resolvesInstalledRuntimeNameNotCatalogueDisplayName() {
+            UltiToolsPlugin economy = mock(UltiToolsPlugin.class);
+            when(economy.getPluginName()).thenReturn("UltiTools-Economy");
+            when(economy.getIdentifyString()).thenReturn(null);
+
+            PluginEntity economyEntry = new PluginEntity();
+            economyEntry.setName("Economy"); // catalogue display name, deliberately NOT the runtime name
+
+            String resolved = PluginInstallCommands.resolveInstalledRuntimeName(
+                    Collections.singletonList(economy), economyEntry);
+
+            assertThat(resolved)
+                    .as("PluginInstallUtils#uninstallPlugin matches only the runtime name -- using "
+                            + "the catalogue's display name here would silently fail to uninstall")
+                    .isEqualTo("UltiTools-Economy");
+        }
+
+        @Test
+        @DisplayName("resolves null when no loaded module matches the catalogue entry")
+        void resolvesNullWhenNoMatch() {
+            PluginEntity notLoaded = new PluginEntity();
+            notLoaded.setName("SomethingElseEntirely");
+
+            String resolved = PluginInstallCommands.resolveInstalledRuntimeName(
+                    Collections.emptyList(), notLoaded);
+
+            assertThat(resolved).isNull();
+        }
+
+        @Test
+        @DisplayName("two different, non-blank identifyStrings are authoritative -- never falls through to the name/prefix fallback")
+        void conflictingIdentifyStringsAreAuthoritative() {
+            UltiToolsPlugin foo = mock(UltiToolsPlugin.class);
+            when(foo.getPluginName()).thenReturn("UltiTools-Foo");
+            when(foo.getIdentifyString()).thenReturn("author-a.foo");
+
+            PluginEntity catalogueFoo = new PluginEntity();
+            catalogueFoo.setName("Foo"); // would match via the prefix fallback if the ID check didn't short-circuit
+            catalogueFoo.setIdentifyString("author-b.foo");
+
+            assertThat(PluginInstallCommands.isSameModule(foo, catalogueFoo))
+                    .as("two present but DIFFERENT stable identifiers prove these are different "
+                            + "modules; the name/prefix heuristic must not override that")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("identifyString comparison is case-insensitive and trims whitespace, matching PluginInstallUtils' own normalisation")
+        void identifyStringComparisonIsCaseInsensitiveAndTrimmed() {
+            UltiToolsPlugin economy = mock(UltiToolsPlugin.class);
+            when(economy.getPluginName()).thenReturn("UltiTools-Economy");
+            when(economy.getIdentifyString()).thenReturn("Com.UltiKits.Economy");
+
+            PluginEntity entry = new PluginEntity();
+            entry.setName("Something Else Entirely"); // deliberately not name-matching, to prove the ID path fires
+            entry.setIdentifyString("  com.ultikits.economy  ");
+
+            assertThat(PluginInstallCommands.isSameModule(economy, entry)).isTrue();
+        }
+    }
 }
