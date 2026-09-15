@@ -129,6 +129,12 @@ public class GuiScheduler {
                 try {
                     task.run();
                 } catch (RenderDepthExceededException e) {
+                    // Gate-2 Codex finding (round 2, PR #478): before catching this here to
+                    // report it, the exception escaped this deferred Runnable and Bukkit's OWN
+                    // scheduler logged it to console automatically -- catching it silently would
+                    // have made the failure invisible on console whenever the collector is
+                    // unavailable or disabled. logFrameTaskError() keeps that console diagnostic.
+                    logFrameTaskError(e);
                     reportRenderDepthExceeded(e);
                     // Deliberately not re-thrown: this runs on Bukkit's own scheduler thread,
                     // asynchronously from whoever called runOnMainThread() -- there is no
