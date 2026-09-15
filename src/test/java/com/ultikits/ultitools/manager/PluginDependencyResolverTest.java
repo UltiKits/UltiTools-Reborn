@@ -199,7 +199,6 @@ class PluginDependencyResolverTest {
     @PluginDependency(depends = {"MissingOne", "MissingTwo", "MissingThree"})
     public static class PluginWithThreeMissingDeps extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
-        @Override public void unregisterSelf() { }
     }
 
     // Circular dependency plugins

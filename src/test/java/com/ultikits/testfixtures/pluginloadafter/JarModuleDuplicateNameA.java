@@ -14,9 +14,4 @@ public class JarModuleDuplicateNameA extends UltiToolsPlugin {
     public boolean registerSelf() {
         return true;
     }
-
-    @Override
-    public void unregisterSelf() {
-        // No-op fixture.
-    }
 }
