@@ -509,8 +509,28 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                 // Missing from disk entirely: Language.withFallback already covers this key.
                 continue;
             }
-            if (placeholderArity(diskValue) != placeholderArity(jarEntry.getValue())) {
-                resolved.put(key, jarEntry.getValue());
+            String jarValue = jarEntry.getValue();
+            boolean mismatch;
+            try {
+                mismatch = placeholderArity(diskValue) != placeholderArity(jarValue);
+            } catch (NumberFormatException e) {
+                // Codex round 3, P2: an explicit format-argument index too large for int (e.g.
+                // "%999999999999999999$s") overflows Integer.parseInt inside placeholderArity.
+                // Before this fix, that exception propagated out of THIS method, out of
+                // resolveLanguageWithProvenance, and aborted the whole module's construction --
+                // over a single malformed, possibly never-formatted translation value, whereas
+                // before D-05/D-06 existed only the affected key would have failed at format
+                // time. Treat a malformed index the same conservative way a genuine arity
+                // mismatch is already handled below: fall back to the bundled version's value
+                // for this key, and say why (never either value) in the warning.
+                resolved.put(key, jarValue);
+                getLogger().warn("Language key '" + key + "' in '" + resourcePath + "' for module '"
+                        + getPluginName() + "' has a malformed format-argument index and could "
+                        + "not be compared; using the current bundled version's value for this key.");
+                continue;
+            }
+            if (mismatch) {
+                resolved.put(key, jarValue);
                 getLogger().warn("Language key '" + key + "' in '" + resourcePath + "' for module '"
                         + getPluginName() + "' has a different placeholder count than the current "
                         + "bundled version; using the current version's value for this key.");

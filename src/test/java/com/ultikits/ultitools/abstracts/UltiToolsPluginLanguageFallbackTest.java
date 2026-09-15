@@ -701,12 +701,16 @@ class UltiToolsPluginLanguageFallbackTest {
                 "{\"greeting\":\"Hi v2\"}", "{\"greeting\":\"Hi v1\"}");
         File diskFile = new File(fixture.resourceFolder, "lang" + File.separator + "en.json");
         ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", ResourceHashSidecar.sha256(diskFile));
-        // The sidecar lives directly under the resource folder root, independently of lang/ --
-        // making ONLY it read-only reproduces "the language file write succeeds but the
-        // provenance record write fails" without touching the language file's own permissions.
-        File sidecarFile = new File(fixture.resourceFolder, ".ultitools-resource-hashes.json");
-        assertThat(sidecarFile).exists();
-        assertThat(sidecarFile.setWritable(false)).isTrue();
+        // 16-05 Codex round 3, P2: ResourceHashSidecar.record() now writes via a temp file in the
+        // sidecar's own parent directory (fixture.resourceFolder itself) followed by an atomic
+        // move, mirroring writeBytes()'s own fix below -- so making the sidecar FILE read-only no
+        // longer reproduces a write failure: a rename only consults the DIRECTORY entry's
+        // permissions, never the target file's own, so the move would still succeed even with the
+        // old file bits unwritable. Removing write from the resourceFolder ROOT instead blocks the
+        // temp-file creation itself, while lang/ (a SEPARATE directory, still writable) is
+        // untouched -- so the language file's own write is unaffected, reproducing exactly the same
+        // "language file refreshed, sidecar record fails" scenario this test targets.
+        assertThat(fixture.resourceFolder.setWritable(false)).isTrue();
         try {
             Language language = resolveProvenanceLanguage(fixture);
 
@@ -718,7 +722,7 @@ class UltiToolsPluginLanguageFallbackTest {
             // logged -- it would misrepresent provenance tracking as healthy when it is not.
             verify(fixture.mockLogger, never()).info(anyString());
         } finally {
-            sidecarFile.setWritable(true);
+            fixture.resourceFolder.setWritable(true);
         }
     }
 

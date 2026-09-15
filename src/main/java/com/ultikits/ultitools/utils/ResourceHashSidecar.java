@@ -8,6 +8,7 @@ import java.io.Writer;
 import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.LinkedHashMap;
@@ -150,18 +151,45 @@ public final class ResourceHashSidecar {
         }
     }
 
+    /**
+     * Writes {@code entries} to the sidecar file, via a temporary file in the sidecar's own
+     * parent directory that is atomically moved into place only once the full write has
+     * succeeded (Codex round 3, P2).
+     * <p>
+     * Before this fix, this method opened the sidecar's real path directly with {@code
+     * TRUNCATE_EXISTING}, which truncates the file as PART OF the {@code open()} call itself --
+     * so a failure partway through serialization (e.g. the filesystem filling up) left every
+     * previously recorded hash replaced by empty or partial JSON. {@link #readAll(File)} degrades
+     * that state to "no record" for every path, not just the one being written, which could
+     * misclassify an untouched language file as an operator customisation and skip a legitimate
+     * update from the current jar. Writing to a temp file first means a failure never touches the
+     * real sidecar at all -- exactly the same fix already applied to {@code UltiToolsPlugin
+     * #writeBytes} for the language file itself.
+     */
     private static void writeAll(File resourceFolder, Map<String, String> entries) {
         File file = sidecarFile(resourceFolder);
+        File parent = file.getParentFile();
+        File tempFile = null;
         try {
-            File parent = file.getParentFile();
             if (parent != null && !parent.isDirectory()) {
                 Files.createDirectories(parent.toPath());
             }
-            try (Writer writer = Files.newBufferedWriter(file.toPath(), StandardCharsets.UTF_8)) {
+            tempFile = File.createTempFile(SIDECAR_FILE_NAME, ".tmp", parent);
+            try (Writer writer = Files.newBufferedWriter(tempFile.toPath(), StandardCharsets.UTF_8)) {
                 GSON.toJson(entries, ENTRY_MAP_TYPE, writer);
             }
+            Files.move(tempFile.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE);
         } catch (IOException e) {
             LOGGER.log(Level.WARNING, "Failed to write resource-hash sidecar " + file.getPath(), e);
+        } finally {
+            if (tempFile != null) {
+                // A successful move already renamed the temp file away from tempFile's own path,
+                // so this is a no-op on the success path and only cleans up a leftover staging
+                // file on any failure branch above.
+                // noinspection ResultOfMethodCallIgnored
+                tempFile.delete();
+            }
         }
     }
 }
