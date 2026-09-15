@@ -1186,24 +1186,17 @@ public class PluginManager {
                     Bukkit.getLogger().log(Level.WARNING, String.format(
                             "[UltiTools-API] %s failed to unregister cleanly after a failed load！",
                             plugin.getPluginName()));
-                    // Gate-2 Codex finding (PR #478 round 1): unregister(plugin)'s own final
-                    // statement is plugin.getContext().close() -- an earlier step throwing (e.g.
-                    // unregisterSelf() above) means that call never ran. This plugin is about to
-                    // be removed from pluginList in the finally block below, so close() must run
-                    // here, independently, or PluginManager.close() can never retry teardown for
-                    // it again and the container/beans/classloader stay referenced for the rest
-                    // of the server run.
-                    try {
-                        if (plugin.getContext() != null) {
-                            plugin.getContext().close();
-                        }
-                    } catch (Exception | Error closeFailure) {
-                        Bukkit.getLogger().log(Level.WARNING, closeFailure, String::new);
-                        Bukkit.getLogger().log(Level.WARNING, String.format(
-                                "[UltiTools-API] %s's container also failed to close during that "
-                                        + "same teardown failure！",
-                                plugin.getPluginName()));
-                    }
+                    // #457's unregister() now closes the context in a finally (see its
+                    // javadoc), so it has already run -- successfully or not -- by the time
+                    // this catch block is reached, regardless of what inside unregister()
+                    // threw. A second, independent close here (PR #478 round 1's original
+                    // fallback, needed only against #457's pre-merge unregister(), which
+                    // closed as its own final statement with nothing guaranteeing that ran
+                    // if an earlier step threw) is redundant on the merged contract and would
+                    // double-close instead. #478's own intent -- the container closes exactly
+                    // once even when unregister() itself throws during this teardown -- is
+                    // still met, now by #457's finally, and is still asserted by this same
+                    // test class's unregisterFailureDuringTeardownIsHandledAndPluginStillRemoved.
                 } finally {
                     pluginList.remove(plugin);
                 }
