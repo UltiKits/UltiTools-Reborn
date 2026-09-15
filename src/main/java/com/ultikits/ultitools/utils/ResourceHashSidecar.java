@@ -2,6 +2,7 @@ package com.ultikits.ultitools.utils;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.Reader;
 import java.io.UncheckedIOException;
 import java.io.Writer;
@@ -68,15 +69,34 @@ public final class ResourceHashSidecar {
 
     /**
      * Computes the SHA-256 digest of {@code file}'s raw bytes, hex-encoded lowercase.
+     * <p>
+     * Codex round 4, P2: streams the file in fixed-size chunks rather than {@link
+     * Files#readAllBytes} -- the previous implementation allocated a byte array as large as the
+     * entire file, so a sufficiently large bundled resource (a module's web dashboard assets,
+     * audio, etc.) could exhaust the server heap and abort module initialization, even though the
+     * extraction path that produced the file ({@code saveResources()}) already streams with a
+     * fixed-size buffer. Streaming here keeps peak memory bounded regardless of file size.
      *
      * @param file the file to hash; must exist and be readable
      * @return the lowercase hex-encoded SHA-256 digest of the file's raw bytes
      */
     public static String sha256(File file) {
         try {
-            return sha256(Files.readAllBytes(file.toPath()));
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            try (InputStream in = Files.newInputStream(file.toPath())) {
+                byte[] buffer = new byte[8192];
+                int len;
+                while ((len = in.read(buffer)) != -1) {
+                    digest.update(buffer, 0, len);
+                }
+            }
+            return toHex(digest.digest());
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to hash " + file.getPath(), e);
+        } catch (NoSuchAlgorithmException e) {
+            // SHA-256 is a JDK-guaranteed algorithm (JLS platform requirement); this branch is
+            // unreachable on any conforming JVM.
+            throw new IllegalStateException("SHA-256 MessageDigest not available", e);
         }
     }
 
@@ -89,17 +109,20 @@ public final class ResourceHashSidecar {
     public static String sha256(byte[] bytes) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(bytes);
-            StringBuilder hex = new StringBuilder(hash.length * 2);
-            for (byte b : hash) {
-                hex.append(String.format("%02x", b & 0xff));
-            }
-            return hex.toString();
+            return toHex(digest.digest(bytes));
         } catch (NoSuchAlgorithmException e) {
             // SHA-256 is a JDK-guaranteed algorithm (JLS platform requirement); this branch is
             // unreachable on any conforming JVM.
             throw new IllegalStateException("SHA-256 MessageDigest not available", e);
         }
+    }
+
+    private static String toHex(byte[] hash) {
+        StringBuilder hex = new StringBuilder(hash.length * 2);
+        for (byte b : hash) {
+            hex.append(String.format("%02x", b & 0xff));
+        }
+        return hex.toString();
     }
 
     /**
@@ -128,6 +151,29 @@ public final class ResourceHashSidecar {
     public static void record(File resourceFolder, String resourcePath, String hash) {
         Map<String, String> entries = readAll(resourceFolder);
         entries.put(resourcePath, hash);
+        writeAll(resourceFolder, entries);
+    }
+
+    /**
+     * Records every {@code resourcePath -> hash} pair in {@code newEntries} in ONE
+     * read-modify-write cycle, instead of the one-cycle-per-entry cost calling {@link #record}
+     * once per entry in a loop would pay (Codex round 4, P2): {@code saveResources()} extracts
+     * every jar entry across a single pass, so collecting that pass's hashes and persisting them
+     * together avoids parsing and atomically rewriting an increasingly large sidecar once per
+     * extracted file -- quadratic for a module bundling many resources (e.g. thousands of web
+     * dashboard assets). A no-op for an empty map: never touches the sidecar file, or its
+     * directory, when there is nothing new to record.
+     *
+     * @param resourceFolder the module's resource folder root (the sidecar's own location)
+     * @param newEntries     the {@code resourcePath -> hash} pairs to add, preserving every entry
+     *                       already recorded
+     */
+    public static void recordAll(File resourceFolder, Map<String, String> newEntries) {
+        if (newEntries.isEmpty()) {
+            return;
+        }
+        Map<String, String> entries = readAll(resourceFolder);
+        entries.putAll(newEntries);
         writeAll(resourceFolder, entries);
     }
 

@@ -86,18 +86,17 @@ public interface Localized {
         if (code.isEmpty()) {
             return false;
         }
-        for (int i = 0; i < code.length(); i++) {
+        // No branching statement (return/break/continue) as the last statement of the loop body
+        // (PMD AvoidBranchingStatementAsLastInLoop) -- accumulate into `safe` instead and let the
+        // loop condition itself short-circuit once a disallowed character is found.
+        boolean safe = true;
+        for (int i = 0; i < code.length() && safe; i++) {
             char c = code.charAt(i);
             boolean asciiAlphanumeric = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
-            if (asciiAlphanumeric) {
-                continue;
-            }
-            if (i > 0 && (c == '_' || c == '-')) {
-                continue;
-            }
-            return false;
+            boolean allowedSeparator = i > 0 && (c == '_' || c == '-');
+            safe = asciiAlphanumeric || allowedSeparator;
         }
-        return true;
+        return safe;
     }
     /**
      * Get the language code of the plugin module.

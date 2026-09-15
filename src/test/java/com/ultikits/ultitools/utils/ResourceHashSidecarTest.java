@@ -16,6 +16,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -167,6 +168,45 @@ class ResourceHashSidecarTest {
 
         assertThat(ResourceHashSidecar.readRecordedHash(tempDir, "lang/en.json")).contains("hash-en");
         assertThat(ResourceHashSidecar.readRecordedHash(tempDir, "res/icon.png")).contains("hash-icon");
+    }
+
+    @Test
+    @DisplayName("recordAll(...) persists every entry in one call, alongside anything already recorded "
+            + "(Codex round 4, P2: batch instead of one read-modify-write cycle per entry)")
+    void recordAllPersistsEveryEntryAlongsideAlreadyRecordedOnes() {
+        ResourceHashSidecar.record(tempDir, "lang/en.json", "hash-en-existing");
+
+        Map<String, String> newEntries = new LinkedHashMap<>();
+        newEntries.put("res/icon.png", "hash-icon");
+        newEntries.put("config/default.yml", "hash-config");
+        ResourceHashSidecar.recordAll(tempDir, newEntries);
+
+        assertThat(ResourceHashSidecar.readRecordedHash(tempDir, "lang/en.json")).contains("hash-en-existing");
+        assertThat(ResourceHashSidecar.readRecordedHash(tempDir, "res/icon.png")).contains("hash-icon");
+        assertThat(ResourceHashSidecar.readRecordedHash(tempDir, "config/default.yml")).contains("hash-config");
+    }
+
+    @Test
+    @DisplayName("recordAll(...) with an empty map never touches the sidecar file at all")
+    void recordAllWithEmptyMapNeverTouchesSidecarFile() {
+        File sidecarFile = new File(tempDir, ".ultitools-resource-hashes.json");
+        assertThat(sidecarFile).doesNotExist();
+
+        ResourceHashSidecar.recordAll(tempDir, Collections.emptyMap());
+
+        assertThat(sidecarFile).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("sha256(File) streams a larger file without reading it fully into memory, and still "
+            + "matches the digest of an in-memory computation over the same bytes")
+    void sha256StreamsLargerFileAndMatchesInMemoryDigest() throws Exception {
+        byte[] bytes = new byte[5 * 1024 * 1024];
+        new java.util.Random(42).nextBytes(bytes);
+        File file = new File(tempDir, "large.bin");
+        Files.write(file.toPath(), bytes);
+
+        assertThat(ResourceHashSidecar.sha256(file)).isEqualTo(referenceSha256(bytes));
     }
 
     @Test

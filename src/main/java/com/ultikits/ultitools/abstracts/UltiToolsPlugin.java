@@ -687,26 +687,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         }
         File location = resolveCodeSourceFile(src.getLocation());
         if (location.isDirectory()) {
-            File resource = new File(location, resourcePath.replace('/', File.separatorChar));
-            // 16-05 / CodeQL java/zipslip alert #11: resourcePath is built by the caller as
-            // "lang/" + code + extension from the same untrusted code loadLanguageFromDisk
-            // guards -- mirror that guard here so this directory-CodeSource branch cannot be
-            // used to read outside the module's own resource folder either.
-            if (!isWithinDirectory(location, resource)) {
-                getLogger().warn("Module '" + getPluginName() + "' resolved an embedded resource "
-                        + "path that would escape its resource folder ('" + location + "'); "
-                        + "refusing to read '" + resource + "'.");
-                return null;
-            }
-            if (!resource.isFile()) {
-                return null;
-            }
-            try {
-                return Files.readAllBytes(resource.toPath());
-            } catch (IOException e) {
-                getLogger().error(e, "Failed to read embedded resource " + resource + " from " + location);
-                return null;
-            }
+            return readEmbeddedResourceBytesFromDirectory(location, resourcePath);
         }
         try (JarFile jarFile = new JarFile(location)) {
             JarEntry entry = jarFile.getJarEntry(resourcePath);
@@ -724,6 +705,39 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             }
         } catch (IOException e) {
             getLogger().error(e, "Failed to read embedded resource " + resourcePath + " from " + location);
+            return null;
+        }
+    }
+
+    /**
+     * The exploded-classpath (directory {@code CodeSource}) branch of {@link
+     * #readEmbeddedResourceBytes(String)}, split out to keep that method's NPath complexity under
+     * the Codacy/PMD threshold once the 16-05 / CodeQL {@code java/zipslip} alert #11 containment
+     * guard was added -- purely a structural split, the guard's own behaviour is unchanged.
+     *
+     * @param location     the directory {@code CodeSource} location
+     * @param resourcePath the resource path to read, e.g. {@code "lang/en.json"}
+     * @return the resource's raw bytes, or {@code null} if absent, escaping, or unreadable
+     */
+    private byte[] readEmbeddedResourceBytesFromDirectory(File location, String resourcePath) {
+        File resource = new File(location, resourcePath.replace('/', File.separatorChar));
+        // 16-05 / CodeQL java/zipslip alert #11: resourcePath is built by the caller as
+        // "lang/" + code + extension from the same untrusted code loadLanguageFromDisk guards --
+        // mirror that guard here so this directory-CodeSource branch cannot be used to read
+        // outside the module's own resource folder either.
+        if (!isWithinDirectory(location, resource)) {
+            getLogger().warn("Module '" + getPluginName() + "' resolved an embedded resource "
+                    + "path that would escape its resource folder ('" + location + "'); "
+                    + "refusing to read '" + resource + "'.");
+            return null;
+        }
+        if (!resource.isFile()) {
+            return null;
+        }
+        try {
+            return Files.readAllBytes(resource.toPath());
+        } catch (IOException e) {
+            getLogger().error(e, "Failed to read embedded resource " + resource + " from " + location);
             return null;
         }
     }
@@ -1081,16 +1095,22 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * canonical path, and any entry whose path would resolve outside it (a Zip Slip attempt) is
      * skipped with a warning rather than written.
      * <p>
-     * Every file this method actually extracts gets its provenance recorded via {@link
-     * ResourceHashSidecar#record(File, String, String)} -- across all three prefixes, D-07 -- so a
-     * later boot can tell "the operator edited this" from "an old jar extracted this and nobody has
-     * touched it since" (#441, D-05/D-06). A file this method skips (already present on disk) gets
-     * no record here: the skip already means the file predates this mechanism, or was already
-     * decided on by {@link #loadLanguageFromDisk} on a previous boot.
+     * Every file this method actually extracts gets its provenance recorded, in one batch via
+     * {@link ResourceHashSidecar#recordAll(File, Map)} after the whole extraction pass completes
+     * (Codex round 4, P2) -- across all three prefixes, D-07 -- so a later boot can tell "the
+     * operator edited this" from "an old jar extracted this and nobody has touched it since"
+     * (#441, D-05/D-06). A file this method skips (already present on disk) gets no record here:
+     * the skip already means the file predates this mechanism, or was already decided on by
+     * {@link #loadLanguageFromDisk} on a previous boot.
      */
     private void saveResources() {
         CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
         URL jar = src.getLocation();
+        // Codex round 4, P2: accumulated across the whole pass and persisted ONCE via
+        // ResourceHashSidecar.recordAll after the loop, instead of one record(...) call (one
+        // read-modify-write cycle of the WHOLE sidecar) per extracted file -- see recordAll's own
+        // javadoc for why that was quadratic for a module bundling many resources.
+        Map<String, String> hashesToRecord = new LinkedHashMap<>();
         try (JarFile jarFile = new JarFile(
                 jar.getPath().startsWith("/") ? jar.getPath() : jar.getPath().substring(1)
         )) {
@@ -1126,13 +1146,13 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                                 out.write(buf, 0, len);
                             }
                         }
-                        ResourceHashSidecar.record(new File(resourceFolderPath), fileName,
-                                ResourceHashSidecar.sha256(outFile));
+                        hashesToRecord.put(fileName, ResourceHashSidecar.sha256(outFile));
                     } catch (IOException ex) {
                         UltiTools.getInstance().getLogger().log(Level.WARNING, "Could not save " + outFile.getName() + " to " + outFile);
                     }
                 }
             }
+            ResourceHashSidecar.recordAll(new File(resourceFolderPath), hashesToRecord);
         } catch (IOException e) {
             getLogger().error("Failed to save resources from jar", e);
         }
