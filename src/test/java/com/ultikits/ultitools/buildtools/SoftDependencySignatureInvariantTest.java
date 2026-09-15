@@ -62,6 +62,11 @@ class SoftDependencySignatureInvariantTest {
     // string-set inputs do (this rule takes real Class objects, not pre-derived strings).
     private static final String FIXTURE_PREFIX = "java.util.Date";
 
+    // Used by the member-enumeration-failure fixtures/tests further down this file (Codex P2, PR
+    // #463) -- declared here, with the other constant fields, per PMD's
+    // FieldDeclarationsShouldBeAtStartOfClass (fields must precede methods/inner classes).
+    private static final String HIDDEN_VAULT_PACKAGE_PREFIX = "net.milkbowl.vault";
+
     @SuppressWarnings("unused")
     private static final class FixtureWithFlaggedField {
         private java.util.Date flagged;
@@ -286,8 +291,8 @@ class SoftDependencySignatureInvariantTest {
     // category. Kept at the top level (not @Nested) to match this file's existing flat structure,
     // and because @Nested test classes are non-static inner classes, which cannot themselves hold
     // static nested classes -- exactly the shape the fixtures and hiding classloader below need.
-
-    private static final String HIDDEN_VAULT_PACKAGE_PREFIX = "net.milkbowl.vault";
+    // (HIDDEN_VAULT_PACKAGE_PREFIX itself is declared with the other constant fields near the top
+    // of this class, per PMD's FieldDeclarationsShouldBeAtStartOfClass.)
 
     @SuppressWarnings("unused")
     private static final class FixtureWithHiddenTypeField {
@@ -330,6 +335,11 @@ class SoftDependencySignatureInvariantTest {
                 SoftDependencySignatureInvariantTest.class.getClassLoader(), targetClassName);
         Class<?> hidden;
         try {
+            // targetClassName is always one of this file's own three compile-time-literal
+            // FixtureWithHiddenType* class names, passed by this file's own @Test methods above --
+            // there is no user- or network-controlled input on this path; this is a build-time
+            // structural guard test loading one of its own known fixture classes.
+            // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
             hidden = Class.forName(targetClassName, false, hidingLoader);
         } catch (ClassNotFoundException e) {
             throw new AssertionError(e);
