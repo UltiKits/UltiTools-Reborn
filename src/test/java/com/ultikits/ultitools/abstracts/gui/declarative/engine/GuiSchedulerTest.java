@@ -150,6 +150,73 @@ class GuiSchedulerTest {
         }
     }
 
+    // === Gate-2 Codex finding (round 1, PR #478): the initial build -- GuiRenderer.initialize()
+    // -> runOnMainThread() -- runs OUTSIDE executeFrame()'s try/catch entirely, so a tree deep
+    // enough to trip Element.mount (CR-01) during the FIRST build never reached
+    // ErrorReportCollector at all, only a subsequent scheduled frame's rebuild would have. This
+    // is the more common case in practice: CR-01's guard fires during mounting, and the very
+    // first build is exactly where a brand-new tree gets mounted. ===
+
+    @Test
+    void testRunOnMainThread_OnMainThread_ReportsRenderDepthExceededAndStillRethrows() {
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+
+            ErrorReportCollector collector = new ErrorReportCollector();
+            TestHelper.mockUltiToolsInstance(ultiTools ->
+                    when(ultiTools.getErrorReportCollector()).thenReturn(collector));
+
+            GuiScheduler scheduler = new GuiScheduler(mockPlugin);
+            RenderDepthExceededException thrown = new RenderDepthExceededException(
+                    "Element.mount", 65, RenderDepthGuard.MAX_DEPTH);
+
+            RenderDepthExceededException caught = assertThrows(RenderDepthExceededException.class,
+                    () -> scheduler.runOnMainThread(() -> {
+                        throw thrown;
+                    }),
+                    "the initial (already-on-main-thread) build path must still propagate the "
+                            + "exception to its caller exactly as before -- GuiRenderer.initialize() "
+                            + "and every existing CR-01 test depend on this");
+
+            assertSame(thrown, caught);
+            assertEquals(1, collector.drainErrors(10).size(),
+                    "the initial build's own RenderDepthExceededException must reach "
+                            + "ErrorReportCollector too, not only a LATER scheduled frame's -- "
+                            + "mounting (CR-01) happens on the very first build, which never "
+                            + "passed through executeFrame()'s try/catch at all");
+        }
+    }
+
+    @Test
+    void testRunOnMainThread_OffMainThread_ReportsRenderDepthExceededWithoutPropagating() {
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(Bukkit::isPrimaryThread).thenReturn(false);
+            bukkit.when(Bukkit::getScheduler).thenReturn(mockScheduler);
+            when(mockScheduler.runTask(any(Plugin.class), any(Runnable.class))).thenAnswer(invocation -> {
+                Runnable wrapped = invocation.getArgument(1);
+                wrapped.run(); // simulate Bukkit actually invoking the deferred task
+                return null;
+            });
+
+            ErrorReportCollector collector = new ErrorReportCollector();
+            TestHelper.mockUltiToolsInstance(ultiTools ->
+                    when(ultiTools.getErrorReportCollector()).thenReturn(collector));
+
+            GuiScheduler scheduler = new GuiScheduler(mockPlugin);
+
+            assertDoesNotThrow(() -> scheduler.runOnMainThread(() -> {
+                throw new RenderDepthExceededException("Element.mount", 65, RenderDepthGuard.MAX_DEPTH);
+            }), "the caller of runOnMainThread() off-thread already never sees the deferred "
+                    + "task's exception (Bukkit's own scheduler runs it later) -- this must stay "
+                    + "true; only the reporting is new");
+
+            assertEquals(1, collector.drainErrors(10).size(),
+                    "the deferred task's RenderDepthExceededException must still reach "
+                            + "ErrorReportCollector even though nothing in this thread can "
+                            + "observe it any other way");
+        }
+    }
+
     // === WR-01: RenderDepthExceededException must reach ErrorReportCollector, and repeated
     // occurrences from the same site across many frames must not each produce a separate report
     // (ErrorReportCollector's own fingerprint dedup is the chosen rate limit -- no new
