@@ -296,5 +296,40 @@ class EconomyUtilsReportingTest {
 
             assertThat(EconomyUtils.attributeModule(stack, prefixToModule)).isEqualTo("ModuleFoo");
         }
+
+        @Test
+        @DisplayName("a nested scan-package collision attributes to the most specific (longest) matching prefix, insertion order broad-then-narrow (Codex P2, PR #463, #482)")
+        void nestedScanPackageCollision_broadInsertedFirst_attributesToMostSpecific() {
+            // com.example.shop.X matches BOTH "com.example" (ModuleA) and "com.example.shop"
+            // (ModuleB) -- the correct attribution is ModuleB (the actual owner of the frame's
+            // package), independent of which prefix was registered first. Before the fix, a first
+            // match on insertion-order alone would return whichever module happened to be inserted
+            // first, making module load order (not the frame's own package) decide attribution and
+            // spending the wrong module's once-per-session dedup slot.
+            StackTraceElement[] stack = {
+                    new StackTraceElement("com.example.shop.SomeClass", "doThing", "SomeClass.java", 10),
+            };
+            Map<String, String> prefixToModule = new LinkedHashMap<>();
+            prefixToModule.put("com.example", "ModuleA");
+            prefixToModule.put("com.example.shop", "ModuleB");
+
+            assertThat(EconomyUtils.attributeModule(stack, prefixToModule)).isEqualTo("ModuleB");
+        }
+
+        @Test
+        @DisplayName("a nested scan-package collision attributes to the most specific (longest) matching prefix, insertion order narrow-then-broad (Codex P2, PR #463, #482)")
+        void nestedScanPackageCollision_narrowInsertedFirst_attributesToMostSpecific() {
+            // Same collision as above with the two entries inserted in the opposite order -- the
+            // result must be identical (ModuleB), proving the selection depends on prefix
+            // specificity, not on LinkedHashMap iteration/insertion order.
+            StackTraceElement[] stack = {
+                    new StackTraceElement("com.example.shop.SomeClass", "doThing", "SomeClass.java", 10),
+            };
+            Map<String, String> prefixToModule = new LinkedHashMap<>();
+            prefixToModule.put("com.example.shop", "ModuleB");
+            prefixToModule.put("com.example", "ModuleA");
+
+            assertThat(EconomyUtils.attributeModule(stack, prefixToModule)).isEqualTo("ModuleB");
+        }
     }
 }
