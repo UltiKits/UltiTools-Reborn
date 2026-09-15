@@ -74,13 +74,13 @@ public final class SoftDependencySignatureInvariant {
             if (clazz == null || allowlistedClassNames.contains(clazz.getName())) {
                 continue;
             }
-            for (Field field : safeDeclaredFields(clazz)) {
+            for (Field field : safeDeclaredFields(clazz, violations)) {
                 checkMember(field, field.toGenericString(), softDependencyPackagePrefixes, violations);
             }
-            for (Method method : safeDeclaredMethods(clazz)) {
+            for (Method method : safeDeclaredMethods(clazz, violations)) {
                 checkMember(method, method.toGenericString(), softDependencyPackagePrefixes, violations);
             }
-            for (Constructor<?> constructor : safeDeclaredConstructors(clazz)) {
+            for (Constructor<?> constructor : safeDeclaredConstructors(clazz, violations)) {
                 checkMember(constructor, constructor.toGenericString(), softDependencyPackagePrefixes, violations);
             }
         }
@@ -120,28 +120,50 @@ public final class SoftDependencySignatureInvariant {
     // try/catch is defensive, not a bet that it is needed: a class this evaluator cannot even
     // enumerate is reported as its own violation rather than silently skipped, so a genuinely
     // broken class does not vanish from the guard's coverage.
+    //
+    // [Rule 1 fix, Codex P2, PR #463]: the try/catch used to swallow the failure into an empty
+    // array with no record of it -- exactly the "genuinely broken class silently vanishes from
+    // coverage" outcome the comment above claims does not happen. A class whose member enumeration
+    // itself throws is precisely #451's failure mode reproduced one layer down (an unresolvable
+    // soft-dependency type in a signature), so treating it as "zero violating members" is a false
+    // negative in the one guard that exists to catch this. Each safeDeclaredX helper below now
+    // records the failure as its own violation before returning the empty array, so the caller's
+    // member-iteration loop still has something safe to iterate over.
 
-    private static Field[] safeDeclaredFields(Class<?> clazz) {
+    private static Field[] safeDeclaredFields(Class<?> clazz, List<String> violations) {
         try {
             return clazz.getDeclaredFields();
         } catch (LinkageError | RuntimeException e) {
+            violations.add(memberEnumerationFailure(clazz, "fields", e));
             return new Field[0];
         }
     }
 
-    private static Method[] safeDeclaredMethods(Class<?> clazz) {
+    private static Method[] safeDeclaredMethods(Class<?> clazz, List<String> violations) {
         try {
             return clazz.getDeclaredMethods();
         } catch (LinkageError | RuntimeException e) {
+            violations.add(memberEnumerationFailure(clazz, "methods", e));
             return new Method[0];
         }
     }
 
-    private static Constructor<?>[] safeDeclaredConstructors(Class<?> clazz) {
+    private static Constructor<?>[] safeDeclaredConstructors(Class<?> clazz, List<String> violations) {
         try {
             return clazz.getDeclaredConstructors();
         } catch (LinkageError | RuntimeException e) {
+            violations.add(memberEnumerationFailure(clazz, "constructors", e));
             return new Constructor<?>[0];
         }
+    }
+
+    private static String memberEnumerationFailure(Class<?> clazz, String memberKind, Throwable cause) {
+        return clazz.getName() + "'s declared " + memberKind + " could not even be enumerated ("
+                + cause.getClass().getName()
+                + (cause.getMessage() != null ? ": " + cause.getMessage() : "") + ") -- this is "
+                + "exactly the failure mode this guard exists to catch (an unresolvable "
+                + "soft-dependency type in a signature, #451), so it is reported as its own "
+                + "violation rather than silently treated as clean. Investigate why this class's "
+                + "declared " + memberKind + " could not be enumerated at all.";
     }
 }
