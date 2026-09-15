@@ -1237,6 +1237,88 @@ class CloudAuthManagerTest {
                             + "必须被这次 logout 真正清掉，不能在重启之后被悄悄重新加载并重连")
                     .doesNotContainKey("cloud_token");
         }
+
+        /**
+         * Real-machine UAT fix, plan 16-08: {@code ultitools.ulticloud.logout.neg-mid-poll}.
+         * <p>
+         * Preconditions on the real server: not authenticated, {@code /ulticloud login}'s magic-link
+         * poll still in flight (no token committed yet, no predecessor either). Observed on Paper
+         * 1.21.11: {@code /ulticloud logout} printed the "not currently logged in" pair instead of
+         * the success pair, because {@link CloudSession#hasAnythingToClear()} consulted only
+         * {@code token}/{@code predecessorToken} -- a cancelled-but-never-committed poll left both
+         * {@code null}, so the logout that genuinely cancelled a real, in-flight authentication
+         * attempt was indistinguishable from a logout that cancelled nothing at all. The safety half
+         * (a stale approval after this logout must not reactivate the server) already passed on the
+         * real server; this test proves both halves together, the same way {@code
+         * pollCompletionAfterLogoutWithoutExplicitStop_commitRejected} in
+         * {@code CredentialGenerationTest} already proves the safety half alone.
+         */
+        @Test
+        @DisplayName("16-08 UAT 修复：登出发生在魔法链接轮询进行中时必须报告成功并真正取消轮询，"
+                + "之后陈旧的批准结果不能落地凭证或重新激活")
+        void logoutDuringInFlightMagicLinkPollReportsSuccessAndCancelsThePoll() throws Exception {
+            // No token has been committed yet -- login is still polling, exactly the checklist row's
+            // precondition ("not currently authenticated ... the 5-minute magic-link poll is still
+            // in flight").
+            setSessionField("token", null);
+            CloudSession session = CloudSession.current();
+
+            ScheduledExecutorService fakePollExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+            java.util.concurrent.ScheduledFuture<?> fakePollTask = fakePollExecutor.schedule(() -> { }, 1, TimeUnit.HOURS);
+            setSessionField("pollExecutor", fakePollExecutor);
+            setSessionField("pollTask", fakePollTask);
+
+            boolean hadCredential = CloudAuthManager.logout();
+
+            assertThat(hadCredential)
+                    .as("cancelling a real, in-flight authentication attempt is a genuine logout, "
+                            + "not \"nothing to clear\" — the checklist row's expected success pair")
+                    .isTrue();
+            assertThat(fakePollTask.isCancelled())
+                    .as("the in-flight poll must actually be cancelled by this logout, not merely "
+                            + "reported as cancelled")
+                    .isTrue();
+            assertThat(getSessionField("pollTask"))
+                    .as("teardown must clear the session's own poll-task reference")
+                    .isNull();
+
+            // The safety half: a stale "completed" result from that same cancelled poll (the
+            // operator approving the old link in the browser after logout) must not reactivate the
+            // server or write a credential -- same session-identity guard as every other
+            // late-arriving commit in this class (mirrors CredentialGenerationTest's Timing 2).
+            boolean staleApprovalCommitted = session.commit(buildTokenWithExp(3600L));
+            assertThat(staleApprovalCommitted)
+                    .as("a poll result that lands after this logout must be rejected, not silently "
+                            + "reactivate the server")
+                    .isFalse();
+            CredentialStore.ReadResult result = CredentialStore.read();
+            assertThat(result.data())
+                    .as("no credential may be written by that rejected, stale result")
+                    .doesNotContainKey("cloud_token");
+        }
+
+        /**
+         * The plain half of the same row's precondition space, restated here alongside the
+         * mid-poll fix above so this class documents both outcomes of the same decision together:
+         * {@link #neverLoggedInReturnsFalseButTeardownStillRuns()} already covers this scenario
+         * (fresh session, no token, no poll ever started) and must keep passing unchanged by the
+         * 16-08 fix — {@code ultitools.ulticloud.logout.neg-not-logged-in}'s own expected "Not
+         * currently logged in to UltiCloud." pair depends on it staying false when nothing was ever
+         * pending.
+         */
+        @Test
+        @DisplayName("对照组：没有凭证也没有轮询在飞时，logout 仍然报告「未登录」")
+        void plainNoTokenAndNoPendingPollStillReportsNotCurrentlyLoggedIn() throws Exception {
+            setSessionField("token", null);
+            setSessionField("pollTask", null);
+            setSessionField("pollExecutor", null);
+
+            boolean hadCredential = CloudAuthManager.logout();
+
+            assertThat(hadCredential)
+                    .as("nothing was ever pending -- this must stay \"not currently logged in\"")
+                    .isFalse();
+        }
     }
 
     // =========================================================================

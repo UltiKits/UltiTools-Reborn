@@ -140,6 +140,34 @@ final class CloudSession {
      */
     private volatile TokenEntity predecessorToken;
 
+    /**
+     * {@code true} if {@link #invalidate()} found -- and cancelled -- a magic-link poll still in
+     * flight on this session, and that fact has not yet been reported and reset by
+     * {@link #clearPersisted()}.
+     * <p>
+     * <b>Real-machine UAT fix, plan 16-08 ({@code ultitools.ulticloud.logout.neg-mid-poll}).</b>
+     * Cancelling a pending authentication attempt IS a real logout, even though it never reached
+     * {@link #commit(TokenEntity)} and therefore never set {@link #token} or
+     * {@link #predecessorToken} -- both of which {@link #hasAnythingToClear()} used to consult
+     * exclusively. Without this field, {@code /ulticloud logout} run while a login's magic-link poll
+     * is still running (no token committed yet, no predecessor either) reported "Not currently
+     * logged in to UltiCloud." even though it genuinely tore the poll down -- observed on a real
+     * Paper 1.21.11 server. The safety half of this row (a stale approval landing after this logout
+     * must not reactivate the server) was never in question: {@link #commit(TokenEntity)}'s own
+     * {@link #invalidated} check already rejects it regardless of this field. Only the reported
+     * OUTCOME of the logout that cancelled the poll was wrong.
+     * <p>
+     * Captured in {@link #invalidate()}, immediately before {@link #stopPolling()} clears
+     * {@link #pollTask} -- reading {@link #pollTask} any later would always see {@code null} and this
+     * field could never become {@code true}. Reset back to {@code false} in
+     * {@link #clearPersisted()}'s own {@code finally} block, alongside {@link #token} and
+     * {@link #predecessorToken}, for the same reason those two are reset there: a second,
+     * independent {@code logout()} call on this same (already-invalidated) session instance -- e.g. a
+     * second {@code /ulticloud logout} before any new login replaces it -- must not keep reporting
+     * success for a poll this session already reported cancelling once.
+     */
+    private volatile boolean pendingAuthenticationCancelled;
+
     private ScheduledExecutorService pollExecutor;
     private ScheduledFuture<?> pollTask;
     private ScheduledExecutorService refreshExecutor;
@@ -307,10 +335,19 @@ final class CloudSession {
      * so {@code sendBatch()} does not find the socket already down with a non-empty queue -- is
      * preserved: this step still runs before {@link #closeWebSocketClient()} below, just now under
      * the same lock as everything else.
+     * <p>
+     * <b>Real-machine UAT fix, plan 16-08:</b> {@link #pendingAuthenticationCancelled} is captured
+     * here -- reading {@link #pollTask} BEFORE {@link #stopPolling()} below clears it -- so
+     * {@link #hasAnythingToClear()} can report that this call genuinely cancelled a real, in-flight
+     * authentication attempt even though nothing was ever committed to {@link #token}. See that
+     * field's own javadoc for the full account.
      */
     synchronized void invalidate() {
         invalidated = true;
         shutdownLogStreamManager();
+        if (pollTask != null) {
+            pendingAuthenticationCancelled = true;
+        }
         stopPolling();
         stopTokenRefreshScheduler();
         closeWebSocketClient();
@@ -406,17 +443,21 @@ final class CloudSession {
     }
 
     /**
-     * @return {@code true} if {@link #clearPersisted()} has something to compare-and-delete on
-     *         this session -- either this session's own {@link #token}, or (round-13 review, P1)
-     *         the nearest ancestor's {@link #predecessorToken} -- {@code false} only if BOTH are
-     *         {@code null}, meaning there is genuinely nothing on disk this session's lineage is
-     *         responsible for. {@code CloudAuthManager#logout()} gates its "nothing to clear" early
-     *         return on this, not on {@link #getToken()} alone, so a session that never itself held
-     *         a token but replaced one that did (exhaustion followed by {@code /ulticloud login})
-     *         still reaches {@link #clearPersisted()} for that predecessor's sake.
+     * @return {@code true} if this session's teardown genuinely cancelled or is responsible for
+     *         clearing something -- this session's own {@link #token}, (round-13 review, P1) the
+     *         nearest ancestor's {@link #predecessorToken}, or (real-machine UAT fix, plan 16-08) a
+     *         magic-link poll that was still in flight and just got cancelled by
+     *         {@link #invalidate()} (see {@link #pendingAuthenticationCancelled}'s own javadoc).
+     *         {@code false} only if all three are absent, meaning this teardown genuinely found
+     *         nothing pending -- neither a credential on disk nor an authentication attempt in
+     *         progress. {@code CloudAuthManager#logout()} gates its "nothing to clear" early return
+     *         on this, not on {@link #getToken()} alone, so a session that never itself held a token
+     *         but replaced one that did (exhaustion followed by {@code /ulticloud login}), or one
+     *         that cancelled a poll before it ever committed anything, still reports a genuine
+     *         logout occurred.
      */
     boolean hasAnythingToClear() {
-        return token != null || predecessorToken != null;
+        return token != null || predecessorToken != null || pendingAuthenticationCancelled;
     }
 
     /** @return this session's WebSocket client, or {@code null} if none is connected */
@@ -488,6 +529,12 @@ final class CloudSession {
      * round-1 race that method's own javadoc documents: a concurrent, genuinely newer commit still
      * writes a different access token value, so the comparison still correctly fails against it
      * either way.
+     * <p>
+     * <b>Real-machine UAT fix, plan 16-08:</b> also resets {@link #pendingAuthenticationCancelled}
+     * back to {@code false} in the same {@code finally} block, for the same reason {@link #token} and
+     * {@link #predecessorToken} are reset here -- a second, independent {@code logout()} call on this
+     * same (already-invalidated) session must not keep reporting success for a poll this session
+     * already reported cancelling once.
      *
      * @throws IOException if the underlying write fails
      */
@@ -497,6 +544,7 @@ final class CloudSession {
         } finally {
             this.token = null;
             this.predecessorToken = null;
+            this.pendingAuthenticationCancelled = false;
         }
     }
 
