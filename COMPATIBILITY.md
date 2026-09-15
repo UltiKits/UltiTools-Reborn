@@ -271,6 +271,15 @@ This section governs the third kind.
   behaviour, now it throws `IllegalArgumentException`).
 - Changes in performance, memory footprint, log wording, or exception message text.
 - Security fixes. These may land in a PATCH without prior notice.
+- Refreshing an extracted resource file nobody has customised. Before 6.3.0, `saveResources()`
+  skipped an already-extracted `lang/` file unconditionally, so an operator who never touched it
+  kept whatever an older jar first extracted, forever — a defect (#441), not a documented
+  guarantee that the file would stay frozen. As of 6.3.0, a `lang/` file whose recorded extraction
+  hash still matches its on-disk bytes is replaced by the current jar's copy on the next start,
+  with one INFO line naming the file; a file the operator has edited is left alone exactly as
+  before, with only the individual keys whose placeholder count moved resolved from the jar
+  instead (see `ultitools.language.file-refresh`/`ultitools.language.file-preserve` in
+  `FEATURES.md`). No operator who customised a file is affected either way.
 
 ### Behavioral changes that do need one
 
