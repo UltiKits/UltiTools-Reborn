@@ -175,10 +175,18 @@ class CommandManagerKnownCommandsCleanupTest {
      * {@code PrivateMethodReflectionTests} already does.
      */
     private void registerViaFramework(CommandExecutor executor) throws Exception {
+        registerViaFramework(mockPlugin, executor);
+    }
+
+    /**
+     * Same as {@link #registerViaFramework(CommandExecutor)} but for an explicit owning
+     * plugin, so a test can register two different modules under the same primary label.
+     */
+    private void registerViaFramework(UltiToolsPlugin plugin, CommandExecutor executor) throws Exception {
         Method registerMethod = CommandManager.class.getDeclaredMethod(
                 "register", UltiToolsPlugin.class, CommandExecutor.class);
         registerMethod.setAccessible(true);
-        registerMethod.invoke(commandManager, mockPlugin, executor);
+        registerMethod.invoke(commandManager, plugin, executor);
     }
 
     @Test
@@ -279,6 +287,46 @@ class CommandManagerKnownCommandsCleanupTest {
             assertThat(realCommandMap.getKnownCommands().get(FALLBACK_PREFIX + ":shared"))
                     .as("our own namespaced entry must still be removed")
                     .isNull();
+        }
+    }
+
+    @Test
+    @DisplayName("Codex #457 P2: unloading an earlier module must not remove a later module's "
+            + "live command sharing the same primary label under the shared UltiTools prefix")
+    void unregisterAllDoesNotRemoveALaterModulesCommandUnderTheSameSharedPrefixLabel() throws Exception {
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(Bukkit::getPluginManager).thenReturn(realPluginManager);
+            bukkit.when(Bukkit::getLogger).thenReturn(Logger.getLogger("CommandManagerKnownCommandsCleanupTest"));
+
+            UltiToolsPlugin earlierPlugin = mock(UltiToolsPlugin.class);
+            when(earlierPlugin.getPluginName()).thenReturn("EarlierModule");
+            when(earlierPlugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
+
+            UltiToolsPlugin laterPlugin = mock(UltiToolsPlugin.class);
+            when(laterPlugin.getPluginName()).thenReturn("LaterModule");
+            when(laterPlugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
+
+            // Two different modules, both registered through this same CommandManager, so
+            // both use the identical shared UltiTools fallback prefix -- and both declare
+            // the same primary alias. SimpleCommandMap#register's namespaced-key put is
+            // unconditional (knownCommands.put(fallbackPrefix + ":" + label, command), no
+            // conflict check), so the later registration silently overwrites the earlier
+            // module's namespaced entry to point at its own command.
+            registerViaFramework(earlierPlugin, new SharedLabelCommandExecutor());
+            registerViaFramework(laterPlugin, new SharedLabelCommandExecutor());
+
+            Command laterCommand = realCommandMap.getCommand(FALLBACK_PREFIX + ":shared");
+            assertThat(laterCommand).isNotNull();
+
+            commandManager.unregisterAll(earlierPlugin);
+
+            assertThat(realCommandMap.getCommand(FALLBACK_PREFIX + ":shared"))
+                    .as("unloading the EARLIER module must not resolve/remove the LATER module's "
+                            + "live command just because they share a namespaced key")
+                    .isSameAs(laterCommand);
+            assertThat(realCommandMap.getCommand("shared"))
+                    .as("the later module's command must still be dispatchable by its bare label too")
+                    .isSameAs(laterCommand);
         }
     }
 
