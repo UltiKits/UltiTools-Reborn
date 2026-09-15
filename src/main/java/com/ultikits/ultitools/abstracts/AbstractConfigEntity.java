@@ -35,15 +35,19 @@ import lombok.Getter;
  * Abstract class representing a configuration entity.
  * <p>
  * Precondition for subclasses (#363): the constructor must be cheap and free of side effects.
- * Every {@link #validateFields()} call - reached from {@link #init(UltiToolsPlugin)}, {@link
- * #reload()}, and {@link #updateProperties(com.google.gson.JsonObject)} - constructs and
- * discards a second, throwaway instance of this class via {@link #ensureConstructable()} to
- * prove the class still supports one of the framework's two documented construction idioms.
- * That means every configuration load, every reload, and every accepted panel write
- * constructs this class one extra time. A constructor that opens a file, registers a listener,
- * or otherwise does real work pays that cost again on every one of those events, purely to be
- * thrown away. The documented {@code super(configFilePath)}-only idiom is unaffected - it is a
- * single, trivial reflective call.
+ * For any class declaring at least one {@code @ConfigEntry} field, every {@link
+ * #validateFields()} call - reached from {@link #init(UltiToolsPlugin)}, {@link #reload()},
+ * {@link #updateProperties(com.google.gson.JsonObject)}, and {@link
+ * #validateProposedProperties(com.google.gson.JsonObject)} - constructs and discards a second,
+ * throwaway instance of this class via {@link #ensureConstructable()} to prove the class still
+ * supports one of the framework's two documented construction idioms (a class with zero {@code
+ * @ConfigEntry} fields never reaches this call at all - {@link #validateFields()} returns before
+ * it). That means every configuration load, every reload, and every panel write ATTEMPT -
+ * accepted or refused - constructs this class one extra time; the construction happens before
+ * the accept/refuse decision is made, not only when the write is ultimately accepted. A
+ * constructor that opens a file, registers a listener, or otherwise does real work pays that
+ * cost again on every one of those events, purely to be thrown away. The documented {@code
+ * super(configFilePath)}-only idiom is unaffected - it is a single, trivial reflective call.
  */
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Config binder writes/reads private @ConfigEntry fields -- see 08-GATE05-TRIAGE.md
 @Getter
@@ -207,38 +211,16 @@ public abstract class AbstractConfigEntity {
      *                                 - the file is not written and touched fields are restored
      */
     public void updateProperties(JsonObject jsonObject) throws IOException {
-        Gson gson = new Gson();
-        // Phase one: apply to fields only. Remember each touched field's pre-call value first
-        // so a refusal in phase two can restore it - nothing reaches `config` or disk here.
+        // Phase one/two: apply touched fields then validate the full post-update state -
+        // extracted into applyAndValidate() so #358 Part 2's validateProposedProperties(JsonObject)
+        // can share the exact same apply-then-validate contract without persisting.
         List<Field> touchedFields = new ArrayList<>();
         List<Object> previousValues = new ArrayList<>();
-        for (Field field : ReflectionUtil.getFields(this.getClass())) {
-            if (field.isAnnotationPresent(ConfigEntry.class)) {
-                field.setAccessible(true);
-                ConfigEntry annotation = field.getAnnotation(ConfigEntry.class);
-                String path = annotation.path();
-                if (path.isEmpty()) {
-                    path = field.getName();
-                }
-                if (jsonObject.has(path)) {
-                    Object configValue = gson.fromJson(jsonObject.get(path), field.getType());
-                    if (configValue != null) {
-                        touchedFields.add(field);
-                        previousValues.add(ReflectionUtil.getFieldValue(this, field));
-                        ReflectionUtil.setFieldValue(this, field, configValue);
-                    }
-                }
-            }
-        }
-
-        // Phase two: validate the full post-update state, restoring on refusal. Must run
-        // before the first field write below, not merely before the final save call -
-        // otherwise a refusal would still leave the in-memory YamlConfiguration holding
-        // rejected values for a later, unrelated save() to flush. The original exception is
-        // rethrown unchanged - never wrapped, never converted to IOException, never swallowed.
         try {
-            validateFields();
+            applyAndValidate(jsonObject, touchedFields, previousValues);
         } catch (RuntimeException e) {
+            // The original exception is rethrown unchanged - never wrapped, never converted to
+            // IOException, never swallowed.
             for (int i = 0; i < touchedFields.size(); i++) {
                 ReflectionUtil.setFieldValue(this, touchedFields.get(i), previousValues.get(i));
             }
@@ -257,6 +239,74 @@ public abstract class AbstractConfigEntity {
             config.set(path, ReflectionUtil.getFieldValue(this, field));
         }
         config.save(ultiToolsPlugin.getConfigFile(configFilePath));
+    }
+
+    /**
+     * Validates that applying {@code jsonObject}'s touched fields would NOT violate any
+     * {@code @Range}/{@code @NotEmpty}/{@code @Size}/{@code @Pattern} constraint, without
+     * persisting anything to disk or leaving any field changed (#358 Part 2).
+     * <p>
+     * Used by {@code ConfigManager.loadFromJson(String)} to validate every entity touched by a
+     * multi-file panel-pushed batch BEFORE persisting any of them - a refusal on entity N must
+     * not leave entities 1..N-1 already written to disk. This method always restores every
+     * field it touched, whether validation passes or fails; the caller is expected to call
+     * {@link #updateProperties(JsonObject)} itself afterward (which re-validates - cheap on the
+     * documented idiom - and persists) once every entity in its own batch has passed this check.
+     *
+     * @param jsonObject the JSON object containing the candidate new properties
+     * @throws ConfigurationException with {@link com.ultikits.ultitools.exceptions.ErrorCode#CONFIG_VALIDATION_FAILED}
+     *                                 if the candidate post-update field state would violate a
+     *                                 validation constraint
+     */
+    public void validateProposedProperties(JsonObject jsonObject) {
+        List<Field> touchedFields = new ArrayList<>();
+        List<Object> previousValues = new ArrayList<>();
+        try {
+            applyAndValidate(jsonObject, touchedFields, previousValues);
+        } finally {
+            for (int i = 0; i < touchedFields.size(); i++) {
+                ReflectionUtil.setFieldValue(this, touchedFields.get(i), previousValues.get(i));
+            }
+        }
+    }
+
+    /**
+     * Applies every {@code jsonObject} field this class declares via {@code @ConfigEntry} to
+     * this instance, then validates the resulting state via {@link #validateFields()}. Never
+     * itself persists or restores anything - callers decide what happens next. {@code
+     * touchedFieldsOut}/{@code previousValuesOut} are populated even when {@link
+     * #validateFields()} throws, so a caller can still restore exactly what this call touched.
+     *
+     * @param jsonObject        the JSON object containing the candidate new properties
+     * @param touchedFieldsOut  populated, in application order, with every field this call applied
+     * @param previousValuesOut populated in the same order with each field's pre-call value
+     * @throws ConfigurationException with {@link com.ultikits.ultitools.exceptions.ErrorCode#CONFIG_VALIDATION_FAILED}
+     *                                 if the post-update field state violates a constraint
+     */
+    private void applyAndValidate(JsonObject jsonObject, List<Field> touchedFieldsOut, List<Object> previousValuesOut) {
+        Gson gson = new Gson();
+        for (Field field : ReflectionUtil.getFields(this.getClass())) {
+            if (field.isAnnotationPresent(ConfigEntry.class)) {
+                field.setAccessible(true);
+                ConfigEntry annotation = field.getAnnotation(ConfigEntry.class);
+                String path = annotation.path();
+                if (path.isEmpty()) {
+                    path = field.getName();
+                }
+                if (jsonObject.has(path)) {
+                    Object configValue = gson.fromJson(jsonObject.get(path), field.getType());
+                    if (configValue != null) {
+                        touchedFieldsOut.add(field);
+                        previousValuesOut.add(ReflectionUtil.getFieldValue(this, field));
+                        ReflectionUtil.setFieldValue(this, field, configValue);
+                    }
+                }
+            }
+        }
+        // Must run before any field write above is persisted - otherwise a refusal would still
+        // leave the in-memory YamlConfiguration holding rejected values for a later, unrelated
+        // save() to flush.
+        validateFields();
     }
 
     /**

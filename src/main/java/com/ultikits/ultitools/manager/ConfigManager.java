@@ -372,16 +372,33 @@ public class ConfigManager {
      * {@code @Pattern} constraint refuses with {@link com.ultikits.ultitools.exceptions.ConfigurationException}
      * instead of being written - the operator's file is not modified for that config entity
      * (SILENT-14).
+     * <p>
+     * Since gate-1 CR-02 (#358 Part 2), the WHOLE batch this call touches - potentially several
+     * config entities across several plugins in one JSON payload - is validated before any of
+     * them is persisted: a first pass calls {@link AbstractConfigEntity#validateProposedProperties}
+     * on every touched entity (applying nothing to disk, restoring every field it touched
+     * regardless of outcome), and only once every entity in the batch has passed does a second
+     * pass call {@link AbstractConfigEntity#updateProperties} on each to actually apply and
+     * persist. A refusal on entity N therefore leaves entities 1..N-1 exactly as they were before
+     * this call - none of them written to disk - rather than the pre-CR-02 behaviour where files
+     * 1..N-1 were already applied and persisted by the time entity N's refusal was discovered.
      *
      * @param json JSON string
      * @throws IOException              if an I/O error occurs
      * @throws com.ultikits.ultitools.exceptions.ConfigurationException if a value violates its
-     *                                 validation constraint
+     *                                 validation constraint - nothing in this call's batch is
+     *                                 persisted when this is thrown
      */
     public final void loadFromJson(String json) throws IOException {
         Gson gson = new Gson();
         Type mapType = new TypeToken<Map<String, Map<String, JsonObject>>>() {}.getType();
         Map<String, Map<String, JsonObject>> parseObject = gson.fromJson(json, mapType);
+
+        // Phase one: collect every (entity, payload) pair this batch touches, in the same
+        // traversal order the pre-CR-02 implementation applied them in, and validate each
+        // WITHOUT persisting - a refusal here must not have written anything for ANY entity yet.
+        List<AbstractConfigEntity> touchedEntities = new ArrayList<>();
+        List<JsonObject> touchedPayloads = new ArrayList<>();
         for (String pluginName : parseObject.keySet()) {
             for (UltiToolsPlugin ultiToolsPlugin : pluginConfigMap.keySet()) {
                 if (!ultiToolsPlugin.getPluginName().equals(pluginName)) {
@@ -392,12 +409,20 @@ public class ConfigManager {
                 for (String configPath : configEntityMap.keySet()) {
                     if (pluginParseData.containsKey(configPath)) {
                         AbstractConfigEntity config = configEntityMap.get(configPath);
-                        config.updateProperties(pluginParseData.get(configPath));
-                        configEntityMap.put(configPath, config);
+                        JsonObject payload = pluginParseData.get(configPath);
+                        config.validateProposedProperties(payload);
+                        touchedEntities.add(config);
+                        touchedPayloads.add(payload);
                     }
                 }
-                pluginConfigMap.put(ultiToolsPlugin, configEntityMap);
             }
+        }
+
+        // Phase two: every entity in this batch passed validation - apply and persist each for
+        // real. updateProperties() re-validates (cheap on the documented construction idiom,
+        // per #363) before it writes, so this is never the first validation an entity sees.
+        for (int i = 0; i < touchedEntities.size(); i++) {
+            touchedEntities.get(i).updateProperties(touchedPayloads.get(i));
         }
     }
 
