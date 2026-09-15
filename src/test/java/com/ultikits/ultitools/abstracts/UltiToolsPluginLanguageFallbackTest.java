@@ -948,4 +948,60 @@ class UltiToolsPluginLanguageFallbackTest {
         assertThat((Boolean) method.invoke(plugin, readOnlyFile)).isTrue();
         assertThat((Boolean) method.invoke(plugin, writableFile)).isFalse();
     }
+
+    @Test
+    @DisplayName("an explicit format index of zero does not silently report arity 0 -- forces the "
+            + "bundled value for that key instead of comparing equal to 'no placeholder at all' "
+            + "(Codex round 11, P2, discussion on UltiToolsPlugin.java:610)")
+    void zeroExplicitFormatIndexDoesNotSilentlyReportZeroArityAndForcesBundledValue() throws Throwable {
+        // Java Formatter indexes are 1-based; String.format throws
+        // IllegalFormatArgumentIndexException for index 0. Before this fix, placeholderArity's
+        // Math.max(highestPosition, 0) never raised highestPosition above 0 for "%0$s" alone, so
+        // it compared EQUAL to a bundled value with no placeholder at all (also arity 0) --
+        // the malformed disk value survived unflagged instead of being treated the same
+        // conservative way the already-handled oversized-index case (round 3) is.
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"known\":\"safe bundled value\",\"other\":\"stable\"}",
+                "{\"known\":\"Uses %0$s\",\"other\":\"stable-customised\"}");
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
+
+        Language language = resolveProvenanceLanguage(fixture);
+
+        assertThat(language.getLocalizedText("known")).isEqualTo("safe bundled value");
+        assertThat(language.getLocalizedText("other")).isEqualTo("stable-customised");
+        verify(fixture.mockLogger, times(1)).warning(argThat((String msg) -> msg.contains("known")));
+    }
+
+    @Test
+    @DisplayName("a language file that is a symbolic link is treated as operator-pinned -- never "
+            + "replaced with a regular file (Codex round 11, P2, discussion on "
+            + "UltiToolsPlugin.java:776)")
+    void symlinkLanguageFileIsTreatedAsOperatorPinnedAndNeverReplaced() throws Throwable {
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"greeting\":\"Hi v2\"}", "{\"greeting\":\"Hi v1\"}");
+        File diskFile = new File(fixture.resourceFolder, "lang" + File.separator + "en.json");
+        byte[] originalBytes = Files.readAllBytes(diskFile.toPath());
+
+        // Simulates an operator-managed shared-translations layout: lang/en.json is a symlink to
+        // a separate real file carrying the same bytes as the recorded baseline.
+        File linkTarget = new File(fixture.resourceFolder, "shared-en.json");
+        Files.write(linkTarget.toPath(), originalBytes);
+        Files.delete(diskFile.toPath());
+        try {
+            Files.createSymbolicLink(diskFile.toPath(), linkTarget.toPath());
+        } catch (UnsupportedOperationException | IOException e) {
+            Assumptions.abort("Symbolic links not supported on this filesystem; skipping. " + e);
+            return;
+        }
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", ResourceHashSidecar.sha256(diskFile));
+
+        Language language = resolveProvenanceLanguage(fixture);
+
+        // Not refreshed: the symlink survives, still pointing at the original (v1) content --
+        // the atomic move must never have replaced it with a regular file.
+        assertThat(language.getLocalizedText("greeting")).isEqualTo("Hi v1");
+        assertThat(Files.isSymbolicLink(diskFile.toPath())).isTrue();
+        assertThat(Files.readAllBytes(diskFile.toPath())).isEqualTo(originalBytes);
+        verify(fixture.mockLogger, never()).info(anyString());
+    }
 }
