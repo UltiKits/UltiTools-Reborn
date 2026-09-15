@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -203,6 +204,47 @@ class UltiToolsPluginLanguageFallbackTest {
 
         assertThat(language.getLocalizedText("greeting")).isEqualTo("你好");
         verify(mockLogger).warn(argThat((String msg) -> msg.contains("TestModule") && msg.contains("fr")));
+    }
+
+    /**
+     * 16-05 (CodeQL {@code java/zipslip} alert #11): a hostile {@code config.yml language:} value
+     * is never restricted by {@link com.ultikits.ultitools.interfaces.Localized#languageCodeOf(String)}'s
+     * allowlist at all -- {@code resolveLanguageCode()} returns the configured code UNCHANGED
+     * whenever {@code supported()} is empty ("no information"), per its own documented contract.
+     * The file-boundary guard added to {@code loadLanguageFromDisk} must therefore be the one
+     * catching this case: the resolved code must never be turned into a {@link File} outside the
+     * module's own {@code lang/} directory, and resolution must degrade to the same empty-
+     * dictionary fallback {@code createLanguageFromPath} already uses when no language file is
+     * loadable at all -- never throw, and never read or write anything outside {@code lang/}.
+     */
+    @Test
+    @DisplayName("16-05: 越权的配置语言代码不会逃出 lang/ 目录，安全回退到空字典 (CodeQL java/zipslip #11)")
+    void hostileConfiguredLanguageCodeNeverEscapesLangDirectory() throws Throwable {
+        String marker = "zipslip-marker-" + System.nanoTime();
+        String hostileCode = "../" + marker;
+
+        UltiToolsPlugin plugin = mock(FixturePlugin.class);
+        when(plugin.getLanguageCode()).thenReturn(hostileCode);
+        when(plugin.supported()).thenReturn(Collections.emptyList());
+        when(plugin.getPluginName()).thenReturn("TestModule");
+        PluginLogger mockLogger = mock(PluginLogger.class);
+        when(plugin.getLogger()).thenReturn(mockLogger);
+
+        Language language = invokeCreateLanguageFromPath(plugin, tempDir.getAbsolutePath());
+
+        // Never resolves to a real dictionary -- every i18n(...) lookup renders its own raw key.
+        assertThat(language.getLocalizedText("greeting")).isEqualTo("greeting");
+
+        // The escaping path (tempDir's PARENT, one level above the lang/ directory) must never
+        // have been touched, for any of the three language-file extensions.
+        File parentDir = tempDir.getParentFile();
+        assertThat(new File(parentDir, marker + ".json")).doesNotExist();
+        assertThat(new File(parentDir, marker + ".yml")).doesNotExist();
+        assertThat(new File(parentDir, marker + ".yaml")).doesNotExist();
+
+        // The guard must have refused the escaping path and said so, naming the module.
+        verify(mockLogger, atLeastOnce()).warn(argThat((String msg) ->
+                msg.contains("TestModule") && msg.contains("escape")));
     }
 
     @Test
