@@ -183,6 +183,40 @@ public class ConfigManager {
     }
 
     /**
+     * Registers every {@code @ConfigEntity} class found across MULTIPLE scan packages for one
+     * plugin, as ONE atomic batch (CR-01, #358 Part 1 gate-1 finding).
+     * <p>
+     * {@code UltiToolsPlugin.initConfig()} calls {@link #registerAll(UltiToolsPlugin, String,
+     * ClassLoader)} once per surviving entry of {@code DependencyUtils.getPluginPackages(plugin)}
+     * - and #362's de-duplication only collapses NESTED scan packages, so two unrelated sibling
+     * packages (declared via {@code @ComponentScan(basePackages = {...})} or {@code
+     * @UltiToolsModule(scanBasePackages = {...})}) both survive and are scanned in two SEPARATE
+     * calls. Each single-package call's own snapshot/rollback is correctly scoped to not disturb
+     * a PRIOR call's successful work - which means a refusal on the SECOND package left the
+     * FIRST package's already-committed entries stranded, because neither call's snapshot ever
+     * captured "before this plugin's whole scan", only "before this one call". This overload
+     * snapshots once, before any package in {@code packageNames} is scanned, and rolls back to
+     * that ONE snapshot if any package's scan refuses - so a plugin whose scan packages span more
+     * than one package registers all of them, or none.
+     *
+     * @param plugin       UltiTools module
+     * @param packageNames every package name to scan, in the order {@code
+     *                     DependencyUtils.getPluginPackages} returns them
+     * @param classLoader  Class loader
+     */
+    public void registerAll(UltiToolsPlugin plugin, String[] packageNames, ClassLoader classLoader) {
+        Set<String> registeredBeforeThisPlugin = snapshotRegisteredPaths(plugin);
+        try {
+            for (String packageName : packageNames) {
+                registerAll(plugin, packageName, classLoader);
+            }
+        } catch (RuntimeException e) {
+            rollBackRegisteredPaths(plugin, registeredBeforeThisPlugin);
+            throw e;
+        }
+    }
+
+    /**
      * Get config entity.
      *
      * @param plugin UltiTools module
