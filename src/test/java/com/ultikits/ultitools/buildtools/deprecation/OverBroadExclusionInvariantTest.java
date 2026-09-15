@@ -70,6 +70,24 @@ import java.util.stream.Stream;
  *       predate the input it was compiled from), not by how much wall-clock time elapsed.</li>
  * </ol>
  *
+ * <p><b>Tie-breaking, and why timestamps are compared at native precision, not truncated to
+ * milliseconds.</b> A second external-review round (Codex, PR #480) correctly noted that comparing
+ * timestamps truncated with {@code FileTime.toMillis()} manufactures collisions a filesystem's own,
+ * usually finer, clock resolution would not produce - two genuinely distinct real timestamps (a
+ * stale compile, and a later source save) can round to the identical millisecond value even when
+ * the underlying filesystem resolves time far more finely (measured on this repository's own
+ * filesystem: sub-millisecond, effectively microsecond-scale, resolution). {@link
+ * java.nio.file.attribute.FileTime#compareTo} is used directly instead, at whatever precision
+ * {@link Files#getLastModifiedTime} actually reports, removing that self-inflicted truncation
+ * entirely. A genuine tie AT that native precision - the class's {@code .class} file and its
+ * top-level source resolving to the exact same instant - is resolved toward KEEP, not DROP:
+ * dropping on a tie would risk re-triggering CR-01's own failure mode (a real, current class
+ * silently vanishing from the derived set) on any filesystem or CI environment coarse enough to
+ * alias a save and its own immediate compile, which is a more likely and more damaging occurrence
+ * than the reverse - a stale artefact's write time landing in the exact same instant as a LATER,
+ * unrelated source edit is the far rarer coincidence of the two, and only rarer still once
+ * truncation is removed.</p>
+ *
  * <p>The read_first task note's other candidate - reading the compiler plugin's own {@code
  * target/maven-status/} incremental-build bookkeeping - was reconsidered and rejected here too: that
  * bookkeeping records which SOURCE FILES were compiled, not which classes a Lombok/annotation
@@ -337,6 +355,38 @@ class OverBroadExclusionInvariantTest {
     }
 
     @Test
+    @DisplayName("CR-01/Codex round 2: a class whose .class file's timestamp exactly ties its top-level source "
+            + "file's timestamp (at the precision this check compares - no millisecond truncation) is kept, not "
+            + "dropped - a documented tie-break, not an accident of rounding")
+    void exactTimestampTieIsResolvedTowardKeepingTheClass(@TempDir Path tempDir) throws IOException {
+        Path srcRoot = tempDir.resolve("src/main/java");
+        Path classesRoot = tempDir.resolve("target/classes");
+        Path pkg = Paths.get("com", "example", "tie");
+        Files.createDirectories(srcRoot.resolve(pkg));
+        Files.createDirectories(classesRoot.resolve(pkg));
+
+        Path widgetJava = srcRoot.resolve(pkg).resolve("Widget.java");
+        Files.write(widgetJava, (
+                "package com.example.tie;\n"
+                        + "public class Widget {\n"
+                        + "}\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        FileTime tiedInstant = FileTime.fromMillis(System.currentTimeMillis());
+        Files.setLastModifiedTime(widgetJava, tiedInstant);
+
+        Path widgetClass = classesRoot.resolve(pkg).resolve("Widget.class");
+        Files.write(widgetClass, new byte[] {0});
+        // Deliberately the EXACT same FileTime value as the source file - not "close", identical.
+        Files.setLastModifiedTime(widgetClass, tiedInstant);
+
+        Set<String> classes = scanExistingClasses(srcRoot, classesRoot);
+
+        assertThat(classes)
+                .as("an exact timestamp tie must not be treated as staleness - see the class javadoc's "
+                        + "tie-breaking rationale")
+                .contains("com.example.tie.Widget");
+    }
+
+    @Test
     @DisplayName("nested/inner class naming in the derived set matches the exact $-qualified exclusion-key form")
     void nestedClassNamingMatchesExclusionKeyForm(@TempDir Path tempDir) throws IOException {
         Path srcRoot = tempDir.resolve("src/main/java");
@@ -422,7 +472,14 @@ class OverBroadExclusionInvariantTest {
             return result;
         }
 
-        Map<String, Long> classMtimeMillis = new LinkedHashMap<>();
+        // FileTime, not a millisecond long: Files.getLastModifiedTime already carries whatever
+        // native precision the filesystem reports (commonly sub-millisecond, even nanosecond, on
+        // ext4/APFS/NTFS) - truncating to milliseconds before comparing throws that precision away
+        // for free and manufactures exactly the kind of "two real, distinct timestamps alias to
+        // the same rounded value" collision an external review (Codex, PR #480 round 2) flagged as
+        // a concrete risk. Comparing FileTime.compareTo() directly uses the filesystem's own
+        // resolution instead of an artificial one this class would otherwise impose.
+        Map<String, FileTime> classMtimes = new LinkedHashMap<>();
         try (Stream<Path> paths = Files.walk(classesRoot)) {
             paths.filter(Files::isRegularFile)
                     .filter(p -> p.toString().endsWith(".class"))
@@ -431,7 +488,7 @@ class OverBroadExclusionInvariantTest {
                         String withoutSuffix = relative.substring(0, relative.length() - ".class".length());
                         String fqcn = withoutSuffix.replace(java.io.File.separatorChar, '.');
                         try {
-                            classMtimeMillis.put(fqcn, Files.getLastModifiedTime(p).toMillis());
+                            classMtimes.put(fqcn, Files.getLastModifiedTime(p));
                         } catch (IOException e) {
                             throw new UncheckedIOException(e);
                         }
@@ -440,20 +497,20 @@ class OverBroadExclusionInvariantTest {
 
         // Cache per top-level source file so a compilation unit with many nested classes only
         // stats its own .java file once.
-        Map<String, Long> sourceMtimeMillisByTopLevel = new LinkedHashMap<>();
+        Map<String, FileTime> sourceMtimesByTopLevel = new LinkedHashMap<>();
 
-        for (Map.Entry<String, Long> entry : classMtimeMillis.entrySet()) {
+        for (Map.Entry<String, FileTime> entry : classMtimes.entrySet()) {
             String fqcn = entry.getKey();
             String topLevelFqcn = topLevelOf(fqcn);
 
-            Long sourceMtime = sourceMtimeMillisByTopLevel.get(topLevelFqcn);
-            if (sourceMtime == null && !sourceMtimeMillisByTopLevel.containsKey(topLevelFqcn)) {
+            FileTime sourceMtime = sourceMtimesByTopLevel.get(topLevelFqcn);
+            if (sourceMtime == null && !sourceMtimesByTopLevel.containsKey(topLevelFqcn)) {
                 Path sourceCandidate = srcRoot.resolve(
                         topLevelFqcn.replace('.', java.io.File.separatorChar) + ".java");
                 if (Files.isRegularFile(sourceCandidate)) {
-                    sourceMtime = Files.getLastModifiedTime(sourceCandidate).toMillis();
+                    sourceMtime = Files.getLastModifiedTime(sourceCandidate);
                 }
-                sourceMtimeMillisByTopLevel.put(topLevelFqcn, sourceMtime);
+                sourceMtimesByTopLevel.put(topLevelFqcn, sourceMtime);
             }
             if (sourceMtime == null) {
                 continue; // (a) top-level source is gone - the original #414 hazard
@@ -466,7 +523,7 @@ class OverBroadExclusionInvariantTest {
             // falls behind the source's CURRENT timestamp regardless of how soon afterward the
             // file was recompiled, closing the race a same-compile-file tolerance window could not
             // (reviewed and replaced - see the class javadoc).
-            if (entry.getValue() < sourceMtime) {
+            if (entry.getValue().compareTo(sourceMtime) < 0) {
                 continue;
             }
 
