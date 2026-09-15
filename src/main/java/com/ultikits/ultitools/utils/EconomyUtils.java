@@ -6,9 +6,12 @@ import org.bukkit.OfflinePlayer;
 import org.bukkit.plugin.RegisteredServiceProvider;
 
 import javax.annotation.Nullable;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.ConcurrentModificationException;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -396,10 +399,29 @@ public final class EconomyUtils {
      * module's own scan packages, using the same {@link Thread#getStackTrace()} idiom
      * {@code SystemLogHandler} already relies on for trigger inference — no {@code StackWalker},
      * since this project's bytecode target is Java 8.
+     * <p>
+     * [Rule 1 fix, Codex P2, PR #463]: {@code pluginManager.getPluginList()} is
+     * {@code PluginManager}'s live, unsynchronized {@code ArrayList} (returned directly by its
+     * {@code @Getter}) — {@code PluginInstallUtils#uninstallPlugin} mutates that same list via
+     * {@code .remove(...)}, reachable from a normal {@code /upm uninstall} command. A module
+     * calling this facade from an async command or {@code @Scheduled(async = true)} task can race
+     * that mutation and see {@link ConcurrentModificationException} instead of a fallback value.
+     * Snapshotting into a fresh {@link ArrayList} narrows the window, but does not close it:
+     * {@code ArrayList}'s copy constructor reads via {@code toArray()}, which itself reads the
+     * live {@code elementData} array and {@code size} field with no synchronization and no
+     * fail-fast modCount check — under a genuine cross-thread race, a structural change mid-copy
+     * can leave a trailing {@code null} in the copied array instead of ever throwing
+     * {@link ConcurrentModificationException} at all (Codex P2, PR #463, follow-up finding), which
+     * would otherwise surface as an uncaught {@link NullPointerException} from
+     * {@code plugin.getClass()} below. Both are the same underlying condition — attribution raced
+     * a concurrent structural change — so both are caught together and treated exactly like an
+     * already-existing case this method documents: unattributable, return {@code null} — matching
+     * this class's "never throws" contract (see {@link #log(String, boolean)}).
      *
      * @return the attributed module's name, or {@code null} when nothing on the framework's own
      *         plugin list is currently reachable (no live {@link UltiTools} instance, no plugin
-     *         manager, or no registered module's scan package appears anywhere on the stack)
+     *         manager, no registered module's scan package appears anywhere on the stack, or the
+     *         plugin list raced a concurrent structural change during attribution)
      */
     private static String attributeCallingModule() {
         UltiTools instance = UltiTools.getInstance();
@@ -411,24 +433,36 @@ public final class EconomyUtils {
             return null;
         }
         Map<String, String> prefixToModule = new LinkedHashMap<>();
-        for (UltiToolsPlugin plugin : pluginManager.getPluginList()) {
-            for (String pkg : pluginManager.getPluginScanPackages(plugin.getClass())) {
-                prefixToModule.putIfAbsent(pkg, plugin.getPluginName());
+        try {
+            List<UltiToolsPlugin> pluginsSnapshot = new ArrayList<>(pluginManager.getPluginList());
+            for (UltiToolsPlugin plugin : pluginsSnapshot) {
+                for (String pkg : pluginManager.getPluginScanPackages(plugin.getClass())) {
+                    prefixToModule.putIfAbsent(pkg, plugin.getPluginName());
+                }
             }
+        } catch (ConcurrentModificationException | NullPointerException e) {
+            return null;
         }
         return attributeModule(Thread.currentThread().getStackTrace(), prefixToModule);
     }
 
     /**
      * Pure: given a stack trace and a map from package prefix to module name, returns the module
-     * name of the first frame whose class name starts with one of the map's prefixes, or
+     * name attributed to the first (most-recent) frame that matches ANY mapped prefix, or
      * {@code null} when no frame matches — including the empty-input cases (a null/empty stack, or
      * an empty prefix map, as when no module is registered yet). Package-private so
      * {@code EconomyUtilsReportingTest} can unit-test the attribution logic itself with synthetic
      * input, independent of a live {@link UltiTools} instance or real registered modules.
+     * <p>
+     * When a single frame matches more than one mapped prefix — e.g. two registered modules declare
+     * nested scan roots {@code "com.example"} and {@code "com.example.shop"}, and the frame's class
+     * is under {@code com.example.shop} — the <b>most specific (longest) matching prefix wins</b>,
+     * independent of {@code prefixToModule}'s iteration/insertion order (Codex P2, PR #463, #482).
+     * Selecting by insertion order alone let module *load* order silently decide attribution for a
+     * frame that unambiguously belongs to the more specific package.
      *
      * @param stack          the stack trace to search, most-recent frame first
-     * @param prefixToModule package prefix to module name, in preference order
+     * @param prefixToModule package prefix to module name; order does not affect the result
      * @return the attributed module name, or {@code null} when nothing matches
      */
     static String attributeModule(StackTraceElement[] stack, Map<String, String> prefixToModule) {
@@ -437,14 +471,25 @@ public final class EconomyUtils {
         }
         for (StackTraceElement frame : stack) {
             String className = frame.getClassName();
+            String bestPrefix = null;
+            String bestModule = null;
             for (Map.Entry<String, String> entry : prefixToModule.entrySet()) {
                 String pkg = entry.getKey();
                 // [Rule 1 fix, Codex P2, 16-07]: a raw String#startsWith("com.example.foo") also
                 // matches the unrelated sibling package "com.example.foobar" -- require an actual
                 // package boundary (either an exact match, or the prefix followed by '.').
-                if (className.equals(pkg) || className.startsWith(pkg + ".")) {
-                    return entry.getValue();
+                boolean matches = className.equals(pkg) || className.startsWith(pkg + ".");
+                if (matches && (bestPrefix == null || pkg.length() > bestPrefix.length())) {
+                    // [Rule 1 fix, Codex P2, PR #463/#482]: when this frame also matches a
+                    // shorter/broader prefix already seen (e.g. "com.example" vs
+                    // "com.example.shop"), keep the longer one -- the most specific package is the
+                    // frame's actual owner, regardless of which entry the map iterates first.
+                    bestPrefix = pkg;
+                    bestModule = entry.getValue();
                 }
+            }
+            if (bestModule != null) {
+                return bestModule;
             }
         }
         return null;

@@ -9,11 +9,14 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
+import org.bukkit.OfflinePlayer;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.ServicePriority;
 import org.junit.jupiter.api.AfterEach;
@@ -26,7 +29,9 @@ import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
 import org.mockito.ArgumentCaptor;
 
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.services.EconomyProvider;
 import com.ultikits.ultitools.services.impl.VaultEconomyProvider;
 
@@ -223,6 +228,130 @@ class EconomyUtilsReportingTest {
         assertThat(EconomyUtils.setup()).isTrue();
     }
 
+    // Codex P2, PR #463: three DISTINCT declared subclasses, not three mock(UltiToolsPlugin.class)
+    // instances of the same abstract type. Mockito/ByteBuddy generates and reuses ONE dynamic
+    // proxy subclass per mocked TYPE (not per instance), so three mocks of the bare
+    // UltiToolsPlugin.class would all share the identical runtime Class -- silently collapsing
+    // three intended per-plugin getPluginScanPackages(Class) stubs into one, with each when(...)
+    // call's own argument-evaluation re-triggering whatever stub was already active for that
+    // shared Class and overwriting it. That collision was caught only by observing its actual
+    // symptom: the plugin-list mutation fired during test SETUP, before the real loop the test
+    // means to exercise ever ran. Distinct declared types guarantee distinct mock classes.
+    private abstract static class FixturePluginA extends UltiToolsPlugin {
+    }
+
+    private abstract static class FixturePluginB extends UltiToolsPlugin {
+    }
+
+    private abstract static class FixturePluginC extends UltiToolsPlugin {
+    }
+
+    @Test
+    @DisplayName("11: a concurrent mutation of PluginManager's live plugin list during attribution does not propagate ConcurrentModificationException (Codex P2, PR #463)")
+    void attributeCallingModule_concurrentPluginListMutation_doesNotPropagateCME() {
+        // PluginManager#getPluginList() returns its live, unsynchronized ArrayList directly (see
+        // PluginManager.java:103 -- @Getter over "private final List<UltiToolsPlugin> pluginList
+        // = new ArrayList<>()"), and PluginInstallUtils#uninstallPlugin mutates that same list via
+        // .remove(...), reachable from a normal /upm uninstall command. A module calling this
+        // economy facade from an async command or @Scheduled(async = true) task can race that
+        // mutation. Reproduced deterministically (no real thread timing needed): the first
+        // plugin's own getPluginScanPackages() lookup removes the SECOND of three plugins from the
+        // SAME live list as a side effect, mid-iteration -- exactly the ArrayList#modCount change a
+        // fail-fast iterator detects, regardless of whether the real-world mutator is a second
+        // thread or (as here) a re-entrant call on this one. A third plugin is required: removing
+        // the second-to-last element of a two-element list instead makes ArrayList$Itr#hasNext()
+        // return false (cursor == the new, shrunken size) before next()'s modCount check ever
+        // fires, silently ending the loop one iteration early with no CME at all -- masking the
+        // exact bug this test exists to catch.
+        PluginManager pluginManager = mock(PluginManager.class);
+        List<UltiToolsPlugin> livePluginList = new ArrayList<>();
+        UltiToolsPlugin pluginA = mock(FixturePluginA.class);
+        UltiToolsPlugin pluginB = mock(FixturePluginB.class);
+        UltiToolsPlugin pluginC = mock(FixturePluginC.class);
+        when(pluginA.getPluginName()).thenReturn("ModuleA");
+        when(pluginB.getPluginName()).thenReturn("ModuleB");
+        when(pluginC.getPluginName()).thenReturn("ModuleC");
+        livePluginList.add(pluginA);
+        livePluginList.add(pluginB);
+        livePluginList.add(pluginC);
+        when(pluginManager.getPluginList()).thenReturn(livePluginList);
+        when(pluginManager.getPluginScanPackages(pluginA.getClass())).thenAnswer(invocation -> {
+            livePluginList.remove(pluginB);
+            return new String[] {"com.example.modulea"};
+        });
+        when(pluginManager.getPluginScanPackages(pluginB.getClass()))
+                .thenReturn(new String[] {"com.example.moduleb"});
+        when(pluginManager.getPluginScanPackages(pluginC.getClass()))
+                .thenReturn(new String[] {"com.example.modulec"});
+
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
+            when(ultiTools.getLogger()).thenReturn(mockLogger);
+            when(ultiTools.getPluginManager()).thenReturn(pluginManager);
+        });
+        EconomyUtils.reset();
+
+        assertThatCode(() -> EconomyUtils.getBalance(mock(OfflinePlayer.class)))
+                .as("a concurrent mutation of PluginManager's live plugin list during attribution "
+                        + "must not propagate ConcurrentModificationException out of the economy "
+                        + "facade -- this is a best-effort attribution helper whose existing "
+                        + "'unattributable' fallback (returning null) is the correct outcome here too")
+                .doesNotThrowAnyException();
+    }
+
+    /**
+     * A minimal {@code ArrayList} whose {@link #toArray()} deliberately corrupts its own result,
+     * simulating the data race {@code ArrayList}'s real copy constructor is genuinely exposed to
+     * under true concurrent mutation (Codex P2, PR #463, follow-up on 6beb6400): {@code toArray()}
+     * reads the live {@code elementData} array and {@code size} field with no synchronization and
+     * no fail-fast modCount check, so a structural change on another thread mid-copy can leave a
+     * trailing {@code null} in the copied array where a real element should be — {@code
+     * ConcurrentModificationException} is never involved, since nothing here is iterating via a
+     * fail-fast {@code Iterator}. Deterministic in a single thread by construction, rather than
+     * relying on real timing to hit a data race that may not reproduce reliably.
+     */
+    private static final class RacyToArrayList extends ArrayList<UltiToolsPlugin> {
+        @Override
+        public Object[] toArray() {
+            Object[] real = super.toArray();
+            if (real.length > 0) {
+                real[real.length - 1] = null;
+            }
+            return real;
+        }
+    }
+
+    @Test
+    @DisplayName("12: a torn snapshot copy (trailing null, simulating ArrayList#toArray()'s own data race) does not propagate NullPointerException either (Codex P2, PR #463, follow-up on 6beb6400)")
+    void attributeCallingModule_tornSnapshotCopy_doesNotPropagateNPE() {
+        PluginManager pluginManager = mock(PluginManager.class);
+        List<UltiToolsPlugin> racyList = new RacyToArrayList();
+        UltiToolsPlugin pluginA = mock(FixturePluginA.class);
+        UltiToolsPlugin pluginB = mock(FixturePluginB.class);
+        when(pluginA.getPluginName()).thenReturn("ModuleA");
+        when(pluginB.getPluginName()).thenReturn("ModuleB");
+        racyList.add(pluginA);
+        racyList.add(pluginB);
+        when(pluginManager.getPluginList()).thenReturn(racyList);
+        when(pluginManager.getPluginScanPackages(pluginA.getClass()))
+                .thenReturn(new String[] {"com.example.modulea"});
+        when(pluginManager.getPluginScanPackages(pluginB.getClass()))
+                .thenReturn(new String[] {"com.example.moduleb"});
+
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
+            when(ultiTools.getLogger()).thenReturn(mockLogger);
+            when(ultiTools.getPluginManager()).thenReturn(pluginManager);
+        });
+        EconomyUtils.reset();
+
+        assertThatCode(() -> EconomyUtils.getBalance(mock(OfflinePlayer.class)))
+                .as("a torn snapshot copy (a null element where a real plugin should be, exactly "
+                        + "what ArrayList's own unsynchronized toArray() can produce under real "
+                        + "concurrent mutation) must not propagate NullPointerException out of the "
+                        + "economy facade either -- the same 'unattributable, return null' fallback "
+                        + "applies here as it does for ConcurrentModificationException")
+                .doesNotThrowAnyException();
+    }
+
     @Nested
     @DisplayName("attributeModule — pure module-attribution logic")
     class AttributeModuleTests {
@@ -295,6 +424,41 @@ class EconomyUtilsReportingTest {
             prefixToModule.put("com.example.foo", "ModuleFoo");
 
             assertThat(EconomyUtils.attributeModule(stack, prefixToModule)).isEqualTo("ModuleFoo");
+        }
+
+        @Test
+        @DisplayName("a nested scan-package collision attributes to the most specific (longest) matching prefix, insertion order broad-then-narrow (Codex P2, PR #463, #482)")
+        void nestedScanPackageCollision_broadInsertedFirst_attributesToMostSpecific() {
+            // com.example.shop.X matches BOTH "com.example" (ModuleA) and "com.example.shop"
+            // (ModuleB) -- the correct attribution is ModuleB (the actual owner of the frame's
+            // package), independent of which prefix was registered first. Before the fix, a first
+            // match on insertion-order alone would return whichever module happened to be inserted
+            // first, making module load order (not the frame's own package) decide attribution and
+            // spending the wrong module's once-per-session dedup slot.
+            StackTraceElement[] stack = {
+                    new StackTraceElement("com.example.shop.SomeClass", "doThing", "SomeClass.java", 10),
+            };
+            Map<String, String> prefixToModule = new LinkedHashMap<>();
+            prefixToModule.put("com.example", "ModuleA");
+            prefixToModule.put("com.example.shop", "ModuleB");
+
+            assertThat(EconomyUtils.attributeModule(stack, prefixToModule)).isEqualTo("ModuleB");
+        }
+
+        @Test
+        @DisplayName("a nested scan-package collision attributes to the most specific (longest) matching prefix, insertion order narrow-then-broad (Codex P2, PR #463, #482)")
+        void nestedScanPackageCollision_narrowInsertedFirst_attributesToMostSpecific() {
+            // Same collision as above with the two entries inserted in the opposite order -- the
+            // result must be identical (ModuleB), proving the selection depends on prefix
+            // specificity, not on LinkedHashMap iteration/insertion order.
+            StackTraceElement[] stack = {
+                    new StackTraceElement("com.example.shop.SomeClass", "doThing", "SomeClass.java", 10),
+            };
+            Map<String, String> prefixToModule = new LinkedHashMap<>();
+            prefixToModule.put("com.example.shop", "ModuleB");
+            prefixToModule.put("com.example", "ModuleA");
+
+            assertThat(EconomyUtils.attributeModule(stack, prefixToModule)).isEqualTo("ModuleB");
         }
     }
 }

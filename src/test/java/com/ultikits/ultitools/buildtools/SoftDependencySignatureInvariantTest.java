@@ -2,8 +2,10 @@ package com.ultikits.ultitools.buildtools;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -59,6 +61,11 @@ class SoftDependencySignatureInvariantTest {
     // needing invented fully-qualified names the way OverBroadExclusionInvariantTest's pure
     // string-set inputs do (this rule takes real Class objects, not pre-derived strings).
     private static final String FIXTURE_PREFIX = "java.util.Date";
+
+    // Used by the member-enumeration-failure fixtures/tests further down this file (Codex P2, PR
+    // #463) -- declared here, with the other constant fields, per PMD's
+    // FieldDeclarationsShouldBeAtStartOfClass (fields must precede methods/inner classes).
+    private static final String HIDDEN_VAULT_PACKAGE_PREFIX = "net.milkbowl.vault";
 
     @SuppressWarnings("unused")
     private static final class FixtureWithFlaggedField {
@@ -265,5 +272,154 @@ class SoftDependencySignatureInvariantTest {
 
     private static Set<String> setOf(String... values) {
         return new LinkedHashSet<>(Arrays.asList(values));
+    }
+
+    // === Fixtures and tests below: Codex P2, PR #463 ===
+    // safeDeclaredFields()/safeDeclaredMethods()/safeDeclaredConstructors() used to swallow a
+    // LinkageError or RuntimeException from the JVM's own eager signature resolution into a
+    // silent empty array, with no record that enumeration failed at all -- exactly the
+    // false-negative outcome this guard exists to prevent, since a class whose member enumeration
+    // itself throws is #451's failure mode reproduced one layer down.
+    //
+    // Reproducing a genuine LinkageError from getDeclaredFields()/getDeclaredMethods()/
+    // getDeclaredConstructors() needs a class whose signature references a type this test's own
+    // classloader cannot resolve -- the same technique HiddenVaultBootstrapTest already uses and
+    // has already proven works for getDeclaredMethods() against a real framework class (#451's own
+    // crash chain): define a fresh copy of a target class under a classloader that refuses to load
+    // net.milkbowl.vault.*, so resolving a Vault-typed field/return-type/parameter type throws
+    // NoClassDefFoundError (a LinkageError) the instant this evaluator asks for that member
+    // category. Kept at the top level (not @Nested) to match this file's existing flat structure,
+    // and because @Nested test classes are non-static inner classes, which cannot themselves hold
+    // static nested classes -- exactly the shape the fixtures and hiding classloader below need.
+    // (HIDDEN_VAULT_PACKAGE_PREFIX itself is declared with the other constant fields near the top
+    // of this class, per PMD's FieldDeclarationsShouldBeAtStartOfClass.)
+
+    @SuppressWarnings("unused")
+    private static final class FixtureWithHiddenTypeField {
+        net.milkbowl.vault.economy.Economy hidden;
+    }
+
+    @SuppressWarnings("unused")
+    private static final class FixtureWithHiddenTypeMethodReturn {
+        net.milkbowl.vault.economy.Economy hiddenMethod() {
+            return null;
+        }
+    }
+
+    @SuppressWarnings("unused")
+    private static final class FixtureWithHiddenTypeConstructorParam {
+        FixtureWithHiddenTypeConstructorParam(net.milkbowl.vault.economy.Economy hidden) {
+        }
+    }
+
+    @Test
+    @DisplayName("getDeclaredFields() throwing a LinkageError is reported as a violation, not silently skipped (Codex P2, PR #463)")
+    void fieldEnumerationFailure_isReportedAsViolation() {
+        assertEnumerationFailureIsReported(FixtureWithHiddenTypeField.class.getName());
+    }
+
+    @Test
+    @DisplayName("getDeclaredMethods() throwing a LinkageError is reported as a violation, not silently skipped (Codex P2, PR #463)")
+    void methodEnumerationFailure_isReportedAsViolation() {
+        assertEnumerationFailureIsReported(FixtureWithHiddenTypeMethodReturn.class.getName());
+    }
+
+    @Test
+    @DisplayName("getDeclaredConstructors() throwing a LinkageError is reported as a violation, not silently skipped (Codex P2, PR #463)")
+    void constructorEnumerationFailure_isReportedAsViolation() {
+        assertEnumerationFailureIsReported(FixtureWithHiddenTypeConstructorParam.class.getName());
+    }
+
+    private static void assertEnumerationFailureIsReported(String targetClassName) {
+        VaultHidingClassLoader hidingLoader = new VaultHidingClassLoader(
+                SoftDependencySignatureInvariantTest.class.getClassLoader(), targetClassName);
+        Class<?> hidden;
+        try {
+            // targetClassName is always one of this file's own three compile-time-literal
+            // FixtureWithHiddenType* class names, passed by this file's own @Test methods above --
+            // there is no user- or network-controlled input on this path; this is a build-time
+            // structural guard test loading one of its own known fixture classes.
+            // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
+            hidden = Class.forName(targetClassName, false, hidingLoader);
+        } catch (ClassNotFoundException e) {
+            throw new AssertionError(e);
+        }
+        assertThat(hidden.getClassLoader())
+                .as("the fixture must actually be defined by the hiding loader, not answered by the "
+                        + "parent's already-loaded copy -- otherwise this test proves nothing about "
+                        + "the enumeration-failure scenario it claims to reproduce")
+                .isSameAs(hidingLoader);
+
+        // The prefix set below is deliberately unrelated to Vault -- the failure this test proves
+        // happens at getDeclaredFields()/Methods()/Constructors() itself, before checkMember()
+        // ever runs, so which prefixes are being searched for is irrelevant; a non-empty set is
+        // only required so evaluate() does not short-circuit at line 66.
+        List<String> violations = SoftDependencySignatureInvariant.evaluate(
+                setOf(hidden), setOf(FIXTURE_PREFIX), Collections.emptySet());
+
+        assertThat(violations)
+                .as("a class this evaluator cannot even enumerate must be reported as its own "
+                        + "violation, not silently treated as clean")
+                .isNotEmpty();
+        assertThat(violations.get(0)).contains(targetClassName);
+    }
+
+    /**
+     * Hides {@code net.milkbowl.vault.*} from a single, freshly-defined copy of the named target
+     * class, generalizing {@code HiddenVaultBootstrapTest}'s {@code VaultHidingClassLoader} (same
+     * technique, parameterized on the target class name since this test needs it for three
+     * different fixtures rather than one fixed class).
+     */
+    private static final class VaultHidingClassLoader extends ClassLoader {
+        private final String targetClassName;
+
+        VaultHidingClassLoader(ClassLoader parent, String targetClassName) {
+            super(parent);
+            this.targetClassName = targetClassName;
+        }
+
+        @Override
+        protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+            if (name.startsWith(HIDDEN_VAULT_PACKAGE_PREFIX)) {
+                throw new ClassNotFoundException(
+                        "Vault is hidden by " + VaultHidingClassLoader.class.getSimpleName() + ": " + name);
+            }
+            if (targetClassName.equals(name)) {
+                synchronized (getClassLoadingLock(name)) {
+                    Class<?> alreadyDefined = findLoadedClass(name);
+                    Class<?> defined = alreadyDefined != null ? alreadyDefined : findClass(name);
+                    if (resolve) {
+                        resolveClass(defined);
+                    }
+                    return defined;
+                }
+            }
+            return super.loadClass(name, resolve);
+        }
+
+        @Override
+        protected Class<?> findClass(String name) throws ClassNotFoundException {
+            String resourcePath = name.replace('.', '/') + ".class";
+            try (InputStream in = getParent().getResourceAsStream(resourcePath)) {
+                if (in == null) {
+                    throw new ClassNotFoundException(name);
+                }
+                byte[] bytes = readAllBytes(in);
+                return defineClass(name, bytes, 0, bytes.length);
+            } catch (IOException e) {
+                throw new ClassNotFoundException(name, e);
+            }
+        }
+
+        // Java 8 bytecode target -- InputStream#readAllBytes is a Java 9+ API.
+        private static byte[] readAllBytes(InputStream in) throws IOException {
+            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+            byte[] chunk = new byte[8192];
+            int read;
+            while ((read = in.read(chunk)) != -1) {
+                buffer.write(chunk, 0, read);
+            }
+            return buffer.toByteArray();
+        }
     }
 }
