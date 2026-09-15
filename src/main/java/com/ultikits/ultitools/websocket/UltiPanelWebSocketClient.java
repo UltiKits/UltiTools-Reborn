@@ -141,13 +141,19 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
 
         String messageStr = gson.toJson(message);
 
-        // Log the outgoing message
-        String msgType = message.has("type") && !message.get("type").isJsonNull() 
-            ? message.get("type").getAsString() : "未知";
-        UltiTools.getInstance().getLogger().log(Level.FINE, 
-            String.format("[WebSocket发送] 类型: %s", msgType));
-
-        
+        // Gate-2 finding (round 7): this used to log the outgoing message's type at Level.FINE
+        // via the shared plugin logger. sendMessage() is the SOLE chokepoint every outbound panel
+        // message goes through -- including log_stream/log_batch/batch_update frames delivered by
+        // SystemLogHandler. Before this plan, "debug" never actually lowered the handler's own JUL
+        // floor (#433's defect), so this diagnostic was unreachable by SystemLogHandler on any
+        // released version. CR-02/round-4's fix (this same PR) makes "debug" genuinely reachable,
+        // and every message this method sends -- not just log-related ones -- would then generate
+        // ANOTHER Level.FINE record describing that very send, which (if still delivered) reaches
+        // this same method again: a 1:1 self-sustaining amplification loop for every single panel
+        // message once "debug" is enabled, not merely the batchConfig.size:1 special case the
+        // earlier (now-removed) UltiPanelLogTransmitter#sendBatch() diagnostic produced. Removed
+        // for the same reason that one was: the information value of a bare "sent message of type
+        // X" line does not justify carrying this hazard.
         send(messageStr);
     }
 

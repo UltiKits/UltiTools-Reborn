@@ -491,7 +491,17 @@ public class PluginInitiationUtils {
                 (message, data) -> handleBackupProgress(data)));
 
         // Config-management messages — the handler performs no second-layer decision.
-        handlers.put("upload_config", InboundHandlerEntry.of(Capability.FILE_WRITE, VerdictRecorder.GATE,
+        //
+        // Gate-2 finding (round 11): upload_config is NOT gated by a fixed constant like most
+        // entries -- it carries traffic in BOTH directions on the same type (see
+        // handleConfigUpload's own javadoc), and only the write-request direction actually needs
+        // FILE_WRITE. A fixed Capability.FILE_WRITE here denied the Worker's own acknowledgement
+        // of the server's OWN outbound uploadConfig() push under the shipped default
+        // (file-write: false) -- the acknowledgement never reached handleConfigUpload's
+        // "message"-presence recognition at all, and was instead recorded as a DENIED write in
+        // the action log for a message that was never attempting to write anything.
+        handlers.put("upload_config", InboundHandlerEntry.resolved(
+                PluginInitiationUtils::resolveUploadConfigCapability, VerdictRecorder.GATE,
                 (message, data) -> handleConfigUpload(data)));
         handlers.put("update_config", InboundHandlerEntry.of(Capability.FILE_WRITE, VerdictRecorder.GATE,
                 (message, data) -> handleConfigUpdate(data)));
@@ -529,6 +539,33 @@ public class PluginInitiationUtils {
     private static Capability resolveFileOperationCapability(JsonObject data) {
         String operation = data != null ? readString(data, "operation") : null;
         return resolveFileOperationCapability(operation);
+    }
+
+    /**
+     * Resolves {@code upload_config}'s required capability from the message's own shape (Gate-2
+     * finding, round 11) -- {@code upload_config} carries traffic in BOTH directions on the same
+     * type (see {@link #handleConfigUpload}'s own javadoc): {@link #uploadConfig} sends the
+     * server's own aggregated config UP on every reconnect, and the Worker's generic
+     * {@code response.type = message.type} echo sends the acknowledgement of that push back down
+     * this SAME inbound type. Only the genuine write-request direction needs
+     * {@link Capability#FILE_WRITE}; the acknowledgement is a protocol echo carrying no
+     * operator-facing policy and resolves to {@link Capability#NONE}, same as this class's other
+     * echo/acknowledgement entries ({@code server_properties_result}, {@code auth_complete}).
+     * <p>
+     * Uses the SAME presence-only heuristic {@link #handleConfigUpload} itself uses to recognise
+     * the acknowledgement ({@code data.has("message")}) -- deliberately the one heuristic, not two
+     * independently-maintained copies of it; see that method's own javadoc for the heuristic's
+     * documented fragility against a future second real producer.
+     *
+     * @param data the message's {@code data} object, possibly {@code null}
+     * @return {@link Capability#NONE} for the acknowledgement shape, {@link Capability#FILE_WRITE}
+     *         otherwise
+     */
+    private static Capability resolveUploadConfigCapability(JsonObject data) {
+        if (data != null && data.has("message")) {
+            return Capability.NONE;
+        }
+        return Capability.FILE_WRITE;
     }
 
     /**
@@ -1426,55 +1463,83 @@ public class PluginInitiationUtils {
     // ========== Config management message handlers ==========
 
     /**
-     * Handles a config upload
+     * Handles a config upload.
+     *
+     * <p>{@code upload_config} carries traffic in <b>both</b> directions on the same message type:
+     * {@link #uploadConfig(UltiPanelWebSocketClient)} sends the server's own aggregated config up on
+     * every reconnect, and the Worker's own message handler echoes that request's {@code type}
+     * straight back as its acknowledgement ({@code websocket-server.ts:454},
+     * {@code response.type = message.type}) — so the acknowledgement lands right back in this same
+     * inbound handler. Its payload is always {@code {message, serverId, configType}}, distinguishable
+     * only by the {@code message} field; recognize it there and stop (issue #359). The former
+     * {@code data.has("requestId")} gate is deleted rather than fixed — nothing anywhere in the
+     * system (panel, frontend, or Worker route) ever populates that field on an {@code upload_config}
+     * payload, so no code path here reads it any more.
      */
     private static void handleConfigUpload(JsonObject data) {
-        if (data != null) {
-            // Only handle explicit config upload requests (carrying a requestId); ignore server acknowledgement messages
-            if (data.has("requestId")) {
-                String requestId = data.get("requestId").getAsString();
-                String configType = data.get("configType").getAsString();
-                String configName = data.get("configName").getAsString();
-                
-                if (configType == null || configType.trim().isEmpty()) {
-                    sendErrorResponse("Valid configuration type is required");
-                    return;
-                }
-                
-                UltiTools.getInstance().getLogger().log(Level.FINE, 
-                    String.format("[配置上传] 类型: %s, 名称: %s", configType, configName));
-                
-                try {
-                    // Handle the config upload logic
-                    handleConfigUploadLogic(data);
+        if (data == null) {
+            return;
+        }
 
-                    // Send success response
-                    JsonObject response = new JsonObject();
-                    response.addProperty("type", "upload_config_response");
-                    response.addProperty("status", "success");
-                    response.addProperty("serverId", panelWS.getServerId());
-                    response.addProperty("requestId", requestId);
-                    panelWS.sendMessage(response);
+        // Worker acknowledgement of the server's own uploadConfig() push -- see issue #359.
+        //
+        // WR-04: this is a PRESENCE-ONLY heuristic, not a structural discriminator -- any
+        // upload_config payload carrying a "message" field is treated as the Worker's
+        // acknowledgement, unconditionally, before the configType-based write logic below ever
+        // runs. Correct against the one real sender that exists today (the Worker's generic
+        // response.type = message.type echo never includes configContent, and the plugin's own
+        // uploadConfig() push never includes "message"), but if a FUTURE legitimate write
+        // request-shaped payload ever also carried a "message" field (e.g. a client-supplied
+        // comment, or an error description alongside configType), it would be silently absorbed
+        // here as an "acknowledgement" -- no write happens, and no response is sent at all, so
+        // the sender gets no feedback. If upload_config ever gains a second real producer,
+        // prefer a structural marker (a role/direction field, or the absence of configContent)
+        // over field presence alone.
+        if (data.has("message")) {
+            String message = data.get("message").getAsString();
+            UltiTools.getInstance().getLogger().log(Level.FINE,
+                String.format("收到服务器配置上传确认: %s", message));
+            return;
+        }
 
-                } catch (Exception e) {
-                    sendErrorResponse("Failed to upload config: " + e.getMessage());
-                }
-            } else {
-                // Recognize and ignore server acknowledgement messages
-                if (data.has("message")) {
-                    String message = data.get("message").getAsString();
-                    UltiTools.getInstance().getLogger().log(Level.FINE, 
-                        String.format("收到服务器配置上传确认: %s", message));
-                } else {
-                    UltiTools.getInstance().getLogger().log(Level.FINE, 
-                        "收到服务器配置上传消息，但不包含requestId，忽略处理");
-                }
-            }
+        String configType = data.has("configType") ? data.get("configType").getAsString() : null;
+
+        if (configType == null || configType.trim().isEmpty()) {
+            sendErrorResponse("Valid configuration type is required");
+            return;
+        }
+
+        String configName = data.has("configName") ? data.get("configName").getAsString() : null;
+
+        UltiTools.getInstance().getLogger().log(Level.FINE,
+            String.format("[配置上传] 类型: %s, 名称: %s", configType, configName));
+
+        try {
+            // Handle the config upload logic
+            handleConfigUploadLogic(data);
+
+            // Send success response
+            JsonObject response = new JsonObject();
+            response.addProperty("type", "upload_config_response");
+            response.addProperty("status", "success");
+            response.addProperty("serverId", panelWS.getServerId());
+            panelWS.sendMessage(response);
+
+        } catch (Exception e) {
+            sendErrorResponse("Failed to upload config: " + e.getMessage());
         }
     }
-    
+
     /**
-     * Handles the config upload logic
+     * Handles the config upload logic.
+     *
+     * <p>{@code upload_config} accepts {@code plugin_config} only (#435, D-13). {@code
+     * server_properties} is rejected naming the message that actually handles it — the dedicated
+     * {@code server_properties} message routed to
+     * {@link com.ultikits.ultitools.manager.ServerPropertiesManager#handleServerProperties}.
+     * {@code permissions} is defined nowhere in the system, so it is not given a meaning here — it
+     * falls to the pre-existing fail-closed {@code default}, whose wording already says exactly
+     * what a dedicated branch would.
      */
     private static void handleConfigUploadLogic(JsonObject data) throws Exception {
         String configType = data.get("configType").getAsString();
@@ -1483,27 +1548,27 @@ public class PluginInitiationUtils {
         String format = data.get("format").getAsString();
         boolean backup = data.get("backup").getAsBoolean();
 
-        UltiTools.getInstance().getLogger().log(Level.FINE, 
-            String.format("处理配置上传: 类型=%s, 名称=%s, 格式=%s, 备份=%s", 
+        UltiTools.getInstance().getLogger().log(Level.FINE,
+            String.format("处理配置上传: 类型=%s, 名称=%s, 格式=%s, 备份=%s",
                 configType, configName, format, backup));
 
         // Handle different config files based on config type
         switch (configType) {
             case "plugin_config":
-                // Handle plugin config
-                if (configContent instanceof JsonObject) {
-                    ConfigEditorUtils.updateConfigMap(new Gson().toJson(configContent));
+                if (!(configContent instanceof JsonObject)) {
+                    throw new IllegalArgumentException(
+                        "Configuration content is required for plugin_config uploads");
                 }
+                ConfigEditorUtils.updateConfigMap(new Gson().toJson(configContent));
                 break;
             case "server_properties":
-                // Handle server.properties config
-                UltiTools.getInstance().getLogger().log(Level.FINE, "Processing server.properties config");
-                break;
-            case "permissions":
-                // Handle permissions config
-                UltiTools.getInstance().getLogger().log(Level.FINE, "Processing permissions config");
-                break;
+                throw new IllegalArgumentException(
+                    "server_properties config is not accepted via upload_config; "
+                        + "send it as a server_properties message instead");
             default:
+                // Also covers "permissions": nothing in the system defines that type's semantics
+                // (#435, D-13), so it is left to this same fail-closed rejection rather than
+                // inventing one here.
                 throw new IllegalArgumentException("Unsupported config type: " + configType);
         }
     }

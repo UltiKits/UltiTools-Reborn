@@ -15,8 +15,10 @@ import static org.mockito.Mockito.when;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 
 import org.junit.jupiter.api.AfterEach;
@@ -363,6 +365,286 @@ class UltiPanelLogTransmitterTest {
         }
     }
 
+    // ==================== batch 调度器重调度测试 (issue #432) ====================
+    @Nested
+    @DisplayName("batch 调度器重调度测试 -- 修改 interval/batchEnabled 必须实际驱动调度器，而不只是改字段")
+    class BatchSchedulerReschedulingTests {
+
+        /**
+         * Typed {@code Object}, not {@code ScheduledFuture}, so every assertion below resolves
+         * AssertJ's plain {@code assertThat(Object)} overload rather than colliding with its
+         * separate, ambiguity-causing {@code assertThat(Future)} overload.
+         */
+        private Object currentTask() throws Exception {
+            Field field = UltiPanelLogTransmitter.class.getDeclaredField("batchSenderTask");
+            field.setAccessible(true);
+            return field.get(logTransmitter);
+        }
+
+        private boolean isCancelled(Object task) {
+            return ((java.util.concurrent.Future<?>) task).isCancelled();
+        }
+
+        @Test
+        @DisplayName("设置新的 interval 会取消旧的调度任务并提交一个新的 -- 观察任务本身，而不是读回字段")
+        void settingNewIntervalCancelsAndResubmitsTheScheduledTask() throws Exception {
+            Object before = currentTask();
+            assertThat(before).isNotNull();
+            assertThat(isCancelled(before)).isFalse();
+
+            logTransmitter.setIntervalMs(10000);
+
+            Object after = currentTask();
+            assertThat(after).isNotSameAs(before);
+            assertThat(isCancelled(before)).isTrue();
+            assertThat(after).isNotNull();
+            assertThat(isCancelled(after)).isFalse();
+        }
+
+        @Test
+        @DisplayName("设置成当前已有的 interval 值不应该扰动调度器 -- 同一个任务实例")
+        void settingSameIntervalDoesNotChurnTheScheduler() throws Exception {
+            Object before = currentTask();
+
+            logTransmitter.setIntervalMs(logTransmitter.getIntervalMs());
+
+            Object after = currentTask();
+            assertThat(after).isSameAs(before);
+        }
+
+        @Test
+        @DisplayName("非正数的 interval 被拒绝，并保留之前生效的值")
+        void nonPositiveIntervalIsRejectedAndThePreviousValueSurvives() {
+            int before = logTransmitter.getIntervalMs();
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> logTransmitter.setIntervalMs(0))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(logTransmitter.getIntervalMs()).isEqualTo(before);
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> logTransmitter.setIntervalMs(-500))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(logTransmitter.getIntervalMs()).isEqualTo(before);
+        }
+
+        @Test
+        @DisplayName("WR-01: 低于共享下限（1000ms）但仍为正数的 interval 同样被拒绝，并保留之前生效的值")
+        void positiveIntervalBelowTheSharedFloorIsRejectedAndThePreviousValueSurvives() {
+            int before = logTransmitter.getIntervalMs();
+
+            // 1ms is positive -- the OLD `intervalMs <= 0` check alone would have accepted this,
+            // driving the scheduler to a roughly 1000-sends/second cadence (16-REVIEW-panel.md
+            // WR-01's exact repro value).
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> logTransmitter.setIntervalMs(1))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("1000");
+            assertThat(logTransmitter.getIntervalMs()).isEqualTo(before);
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> logTransmitter.setIntervalMs(999))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(logTransmitter.getIntervalMs()).isEqualTo(before);
+        }
+
+        @Test
+        @DisplayName("WR-01: 恰好等于共享下限（1000ms）的 interval 被接受")
+        void intervalExactlyAtTheSharedFloorIsAccepted() {
+            logTransmitter.setIntervalMs(1000);
+            assertThat(logTransmitter.getIntervalMs()).isEqualTo(1000);
+        }
+
+        @Test
+        @DisplayName("禁用批量发送会停止调度任务；重新以当前 interval 启用会重新启动它")
+        void disablingBatchingStopsTheSenderReEnablingStartsItAgain() throws Exception {
+            assertThat(currentTask()).isNotNull();
+
+            logTransmitter.setBatchEnabled(false);
+            assertThat(currentTask()).isNull();
+
+            logTransmitter.setBatchEnabled(true);
+            Object restarted = currentTask();
+            assertThat(restarted).isNotNull();
+            assertThat(isCancelled(restarted)).isFalse();
+        }
+
+        @Test
+        @DisplayName("Gate-2 P2: 禁用批量发送前，会先把已排队（未达 batchSize 阈值）的记录发出去，而不是丢在队列里")
+        void disablingBatchingFlushesAlreadyQueuedEntriesFirst() throws Exception {
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+            // batchSize defaults to 10; queue fewer than that so addToBatch's own size-threshold
+            // send never fires on its own.
+            logTransmitter.sendLog("info", "queued-1", "test", null);
+            logTransmitter.sendLog("info", "queued-2", "test", null);
+
+            Field queueField = UltiPanelLogTransmitter.class.getDeclaredField("logQueue");
+            queueField.setAccessible(true);
+            assertThat(((java.util.Collection<?>) queueField.get(logTransmitter)))
+                    .as("precondition: entries are genuinely queued, not yet sent")
+                    .isNotEmpty();
+
+            logTransmitter.setBatchEnabled(false);
+
+            assertThat(((java.util.Collection<?>) queueField.get(logTransmitter)))
+                    .as("Gate-2 P2: the queue must be empty after disabling -- nothing left stranded")
+                    .isEmpty();
+            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
+        }
+
+        @Test
+        @DisplayName("Gate-2 round 6: 在 external drain mode 下，队列达到 batchSize 时会触发 externalSizeThresholdCallback")
+        void reachingBatchSizeUnderExternalDrainModeInvokesTheSizeThresholdCallback() {
+            logTransmitter.setExternalDrainMode(true);
+            logTransmitter.setBatchSize(2);
+            AtomicInteger callbackCount = new AtomicInteger(0);
+            logTransmitter.setExternalSizeThresholdCallback(callbackCount::incrementAndGet);
+
+            logTransmitter.sendLog("info", "line-1", "test", null);
+            assertThat(callbackCount.get()).as("threshold (2) not yet reached").isZero();
+
+            logTransmitter.sendLog("info", "line-2", "test", null);
+            assertThat(callbackCount.get()).as("threshold reached on the 2nd enqueue").isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("Gate-2 round 6 对照: external drain mode 关闭时，达到 batchSize 不会调用 externalSizeThresholdCallback（走的是真实 sendBatch）")
+        void reachingBatchSizeWithoutExternalDrainModeDoesNotInvokeTheCallback() {
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+            logTransmitter.setBatchSize(2);
+            AtomicInteger callbackCount = new AtomicInteger(0);
+            logTransmitter.setExternalSizeThresholdCallback(callbackCount::incrementAndGet);
+
+            logTransmitter.sendLog("info", "line-1", "test", null);
+            logTransmitter.sendLog("info", "line-2", "test", null);
+
+            assertThat(callbackCount.get()).isZero();
+            verify(mockWebSocketClient, atLeastOnce()).sendMessage(any(JsonObject.class));
+        }
+
+        @Test
+        @DisplayName("Gate-2 round 6: setBatchEnabled(false) 持有 batchModeLock 期间，并发的 sendLog 必须等待 -- 证明锁真的挡住了")
+        void disablingBatchingHoldsTheLockAcrossFlushBlockingConcurrentSendLog() throws Exception {
+            Field lockField = UltiPanelLogTransmitter.class.getDeclaredField("batchModeLock");
+            lockField.setAccessible(true);
+            Object lock = lockField.get(logTransmitter);
+
+            CountDownLatch workerStarted = new CountDownLatch(1);
+            CountDownLatch workerDone = new CountDownLatch(1);
+            Thread worker = new Thread(() -> {
+                workerStarted.countDown();
+                logTransmitter.sendLog("info", "concurrent", "test", null);
+                workerDone.countDown();
+            });
+
+            try {
+                synchronized (lock) {
+                    worker.start();
+                    assertThat(workerStarted.await(5, TimeUnit.SECONDS)).isTrue();
+                    // The worker's sendLog() call must NOT be able to proceed past its own
+                    // synchronized(batchModeLock) block while this thread holds the same lock.
+                    assertThat(workerDone.await(300, TimeUnit.MILLISECONDS))
+                            .as("sendLog() must block on batchModeLock while it is held elsewhere")
+                            .isFalse();
+                }
+                // Released -- the worker should now complete promptly.
+                assertThat(workerDone.await(5, TimeUnit.SECONDS))
+                        .as("sendLog() must proceed once the lock is released")
+                        .isTrue();
+            } finally {
+                worker.join(5000);
+            }
+        }
+
+        @Test
+        @DisplayName("Gate-2 P2 (round 10): sendBatch() 现在也持有 batchModeLock -- 证明调度线程自己触发的 tick 会被并发的 flush 挡住")
+        void sendBatchNowHoldsBatchModeLockBlockingAConcurrentScheduledTickWhileFlushing() throws Exception {
+            // Arrange: a queued record, and a direct handle on the private sendBatch() method --
+            // standing in for the scheduler's own periodic call to it.
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+            Field queueField = UltiPanelLogTransmitter.class.getDeclaredField("logQueue");
+            queueField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            java.util.Queue<JsonObject> queue = (java.util.Queue<JsonObject>) queueField.get(logTransmitter);
+            JsonObject entry = new JsonObject();
+            entry.addProperty("message", "queued");
+            queue.offer(entry);
+
+            Method sendBatchMethod = UltiPanelLogTransmitter.class.getDeclaredMethod("sendBatch");
+            sendBatchMethod.setAccessible(true);
+
+            Field lockField = UltiPanelLogTransmitter.class.getDeclaredField("batchModeLock");
+            lockField.setAccessible(true);
+            Object lock = lockField.get(logTransmitter);
+
+            CountDownLatch workerStarted = new CountDownLatch(1);
+            CountDownLatch workerDone = new CountDownLatch(1);
+            Thread worker = new Thread(() -> {
+                workerStarted.countDown();
+                try {
+                    sendBatchMethod.invoke(logTransmitter);
+                } catch (Exception e) {
+                    org.junit.jupiter.api.Assertions.fail(e);
+                }
+                workerDone.countDown();
+            });
+
+            try {
+                synchronized (lock) {
+                    worker.start();
+                    assertThat(workerStarted.await(5, TimeUnit.SECONDS)).isTrue();
+                    // Before round 10, sendBatch() was completely unsynchronized -- the scheduler's
+                    // own tick could run concurrently with a disable-time flush (which holds
+                    // batchModeLock across its own doFlushLogs()/sendBatch() loop) and interleave
+                    // queue polls between the two, sending frames in an unrecoverable order.
+                    assertThat(workerDone.await(300, TimeUnit.MILLISECONDS))
+                            .as("sendBatch() must block on batchModeLock while it is held elsewhere")
+                            .isFalse();
+                    verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
+                }
+                assertThat(workerDone.await(5, TimeUnit.SECONDS))
+                        .as("sendBatch() must proceed once the lock is released")
+                        .isTrue();
+                verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
+            } finally {
+                worker.join(5000);
+            }
+        }
+
+        @Test
+        @DisplayName("Gate-2 P2 (round 10): flushLogs() 现在也把 batchModeLock 当作最外层锁获取 -- 即便没有外部 coordination lock")
+        void flushLogsNowAcquiresBatchModeLockAsTheOutermostLockEvenWithoutAnExternalCoordinationLock() throws Exception {
+            // No setExternalDrainCoordinationLock call -- proves batchModeLock alone, not the
+            // round-9 coordination lock, is what now guards flushLogs()/sendBatch() against the
+            // scheduler's own concurrent tick.
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            Field lockField = UltiPanelLogTransmitter.class.getDeclaredField("batchModeLock");
+            lockField.setAccessible(true);
+            Object lock = lockField.get(logTransmitter);
+
+            CountDownLatch workerStarted = new CountDownLatch(1);
+            CountDownLatch workerDone = new CountDownLatch(1);
+            Thread worker = new Thread(() -> {
+                workerStarted.countDown();
+                logTransmitter.flushLogs();
+                workerDone.countDown();
+            });
+
+            try {
+                synchronized (lock) {
+                    worker.start();
+                    assertThat(workerStarted.await(5, TimeUnit.SECONDS)).isTrue();
+                    assertThat(workerDone.await(300, TimeUnit.MILLISECONDS))
+                            .as("flushLogs() must block on batchModeLock while it is held elsewhere, "
+                                    + "even with no external coordination lock wired up")
+                            .isFalse();
+                }
+                assertThat(workerDone.await(5, TimeUnit.SECONDS))
+                        .as("flushLogs() must proceed once the lock is released")
+                        .isTrue();
+            } finally {
+                worker.join(5000);
+            }
+        }
+    }
+
     @Nested
     @DisplayName("addToBatch 测试")
     class AddToBatchTests {
@@ -537,7 +819,7 @@ class UltiPanelLogTransmitterTest {
         void shouldNotSendWhenNotConnected() throws Exception {
             // Arrange
             when(mockWebSocketClient.isConnected()).thenReturn(false);
-            
+
             // 添加日志
             logTransmitter.sendLog("info", "test", "server", null);
 
@@ -546,6 +828,70 @@ class UltiPanelLogTransmitterTest {
 
             // Assert
             verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
+        }
+
+        @Test
+        @DisplayName("Gate-2 P2 (round 9): 设置了 externalDrainCoordinationLock 后，flushLogs() 会持有该锁 -- 与 monitor 自己的排空路径共享同一把互斥锁")
+        void flushLogsHoldsTheExternalCoordinationLockWhenOneIsWired() throws Exception {
+            // Arrange -- a standalone lock object standing in for
+            // ServerMonitorManager's own logDrainLock, wired exactly the way
+            // LogStreamManager#initialize() wires the real one.
+            Object coordinationLock = new Object();
+            logTransmitter.setExternalDrainCoordinationLock(coordinationLock);
+
+            for (int i = 0; i < 5; i++) {
+                logTransmitter.sendLog("info", "message " + i, "server", null);
+            }
+
+            CountDownLatch workerStarted = new CountDownLatch(1);
+            CountDownLatch workerDone = new CountDownLatch(1);
+            Thread worker = new Thread(() -> {
+                workerStarted.countDown();
+                logTransmitter.flushLogs();
+                workerDone.countDown();
+            });
+
+            try {
+                synchronized (coordinationLock) {
+                    worker.start();
+                    assertThat(workerStarted.await(5, TimeUnit.SECONDS)).isTrue();
+                    // flushLogs() must not be able to proceed past its own
+                    // synchronized(externalDrainCoordinationLock) while this thread holds the
+                    // SAME lock object -- proves flushLogs() actually participates in the
+                    // external coordination lock rather than running unsynchronized.
+                    assertThat(workerDone.await(300, TimeUnit.MILLISECONDS))
+                            .as("flushLogs() must block on the wired coordination lock while it is held elsewhere")
+                            .isFalse();
+                }
+                // Released -- the worker should now complete promptly and the queue drained.
+                assertThat(workerDone.await(5, TimeUnit.SECONDS))
+                        .as("flushLogs() must proceed once the coordination lock is released")
+                        .isTrue();
+            } finally {
+                worker.join(5000);
+            }
+
+            Field queueField = UltiPanelLogTransmitter.class.getDeclaredField("logQueue");
+            queueField.setAccessible(true);
+            ConcurrentLinkedQueue<?> queue = (ConcurrentLinkedQueue<?>) queueField.get(logTransmitter);
+            assertThat(queue.isEmpty()).as("the queue must still have been drained once released").isTrue();
+        }
+
+        @Test
+        @DisplayName("Gate-2 P2 (round 9) 对照: 未设置 externalDrainCoordinationLock（默认 null）时 flushLogs() 照常不加锁运行")
+        void flushLogsRunsUnsynchronizedWhenNoCoordinationLockIsWired() throws Exception {
+            // Control: no setExternalDrainCoordinationLock call -- must behave exactly as before
+            // this fix, i.e. no external lock participation at all.
+            for (int i = 0; i < 3; i++) {
+                logTransmitter.sendLog("info", "message " + i, "server", null);
+            }
+
+            logTransmitter.flushLogs();
+
+            Field queueField = UltiPanelLogTransmitter.class.getDeclaredField("logQueue");
+            queueField.setAccessible(true);
+            ConcurrentLinkedQueue<?> queue = (ConcurrentLinkedQueue<?>) queueField.get(logTransmitter);
+            assertThat(queue.isEmpty()).isTrue();
         }
     }
 
