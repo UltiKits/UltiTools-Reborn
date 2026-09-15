@@ -225,6 +225,51 @@ class GuiSchedulerTest {
         }
     }
 
+    // === Gate-2 Codex finding (round 3, PR #478): flush() runs each queued task via a bare
+    // task.run() with no try/catch at all -- neither executeFrame()'s catch nor
+    // runOnMainThread()'s new one. A caller forcing a queued rebuild through flush() (its own
+    // documented synchronous-drain contract) never had its RenderDepthExceededException reach
+    // ErrorReportCollector, though it did still propagate to flush()'s own caller. ===
+
+    @Test
+    void testFlush_ReportsRenderDepthExceededAndStillRethrows() {
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            // Enqueue while OFF the main thread so scheduleFrame() defers via runTaskLater
+            // without actually running the task -- it must still be sitting in pendingTasks for
+            // flush() to drain below.
+            bukkit.when(Bukkit::isPrimaryThread).thenReturn(false);
+            bukkit.when(Bukkit::getScheduler).thenReturn(mockScheduler);
+            when(mockScheduler.runTaskLater(any(Plugin.class), any(Runnable.class), anyLong()))
+                    .thenReturn(null);
+
+            GuiScheduler scheduler = new GuiScheduler(mockPlugin);
+            RenderDepthExceededException thrown = new RenderDepthExceededException(
+                    "Element.mount", 65, RenderDepthGuard.MAX_DEPTH);
+            scheduler.scheduleFrame(() -> {
+                throw thrown;
+            });
+
+            // Now flush() it, on the main thread -- flush()'s own documented contract.
+            bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+
+            ErrorReportCollector collector = new ErrorReportCollector();
+            TestHelper.mockUltiToolsInstance(ultiTools ->
+                    when(ultiTools.getErrorReportCollector()).thenReturn(collector));
+
+            RenderDepthExceededException caught = assertThrows(RenderDepthExceededException.class,
+                    scheduler::flush,
+                    "flush()'s own documented contract is synchronous draining -- an exception "
+                            + "from a queued task must still propagate to flush()'s caller "
+                            + "exactly as before");
+
+            assertSame(thrown, caught);
+            assertEquals(1, collector.drainErrors(10).size(),
+                    "a RenderDepthExceededException drained via flush() must also reach "
+                            + "ErrorReportCollector, not only one drained via executeFrame() or "
+                            + "runOnMainThread()");
+        }
+    }
+
     // === WR-01: RenderDepthExceededException must reach ErrorReportCollector, and repeated
     // occurrences from the same site across many frames must not each produce a separate report
     // (ErrorReportCollector's own fingerprint dedup is the chosen rate limit -- no new
