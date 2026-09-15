@@ -192,8 +192,10 @@ public class CloudAuthManager {
      * shared document before this method's clear does, the clear cannot remove a value the
      * torn-down session never itself wrote.
      *
-     * @return {@code true} if a credential existed and was cleared; {@code false} if there was
-     *         nothing to clear (teardown still ran regardless)
+     * @return {@code true} if a credential existed and was cleared, or a pending authentication
+     *         attempt was cancelled (real-machine UAT fix, plan 16-08 -- see
+     *         {@link CloudSession#hasAnythingToClear()}); {@code false} if there was nothing to
+     *         clear and nothing pending (teardown still ran regardless)
      * @throws IOException if clearing the persisted credential fails
      */
     public static synchronized boolean logout() throws IOException {
@@ -206,6 +208,12 @@ public class CloudAuthManager {
         // reach clearPersisted() below, or the predecessor's still-valid, still-persisted
         // credential survives on disk despite this explicit logout, and a later restart reloads
         // and reconnects with it.
+        //
+        // Real-machine UAT fix, plan 16-08 (ultitools.ulticloud.logout.neg-mid-poll): the same
+        // hasAnythingToClear() gate ALSO now covers a magic-link poll that was still in flight when
+        // disableCloud() above cancelled it (CloudSession#pendingAuthenticationCancelled) -- so
+        // cancelling a real, in-progress authentication attempt reports a genuine logout even though
+        // it never reached commit() and therefore never set token or predecessorToken.
         if (!tornDown.hasAnythingToClear()) {
             return false;
         }
