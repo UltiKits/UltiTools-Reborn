@@ -1,6 +1,11 @@
 package com.ultikits.ultitools.abstracts.gui.declarative.engine;
 
+import com.google.gson.JsonArray;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderDepthExceededException;
+import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderDepthGuard;
+import com.ultikits.ultitools.manager.ErrorReportCollector;
+import com.ultikits.ultitools.utils.TestHelper;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitScheduler;
@@ -8,6 +13,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 
+import java.util.logging.Logger;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -141,6 +147,73 @@ class GuiSchedulerTest {
             // 这个测试其实验证的是：在调用 cancelAll 后，任务状态被重置。
 
             assertFalse(executed.get());
+        }
+    }
+
+    // === WR-01: RenderDepthExceededException must reach ErrorReportCollector, and repeated
+    // occurrences from the same site across many frames must not each produce a separate report
+    // (ErrorReportCollector's own fingerprint dedup is the chosen rate limit -- no new
+    // GUI-specific bookkeeping is added). ===
+
+    @Test
+    void testRenderDepthExceededException_ReportsOnceAcrossMultipleFrames() {
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+            when(mockPlugin.getLogger()).thenReturn(
+                    Logger.getLogger("GuiSchedulerTest.RenderDepthExceededException"));
+
+            // Real ErrorReportCollector (enabled=true by field default; init()/loadConfiguration()
+            // are deliberately not called, to avoid starting the dedup-reset scheduler thread --
+            // the same idiom ErrorReportCollectorTest itself uses).
+            ErrorReportCollector collector = new ErrorReportCollector();
+            TestHelper.mockUltiToolsInstance(ultiTools ->
+                    when(ultiTools.getErrorReportCollector()).thenReturn(collector));
+
+            GuiScheduler scheduler = new GuiScheduler(mockPlugin, 0L);
+
+            // Always thrown from the SAME site with the SAME depth/limit, exactly as a single
+            // over-deep GUI tree being rebuilt repeatedly (e.g. on every setState()) would.
+            Runnable throwingTask = () -> {
+                throw new RenderDepthExceededException("Element.mount", 65, RenderDepthGuard.MAX_DEPTH);
+            };
+
+            int frames = 5;
+            for (int i = 0; i < frames; i++) {
+                scheduler.scheduleFrame(throwingTask);
+            }
+
+            JsonArray drained = collector.drainErrors(10);
+            assertEquals(1, drained.size(),
+                    "five frames throwing the SAME RenderDepthExceededException must produce "
+                            + "exactly one report, not five -- repeated re-logging of the same "
+                            + "site is exactly the log-noise problem the collector's "
+                            + "fingerprint-dedup mechanism already exists to solve elsewhere");
+            assertEquals(frames,
+                    drained.get(0).getAsJsonObject().get("occurrenceCount").getAsInt(),
+                    "the single report must still track how many times it actually happened");
+        }
+    }
+
+    @Test
+    void testOtherExceptions_AreNotRoutedToErrorReportCollector() {
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+            when(mockPlugin.getLogger()).thenReturn(
+                    Logger.getLogger("GuiSchedulerTest.OtherExceptions"));
+
+            ErrorReportCollector collector = new ErrorReportCollector();
+            TestHelper.mockUltiToolsInstance(ultiTools ->
+                    when(ultiTools.getErrorReportCollector()).thenReturn(collector));
+
+            GuiScheduler scheduler = new GuiScheduler(mockPlugin, 0L);
+            scheduler.scheduleFrame(() -> {
+                throw new IllegalStateException("some unrelated frame failure");
+            });
+
+            assertEquals(0, collector.drainErrors(10).size(),
+                    "this fix is scoped to RenderDepthExceededException specifically -- an "
+                            + "unrelated exception's existing (unchanged) warning+stack-trace "
+                            + "handling is not touched here");
         }
     }
 }
