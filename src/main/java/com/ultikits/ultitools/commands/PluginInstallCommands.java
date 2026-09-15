@@ -31,6 +31,13 @@ import net.kyori.adventure.text.format.TextColor;
 @CmdExecutor(description = "UltiTools Plugin Management Commands", alias = "upm", requireOp = true)
 @CmdTarget(CmdTarget.CmdTargetType.BOTH)
 public class PluginInstallCommands extends BaseCommandExecutor {
+
+    /**
+     * The literal Bukkit {@code name:} prefix {@link #isSameModule} strips before comparing a
+     * loaded module's runtime name against the catalogue's display name (#439).
+     */
+    private static final String VENDOR_PREFIX = "UltiTools-";
+
     @CmdMapping(format = "list <page>")
     @RunAsync
     public void listPlugins(@CmdSender CommandSender sender, @CmdParam("page") String page) {
@@ -373,8 +380,6 @@ public class PluginInstallCommands extends BaseCommandExecutor {
     private static boolean isNonBlank(String value) {
         return value != null && !value.isEmpty();
     }
-
-    private static final String VENDOR_PREFIX = "UltiTools-";
 
     private static String stripVendorPrefix(String runtimeName) {
         return runtimeName.startsWith(VENDOR_PREFIX)
