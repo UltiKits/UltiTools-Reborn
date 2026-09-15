@@ -97,16 +97,36 @@ public final class RemovalConsistencyEvaluator {
         // D-01 staleness: a member-level exclude key with no registry entry AND no visible trace
         // in the report - neither the exact key nor its enclosing class - protects nothing
         // discoverable. Whole-class excludes are exempt (see class javadoc).
+        //
+        // #461: an EMPTY report means japicmp had nothing to compare against at all (a missing or
+        // unreadable target/japicmp/japicmp.xml) - nothing can be confirmed either stale or current
+        // in that state. Flagging every not-yet-registered member-level exclude as stale here is
+        // exactly backwards: it turns one infrastructure problem into N false compatibility
+        // findings. Collect one REPORT_MISSING_OR_EMPTY finding instead of running the per-key
+        // check, but only when at least one member-level key would actually have needed the report
+        // for corroboration (i.e. is not already registry-tracked) - a key the registry already
+        // covers needed nothing from the report either way, exactly as with a non-empty report.
+        boolean reportIsEmpty = report.entries().isEmpty();
+        boolean anyUnresolvableMemberLevelExclude = false;
         for (RegistryKey key : sortedExcludeKeys) {
             if (key.isClassLevel()) {
                 continue;
             }
             boolean inRegistry = registryByKey.containsKey(key.toString());
+            if (reportIsEmpty) {
+                if (!inRegistry) {
+                    anyUnresolvableMemberLevelExclude = true;
+                }
+                continue;
+            }
             boolean keyVisible = report.entries().containsKey(key);
             boolean enclosingClassVisible = report.entries().containsKey(RegistryKey.forClass(key.getClassName()));
             if (!inRegistry && !keyVisible && !enclosingClassVisible) {
                 findings.add(Finding.staleExclusion(key));
             }
+        }
+        if (reportIsEmpty && anyUnresolvableMemberLevelExclude) {
+            findings.add(Finding.reportMissingOrEmpty());
         }
 
         // D-01 coverage: a report REMOVED key with no exclude entry and no registry entry is an
