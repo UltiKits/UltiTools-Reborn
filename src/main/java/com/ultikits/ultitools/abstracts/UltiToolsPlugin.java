@@ -12,6 +12,8 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.io.OutputStream;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFilePermission;
 import java.lang.reflect.Type;
 import java.net.JarURLConnection;
 import java.net.URI;
@@ -684,12 +686,40 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * truncated or partial file in place of the original bytes. The temp file is created in
      * the same directory specifically so the final move can be a same-filesystem atomic
      * rename, not a copy.
+     * <p>
+     * Codex round 8, P2 (discussion_r4012703529): the atomic move above replaces a DIRECTORY
+     * ENTRY, which on POSIX only ever consults the containing directory's write permission --
+     * never the target file's own permission bits. Two consequences this method now guards
+     * against, both only reachable through this method's one caller ({@link
+     * #resolveLanguageWithProvenance}'s branch 1, "never touched since extraction"):
+     * <ol>
+     *   <li>An untouched file the operator made read-only (a deliberate hardening signal) was
+     *       silently overwritten anyway -- the move does not care that the destination is
+     *       read-only. Guarded by refusing to refresh a non-writable {@code file} at all: treat
+     *       it as operator-pinned, log once, and let the caller's existing disk-authoritative
+     *       fallback ({@code readLanguageFile}) keep serving it untouched.</li>
+     *   <li>A writable file's non-default POSIX permissions (e.g. a hardened {@code 0640}) were
+     *       silently replaced by whatever {@link File#createTempFile} defaults to (commonly
+     *       owner-only) the moment the file WAS legitimately refreshed. Guarded by copying the
+     *       original's POSIX permissions onto the temp file before the move, via {@link
+     *       #copyPosixPermissionsIfSupported}.</li>
+     * </ol>
+     * Deliberately POSIX-only: there is no portable, dependency-free way to copy ACLs from Java's
+     * own file APIs, so a non-POSIX filesystem's ACLs are NOT preserved by this method -- silently
+     * dropping them without saying so would be worse than the status quo this fix improves on.
      */
     private boolean writeBytes(File file, byte[] bytes) {
+        if (file.exists() && !Files.isWritable(file.toPath())) {
+            getLogger().warn("Language file '" + file.getPath() + "' for module '" + getPluginName()
+                    + "' is not writable; treating it as operator-pinned and leaving it untouched "
+                    + "instead of refreshing it from the bundled version.");
+            return false;
+        }
         File parentDir = file.getParentFile();
         File tempFile = null;
         try {
             tempFile = File.createTempFile(file.getName(), ".tmp", parentDir);
+            copyPosixPermissionsIfSupported(file, tempFile);
             Files.write(tempFile.toPath(), bytes);
             Files.move(tempFile.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING,
                     StandardCopyOption.ATOMIC_MOVE);
@@ -705,6 +735,37 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                 // noinspection ResultOfMethodCallIgnored
                 tempFile.delete();
             }
+        }
+    }
+
+    /**
+     * Copies {@code source}'s POSIX permissions onto {@code target} if the filesystem exposes a
+     * {@link PosixFileAttributeView} for it, so {@link #writeBytes}'s atomic move does not
+     * silently replace an untouched-but-non-default-permission file's permissions with {@link
+     * File#createTempFile}'s own defaults (Codex round 8, P2, discussion_r4012703529). A no-op --
+     * never an error -- on a non-POSIX filesystem ({@code view == null}), or on any failure to
+     * read or apply the permissions: this is a best-effort improvement layered onto the write it
+     * must never abort.
+     *
+     * @param source the file whose current permissions should be preserved
+     * @param target the newly created temp file about to be moved into {@code source}'s place
+     */
+    private void copyPosixPermissionsIfSupported(File source, File target) {
+        if (!source.exists()) {
+            return;
+        }
+        try {
+            PosixFileAttributeView sourceView =
+                    Files.getFileAttributeView(source.toPath(), PosixFileAttributeView.class);
+            if (sourceView == null) {
+                return;
+            }
+            Set<PosixFilePermission> permissions = sourceView.readAttributes().permissions();
+            Files.setPosixFilePermissions(target.toPath(), permissions);
+        } catch (IOException | UnsupportedOperationException e) {
+            getLogger().warn("Could not preserve file permissions while refreshing '" + source.getPath()
+                    + "' for module '" + getPluginName() + "'; the refreshed file may not match the "
+                    + "original's permissions.");
         }
     }
 

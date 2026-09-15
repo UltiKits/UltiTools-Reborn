@@ -12,6 +12,8 @@ import java.util.TreeSet;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
+import org.jetbrains.annotations.ApiStatus;
+
 /**
  * Localized interface.
  */
@@ -59,6 +61,7 @@ public interface Localized {
      *         stripped remainder is not a safe language-code token
      * @since 6.3.0
      */
+    @ApiStatus.Internal
     static String languageCodeOf(String fileName) {
         for (String extension : LANGUAGE_EXTENSIONS) {
             if (fileName.endsWith(extension) && fileName.length() > extension.length()) {
@@ -82,6 +85,7 @@ public interface Localized {
      * @return whether {@code code} is safe to treat as a language code
      * @since 6.3.0
      */
+    @ApiStatus.Internal
     static boolean isSafeLanguageCode(String code) {
         if (code.isEmpty()) {
             return false;
@@ -136,6 +140,7 @@ public interface Localized {
      * @param codeSourceLocation the URL returned by {@code CodeSource.getLocation()}
      * @return the language codes found, sorted and de-duplicated; empty on any failure
      */
+    @ApiStatus.Internal
     static List<String> scanLangResources(URL codeSourceLocation) {
         try {
             String rawPath = codeSourceLocation.getPath();
@@ -156,6 +161,7 @@ public interface Localized {
      * @param langDir the {@code lang/} directory to scan
      * @return the language codes found; empty if {@code langDir} does not exist or is empty
      */
+    @ApiStatus.Internal
     static List<String> scanLangDirectory(File langDir) {
         if (langDir == null || !langDir.isDirectory()) {
             return new ArrayList<>();
@@ -185,6 +191,7 @@ public interface Localized {
      * @param jarFile the module's own JAR
      * @return the language codes found; empty if {@code jarFile} cannot be opened as a JAR
      */
+    @ApiStatus.Internal
     static List<String> scanLangJar(File jarFile) {
         try (JarFile jar = new JarFile(jarFile)) {
             Set<String> codes = new TreeSet<>();
