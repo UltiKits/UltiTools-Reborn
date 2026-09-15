@@ -9,11 +9,14 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
+import org.bukkit.OfflinePlayer;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.ServicePriority;
 import org.junit.jupiter.api.AfterEach;
@@ -26,7 +29,9 @@ import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
 import org.mockito.ArgumentCaptor;
 
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.services.EconomyProvider;
 import com.ultikits.ultitools.services.impl.VaultEconomyProvider;
 
@@ -221,6 +226,76 @@ class EconomyUtilsReportingTest {
         server.getServicesManager().register(Economy.class, mockEconomy, vaultPlugin, ServicePriority.Normal);
 
         assertThat(EconomyUtils.setup()).isTrue();
+    }
+
+    // Codex P2, PR #463: three DISTINCT declared subclasses, not three mock(UltiToolsPlugin.class)
+    // instances of the same abstract type. Mockito/ByteBuddy generates and reuses ONE dynamic
+    // proxy subclass per mocked TYPE (not per instance), so three mocks of the bare
+    // UltiToolsPlugin.class would all share the identical runtime Class -- silently collapsing
+    // three intended per-plugin getPluginScanPackages(Class) stubs into one, with each when(...)
+    // call's own argument-evaluation re-triggering whatever stub was already active for that
+    // shared Class and overwriting it. That collision was caught only by observing its actual
+    // symptom: the plugin-list mutation fired during test SETUP, before the real loop the test
+    // means to exercise ever ran. Distinct declared types guarantee distinct mock classes.
+    private abstract static class FixturePluginA extends UltiToolsPlugin {
+    }
+
+    private abstract static class FixturePluginB extends UltiToolsPlugin {
+    }
+
+    private abstract static class FixturePluginC extends UltiToolsPlugin {
+    }
+
+    @Test
+    @DisplayName("11: a concurrent mutation of PluginManager's live plugin list during attribution does not propagate ConcurrentModificationException (Codex P2, PR #463)")
+    void attributeCallingModule_concurrentPluginListMutation_doesNotPropagateCME() {
+        // PluginManager#getPluginList() returns its live, unsynchronized ArrayList directly (see
+        // PluginManager.java:103 -- @Getter over "private final List<UltiToolsPlugin> pluginList
+        // = new ArrayList<>()"), and PluginInstallUtils#uninstallPlugin mutates that same list via
+        // .remove(...), reachable from a normal /upm uninstall command. A module calling this
+        // economy facade from an async command or @Scheduled(async = true) task can race that
+        // mutation. Reproduced deterministically (no real thread timing needed): the first
+        // plugin's own getPluginScanPackages() lookup removes the SECOND of three plugins from the
+        // SAME live list as a side effect, mid-iteration -- exactly the ArrayList#modCount change a
+        // fail-fast iterator detects, regardless of whether the real-world mutator is a second
+        // thread or (as here) a re-entrant call on this one. A third plugin is required: removing
+        // the second-to-last element of a two-element list instead makes ArrayList$Itr#hasNext()
+        // return false (cursor == the new, shrunken size) before next()'s modCount check ever
+        // fires, silently ending the loop one iteration early with no CME at all -- masking the
+        // exact bug this test exists to catch.
+        PluginManager pluginManager = mock(PluginManager.class);
+        List<UltiToolsPlugin> livePluginList = new ArrayList<>();
+        UltiToolsPlugin pluginA = mock(FixturePluginA.class);
+        UltiToolsPlugin pluginB = mock(FixturePluginB.class);
+        UltiToolsPlugin pluginC = mock(FixturePluginC.class);
+        when(pluginA.getPluginName()).thenReturn("ModuleA");
+        when(pluginB.getPluginName()).thenReturn("ModuleB");
+        when(pluginC.getPluginName()).thenReturn("ModuleC");
+        livePluginList.add(pluginA);
+        livePluginList.add(pluginB);
+        livePluginList.add(pluginC);
+        when(pluginManager.getPluginList()).thenReturn(livePluginList);
+        when(pluginManager.getPluginScanPackages(pluginA.getClass())).thenAnswer(invocation -> {
+            livePluginList.remove(pluginB);
+            return new String[] {"com.example.modulea"};
+        });
+        when(pluginManager.getPluginScanPackages(pluginB.getClass()))
+                .thenReturn(new String[] {"com.example.moduleb"});
+        when(pluginManager.getPluginScanPackages(pluginC.getClass()))
+                .thenReturn(new String[] {"com.example.modulec"});
+
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
+            when(ultiTools.getLogger()).thenReturn(mockLogger);
+            when(ultiTools.getPluginManager()).thenReturn(pluginManager);
+        });
+        EconomyUtils.reset();
+
+        assertThatCode(() -> EconomyUtils.getBalance(mock(OfflinePlayer.class)))
+                .as("a concurrent mutation of PluginManager's live plugin list during attribution "
+                        + "must not propagate ConcurrentModificationException out of the economy "
+                        + "facade -- this is a best-effort attribution helper whose existing "
+                        + "'unattributable' fallback (returning null) is the correct outcome here too")
+                .doesNotThrowAnyException();
     }
 
     @Nested
