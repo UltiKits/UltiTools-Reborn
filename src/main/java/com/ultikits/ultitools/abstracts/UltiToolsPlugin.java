@@ -430,27 +430,42 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                 // saveResources()'s own pattern) rather than trusting the precomputed jarHash,
                 // so a partial/failed write can never be misreported as success (WR-01).
                 if (writeBytes(file, jarBytes)) {
-                    String newDiskHash = ResourceHashSidecar.sha256(file);
-                    ResourceHashSidecar.record(resourceFolder, resourcePath, newDiskHash);
-                    // Codex round 2, P2: record(...) swallows its own IOException and returns
-                    // void, so a caller cannot otherwise tell a sidecar write failure from
-                    // success. Read the record back to confirm it actually persisted before
-                    // claiming success -- logging "has been updated" when the file WAS
-                    // refreshed but the sidecar was NOT would misrepresent provenance
-                    // tracking as healthy. Deliberately not reverted on failure: a second
-                    // write introduces its own atomicity risk for a genuinely rare failure;
-                    // the next boot's hash mismatch safely falls into branch 2 (treated as
-                    // customised) instead, which is this mechanism's own conservative default.
-                    boolean recordPersisted = ResourceHashSidecar.readRecordedHash(resourceFolder, resourcePath)
-                            .filter(newDiskHash::equals).isPresent();
-                    if (recordPersisted) {
-                        getLogger().info("Language file '" + resourcePath + "' for module '" + getPluginName()
-                                + "' was not modified since it was extracted and has been updated to the "
-                                + "current bundled version.");
-                    } else {
-                        getLogger().error("Refreshed language file '" + resourcePath + "' for module '"
-                                + getPluginName() + "' but could not persist its provenance record; it may "
-                                + "be treated as customised on the next start until this is resolved.");
+                    try {
+                        String newDiskHash = ResourceHashSidecar.sha256(file);
+                        ResourceHashSidecar.record(resourceFolder, resourcePath, newDiskHash);
+                        // Codex round 2, P2: record(...) swallows its own IOException and returns
+                        // void, so a caller cannot otherwise tell a sidecar write failure from
+                        // success. Read the record back to confirm it actually persisted before
+                        // claiming success -- logging "has been updated" when the file WAS
+                        // refreshed but the sidecar was NOT would misrepresent provenance
+                        // tracking as healthy. Deliberately not reverted on failure: a second
+                        // write introduces its own atomicity risk for a genuinely rare failure;
+                        // the next boot's hash mismatch safely falls into branch 2 (treated as
+                        // customised) instead, which is this mechanism's own conservative default.
+                        boolean recordPersisted = ResourceHashSidecar.readRecordedHash(resourceFolder, resourcePath)
+                                .filter(newDiskHash::equals).isPresent();
+                        if (recordPersisted) {
+                            getLogger().info("Language file '" + resourcePath + "' for module '" + getPluginName()
+                                    + "' was not modified since it was extracted and has been updated to the "
+                                    + "current bundled version.");
+                        } else {
+                            getLogger().error("Refreshed language file '" + resourcePath + "' for module '"
+                                    + getPluginName() + "' but could not persist its provenance record; it may "
+                                    + "be treated as customised on the next start until this is resolved.");
+                        }
+                    } catch (UncheckedIOException e) {
+                        // Codex round 6, P1: the same gap fixed in saveResources() -- the file
+                        // this branch just wrote could not be reopened for hashing immediately
+                        // afterward (e.g. a write-only default ACL, or a transient filesystem
+                        // error), and sha256(File)'s UncheckedIOException is not an IOException a
+                        // plain IOException catch would see. Degrade rather than let it abort
+                        // module construction: the file itself WAS refreshed and is still used
+                        // below via readLanguageFile -- only its provenance record is skipped, so
+                        // the next boot's hash comparison falls back to "unknown provenance"
+                        // (branches 3/4) instead of crashing this one.
+                        getLogger().error("Could not hash refreshed language file '" + resourcePath
+                                + "' for module '" + getPluginName() + "' immediately after writing it; "
+                                + "its provenance record was not updated.", e);
                     }
                 }
                 return readLanguageFile(file, extension);

@@ -22,6 +22,7 @@ import org.jetbrains.annotations.ApiStatus;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonIOException;
 import com.google.gson.JsonSyntaxException;
 import com.google.gson.reflect.TypeToken;
 
@@ -226,7 +227,12 @@ public final class ResourceHashSidecar {
             }
             Files.move(tempFile.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING,
                     StandardCopyOption.ATOMIC_MOVE);
-        } catch (IOException e) {
+        } catch (IOException | JsonIOException e) {
+            // Codex round 6, P2: GSON.toJson wraps an IOException it hits while actively
+            // serializing (e.g. the filesystem filling up mid-write) in its own unchecked
+            // JsonIOException, which a catch (IOException) alone does not see -- letting it
+            // escape record()/recordAll() into the plugin constructor and abort module startup,
+            // contrary to this class's own documented best-effort behaviour (see class javadoc).
             LOGGER.log(Level.WARNING, "Failed to write resource-hash sidecar " + file.getPath(), e);
         } finally {
             if (tempFile != null) {
