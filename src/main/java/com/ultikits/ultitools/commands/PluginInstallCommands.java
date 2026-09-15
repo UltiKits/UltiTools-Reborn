@@ -31,6 +31,13 @@ import net.kyori.adventure.text.format.TextColor;
 @CmdExecutor(description = "UltiTools Plugin Management Commands", alias = "upm", requireOp = true)
 @CmdTarget(CmdTarget.CmdTargetType.BOTH)
 public class PluginInstallCommands extends BaseCommandExecutor {
+
+    /**
+     * The literal Bukkit {@code name:} prefix {@link #isSameModule} strips before comparing a
+     * loaded module's runtime name against the catalogue's display name (#439).
+     */
+    private static final String VENDOR_PREFIX = "UltiTools-";
+
     @CmdMapping(format = "list <page>")
     @RunAsync
     public void listPlugins(@CmdSender CommandSender sender, @CmdParam("page") String page) {
@@ -57,13 +64,8 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             for (PluginEntity plugin : plugins) {
                 text = text.append(Component.text(i + UltiTools.getInstance().i18n(".  名字：") + plugin.getName() + "\n").color(TextColor.color(0x00ffff)));
                 text = text.append(Component.text(UltiTools.getInstance().i18n("    安装状态：")).color(TextColor.color(127, 127, 127)));
-                boolean installed = false;
-                for (UltiToolsPlugin installedPlugin : installedPlugins) {
-                    if (installedPlugin.getPluginName().equals(plugin.getName())) {
-                        installed = true;
-                        break;
-                    }
-                }
+                String matchedRuntimeName = resolveInstalledRuntimeName(installedPlugins, plugin);
+                boolean installed = matchedRuntimeName != null;
                 if (installed) {
                     text = text.append(Component.text(UltiTools.getInstance().i18n(" 已安装") + "\n").color(TextColor.color(0x00ff00)));
                     text = text.append(
@@ -71,7 +73,10 @@ public class PluginInstallCommands extends BaseCommandExecutor {
                                     .text(UltiTools.getInstance().i18n("     | 卸载 |     ") + "\n")
                                     .color(TextColor.color(255, 0, 0))
                                     .hoverEvent(Component.text(UltiTools.getInstance().i18n("点击卸载模块")))
-                                    .clickEvent(ClickEvent.runCommand("/upm uninstall " + plugin.getName()))
+                                    // #439 gate-2 Codex round 1: the LOADED module's own runtime
+                                    // name, not the catalogue's display name -- uninstallPlugin
+                                    // matches only the former.
+                                    .clickEvent(ClickEvent.runCommand("/upm uninstall " + matchedRuntimeName))
                     );
                 } else {
                     text = text.append(Component.text(UltiTools.getInstance().i18n(" 未安装") + "\n").color(TextColor.color(0xff0000)));
@@ -285,6 +290,146 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         sender.sendMessage(ChatColor.GREEN + String.format(
             UltiTools.getInstance().i18n("全部更新完成！%d个成功，%d个失败。请重启服务器。"),
             success, failed));
+    }
+
+    /**
+     * Decides whether {@code installedPlugin} (a currently loaded module) and {@code
+     * catalogueEntry} (a directory entry from the UltiCloud catalogue) refer to the SAME module
+     * (#439). The prior check compared {@code installedPlugin.getPluginName()} (the module's
+     * Bukkit {@code plugin.yml} {@code name:}) against {@code catalogueEntry.getName()} (the
+     * catalogue's own display name) with plain string equality -- correct only when the two
+     * strings genuinely agree, which they do not for every module.
+     * <p>
+     * <b>Preferred key, but inert today: {@code identifyString}.</b> This is the field {@link
+     * PluginInstallUtils} and {@link com.ultikits.ultitools.manager.UpdateManager} already treat
+     * as this framework's stable module identity for install/update/version lookups, and the one
+     * field {@link PluginEntity} and {@link UltiToolsPlugin} both carry under the same name.
+     * Compared only when BOTH sides carry a non-blank value -- two identify-string-less entries
+     * are never treated as a match on that basis alone, or every such module would appear
+     * installed against every such catalogue entry, which is worse than the bug being fixed.
+     * <b>Measured as of 6.3.0 (WR-01, `16-REVIEW-command.md`): zero of the seventeen module
+     * directories under {@code Modules/} declare {@code identify-string:} in {@code plugin.yml}</b>
+     * (verified: {@code grep -rl "identify-string:" Modules/*&#47;src/main/resources/plugin.yml}
+     * returns nothing), so {@code installedPlugin.getIdentifyString()} is {@code null} for every
+     * module that exists today, including both modules #439 names, and this branch does not fire
+     * for any of them. It exists so a module that DOES declare one -- and any future migration
+     * toward {@code identify-string:}-based identity -- is matched correctly without this method
+     * needing to change again; today it is aspirational, not load-bearing.
+     * <p>
+     * <b>What actually fires today: exact name equality, plus one fixed, deterministic prefix
+     * strip.</b> Measured (WR-01): only 4 of the 15 active modules declare a Bukkit {@code
+     * name:} carrying the literal {@code "UltiTools-"} prefix -- {@code UltiTools-Chat}
+     * ({@code Modules/UltiChat/src/main/resources/plugin.yml:1}), {@code UltiTools-Economy}
+     * ({@code Modules/UltiEconomy/.../plugin.yml:1}), {@code UltiTools-Kits}
+     * ({@code Modules/UltiKits/.../plugin.yml:1}), and {@code UltiTools-Menu}
+     * ({@code Modules/UltiMenu/.../plugin.yml:1}) -- the last two ARE #439's own two named
+     * modules. The other 11 modules declare their bare folder name with no prefix at all (e.g.
+     * {@code UltiLogin}, {@code UltiWorlds}). This is NOT a declared or tool-enforced convention: {@code
+     * Tooling/ultikits-cli/src/lib/templates.ts:152} templates {@code name:} directly from the
+     * author-supplied module name with no prefix logic, and {@code
+     * Tooling/UltiTools-Maven-Archetype} ships no {@code plugin.yml} template at all -- it is
+     * simply each of these 4 authors' own historical choice. Stripping that one fixed prefix
+     * before comparing is a single deterministic transform, not a similarity/fuzzy heuristic: it
+     * accepts precisely the pairs that differ by nothing, or by exactly that one literal prefix,
+     * and rejects every other pair -- including one that merely shares a prefix or substring (a
+     * catalogue name that only resembles a loaded module's, such as one ending in {@code "Pro"},
+     * is rejected, not matched).
+     * <p>
+     * <b>Two present identifiers are authoritative, even on a mismatch (gate-2 Codex round 1).</b>
+     * When BOTH sides carry a non-blank {@code identifyString}, that comparison alone decides the
+     * outcome -- a match returns {@code true} immediately, and a MISMATCH returns {@code false}
+     * immediately, without ever falling through to the name/prefix heuristic below. Two present,
+     * different stable identifiers prove the modules are different; the name heuristic must not
+     * override that proof (a loaded {@code UltiTools-Foo} with id {@code author-a.foo} must not be
+     * reported as the catalogue's unrelated {@code Foo} with id {@code author-b.foo}, even though
+     * the name/prefix rule alone would match them). The comparison is normalised (trimmed,
+     * lower-cased) via the same convention {@code PluginInstallUtils}'s own (private) {@code
+     * normalizeIdentifyString} already applies before every install/update/lookup comparison
+     * elsewhere in this package, so a module and a catalogue entry that agree except for case are
+     * still recognised as the same.
+     * <p>
+     * <b>Residual collision risk (WR-01), disclosed rather than papered over:</b> the risk above
+     * is closed whenever BOTH sides carry an identifier. It remains open only when at least one
+     * side's {@code identifyString} is blank -- true for every module today (0/17) -- in which
+     * case a THIRD-PARTY module that names itself {@code UltiTools-Foo} in its own {@code
+     * plugin.yml} would still be reported installed against a different, unrelated author's
+     * unaffiliated catalogue entry literally named {@code Foo}, since neither {@code
+     * UltiToolsPlugin} nor {@code PluginEntity} exposes anything else (a developer/author ID) this
+     * method could cross-check in that case. Still strictly better than the defect being fixed:
+     * today, EVERY module whose name doesn't already match its catalogue display name
+     * byte-for-byte is unconditionally reported not installed, a guaranteed false negative for
+     * real, correctly-loaded modules. Closing the remaining gap needs a stable identifier
+     * populated on both sides (#474), not a looser name heuristic.
+     *
+     * @param installedPlugin a currently loaded module
+     * @param catalogueEntry  a directory entry from the catalogue
+     * @return {@code true} iff the two are judged to refer to the same module
+     */
+    static boolean isSameModule(UltiToolsPlugin installedPlugin, PluginEntity catalogueEntry) {
+        String moduleIdentify = normalizeIdentifyString(installedPlugin.getIdentifyString());
+        String catalogueIdentify = normalizeIdentifyString(catalogueEntry.getIdentifyString());
+        if (moduleIdentify != null && catalogueIdentify != null) {
+            // Both sides carry a stable identifier -- AUTHORITATIVE. Never fall through to the
+            // name/prefix heuristic below, even when the two identifiers disagree (gate-2 Codex
+            // round 1): a present mismatch proves these are different modules.
+            return moduleIdentify.equals(catalogueIdentify);
+        }
+
+        String runtimeName = installedPlugin.getPluginName();
+        String catalogueName = catalogueEntry.getName();
+        if (runtimeName == null || catalogueName == null) {
+            return false;
+        }
+        if (runtimeName.equals(catalogueName)) {
+            return true;
+        }
+        return stripVendorPrefix(runtimeName).equals(catalogueName);
+    }
+
+    /**
+     * Resolves the runtime name to use for the {@code /upm uninstall} click command in {@link
+     * #listPlugins(CommandSender, String)}'s player branch: the LOADED module's own {@code
+     * getPluginName()}, not the catalogue entry's display name (gate-2 Codex round 1). {@link
+     * PluginInstallUtils#uninstallPlugin} matches only against the runtime name -- for exactly
+     * the display-name-mismatch case {@link #isSameModule} exists to recognise as installed,
+     * using the catalogue's display name here would build an uninstall command that silently
+     * fails (no unregister, no file delete, a generic failure message).
+     *
+     * @param installedPlugins every currently-loaded module
+     * @param catalogueEntry   the catalogue entry being rendered
+     * @return the matched module's own runtime name, or {@code null} if none matches
+     */
+    static String resolveInstalledRuntimeName(List<UltiToolsPlugin> installedPlugins, PluginEntity catalogueEntry) {
+        for (UltiToolsPlugin installedPlugin : installedPlugins) {
+            if (isSameModule(installedPlugin, catalogueEntry)) {
+                return installedPlugin.getPluginName();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Trims and lower-cases an identify string, the same normalisation {@code
+     * PluginInstallUtils}'s own (private) {@code normalizeIdentifyString} applies before every
+     * install/update/lookup comparison elsewhere in this package (gate-2 Codex round 1) -- kept as
+     * a small local copy rather than widening that method's visibility, since the transform
+     * itself is a one-line, well-established convention, not shared mutable state.
+     *
+     * @param value the raw identify string, possibly {@code null} or blank
+     * @return the normalised value, or {@code null} if the input was {@code null} or blank
+     */
+    private static String normalizeIdentifyString(String value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.trim().toLowerCase(java.util.Locale.ROOT);
+        return normalized.isEmpty() ? null : normalized;
+    }
+
+    private static String stripVendorPrefix(String runtimeName) {
+        return runtimeName.startsWith(VENDOR_PREFIX)
+                ? runtimeName.substring(VENDOR_PREFIX.length())
+                : runtimeName;
     }
 
     @Override

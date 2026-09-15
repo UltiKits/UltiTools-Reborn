@@ -41,7 +41,12 @@ public class CommandManager {
      * @param aliases     Aliases
      */
     public void register(UltiToolsPlugin plugin, Class<? extends CommandExecutor> clazz, String permission, String description, String... aliases) {
-        CommandExecutor commandExecutor = UltiTools.getInstance().getDependenceManagers().getContext().getBean(clazz);
+        // #347: resolve from the MODULE's own container, matching the two-argument overload
+        // below (register(plugin, clazz)) -- not from the core container. A module author who
+        // registers a bean in their own container and calls this overload with an explicit
+        // permission/description/aliases must get their own instance back, not a core-container
+        // bean of the same type that happens to shadow it.
+        CommandExecutor commandExecutor = plugin.getContext().getBean(clazz);
         register(plugin, commandExecutor, permission, description, aliases);
     }
 
