@@ -298,6 +298,60 @@ class EconomyUtilsReportingTest {
                 .doesNotThrowAnyException();
     }
 
+    /**
+     * A minimal {@code ArrayList} whose {@link #toArray()} deliberately corrupts its own result,
+     * simulating the data race {@code ArrayList}'s real copy constructor is genuinely exposed to
+     * under true concurrent mutation (Codex P2, PR #463, follow-up on 6beb6400): {@code toArray()}
+     * reads the live {@code elementData} array and {@code size} field with no synchronization and
+     * no fail-fast modCount check, so a structural change on another thread mid-copy can leave a
+     * trailing {@code null} in the copied array where a real element should be — {@code
+     * ConcurrentModificationException} is never involved, since nothing here is iterating via a
+     * fail-fast {@code Iterator}. Deterministic in a single thread by construction, rather than
+     * relying on real timing to hit a data race that may not reproduce reliably.
+     */
+    private static final class RacyToArrayList extends ArrayList<UltiToolsPlugin> {
+        @Override
+        public Object[] toArray() {
+            Object[] real = super.toArray();
+            if (real.length > 0) {
+                real[real.length - 1] = null;
+            }
+            return real;
+        }
+    }
+
+    @Test
+    @DisplayName("12: a torn snapshot copy (trailing null, simulating ArrayList#toArray()'s own data race) does not propagate NullPointerException either (Codex P2, PR #463, follow-up on 6beb6400)")
+    void attributeCallingModule_tornSnapshotCopy_doesNotPropagateNPE() {
+        PluginManager pluginManager = mock(PluginManager.class);
+        List<UltiToolsPlugin> racyList = new RacyToArrayList();
+        UltiToolsPlugin pluginA = mock(FixturePluginA.class);
+        UltiToolsPlugin pluginB = mock(FixturePluginB.class);
+        when(pluginA.getPluginName()).thenReturn("ModuleA");
+        when(pluginB.getPluginName()).thenReturn("ModuleB");
+        racyList.add(pluginA);
+        racyList.add(pluginB);
+        when(pluginManager.getPluginList()).thenReturn(racyList);
+        when(pluginManager.getPluginScanPackages(pluginA.getClass()))
+                .thenReturn(new String[] {"com.example.modulea"});
+        when(pluginManager.getPluginScanPackages(pluginB.getClass()))
+                .thenReturn(new String[] {"com.example.moduleb"});
+
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
+            when(ultiTools.getLogger()).thenReturn(mockLogger);
+            when(ultiTools.getPluginManager()).thenReturn(pluginManager);
+        });
+        EconomyUtils.reset();
+
+        assertThatCode(() -> EconomyUtils.getBalance(mock(OfflinePlayer.class)))
+                .as("a torn snapshot copy (a null element where a real plugin should be, exactly "
+                        + "what ArrayList's own unsynchronized toArray() can produce under real "
+                        + "concurrent mutation) must not propagate NullPointerException out of the "
+                        + "economy facade either -- the same 'unattributable, return null' fallback "
+                        + "applies here as it does for ConcurrentModificationException")
+                .doesNotThrowAnyException();
+    }
+
     @Nested
     @DisplayName("attributeModule — pure module-attribution logic")
     class AttributeModuleTests {
