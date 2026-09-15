@@ -768,4 +768,25 @@ class UltiToolsPluginLanguageFallbackTest {
         assertThat(language.getLocalizedText("other")).isEqualTo("stable-customised");
         verify(fixture.mockLogger, times(1)).warning(argThat((String msg) -> msg.contains("known")));
     }
+
+    @Test
+    @DisplayName("an ordinary '%' in customised text (e.g. '90% done') is never mistaken for a "
+            + "Formatter placeholder -- the operator's customisation is preserved, not silently "
+            + "overwritten (Codex round 6, P2)")
+    void ordinaryPercentSignInTextIsNeverMistakenForAPlaceholder() throws Throwable {
+        // Under the old, more permissive PLACEHOLDER_PATTERN, a space is accepted as a Formatter
+        // flag, so "90% done" matches "% d" as a bogus %d conversion (arity 1) even though there
+        // is no real placeholder here at all. The jar wording below carries no '%' character, so
+        // its arity computes as 0 -- a false-positive mismatch that would silently overwrite the
+        // operator's customised value with the plain-text bundled wording.
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"known\":\"Progress: 90 percent done\"}",
+                "{\"known\":\"Progress: 90% done\"}");
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
+
+        Language language = resolveProvenanceLanguage(fixture);
+
+        assertThat(language.getLocalizedText("known")).isEqualTo("Progress: 90% done");
+        verify(fixture.mockLogger, never()).warning(anyString());
+    }
 }
