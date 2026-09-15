@@ -201,8 +201,13 @@ class ResourceHashSidecarTest {
     @DisplayName("sha256(File) streams a larger file without reading it fully into memory, and still "
             + "matches the digest of an in-memory computation over the same bytes")
     void sha256StreamsLargerFileAndMatchesInMemoryDigest() throws Exception {
+        // Deliberately not java.util.Random -- this only needs non-uniform, reproducible bytes
+        // large enough to exercise the chunked read loop across multiple buffer fills, never
+        // anything resembling a security-sensitive value, so no RNG (weak or otherwise) is used.
         byte[] bytes = new byte[5 * 1024 * 1024];
-        new java.util.Random(42).nextBytes(bytes);
+        for (int i = 0; i < bytes.length; i++) {
+            bytes[i] = (byte) (i * 31 + 7);
+        }
         File file = new File(tempDir, "large.bin");
         Files.write(file.toPath(), bytes);
 
