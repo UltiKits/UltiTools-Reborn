@@ -227,6 +227,46 @@ class HelpGateTest {
 
             assertThat(executor.helpShown).isTrue();
         }
+
+        /**
+         * WR-02 (16-REVIEW-command.md): the original fix's javadoc/commit message claimed
+         * {@code handleGatedHelp} "reuses {@link ValidatorChain#validate}'s own applicability
+         * logic," but the diff actually added a second, textually-identical copy of
+         * {@code validator.shouldValidate(context)} directly inside {@code handleGatedHelp} --
+         * true reuse would mean both call sites route through the SAME method, not two
+         * independent copies of the same one-line condition. This pins that
+         * {@code handleGatedHelp} now genuinely calls {@link ValidatorChain#isApplicable}, the
+         * single shared method {@link ValidatorChain#validate}/{@code #validateAll} also call --
+         * checked against the compiled class's own constant pool, the same idiom
+         * {@code PermissionValidatorTest.ClassLevelReachability.bukkitLevelRegistrationStillHappens}
+         * already uses in this codebase, so it survives reformatting/comment edits and constructs
+         * no call path of its own.
+         */
+        @Test
+        @DisplayName("handleGatedHelp delegates applicability to ValidatorChain.isApplicable, not a second copy of the condition")
+        void gatedHelpDelegatesApplicabilityToSharedMethod() throws Exception {
+            byte[] bytecode;
+            try (java.io.InputStream in = BaseCommandExecutor.class
+                    .getResourceAsStream("BaseCommandExecutor.class")) {
+                assertThat(in).as("BaseCommandExecutor.class is not readable from the classpath").isNotNull();
+                java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
+                byte[] chunk = new byte[8192];
+                int read;
+                while ((read = in.read(chunk)) != -1) {
+                    buffer.write(chunk, 0, read);
+                }
+                bytecode = buffer.toByteArray();
+            }
+
+            // ISO-8859-1 maps each byte to exactly one char, so the constant pool's UTF-8 method
+            // reference entries survive decoding intact for a plain substring search.
+            String constantPool = new String(bytecode, java.nio.charset.StandardCharsets.ISO_8859_1);
+            assertThat(constantPool)
+                    .as("BaseCommandExecutor no longer references ValidatorChain#isApplicable -- "
+                            + "the WR-02 fix delegating applicability to a single shared method may "
+                            + "have been reverted to a second, independent copy of the condition")
+                    .contains("isApplicable");
+        }
     }
 
     @CmdExecutor(alias = {"fixture"}, description = "custom-chain fixture")
