@@ -1,6 +1,9 @@
 package com.ultikits.ultitools.abstracts.gui.declarative.engine;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderDepthExceededException;
+import com.ultikits.ultitools.manager.ErrorReportCollector;
+import com.ultikits.ultitools.manager.TriggerContext;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.Plugin;
 import org.jetbrains.annotations.NotNull;
@@ -155,7 +158,43 @@ public class GuiScheduler {
             } catch (Exception e) {
                 plugin.getLogger().warning("Error executing GUI frame task: " + e.getMessage());
                 e.printStackTrace();
+                // WR-01: route a depth-guard trip into ErrorReportCollector so it reaches the
+                // panel's error dashboard, not only the server console -- consistent with every
+                // other exception-reporting path this framework documents. Scoped to this one
+                // exception type deliberately: a blanket "report every GUI frame exception"
+                // change is a wider behaviour change than this fix's own finding asked for.
+                if (e instanceof RenderDepthExceededException) {
+                    reportRenderDepthExceeded((RenderDepthExceededException) e);
+                }
             }
+        }
+    }
+
+    /**
+     * Reports a {@link RenderDepthExceededException} to {@link ErrorReportCollector}.
+     * <p>
+     * No new per-GUI "failed/closed" bookkeeping is added here: the exception is always thrown
+     * from the same guard site with a stable top stack frame (the guard name and depth vary in
+     * the message, not in the class/method/line the stack trace records), so
+     * {@code ErrorReportCollector}'s own fingerprint-based dedup already coalesces repeated
+     * occurrences -- e.g. the same over-deep tree being rebuilt on every {@code setState()} call
+     * -- into ONE report with an incrementing count, rather than one report per frame.
+     *
+     * @param e the depth-guard trip to report
+     */
+    private void reportRenderDepthExceeded(RenderDepthExceededException e) {
+        try {
+            UltiTools instance = UltiTools.getInstance();
+            if (instance == null) {
+                return;
+            }
+            ErrorReportCollector erc = instance.getErrorReportCollector();
+            if (erc == null) {
+                return;
+            }
+            erc.reportError(e, null, TriggerContext.uncaught("GUI render frame: " + e.getMessage()));
+        } catch (Exception ignored) {
+            // Never re-enter logging from error reporting.
         }
     }
 

@@ -1,11 +1,22 @@
 package com.ultikits.ultitools.abstracts.gui.declarative.core;
 
+import org.jetbrains.annotations.ApiStatus;
+
 /**
  * Shared depth ceiling for the declarative render frame's traversal family (T-05-62 / #371).
  * <p>
- * Four recursions walk the Element tree within a single frame:
+ * Five recursions walk the Element tree and need this guard:
  * <ul>
- *   <li>{@code GuiRenderer.rebuildElement} -- the element-rebuild recursion, first in the frame</li>
+ *   <li>{@code Element.mount} -- the mounting recursion itself (CR-01): every
+ *       {@code mount(Element)} override calls {@code super.mount(parent)} before mounting its
+ *       own children, so checking here guards {@code ContainerElement}/{@code
+ *       GridViewElement.mountChildren()} and the {@code mount()->performRebuild()->
+ *       updateChild()->mount()} cascade {@code StatelessElement}/{@code StatefulElement} drive,
+ *       in one place. This is the recursion that runs FIRST -- before any of the four below --
+ *       both on the very first frame and whenever a later rebuild introduces a brand-new
+ *       subtree.</li>
+ *   <li>{@code GuiRenderer.rebuildElement} -- the element-rebuild recursion, against an
+ *       already-mounted tree</li>
  *   <li>{@code GridViewElement.performRebuild} -- nested inside the above for a GridView's own
  *       children</li>
  *   <li>{@code GridViewElement.collectRenderNodeLeaves} -- walks a GridView cell's subtree to
@@ -13,9 +24,16 @@ package com.ultikits.ultitools.abstracts.gui.declarative.core;
  *   <li>{@code GuiRenderer.collectRenderNodesRecursive} -- the render-node collection recursion,
  *       last in the frame</li>
  * </ul>
+ * {@code Element.update()}/{@code Element.unmount()} need no separate guard: both only ever walk
+ * a subtree whose depth was already validated by the mount guard when it was first mounted, so
+ * neither can exceed {@link #MAX_DEPTH} without first passing through an unguarded
+ * {@code mount()} call -- which the guard above closes. {@code Navigator.of()} walks the tree
+ * UPWARD via a plain loop over {@code Element.getParent()} (the same iterative shape as
+ * {@link #depthOf(Element)} itself) -- not recursion, so it needs no guard either.
+ * <p>
  * A module-authored widget tree deep enough overflows the JVM stack mid-frame;
  * {@link StackOverflowError} is an {@link Error}, so nothing on the render path catches it and it
- * escapes the scheduled frame, potentially leaving the Inventory half-written. Each of the four
+ * escapes the scheduled frame, potentially leaving the Inventory half-written. Each of the five
  * call sites checks its current depth against {@link #MAX_DEPTH} before descending further,
  * raising {@link RenderDepthExceededException} -- a named, attributable failure -- instead.
  * <p>
@@ -32,9 +50,14 @@ package com.ultikits.ultitools.abstracts.gui.declarative.core;
  * thousands of frames for a call shape this simple, on the stack sizes Paper's main thread runs
  * with). It is a sanity ceiling on module-authored tree shape, not an attempt to find the exact
  * point of stack exhaustion -- the guard is meant to trip long before the JVM ever would.
+ * <p>
+ * <b>WR-03:</b> {@code @ApiStatus.Internal} -- purely internal render-engine machinery; no
+ * module-author use case for catching {@link RenderDepthExceededException} or referencing
+ * {@link #MAX_DEPTH} directly is intended, and this release adds no new public surface.
  *
  * @since 6.3.0
  */
+@ApiStatus.Internal
 public final class RenderDepthGuard {
 
     /**
