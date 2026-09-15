@@ -34,6 +34,8 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.ultikits.testfixtures.pluginloadafter.JarModuleDuplicateNameA;
+import com.ultikits.testfixtures.pluginloadafter.JarModuleDuplicateNameB;
 import com.ultikits.testfixtures.pluginloadafter.JarModuleLoadAfterBySimpleName;
 import com.ultikits.testfixtures.pluginloadafter.JarModuleMutualLoadAfterX;
 import com.ultikits.testfixtures.pluginloadafter.JarModuleMutualLoadAfterY;
@@ -189,6 +191,14 @@ class PluginDependencyResolverTest {
     public static class PluginWithMissingDep extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
         @Override public void unregisterSelf() { }
+    }
+
+    // #361 (WR-05): a module declaring several missing hard dependencies at once, so the
+    // multi-missing-dependency message has more than one name to report for a SINGLE module
+    // (as opposed to PluginWithMissingDep, which has exactly one).
+    @PluginDependency(depends = {"MissingOne", "MissingTwo", "MissingThree"})
+    public static class PluginWithThreeMissingDeps extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
     }
 
     // Circular dependency plugins
@@ -520,6 +530,185 @@ class PluginDependencyResolverTest {
 
             assertEquals(3, result.size());
             assertTrue(result.containsAll(plugins));
+        }
+    }
+
+    @Nested
+    @DisplayName("Multi-Missing-Dependency and Duplicate-Name Reporting Tests (#361)")
+    class MultiMissingDependencyAndDuplicateNameTests {
+
+        @Test
+        @DisplayName("a module declaring three missing hard dependencies gets one message naming all three")
+        void severalMissingHardDependenciesAreAllNamedInOneMessage() {
+            List<Class<? extends UltiToolsPlugin>> plugins = Collections.singletonList(
+                PluginWithThreeMissingDeps.class
+            );
+
+            MissingDependencyException ex = assertThrows(MissingDependencyException.class,
+                () -> resolver.resolve(plugins));
+
+            assertTrue(ex.getMessage().contains("MissingOne"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("MissingTwo"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("MissingThree"), ex.getMessage());
+            // Exactly one module refuses here, so the message must be a single joined entry,
+            // not three separate "Plugin ... requires ..." clauses stitched together.
+            assertEquals(1, ex.getMessage().split("; ").length,
+                "three missing dependencies of the SAME module must be joined into one entry, "
+                + "not reported as three separate refusal clauses. Full message: "
+                + ex.getMessage());
+        }
+
+        @Test
+        @DisplayName("a module declaring exactly one missing hard dependency reads as singular, "
+                + "not a degenerate list")
+        void singleMissingHardDependencyMessageIsNotADegenerateList() {
+            List<Class<? extends UltiToolsPlugin>> plugins = Collections.singletonList(
+                PluginWithMissingDep.class
+            );
+
+            MissingDependencyException ex = assertThrows(MissingDependencyException.class,
+                () -> resolver.resolve(plugins));
+
+            assertEquals(
+                "Plugin 'PluginWithMissingDep' requires dependency 'MissingPlugin' which is not available",
+                ex.getMessage(),
+                "the single-missing-dependency message shape must be unchanged by widening the "
+                + "diagnostic to the multi-missing case");
+        }
+
+        @Test
+        @DisplayName("a module with no declared dependencies produces no missing-dependency message")
+        void noDeclaredDependenciesProducesNoMissingDependencyMessage() throws Exception {
+            List<Class<? extends UltiToolsPlugin>> plugins = Collections.singletonList(PluginA.class);
+
+            List<Class<? extends UltiToolsPlugin>> result = resolver.resolve(plugins);
+
+            assertEquals(1, result.size());
+            assertEquals(PluginA.class, result.get(0));
+        }
+
+        @Test
+        @DisplayName("two modules declaring the same plugin.yml name are reported with both sources named")
+        void duplicatePluginYmlNameIsReportedWithBothSourcesNamed() throws Exception {
+            Class<? extends UltiToolsPlugin> first = loadJarBackedFixture(
+                "dup-a.jar", JarModuleDuplicateNameA.class, "name: DuplicateModule\n");
+            Class<? extends UltiToolsPlugin> second = loadJarBackedFixture(
+                "dup-b.jar", JarModuleDuplicateNameB.class, "name: DuplicateModule\n");
+
+            Logger dupLogger = Logger.getLogger(
+                "PluginDependencyResolverTest.duplicatePluginYmlNameIsReportedWithBothSourcesNamed");
+            dupLogger.setUseParentHandlers(false);
+            List<LogRecord> captured = new ArrayList<>();
+            Handler handler = new Handler() {
+                @Override
+                public void publish(LogRecord record) {
+                    captured.add(record);
+                }
+
+                @Override
+                public void flush() {
+                    // No-op: records are captured synchronously in publish().
+                }
+
+                @Override
+                public void close() {
+                    // No-op: nothing held open that needs releasing.
+                }
+            };
+            dupLogger.addHandler(handler);
+            PluginDependencyResolver dupResolver = new PluginDependencyResolver(dupLogger);
+
+            List<Class<? extends UltiToolsPlugin>> result = dupResolver.resolve(Arrays.asList(first, second));
+
+            // Resolution still has to pick one winner (D-12's alias map keeps that behaviour) --
+            // but BOTH modules still load; a collision is not a refusal.
+            assertEquals(2, result.size());
+
+            boolean warned = captured.stream().anyMatch(record ->
+                record.getLevel().intValue() >= Level.WARNING.intValue()
+                    && record.getMessage() != null
+                    && record.getMessage().contains("DuplicateModule")
+                    && record.getMessage().contains("JarModuleDuplicateNameA")
+                    && record.getMessage().contains("JarModuleDuplicateNameB"));
+            assertTrue(warned, "expected a WARNING naming both modules and the shared plugin.yml "
+                + "name 'DuplicateModule'; captured records: " + captured.stream()
+                    .map(LogRecord::getMessage).collect(java.util.stream.Collectors.toList()));
+        }
+
+        @Test
+        @DisplayName("a duplicate plugin.yml name that also equals another module's simple class "
+                + "name reports THAT CLASS as the actual winner, not the first plugin.yml declarer")
+        void duplicatePluginYmlNameEqualToASimpleClassNameReportsTheClassAsWinner() throws Exception {
+            // JarModuleTarget's OWN alias comes only from its simple class name (buildAliasMap's
+            // FIRST loop, which always runs before any plugin.yml name: is considered) -- giving
+            // it an UNRELATED plugin.yml name: here keeps that separate from the collision below.
+            Class<? extends UltiToolsPlugin> classNamedTarget = loadJarBackedFixture(
+                "target-classname-winner.jar", JarModuleTarget.class, "name: SomeOtherIrrelevantName\n");
+            Class<? extends UltiToolsPlugin> first = loadJarBackedFixture(
+                "dup-c.jar", JarModuleDuplicateNameA.class, "name: JarModuleTarget\n");
+            Class<? extends UltiToolsPlugin> second = loadJarBackedFixture(
+                "dup-d.jar", JarModuleDuplicateNameB.class, "name: JarModuleTarget\n");
+
+            Logger dupLogger = Logger.getLogger(
+                "PluginDependencyResolverTest.duplicatePluginYmlNameEqualToASimpleClassName");
+            dupLogger.setUseParentHandlers(false);
+            List<LogRecord> captured = new ArrayList<>();
+            Handler handler = new Handler() {
+                @Override
+                public void publish(LogRecord record) {
+                    captured.add(record);
+                }
+
+                @Override
+                public void flush() {
+                    // No-op: records are captured synchronously in publish().
+                }
+
+                @Override
+                public void close() {
+                    // No-op: nothing held open that needs releasing.
+                }
+            };
+            dupLogger.addHandler(handler);
+            PluginDependencyResolver dupResolver = new PluginDependencyResolver(dupLogger);
+
+            List<Class<? extends UltiToolsPlugin>> result = dupResolver.resolve(
+                Arrays.asList(classNamedTarget, first, second));
+
+            assertEquals(3, result.size());
+
+            boolean warnedTheRealWinner = captured.stream().anyMatch(record ->
+                record.getMessage() != null
+                    && record.getMessage().contains("JarModuleTarget")
+                    && record.getMessage().contains("JarModuleDuplicateNameA")
+                    && record.getMessage().contains("JarModuleDuplicateNameB")
+                    && record.getMessage().contains("resolve this name to 'JarModuleTarget'"));
+            assertTrue(warnedTheRealWinner,
+                "the alias map's FIRST loop (simple class names) always runs before any "
+                    + "plugin.yml name: is considered, so 'JarModuleTarget' -- the class -- wins "
+                    + "the alias here, NOT 'JarModuleDuplicateNameA' even though it is the first "
+                    + "plugin.yml declarer; the WARNING must name the class that actually wins, "
+                    + "not the naive 'first declarer' answer. Captured records: "
+                    + captured.stream().map(LogRecord::getMessage).collect(java.util.stream.Collectors.toList()));
+        }
+
+        @Test
+        @DisplayName("resolution order for every previously-successful case is unchanged by the "
+                + "widened diagnostic")
+        void resolutionOrderForPreviouslySuccessfulCasesIsUnchanged() throws Exception {
+            List<Class<? extends UltiToolsPlugin>> plugins = Arrays.asList(
+                PluginDependsOnAB.class, PluginLoadBeforeC.class, PluginA.class, PluginB.class, PluginC.class
+            );
+
+            List<Class<? extends UltiToolsPlugin>> result = resolver.resolve(plugins);
+
+            assertEquals(5, result.size());
+            assertTrue(result.indexOf(PluginA.class) < result.indexOf(PluginDependsOnAB.class),
+                "PluginA must still load before its dependent, PluginDependsOnAB");
+            assertTrue(result.indexOf(PluginB.class) < result.indexOf(PluginDependsOnAB.class),
+                "PluginB must still load before its dependent, PluginDependsOnAB");
+            assertTrue(result.indexOf(PluginLoadBeforeC.class) < result.indexOf(PluginC.class),
+                "PluginLoadBeforeC must still load before PluginC per its loadBefore declaration");
         }
     }
 

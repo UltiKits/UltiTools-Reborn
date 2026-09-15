@@ -18,11 +18,16 @@ import java.lang.annotation.Target;
  * whitespace-only also fails the module's load, naming the offending method: a name that cannot
  * name anything is not a usable third state between "declared" and "absent".
  * <p>
- * {@code @Target} also includes {@link ElementType#ANNOTATION_TYPE}, but no code path in this
- * framework acts on a {@code @Bean} placed there -- that gap is tracked as a separate issue
- * (03-CONTEXT.md &sect; Deferred Ideas) and is not implemented by this attribute's own fix.
+ * {@code @Target} declares {@link ElementType#METHOD} only. It used to also permit placing this
+ * annotation on an annotation type declaration, but no code path in this framework ever acted on
+ * a {@code @Bean} placed there -- {@code ComponentScanner.processBeanMethod} and
+ * {@code SimpleContainer.processConfigurationClass} both only ever look for {@code @Bean} on
+ * methods -- so the wider target let an author place this annotation somewhere nothing would
+ * ever read it. Narrowed to methods only in 6.3.0 (issue #348); no semantics for the removed
+ * target were implemented, since nothing has ever acted on it and inventing a meaning for it
+ * here would be a new declared surface with no consumer.
  */
-@Target({ElementType.METHOD, ElementType.ANNOTATION_TYPE})
+@Target(ElementType.METHOD)
 @Retention(RetentionPolicy.RUNTIME)
 public @interface Bean {
     /**

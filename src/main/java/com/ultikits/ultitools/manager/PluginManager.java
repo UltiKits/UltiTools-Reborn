@@ -1086,6 +1086,46 @@ public class PluginManager {
         } catch (Exception | Error e) {
             Bukkit.getLogger().log(Level.WARNING, e, String::new);
             Bukkit.getLogger().log(Level.WARNING, String.format("[UltiTools-API] %s load failed！", plugin.getPluginName()));
+            // WR-02 (#410): onPluginRegistered() may have already run pluginList.add(plugin)
+            // and recorded some of this module's beans' @Scheduled tasks (correctly, per
+            // TaskManager's own #410 fix) before a LATER bean's own scheduling call threw.
+            // registerSelf() already returned true to reach onPluginRegistered() at all, so
+            // calling unregisterSelf() below is never "on a module that never finished
+            // registerSelf()" -- only a module whose OWN activation already succeeded, but
+            // whose framework-side post-registration bookkeeping failed partway, reaches here.
+            // unregister(plugin) itself is wrapped separately: it must not let a SECOND
+            // exception escape this handler, and the plugin must not stay in pluginList either
+            // way.
+            if (pluginList.contains(plugin)) {
+                try {
+                    unregister(plugin);
+                } catch (Exception | Error unregisterFailure) {
+                    Bukkit.getLogger().log(Level.WARNING, unregisterFailure, String::new);
+                    Bukkit.getLogger().log(Level.WARNING, String.format(
+                            "[UltiTools-API] %s failed to unregister cleanly after a failed load！",
+                            plugin.getPluginName()));
+                    // Gate-2 Codex finding (PR #478 round 1): unregister(plugin)'s own final
+                    // statement is plugin.getContext().close() -- an earlier step throwing (e.g.
+                    // unregisterSelf() above) means that call never ran. This plugin is about to
+                    // be removed from pluginList in the finally block below, so close() must run
+                    // here, independently, or PluginManager.close() can never retry teardown for
+                    // it again and the container/beans/classloader stay referenced for the rest
+                    // of the server run.
+                    try {
+                        if (plugin.getContext() != null) {
+                            plugin.getContext().close();
+                        }
+                    } catch (Exception | Error closeFailure) {
+                        Bukkit.getLogger().log(Level.WARNING, closeFailure, String::new);
+                        Bukkit.getLogger().log(Level.WARNING, String.format(
+                                "[UltiTools-API] %s's container also failed to close during that "
+                                        + "same teardown failure！",
+                                plugin.getPluginName()));
+                    }
+                } finally {
+                    pluginList.remove(plugin);
+                }
+            }
             return false;
         }
     }

@@ -65,11 +65,29 @@ public abstract class Element {
      * <p>
      * Called the first time the Element is inserted into the tree. Subclasses should perform
      * initialization work here and mount their child Elements.
+     * <p>
+     * <b>CR-01 (T-05-62 / #371):</b> every {@code mount(Element)} override in this codebase
+     * calls {@code super.mount(parent)} before doing its own work (mounting children, running
+     * the first {@code performRebuild()}, etc.) -- this base method is therefore the single
+     * choke point through which the ENTIRE mounting recursion passes, one call per Element,
+     * regardless of subtype: {@code ContainerElement}/{@code GridViewElement.mountChildren()}
+     * calling {@code childElement.mount(this)} for each child, and the
+     * {@code mount()->performRebuild()->updateChild()->mount()} cascade
+     * {@code StatelessElement}/{@code StatefulElement} drive when composing a child Widget for
+     * the first time. Checking the depth HERE, rather than separately in every subclass's own
+     * mounting method, guards the mount recursion exactly once per node without needing to
+     * duplicate the check at each override. {@code update()}/{@code unmount()}'s own recursions
+     * need no separate guard: they only ever walk a subtree whose depth was already validated
+     * here when it was first mounted, so they can never exceed {@link RenderDepthGuard#MAX_DEPTH}
+     * without first passing through an unguarded {@code mount()} call -- which this check
+     * closes.
      *
      * @param parent the parent Element, or null if this is the root Element
      */
     public void mount(@Nullable Element parent) {
         _parent = parent;
+        RenderDepthGuard.check("Element.mount", RenderDepthGuard.depthOf(this));
+
         _mounted = true;
         _dirty = false;
 

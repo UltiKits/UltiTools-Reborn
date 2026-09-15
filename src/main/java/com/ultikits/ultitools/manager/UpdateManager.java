@@ -7,7 +7,6 @@ import java.util.logging.Logger;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
-import com.ultikits.ultitools.annotations.PlayerCache;
 import com.ultikits.ultitools.entities.UpdateInfo;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
 import com.ultikits.ultitools.utils.VersionComparatorUtil;
@@ -33,19 +32,23 @@ public class UpdateManager {
     @Getter
     private final Map<String, UpdateInfo> moduleUpdates = new ConcurrentHashMap<>();
 
-    @PlayerCache
-    private final Set<UUID> notifiedPlayers = ConcurrentHashMap.newKeySet();
-
     /**
-     * True once this instance has registered {@link #notifiedPlayers} with the live {@link
-     * PlayerCacheManager} for quit-based sweeping (GEN-08, D-03). Set lazily from {@link
-     * #markPlayerNotified(UUID)} -- the write path, and this instance's first production call
-     * after construction -- rather than the constructor, mirroring {@code CooldownValidator}'s
-     * identical lazy-first-use rationale: a bare {@code new UpdateManager(logger)} (the shape a
-     * unit test reaches) must never attempt contact with a core plugin that may not exist yet,
-     * and a failed attempt is retried on the next call rather than permanently abandoned.
+     * Players already notified about an available update, for the lifetime of this manager
+     * instance -- which is one server run: {@code UltiTools.scheduleStartupMessages()} builds a
+     * fresh {@code UpdateManager} exactly once per {@code onEnable()}, so a restart always starts
+     * from an empty set. Deliberately NOT {@code @PlayerCache} (#431): GEN-08/D-03 (plan 05-04)
+     * registered this field with {@link PlayerCacheManager} for quit-based sweeping to bound its
+     * size, but that made a quitting-and-rejoining player look never-notified within the SAME
+     * server run, breaking {@link com.ultikits.ultitools.listeners.UpdateJoinListener}'s own
+     * documented promise of one notification per player per server session. The set's natural
+     * size bound is the number of distinct OP UUIDs that join this run, which does not grow on a
+     * repeat quit/rejoin of the same player -- there was no real unbounded-growth hazard here to
+     * trade the promise away for. Scoped to this field alone: the three other fields GEN-08/D-03
+     * migrated onto {@code PlayerCacheManager} (in {@code InMemoryNotificationService} and
+     * {@code InMemeryTeleportService}) represent genuinely connection-scoped state and are
+     * untouched.
      */
-    private volatile boolean playerCacheRegistered = false;
+    private final Set<UUID> notifiedPlayers = ConcurrentHashMap.newKeySet();
 
     @Getter
     private volatile boolean checkComplete;
@@ -152,34 +155,13 @@ public class UpdateManager {
     }
 
     /**
-     * Mark a player as having been notified about available updates.
+     * Mark a player as having been notified about available updates. The mark lives for this
+     * manager instance's lifetime (one server run) and is not cleared when the player quits
+     * (#431).
      *
      * @param uuid the player's UUID
      */
     public void markPlayerNotified(UUID uuid) {
-        ensurePlayerCacheRegistered();
         notifiedPlayers.add(uuid);
-    }
-
-    /**
-     * Attempts lazy first-use registration of this instance with the live {@link
-     * PlayerCacheManager} singleton. Safe to call unconditionally on every {@link
-     * #markPlayerNotified(UUID)} invocation: a no-op once {@link #playerCacheRegistered} is
-     * true, and a cheap, safely-no-op-on-failure retry otherwise (see that field's javadoc).
-     */
-    private void ensurePlayerCacheRegistered() {
-        if (playerCacheRegistered) {
-            return;
-        }
-        UltiTools instance = UltiTools.getInstance();
-        // Checking getPluginManager() too, not just getInstance(), matters: a mock/test double
-        // that stands up UltiTools.getInstance() without yet wiring getPluginManager() would
-        // otherwise latch this flag true on a no-op attempt, permanently skipping the retry that
-        // would have succeeded once the chain was genuinely live.
-        if (instance == null || instance.getPluginManager() == null) {
-            return;
-        }
-        PlayerCacheManager.tryRegister(this);
-        playerCacheRegistered = true;
     }
 }
