@@ -363,13 +363,19 @@ class GuiRendererRepaintTest {
     // ==================================================================
 
     @Test
-    @DisplayName("a widget tree deeper than the limit raises a named depth error via the direct "
-            + "child path (GuiRenderer.rebuildElement), not a stack overflow")
-    void deeplyNestedContainerChainThrowsNamedDepthErrorViaDirectChildPath() {
+    @DisplayName("a widget tree deeper than the limit raises a named depth error from MOUNTING "
+            + "itself (Element.mount), before rebuildElement ever runs -- direct child path "
+            + "(CR-01)")
+    void deeplyNestedContainerChainThrowsNamedDepthErrorFromMountViaDirectChildPath() {
         TestGui gui = newGui(1);
         GuiRenderer renderer = newRenderer(gui);
         BuildContext context = rootContext(1);
 
+        // MAX_DEPTH + 100 = 164 levels: nowhere near a REAL JVM stack overflow, deliberately --
+        // this depth exists to distinguish "the mount guard closed the hole" from "the tree
+        // happened to survive mounting and get caught by the already-guarded rebuild pass
+        // afterwards" (CR-01). Asserting the guard NAME below, not just the exception TYPE, is
+        // what makes that distinction observable.
         Widget leaf = ItemDisplay.builder(new ItemStack(Material.DIAMOND)).slot(0).build();
         Widget deepTree = nestedContainerChain(RenderDepthGuard.MAX_DEPTH + 100, leaf);
 
@@ -381,12 +387,20 @@ class GuiRendererRepaintTest {
 
         assertTrue(ex.getMessage().contains(String.valueOf(RenderDepthGuard.MAX_DEPTH)),
                 "the error message must identify the limit that was exceeded: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("Element.mount"),
+                "CR-01: the exception must be raised by the MOUNT recursion itself "
+                        + "(Element.mount), not merely by the already-guarded rebuild/collect "
+                        + "passes that run AFTER mounting has already finished -- a tree this "
+                        + "shallow (164 levels) survives the mount cascade trivially if mount() "
+                        + "is unguarded, so seeing this exception at all does not by itself prove "
+                        + "the mount path is closed. Actual message: " + ex.getMessage());
     }
 
     @Test
     @DisplayName("a widget tree deeper than the limit, nested inside a GridView cell, raises the "
-            + "same named depth error via the grid path (GridViewElement.collectRenderNodeLeaves)")
-    void deeplyNestedTreeInsideGridViewCellThrowsNamedDepthErrorViaGridPath() {
+            + "same named depth error from MOUNTING, before collectRenderNodeLeaves ever runs -- "
+            + "grid path (CR-01)")
+    void deeplyNestedTreeInsideGridViewCellThrowsNamedDepthErrorFromMountViaGridPath() {
         TestGui gui = newGui(1);
         GuiRenderer renderer = newRenderer(gui);
         BuildContext context = rootContext(1);
@@ -399,11 +413,17 @@ class GuiRendererRepaintTest {
                 .child(deepTree)
                 .build();
 
-        assertThrows(RenderDepthExceededException.class,
+        RenderDepthExceededException ex = assertThrows(RenderDepthExceededException.class,
                 () -> renderer.initialize(() -> gridWithDeepCell, context),
                 "a GridView cell whose subtree is deeper than the limit must raise the same "
-                        + "named depth error through GridViewElement's own leaf-collection walk "
-                        + "-- guarding only the direct child path would leave this walk unbounded");
+                        + "named depth error -- guarding only the direct child path would leave "
+                        + "this walk unbounded");
+
+        assertTrue(ex.getMessage().contains("Element.mount"),
+                "CR-01: mounting the GridView cell's deep subtree must trip the mount guard "
+                        + "before GridViewElement.mount()'s own applyGridPositions() call ever "
+                        + "reaches the (separately guarded) collectRenderNodeLeaves walk. "
+                        + "Actual message: " + ex.getMessage());
     }
 
     @Test
