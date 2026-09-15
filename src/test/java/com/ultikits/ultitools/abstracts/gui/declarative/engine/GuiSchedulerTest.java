@@ -16,6 +16,7 @@ import org.mockito.MockedStatic;
 import java.util.logging.Logger;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -267,6 +268,76 @@ class GuiSchedulerTest {
                     "a RenderDepthExceededException drained via flush() must also reach "
                             + "ErrorReportCollector, not only one drained via executeFrame() or "
                             + "runOnMainThread()");
+        }
+    }
+
+    // === Found by sweeping this same defect class after the round-1/2/3 Codex findings above:
+    // executeFrame()'s OWN off-thread branch reschedules the task via a RAW, unwrapped
+    // Bukkit.getScheduler().runTask(plugin, task) call -- the exact shape runOnMainThread()'s
+    // off-thread branch had before round 1 fixed it. If Bukkit later runs that rescheduled task
+    // and it throws RenderDepthExceededException, nothing here ever reports it (or even logs it
+    // to console, matching the WR-01 gap this whole family closes). ===
+
+    @Test
+    void testExecuteFrame_RescheduledTask_ReportsRenderDepthExceededWhenBukkitRunsItLater() {
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(Bukkit::isPrimaryThread).thenReturn(false);
+            bukkit.when(Bukkit::getScheduler).thenReturn(mockScheduler);
+            Logger mockLogger = mock(Logger.class);
+            when(mockPlugin.getLogger()).thenReturn(mockLogger);
+
+            ErrorReportCollector collector = new ErrorReportCollector();
+            TestHelper.mockUltiToolsInstance(ultiTools ->
+                    when(ultiTools.getErrorReportCollector()).thenReturn(collector));
+
+            // scheduleFrame() itself, off-thread, defers via runTaskLater -- capture that
+            // callback (executeFrame itself) instead of letting Mockito run it immediately.
+            AtomicReference<Runnable> capturedFrame = new AtomicReference<>();
+            when(mockScheduler.runTaskLater(any(Plugin.class), any(Runnable.class), anyLong()))
+                    .thenAnswer(invocation -> {
+                        capturedFrame.set(invocation.getArgument(1));
+                        return null;
+                    });
+            // executeFrame(), finding itself off-thread partway through its own drain loop,
+            // reschedules the SAME task via runTask(...) instead of running it -- capture that
+            // too, rather than letting Mockito run it immediately, so this test controls exactly
+            // when the task actually executes (and throws).
+            AtomicReference<Runnable> capturedReschedule = new AtomicReference<>();
+            when(mockScheduler.runTask(any(Plugin.class), any(Runnable.class)))
+                    .thenAnswer(invocation -> {
+                        capturedReschedule.set(invocation.getArgument(1));
+                        return null;
+                    });
+
+            GuiScheduler scheduler = new GuiScheduler(mockPlugin);
+            RenderDepthExceededException thrown = new RenderDepthExceededException(
+                    "Element.mount", 65, RenderDepthGuard.MAX_DEPTH);
+            scheduler.scheduleFrame(() -> {
+                throw thrown;
+            });
+
+            // Simulate Bukkit invoking the deferred frame callback -- still off-thread per this
+            // test's mock, so executeFrame()'s own isOnMainThread() check inside its drain loop
+            // takes the "not on main thread, reschedule" branch instead of running the task.
+            Runnable frameCallback = capturedFrame.get();
+            assertNotNull(frameCallback, "scheduleFrame() must defer via runTaskLater() when off-thread");
+            frameCallback.run();
+
+            // Now run whatever executeFrame() rescheduled -- this is where the task actually
+            // executes and throws, exactly as Bukkit itself would do on a later tick.
+            Runnable rescheduled = capturedReschedule.get();
+            assertNotNull(rescheduled, "executeFrame() must reschedule the task via runTask() "
+                    + "when it finds itself off-thread mid-drain");
+
+            assertDoesNotThrow(rescheduled::run,
+                    "nothing calls this Runnable synchronously from the original caller -- "
+                            + "Bukkit invokes it later, exactly like runOnMainThread()'s own "
+                            + "off-thread branch");
+
+            assertEquals(1, collector.drainErrors(10).size(),
+                    "a RenderDepthExceededException from a task executeFrame() rescheduled "
+                            + "off-thread must also reach ErrorReportCollector");
+            verify(mockLogger).warning(contains("Error executing GUI frame task"));
         }
     }
 
