@@ -156,8 +156,11 @@ class PluginManagerRegistrationFailureTeardownTest {
                     .thenReturn(mock(BukkitTask.class))
                     .thenThrow(new RuntimeException("simulated: host plugin became disabled mid-registration"));
 
-            SimpleContainer context = new SimpleContainer();
-            context.registerSingleton("bean", new TaskManagerTest.TwoScheduledMethodsBean());
+            SimpleContainer realContext = new SimpleContainer();
+            realContext.registerSingleton("bean", new TaskManagerTest.TwoScheduledMethodsBean());
+            // Spy so close() can be verified -- unregister()'s own final statement, which never
+            // runs if an earlier step (unregisterSelf() below) throws first.
+            SimpleContainer context = org.mockito.Mockito.spy(realContext);
 
             UltiToolsPlugin plugin = failingModuleWithTwoScheduledMethodsBean(context);
             // unregisterSelf() itself throwing is the concrete "unregister() can itself throw"
@@ -174,6 +177,12 @@ class PluginManagerRegistrationFailureTeardownTest {
                     "even when unregister() itself throws partway, the plugin must still end up "
                             + "removed from pluginList -- a half-torn-down plugin staying in the "
                             + "list would be worse than the original gap");
+            // Codex P2 (PR #478 round 1): unregister() throwing at unregisterSelf() means its own
+            // final plugin.getContext().close() call never ran, and this plugin is about to be
+            // removed from pluginList -- PluginManager.close() can never retry teardown for it
+            // again after that. The failure path must close the context independently, or the
+            // module's container/beans/classloader stay referenced for the rest of the server run.
+            verify(context).close();
         }
     }
 
