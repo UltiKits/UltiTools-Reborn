@@ -423,11 +423,12 @@ public abstract class BaseCommandExecutor implements TabExecutor {
      * a different place.
      * <p>
      * <b>Applicability is consulted, same as the normal dispatch path (#413).</b> Before invoking
-     * a sender-type or permission validator here, its own {@link CommandValidator#shouldValidate}
-     * is checked first -- reusing {@link ValidatorChain#validate}'s own applicability logic rather
-     * than reimplementing the condition. A validator that reports it does not apply to this
-     * context is skipped, not invoked and happened to pass. This does not weaken enforcement: a
-     * validator that DOES apply and denies still denies help, exactly as before.
+     * a sender-type or permission validator here, {@link ValidatorChain#isApplicable} is called --
+     * the exact same static method {@link ValidatorChain#validate}/{@code #validateAll} call
+     * internally, not a second, independent copy of the one-line condition it wraps (WR-02). A
+     * validator that reports it does not apply to this context is skipped, not invoked and
+     * happened to pass. This does not weaken enforcement: a validator that DOES apply and denies
+     * still denies help, exactly as before.
      *
      * @param context the command context, already built
      * @return {@code true} always -- Bukkit's contract for a handled command
@@ -438,7 +439,7 @@ public abstract class BaseCommandExecutor implements TabExecutor {
             if (!(validator instanceof SenderTypeValidator) && !(validator instanceof PermissionValidator)) {
                 continue;
             }
-            if (!validator.shouldValidate(context)) {
+            if (!ValidatorChain.isApplicable(validator, context)) {
                 continue;
             }
             CommandValidator.ValidationResult result = validator.validate(context);

@@ -80,6 +80,24 @@ public final class ValidatorChain {
     }
 
     /**
+     * The single applicability check every caller must use before asking a validator to {@link
+     * CommandValidator#validate}. {@link #validate} and {@link #validateAll} both call this
+     * (rather than {@code validator.shouldValidate(context)} directly) so there is exactly one
+     * place this decision lives; a caller OUTSIDE this class that needs the same decision --
+     * {@code BaseCommandExecutor}'s gated help path, which invokes select validators directly
+     * without running the full chain -- calls this too, instead of re-declaring the same one-line
+     * condition a second time (WR-02, #413).
+     *
+     * @param validator the validator to check
+     * @param context   the command context
+     * @return {@code true} iff {@code validator} should be asked to validate this context
+     * @since 6.3.0
+     */
+    public static boolean isApplicable(CommandValidator validator, CommandContext context) {
+        return validator.shouldValidate(context);
+    }
+
+    /**
      * Validates the context through all validators in the chain.
      * Stops at the first failure.
      *
@@ -93,7 +111,7 @@ public final class ValidatorChain {
         List<CommandValidator> passedValidators = new ArrayList<>();
 
         for (CommandValidator validator : validators) {
-            if (!validator.shouldValidate(context)) {
+            if (!isApplicable(validator, context)) {
                 continue;
             }
 
@@ -125,7 +143,7 @@ public final class ValidatorChain {
         List<CommandValidator> passedValidators = new ArrayList<>();
 
         for (CommandValidator validator : validators) {
-            if (!validator.shouldValidate(context)) {
+            if (!isApplicable(validator, context)) {
                 continue;
             }
 
