@@ -5,6 +5,9 @@ import static org.assertj.core.api.Assertions.fail;
 
 import java.io.IOException;
 import java.lang.annotation.Annotation;
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Target;
+import java.lang.reflect.Method;
 import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -12,6 +15,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -21,6 +25,7 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import com.ultikits.ultitools.annotations.Bean;
 import com.ultikits.ultitools.annotations.Configuration;
 import com.ultikits.ultitools.annotations.EventListener;
 import com.ultikits.ultitools.annotations.Service;
@@ -131,11 +136,126 @@ class FrameworkAnnotationWiringTest {
     }
 
     @Test
-    @DisplayName("@Configuration census matches, and no framework @Configuration declares @Bean")
+    @DisplayName("@Configuration census matches the classes actually carrying the annotation")
     void configurationCensusIsExact() throws Exception {
         assertCensus(Configuration.class, CONFIGURATIONS,
                 "com.ultikits.ultitools.context.ContextConfig",
                 "an empty marker; nothing processes framework @Configuration in production");
+    }
+
+    /**
+     * #411's second finding: this class's census used to check only the set of
+     * {@code @Configuration}-annotated classes, which does not change when an inert {@code @Bean}
+     * method is added to one of them. This test checks the thing the class-level javadoc always
+     * claimed to guard -- that no framework {@code @Configuration} class carries a {@code @Bean}
+     * method, since {@code SimpleContainer.processConfigurationClass} never runs against
+     * {@code com.ultikits.ultitools} in production and any such method would be permanently inert,
+     * exactly like the deleted {@code UltiToolsBean}.
+     */
+    @Test
+    @DisplayName("no framework @Configuration class declares a @Bean method the container will never process (#411)")
+    void configurationClassesDeclareNoStrayBeanMethods() throws Exception {
+        List<String> violations = findStrayBeanMethods(classesFor(CONFIGURATIONS));
+
+        assertThat(violations)
+                .as("A @Configuration class here that declares @Bean methods would be inert -- see "
+                        + "ContextConfig's own javadoc and issue #411. If this fails, the named "
+                        + "method needs a real registration site or must be removed, exactly like "
+                        + "the deleted UltiToolsBean.")
+                .isEmpty();
+    }
+
+    /**
+     * The empty-set branch of {@link #findStrayBeanMethods} is a stated, tested outcome rather than
+     * an assumption riding along with the real-code test above (#411).
+     */
+    @Test
+    @DisplayName("an empty set of configuration classes yields no stray-bean violations, not a vacuous pass (#411)")
+    void emptyConfigurationSetProducesNoStrayBeanViolations() {
+        assertThat(findStrayBeanMethods(Collections.emptySet())).isEmpty();
+    }
+
+    /**
+     * {@link #configurationClassesDeclareNoStrayBeanMethods} passes on the real codebase today
+     * because no framework {@code @Configuration} class currently carries a stray {@code @Bean}
+     * method -- which is exactly the shape of a vacuous pass (#411's own complaint about the
+     * census this replaces). This test proves {@link #findStrayBeanMethods} is not that: it runs
+     * the identical check against a fixture built specifically to carry a stray {@code @Bean}
+     * method and confirms it is caught. The fixture is never scanned by
+     * {@link #findFrameworkClassesAnnotatedWith} -- it lives in test sources, not this build's
+     * {@code target/classes} -- and is never registered anywhere.
+     */
+    @Test
+    @DisplayName("a stray @Bean method on a fixture is detected, proving the census above is not vacuous (#411)")
+    void strayBeanMethodOnFixtureIsDetected() {
+        List<String> violations = findStrayBeanMethods(
+                Collections.singleton(FixtureConfigurationWithStrayBeanMethod.class));
+
+        assertThat(violations)
+                .as("the same check used against real framework classes must catch a fixture "
+                        + "carrying a stray @Bean method, or the census above would pass for the "
+                        + "wrong reason")
+                .containsExactly(FixtureConfigurationWithStrayBeanMethod.class.getName() + "#strayBean");
+    }
+
+    @Configuration
+    private static final class FixtureConfigurationWithStrayBeanMethod {
+        @Bean
+        void strayBean() {
+        }
+    }
+
+    /**
+     * {@code @Bean}'s own {@code @Target} used to include {@link ElementType#ANNOTATION_TYPE}
+     * alongside {@link ElementType#METHOD}, even though {@code ComponentScanner.processBeanMethod}
+     * and {@code SimpleContainer.processConfigurationClass} both only ever look for {@code @Bean}
+     * on methods (#348). Reflecting on the declared targets is this repository's own idiom for
+     * asserting a shape of an annotation type (see the census tests above) -- a compile-time
+     * "does this fail to compile" check would need in-memory {@code javax.tools.JavaCompiler}
+     * invocation with no existing precedent anywhere in this test tree, for a fact this reflection
+     * check states just as precisely.
+     */
+    @Test
+    @DisplayName("@Bean targets methods only -- nothing acts on an annotation-type target (#348)")
+    void beanAnnotationTargetsMethodOnly() {
+        Target target = Bean.class.getAnnotation(Target.class);
+
+        assertThat(target).as("@Bean must declare @Target").isNotNull();
+        assertThat(target.value())
+                .as("ComponentScanner.processBeanMethod and SimpleContainer.processConfigurationClass "
+                        + "both only ever look for @Bean on methods -- ANNOTATION_TYPE has no "
+                        + "consumer and must not remain a target nothing reads (#348)")
+                .containsExactly(ElementType.METHOD);
+    }
+
+    /**
+     * Loads {@code classNames} via the same non-initialising {@link Class#forName} idiom used
+     * elsewhere in this test, then delegates to {@link #findStrayBeanMethods(Set)}.
+     */
+    private Set<Class<?>> classesFor(Set<String> classNames) throws ClassNotFoundException {
+        Set<Class<?>> classes = new LinkedHashSet<>();
+        for (String name : classNames) {
+            classes.add(Class.forName(name, false, getClass().getClassLoader()));
+        }
+        return classes;
+    }
+
+    /**
+     * The check both {@link #configurationClassesDeclareNoStrayBeanMethods} (real code, expected
+     * empty) and {@link #strayBeanMethodOnFixtureIsDetected} (fixture, expected non-empty) run
+     * against, and {@link #emptyConfigurationSetProducesNoStrayBeanViolations} exercises with no
+     * input at all -- one implementation, three stated outcomes (#411).
+     */
+    private List<String> findStrayBeanMethods(Set<Class<?>> configurationClasses) {
+        List<String> violations = new ArrayList<>();
+        for (Class<?> clazz : configurationClasses) {
+            for (Method method : clazz.getDeclaredMethods()) {
+                if (method.isAnnotationPresent(Bean.class)) {
+                    violations.add(clazz.getName() + "#" + method.getName());
+                }
+            }
+        }
+        return violations;
     }
 
     @Test
