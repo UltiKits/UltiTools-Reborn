@@ -373,6 +373,50 @@ class ResourceHashSidecarTest {
     }
 
     @Test
+    @DisplayName("hashes already accumulated before a later entry aborts extraction are still "
+            + "persisted (Codex round 10, P2, discussion on UltiToolsPlugin.java:1314)")
+    void saveResourcesPersistsQueuedHashesEvenWhenALaterEntryAbortsExtraction() throws Throwable {
+        // A NUL byte in a jar entry name is a legal zip-format entry name (no such restriction in
+        // the format itself, confirmed by round-tripping through JarOutputStream/JarFile), but
+        // File.getCanonicalPath() throws IOException("Invalid file path") for one -- deterministic
+        // and portable, unlike trying to corrupt zip bytes or force getInputStream() to fail. This
+        // reproduces exactly the escape Codex describes: the exception fires OUTSIDE
+        // saveResources()'s inner per-entry try/catch (it sits between the zip-slip check and that
+        // try block), so it propagates to the outer catch, skipping the rest of the while loop
+        // entirely -- including any entries not yet visited.
+        // saveResources()'s outer catch (IOException e) logs via getLogger(), which routes
+        // through UltiTools.getInstance().getLogger() -- unlike this class's other saveResources()
+        // tests, which never reach that catch clause and so never needed either mocked.
+        TestHelper.mockUltiToolsInstance(ultiTools ->
+                org.mockito.Mockito.when(ultiTools.getLogger())
+                        .thenReturn(java.util.logging.Logger.getLogger("ResourceHashSidecarTest")));
+
+        char nul = (char) 0;
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("lang/en.json", "{\"greeting\":\"Hi\"}".getBytes(StandardCharsets.UTF_8));
+        entries.put("lang/bad" + nul + "name.json", "{}".getBytes(StandardCharsets.UTF_8));
+        File jar = buildFixtureJar("fixture-abort.jar", entries);
+
+        File resourceFolder = new File(tempDir, "resource-folder-abort");
+        Files.createDirectories(resourceFolder.toPath());
+
+        try (ChildFirstClassLoader loader = new ChildFirstClassLoader(new URL[]{jar.toURI().toURL()},
+                ResourceHashSidecarTest.class.getClassLoader())) {
+            Object plugin = newFixtureInstance(loader);
+            setResourceFolderPath(plugin, resourceFolder.getAbsolutePath());
+
+            invokeSaveResources(plugin);
+
+            // The first entry extracted fine, BEFORE the second entry's canonical-path resolution
+            // threw and aborted the loop -- its hash must still be persisted, not discarded.
+            File extractedLang = new File(resourceFolder, "lang" + File.separator + "en.json");
+            assertThat(extractedLang).isFile();
+            assertThat(ResourceHashSidecar.readRecordedHash(resourceFolder, "lang/en.json"))
+                    .contains(ResourceHashSidecar.sha256(extractedLang));
+        }
+    }
+
+    @Test
     @DisplayName("an empty extracted file gets a record whose digest is the digest of zero bytes, "
             + "not an absent record")
     void saveResourcesRecordsZeroByteDigestForEmptyExtractedFileRatherThanNoRecord() throws Throwable {
