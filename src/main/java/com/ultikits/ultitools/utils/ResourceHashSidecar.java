@@ -143,6 +143,10 @@ public final class ResourceHashSidecar {
     /**
      * Records {@code hash} as the provenance digest for {@code resourcePath} under {@code
      * resourceFolder}, preserving every other entry already recorded.
+     * <p>
+     * Codex round 9, P2: if the sidecar file EXISTS but cannot currently be read/parsed (e.g. a
+     * transient filesystem error), this is a no-op -- see {@link #readAllForWrite(File)}'s own
+     * javadoc for why a write must never equate that with "the sidecar does not exist yet".
      *
      * @param resourceFolder the module's resource folder root (the sidecar's own location)
      * @param resourcePath   the extracted resource's path, relative to the resource folder, using
@@ -150,9 +154,13 @@ public final class ResourceHashSidecar {
      * @param hash           the digest to record (see {@link #sha256(File)})
      */
     public static void record(File resourceFolder, String resourcePath, String hash) {
-        Map<String, String> entries = readAll(resourceFolder);
-        entries.put(resourcePath, hash);
-        writeAll(resourceFolder, entries);
+        Optional<Map<String, String>> entries = readAllForWrite(resourceFolder);
+        if (!entries.isPresent()) {
+            return;
+        }
+        Map<String, String> map = entries.get();
+        map.put(resourcePath, hash);
+        writeAll(resourceFolder, map);
     }
 
     /**
@@ -164,6 +172,9 @@ public final class ResourceHashSidecar {
      * extracted file -- quadratic for a module bundling many resources (e.g. thousands of web
      * dashboard assets). A no-op for an empty map: never touches the sidecar file, or its
      * directory, when there is nothing new to record.
+     * <p>
+     * Codex round 9, P2: also a no-op if the sidecar file EXISTS but cannot currently be
+     * read/parsed -- see {@link #readAllForWrite(File)}'s own javadoc.
      *
      * @param resourceFolder the module's resource folder root (the sidecar's own location)
      * @param newEntries     the {@code resourcePath -> hash} pairs to add, preserving every entry
@@ -173,9 +184,13 @@ public final class ResourceHashSidecar {
         if (newEntries.isEmpty()) {
             return;
         }
-        Map<String, String> entries = readAll(resourceFolder);
-        entries.putAll(newEntries);
-        writeAll(resourceFolder, entries);
+        Optional<Map<String, String>> entries = readAllForWrite(resourceFolder);
+        if (!entries.isPresent()) {
+            return;
+        }
+        Map<String, String> map = entries.get();
+        map.putAll(newEntries);
+        writeAll(resourceFolder, map);
     }
 
     private static File sidecarFile(File resourceFolder) {
@@ -196,10 +211,47 @@ public final class ResourceHashSidecar {
             // common superclass of JsonSyntaxException (malformed JSON) AND JsonIOException --
             // Gson wraps an IOException it hits reading from `reader` mid-parse (e.g. a network
             // filesystem hiccup) in the latter, which a catch (IOException | JsonSyntaxException)
-            // alone does not see, letting it escape readRecordedHash/record/recordAll into the
-            // plugin constructor and abort module startup.
+            // alone does not see, letting it escape readRecordedHash into the plugin constructor
+            // and abort module startup. record()/recordAll() route through readAllForWrite below
+            // instead (Codex round 9, P2), which shares this catch clause but does NOT degrade
+            // the same way for a WRITE -- see its own javadoc.
             LOGGER.log(Level.WARNING, "Ignoring unreadable resource-hash sidecar " + file.getPath(), e);
             return new LinkedHashMap<>();
+        }
+    }
+
+    /**
+     * Like {@link #readAll(File)}, but distinguishes "the sidecar does not exist yet" (fine to
+     * proceed from an empty baseline) from "the sidecar exists but could not be read or parsed
+     * THIS TIME" (Codex round 9, P2, discussion on {@code ResourceHashSidecar.java:155}).
+     * {@link #record} and {@link #recordAll} call this instead of {@link #readAll} for exactly
+     * that reason: {@link #readAll}'s "any failure degrades to an empty map" contract is correct
+     * for a READ ({@link #readRecordedHash}, per T-16-04-03 -- a caller just gets "no record",
+     * nothing is lost), but wrong for a WRITE. Before this fix, record()/recordAll() called
+     * readAll() directly, so a transient read failure on an otherwise-valid, non-empty sidecar
+     * produced an empty map that was then WRITTEN BACK with only the entry being recorded --
+     * permanently discarding every other module's previously recorded hash over a failure that
+     * may not even recur on the very next boot.
+     *
+     * @param resourceFolder the module's resource folder root (the sidecar's own location)
+     * @return the parsed entries (a fresh, empty map if the sidecar does not exist), or {@link
+     *         Optional#empty()} if the sidecar file exists but could not be read/parsed this
+     *         time -- callers writing back MUST treat that as "do nothing", never as "empty"
+     */
+    private static Optional<Map<String, String>> readAllForWrite(File resourceFolder) {
+        File file = sidecarFile(resourceFolder);
+        if (!file.isFile()) {
+            return Optional.of(new LinkedHashMap<>());
+        }
+        try (Reader reader = Files.newBufferedReader(file.toPath(), StandardCharsets.UTF_8)) {
+            Map<String, String> parsed = GSON.fromJson(reader, ENTRY_MAP_TYPE);
+            return Optional.of(parsed != null ? new LinkedHashMap<>(parsed) : new LinkedHashMap<>());
+        } catch (IOException | JsonParseException e) {
+            LOGGER.log(Level.WARNING, "Not updating resource-hash sidecar " + file.getPath()
+                    + ": it exists but could not be read or parsed just now, and writing back a "
+                    + "map derived from that failure would permanently discard every previously "
+                    + "recorded hash over what may be a transient error.", e);
+            return Optional.empty();
         }
     }
 
