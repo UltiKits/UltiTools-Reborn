@@ -190,10 +190,16 @@ public class GuiRenderer {
 
     /**
      * Recursively rebuilds the Element tree.
+     * <p>
+     * Guarded by {@link RenderDepthGuard} (T-05-62 / #371): a module-authored tree deeper than
+     * {@link RenderDepthGuard#MAX_DEPTH} raises {@link RenderDepthExceededException} here rather
+     * than overflowing the JVM stack mid-frame.
      *
      * @param element the Element to rebuild
      */
     private void rebuildElement(@NotNull Element element) {
+        RenderDepthGuard.check("GuiRenderer.rebuildElement", RenderDepthGuard.depthOf(element));
+
         if (element.isDirty()) {
             element.performRebuild();
         }
@@ -217,6 +223,9 @@ public class GuiRenderer {
     }
 
     private void collectRenderNodesRecursive(@NotNull Element element, @NotNull List<RenderNode> nodes) {
+        // Guarded by RenderDepthGuard (T-05-62 / #371) -- see rebuildElement's javadoc above.
+        RenderDepthGuard.check("GuiRenderer.collectRenderNodesRecursive", RenderDepthGuard.depthOf(element));
+
         // Collect the children first
         for (Element child : element.getChildren()) {
             collectRenderNodesRecursive(child, nodes);
