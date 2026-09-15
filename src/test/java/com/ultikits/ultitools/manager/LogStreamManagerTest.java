@@ -19,12 +19,7 @@ import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
@@ -120,19 +115,6 @@ class LogStreamManagerTest {
         field.set(logStreamManager, handler);
     }
 
-    @SuppressWarnings("unchecked")
-    private ConcurrentHashMap<String, Boolean> getSubscribedClients() throws Exception {
-        Field field = LogStreamManager.class.getDeclaredField("subscribedClients");
-        field.setAccessible(true);
-        return (ConcurrentHashMap<String, Boolean>) field.get(logStreamManager);
-    }
-
-    private AtomicBoolean getStreamingState() throws Exception {
-        Field field = LogStreamManager.class.getDeclaredField("streaming");
-        field.setAccessible(true);
-        return (AtomicBoolean) field.get(logStreamManager);
-    }
-
     @AfterEach
     void tearDown() throws Exception {
         // 必须调 shutdown()。initialize() 做了两件会活过本测试的事：
@@ -199,28 +181,9 @@ class LogStreamManagerTest {
     class InitialStateTests {
 
         @Test
-        @DisplayName("初始状态应该是未流式传输")
-        void shouldNotBeStreamingInitially() {
-            assertThat(logStreamManager.isStreaming()).isFalse();
-        }
-
-        @Test
-        @DisplayName("初始订阅客户端数量应该为0")
-        void subscriberCountShouldBeZeroInitially() {
-            assertThat(logStreamManager.getSubscriberCount()).isZero();
-        }
-
-        @Test
         @DisplayName("初始化前 logTransmitter 应该为 null")
         void logTransmitterShouldBeNullBeforeInitialization() {
             assertThat(logStreamManager.getLogTransmitter()).isNull();
-        }
-
-        @Test
-        @DisplayName("subscribedClients Map 应该存在但为空")
-        void subscribedClientsShouldBeEmptyInitially() throws Exception {
-            ConcurrentHashMap<String, Boolean> clients = getSubscribedClients();
-            assertThat(clients).isEmpty();
         }
     }
 
@@ -237,8 +200,10 @@ class LogStreamManagerTest {
         }
 
         @Test
-        @DisplayName("处理 start action - 应该启动日志流")
-        void shouldHandleStartAction() throws Exception {
+        @DisplayName("D-20: 处理 start action -- 拒绝，而不是启动订阅")
+        void shouldRejectStartAction() throws Exception {
+            setWebSocketClient(mockWebSocketClient);
+
             JsonObject data = new JsonObject();
             data.addProperty("action", "start");
             data.addProperty("clientId", "client-123");
@@ -246,48 +211,45 @@ class LogStreamManagerTest {
 
             logStreamManager.handleLogStreamMessage(data);
 
-            ConcurrentHashMap<String, Boolean> clients = getSubscribedClients();
-            assertThat(clients).containsKey("client-123");
-            assertThat(clients.get("client-123")).isTrue();
-            assertThat(logStreamManager.isStreaming()).isTrue();
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient).sendMessage(captor.capture());
+            JsonObject responseData = captor.getValue().getAsJsonObject("data");
+            assertThat(responseData.get("message").getAsString())
+                    .contains("start")
+                    .contains("not supported")
+                    .contains("panel view's own action");
         }
 
         @Test
-        @DisplayName("处理 stop action - 应该停止日志流")
-        void shouldHandleStopAction() throws Exception {
-            // 先启动
-            logStreamManager.startLogStream("client-123", "info");
-            assertThat(logStreamManager.isStreaming()).isTrue();
+        @DisplayName("D-20: 处理 stop action -- 拒绝，而不是停止订阅")
+        void shouldRejectStopAction() throws Exception {
+            setWebSocketClient(mockWebSocketClient);
 
-            // 停止
             JsonObject data = new JsonObject();
             data.addProperty("action", "stop");
             data.addProperty("clientId", "client-123");
-            
+
             logStreamManager.handleLogStreamMessage(data);
 
-            ConcurrentHashMap<String, Boolean> clients = getSubscribedClients();
-            assertThat(clients).doesNotContainKey("client-123");
-            assertThat(logStreamManager.isStreaming()).isFalse();
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient).sendMessage(captor.capture());
+            JsonObject responseData = captor.getValue().getAsJsonObject("data");
+            assertThat(responseData.get("message").getAsString())
+                    .contains("stop")
+                    .contains("not supported")
+                    .contains("panel view's own action");
         }
 
         @Test
-        @DisplayName("处理 pause action -- D-19: 拒绝，而不是暂停 -- 订阅状态不受影响")
+        @DisplayName("处理 pause action -- D-19: 拒绝，而不是暂停")
         void shouldRejectPauseAction() throws Exception {
             setWebSocketClient(mockWebSocketClient);
-            logStreamManager.startLogStream("client-123", "info");
-            reset(mockWebSocketClient);
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
 
             JsonObject data = new JsonObject();
             data.addProperty("action", "pause");
             data.addProperty("clientId", "client-123");
 
             logStreamManager.handleLogStreamMessage(data);
-
-            // Subscription state is untouched -- pause is rejected, not applied.
-            ConcurrentHashMap<String, Boolean> clients = getSubscribedClients();
-            assertThat(clients.get("client-123")).isTrue();
 
             ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
             verify(mockWebSocketClient).sendMessage(captor.capture());
@@ -301,18 +263,12 @@ class LogStreamManagerTest {
         @DisplayName("处理 resume action -- D-19: 拒绝，而不是恢复")
         void shouldRejectResumeAction() throws Exception {
             setWebSocketClient(mockWebSocketClient);
-            logStreamManager.startLogStream("client-123", "info");
-            reset(mockWebSocketClient);
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
 
             JsonObject data = new JsonObject();
             data.addProperty("action", "resume");
             data.addProperty("clientId", "client-123");
 
             logStreamManager.handleLogStreamMessage(data);
-
-            ConcurrentHashMap<String, Boolean> clients = getSubscribedClients();
-            assertThat(clients.get("client-123")).isTrue();
 
             ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
             verify(mockWebSocketClient).sendMessage(captor.capture());
@@ -323,17 +279,23 @@ class LogStreamManagerTest {
         }
 
         @Test
-        @DisplayName("处理 status action - 应该发送状态")
+        @DisplayName("D-20: 处理 status action -- 应该发送诚实的只读状态，不再包含 subscriberCount/streaming")
         void shouldHandleStatusAction() throws Exception {
             setWebSocketClient(mockWebSocketClient);
-            
+
             JsonObject data = new JsonObject();
             data.addProperty("action", "status");
             data.addProperty("clientId", "client-123");
 
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
             logStreamManager.handleLogStreamMessage(data);
+            verify(mockWebSocketClient).sendMessage(captor.capture());
 
-            verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
+            JsonObject responseData = captor.getValue().getAsJsonObject("data");
+            assertThat(responseData.get("action").getAsString()).isEqualTo("status");
+            assertThat(responseData.has("connected")).isTrue();
+            assertThat(responseData.has("subscriberCount")).isFalse();
+            assertThat(responseData.has("streaming")).isFalse();
         }
 
         @Test
@@ -389,14 +351,18 @@ class LogStreamManagerTest {
         @Test
         @DisplayName("空 clientId 应该使用默认值 'default'")
         void shouldUseDefaultClientIdWhenNull() throws Exception {
+            setWebSocketClient(mockWebSocketClient);
+
             JsonObject data = new JsonObject();
             data.addProperty("action", "start");
             // clientId 为 null
 
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
             logStreamManager.handleLogStreamMessage(data);
+            verify(mockWebSocketClient).sendMessage(captor.capture());
 
-            ConcurrentHashMap<String, Boolean> clients = getSubscribedClients();
-            assertThat(clients).containsKey("default");
+            JsonObject responseData = captor.getValue().getAsJsonObject("data");
+            assertThat(responseData.get("clientId").getAsString()).isEqualTo("default");
         }
 
         @Test
@@ -427,119 +393,7 @@ class LogStreamManagerTest {
         }
     }
 
-    // ==================== startLogStream 测试 ====================
-    @Nested
-    @DisplayName("startLogStream 测试")
-    class StartLogStreamTests {
-
-        @Test
-        @DisplayName("应该正确启动日志流（带级别参数）")
-        void shouldStartLogStreamWithLevel() throws Exception {
-            logStreamManager.startLogStream("client-1", "debug");
-
-            assertThat(logStreamManager.isStreaming()).isTrue();
-            assertThat(logStreamManager.getSubscriberCount()).isEqualTo(1);
-            
-            ConcurrentHashMap<String, Boolean> clients = getSubscribedClients();
-            assertThat(clients.get("client-1")).isTrue();
-        }
-
-        @Test
-        @DisplayName("应该正确启动日志流（兼容旧版本，无级别参数）")
-        void shouldStartLogStreamWithoutLevel() throws Exception {
-            logStreamManager.startLogStream("client-1");
-
-            assertThat(logStreamManager.isStreaming()).isTrue();
-            ConcurrentHashMap<String, Boolean> clients = getSubscribedClients();
-            assertThat(clients.get("client-1")).isTrue();
-        }
-
-        @Test
-        @DisplayName("多个客户端应该都能订阅")
-        void shouldAllowMultipleClients() throws Exception {
-            logStreamManager.startLogStream("client-1", "info");
-            logStreamManager.startLogStream("client-2", "debug");
-            logStreamManager.startLogStream("client-3", "warning");
-
-            assertThat(logStreamManager.getSubscriberCount()).isEqualTo(3);
-        }
-
-        @Test
-        @DisplayName("WebSocket 连接时应该发送响应")
-        void shouldSendResponseWhenConnected() throws Exception {
-            setWebSocketClient(mockWebSocketClient);
-            
-            logStreamManager.startLogStream("client-1", "info");
-
-            verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
-        }
-
-        @Test
-        @DisplayName("WebSocket 未连接时不应该发送响应")
-        void shouldNotSendResponseWhenDisconnected() throws Exception {
-            when(mockWebSocketClient.isConnected()).thenReturn(false);
-            setWebSocketClient(mockWebSocketClient);
-            
-            logStreamManager.startLogStream("client-1", "info");
-
-            verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
-        }
-    }
-
-    // ==================== stopLogStream 测试 ====================
-    @Nested
-    @DisplayName("stopLogStream 测试")
-    class StopLogStreamTests {
-
-        @Test
-        @DisplayName("应该正确停止单个客户端")
-        void shouldStopSingleClient() throws Exception {
-            logStreamManager.startLogStream("client-1", "info");
-            logStreamManager.stopLogStream("client-1");
-
-            assertThat(logStreamManager.getSubscriberCount()).isZero();
-            assertThat(logStreamManager.isStreaming()).isFalse();
-        }
-
-        @Test
-        @DisplayName("停止一个客户端不应影响其他客户端")
-        void shouldNotAffectOtherClients() throws Exception {
-            logStreamManager.startLogStream("client-1", "info");
-            logStreamManager.startLogStream("client-2", "info");
-            
-            logStreamManager.stopLogStream("client-1");
-
-            assertThat(logStreamManager.getSubscriberCount()).isEqualTo(1);
-            assertThat(logStreamManager.isStreaming()).isTrue();
-            
-            ConcurrentHashMap<String, Boolean> clients = getSubscribedClients();
-            assertThat(clients).containsKey("client-2");
-            assertThat(clients).doesNotContainKey("client-1");
-        }
-
-        @Test
-        @DisplayName("停止最后一个客户端应该设置 streaming 为 false")
-        void shouldSetStreamingFalseWhenLastClientStops() throws Exception {
-            logStreamManager.startLogStream("client-1", "info");
-            logStreamManager.startLogStream("client-2", "info");
-            
-            logStreamManager.stopLogStream("client-1");
-            assertThat(logStreamManager.isStreaming()).isTrue();
-            
-            logStreamManager.stopLogStream("client-2");
-            assertThat(logStreamManager.isStreaming()).isFalse();
-        }
-
-        @Test
-        @DisplayName("停止不存在的客户端不应抛出异常")
-        void shouldHandleStoppingNonExistentClient() {
-            logStreamManager.stopLogStream("non-existent-client");
-            // 不应该抛出异常
-            assertThat(logStreamManager.getSubscriberCount()).isZero();
-        }
-    }
-
-    // ==================== D-19: pause/resume rejection, via the real inbound dispatch ====================
+    // ==================== D-19/D-20: pause/resume/start/stop rejection, via the real inbound dispatch ====================
     @Nested
     @DisplayName("D-19: pause/resume 通过真实的 handleLogStreamMessage 入站分发被拒绝，投递不受影响")
     class PauseResumeRejectionTests {
@@ -618,6 +472,101 @@ class LogStreamManagerTest {
             verify(mockWebSocketClient, times(1)).sendMessage(captor.capture());
             JsonObject data = captor.getValue().getAsJsonObject("data");
             assertThat(data.get("message").getAsString()).isEqualTo("still-delivered-after-pause-request");
+        }
+    }
+
+    // ==================== D-20: start/stop rejection, via the real inbound dispatch ====================
+    @Nested
+    @DisplayName("D-20: start/stop 通过真实的 handleLogStreamMessage 入站分发被拒绝，投递不受影响 (issue #468)")
+    class StartStopRejectionTests {
+
+        @BeforeEach
+        void forceImmediateSendMode() {
+            when(mockConfig.contains("ultipanel.logging.batch.enabled")).thenReturn(true);
+            when(mockConfig.getBoolean("ultipanel.logging.batch.enabled", true)).thenReturn(false);
+        }
+
+        private void publishRecord(String message) {
+            Logger.getLogger("").log(new LogRecord(Level.INFO, message));
+        }
+
+        private JsonObject startOrStop(String action, String clientId) {
+            JsonObject data = new JsonObject();
+            data.addProperty("action", action);
+            data.addProperty("clientId", clientId);
+            return data;
+        }
+
+        @Test
+        @DisplayName("发送 start action（真实入站分发）：收到拒绝响应，命名 panel view 自己的动作")
+        void sendingStartViaRealInboundDispatchReturnsRejection() {
+            logStreamManager.initialize(mockWebSocketClient);
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            logStreamManager.handleLogStreamMessage(startOrStop("start", "browser-1"));
+
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient, times(1)).sendMessage(captor.capture());
+            JsonObject data = captor.getValue().getAsJsonObject("data");
+            assertThat(data.get("message").getAsString())
+                    .contains("start")
+                    .contains("not supported")
+                    .contains("panel view's own action");
+            assertThat(data.get("context").getAsString()).isEqualTo("log_stream");
+        }
+
+        @Test
+        @DisplayName("发送 stop action（真实入站分发）：收到拒绝响应")
+        void sendingStopViaRealInboundDispatchReturnsRejection() {
+            logStreamManager.initialize(mockWebSocketClient);
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            logStreamManager.handleLogStreamMessage(startOrStop("stop", "browser-1"));
+
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient, times(1)).sendMessage(captor.capture());
+            JsonObject data = captor.getValue().getAsJsonObject("data");
+            assertThat(data.get("message").getAsString())
+                    .contains("stop")
+                    .contains("not supported")
+                    .contains("panel view's own action");
+        }
+
+        @Test
+        @DisplayName("发送 stop 之后：投递完全不受影响 -- 拒绝是唯一效果，delivery 从未被 gate 过")
+        void sendingStopDoesNotAffectDelivery() {
+            logStreamManager.initialize(mockWebSocketClient);
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            logStreamManager.handleLogStreamMessage(startOrStop("stop", "browser-1"));
+            reset(mockWebSocketClient); // clear the rejection response captured above
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            publishRecord("still-delivered-after-stop-request");
+
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient, times(1)).sendMessage(captor.capture());
+            JsonObject data = captor.getValue().getAsJsonObject("data");
+            assertThat(data.get("message").getAsString()).isEqualTo("still-delivered-after-stop-request");
+        }
+
+        @Test
+        @DisplayName("投递在 initialize() 之后立即照常工作 -- 没有任何 start 步骤要先执行")
+        void deliveryWorksImmediatelyAfterInitializeWithNoStartStep() {
+            logStreamManager.initialize(mockWebSocketClient);
+            reset(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+            publishRecord("delivered-with-no-start-action-ever-sent");
+
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient, times(1)).sendMessage(captor.capture());
+            JsonObject data = captor.getValue().getAsJsonObject("data");
+            assertThat(data.get("message").getAsString())
+                    .isEqualTo("delivered-with-no-start-action-ever-sent");
         }
     }
 
@@ -1224,27 +1173,6 @@ class LogStreamManagerTest {
     class ShutdownTests {
 
         @Test
-        @DisplayName("shutdown 应该清除所有订阅客户端")
-        void shouldClearAllSubscribedClients() throws Exception {
-            logStreamManager.startLogStream("client-1", "info");
-            logStreamManager.startLogStream("client-2", "info");
-            
-            logStreamManager.shutdown();
-
-            assertThat(logStreamManager.getSubscriberCount()).isZero();
-        }
-
-        @Test
-        @DisplayName("shutdown 应该设置 streaming 为 false")
-        void shouldSetStreamingToFalse() {
-            logStreamManager.startLogStream("client-1", "info");
-            
-            logStreamManager.shutdown();
-
-            assertThat(logStreamManager.isStreaming()).isFalse();
-        }
-
-        @Test
         @DisplayName("shutdown 应该关闭 logTransmitter")
         void shouldShutdownLogTransmitter() throws Exception {
             UltiPanelLogTransmitter mockTransmitter = mock(UltiPanelLogTransmitter.class);
@@ -1261,39 +1189,6 @@ class LogStreamManagerTest {
             logStreamManager.shutdown();
             // 不应该抛出异常 - test passes if we reach here
             assertThat(true).isTrue();
-        }
-    }
-
-    // ==================== isStreaming / getSubscriberCount 测试 ====================
-    @Nested
-    @DisplayName("状态查询方法测试")
-    class StatusQueryTests {
-
-        @Test
-        @DisplayName("isStreaming 应该返回正确状态")
-        void isStreamingShouldReturnCorrectState() {
-            assertThat(logStreamManager.isStreaming()).isFalse();
-            
-            logStreamManager.startLogStream("client-1", "info");
-            assertThat(logStreamManager.isStreaming()).isTrue();
-            
-            logStreamManager.stopLogStream("client-1");
-            assertThat(logStreamManager.isStreaming()).isFalse();
-        }
-
-        @Test
-        @DisplayName("getSubscriberCount 应该返回正确数量")
-        void getSubscriberCountShouldReturnCorrectCount() {
-            assertThat(logStreamManager.getSubscriberCount()).isZero();
-            
-            logStreamManager.startLogStream("client-1", "info");
-            assertThat(logStreamManager.getSubscriberCount()).isEqualTo(1);
-            
-            logStreamManager.startLogStream("client-2", "info");
-            assertThat(logStreamManager.getSubscriberCount()).isEqualTo(2);
-            
-            logStreamManager.stopLogStream("client-1");
-            assertThat(logStreamManager.getSubscriberCount()).isEqualTo(1);
         }
     }
 
@@ -1402,43 +1297,60 @@ class LogStreamManagerTest {
         @DisplayName("应该发送包含状态信息的消息")
         void shouldSendStatusMessage() throws Exception {
             setWebSocketClient(mockWebSocketClient);
-            logStreamManager.startLogStream("client-1", "info");
-            
+
             Method method = LogStreamManager.class.getDeclaredMethod("sendStreamStatus", String.class);
             method.setAccessible(true);
-            
+
             method.invoke(logStreamManager, "client-1");
 
             verify(mockWebSocketClient, atLeast(1)).sendMessage(any(JsonObject.class));
         }
 
         @Test
-        @DisplayName("状态消息应该包含正确的字段")
+        @DisplayName("D-20: 状态消息应该包含诚实的字段 (connected/logTransmitterEnabled/queueSize)，不再包含 streaming/subscriberCount")
         void statusMessageShouldContainCorrectFields() throws Exception {
             setWebSocketClient(mockWebSocketClient);
-            logStreamManager.startLogStream("client-1", "info");
-            reset(mockWebSocketClient);
             when(mockWebSocketClient.isConnected()).thenReturn(true);
-            
+
             // 捕获发送的消息
             ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-            
+
             Method method = LogStreamManager.class.getDeclaredMethod("sendStreamStatus", String.class);
             method.setAccessible(true);
             method.invoke(logStreamManager, "client-1");
 
             verify(mockWebSocketClient).sendMessage(captor.capture());
-            
+
             JsonObject sentMessage = captor.getValue();
             assertThat(sentMessage.get("type").getAsString()).isEqualTo("log_stream_response");
             assertThat(sentMessage.has("timestamp")).isTrue();
             assertThat(sentMessage.has("serverId")).isTrue();
             assertThat(sentMessage.has("data")).isTrue();
-            
+
             JsonObject data = sentMessage.getAsJsonObject("data");
             assertThat(data.get("action").getAsString()).isEqualTo("status");
-            assertThat(data.has("streaming")).isTrue();
-            assertThat(data.has("subscriberCount")).isTrue();
+            assertThat(data.get("connected").getAsBoolean()).isTrue();
+            assertThat(data.has("logTransmitterEnabled")).isTrue();
+            assertThat(data.has("queueSize")).isTrue();
+            assertThat(data.has("streaming")).isFalse();
+            assertThat(data.has("subscriberCount")).isFalse();
+        }
+
+        @Test
+        @DisplayName("D-20: WebSocket 未连接时，connected 字段应该为 false -- 诚实反映连接状态")
+        void statusMessageReportsDisconnectedHonestly() throws Exception {
+            setWebSocketClient(mockWebSocketClient);
+            when(mockWebSocketClient.isConnected()).thenReturn(false);
+
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+
+            Method method = LogStreamManager.class.getDeclaredMethod("sendStreamStatus", String.class);
+            method.setAccessible(true);
+            method.invoke(logStreamManager, "client-1");
+
+            verify(mockWebSocketClient).sendMessage(captor.capture());
+            JsonObject data = captor.getValue().getAsJsonObject("data");
+            assertThat(data.get("connected").getAsBoolean()).isFalse();
         }
     }
 
@@ -1628,58 +1540,6 @@ class LogStreamManagerTest {
             assertThat(field).isNotNull();
         }
 
-        @Test
-        @DisplayName("streaming 字段应该是 AtomicBoolean")
-        void streamingFieldShouldBeAtomicBoolean() throws Exception {
-            Field field = LogStreamManager.class.getDeclaredField("streaming");
-            assertThat(field).isNotNull();
-            assertThat(field.getType()).isEqualTo(AtomicBoolean.class);
-        }
-
-        @Test
-        @DisplayName("subscribedClients 字段应该是 ConcurrentHashMap")
-        void subscribedClientsFieldShouldBeConcurrentHashMap() throws Exception {
-            Field field = LogStreamManager.class.getDeclaredField("subscribedClients");
-            assertThat(field).isNotNull();
-            assertThat(field.getType()).isEqualTo(ConcurrentHashMap.class);
-        }
-    }
-
-    // ==================== 并发安全测试 ====================
-    @Nested
-    @DisplayName("并发安全测试")
-    class ConcurrencyTests {
-
-        @Test
-        @DisplayName("多线程同时启动日志流应该是线程安全的")
-        void shouldBeThreadSafeForMultipleStarts() throws Exception {
-            int threadCount = 10;
-            CountDownLatch latch = new CountDownLatch(threadCount);
-            ExecutorService executor = Executors.newFixedThreadPool(threadCount);
-            
-            for (int i = 0; i < threadCount; i++) {
-                final int clientNum = i;
-                executor.submit(() -> {
-                    try {
-                        logStreamManager.startLogStream("client-" + clientNum, "info");
-                    } finally {
-                        latch.countDown();
-                    }
-                });
-            }
-            
-            latch.await(5, TimeUnit.SECONDS);
-            executor.shutdown();
-            
-            assertThat(logStreamManager.getSubscriberCount()).isEqualTo(threadCount);
-        }
-
-        @Test
-        @DisplayName("streaming 状态应该使用 AtomicBoolean 保证线程安全")
-        void streamingStateShouldBeAtomic() throws Exception {
-            AtomicBoolean streaming = getStreamingState();
-            assertThat(streaming).isInstanceOf(AtomicBoolean.class);
-        }
     }
 
     // ==================== 边界条件测试 ====================
@@ -1688,56 +1548,28 @@ class LogStreamManagerTest {
     class EdgeCaseTests {
 
         @Test
-        @DisplayName("重复启动同一客户端应该更新状态")
-        void shouldUpdateStateOnDuplicateStart() throws Exception {
-            logStreamManager.startLogStream("client-1", "info");
-            logStreamManager.startLogStream("client-1", "debug");
-            
-            // 应该只有一个客户端
-            assertThat(logStreamManager.getSubscriberCount()).isEqualTo(1);
-            
-            ConcurrentHashMap<String, Boolean> clients = getSubscribedClients();
-            assertThat(clients.get("client-1")).isTrue();
-        }
-
-        @Test
-        @DisplayName("空字符串 clientId 应该被接受")
-        void shouldAcceptEmptyStringClientId() throws Exception {
-            logStreamManager.startLogStream("", "info");
-            
-            ConcurrentHashMap<String, Boolean> clients = getSubscribedClients();
-            assertThat(clients).containsKey("");
-        }
-
-        @Test
-        @DisplayName("null level 应该使用默认值")
-        void shouldUseDefaultLevelWhenNull() throws Exception {
-            logStreamManager.startLogStream("client-1", null);
-            
-            // 不应该抛出异常
-            assertThat(logStreamManager.getSubscriberCount()).isEqualTo(1);
-        }
-
-        @Test
-        @DisplayName("D-19: 连续多次发送 pause/resume action 都应该被拒绝，且不改变订阅状态")
-        void shouldRejectRepeatedPauseResumeActions() throws Exception {
+        @DisplayName("D-19/D-20: 连续多次发送 pause/resume/start/stop action 都应该被拒绝")
+        void shouldRejectRepeatedControlActions() throws Exception {
             setWebSocketClient(mockWebSocketClient);
-            logStreamManager.startLogStream("client-1", "info");
-            reset(mockWebSocketClient);
             when(mockWebSocketClient.isConnected()).thenReturn(true);
 
-            for (int i = 0; i < 5; i++) {
-                JsonObject pause = new JsonObject();
-                pause.addProperty("action", "pause");
-                pause.addProperty("clientId", "client-1");
-                logStreamManager.handleLogStreamMessage(pause);
-                assertThat(getSubscribedClients().get("client-1")).isTrue();
+            for (String action : new String[] {"pause", "resume", "start", "stop"}) {
+                for (int i = 0; i < 5; i++) {
+                    reset(mockWebSocketClient);
+                    when(mockWebSocketClient.isConnected()).thenReturn(true);
 
-                JsonObject resume = new JsonObject();
-                resume.addProperty("action", "resume");
-                resume.addProperty("clientId", "client-1");
-                logStreamManager.handleLogStreamMessage(resume);
-                assertThat(getSubscribedClients().get("client-1")).isTrue();
+                    JsonObject message = new JsonObject();
+                    message.addProperty("action", action);
+                    message.addProperty("clientId", "client-1");
+                    logStreamManager.handleLogStreamMessage(message);
+
+                    ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+                    verify(mockWebSocketClient).sendMessage(captor.capture());
+                    JsonObject data = captor.getValue().getAsJsonObject("data");
+                    assertThat(data.get("message").getAsString())
+                            .contains("not supported")
+                            .contains("panel view's own action");
+                }
             }
         }
     }
@@ -1751,13 +1583,16 @@ class LogStreamManagerTest {
         @DisplayName("响应消息应该包含 type: log_stream")
         void responseMessageShouldHaveCorrectType() throws Exception {
             setWebSocketClient(mockWebSocketClient);
-            
+
             ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-            
-            logStreamManager.startLogStream("client-1", "info");
+
+            JsonObject status = new JsonObject();
+            status.addProperty("action", "status");
+            status.addProperty("clientId", "client-1");
+            logStreamManager.handleLogStreamMessage(status);
 
             verify(mockWebSocketClient).sendMessage(captor.capture());
-            
+
             JsonObject message = captor.getValue();
             assertThat(message.get("type").getAsString()).isEqualTo("log_stream_response");
         }
@@ -1766,13 +1601,16 @@ class LogStreamManagerTest {
         @DisplayName("响应消息应该包含 serverId")
         void responseMessageShouldHaveServerId() throws Exception {
             setWebSocketClient(mockWebSocketClient);
-            
+
             ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-            
-            logStreamManager.startLogStream("client-1", "info");
+
+            JsonObject status = new JsonObject();
+            status.addProperty("action", "status");
+            status.addProperty("clientId", "client-1");
+            logStreamManager.handleLogStreamMessage(status);
 
             verify(mockWebSocketClient).sendMessage(captor.capture());
-            
+
             JsonObject message = captor.getValue();
             assertThat(message.has("serverId")).isTrue();
         }
@@ -1781,61 +1619,47 @@ class LogStreamManagerTest {
         @DisplayName("响应消息应该包含 timestamp")
         void responseMessageShouldHaveTimestamp() throws Exception {
             setWebSocketClient(mockWebSocketClient);
-            
+
             ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-            
-            logStreamManager.startLogStream("client-1", "info");
+
+            JsonObject status = new JsonObject();
+            status.addProperty("action", "status");
+            status.addProperty("clientId", "client-1");
+            logStreamManager.handleLogStreamMessage(status);
 
             verify(mockWebSocketClient).sendMessage(captor.capture());
-            
+
             JsonObject message = captor.getValue();
             assertThat(message.has("timestamp")).isTrue();
             assertThat(message.get("timestamp").getAsLong()).isGreaterThan(0);
         }
 
         @Test
-        @DisplayName("响应消息 data 应该包含 status 字段")
-        void responseDataShouldHaveStatusField() throws Exception {
+        @DisplayName("config action 的响应 data 应该包含 status 字段")
+        void configResponseDataShouldHaveStatusField() throws Exception {
             setWebSocketClient(mockWebSocketClient);
-            
+
             ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-            
-            logStreamManager.startLogStream("client-1", "info");
+
+            JsonObject data = new JsonObject();
+            data.addProperty("action", "config");
+            data.addProperty("clientId", "client-1");
+            // Neither `levels` nor `batchConfig` present -- the "nothing changed" branch,
+            // which still uses sendStreamResponse's status-bearing shape.
+            logStreamManager.handleLogStreamMessage(data);
 
             verify(mockWebSocketClient).sendMessage(captor.capture());
-            
-            JsonObject message = captor.getValue();
-            JsonObject data = message.getAsJsonObject("data");
-            assertThat(data.has("status")).isTrue();
-            assertThat(data.get("status").getAsString()).isEqualTo("started");
-        }
 
-        @Test
-        @DisplayName("停止响应 status 应该是 stopped")
-        void stopResponseStatusShouldBeStopped() throws Exception {
-            setWebSocketClient(mockWebSocketClient);
-            logStreamManager.startLogStream("client-1", "info");
-            reset(mockWebSocketClient);
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            
-            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-            
-            logStreamManager.stopLogStream("client-1");
-
-            verify(mockWebSocketClient).sendMessage(captor.capture());
-            
             JsonObject message = captor.getValue();
-            JsonObject data = message.getAsJsonObject("data");
-            assertThat(data.get("status").getAsString()).isEqualTo("stopped");
+            JsonObject responseData = message.getAsJsonObject("data");
+            assertThat(responseData.has("status")).isTrue();
+            assertThat(responseData.get("status").getAsString()).isEqualTo("config_unchanged");
         }
 
         @Test
         @DisplayName("D-19: pause 的响应是 error 响应形状（type: log_stream_response 但 data 没有 status 字段），不是 paused")
         void pauseResponseIsARejectionNotAStatusResponse() throws Exception {
             setWebSocketClient(mockWebSocketClient);
-            logStreamManager.startLogStream("client-1", "info");
-            reset(mockWebSocketClient);
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
 
             ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
 
@@ -1857,9 +1681,6 @@ class LogStreamManagerTest {
         @DisplayName("D-19: resume 的响应同样是 error 响应形状，不是 resumed")
         void resumeResponseIsARejectionNotAStatusResponse() throws Exception {
             setWebSocketClient(mockWebSocketClient);
-            logStreamManager.startLogStream("client-1", "info");
-            reset(mockWebSocketClient);
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
 
             ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
 
@@ -1867,6 +1688,48 @@ class LogStreamManagerTest {
             resume.addProperty("action", "resume");
             resume.addProperty("clientId", "client-1");
             logStreamManager.handleLogStreamMessage(resume);
+
+            verify(mockWebSocketClient).sendMessage(captor.capture());
+
+            JsonObject message = captor.getValue();
+            assertThat(message.get("type").getAsString()).isEqualTo("log_stream_response");
+            JsonObject data = message.getAsJsonObject("data");
+            assertThat(data.has("status")).isFalse();
+            assertThat(data.get("context").getAsString()).isEqualTo("log_stream");
+        }
+
+        @Test
+        @DisplayName("D-20: start 的响应同样是 error 响应形状，不是 started")
+        void startResponseIsARejectionNotAStatusResponse() throws Exception {
+            setWebSocketClient(mockWebSocketClient);
+
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+
+            JsonObject start = new JsonObject();
+            start.addProperty("action", "start");
+            start.addProperty("clientId", "client-1");
+            logStreamManager.handleLogStreamMessage(start);
+
+            verify(mockWebSocketClient).sendMessage(captor.capture());
+
+            JsonObject message = captor.getValue();
+            assertThat(message.get("type").getAsString()).isEqualTo("log_stream_response");
+            JsonObject data = message.getAsJsonObject("data");
+            assertThat(data.has("status")).isFalse();
+            assertThat(data.get("context").getAsString()).isEqualTo("log_stream");
+        }
+
+        @Test
+        @DisplayName("D-20: stop 的响应同样是 error 响应形状，不是 stopped")
+        void stopResponseIsARejectionNotAStatusResponse() throws Exception {
+            setWebSocketClient(mockWebSocketClient);
+
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+
+            JsonObject stop = new JsonObject();
+            stop.addProperty("action", "stop");
+            stop.addProperty("clientId", "client-1");
+            logStreamManager.handleLogStreamMessage(stop);
 
             verify(mockWebSocketClient).sendMessage(captor.capture());
 
@@ -1954,21 +1817,6 @@ class LogStreamManagerTest {
             Field field = LogStreamManager.class.getDeclaredField("systemLogHandler");
             field.setAccessible(true);
             assertThat(field.get(logStreamManager)).isNotNull();
-        }
-
-        @Test
-        @DisplayName("initialize 应该启动日志流")
-        void shouldStartLogStream() throws Exception {
-            // Arrange
-            when(mockWebSocketClient.isConnected()).thenReturn(true);
-            when(mockWebSocketClient.getServerId()).thenReturn("test-server");
-            when(mockConfig.contains(anyString())).thenReturn(false);
-            
-            // Act
-            logStreamManager.initialize(mockWebSocketClient);
-            
-            // Assert - 日志流应该已启动
-            assertThat(logStreamManager.isStreaming()).isTrue();
         }
 
         @Test

@@ -23,8 +23,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -48,8 +46,6 @@ public class LogStreamManager implements Listener {
 
     private static LogStreamManager instance;
     private UltiPanelWebSocketClient webSocketClient;
-    private final AtomicBoolean streaming = new AtomicBoolean(false);
-    private final ConcurrentHashMap<String, Boolean> subscribedClients = new ConcurrentHashMap<>();
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
     
     @Getter
@@ -135,9 +131,15 @@ public class LogStreamManager implements Listener {
         Logger rootLogger = Logger.getLogger("");
         rootLogger.addHandler(systemLogHandler);
 
-        // Auto-start the log stream (begin monitoring and sending logs immediately)
-        startLogStream("auto", "info");
-
+        // D-20 (maintainer decision, 2026-09-15): this used to call startLogStream("auto",
+        // "info") here to auto-subscribe a permanent sentinel client. That call did nothing real
+        // -- the handler was already attached to the root logger two lines above, the "level"
+        // parameter was never applied to anything (SystemLogHandler#setEnabledLevels is the only
+        // real level gate, and this code path never called it), and the only observable effect
+        // was mutating now-removed subscribedClients/streaming bookkeeping plus broadcasting a
+        // spurious "started" acknowledgment to no one in particular. Delivery to the panel is
+        // unconditional once this handler is attached, for as long as the WebSocket connection is
+        // up -- there is nothing left to "start" here.
         UltiTools.getInstance().getLogger().info("[UltiPanel] LogStreamManager initialized and log streaming started");
 
         // Send the initialization-complete logs
@@ -244,18 +246,16 @@ public class LogStreamManager implements Listener {
         
         switch (action != null ? action : "") {
             case "start":
-                startLogStream(clientId, level);
-                break;
             case "stop":
-                stopLogStream(clientId);
-                break;
             case "pause":
             case "resume":
-                // D-19 (maintainer decision, 2026-09-14): pause/resume are rejected, not
-                // implemented. See sendPauseResumeRejection()'s javadoc for the full reasoning.
-                sendPauseResumeRejection(clientId, action);
+                // D-19/D-20 (maintainer decisions, 2026-09-14/2026-09-15): none of these four
+                // control actions is implemented -- see sendControlActionRejection()'s javadoc.
+                sendControlActionRejection(clientId, action);
                 break;
             case "status":
+                // D-20: status is a read-only introspection action, not a control toggle -- it
+                // is answered honestly rather than rejected. See sendStreamStatus()'s javadoc.
                 sendStreamStatus(clientId);
                 break;
             case "config":
@@ -560,72 +560,51 @@ public class LogStreamManager implements Listener {
     }
     
     /**
-     * Starts the log stream.
-     */
-    public void startLogStream(String clientId, String level) {
-        subscribedClients.put(clientId, true);
-        streaming.set(true);
-
-        UltiTools.getInstance().getLogger().info(
-            String.format("LogStreamManager: 为客户端 %s 启动日志流，级别: %s", clientId, level));
-
-        // Send the acknowledgment message
-        sendStreamResponse(clientId, "started", "Log stream started successfully");
-    }
-
-    /**
-     * Starts the log stream (legacy-version compatibility overload).
-     */
-    public void startLogStream(String clientId) {
-        startLogStream(clientId, "info");
-    }
-
-    /**
-     * Stops the log stream.
-     */
-    public void stopLogStream(String clientId) {
-        subscribedClients.remove(clientId);
-        if (subscribedClients.isEmpty()) {
-            streaming.set(false);
-        }
-
-        UltiTools.getInstance().getLogger().info(
-            String.format("LogStreamManager: 为客户端 %s 停止日志流", clientId));
-
-        // Send the acknowledgment message
-        sendStreamResponse(clientId, "stopped", "Log stream stopped successfully");
-    }
-
-    /**
-     * Rejects a {@code pause}/{@code resume} request (D-19, maintainer decision 2026-09-14).
+     * Rejects a {@code start}/{@code stop}/{@code pause}/{@code resume} request (D-19/D-20,
+     * maintainer decisions 2026-09-14/2026-09-15).
      * <p>
-     * This framework has no per-viewer identity to honour a per-viewer pause with: the delivery
-     * messages ({@code log_stream}/{@code log_batch}) carry no per-client address at all --
-     * {@link UltiPanelLogTransmitter#sendLog} broadcasts once over the single WebSocket
+     * This framework has no per-viewer identity to gate any of these four actions with: the
+     * delivery messages ({@code log_stream}/{@code log_batch}) carry no per-client address at
+     * all -- {@link UltiPanelLogTransmitter#sendLog} broadcasts once over the single WebSocket
      * connection this server holds to the panel relay, which fans a delivered record out to
      * however many browser viewers are subscribed on that connection, invisibly to this
-     * framework. #434's original fix (a global "does any subscriber want delivery" check) could
-     * never actually suppress anything in production, because {@link #initialize} permanently
-     * subscribes a synthetic {@code "auto"} client that is never paused -- see
-     * {@code 16-REVIEW-panel.md} CR-01. Rather than build real per-viewer session identity
-     * (cross-repository, not authorised here), the framework declares the action unsupported and
-     * says so: pausing the live view is the panel view's own action (stop rendering new lines,
-     * optionally buffer them client-side), and the server keeps streaming to every subscribed
-     * client regardless. {@code stop}/{@code start} remain the way to unsubscribe/resubscribe.
-     * The removed {@code pauseLogStream(String)}/{@code resumeLogStream(String)} public methods
-     * are recorded in {@code COMPATIBILITY.md} under the same-release exception.
+     * framework. A server-side "real" implementation of any of the four would necessarily
+     * silence or resume delivery for every viewer of the server at once, not the one browser tab
+     * that asked.
+     * <p>
+     * {@code pause}/{@code resume} (D-19): #434's original fix (a global "does any subscriber
+     * want delivery" check) could never actually suppress anything in production, because
+     * {@link #initialize} used to permanently subscribe a synthetic {@code "auto"} client that
+     * was never paused -- see {@code 16-REVIEW-panel.md} CR-01.
+     * <p>
+     * {@code start}/{@code stop} (D-20, issue #468): measured end to end -- the shipped frontend
+     * sends {@code start}/{@code stop} only from its own toggle button and never gates rendering
+     * on the toggle state; the Worker's REST endpoint is a stateless relay minting a disposable
+     * {@code clientId} per call with no per-browser stream state anywhere in its Durable Object;
+     * and this framework's own (now-removed) {@code stopLogStream} mutated only its own internal
+     * bookkeeping, which nothing on the delivery path ever consulted. {@code stop} never actually
+     * stopped delivery for any real client, on any released version, before or after this
+     * change -- it changes only the response, not the underlying (already-inert) behaviour.
+     * <p>
+     * The framework states plainly instead: it streams logs to the panel for as long as it is
+     * connected, with no per-viewer on/off state to toggle. Turning the live view on/off, or
+     * pausing/resuming it, is the panel view's own concern (stop/start rendering, optionally
+     * buffer client-side) -- not a request this server can selectively honour for one viewer.
+     * The removed {@code startLogStream(String, String)}/{@code startLogStream(String)}/
+     * {@code stopLogStream(String)}/{@code isStreaming()}/{@code getSubscriberCount()} and (from
+     * D-19) {@code pauseLogStream(String)}/{@code resumeLogStream(String)} public methods are
+     * recorded in {@code COMPATIBILITY.md} under the same-release exception.
      */
-    private void sendPauseResumeRejection(String clientId, String action) {
-        sendErrorResponse(clientId, "The '" + action + "' action is not supported: pausing the "
-                + "live log view is the panel view's own action (stop rendering, optionally "
-                + "buffer client-side) -- the server has no per-viewer visibility into the panel "
-                + "relay's fan-out and keeps streaming to every subscribed client regardless. "
-                + "Use 'stop'/'start' to unsubscribe/resubscribe instead.");
+    private void sendControlActionRejection(String clientId, String action) {
+        sendErrorResponse(clientId, "The '" + action + "' action is not supported: this "
+                + "framework streams logs to the panel for as long as it is connected, with no "
+                + "per-viewer on/off state to toggle -- turning the live view on/off, or "
+                + "pausing/resuming it, is the panel view's own action (stop/start rendering, "
+                + "optionally buffer client-side).");
     }
 
-
     /**
-     * Sends a stream response message.
+     * Sends a stream response message (used by the {@code config} action's acknowledgment).
      */
     private void sendStreamResponse(String clientId, String status, String message) {
         if (webSocketClient == null || !webSocketClient.isConnected()) {
@@ -637,23 +616,21 @@ public class LogStreamManager implements Listener {
             response.addProperty("type", "log_stream_response");
             response.addProperty("serverId", getServerId());
             response.addProperty("timestamp", System.currentTimeMillis());
-            
+
             JsonObject data = new JsonObject();
             data.addProperty("status", status);
             data.addProperty("message", message);
             data.addProperty("clientId", clientId);
-            data.addProperty("subscriberCount", subscribedClients.size());
-            data.addProperty("streaming", streaming.get());
-            
+
             response.add("data", data);
             webSocketClient.sendMessage(response);
-            
+
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().warning(
                 String.format("LogStreamManager: 发送流响应失败: %s", e.getMessage()));
         }
     }
-    
+
     /**
      * Sends an error response.
      */
@@ -683,40 +660,36 @@ public class LogStreamManager implements Listener {
     }
     
     /**
-     * Sends the stream status.
+     * Sends the stream status (D-20, maintainer decision 2026-09-15).
+     * <p>
+     * Unlike {@code start}/{@code stop}/{@code pause}/{@code resume}, {@code status} asks
+     * nothing to be toggled -- it is a read-only introspection request, and every field it
+     * reports is backed by something genuinely tracked, not bookkeeping that no client's
+     * request ever actually drove. There is no longer a {@code subscriberCount} or
+     * {@code streaming} field: this framework has no concept of an individual subscribed
+     * viewer to count (see {@link #sendControlActionRejection}'s javadoc), and delivery is
+     * unconditional once the handler is attached, for as long as the panel connection is up --
+     * which is exactly what the new {@code connected} field reports honestly. {@code
+     * logTransmitterEnabled}/{@code queueSize} are unchanged; both were already backed by real
+     * {@link UltiPanelLogTransmitter} state.
      */
     private void sendStreamStatus(String clientId) {
         JsonObject message = new JsonObject();
         message.addProperty("type", "log_stream_response");
         message.addProperty("timestamp", System.currentTimeMillis());
         message.addProperty("serverId", getServerId());
-        
+
         JsonObject data = new JsonObject();
         data.addProperty("action", "status");
-        data.addProperty("streaming", streaming.get());
-        data.addProperty("subscriberCount", subscribedClients.size());
+        data.addProperty("connected", webSocketClient != null && webSocketClient.isConnected());
         data.addProperty("clientId", clientId);
         data.addProperty("logTransmitterEnabled", logTransmitter != null && logTransmitter.isLogTransmissionEnabled());
         data.addProperty("queueSize", logTransmitter != null ? logTransmitter.getQueueSize() : 0);
         message.add("data", data);
-        
+
         if (webSocketClient != null) {
             webSocketClient.sendMessage(message);
         }
-    }
-    
-    /**
-     * Gets the current stream status.
-     */
-    public boolean isStreaming() {
-        return streaming.get();
-    }
-
-    /**
-     * Gets the number of subscribed clients.
-     */
-    public int getSubscriberCount() {
-        return subscribedClients.size();
     }
 
     /**
@@ -781,9 +754,6 @@ public class LogStreamManager implements Listener {
      * Shuts down the log stream manager.
      */
     public void shutdown() {
-        subscribedClients.clear();
-        streaming.set(false);
-
         // Shut down the log transmitter
         if (logTransmitter != null) {
             logTransmitter.shutdown();

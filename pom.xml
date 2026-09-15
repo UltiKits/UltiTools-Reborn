@@ -594,6 +594,23 @@
                                  compatibility/records/6.3.0.md. -->
                             <exclude>com.ultikits.ultitools.manager.LogStreamManager#pauseLogStream(java.lang.String)</exclude>
                             <exclude>com.ultikits.ultitools.manager.LogStreamManager#resumeLogStream(java.lang.String)</exclude>
+                            <!-- D-20 addendum (maintainer decision 2026-09-14/2026-09-15, issue #468):
+                                 start/stop are no longer claimed by the framework either, for the
+                                 same reason as pause/resume above - the shipped frontend only ever
+                                 toggles start/stop from its own button and never gates rendering on
+                                 the response, the Worker's REST endpoint is a stateless relay with
+                                 no per-browser state, and stopLogStream mutated only bookkeeping
+                                 nothing on the delivery path consulted. All five removed here were
+                                 public in the released 6.2.5 jar (javap-confirmed against the same
+                                 baseline jar as the pause/resume entry above); measured zero external
+                                 callers under Modules/ and Tooling/UltiTools-External-Example (same
+                                 182-file UltiToolsPlugin control group). Recorded in COMPATIBILITY.md
+                                 and compatibility/records/6.3.0.md, same entry as D-19. -->
+                            <exclude>com.ultikits.ultitools.manager.LogStreamManager#startLogStream(java.lang.String, java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.LogStreamManager#startLogStream(java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.LogStreamManager#stopLogStream(java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.LogStreamManager#isStreaming()</exclude>
+                            <exclude>com.ultikits.ultitools.manager.LogStreamManager#getSubscriberCount()</exclude>
                             <!-- 16-13-PLAN.md (Gate-2 external review finding): SetAllResult's public
                                  5-arg constructor widened to 6 args to carry the D-15
                                  NOT_PRESENT_ON_THIS_SERVER outcome as its own distinct list
