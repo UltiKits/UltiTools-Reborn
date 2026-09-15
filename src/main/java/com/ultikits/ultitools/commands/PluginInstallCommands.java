@@ -64,13 +64,8 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             for (PluginEntity plugin : plugins) {
                 text = text.append(Component.text(i + UltiTools.getInstance().i18n(".  名字：") + plugin.getName() + "\n").color(TextColor.color(0x00ffff)));
                 text = text.append(Component.text(UltiTools.getInstance().i18n("    安装状态：")).color(TextColor.color(127, 127, 127)));
-                boolean installed = false;
-                for (UltiToolsPlugin installedPlugin : installedPlugins) {
-                    if (isSameModule(installedPlugin, plugin)) {
-                        installed = true;
-                        break;
-                    }
-                }
+                String matchedRuntimeName = resolveInstalledRuntimeName(installedPlugins, plugin);
+                boolean installed = matchedRuntimeName != null;
                 if (installed) {
                     text = text.append(Component.text(UltiTools.getInstance().i18n(" 已安装") + "\n").color(TextColor.color(0x00ff00)));
                     text = text.append(
@@ -78,7 +73,10 @@ public class PluginInstallCommands extends BaseCommandExecutor {
                                     .text(UltiTools.getInstance().i18n("     | 卸载 |     ") + "\n")
                                     .color(TextColor.color(255, 0, 0))
                                     .hoverEvent(Component.text(UltiTools.getInstance().i18n("点击卸载模块")))
-                                    .clickEvent(ClickEvent.runCommand("/upm uninstall " + plugin.getName()))
+                                    // #439 gate-2 Codex round 1: the LOADED module's own runtime
+                                    // name, not the catalogue's display name -- uninstallPlugin
+                                    // matches only the former.
+                                    .clickEvent(ClickEvent.runCommand("/upm uninstall " + matchedRuntimeName))
                     );
                 } else {
                     text = text.append(Component.text(UltiTools.getInstance().i18n(" 未安装") + "\n").color(TextColor.color(0xff0000)));
@@ -337,33 +335,44 @@ public class PluginInstallCommands extends BaseCommandExecutor {
      * catalogue name that only resembles a loaded module's, such as one ending in {@code "Pro"},
      * is rejected, not matched).
      * <p>
-     * <b>Residual collision risk (WR-01), disclosed rather than papered over:</b> because no
-     * stable identifier is populated on either side today, a THIRD-PARTY module that names itself
-     * {@code UltiTools-Foo} in its own {@code plugin.yml} -- nothing stops an unrelated author
-     * from choosing that name -- would be reported installed against a different, unrelated
-     * author's unaffiliated catalogue entry literally named {@code Foo}, because neither {@code
-     * UltiToolsPlugin} nor {@code PluginEntity} exposes anything else (a developer/author ID, a
-     * catalogue row ID) that this method could cross-check to tell them apart; {@code
-     * PluginEntity#getDeveloperId()} has no counterpart accessor anywhere on {@code
-     * UltiToolsPlugin}. This is a real, narrow false-positive path, not a hypothetical this method
-     * closes. It is still strictly better than the defect being fixed: today, EVERY module whose
-     * name doesn't already match its catalogue display name byte-for-byte is unconditionally
-     * reported not installed, a guaranteed false negative for real, correctly-loaded modules;
-     * the collision above requires an unrelated third party to first choose a name that claims
-     * affiliation with this framework. Closing it for real needs a stable identifier populated on
-     * both sides -- exactly the {@code identifyString} path above, once it is populated -- not a
-     * looser name heuristic.
+     * <b>Two present identifiers are authoritative, even on a mismatch (gate-2 Codex round 1).</b>
+     * When BOTH sides carry a non-blank {@code identifyString}, that comparison alone decides the
+     * outcome -- a match returns {@code true} immediately, and a MISMATCH returns {@code false}
+     * immediately, without ever falling through to the name/prefix heuristic below. Two present,
+     * different stable identifiers prove the modules are different; the name heuristic must not
+     * override that proof (a loaded {@code UltiTools-Foo} with id {@code author-a.foo} must not be
+     * reported as the catalogue's unrelated {@code Foo} with id {@code author-b.foo}, even though
+     * the name/prefix rule alone would match them). The comparison is normalised (trimmed,
+     * lower-cased) via the same convention {@code PluginInstallUtils}'s own (private) {@code
+     * normalizeIdentifyString} already applies before every install/update/lookup comparison
+     * elsewhere in this package, so a module and a catalogue entry that agree except for case are
+     * still recognised as the same.
+     * <p>
+     * <b>Residual collision risk (WR-01), disclosed rather than papered over:</b> the risk above
+     * is closed whenever BOTH sides carry an identifier. It remains open only when at least one
+     * side's {@code identifyString} is blank -- true for every module today (0/17) -- in which
+     * case a THIRD-PARTY module that names itself {@code UltiTools-Foo} in its own {@code
+     * plugin.yml} would still be reported installed against a different, unrelated author's
+     * unaffiliated catalogue entry literally named {@code Foo}, since neither {@code
+     * UltiToolsPlugin} nor {@code PluginEntity} exposes anything else (a developer/author ID) this
+     * method could cross-check in that case. Still strictly better than the defect being fixed:
+     * today, EVERY module whose name doesn't already match its catalogue display name
+     * byte-for-byte is unconditionally reported not installed, a guaranteed false negative for
+     * real, correctly-loaded modules. Closing the remaining gap needs a stable identifier
+     * populated on both sides (#474), not a looser name heuristic.
      *
      * @param installedPlugin a currently loaded module
      * @param catalogueEntry  a directory entry from the catalogue
      * @return {@code true} iff the two are judged to refer to the same module
      */
     static boolean isSameModule(UltiToolsPlugin installedPlugin, PluginEntity catalogueEntry) {
-        String moduleIdentify = installedPlugin.getIdentifyString();
-        String catalogueIdentify = catalogueEntry.getIdentifyString();
-        if (isNonBlank(moduleIdentify) && isNonBlank(catalogueIdentify)
-                && moduleIdentify.equals(catalogueIdentify)) {
-            return true;
+        String moduleIdentify = normalizeIdentifyString(installedPlugin.getIdentifyString());
+        String catalogueIdentify = normalizeIdentifyString(catalogueEntry.getIdentifyString());
+        if (moduleIdentify != null && catalogueIdentify != null) {
+            // Both sides carry a stable identifier -- AUTHORITATIVE. Never fall through to the
+            // name/prefix heuristic below, even when the two identifiers disagree (gate-2 Codex
+            // round 1): a present mismatch proves these are different modules.
+            return moduleIdentify.equals(catalogueIdentify);
         }
 
         String runtimeName = installedPlugin.getPluginName();
@@ -377,8 +386,44 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         return stripVendorPrefix(runtimeName).equals(catalogueName);
     }
 
-    private static boolean isNonBlank(String value) {
-        return value != null && !value.isEmpty();
+    /**
+     * Resolves the runtime name to use for the {@code /upm uninstall} click command in {@link
+     * #listPlugins(CommandSender, String)}'s player branch: the LOADED module's own {@code
+     * getPluginName()}, not the catalogue entry's display name (gate-2 Codex round 1). {@link
+     * PluginInstallUtils#uninstallPlugin} matches only against the runtime name -- for exactly
+     * the display-name-mismatch case {@link #isSameModule} exists to recognise as installed,
+     * using the catalogue's display name here would build an uninstall command that silently
+     * fails (no unregister, no file delete, a generic failure message).
+     *
+     * @param installedPlugins every currently-loaded module
+     * @param catalogueEntry   the catalogue entry being rendered
+     * @return the matched module's own runtime name, or {@code null} if none matches
+     */
+    static String resolveInstalledRuntimeName(List<UltiToolsPlugin> installedPlugins, PluginEntity catalogueEntry) {
+        for (UltiToolsPlugin installedPlugin : installedPlugins) {
+            if (isSameModule(installedPlugin, catalogueEntry)) {
+                return installedPlugin.getPluginName();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Trims and lower-cases an identify string, the same normalisation {@code
+     * PluginInstallUtils}'s own (private) {@code normalizeIdentifyString} applies before every
+     * install/update/lookup comparison elsewhere in this package (gate-2 Codex round 1) -- kept as
+     * a small local copy rather than widening that method's visibility, since the transform
+     * itself is a one-line, well-established convention, not shared mutable state.
+     *
+     * @param value the raw identify string, possibly {@code null} or blank
+     * @return the normalised value, or {@code null} if the input was {@code null} or blank
+     */
+    private static String normalizeIdentifyString(String value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.trim().toLowerCase(java.util.Locale.ROOT);
+        return normalized.isEmpty() ? null : normalized;
     }
 
     private static String stripVendorPrefix(String runtimeName) {
