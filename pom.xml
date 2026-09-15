@@ -614,6 +614,16 @@
                 <configuration>
                     <mainClass>com.ultikits.ultitools.buildtools.deprecation.DeprecationRegistryGenerator</mainClass>
                     <classpathScope>test</classpathScope>
+                    <!-- #461: this goal runs in-process, in the Maven JVM's own working
+                         directory - NOT ${project.basedir} - so an invocation launched with
+                         `mvn -f <other-tree>/pom.xml` from a different shell cwd silently
+                         read/wrote the WRONG tree's sources, pom and japicmp report. Passing
+                         ${project.basedir} explicitly lets
+                         DeprecationRegistryGenerator#resolveBaseDir resolve every relative
+                         path against it instead of the JVM's actual cwd. -->
+                    <arguments>
+                        <argument>${project.basedir}</argument>
+                    </arguments>
                 </configuration>
                 <executions>
                     <execution>

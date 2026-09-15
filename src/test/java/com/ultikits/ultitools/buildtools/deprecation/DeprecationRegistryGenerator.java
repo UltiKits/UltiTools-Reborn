@@ -373,10 +373,7 @@ public final class DeprecationRegistryGenerator {
      * resolution against a temporary tree, never depend on the JVM's actual working directory.
      */
     static Document readPomDocument(Path baseDir) throws IOException {
-        // RED (#461, intentionally the pre-fix behaviour): still ignores baseDir and reads
-        // relative to the JVM's actual working directory - proves the test below fails on a real
-        // assertion (wrong pom content) before the GREEN commit resolves against baseDir.
-        String xml = new String(Files.readAllBytes(POM_XML), StandardCharsets.UTF_8);
+        String xml = new String(Files.readAllBytes(baseDir.resolve(POM_XML)), StandardCharsets.UTF_8);
         return parsePomXml(xml);
     }
 
