@@ -80,12 +80,18 @@ class RemovalConsistencyEvaluatorTest {
     class StalenessTests {
 
         @Test
-        @DisplayName("Test 1: an exclude key absent from both the report and the registry is stale")
+        @DisplayName("Test 1: an exclude key absent from both the report and the registry is stale (report itself is non-empty and genuinely ran)")
         void excludeKeyAbsentFromReportAndRegistryIsStale() {
             RegistryKey key = RegistryKey.forMember(
                     "com.ultikits.ultitools.NoSuchClass", "bogus", Collections.emptyList());
             Set<RegistryKey> excludeKeys = new HashSet<>(Collections.singletonList(key));
-            JapicmpReportReader.Report report = reportOf("PROTECTED", Collections.emptyMap());
+            // #461: a non-empty report (one unrelated entry) so this test exercises "this specific
+            // key has no trace in a report that DID run" - not the empty-report infrastructure state,
+            // which is covered separately below and must produce a different finding kind entirely.
+            Map<RegistryKey, JapicmpReportReader.Entry> entries = new LinkedHashMap<>();
+            entries.put(RegistryKey.forClass("com.ultikits.ultitools.SomeUnrelatedClass"),
+                    entry("MODIFIED", null, true));
+            JapicmpReportReader.Report report = reportOf("PROTECTED", entries);
             RegistryLedger registry = RegistryLedger.empty();
 
             List<RemovalConsistencyEvaluator.Finding> findings =
@@ -95,6 +101,75 @@ class RemovalConsistencyEvaluatorTest {
                     .extracting(RemovalConsistencyEvaluator.Finding::getKind)
                     .contains(RemovalConsistencyEvaluator.Finding.Kind.STALE_EXCLUSION);
             assertThat(findings.get(0).describe()).contains(key.toString());
+        }
+    }
+
+    @Nested
+    @DisplayName("#461: empty or missing japicmp report guard")
+    class EmptyOrMissingReportGuardTests {
+
+        @Test
+        @DisplayName("a genuinely empty report (Report.empty(), simulating a missing target/japicmp/japicmp.xml) with an "
+                + "unregistered member-level exclude reports one infrastructure finding, not a STALE_EXCLUSION per key")
+        void emptyReportWithMemberLevelExcludeReportsInfrastructureFindingNotStaleExclusion() {
+            RegistryKey key = RegistryKey.forMember(
+                    "com.ultikits.ultitools.BaseCommandExecutor", "handleHelp", Collections.emptyList());
+            Set<RegistryKey> excludeKeys = new HashSet<>(Collections.singletonList(key));
+
+            List<RemovalConsistencyEvaluator.Finding> findings = RemovalConsistencyEvaluator.evaluate(
+                    excludeKeys, JapicmpReportReader.Report.empty(), RegistryLedger.empty(), "6.2.5");
+
+            assertThat(findings)
+                    .extracting(RemovalConsistencyEvaluator.Finding::getKind)
+                    .containsExactly(RemovalConsistencyEvaluator.Finding.Kind.REPORT_MISSING_OR_EMPTY)
+                    .doesNotContain(RemovalConsistencyEvaluator.Finding.Kind.STALE_EXCLUSION);
+        }
+
+        @Test
+        @DisplayName("an empty-but-parsed report (entries map literally empty, distinct from Report.empty()) behaves identically")
+        void emptyEntriesMapReportBehavesIdenticallyToReportEmpty() {
+            RegistryKey key = RegistryKey.forMember(
+                    "com.ultikits.ultitools.GuiRenderer", "performBuild", Collections.emptyList());
+            Set<RegistryKey> excludeKeys = new HashSet<>(Collections.singletonList(key));
+            JapicmpReportReader.Report report = reportOf("PROTECTED", Collections.emptyMap());
+
+            List<RemovalConsistencyEvaluator.Finding> findings =
+                    RemovalConsistencyEvaluator.evaluate(excludeKeys, report, RegistryLedger.empty(), "6.2.5");
+
+            assertThat(findings)
+                    .extracting(RemovalConsistencyEvaluator.Finding::getKind)
+                    .containsExactly(RemovalConsistencyEvaluator.Finding.Kind.REPORT_MISSING_OR_EMPTY);
+        }
+
+        @Test
+        @DisplayName("an empty report with ONLY class-level exclude keys reports nothing - whole-class excludes were "
+                + "already exempt from STALE_EXCLUSION and stay exempt from the new guard too")
+        void emptyReportWithOnlyClassLevelExcludesReportsNothing() {
+            Set<RegistryKey> excludeKeys = new HashSet<>(Collections.singletonList(
+                    RegistryKey.forClass("com.ultikits.ultitools.aop.CglibProxyFactory")));
+
+            List<RemovalConsistencyEvaluator.Finding> findings = RemovalConsistencyEvaluator.evaluate(
+                    excludeKeys, JapicmpReportReader.Report.empty(), RegistryLedger.empty(), "6.2.5");
+
+            assertThat(findings).isEmpty();
+        }
+
+        @Test
+        @DisplayName("an empty report with an unregistered member-level exclude that IS already tracked by the registry "
+                + "reports nothing - the registry entry alone is sufficient, exactly as with a non-empty report")
+        void emptyReportWithRegistryTrackedMemberLevelExcludeReportsNothing() {
+            RegistryKey key = RegistryKey.forMember(
+                    "com.ultikits.ultitools.Foo", "trackedMember", Collections.emptyList());
+            RegistryLedger registry = RegistryLedger.of(Collections.singletonList(removedEntry(key, "6.3.0")));
+            Set<RegistryKey> excludeKeys = new HashSet<>(Collections.singletonList(key));
+
+            List<RemovalConsistencyEvaluator.Finding> findings = RemovalConsistencyEvaluator.evaluate(
+                    excludeKeys, JapicmpReportReader.Report.empty(), registry, "6.2.5");
+
+            assertThat(findings)
+                    .extracting(RemovalConsistencyEvaluator.Finding::getKind)
+                    .doesNotContain(RemovalConsistencyEvaluator.Finding.Kind.REPORT_MISSING_OR_EMPTY,
+                            RemovalConsistencyEvaluator.Finding.Kind.STALE_EXCLUSION);
         }
     }
 

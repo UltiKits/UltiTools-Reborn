@@ -166,7 +166,8 @@ public final class RemovalConsistencyEvaluator {
 
         /** What kind of consistency violation this finding represents. */
         public enum Kind {
-            SCOPE_MISMATCH, STALE_EXCLUSION, UNRECORDED_REMOVAL, INADMISSIBLE_ALLOWLIST, MISSING_EXCLUSION_FOR_REMOVED
+            SCOPE_MISMATCH, REPORT_MISSING_OR_EMPTY, STALE_EXCLUSION, UNRECORDED_REMOVAL,
+            INADMISSIBLE_ALLOWLIST, MISSING_EXCLUSION_FOR_REMOVED
         }
 
         private final Kind kind;
@@ -191,6 +192,24 @@ public final class RemovalConsistencyEvaluator {
                     "pom <exclude> entry '" + key + "' has no registry entry and no trace in the "
                             + "japicmp report - it may be stale, or a typo that never matched "
                             + "anything real");
+        }
+
+        /**
+         * #461: the japicmp report is missing or empty - no comparison ran, so nothing can be
+         * confirmed either stale or current. One finding for the whole evaluation, not one per
+         * unregistered member-level exclude key - reporting N false STALE_EXCLUSION findings for
+         * what is actually an infrastructure problem (a missing/empty {@code
+         * target/japicmp/japicmp.xml}, e.g. a partial {@code -DskipTests} build, or two {@code mvn
+         * clean verify} invocations racing in the same working tree) is exactly the defect this
+         * finding replaces.
+         */
+        static Finding reportMissingOrEmpty() {
+            return new Finding(Kind.REPORT_MISSING_OR_EMPTY, null,
+                    "the japicmp report is missing or empty - no comparison ran; nothing was "
+                            + "evaluated. This is an infrastructure state (check that "
+                            + "target/japicmp/japicmp.xml exists and is non-empty before the "
+                            + "generate-deprecation-registry execution runs), not a compatibility "
+                            + "finding about any individual pom <exclude> entry");
         }
 
         static Finding unrecordedRemoval(RegistryKey key) {
