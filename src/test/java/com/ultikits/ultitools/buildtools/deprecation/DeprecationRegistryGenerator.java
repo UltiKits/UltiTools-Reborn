@@ -92,7 +92,14 @@ public final class DeprecationRegistryGenerator {
         return Paths.get("").toAbsolutePath();
     }
 
-    private static void run(Path baseDir) throws IOException, ReflectiveOperationException {
+    /**
+     * Package-private (not {@code private}) so a test can exercise the full write-side pipeline -
+     * {@link #loadPriorLedger}, {@link JavadocDeprecationScanner#scan}, {@link #readJapicmpReport},
+     * and both {@link Files#write} calls - directly against an isolated {@code baseDir}, without
+     * going through {@link #main(String[])}'s {@code System.exit} on failure (WR-01). Do not narrow
+     * this back to {@code private}.
+     */
+    static void run(Path baseDir) throws IOException, ReflectiveOperationException {
         Path ledgerJson = baseDir.resolve(LEDGER_JSON);
         Path ledgerMarkdown = baseDir.resolve(LEDGER_MARKDOWN);
         RegistryLedger prior = loadPriorLedger(ledgerJson);
@@ -274,10 +281,12 @@ public final class DeprecationRegistryGenerator {
         if (!Files.exists(japicmpReport)) {
             // No japicmp report (e.g. `-DskipTests` ran before `verify`'s cmp goal on a partial
             // build, or #461's basedir mismatch). Nothing can be confirmed REMOVED without it - an
-            // empty report is the safe, conservative default; D-22 requires agreement, and silence
-            // from japicmp never authorizes a REMOVED transition on its own. RemovalConsistencyEvaluator
-            // reports this state loudly rather than silently treating an absent report as a clean
-            // comparison (#461).
+            // empty report is the safe, conservative default AT THIS LAYER ONLY: this generator
+            // itself must not crash on a missing report. D-22 requires agreement, and silence from
+            // japicmp never authorizes a REMOVED transition on its own. The layer above turns
+            // "quiet" into "loud": RemovalConsistencyEvaluator#evaluate unconditionally reports this
+            // exact state as a single Finding.Kind.REPORT_MISSING_OR_EMPTY (WR-03) - so "safe
+            // default" here means "does not crash," never "the build passes silently" (#461).
             return JapicmpReportReader.Report.empty();
         }
         return JapicmpReportReader.read(japicmpReport);

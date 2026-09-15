@@ -25,16 +25,23 @@ import java.util.concurrent.TimeUnit;
  * real compatibility problem (the empty-report guard in {@link RemovalConsistencyEvaluator} is the
  * sibling half of this fix - see {@code RemovalConsistencyEvaluatorTest}).
  *
- * <p>These tests exercise only the safe, read-only slice of the fix - {@link
- * DeprecationRegistryGenerator#readPomDocument(Path)} and {@link
- * DeprecationRegistryGenerator#resolveBaseDir(String[])} - against a temporary, throwaway project
- * tree, deliberately never invoking the full {@code run(Path)} pipeline (javadoc scan, japicmp
- * report read, ledger merge and write) in a unit test: that pipeline writes {@code
- * compatibility/deprecations.json}/{@code DEPRECATIONS.md}, and running it against anything other
- * than an isolated temporary tree risks corrupting this repository's own tracked registry. The full
- * write-side pipeline is proven end-to-end by the plan's own integration verify (<code>cd "$W" &amp;&amp;
- * mvn -B -o exec:java@generate-deprecation-registry</code> from inside the worktree, and the
- * from-primary-checkout-cwd proof required by Task 3), not by a unit test here.
+ * <p>The first revision of this test class exercised only the read-only slice of the fix -
+ * {@link DeprecationRegistryGenerator#readPomDocument(Path)} and {@link
+ * DeprecationRegistryGenerator#resolveBaseDir(String[])} - deliberately never invoking the full
+ * {@code run(Path)} pipeline, citing the risk of corrupting this repository's own tracked
+ * {@code compatibility/deprecations.json}/{@code DEPRECATIONS.md}. Gate-1 review WR-01 correctly
+ * flagged that as leaving the write side - the actual root-cause fix, threading {@code baseDir}
+ * through {@code loadPriorLedger}, {@code JavadocDeprecationScanner#scan}, {@code
+ * readJapicmpReport}, and both {@code Files.write} calls - proven only by a manual, one-off shell
+ * transcript that no CI run re-executes. {@link #runWritesLedgerFilesUnderGivenBaseDirOnly} closes
+ * that gap: it builds a complete, isolated, minimal project layout under {@code @TempDir}
+ * (a synthetic {@code pom.xml}, a tiny {@code src/main/java}, and a small japicmp report - no
+ * prior ledger), calls {@link DeprecationRegistryGenerator#run(Path)} directly against that
+ * temporary root, and asserts both that the ledger files land there AND that the real
+ * repository's own tracked {@code compatibility/} files are byte-for-byte unchanged - the
+ * regression this test exists to catch is exactly a future edit reintroducing a bare {@code
+ * Paths.get(...)} somewhere in that call chain (e.g. during the #464 merge, see WR-02) instead of
+ * {@code baseDir.resolve(...)}.
  */
 @DisplayName("DeprecationRegistryGenerator basedir resolution tests (#461)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
@@ -90,6 +97,67 @@ class DeprecationRegistryGeneratorBaseDirTest {
                 .as("readPomDocument(Path) must read the pom.xml under the given base directory, "
                         + "not whatever pom.xml the JVM's actual working directory happens to hold")
                 .isEqualTo(sentinelVersion);
+    }
+
+    @Test
+    @DisplayName("WR-01: run(Path) writes the ledger files under the given base directory only - "
+            + "the real repository's own tracked compatibility/ files are byte-for-byte unchanged afterward")
+    void runWritesLedgerFilesUnderGivenBaseDirOnly(@TempDir Path tempProjectRoot) throws Exception {
+        Files.write(tempProjectRoot.resolve("pom.xml"), (
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                        + "<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n"
+                        + "    <modelVersion>4.0.0</modelVersion>\n"
+                        + "    <groupId>com.example</groupId>\n"
+                        + "    <artifactId>wr01-fixture</artifactId>\n"
+                        + "    <version>1.0.0-SNAPSHOT</version>\n"
+                        + "</project>\n").getBytes(StandardCharsets.UTF_8));
+
+        Path srcPkg = tempProjectRoot.resolve("src/main/java/com/example/wr01");
+        Files.createDirectories(srcPkg);
+        Files.write(srcPkg.resolve("Simple.java"), (
+                "package com.example.wr01;\n"
+                        + "public class Simple {\n"
+                        + "}\n").getBytes(StandardCharsets.UTF_8));
+
+        Path japicmpDir = tempProjectRoot.resolve("target/japicmp");
+        Files.createDirectories(japicmpDir);
+        Files.write(japicmpDir.resolve("japicmp.xml"), (
+                "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
+                        + "<japicmp accessModifier=\"PROTECTED\">\n"
+                        + "    <classes>\n"
+                        + "        <class binaryCompatible=\"true\" changeStatus=\"UNCHANGED\" "
+                        + "fullyQualifiedName=\"com.example.wr01.Simple\" "
+                        + "javaObjectSerializationCompatible=\"NOT_SERIALIZABLE\" sourceCompatible=\"true\"/>\n"
+                        + "    </classes>\n"
+                        + "</japicmp>\n").getBytes(StandardCharsets.UTF_8));
+
+        // Snapshot the REAL repository's own tracked ledger files before running - this test's
+        // whole point is proving run(Path) never touches them when given an unrelated baseDir.
+        Path realLedgerJson = Paths.get("compatibility", "deprecations.json");
+        Path realLedgerMarkdown = Paths.get("compatibility", "DEPRECATIONS.md");
+        byte[] realJsonBefore = Files.readAllBytes(realLedgerJson);
+        byte[] realMarkdownBefore = Files.readAllBytes(realLedgerMarkdown);
+
+        DeprecationRegistryGenerator.run(tempProjectRoot);
+
+        assertThat(Files.readAllBytes(realLedgerJson))
+                .as("run(Path) must never write to the real repository's tracked compatibility/deprecations.json "
+                        + "when given an unrelated temporary base directory")
+                .isEqualTo(realJsonBefore);
+        assertThat(Files.readAllBytes(realLedgerMarkdown))
+                .as("run(Path) must never write to the real repository's tracked compatibility/DEPRECATIONS.md "
+                        + "when given an unrelated temporary base directory")
+                .isEqualTo(realMarkdownBefore);
+
+        Path writtenJson = tempProjectRoot.resolve("compatibility/deprecations.json");
+        Path writtenMarkdown = tempProjectRoot.resolve("compatibility/DEPRECATIONS.md");
+        assertThat(writtenJson).as("the ledger JSON must land under the given base directory").exists();
+        assertThat(writtenMarkdown).as("the ledger markdown must land under the given base directory").exists();
+        // Simple.java carries no @Deprecated annotation, so the ledger is legitimately empty - the
+        // point here is that these two files exist, are valid, and are NOT the real repository's
+        // own 55-entry ledger (which would prove baseDir was silently ignored in favour of cwd).
+        String jsonContent = new String(Files.readAllBytes(writtenJson), StandardCharsets.UTF_8).trim();
+        assertThat(jsonContent).isEqualTo("[]");
     }
 
     private static String projectVersion(Document doc) {
