@@ -305,6 +305,15 @@ public class PluginDependencyResolver {
      * change introduces (resolution already picked "whichever came first" before this fix), and
      * not addressed here deliberately - sorting the upstream list would itself be a load-order
      * behaviour change on existing installs, requiring its own decision. Tracked as #476.
+     * <p>
+     * <b>Gate-2 Codex finding, PR #478 round 1:</b> the naive "first plugin.yml declarer wins"
+     * answer is wrong whenever the colliding name ALSO equals some other node's own simple class
+     * name - {@link #buildAliasMap}'s FIRST loop claims every simple class name as its own alias
+     * before any {@code plugin.yml} {@code name:} is considered at all, so that OTHER node wins
+     * outright and none of the {@code plugin.yml} declarers do, regardless of their discovery
+     * order among themselves. This method now checks {@code nodes.containsKey(ymlName)} (keyed
+     * by simple class name) before falling back to "first declarer", so the reported winner
+     * always matches what {@link #buildAliasMap} actually produces.
      */
     private void warnOnDuplicatePluginYmlNames(Map<String, PluginNode> nodes) {
         Map<String, List<String>> declaringModulesByYmlName = new LinkedHashMap<>();
@@ -319,12 +328,18 @@ public class PluginDependencyResolver {
         for (Map.Entry<String, List<String>> entry : declaringModulesByYmlName.entrySet()) {
             List<String> declaringModules = entry.getValue();
             if (declaringModules.size() > 1) {
+                String ymlName = entry.getKey();
+                boolean claimedBySimpleClassName = nodes.containsKey(ymlName);
+                String winner = claimedBySimpleClassName ? ymlName : declaringModules.get(0);
+                String winnerReason = claimedBySimpleClassName
+                    ? "a module class literally named '" + ymlName + "', which always claims "
+                        + "this alias before any plugin.yml name: is considered"
+                    : "the module discovered first";
                 logger.warning(String.format(
                     "[UltiTools-API] Multiple modules declare the same plugin.yml name '%s': "
-                        + "%s. Dependency resolution will resolve this name to '%s' (the module "
-                        + "discovered first); rename one module's plugin.yml name: to remove "
-                        + "the ambiguity.",
-                    entry.getKey(), declaringModules, declaringModules.get(0)));
+                        + "%s. Dependency resolution will resolve this name to '%s' (%s); rename "
+                        + "one module's plugin.yml name: to remove the ambiguity.",
+                    ymlName, declaringModules, winner, winnerReason));
             }
         }
     }
