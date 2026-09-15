@@ -1104,6 +1104,24 @@ public class PluginManager {
                     Bukkit.getLogger().log(Level.WARNING, String.format(
                             "[UltiTools-API] %s failed to unregister cleanly after a failed load！",
                             plugin.getPluginName()));
+                    // Gate-2 Codex finding (PR #478 round 1): unregister(plugin)'s own final
+                    // statement is plugin.getContext().close() -- an earlier step throwing (e.g.
+                    // unregisterSelf() above) means that call never ran. This plugin is about to
+                    // be removed from pluginList in the finally block below, so close() must run
+                    // here, independently, or PluginManager.close() can never retry teardown for
+                    // it again and the container/beans/classloader stay referenced for the rest
+                    // of the server run.
+                    try {
+                        if (plugin.getContext() != null) {
+                            plugin.getContext().close();
+                        }
+                    } catch (Exception | Error closeFailure) {
+                        Bukkit.getLogger().log(Level.WARNING, closeFailure, String::new);
+                        Bukkit.getLogger().log(Level.WARNING, String.format(
+                                "[UltiTools-API] %s's container also failed to close during that "
+                                        + "same teardown failure！",
+                                plugin.getPluginName()));
+                    }
                 } finally {
                     pluginList.remove(plugin);
                 }
