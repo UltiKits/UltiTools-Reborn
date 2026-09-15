@@ -67,7 +67,6 @@ class CommandManagerKnownCommandsCleanupTest {
 
     private static final String FALLBACK_PREFIX = "ultitools";
 
-    private ServerMock server;
     private CommandManager commandManager;
     private UltiToolsPlugin mockPlugin;
     private SimpleCommandMap realCommandMap;
@@ -76,7 +75,7 @@ class CommandManagerKnownCommandsCleanupTest {
     @BeforeEach
     void setUp() {
         MockBukkitHelper.ensureCleanState();
-        server = MockBukkit.mock();
+        ServerMock server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
 
         TestHelper.mockUltiToolsInstance(ultiTools -> {
@@ -268,7 +267,6 @@ class CommandManagerKnownCommandsCleanupTest {
             // command take the bare label while our namespaced key stays ours. This is the
             // exact scenario a naive "remove every entry whose KEY starts with our label"
             // fix would get wrong: it would also strip the other owner's live command.
-            CommandExecutor foreignExecutor = mock(CommandExecutor.class);
             Command foreignCommand = mock(Command.class);
             when(foreignCommand.getName()).thenReturn("shared");
             realCommandMap.getKnownCommands().put("shared", foreignCommand);
