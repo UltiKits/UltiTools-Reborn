@@ -94,39 +94,38 @@ public final class RemovalConsistencyEvaluator {
         // implementation or insertion order.
         Set<RegistryKey> sortedExcludeKeys = new TreeSet<>(excludeKeys);
 
+        // #461/WR-03: an EMPTY report unconditionally means "no comparison ran" - a real japicmp
+        // run against this codebase reports tens of thousands of entries (UNCHANGED classes
+        // included, not merely changed ones - measured: 331 <class> elements alone in a real
+        // report against this repository), so an empty report.entries() can only mean the report is
+        // missing or unreadable (e.g. target/japicmp/japicmp.xml absent, or two `mvn clean verify`
+        // invocations racing in the same tree), never a legitimately clean comparison with nothing
+        // to say. Reported once here, unconditionally - regardless of what excludeKeys or registry
+        // happen to contain - rather than only when at least one member-level exclude would
+        // otherwise have depended on the report: "no comparison ran" is itself worth surfacing even
+        // when nothing this particular call was given happens to need it (a widening from the
+        // narrower, registry-coverage-gated version of this guard - see the review this fixes).
+        boolean reportIsEmpty = report.entries().isEmpty();
+        if (reportIsEmpty) {
+            findings.add(Finding.reportMissingOrEmpty());
+        }
+
         // D-01 staleness: a member-level exclude key with no registry entry AND no visible trace
         // in the report - neither the exact key nor its enclosing class - protects nothing
-        // discoverable. Whole-class excludes are exempt (see class javadoc).
-        //
-        // #461: an EMPTY report means japicmp had nothing to compare against at all (a missing or
-        // unreadable target/japicmp/japicmp.xml) - nothing can be confirmed either stale or current
-        // in that state. Flagging every not-yet-registered member-level exclude as stale here is
-        // exactly backwards: it turns one infrastructure problem into N false compatibility
-        // findings. Collect one REPORT_MISSING_OR_EMPTY finding instead of running the per-key
-        // check, but only when at least one member-level key would actually have needed the report
-        // for corroboration (i.e. is not already registry-tracked) - a key the registry already
-        // covers needed nothing from the report either way, exactly as with a non-empty report.
-        boolean reportIsEmpty = report.entries().isEmpty();
-        boolean anyUnresolvableMemberLevelExclude = false;
+        // discoverable. Whole-class excludes are exempt (see class javadoc). Skipped entirely when
+        // the report is empty - the single REPORT_MISSING_OR_EMPTY finding above already covers
+        // that state; running this loop too would turn one infrastructure problem into N additional
+        // false compatibility findings on top of it, exactly the original #461 defect.
         for (RegistryKey key : sortedExcludeKeys) {
-            if (key.isClassLevel()) {
+            if (key.isClassLevel() || reportIsEmpty) {
                 continue;
             }
             boolean inRegistry = registryByKey.containsKey(key.toString());
-            if (reportIsEmpty) {
-                if (!inRegistry) {
-                    anyUnresolvableMemberLevelExclude = true;
-                }
-                continue;
-            }
             boolean keyVisible = report.entries().containsKey(key);
             boolean enclosingClassVisible = report.entries().containsKey(RegistryKey.forClass(key.getClassName()));
             if (!inRegistry && !keyVisible && !enclosingClassVisible) {
                 findings.add(Finding.staleExclusion(key));
             }
-        }
-        if (reportIsEmpty && anyUnresolvableMemberLevelExclude) {
-            findings.add(Finding.reportMissingOrEmpty());
         }
 
         // D-01 coverage: a report REMOVED key with no exclude entry and no registry entry is an
