@@ -197,6 +197,8 @@ class GuiSchedulerTest {
                 wrapped.run(); // simulate Bukkit actually invoking the deferred task
                 return null;
             });
+            Logger mockLogger = mock(Logger.class);
+            when(mockPlugin.getLogger()).thenReturn(mockLogger);
 
             ErrorReportCollector collector = new ErrorReportCollector();
             TestHelper.mockUltiToolsInstance(ultiTools ->
@@ -214,6 +216,12 @@ class GuiSchedulerTest {
                     "the deferred task's RenderDepthExceededException must still reach "
                             + "ErrorReportCollector even though nothing in this thread can "
                             + "observe it any other way");
+            // Gate-2 Codex finding (round 2, PR #478): before this fix, the deferred exception
+            // escaped the wrapped Runnable and Bukkit's OWN scheduler logged it to console.
+            // Catching it here to report it must not make that console diagnostic disappear --
+            // an unavailable/disabled collector would otherwise make the failure completely
+            // silent, and even a working collector produced no server-console line at all.
+            verify(mockLogger).warning(contains("Error executing GUI frame task"));
         }
     }
 
