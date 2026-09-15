@@ -79,7 +79,7 @@ class UltiToolsPluginInitConfigRollbackTest {
         assertThatThrownBy(() -> invokeInitConfig(mockPlugin))
                 .hasRootCauseInstanceOf(ConfigurationException.class);
 
-        Map<String, com.ultikits.ultitools.abstracts.AbstractConfigEntity> configs =
+        Map<String, AbstractConfigEntity> configs =
                 configManager.getAllConfigEntities(mockPlugin);
         assertThat(configs == null || configs.isEmpty())
                 .as("pkga's entry (registered by the first registerAll() call in the loop) must "
