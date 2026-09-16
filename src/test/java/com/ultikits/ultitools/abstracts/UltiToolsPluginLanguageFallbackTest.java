@@ -633,6 +633,54 @@ class UltiToolsPluginLanguageFallbackTest {
     }
 
     @Test
+    @DisplayName("D-05 branch 1, write failure: the placeholder-arity guard still applies to the "
+            + "stale disk value when the refresh is skipped, so it cannot throw "
+            + "MissingFormatArgumentException at format time (UltiToolsPlugin.java:498, review "
+            + "thread PRRT_kwDOIcF9Es6i1d_q, P2)")
+    void writeFailureStillAppliesPlaceholderArityOverrideToTheStaleValue() throws Throwable {
+        // The reviewer's own comment named the wrong failure direction: String.format silently
+        // ignores an EXTRA argument, so a bundled value GAINING a placeholder never throws when
+        // formatted against a narrower stale disk value. The real throwing direction is the
+        // opposite -- the bundled value LOSES a placeholder (jar now has one, disk still has two)
+        // while the call site now supplies only one argument, and the stale two-placeholder disk
+        // value is the one left active if the arity guard is skipped on a failed refresh.
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"greeting\":\"Hi %s\"}", "{\"greeting\":\"Hi %s (%s)\"}");
+        File diskFile = new File(fixture.resourceFolder, "lang" + File.separator + "en.json");
+        File langDir = diskFile.getParentFile();
+        byte[] originalBytes = Files.readAllBytes(diskFile.toPath());
+        String originalHash = ResourceHashSidecar.sha256(diskFile);
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", originalHash);
+
+        // Same fault-injection idiom as overwriteWriteFailureDoesNotRecordJarHashOrLogSuccess:
+        // the write-then-atomic-move implementation needs the CONTAINING DIRECTORY's write
+        // permission to stage its temp file, so removing it forces writeBytes(...) to return
+        // false without touching the target file's own bytes -- landing branch 1 in exactly the
+        // "refresh skipped" state the reported finding describes.
+        assertThat(langDir.setWritable(false)).isTrue();
+        try {
+            Language language = resolveProvenanceLanguage(fixture);
+
+            // The disk file itself must be byte-unchanged -- this fix must never be mistaken for
+            // "write anyway"; the guard applies to the VALUE handed back to the caller, not to
+            // what is (or is not) persisted to disk.
+            assertThat(Files.readAllBytes(diskFile.toPath())).isEqualTo(originalBytes);
+
+            String resolved = language.getLocalizedText("greeting");
+            // Before the fix: `resolved` is the stale, wider disk value "Hi %s (%s)" (branch 1
+            // returned readLanguageFile(...) unconditionally, skipping the arity override
+            // entirely on a failed write). Formatting it with the single argument the
+            // now-one-placeholder call site supplies throws MissingFormatArgumentException --
+            // this is the RED evidence for this test. After the fix, the arity mismatch (disk=2,
+            // jar=1) is caught and the value is overridden to the bundled "Hi %s", so formatting
+            // with one argument succeeds and yields the bundled text.
+            assertThat(String.format(resolved, "Alice")).isEqualTo("Hi Alice");
+        } finally {
+            langDir.setWritable(true);
+        }
+    }
+
+    @Test
     @DisplayName("disk hash read failure (e.g. an unreadable path or accidentally a directory) does "
             + "not abort module startup -- degrades to a best-effort read instead (Codex round 1, P1)")
     void diskHashReadFailureDoesNotAbortResolution() throws Throwable {

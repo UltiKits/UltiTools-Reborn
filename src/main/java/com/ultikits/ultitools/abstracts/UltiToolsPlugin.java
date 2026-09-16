@@ -495,7 +495,24 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                                 + "its provenance record was not updated.", e);
                     }
                 }
-                return readLanguageFile(file, extension);
+                // Codex round on UltiToolsPlugin.java:498 (P2): this used to be an unconditional
+                // readLanguageFile(...), skipping the per-key placeholder-arity guard on EXACTLY
+                // the paths where a stale value is most likely -- writeBytes(file, jarBytes)
+                // returning false (read-only file, symlink, unpreservable ownership, or an I/O
+                // failure mid-write) leaves the OLD disk bytes in place while jarBytes has already
+                // moved on, so a key whose bundled arity shrank (two placeholders -> one) can
+                // still carry the old, wider disk value here. The corrected failure direction
+                // (the reviewer's own comment named the opposite, non-throwing direction): a
+                // stale disk value with MORE placeholders than the call site now supplies throws
+                // java.util.MissingFormatArgumentException at format time -- extra bundled
+                // arguments over a narrower stale value are silently ignored by String.format, not
+                // an error. Applying the override here UNCONDITIONALLY -- not only on the
+                // writeBytes-failed branch -- means the write's own outcome stops mattering for
+                // this guarantee: when the write succeeded, disk and jar bytes are now identical,
+                // so every key's arity trivially matches and this is a no-op past the extra
+                // parse; when it failed, this is precisely the protection this method exists to
+                // provide.
+                return applyPlaceholderArityOverride(file, jarBytes, extension, resourcePath);
             }
             // Branch 2: operator customisation -> leave the disk file alone.
             return applyPlaceholderArityOverride(file, jarBytes, extension, resourcePath);
