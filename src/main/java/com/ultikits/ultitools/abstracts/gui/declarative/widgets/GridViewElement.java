@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.abstracts.gui.declarative.widgets;
 
 import com.ultikits.ultitools.abstracts.gui.declarative.core.Element;
+import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderDepthGuard;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderNode;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderObjectElement;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.Widget;
@@ -72,6 +73,12 @@ public class GridViewElement extends Element {
 
     @Override
     public void performRebuild() {
+        // Guarded by RenderDepthGuard (T-05-62 / #371): this GridViewElement's OWN
+        // Element-tree depth, not the child loop's index -- a tree deep enough (through this
+        // GridView, or through a deeper GridView/Container ancestor) raises
+        // RenderDepthExceededException here rather than overflowing the JVM stack mid-frame.
+        RenderDepthGuard.check("GridViewElement.performRebuild", RenderDepthGuard.depthOf(this));
+
         for (Element child : childElements) {
             if (child.isDirty()) {
                 child.performRebuild();
@@ -143,6 +150,11 @@ public class GridViewElement extends Element {
     }
 
     private static void collectRenderNodeLeaves(@NotNull Element element, @NotNull List<RenderNode> out) {
+        // Guarded by RenderDepthGuard (T-05-62 / #371) -- see performRebuild's javadoc above.
+        // This is the walk the original finding names as the newly-added, unbounded one (#3 of
+        // the four): a nested Container inside a single GridView cell has no ceiling here today.
+        RenderDepthGuard.check("GridViewElement.collectRenderNodeLeaves", RenderDepthGuard.depthOf(element));
+
         if (element instanceof RenderObjectElement) {
             out.add(((RenderObjectElement) element).getRenderNode());
         }

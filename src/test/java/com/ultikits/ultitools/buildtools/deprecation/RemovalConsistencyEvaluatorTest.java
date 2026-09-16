@@ -296,7 +296,7 @@ class RemovalConsistencyEvaluatorTest {
             // REMOVED for the same key - RegistryLedger.merge (07-02) is the sole owner of this
             // agreement rule; this evaluator reuses its output rather than re-deriving it.
             RegistryLedger merged = RegistryLedger.merge(prior, Collections.emptyList(),
-                    new HashSet<>(Collections.singletonList(key)));
+                    new HashSet<>(Collections.singletonList(key)), "6.3.0");
 
             assertThat(merged.entries()).hasSize(1);
             assertThat(merged.entries().get(0).getStatus()).isEqualTo(DeprecationEntry.Status.REMOVED);
@@ -317,7 +317,7 @@ class RemovalConsistencyEvaluatorTest {
             RegistryKey key = RegistryKey.forMember("com.ultikits.ultitools.Foo", "bar", Collections.emptyList());
             RegistryLedger prior = RegistryLedger.of(Collections.singletonList(announcedEntry(key, "6.3.0")));
 
-            assertThatThrownBy(() -> RegistryLedger.merge(prior, Collections.emptyList(), Collections.emptySet()))
+            assertThatThrownBy(() -> RegistryLedger.merge(prior, Collections.emptyList(), Collections.emptySet(), "6.3.0"))
                     .isInstanceOf(LedgerMergeConflictException.class);
         }
 
@@ -329,7 +329,7 @@ class RemovalConsistencyEvaluatorTest {
             DeprecationEntry stillDeclared = announcedEntry(key, "6.3.0");
 
             assertThatThrownBy(() -> RegistryLedger.merge(prior, Collections.singletonList(stillDeclared),
-                    new HashSet<>(Collections.singletonList(key))))
+                    new HashSet<>(Collections.singletonList(key)), "6.3.0"))
                     .isInstanceOf(LedgerMergeConflictException.class);
         }
 
@@ -339,7 +339,7 @@ class RemovalConsistencyEvaluatorTest {
             RegistryKey key = RegistryKey.forMember("com.ultikits.ultitools.Foo", "bar", Collections.emptyList());
             RegistryLedger prior = RegistryLedger.of(Collections.singletonList(announcedEntry(key, "6.3.0")));
             RegistryLedger merged = RegistryLedger.merge(prior, Collections.emptyList(),
-                    new HashSet<>(Collections.singletonList(key)));
+                    new HashSet<>(Collections.singletonList(key)), "6.3.0");
 
             List<RemovalConsistencyEvaluator.Finding> findings =
                     RemovalConsistencyEvaluator.evaluate(Collections.emptySet(), JapicmpReportReader.Report.empty(), merged, "6.2.5");

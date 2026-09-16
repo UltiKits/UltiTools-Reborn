@@ -102,8 +102,9 @@ below). The row below therefore cites `#handleHelp`, the method that actually ex
 |---|---|---|---|---|---|---|---|---|
 | ultitools.ul.help | Print the /ul command usage summary | command | `/ul help` | none (requireOp=true) | both | admin | brief | UltiToolsCommands#handleHelp |
 | ultitools.ul.list | List every currently loaded module and its version | command | `/ul list` | none (requireOp=true) | both | admin | brief | UltiToolsCommands#listPlugins |
-| ultitools.ul.reload | Reload every loaded module | command | `/ul reload` | none (requireOp=true) | both | admin | brief | UltiToolsCommands#reloadPlugins |
-| ultitools.ul.reload-module | Reload a single named module | command | `/ul reload <name>` | none (requireOp=true) | both | admin | brief | UltiToolsCommands#reloadPlugin |
+| ultitools.ul.reload | Reload every loaded module; the framework logs one INFO console line per module reloaded, and any module reload work now runs in that module's `onReload()` hook after the framework's own config/language/drift steps (D-01/D-02/D-03) | command | `/ul reload` | none (requireOp=true) | both | admin | brief | UltiToolsCommands#reloadPlugins |
+| ultitools.ul.reload-module | Reload a single named module; the framework logs one INFO console line for that module, and any module reload work now runs in its `onReload()` hook after the framework's own config/language/drift steps (D-01/D-02/D-03) | command | `/ul reload <name>` | none (requireOp=true) | both | admin | brief | UltiToolsCommands#reloadPlugin |
+| ultitools.ul.reload-log-line | The framework itself logs exactly one INFO console line naming each module, immediately after that module's own config-reload/language-refresh/drift-report steps and before its `onReload()` hook runs — produced by the framework's own `lang/en.json`/`lang/zh.json` catalogue, never by the module (D-03) | gate | automatic, once per module, during `/ul reload` or `/ul reload <name>` | n/a | n/a | admin | brief | UltiToolsPlugin#reloadSelf |
 
 ## /upm — plugin management
 
@@ -171,11 +172,11 @@ session.
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
-| ultitools.boot.plugin-load-order | Order module loading by declared dependencies (Kahn's topological sort); a cycle or a missing hard dependency excludes only the affected module(s), not the whole load | event | console log during server startup | n/a | n/a | admin | brief | PluginManager#sortPluginsByDependencies |
+| ultitools.boot.plugin-load-order | Order module loading by declared dependencies (Kahn's topological sort); a cycle or a missing hard dependency excludes only the affected module(s), not the whole load. Fixed in 6.3.0 (UltiKits/UltiTools-Reborn#361): a module declaring several missing hard dependencies is named all of them in one message, not just the first; and two installed modules declaring the same `plugin.yml` `name:` produce a WARNING naming both sources and which one dependency resolution resolves the name to, instead of silently picking whichever was discovered first with nothing logged | event | console log during server startup | n/a | n/a | admin | brief | PluginManager#sortPluginsByDependencies |
 | ultitools.boot.plugin-load-order-legacy | Opt-in JVM system property that bypasses dependency resolution entirely and loads modules in filesystem order, modeled on Paper's own `-Dpaper.useLegacyPluginLoading=true` precedent | event | `-Dultitools.useLegacyPluginLoading=true` on the server's launch command line | n/a | n/a | internal | brief | PluginManager#sortPluginsByDependencies |
 | ultitools.boot.update-check | Check for a newer framework version and newer module versions once, asynchronously, shortly after startup | event | console log during server startup | n/a | n/a | admin | none | UpdateManager#checkUpdatesSync |
 | ultitools.listener.placeholderapi-bridge | On a player's first join needing an unregistered PlaceholderAPI expansion, download and reload it automatically | event | join the server as any player while PlaceholderAPI is installed | n/a | n/a | internal | none | PlayerJoinListener#onPlayerJoin |
-| ultitools.listener.update-notify | Notify an OP player once per connection, on join, if a framework or module update is available. `UpdateJoinListener`'s own javadoc claims "once per server session", but `PlayerCacheManager#onPlayerQuit` clears the backing `@PlayerCache` set on every quit, so a quit and rejoin re-sends the notification within the same session — a known product defect (UltiKits/UltiTools-Reborn#431), not the intended behaviour | event | join the server as an OP player after ultitools.boot.update-check has found an update | n/a | n/a | admin | none | UpdateJoinListener#onPlayerJoin |
+| ultitools.listener.update-notify | Notify an OP player once per server session, on join, if a framework or module update is available. Fixed in 6.3.0 (UltiKits/UltiTools-Reborn#431): `notifiedPlayers` is no longer `@PlayerCache`-annotated, so `PlayerCacheManager#onPlayerQuit` does not clear it, and a quit-and-rejoin within the same server run does not re-send the notification — matching `UpdateJoinListener`'s own javadoc claim. A restart (a new `UpdateManager` instance) does notify again | event | join the server as an OP player after ultitools.boot.update-check has found an update | n/a | n/a | admin | none | UpdateJoinListener#onPlayerJoin |
 
 **Reconciliation note (D-07):** the line-start form of the canonical command reports exactly one
 `@EventListener` site in this repository (`PlayerJoinListener`) against five `event`-Kind rows
@@ -191,6 +192,21 @@ same way: a direct `Bukkit.getPluginManager().registerEvents(...)` call inside
 `ultitools.boot.update-check`) are not driven by any annotation at all and reconcile against
 nothing, because module load-order (in either its resolved or legacy-bypass form) and the update
 check have no annotation-based instrument in this codebase.
+
+## Economy
+
+New in this section (D-08/D-09, #451, 6.3.0): before this, a module requesting the economy on a
+server with no Vault plugin — or with Vault present but no economy provider registered — crashed
+the entire framework at boot, before the request itself could even fail. Kept `event`-Kind and
+placed in its own section rather than folded into "Boot sequence and listeners" above, since
+neither row here is driven by a Bukkit event or an `@Scheduled`/`@EventListener` annotation the
+way every row in that section's own reconciliation note accounts for — both are triggered by an
+`EconomyUtils` call from module code, not by anything Bukkit dispatches.
+
+| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
+|---|---|---|---|---|---|---|---|---|
+| ultitools.economy.report-startup-state | Log one line at framework start naming the current economy service state — Vault not installed, Vault installed but no provider registered, or hooked into Vault naming the registered provider | event | console log during server startup | n/a | n/a | admin | none | EconomyUtils#logStartupState |
+| ultitools.economy.report-unavailable | On a module's first economy request while unavailable, log one WARNING per calling module per server session naming the module, distinguishing "Vault is not installed" from "Vault is installed but no provider is registered", stating the condition is the server's environment rather than a framework or module defect, and giving the install instruction. A request whose calling module cannot be attributed is still logged once, as an unknown caller | event | any module calls an `EconomyUtils` operation (`getBalance`, `has`, `deposit`, `withdraw`, `format`, `getCurrencyName`, `getCurrencyNamePlural`) while Vault is absent or has no registered provider | n/a | n/a | admin | none | EconomyUtils#reportEconomyStateIfUnavailable |
 
 ## Scheduled tasks
 
@@ -212,6 +228,8 @@ check have no annotation-based instrument in this codebase.
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
+| ultitools.language.file-preserve | An `UltiToolsPlugin` module's extracted `lang/<code><ext>` file that has been customised since extraction (its bytes no longer match the recorded provenance hash, or no provenance was ever recorded and its bytes differ from the jar's) is never overwritten; only the individual keys whose `String.format` placeholder arity (distinct argument positions, `%s`/`%d`-style) differs from the jar's bundled value for that key are resolved from the jar instead, each logged once as a WARN naming the module, file and key (D-05/D-06, #441) | gate | any loaded module's `plugins/UltiTools/pluginConfig/<module>/lang/<code><ext>` file, hand-edited after extraction, with the module jar later shipping a changed placeholder count for one of the edited keys — observed on the module's next start | n/a | n/a | admin | brief | UltiToolsPlugin#applyPlaceholderArityOverride |
+| ultitools.language.file-refresh | An `UltiToolsPlugin` module's extracted `lang/<code><ext>` file that has never been modified since extraction (its bytes still match the recorded provenance hash, or no provenance was recorded but its bytes already equal the jar's) is silently replaced by the current module jar's bundled copy on the next start, with one informative log line naming the file (D-05/D-06/D-07, #441) | gate | any loaded module's `plugins/UltiTools/pluginConfig/<module>/lang/<code><ext>` file, left untouched since extraction, with the module jar upgraded to a version shipping different `lang/<code><ext>` content — observed on the module's next start | n/a | n/a | admin | brief | UltiToolsPlugin#resolveLanguageWithProvenance |
 | ultitools.language.select | Choose the framework's message language (`zh` or `en`) via `config.yml`, applied on next start or `/ul reload` | gate | `language` in `plugins/UltiTools/config.yml`, applied on next start or `/ul reload` — unlike `datasource.type` above, `UltiTools#reloadPlugins` runs `reloadConfig()` then `initLanguage()`, so a reload alone is sufficient | n/a | n/a | admin | brief | UltiTools#initLanguage |
 
 ## Panel capabilities
@@ -231,6 +249,34 @@ funnels through the same `Capability#isEnabled()` accessor.
 | ultitools.capability.player-events | Allow the panel to receive live player events — join, quit, chat, death, kick, command preprocessing, and world change, seven distinct `PlayerEventManager` handlers each with their own `event_type` value and payload shape, not just join/quit/chat; ships enabled | gate | `ultipanel.capabilities.player-events` in config.yml | n/a | n/a | admin | brief | Capability#PLAYER_EVENTS |
 | ultitools.capability.server-properties | Allow the panel to read and edit the `server.properties` safe-key whitelist; ships disabled | gate | `ultipanel.capabilities.server-properties` in config.yml | n/a | n/a | admin | brief | Capability#SERVER_PROPERTIES |
 
+## Live log stream controls
+
+Three panel-facing controls over the `log_stream`/`config` WebSocket actions, gated by the
+`ultipanel.capabilities.logs` capability above. All three were declared controls that reported
+acceptance and changed nothing before this pull request; each is now proven by a test that fails
+when its fix is removed (#432, #433, #434).
+
+| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
+|---|---|---|---|---|---|---|---|---|
+| ultitools.remote.log-stream-pause | The `log_stream` action `pause`/`resume` is rejected outright, not implemented: the delivery messages (`log_stream`/`log_batch`) carry no per-viewer address, so the framework cannot honour a per-viewer pause without server-side viewer identity it does not have; the response states that pausing the live view is the panel view's own action and that the server keeps streaming to every subscribed client regardless (#434 closed — the declaration is removed rather than made to work; D-19). The public `LogStreamManager#pauseLogStream(String)`/`#resumeLogStream(String)` methods were removed in the same change — see `COMPATIBILITY.md` | gate | `log_stream` panel message with `action: "pause"`/`"resume"` | n/a | n/a | admin | brief | LogStreamManager#handleLogStreamMessage |
+| ultitools.remote.log-stream-levels | The `config` action's `levels` list actually filters which log levels are delivered, instead of only logging that a request was received; an unrecognised level name is rejected naming the value, with the previously-applied levels left unchanged (#433 fixed). Enabling `"debug"` also lowers `SystemLogHandler`'s own `java.util.logging` level floor (was stuck at `Level.INFO`, rejecting `FINE`/`FINER`/`FINEST` records before the levels check ever ran) so debug-level records are actually reachable, not just nominally accepted (Gate-2 finding, fixed) | gate | `log_stream` panel message with `action: "config"`, field `levels` (array of `info`/`warning`/`error`/`debug`) | n/a | n/a | admin | brief | LogStreamManager#handleConfigUpdate |
+| ultitools.remote.log-stream-batch-interval | The `config` action's `batchConfig.interval` field actually reschedules the running batch sender to the new interval, instead of only mutating a field the already-running scheduled task never re-reads (#432 fixed, both halves — see the `ultipanel.logging.batch.interval` config row). Honoured to within one second even when `ultipanel.capabilities.monitoring` is enabled (the shipped default): `ServerMonitorManager`'s own independent 5-second `batch_update` tick used to drain the queue regardless of the configured interval, making the panel action's effect invisible in the default configuration; a first fix gated the drain by the configured interval but the check itself still only ran on that same 5-second tick, quantizing any accepted interval up to a multiple of 5 seconds (1000ms drained no faster than every 5s; 7000ms drained roughly every 10s) — a second, independently-scheduled 1-second check (`ServerMonitorManager#maybeSendLogsOnly`, sharing the same interval gate) now drains and sends a logs-only `batch_update` as soon as the configured interval elapses, honoured to within one second rather than five (Gate-2 findings, fixed). `batchConfig.size` below 1 is now rejected (previously silently stalled delivery — a size ≤ 0 made every enqueue trigger an immediate no-op send), and disabling batching (`batchConfig.enabled: false`) now flushes whatever is already queued first instead of stranding it until batching is re-enabled (both Gate-2 findings, fixed). A `levels` field present but not a JSON array is now rejected outright rather than silently ignored while an accompanying `batchConfig` still applied (Gate-2 finding, fixed) | gate | `log_stream` panel message with `action: "config"`, field `batchConfig.interval`/`batchConfig.size`/`batchConfig.enabled` | n/a | n/a | admin | brief | UltiPanelLogTransmitter#setIntervalMs, ServerMonitorManager#sendBatchUpdate, ServerMonitorManager#maybeSendLogsOnly |
+| ultitools.remote.error-auto-report | Automatic `ErrorReportCollector` reporting of `SEVERE`-with-`Throwable` log records to UltiPanel is independent of the panel's own live `log_stream` view: excluding `"error"` from the `levels` filter (or the stream being paused, when pause is later supported) suppresses only what the live view shows, never the separate automatic error-reporting pipeline — the two are declared as distinct surfaces (CR-01/CR-02 from this phase's own review, fixed as part of making the `levels` filter genuinely effective) | gate | any `SEVERE` log record carrying a `Throwable`, regardless of the panel's `levels` configuration | n/a | n/a | admin | none | SystemLogHandler#publish |
+| ultitools.remote.log-stream-start-stop | Addendum (D-20, issue #468): the `log_stream` action `start`/`stop` is rejected outright, the same as `pause`/`resume` above — measured end to end, the shipped frontend only ever toggles `start`/`stop` from its own button without gating rendering on the response, the Worker's REST log-stream endpoint is a stateless relay minting a disposable `clientId` per call with no per-browser stream state, and this framework's own `stopLogStream` mutated only bookkeeping nothing on the delivery path ever consulted — `stop` never actually stopped delivery for any real client, on any released version. The public `LogStreamManager#startLogStream(String, String)`/`#startLogStream(String)`/`#stopLogStream(String)`/`#isStreaming()`/`#getSubscriberCount()` methods were removed in the same change — see `COMPATIBILITY.md` | gate | `log_stream` panel message with `action: "start"`/`"stop"` | n/a | n/a | admin | brief | LogStreamManager#handleLogStreamMessage |
+| ultitools.remote.log-stream-status | Addendum (D-20, issue #468): the `log_stream` action `status` is read-only introspection, not a control toggle, so it is answered honestly rather than rejected — the response's `subscriberCount`/`streaming` fields (no longer backed by any bookkeeping) are replaced with a `connected` field reporting whether this server's WebSocket connection to the panel is currently up (the same fact `streaming` used to gesture at); `logTransmitterEnabled`/`queueSize` are unchanged, already backed by genuine `UltiPanelLogTransmitter` state | gate | `log_stream` panel message with `action: "status"` | n/a | n/a | admin | brief | LogStreamManager#handleLogStreamMessage |
+
+## Panel upload and metrics honesty
+
+Three declared panel-facing surfaces that answered `success` or a confident number without
+actually doing the thing they declared (#435, #436, #437, D-13/D-14). Each is now proven by a
+test that fails when its fix is removed.
+
+| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
+|---|---|---|---|---|---|---|---|---|
+| ultitools.remote.upload-config | `upload_config` accepts `plugin_config` only. A `server_properties` `configType` is rejected naming the dedicated `server_properties` message that actually handles server-properties writes; a `permissions` `configType` is rejected as unsupported — nothing in the system defines that type's semantics. Both previously logged at a hidden `FINE` level and answered `success` for a request that did nothing (#435 fixed); the unreachable `requestId`-gated branch this handler carried is also removed, since no sender anywhere in the system — panel, frontend, or Worker route — ever populates that field on this message type (#359 fixed) | gate | `upload_config` panel message, field `configType` | n/a | n/a | admin | brief | PluginInitiationUtils#handleConfigUploadLogic |
+| ultitools.remote.disk-usage | `metrics_data`'s `serverPerformance.diskUsage` is the real used percentage of the filesystem holding the server root, following `df`'s own `Use%` convention (`used = total - free` via `File#getFreeSpace`, includes filesystem-reserved space; `percentage = used / (used + avail)` via `File#getUsableSpace`, excludes it) rather than a straight `(total - usable) / total`, rounded to two decimals like the neighbouring `memoryUsage`, instead of a hardcoded `0.0` (#436 fixed; formula corrected to match `df` under WR-03 — the earlier `(total - usable) / total` formula measured roughly one point higher than `df` on a real ext4 volume with its default reserved-block allocation) | gate | `metrics_data` panel message, or observe `batch_update`'s `serverPerformance.diskUsage` | n/a | n/a | admin | brief | ServerMonitorManager#computeDiskUsage |
+| ultitools.remote.enabled-plugins | `metrics_data`'s `pluginUsage.enabledPlugins` counts only plugins whose `enabled` flag is set, instead of every plugin installed regardless of whether it actually enabled (#437 fixed) | gate | `metrics_data` panel message, or observe `batch_update`'s `pluginUsage.enabledPlugins` | n/a | n/a | admin | brief | ServerMonitorManager#countEnabledPlugins |
+
 ## Remote surface guards
 
 Guards enforced independently of, and in addition to, the capability switches above — a
@@ -241,15 +287,17 @@ unlisted `server.properties` key.
 |---|---|---|---|---|---|---|---|---|
 | ultitools.remote.command-blocklist | Refuse a remote command whose base name (namespace prefix stripped first) is on the operator-editable blocklist; ships with 10 dangerous commands blocked (`op`, `deop`, `stop`, `restart`, `reload`, `ban-ip`, `pardon-ip`, `whitelist`, `save-off`, `save-all`) | gate | `ultipanel.commands.blocklist` in config.yml | n/a | n/a | admin | detailed | CommandExecutionManager#isCommandAllowed |
 | ultitools.remote.file-editable-roots | Restrict panel file access to an operator-configured set of root directories (ships as `plugins`, `logs` only), with credential-bearing files and dangerous extensions unconditionally protected regardless of root | gate | `ultipanel.files.editable-roots` in config.yml | n/a | n/a | admin | detailed | FileOperationManager#isPathAllowed |
-| ultitools.remote.server-properties-safe-keys | Refuse to write any `server.properties` key not on the fixed safe-key whitelist (`motd`, `max-players`, `view-distance`, `simulation-distance`, `spawn-protection`, `difficulty`, `gamemode`, `pvp`, `allow-nether`, `allow-flight`, `spawn-animals`, `spawn-monsters`, `spawn-npcs`, `enable-command-block`) | gate | panel `server.properties` edit, or read `ServerPropertiesManager` source directly | n/a | n/a | admin | brief | ServerPropertiesManager#setProperty |
+| ultitools.remote.server-properties-safe-keys | Refuse to write any `server.properties` key not on the fixed safe-key whitelist (`motd`, `max-players`, `view-distance`, `simulation-distance`, `spawn-protection`, `difficulty`, `gamemode`, `pvp`, `allow-nether`, `allow-flight`, `spawn-animals`, `spawn-monsters`, `spawn-npcs`, `enable-command-block`) — a ceiling across every Paper version this framework supports, not a per-server promise. A write to a whitelisted key the RUNNING server's own `server.properties` does not have is also refused, with a reason distinguishing it from "not whitelisted" and "no properties file"; the key was previously written and answered `success` regardless of whether Paper ever reads it back (D-15, SAFE_KEYS issue, fixed). The batch `set_all` path reports the same distinction via its own `notPresentOnServer` response array, kept separate from `failed` (a genuine read/write I/O error) rather than collapsed into it (Gate-2 finding, fixed) | gate | panel `server.properties` edit, or read `ServerPropertiesManager` source directly | n/a | n/a | admin | brief | ServerPropertiesManager#setProperty |
 | ultitools.remote.server-properties-safe-keys-read | Return only the same fixed safe-key whitelist's current values, never the full `server.properties` file — a distinct code path (`handleGet`) from the write guard above, not just its mirror image | gate | `server_properties` panel message with `action: "get"` (or omitted, `get` is the default) | n/a | n/a | admin | brief | ServerPropertiesManager#handleGet |
 
 ## Configuration
 
-Every leaf key in `src/main/resources/config.yml` (44 keys, counted with
-`grep -nE '^[[:space:]]*[a-zA-Z][a-zA-Z0-9_-]*:[[:space:]]*[^[:space:]#]' src/main/resources/config.yml | wc -l`,
-the reconciliation table's counting command for this Kind) plus the two operator-relevant keys in
-`src/main/resources/env.yml` (`api-url` and `version`). This section catalogues the configuration surface exhaustively at
+Every leaf key in `src/main/resources/config.yml` (47 keys, counted with
+`grep -nE '^[[:space:]]*[a-zA-Z][a-zA-Z0-9_-]*:[[:space:]]*[^[:space:]#]' src/main/resources/config.yml | wc -l`
+— 44 plus the three `ultipanel.logging.batch.*` keys added in this same pull request, see the
+three rows below —, the reconciliation table's counting command for this Kind) plus the two
+operator-relevant keys in `src/main/resources/env.yml` (`api-url` and `version`). This section
+catalogues the configuration surface exhaustively at
 key granularity; several of these keys already have a behavioural row elsewhere in this document
 (storage backend, language, the eight panel capabilities) — that row documents the *feature* the
 key drives, this row documents the *key* itself, and both are kept so the reconciliation table
@@ -260,22 +308,34 @@ shipped `config.yml`, read directly by `Bukkit`'s `FileConfiguration`, not a bou
 against 0, with this sentence as its reason, rather than being omitted.
 
 This section carries 53 rows total (51 `ultitools.config.config.*` rows for `config.yml`, plus
-`ultitools.config.env.api-url` and `ultitools.config.env.version` for `env.yml`), not the 44 the
+`ultitools.config.env.api-url` and `ultitools.config.env.version` for `env.yml`), not the 47 the
 counting command above measures, and that divergence has a reason rather than being an omission —
 the counting command only sees `src/main/resources/config.yml`, the shipped default resource; it
 cannot see a key the framework recognises but does not ship a default for, and it was never meant
 to count `env.yml` at all (that is a second, separate file, resolved at build time from Maven
-properties rather than being a shipped default, with its own two-key row set). Seven keys are genuinely
-read by production code (`SystemLogHandler`, `LogStreamManager`, `CommandExecutionManager`,
+properties rather than being a shipped default, with its own two-key row set). Four keys are genuinely
+read by production code (`SystemLogHandler`, `CommandExecutionManager`,
 `FileOperationManager`, confirmed by reading each) but are absent from the `config.yml` resource:
 `ultipanel.commands.blocklist` and `ultipanel.files.editable-roots` are migrated onto disk on
 first boot if absent (`UltiTools#migrateKeyIfAbsent`), so a running server always has them even
-though the packaged jar's default resource does not; `ultipanel.logging.levels`,
-`ultipanel.logging.excluded-loggers`, and the three `ultipanel.logging.batch.*` keys are purely
+though the packaged jar's default resource does not; `ultipanel.logging.levels` and
+`ultipanel.logging.excluded-loggers` are purely
 opt-in — read via `FileConfiguration#contains` with a code-level fallback, present only if the
-operator adds them by hand per `config-example.yml`, and have no effect at all otherwise (except
-`batch.interval`, which has no effect regardless — see the row below and
-UltiKits/UltiTools-Reborn#432). The reconciliation-table verify command's own `keys=44 rows=51`
+operator adds them by hand per `config-example.yml`. The three `ultipanel.logging.batch.*` keys
+were in this same "opt-in, absent from the shipped resource" group before this pull request;
+they are now genuinely shipped in `config.yml` (see the three rows below), so they have moved out
+of this enumeration. **Upgrade behaviour for an existing installation (measured, not assumed):**
+`UltiTools#getConfig()` is Bukkit's own `FileConfiguration` for this plugin, loaded from whatever
+`plugins/UltiTools/config.yml` already exists on disk with no default-key merge step — unlike the
+two `migrateKeyIfAbsent` keys above, nothing writes the new `batch` block onto an operator's
+existing file. An operator upgrading from a jar built before this pull request keeps a
+`config.yml` with no `ultipanel.logging.batch` block at all; `LogStreamManager#loadBatchConfiguration`'s
+`FileConfiguration#contains` guards see it as absent and skip applying anything, so
+`UltiPanelLogTransmitter`'s own in-code defaults apply instead (batching enabled, batch size 10,
+interval 5000ms) — which are the same three values this pull request's shipped defaults use, so
+there is no behavioural change for that operator. The new key is invisible until they either add
+it to their existing file by hand or delete it and let the framework re-extract the packaged
+default. The reconciliation-table verify command's own `keys=47 rows=51`
 output (measuring `config.yml` alone, its own stated scope) is therefore the accurate, intentional
 result of this reading, not a defect the row count should be forced to match; the section's true
 total including both `env.yml` keys is 53.
@@ -323,9 +383,9 @@ total including both `env.yml` keys is 53.
 | ultitools.config.config.ultipanel.files.editable-roots | Root directories (relative to the server root) the panel's file capabilities are confined to; not present in the shipped default resource but migrated onto disk on first boot if absent, same as the blocklist above | config | `plugins/UltiTools/config.yml: ultipanel.files.editable-roots (default: [plugins, logs])` | n/a | n/a | admin | detailed | FileOperationManager#isPathAllowed |
 | ultitools.config.config.ultipanel.logging.action-log.max-files | Number of rotated `action.log.<generation>` files retained; there is no key to disable the log itself | config | `src/main/resources/config.yml: ultipanel.logging.action-log.max-files (default: 5)` | n/a | n/a | admin | none | RemoteActionLog#loadConfiguration |
 | ultitools.config.config.ultipanel.logging.action-log.max-size-bytes | Rotation size, in bytes, for the active `action.log.0` file before it rolls to the next generation | config | `src/main/resources/config.yml: ultipanel.logging.action-log.max-size-bytes (default: 1048576)` | n/a | n/a | admin | none | RemoteActionLog#loadConfiguration |
-| ultitools.config.config.ultipanel.logging.batch.enabled | Whether log-stream delivery to the panel is batched rather than sent line-by-line; purely opt-in — absent from both the shipped resource and the migration path, has effect only if the operator adds it by hand per `config-example.yml` | config | `config-example.yml: ultipanel.logging.batch.enabled (code default when present: true)` | n/a | n/a | admin | none | LogStreamManager#loadBatchConfiguration |
-| ultitools.config.config.ultipanel.logging.batch.size | Entries per batch when batched log delivery is enabled; purely opt-in, same as `batch.enabled` above | config | `config-example.yml: ultipanel.logging.batch.size (code default when present: 10)` | n/a | n/a | admin | none | LogStreamManager#loadBatchConfiguration |
-| ultitools.config.config.ultipanel.logging.batch.interval | Documented as the send interval, in milliseconds, for batched log delivery — but setting it has no observable effect: `UltiPanelLogTransmitter`'s constructor starts its fixed-delay scheduler with the hardcoded 5000ms default before `LogStreamManager#loadBatchConfiguration` applies the configured value, and `setIntervalMs` only mutates the field without rescheduling the already-running task. A known product defect (UltiKits/UltiTools-Reborn#432), not fixed here per this plan's zero-new-code rule | config | `config-example.yml: ultipanel.logging.batch.interval (code default when present: 5000; setting it has no effect, see #432)` | n/a | n/a | admin | none | LogStreamManager#loadBatchConfiguration, UltiPanelLogTransmitter#UltiPanelLogTransmitter |
+| ultitools.config.config.ultipanel.logging.batch.enabled | Whether log-stream delivery to the panel is batched rather than sent line-by-line; disabling actually stops the scheduled batch-send task, not merely the code path that feeds it (#432 fixed) | config | `src/main/resources/config.yml: ultipanel.logging.batch.enabled (default: true)` | n/a | n/a | admin | none | UltiPanelLogTransmitter#setBatchEnabled |
+| ultitools.config.config.ultipanel.logging.batch.size | Entries per batch when batched log delivery is enabled, read once at server start | config | `src/main/resources/config.yml: ultipanel.logging.batch.size (default: 10)` | n/a | n/a | admin | none | LogStreamManager#loadBatchConfiguration |
+| ultitools.config.config.ultipanel.logging.batch.interval | Milliseconds between scheduled batch sends. Fixed: setting it now actually reschedules the already-running sender rather than being baked into the scheduler at construction and silently ignored thereafter (#432, both halves — the key's own absence from the shipped resource, and `setIntervalMs` not rescheduling — fixed together in the same pull request) | config | `src/main/resources/config.yml: ultipanel.logging.batch.interval (default: 5000)` | n/a | n/a | admin | none | UltiPanelLogTransmitter#setIntervalMs |
 | ultitools.config.config.ultipanel.logging.error-reporting.dedup-window-seconds | Time window, in seconds, within which a repeat of the same error fingerprint is not re-reported | config | `src/main/resources/config.yml: ultipanel.logging.error-reporting.dedup-window-seconds (default: 300)` | n/a | n/a | admin | none | ErrorReportCollector#loadConfiguration |
 | ultitools.config.config.ultipanel.logging.error-reporting.enabled | Whether errors are auto-reported to UltiPanel | config | `src/main/resources/config.yml: ultipanel.logging.error-reporting.enabled (default: true)` | n/a | n/a | admin | brief | ErrorReportCollector#loadConfiguration |
 | ultitools.config.config.ultipanel.logging.error-reporting.max-errors-per-batch | Maximum number of error reports sent per `batch_update` cycle | config | `src/main/resources/config.yml: ultipanel.logging.error-reporting.max-errors-per-batch (default: 10)` | n/a | n/a | admin | none | ErrorReportCollector#loadConfiguration |

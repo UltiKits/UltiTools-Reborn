@@ -16,6 +16,7 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BiConsumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -76,18 +77,22 @@ class PluginInitiationUtilsConfigUpdateTest {
 
     @AfterEach
     void tearDown() throws Exception {
-        // panelWS 是静态字段，不还原会漏给同一个 JVM 里后面的测试类。
+        // CloudSession.current 是 JVM 级静态（surefire 未配 forkCount，issue #250），不还原
+        // 会漏给同一个 JVM 里后面的测试类。
         setPanelWs(previousPanelWs);
         Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
         instanceField.setAccessible(true);
         instanceField.set(null, null);
     }
 
+    /**
+     * 如今 WebSocket 客户端是 {@link CloudSession} 的实例状态（16-08 Task 2 起，替代已删除的
+     * {@code PluginInitiationUtils.panelWS} 静态字段）。本类与 {@code CloudSession} 同包
+     * ({@code utils})，直接调用即可，不需要反射。
+     */
     private Object setPanelWs(Object value) throws Exception {
-        Field field = PluginInitiationUtils.class.getDeclaredField("panelWS");
-        field.setAccessible(true);
-        Object previous = field.get(null);
-        field.set(null, value);
+        UltiPanelWebSocketClient previous = CloudSession.current().getWebSocketClient();
+        CloudSession.current().setWebSocketClient((UltiPanelWebSocketClient) value);
         return previous;
     }
 
@@ -353,7 +358,7 @@ class PluginInitiationUtilsConfigUpdateTest {
         private void stubSetAllResult(List<String> updated, List<String> rejected, List<String> failed) {
             lenient().when(mockServerProperties.applySetAll(any(JsonObject.class)))
                     .thenReturn(new ServerPropertiesManager.SetAllResult(
-                            updated, rejected, failed, emptyList(), emptyList()));
+                            updated, rejected, failed, emptyList(), emptyList(), emptyList()));
         }
 
         /**
@@ -367,7 +372,7 @@ class PluginInitiationUtilsConfigUpdateTest {
         void malformedValuesMakeTheResponseAnError() throws Exception {
             lenient().when(mockServerProperties.applySetAll(any(JsonObject.class)))
                     .thenReturn(new ServerPropertiesManager.SetAllResult(
-                            emptyList(), emptyList(), emptyList(), emptyList(), singletonList("motd")));
+                            emptyList(), emptyList(), emptyList(), emptyList(), singletonList("motd"), emptyList()));
 
             PluginInitiationUtils.handleConfigUpdate(
                     panelMessage("server_properties", "{\"motd\":{}}", "req-13"));
@@ -385,6 +390,153 @@ class PluginInitiationUtilsConfigUpdateTest {
             ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
             verify(mockServerProperties).handleServerProperties(captor.capture());
             assertThat(captor.getValue().get("action").getAsString()).isEqualTo("get");
+        }
+    }
+
+    /**
+     * {@link PluginInitiationUtils#handleConfigUpload(JsonObject)} -- issue #435/#359, D-13.
+     *
+     * <p>{@code upload_config} carries traffic in <b>both</b> directions on the very same message
+     * type: {@code uploadConfig(client)} sends the server's own aggregated config up on every
+     * reconnect ({@code PluginInitiationUtils.java:262}), and the Worker's own response handler
+     * echoes that request's {@code type} straight back as its acknowledgement
+     * ({@code websocket-server.ts:454}, {@code response.type = message.type}; the {@code
+     * upload_config}/{@code update_config} case ends {@code return response;} at
+     * {@code websocket-server.ts:1041}) -- so the acknowledgement lands right back in this same
+     * inbound handler, distinguishable only by its {@code message} field (issue #359's own quoted
+     * evidence: three candidate Worker write routes probed against production all returned 404,
+     * and the production frontend bundle has zero occurrences of {@code upload_config}/{@code
+     * uploadConfig}). The old {@code data.has("requestId")} gate never had a caller -- nothing
+     * anywhere in the system ever populates that field on an {@code upload_config} payload -- so it
+     * is deleted rather than fixed; the {@code message}-field check that already recognised the
+     * acknowledgement is kept and promoted to run first, since it is the live path.
+     */
+    @Nested
+    @DisplayName("handleConfigUpload -- upload_config 的写入分支 (issue #359/#435, D-13)")
+    class ConfigUploadRouting {
+
+        /**
+         * The real write-request shape -- identical to what {@code uploadConfig(client)} itself
+         * sends (configType/configName/configContent/format/backup) -- but deliberately without a
+         * {@code message} field, which is the acknowledgement's own signature (see
+         * {@link #workerAcknowledgementIsRecognizedAndIgnored()}).
+         */
+        private JsonObject uploadPayload(String configType, JsonObject configContent) {
+            JsonObject data = new JsonObject();
+            data.addProperty("configType", configType);
+            data.addProperty("configName", "UltiTools.yml");
+            if (configContent != null) {
+                data.add("configContent", configContent);
+            }
+            data.addProperty("format", "yaml");
+            data.addProperty("backup", true);
+            return data;
+        }
+
+        /**
+         * Invokes the real dispatch-table entry rather than the {@code private} method directly --
+         * {@link PluginInitiationUtils#inboundDispatchTable()} is the same package-private seam
+         * {@code PluginInitiationUtilsDispatchTableTest} already asserts the routing through, so
+         * this proves the behaviour panel traffic would actually observe, not just the method body.
+         */
+        private void invoke(JsonObject data) {
+            BiConsumer<JsonObject, JsonObject> handler =
+                    PluginInitiationUtils.inboundDispatchTable().get("upload_config").getHandler();
+            handler.accept(new JsonObject(), data);
+        }
+
+        private JsonObject capturedErrorResponse() {
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocket).sendMessage(captor.capture());
+            JsonObject sent = captor.getValue();
+            assertThat(sent.get("type").getAsString()).isEqualTo("error");
+            return sent;
+        }
+
+        @Test
+        @DisplayName("支持的 plugin_config 类型照常生效")
+        void supportedTypeAppliesAsToday() throws Exception {
+            JsonObject content = new JsonObject();
+            content.addProperty("language", "zh");
+
+            invoke(uploadPayload("plugin_config", content));
+
+            verify(mockConfigManager).loadFromJson(new com.google.gson.Gson().toJson(content));
+            JsonObject response = capturedResponse();
+            assertThat(response.get("type").getAsString()).isEqualTo("upload_config_response");
+            assertThat(response.get("status").getAsString()).isEqualTo("success");
+        }
+
+        @Test
+        @DisplayName("server_properties 类型被拒绝，并点名该走 server_properties 消息")
+        void serverPropertiesTypeIsRejectedNamingTheRightMessage() throws Exception {
+            invoke(uploadPayload("server_properties", new JsonObject()));
+
+            verify(mockConfigManager, never()).loadFromJson(anyString());
+            JsonObject error = capturedErrorResponse();
+            assertThat(error.getAsJsonObject("data").get("message").getAsString())
+                    .contains("server_properties");
+        }
+
+        @Test
+        @DisplayName("permissions 类型被拒绝，说明该类型不受支持")
+        void permissionsTypeIsRejectedAsUnsupported() throws Exception {
+            invoke(uploadPayload("permissions", new JsonObject()));
+
+            verify(mockConfigManager, never()).loadFromJson(anyString());
+            JsonObject error = capturedErrorResponse();
+            assertThat(error.getAsJsonObject("data").get("message").getAsString())
+                    .contains("permissions");
+        }
+
+        @Test
+        @DisplayName("未知类型保持既有的失败关闭行为")
+        void unknownTypeKeepsExistingFailClosedBehaviour() throws Exception {
+            invoke(uploadPayload("definitely_not_a_real_type", new JsonObject()));
+
+            verify(mockConfigManager, never()).loadFromJson(anyString());
+            JsonObject error = capturedErrorResponse();
+            assertThat(error.getAsJsonObject("data").get("message").getAsString())
+                    .contains("Unsupported config type: definitely_not_a_real_type");
+        }
+
+        @Test
+        @DisplayName("没有任何配置内容的上传被拒绝，而不是回 success")
+        void noConfigurationContentAtAllIsRejectedNotAnsweredSuccess() throws Exception {
+            invoke(uploadPayload("plugin_config", null));
+
+            verify(mockConfigManager, never()).loadFromJson(anyString());
+            JsonObject error = capturedErrorResponse();
+            assertThat(error.getAsJsonObject("data").get("message").getAsString())
+                    .contains("Configuration content is required");
+        }
+
+        @Test
+        @DisplayName("成功响应里不再出现 requestId —— 没有任何代码路径再读它")
+        void successResponseNeverIncludesARequestId() {
+            JsonObject content = new JsonObject();
+            content.addProperty("language", "zh");
+            JsonObject payload = uploadPayload("plugin_config", content);
+            payload.addProperty("requestId", "should-be-ignored");
+
+            invoke(payload);
+
+            JsonObject response = capturedResponse();
+            assertThat(response.has("requestId")).isFalse();
+        }
+
+        @Test
+        @DisplayName("Worker 回显的确认消息（只有 message 字段）被识别并忽略，不当成写请求 (issue #359)")
+        void workerAcknowledgementIsRecognizedAndIgnored() throws Exception {
+            JsonObject ack = new JsonObject();
+            ack.addProperty("message", "Configuration upload_config processed successfully");
+            ack.addProperty("serverId", "srv-1");
+            ack.addProperty("configType", "plugin_config");
+
+            invoke(ack);
+
+            verify(mockConfigManager, never()).loadFromJson(anyString());
+            verify(mockWebSocket, never()).sendMessage(any(JsonObject.class));
         }
     }
 }

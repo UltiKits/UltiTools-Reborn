@@ -280,6 +280,25 @@ public class PluginManager {
     }
 
     /**
+     * Logs one WARNING for a module whose {@link #unregister(UltiToolsPlugin)} call threw,
+     * mirroring {@link #logPluginInitializationFailure(String, Throwable)}'s message shape
+     * so both refusal classes (load-time, unload-time) read the same way in the console.
+     * Package-private for the same reason as that method: a test-seam choice, not a widened
+     * API surface (WR-01, 16-REVIEW-lifecycle.md).
+     *
+     * @param moduleName the module whose unregistration failed, however the caller
+     *                   identifies it
+     * @param thrown     the throwable caught at the {@link #close()} loop boundary
+     */
+    static void logPluginUnregistrationFailure(String moduleName, Throwable thrown) {
+        Bukkit.getLogger().log(
+                Level.WARNING,
+                String.format("[UltiTools-API] Failed to unregister plugin %s: %s", moduleName, rootCauseMessage(thrown)),
+                thrown
+        );
+    }
+
+    /**
      * Walks {@code thrown}'s cause chain for the deepest {@link UltiToolsException}, returning
      * its message - or {@code thrown.getMessage()} if the chain holds none. Bounded via
      * identity-based cycle detection ({@link IdentityHashMap}) so a self-referential or cyclic
@@ -305,46 +324,101 @@ public class PluginManager {
      * @param plugin UltiTools plugin instance
      */
     public void unregister(UltiToolsPlugin plugin) {
-        // Cancel all @Scheduled tasks before unregistering
-        if (taskManager != null) {
-            taskManager.cancelAll(plugin);
-        }
-        // Unregister @PlayerCache beans before context closes
-        if (playerCacheManager != null && plugin.getContext() != null) {
-            for (Object bean : plugin.getContext().getSingletonValues()) {
-                playerCacheManager.unregisterBean(bean);
+        // Each registry-cleanup step below is isolated from every other step's failure
+        // (Codex review on #457, round 4: "Run all registry cleanup after an earlier
+        // failure") -- an Error from one owner registry (e.g. TaskManager.cancelAll() not
+        // catching a BukkitTask.cancel() Error) must not skip any other registry's own
+        // cleanup. A step's own failure is logged via runUnregisterStep, not rethrown, so it
+        // cannot mask a later step's failure either.
+        runUnregisterStep(plugin, "cancel @Scheduled tasks", () -> {
+            if (taskManager != null) {
+                taskManager.cancelAll(plugin);
             }
-        }
+        });
+        // Unregister @PlayerCache beans before context closes
+        runUnregisterStep(plugin, "unregister @PlayerCache beans", () -> {
+            if (playerCacheManager != null && plugin.getContext() != null) {
+                for (Object bean : plugin.getContext().getSingletonValues()) {
+                    playerCacheManager.unregisterBean(bean);
+                }
+            }
+        });
         // Bulk-unregister this module's tab-completion completers so the singleton does not
         // pin the module's ClassLoader after unload (T-05-24 / D-08). A module that registered
         // nothing is a no-op (unregisterByOwner(null) and unregisterByOwner("unknown-name") both
         // return 0 and throw nothing).
-        TabCompletionManager.getInstance().unregisterByOwner(plugin.getPluginName());
+        runUnregisterStep(plugin, "unregister tab-completion completers",
+                () -> TabCompletionManager.getInstance().unregisterByOwner(plugin.getPluginName()));
         // Unregister @ModuleEventHandler handlers from EventBus
-        EventBus eventBus = UltiTools.getInstance().getEventBus();
-        if (eventBus != null) {
-            eventBus.unregisterAll(plugin.getPluginName());
+        runUnregisterStep(plugin, "unregister EventBus handlers", () -> {
+            EventBus eventBus = UltiTools.getInstance().getEventBus();
+            if (eventBus != null) {
+                eventBus.unregisterAll(plugin.getPluginName());
+            }
+        });
+        // Unregister this module's panel message responders (WIRE-16, D-26/D-27, Plan 06-08
+        // Task 3) — mirrors the EventBus.unregisterAll call immediately above; a responder
+        // left behind by an unloaded module would go on answering panel requests with code
+        // whose classloader is gone.
+        runUnregisterStep(plugin, "unregister panel message responders", () -> {
+            PanelResponderRegistry panelResponderRegistry = UltiTools.getInstance().getPanelResponderRegistry();
+            if (panelResponderRegistry != null) {
+                panelResponderRegistry.unregisterAll(plugin.getPluginName());
+            }
+        });
+        // Release this module's recorded @ConditionalOnConfig scan-time decisions (#392,
+        // D-01). The record holds Class<?> references and would otherwise pin the module's
+        // ClassLoader after unload, exactly like the TabCompletionManager / EventBus /
+        // PanelResponderRegistry releases immediately above.
+        runUnregisterStep(plugin, "clear @ConditionalOnConfig scan-time decisions",
+                () -> ConditionalRegistrationEvaluator.clear(plugin));
+        try {
+            // Listener unregistration happens inside unregisterSelf() itself, AFTER
+            // onUnregister() (D-02) -- do not also unregister listeners here. Calling it
+            // directly at this point ran onUnregister() with the module's own listeners
+            // already torn down, contradicting that hook's own javadoc guarantee (CR-01,
+            // 16-REVIEW-lifecycle.md), and unregistered listeners twice per unregister
+            // (IN-01, harmless but redundant).
+            //
+            // Unlike the best-effort registry bookkeeping above, this step's own failure is
+            // NOT swallowed: a module's onUnregister() throwing is a real defect the caller
+            // needs to see (Codex review on #457, round 1: "a throwing hook is surfaced to
+            // the caller, not swallowed"). unregisterSelf() itself already runs every one of
+            // its own three steps regardless of an earlier one's failure, and collects rather
+            // than discards any later failure via addSuppressed() (see its javadoc, and issue
+            // #484).
+            plugin.unregisterSelf();
+        } finally {
+            // unregister() is reachable with an instance the caller constructed directly,
+            // which never went through PluginManager.register(...) and so never received a
+            // container (SILENT-19, #338). Guard the close the same way the steps above do,
+            // and run it even if unregisterSelf() itself throws (Codex review on #457, round
+            // 2: "Close the module context when its unload hook throws").
+            if (plugin.getContext() != null) {
+                plugin.getContext().close();
+            }
         }
-        // Unregister this module's panel message responders (WIRE-16, D-26/D-27, Plan 06-08 Task
-        // 3) — mirrors the EventBus.unregisterAll call immediately above; a responder left behind
-        // by an unloaded module would go on answering panel requests with code whose classloader
-        // is gone.
-        PanelResponderRegistry panelResponderRegistry = UltiTools.getInstance().getPanelResponderRegistry();
-        if (panelResponderRegistry != null) {
-            panelResponderRegistry.unregisterAll(plugin.getPluginName());
-        }
-        // Release this module's recorded @ConditionalOnConfig scan-time decisions (#392, D-01).
-        // The record holds Class<?> references and would otherwise pin the module's ClassLoader
-        // after unload, exactly like the TabCompletionManager / EventBus / PanelResponderRegistry
-        // releases immediately above.
-        ConditionalRegistrationEvaluator.clear(plugin);
-        UltiTools.getInstance().getListenerManager().unregisterAll(plugin);
-        plugin.unregisterSelf();
-        // unregister() is reachable with an instance the caller constructed directly, which never
-        // went through PluginManager.register(...) and so never received a container (SILENT-19,
-        // #338). Guard the close the same way the @PlayerCache block above already does.
-        if (plugin.getContext() != null) {
-            plugin.getContext().close();
+    }
+
+    /**
+     * Runs one {@link #unregister(UltiToolsPlugin)} best-effort registry-cleanup step in
+     * isolation: a throw from {@code step} is logged via {@link
+     * #logPluginUnregistrationFailure(String, Throwable)}, not rethrown, so it can neither
+     * skip nor mask any of {@code unregister}'s other steps (Codex review on #457, across
+     * four rounds on the same method: listener cleanup surviving command-cleanup failure,
+     * the context close surviving the unload hook throwing, mandatory cleanup surviving an
+     * early registry failure, and finally every registry step surviving every other one).
+     *
+     * @param plugin          the plugin being unregistered, for the log message and step context
+     * @param stepDescription a short, human-readable name for {@code step}, folded into the
+     *                        WARNING log line if it throws
+     * @param step            the cleanup action to attempt
+     */
+    private static void runUnregisterStep(UltiToolsPlugin plugin, String stepDescription, Runnable step) {
+        try {
+            step.run();
+        } catch (Exception | Error e) {
+            logPluginUnregistrationFailure(plugin.getPluginName() + " (" + stepDescription + ")", e);
         }
     }
 
@@ -357,7 +431,17 @@ public class PluginManager {
 
         Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Unregistering all plugins...");
         for (UltiToolsPlugin plugin : pluginList) {
-            unregister(plugin);
+            // One module's unregister() (ultimately its own onUnregister()) throwing must
+            // not cascade into every subsequent module's own command/listener/EventBus/
+            // PanelResponderRegistry unregistration, nor skip pluginList.clear()/
+            // taskManager.cancelAllCore() below, nor propagate out of close() into
+            // UltiTools.onDisable() and skip configManager.saveAll() (WR-01,
+            // 16-REVIEW-lifecycle.md) -- mirrors the register() convention above.
+            try {
+                unregister(plugin);
+            } catch (Exception | Error e) {
+                logPluginUnregistrationFailure(plugin.getPluginName(), e);
+            }
         }
         pluginList.clear();
         pluginClassList.clear();
@@ -1086,6 +1170,39 @@ public class PluginManager {
         } catch (Exception | Error e) {
             Bukkit.getLogger().log(Level.WARNING, e, String::new);
             Bukkit.getLogger().log(Level.WARNING, String.format("[UltiTools-API] %s load failed！", plugin.getPluginName()));
+            // WR-02 (#410): onPluginRegistered() may have already run pluginList.add(plugin)
+            // and recorded some of this module's beans' @Scheduled tasks (correctly, per
+            // TaskManager's own #410 fix) before a LATER bean's own scheduling call threw.
+            // registerSelf() already returned true to reach onPluginRegistered() at all, so
+            // calling unregisterSelf() below is never "on a module that never finished
+            // registerSelf()" -- only a module whose OWN activation already succeeded, but
+            // whose framework-side post-registration bookkeeping failed partway, reaches here.
+            // unregister(plugin) itself is wrapped separately: it must not let a SECOND
+            // exception escape this handler, and the plugin must not stay in pluginList either
+            // way.
+            if (pluginList.contains(plugin)) {
+                try {
+                    unregister(plugin);
+                } catch (Exception | Error unregisterFailure) {
+                    Bukkit.getLogger().log(Level.WARNING, unregisterFailure, String::new);
+                    Bukkit.getLogger().log(Level.WARNING, String.format(
+                            "[UltiTools-API] %s failed to unregister cleanly after a failed load！",
+                            plugin.getPluginName()));
+                    // #457's unregister() now closes the context in a finally (see its
+                    // javadoc), so it has already run -- successfully or not -- by the time
+                    // this catch block is reached, regardless of what inside unregister()
+                    // threw. A second, independent close here (PR #478 round 1's original
+                    // fallback, needed only against #457's pre-merge unregister(), which
+                    // closed as its own final statement with nothing guaranteeing that ran
+                    // if an earlier step threw) is redundant on the merged contract and would
+                    // double-close instead. #478's own intent -- the container closes exactly
+                    // once even when unregister() itself throws during this teardown -- is
+                    // still met, now by #457's finally, and is still asserted by this same
+                    // test class's unregisterFailureDuringTeardownIsHandledAndPluginStillRemoved.
+                } finally {
+                    pluginList.remove(plugin);
+                }
+            }
             return false;
         }
     }
@@ -1880,11 +1997,17 @@ public class PluginManager {
     /**
      * Get scan packages for a plugin class.
      * Reads from @UltiToolsModule or @ComponentScan annotations, defaults to plugin class package.
+     * <p>
+     * Widened from {@code private} to {@code public} by 16-06-PLAN.md (D-08): {@code EconomyUtils}'
+     * module-attribution helper needs the same real scan-package resolution this class already
+     * uses at registration time, rather than duplicating (and risking drifting from) this logic in
+     * another package. A new public method is additive, not a binary-compatibility break — japicmp
+     * reports only removed or changed members, never a widened one.
      *
      * @param pluginClass plugin class
      * @return scan packages
      */
-    private String[] getPluginScanPackages(Class<? extends UltiToolsPlugin> pluginClass) {
+    public String[] getPluginScanPackages(Class<? extends UltiToolsPlugin> pluginClass) {
         // Read through the merged resolver, not a bare pluginClass.getAnnotation(...) --
         // @UltiToolsModule is meta-annotated @ComponentScan, and its scanBasePackages()/
         // scanBasePackageClasses() attributes both declare @AliasFor onto ComponentScan's

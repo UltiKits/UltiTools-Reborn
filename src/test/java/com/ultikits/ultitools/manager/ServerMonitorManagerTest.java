@@ -7,12 +7,19 @@ import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
@@ -741,12 +748,31 @@ class ServerMonitorManagerTest {
         void shouldLogStartMessage() {
             // Arrange
             when(mockWebSocketClient.isConnected()).thenReturn(true);
-            
+
             // Act
             serverMonitorManager.startMonitoring();
-            
+
             // Assert
             verify(mockLogger).log(any(java.util.logging.Level.class), org.mockito.ArgumentMatchers.contains("启动"));
+        }
+
+        @Test
+        @DisplayName("Gate-2 P2 (round 11): maybeSendLogsOnly 的调度粒度被收紧到 LOG_FLUSH_POLL_INTERVAL_MS（100ms），不再是 1 秒")
+        void logsOnlyPollingGranularityIsNarrowedToOneHundredMillis() throws Exception {
+            // Pins the round-11 fix at the constant level: the worst-case overshoot past a
+            // configured batchConfig.interval (e.g. a 1500ms interval draining every ~2000ms
+            // under the OLD 1-second granularity) is bounded by this value instead. Verified as a
+            // constant rather than by observing real scheduled-task timing, since the fix is
+            // exactly the scheduling period passed to scheduleAtFixedRate -- a wall-clock test
+            // here would be slower and flakier for no additional coverage.
+            Field field = ServerMonitorManager.class.getDeclaredField("LOG_FLUSH_POLL_INTERVAL_MS");
+            field.setAccessible(true);
+            long pollIntervalMs = (long) field.get(null);
+
+            assertThat(pollIntervalMs)
+                    .as("must be tighter than the OLD 1-second granularity this fix replaces")
+                    .isLessThan(1000L)
+                    .isPositive();
         }
     }
 
@@ -851,6 +877,12 @@ class ServerMonitorManagerTest {
             return config;
         }
 
+        private void invokeMaybeSendLogsOnly(ServerMonitorManager manager) throws Exception {
+            Method method = ServerMonitorManager.class.getDeclaredMethod("maybeSendLogsOnly");
+            method.setAccessible(true);
+            method.invoke(manager);
+        }
+
         private void invokeSendBatchUpdate(ServerMonitorManager manager) throws Exception {
             Method method = ServerMonitorManager.class.getDeclaredMethod("sendBatchUpdate");
             method.setAccessible(true);
@@ -862,6 +894,13 @@ class ServerMonitorManagerTest {
             Field queueField = UltiPanelLogTransmitter.class.getDeclaredField("logQueue");
             queueField.setAccessible(true);
             return ((Collection<?>) queueField.get(transmitter)).size();
+        }
+
+        /** Gate-2 P1 tests: reflectively backdate lastLogFlushMs to simulate elapsed time deterministically. */
+        private void setLastLogFlushMs(ServerMonitorManager manager, long value) throws Exception {
+            Field field = ServerMonitorManager.class.getDeclaredField("lastLogFlushMs");
+            field.setAccessible(true);
+            ((java.util.concurrent.atomic.AtomicLong) field.get(manager)).set(value);
         }
 
         @Test
@@ -939,6 +978,473 @@ class ServerMonitorManagerTest {
             } finally {
                 transmitter.shutdown();
             }
+        }
+
+        @Test
+        @DisplayName("Gate-2 P1: interval 大于 5 秒时（如 15000ms），logs 排空遵循传输器自己配置的 interval，而不是每 5 秒 tick 都排空")
+        void logsRespectTheTransmittersConfiguredIntervalNotTheFixedFiveSecondTick() throws Exception {
+            UltiPanelWebSocketClient transmitterClient = mock(UltiPanelWebSocketClient.class);
+            lenient().when(transmitterClient.isConnected()).thenReturn(true);
+            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(transmitterClient, "test-server");
+            try {
+                transmitter.setIntervalMs(15000); // longer than the hardcoded 5s batch_update tick
+                transmitter.info("queued line", "test");
+                when(mockLogStreamManagerForBatch.getLogTransmitter()).thenReturn(transmitter);
+
+                // A prior tick flushed 5 seconds ago -- well under the configured 15-second interval.
+                setLastLogFlushMs(serverMonitorManager, System.currentTimeMillis() - 5000);
+
+                invokeSendBatchUpdate(serverMonitorManager);
+
+                ArgumentCaptor<JsonObject> sent = ArgumentCaptor.forClass(JsonObject.class);
+                verify(mockWebSocketClient).sendMessage(sent.capture());
+                JsonObject data = sent.getValue().getAsJsonObject("data");
+
+                assertThat(data.has("logs"))
+                        .as("only 5 seconds have passed against a configured 15-second interval")
+                        .isFalse();
+                assertThat(queueSizeOf(transmitter))
+                        .as("the queued line must still be waiting, not silently dropped")
+                        .isEqualTo(1);
+            } finally {
+                transmitter.shutdown();
+            }
+        }
+
+        @Test
+        @DisplayName("Gate-2 P1 对照：一旦经过完整的已配置 interval，logs 排空照常发生")
+        void logsFlushOnceTheConfiguredIntervalHasElapsed() throws Exception {
+            UltiPanelWebSocketClient transmitterClient = mock(UltiPanelWebSocketClient.class);
+            lenient().when(transmitterClient.isConnected()).thenReturn(true);
+            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(transmitterClient, "test-server");
+            try {
+                transmitter.setIntervalMs(15000);
+                transmitter.info("queued line", "test");
+                when(mockLogStreamManagerForBatch.getLogTransmitter()).thenReturn(transmitter);
+
+                // A prior tick flushed 16 seconds ago -- past the configured 15-second interval.
+                setLastLogFlushMs(serverMonitorManager, System.currentTimeMillis() - 16000);
+
+                invokeSendBatchUpdate(serverMonitorManager);
+
+                ArgumentCaptor<JsonObject> sent = ArgumentCaptor.forClass(JsonObject.class);
+                verify(mockWebSocketClient).sendMessage(sent.capture());
+                JsonObject data = sent.getValue().getAsJsonObject("data");
+
+                assertThat(data.has("logs")).as("16 seconds have passed, past the 15-second interval").isTrue();
+                assertThat(queueSizeOf(transmitter)).as("the queue was drained").isZero();
+            } finally {
+                transmitter.shutdown();
+            }
+        }
+
+        @Test
+        @DisplayName("Gate-2 round 5: sendBatchUpdate 排空时使用 transmitter 自己配置的 batchSize，而不是硬编码的 50")
+        void sendBatchUpdateDrainsUpToTheConfiguredBatchSizeNotAHardcodedFifty() throws Exception {
+            UltiPanelWebSocketClient transmitterClient = mock(UltiPanelWebSocketClient.class);
+            lenient().when(transmitterClient.isConnected()).thenReturn(true);
+            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(transmitterClient, "test-server");
+            try {
+                // External drain mode is what monitoring actually enables (round 4's fix) --
+                // without it, addToBatch's own size-threshold send would drain the queue itself
+                // before sendBatchUpdate ever runs.
+                transmitter.setExternalDrainMode(true);
+                transmitter.setBatchSize(3);
+                for (int i = 0; i < 5; i++) {
+                    transmitter.info("line-" + i, "test");
+                }
+                when(mockLogStreamManagerForBatch.getLogTransmitter()).thenReturn(transmitter);
+
+                invokeSendBatchUpdate(serverMonitorManager);
+
+                ArgumentCaptor<JsonObject> sent = ArgumentCaptor.forClass(JsonObject.class);
+                verify(mockWebSocketClient).sendMessage(sent.capture());
+                JsonObject data = sent.getValue().getAsJsonObject("data");
+                assertThat(data.getAsJsonArray("logs").size())
+                        .as("must drain exactly the configured batchSize (3), not a hardcoded 50")
+                        .isEqualTo(3);
+                assertThat(queueSizeOf(transmitter))
+                        .as("2 of the 5 queued lines must still be waiting -- proves the cap actually applied")
+                        .isEqualTo(2);
+            } finally {
+                transmitter.shutdown();
+            }
+        }
+
+        @Test
+        @DisplayName("Gate-2 round 5: maybeSendLogsOnly 排空时同样使用 transmitter 自己配置的 batchSize")
+        void maybeSendLogsOnlyDrainsUpToTheConfiguredBatchSizeNotAHardcodedFifty() throws Exception {
+            UltiPanelWebSocketClient transmitterClient = mock(UltiPanelWebSocketClient.class);
+            lenient().when(transmitterClient.isConnected()).thenReturn(true);
+            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(transmitterClient, "test-server");
+            try {
+                transmitter.setExternalDrainMode(true);
+                transmitter.setBatchSize(3);
+                for (int i = 0; i < 5; i++) {
+                    transmitter.info("line-" + i, "test");
+                }
+                when(mockLogStreamManagerForBatch.getLogTransmitter()).thenReturn(transmitter);
+
+                invokeMaybeSendLogsOnly(serverMonitorManager);
+
+                ArgumentCaptor<JsonObject> sent = ArgumentCaptor.forClass(JsonObject.class);
+                verify(mockWebSocketClient).sendMessage(sent.capture());
+                JsonObject data = sent.getValue().getAsJsonObject("data");
+                assertThat(data.getAsJsonArray("logs").size()).isEqualTo(3);
+                assertThat(queueSizeOf(transmitter)).isEqualTo(2);
+            } finally {
+                transmitter.shutdown();
+            }
+        }
+
+        @Test
+        @DisplayName("Gate-2 round 3: maybeSendLogsOnly 在 interval 到期时独立于 5 秒的 sendBatchUpdate tick 发送仅含 logs 的 batch_update")
+        void maybeSendLogsOnlySendsALogsOnlyBatchUpdateWhenDue() throws Exception {
+            UltiPanelWebSocketClient transmitterClient = mock(UltiPanelWebSocketClient.class);
+            lenient().when(transmitterClient.isConnected()).thenReturn(true);
+            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(transmitterClient, "test-server");
+            try {
+                transmitter.setIntervalMs(7000); // not a multiple of the 5s sendBatchUpdate tick
+                transmitter.info("queued line", "test");
+                when(mockLogStreamManagerForBatch.getLogTransmitter()).thenReturn(transmitter);
+                setLastLogFlushMs(serverMonitorManager, System.currentTimeMillis() - 7500);
+
+                invokeMaybeSendLogsOnly(serverMonitorManager);
+
+                ArgumentCaptor<JsonObject> sent = ArgumentCaptor.forClass(JsonObject.class);
+                verify(mockWebSocketClient).sendMessage(sent.capture());
+                JsonObject message = sent.getValue();
+                assertThat(message.get("type").getAsString()).isEqualTo("batch_update");
+                JsonObject data = message.getAsJsonObject("data");
+                assertThat(data.has("logs")).isTrue();
+                assertThat(data.has("status"))
+                        .as("a logs-only tick must not also carry status/metrics -- that is sendBatchUpdate()'s own job")
+                        .isFalse();
+                assertThat(data.has("metrics")).isFalse();
+                assertThat(queueSizeOf(transmitter)).isZero();
+            } finally {
+                transmitter.shutdown();
+            }
+        }
+
+        @Test
+        @DisplayName("Gate-2 round 3: interval 未到期时 maybeSendLogsOnly 不发送任何消息")
+        void maybeSendLogsOnlySendsNothingWhenNotYetDue() throws Exception {
+            UltiPanelWebSocketClient transmitterClient = mock(UltiPanelWebSocketClient.class);
+            lenient().when(transmitterClient.isConnected()).thenReturn(true);
+            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(transmitterClient, "test-server");
+            try {
+                transmitter.setIntervalMs(7000);
+                transmitter.info("queued line", "test");
+                when(mockLogStreamManagerForBatch.getLogTransmitter()).thenReturn(transmitter);
+                setLastLogFlushMs(serverMonitorManager, System.currentTimeMillis() - 2000); // well under 7s
+
+                invokeMaybeSendLogsOnly(serverMonitorManager);
+
+                verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
+                assertThat(queueSizeOf(transmitter))
+                        .as("nothing drained -- the queued line must still be waiting")
+                        .isEqualTo(1);
+            } finally {
+                transmitter.shutdown();
+            }
+        }
+
+        @Test
+        @DisplayName("Gate-2 round 3: maybeSendLogsOnly 与 sendBatchUpdate 共享同一个 lastLogFlushMs 闸门 -- 谁先到都不会重复发送")
+        void maybeSendLogsOnlyAndSendBatchUpdateShareTheSameGateNoDoubleSend() throws Exception {
+            UltiPanelWebSocketClient transmitterClient = mock(UltiPanelWebSocketClient.class);
+            lenient().when(transmitterClient.isConnected()).thenReturn(true);
+            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(transmitterClient, "test-server");
+            try {
+                transmitter.setIntervalMs(1000);
+                transmitter.info("queued line", "test");
+                when(mockLogStreamManagerForBatch.getLogTransmitter()).thenReturn(transmitter);
+                setLastLogFlushMs(serverMonitorManager, System.currentTimeMillis() - 5000);
+
+                // The 1-second task fires first and drains.
+                invokeMaybeSendLogsOnly(serverMonitorManager);
+                reset(mockWebSocketClient);
+                when(mockWebSocketClient.isConnected()).thenReturn(true);
+
+                // sendBatchUpdate()'s own 5-second tick fires immediately after -- must see the
+                // gate already satisfied by maybeSendLogsOnly and NOT re-include an (empty) logs
+                // array from an already-drained queue.
+                invokeSendBatchUpdate(serverMonitorManager);
+
+                ArgumentCaptor<JsonObject> sent = ArgumentCaptor.forClass(JsonObject.class);
+                verify(mockWebSocketClient).sendMessage(sent.capture());
+                JsonObject data = sent.getValue().getAsJsonObject("data");
+                assertThat(data.has("logs"))
+                        .as("the queue was already drained by maybeSendLogsOnly -- nothing left to include")
+                        .isFalse();
+            } finally {
+                transmitter.shutdown();
+            }
+        }
+
+        @Test
+        @DisplayName("Gate-2 P2 (round 4): claimLogFlushWindow 在并发竞争同一窗口时只有一个调用者能成功 claim -- 确定性压力测试，不依赖 sleep")
+        void claimLogFlushWindowIsRaceSafeUnderConcurrentContention() throws Exception {
+            Method claimMethod = ServerMonitorManager.class.getDeclaredMethod(
+                    "claimLogFlushWindow", long.class, int.class);
+            claimMethod.setAccessible(true);
+
+            int threadCount = 20;
+            long now = System.currentTimeMillis();
+            ExecutorService pool = Executors.newFixedThreadPool(threadCount);
+            CountDownLatch ready = new CountDownLatch(threadCount);
+            CountDownLatch go = new CountDownLatch(1);
+            List<Future<Boolean>> results = new ArrayList<>();
+            try {
+                for (int i = 0; i < threadCount; i++) {
+                    results.add(pool.submit(() -> {
+                        ready.countDown();
+                        go.await();
+                        // All threads race to claim the SAME window (interval=1000, well elapsed
+                        // since lastLogFlushMs starts at 0) at as close to the same instant as
+                        // the test harness can force deterministically.
+                        return (Boolean) claimMethod.invoke(serverMonitorManager, now, 1000);
+                    }));
+                }
+                ready.await();
+                go.countDown();
+
+                long successCount = 0;
+                for (Future<Boolean> f : results) {
+                    if (Boolean.TRUE.equals(f.get())) {
+                        successCount++;
+                    }
+                }
+                assertThat(successCount)
+                        .as("exactly one of the 20 racing callers must win the claim -- a plain "
+                                + "volatile check-then-write let more than one through (Gate-2 round 4)")
+                        .isEqualTo(1);
+            } finally {
+                pool.shutdownNow();
+            }
+        }
+
+        @Test
+        @DisplayName("Gate-2 P2 (round 7): logDrainLock 持有期间，drainLogsNow() 的并发调用必须等待 -- 证明三条排空路径共享同一把互斥锁")
+        void logDrainLockBlocksConcurrentDrainLogsNowWhileHeld() throws Exception {
+            Field lockField = ServerMonitorManager.class.getDeclaredField("logDrainLock");
+            lockField.setAccessible(true);
+            Object lock = lockField.get(serverMonitorManager);
+
+            when(UltiTools.getInstance().getConfig())
+                    .thenReturn(configWith(Capability.LOGS.getConfigPath(), true));
+            UltiPanelWebSocketClient transmitterClient = mock(UltiPanelWebSocketClient.class);
+            lenient().when(transmitterClient.isConnected()).thenReturn(true);
+            UltiPanelLogTransmitter transmitter = new UltiPanelLogTransmitter(transmitterClient, "test-server");
+            try {
+                transmitter.info("queued line", "test");
+                when(mockLogStreamManagerForBatch.getLogTransmitter()).thenReturn(transmitter);
+
+                CountDownLatch workerStarted = new CountDownLatch(1);
+                CountDownLatch workerDone = new CountDownLatch(1);
+                Thread worker = new Thread(() -> {
+                    workerStarted.countDown();
+                    serverMonitorManager.drainLogsNow();
+                    workerDone.countDown();
+                });
+
+                try {
+                    synchronized (lock) {
+                        worker.start();
+                        assertThat(workerStarted.await(5, TimeUnit.SECONDS)).isTrue();
+                        assertThat(workerDone.await(300, TimeUnit.MILLISECONDS))
+                                .as("drainLogsNow() must block on logDrainLock while it is held elsewhere")
+                                .isFalse();
+                    }
+                    assertThat(workerDone.await(5, TimeUnit.SECONDS))
+                            .as("drainLogsNow() must proceed once the lock is released")
+                            .isTrue();
+                } finally {
+                    worker.join(5000);
+                }
+            } finally {
+                transmitter.shutdown();
+            }
+        }
+
+        @Test
+        @DisplayName("Gate-2 P2 (round 9): logDrainLock 现在覆盖 sendBatchUpdate 自己最终的 sendMessage 调用，而不仅仅是 drainQueue")
+        void logDrainLockNowCoversSendBatchUpdatesOwnFinalSendNotJustTheDrain() throws Exception {
+            Field lockField = ServerMonitorManager.class.getDeclaredField("logDrainLock");
+            lockField.setAccessible(true);
+            Object lock = lockField.get(serverMonitorManager);
+
+            CountDownLatch workerStarted = new CountDownLatch(1);
+            CountDownLatch workerDone = new CountDownLatch(1);
+            Thread worker = new Thread(() -> {
+                workerStarted.countDown();
+                try {
+                    invokeSendBatchUpdate(serverMonitorManager);
+                } catch (Exception e) {
+                    // Fail the test rather than throw a raw exception type out of a Runnable
+                    // (PMD.AvoidThrowingRawExceptionTypes) -- fail() records the cause without
+                    // this call site itself constructing one.
+                    org.junit.jupiter.api.Assertions.fail(e);
+                }
+                workerDone.countDown();
+            });
+
+            try {
+                synchronized (lock) {
+                    worker.start();
+                    assertThat(workerStarted.await(5, TimeUnit.SECONDS)).isTrue();
+                    // sendBatchUpdate() must not be able to reach its own final sendMessage()
+                    // call while this thread holds the SAME logDrainLock -- before round 9, the
+                    // synchronized block only wrapped drainQueue(), so a size-triggered drain
+                    // elsewhere could squeeze its own send in between this method's drain and its
+                    // own send, letting a NEWER frame overtake an OLDER one already drained here.
+                    assertThat(workerDone.await(300, TimeUnit.MILLISECONDS))
+                            .as("sendBatchUpdate() must block on logDrainLock for its whole tail, "
+                                    + "including its own final sendMessage() call")
+                            .isFalse();
+                    verify(mockWebSocketClient, never()).sendMessage(any(JsonObject.class));
+                }
+                assertThat(workerDone.await(5, TimeUnit.SECONDS))
+                        .as("sendBatchUpdate() must proceed once the lock is released")
+                        .isTrue();
+                verify(mockWebSocketClient).sendMessage(any(JsonObject.class));
+            } finally {
+                worker.join(5000);
+            }
+        }
+    }
+
+    /**
+     * {@code diskUsage} and {@code enabledPlugins} in {@code getCurrentMetricsData}'s {@code
+     * serverPerformance}/{@code pluginUsage} objects -- issue #436/#437, D-14.
+     *
+     * <p>{@code diskUsage} was a hardcoded {@code 0.0} ({@code
+     * ServerMonitorManager.java:671} before this fix); {@code enabledPlugins} was {@code
+     * snapshot.pluginCount} -- every installed plugin, not filtered by whether it is actually
+     * enabled. Both gave a panel operator a confident, wrong answer.
+     */
+    @Nested
+    @DisplayName("diskUsage 与 enabledPlugins -- issue #436/#437, D-14")
+    class DiskUsageAndEnabledPluginsTests {
+
+        private JsonObject capturedMetricsData() {
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient, atLeastOnce()).sendMessage(captor.capture());
+            return captor.getValue().getAsJsonObject("data");
+        }
+
+        private JsonObject capturedServerPerformance() {
+            return capturedMetricsData().getAsJsonObject("serverPerformance");
+        }
+
+        private JsonObject pluginJson(String name, boolean enabled) {
+            JsonObject plugin = new JsonObject();
+            plugin.addProperty("name", name);
+            plugin.addProperty("enabled", enabled);
+            return plugin;
+        }
+
+        @Test
+        @DisplayName("真实文件系统上 diskUsage 严格大于 0 且不超过 100，按 memoryUsage 同款方式保留两位小数")
+        void diskUsageOnRealFilesystemIsInRangeAndRounded() {
+            serverMonitorManager.refreshStateSnapshot();
+            serverMonitorManager.sendMetricsData();
+
+            double diskUsage = capturedServerPerformance().get("diskUsage").getAsDouble();
+
+            assertThat(diskUsage).isGreaterThan(0.0).isLessThanOrEqualTo(100.0);
+            // Same convention as memoryUsage: Math.round(value * 100.0) / 100.0 -- multiplying
+            // by 100 and rounding must land on (approximately) a whole number.
+            double scaled = diskUsage * 100.0;
+            assertThat(scaled).isCloseTo(Math.round(scaled), org.assertj.core.data.Offset.offset(1e-9));
+        }
+
+        @Test
+        @DisplayName("diskUsage 取自注入的 total/usable 读数，不是目录遍历 -- free == usable 时（无 root 保留块），等价于旧公式")
+        void diskUsageIsComputedFromInjectedTotalAndUsableSpace() {
+            // free == usable == 750: no root-reserved allocation, so WR-03's df-style formula
+            // ((total - free) / ((total - free) + usable)) coincides with the simpler
+            // (total - usable) / total this scenario used to assert -- both give 25%.
+            serverMonitorManager.setDiskSpaceReaders(root -> 1000L, root -> 750L, root -> 750L);
+            serverMonitorManager.refreshStateSnapshot();
+            serverMonitorManager.sendMetricsData();
+
+            assertThat(capturedServerPerformance().get("diskUsage").getAsDouble()).isEqualTo(25.0);
+        }
+
+        @Test
+        @DisplayName("WR-03: free < usable（有 root 保留块）时按 df 的 Use% 惯例计算，而不是 (total-usable)/total")
+        void diskUsageFollowsDfConventionWhenReservedBlocksExist() {
+            // total=1000, free=550 (includes the 200 reserved for root), usable=350 (excludes
+            // it) -- a stand-in for a real ext4 volume's ~5-15% reserved-block allocation.
+            // df-style: used = total - free = 450; Use% = used / (used + usable) = 450/800 = 56.25%.
+            // The OLD (total - usable) / total formula would have given (1000-350)/1000 = 65.0%
+            // -- a ~9-point divergence, confirming the two formulas are NOT interchangeable here.
+            serverMonitorManager.setDiskSpaceReaders(root -> 1000L, root -> 550L, root -> 350L);
+            serverMonitorManager.refreshStateSnapshot();
+            serverMonitorManager.sendMetricsData();
+
+            assertThat(capturedServerPerformance().get("diskUsage").getAsDouble()).isEqualTo(56.25);
+        }
+
+        @Test
+        @DisplayName("文件系统报告总空间为零时返回 0.0，而不是除零错误")
+        void zeroTotalSpaceProducesZeroNotADivisionError() {
+            serverMonitorManager.setDiskSpaceReaders(root -> 0L, root -> 0L, root -> 0L);
+            serverMonitorManager.refreshStateSnapshot();
+
+            assertDoesNotThrow(() -> serverMonitorManager.sendMetricsData());
+
+            assertThat(capturedServerPerformance().get("diskUsage").getAsDouble()).isEqualTo(0.0);
+        }
+
+        @Test
+        @DisplayName("used+avail 分母为零（free 等于 total 且 usable 为零）时返回 0.0，而不是除零错误")
+        void zeroDenominatorProducesZeroNotADivisionError() {
+            // total == free (nothing used at all) and usable == 0 -- used = 0, denominator =
+            // used + usable = 0. This is a distinct edge case from the zero-total-space one
+            // above: total is nonzero here, so the first guard does not catch it.
+            serverMonitorManager.setDiskSpaceReaders(root -> 1000L, root -> 1000L, root -> 0L);
+            serverMonitorManager.refreshStateSnapshot();
+
+            assertDoesNotThrow(() -> serverMonitorManager.sendMetricsData());
+
+            assertThat(capturedServerPerformance().get("diskUsage").getAsDouble()).isEqualTo(0.0);
+        }
+
+        @Test
+        @DisplayName("enabledPlugins 只数 enabled 标记为真的插件，不是全部已安装的插件")
+        void enabledPluginsCountsOnlyTheEnabledFlaggedOnes() {
+            JsonArray plugins = new JsonArray();
+            plugins.add(pluginJson("Alpha", true));
+            plugins.add(pluginJson("Beta", false));
+            plugins.add(pluginJson("Gamma", true));
+
+            assertThat(ServerMonitorManager.countEnabledPlugins(plugins)).isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("没有任何插件时计数为零，不抛异常")
+        void noPluginsAtAllProducesZeroWithoutThrowing() {
+            assertThat(ServerMonitorManager.countEnabledPlugins(new JsonArray())).isZero();
+        }
+
+        @Test
+        @DisplayName("metrics 消息的字段名与类型不变，没有新增/改名/改类型的字段")
+        void metricsMessageFieldsAndWireTypesUnchanged() {
+            serverMonitorManager.refreshStateSnapshot();
+            serverMonitorManager.sendMetricsData();
+
+            JsonObject data = capturedMetricsData();
+            assertThat(data.getAsJsonObject("serverPerformance").keySet())
+                    .containsExactlyInAnyOrder("averageTPS", "memoryUsage", "diskUsage");
+            assertThat(data.getAsJsonObject("pluginUsage").keySet())
+                    .containsExactlyInAnyOrder("enabledPlugins", "loadedWorlds");
+            assertThat(data.getAsJsonObject("serverPerformance").get("diskUsage").getAsJsonPrimitive().isNumber())
+                    .isTrue();
+            assertThat(data.getAsJsonObject("pluginUsage").get("enabledPlugins").getAsJsonPrimitive().isNumber())
+                    .isTrue();
         }
     }
 }

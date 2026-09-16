@@ -5,9 +5,9 @@ import java.io.StringWriter;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.logging.Level;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
@@ -31,25 +31,96 @@ public class UltiPanelLogTransmitter {
 
     private static final int MAX_QUEUE_SIZE = 1000;
 
+    /**
+     * Shared lower bound for the batch-send interval (#432/WR-01). Before this fix, the
+     * boot-time path ({@link LogStreamManager#loadBatchConfiguration()}) clamped to 1000ms via
+     * its own inline {@code Math.max(1000, interval)}, while this class's own
+     * {@link #setIntervalMs(int)} -- reachable live, over the panel's WebSocket {@code config}
+     * action -- only rejected a non-positive value, leaving every value from 1ms up accepted. A
+     * panel operator (or a compromised/buggy panel session) could drive the batch scheduler to a
+     * roughly 1000-sends/second cadence indefinitely. Both entry points now share this one
+     * constant instead of the live path being silently more permissive than the boot path.
+     */
+    static final int MIN_INTERVAL_MS = 1000;
+
     private final UltiPanelWebSocketClient webSocketClient;
     private final String serverId;
     private final AtomicBoolean logTransmissionEnabled = new AtomicBoolean(true);
+
+    /**
+     * Guards the batch-vs-immediate DISPATCH DECISION in {@link #sendLog} against the
+     * enabled-to-disabled TRANSITION in {@link #setBatchEnabled(boolean)} (Gate-2 finding,
+     * round 6). Before this lock, {@code setBatchEnabled(false)} wrote {@code this.batchEnabled
+     * = false} before {@link #flushLogs()} drained the existing queue, so a concurrent
+     * {@code sendLog()} call could read the new {@code false} value and send a NEWER record
+     * immediately while {@code flushLogs()} was still draining OLDER queued records -- the
+     * newer record then arrived at the panel before the older ones, breaking FIFO order.
+     * Holding this lock across both {@code sendLog}'s dispatch decision and the WHOLE disable
+     * transition means every {@code sendLog} call observes the transition as atomic: either
+     * entirely before it (queued, and included in the flush that is about to run) or entirely
+     * after it (flag already false, sent immediately) -- never during.
+     */
+    private final Object batchModeLock = new Object();
 
     // External drain mode: when true, sendBatch() no longer sends automatically, and logs are
     // obtained externally by calling drainQueue()
     private final AtomicBoolean externalDrainMode = new AtomicBoolean(false);
 
-    // Batch-send configuration
-    @Getter @Setter
-    private boolean batchEnabled = true;
-    @Getter @Setter
-    private int batchSize = 10;
-    @Getter @Setter
-    private int intervalMs = 5000; // 5-second interval
+    /**
+     * Invoked from {@link #addToBatch(JsonObject)} whenever the queue reaches {@link #batchSize}
+     * WHILE {@link #externalDrainMode} is active (Gate-2 finding, round 6). Without this,
+     * reaching the size threshold under external drain mode had no effect at all --
+     * {@link #sendBatch()}'s own early-return for external drain mode silently swallowed the
+     * threshold crossing that would otherwise have triggered an immediate send, so a documented
+     * size threshold never actually shortened delivery latency while monitoring was active, and a
+     * sustained burst could fill {@link #MAX_QUEUE_SIZE} and start discarding old entries despite
+     * repeatedly crossing the threshold. {@code null} by default (no external owner wired up);
+     * {@link LogStreamManager#initialize} sets it alongside {@link #setExternalDrainMode(boolean)}.
+     */
+    private volatile Runnable externalSizeThresholdCallback;
+
+    /**
+     * External coordination lock for {@link #flushLogs()} (Gate-2 finding, round 9). {@code null}
+     * by default (no external owner wired up -- {@code flushLogs()} runs unsynchronized, its
+     * original behaviour). {@link LogStreamManager#initialize} wires this to
+     * {@code ServerMonitorManager}'s OWN {@code logDrainLock} (the same object
+     * {@link ServerMonitorManager#drainAndSendLogsOnly} and its inline {@code sendBatchUpdate}
+     * drain already synchronize on) alongside {@link #setExternalSizeThresholdCallback}. Without
+     * this, a live {@code batchConfig.enabled: false} update's flush ran entirely outside that
+     * lock, so it could still send NEWER records ahead of OLDER ones the monitor had already
+     * polled but not yet sent, even after round 7's monitor-side-only serialization.
+     */
+    private volatile Object externalDrainCoordinationLock;
+
+    // Batch-send configuration. All three are written from the panel's WebSocket receive thread
+    // (setBatchEnabled/setBatchSize/setIntervalMs, reachable live over the panel's `config`
+    // action) and read without further synchronization from the logging thread (addToBatch's
+    // logQueue.size() >= batchSize check) and the batch scheduler thread (sendBatch's own
+    // for (int i = 0; i < batchSize ...) loop) -- volatile, like the two neighbouring
+    // cross-thread fields above (externalSizeThresholdCallback, externalDrainCoordinationLock),
+    // is required for the writer's value to ever become visible to those readers (Gate-2
+    // finding, review round 12, pull request #467). Structural regression test:
+    // UltiPanelLogTransmitterBatchFieldVolatilityInvariantTest.
+    @Getter
+    private volatile boolean batchEnabled = true; // setter below (#432) -- starts/stops the scheduled sender
+    @Getter
+    private volatile int batchSize = 10; // setter below (Gate-2) -- rejects a value below 1
+    @Getter
+    private volatile int intervalMs = 5000; // 5-second interval; setter below (#432) reschedules the sender
 
     // Batch-send queue and scheduler
     private final ConcurrentLinkedQueue<JsonObject> logQueue;
     private final ScheduledExecutorService batchScheduler;
+
+    /**
+     * The currently-scheduled batch-send task, or {@code null} while batching is disabled.
+     * <p>
+     * Tracked so {@link #setIntervalMs(int)} and {@link #setBatchEnabled(boolean)} can cancel and
+     * resubmit it -- before #432, the interval was baked into the one
+     * {@code scheduleWithFixedDelay} call the constructor made, and the setter only mutated the
+     * field without ever touching the already-running task.
+     */
+    private volatile ScheduledFuture<?> batchSenderTask;
 
     /**
      * Constructor.
@@ -111,12 +182,16 @@ public class UltiPanelLogTransmitter {
                 logData.add("stackTrace", null);
             }
 
-            if (batchEnabled) {
-                // Batch-send mode
-                addToBatch(logData);
-            } else {
-                // Immediate-send mode
-                sendLogImmediately(logData);
+            // Gate-2 finding (round 6): held across the read of batchEnabled AND the resulting
+            // call, matching setBatchEnabled(false)'s own lock -- see batchModeLock's javadoc.
+            synchronized (batchModeLock) {
+                if (batchEnabled) {
+                    // Batch-send mode
+                    addToBatch(logData);
+                } else {
+                    // Immediate-send mode
+                    sendLogImmediately(logData);
+                }
             }
 
         } catch (Exception e) {
@@ -171,64 +246,209 @@ public class UltiPanelLogTransmitter {
         // If the queue is full, send immediately
         if (logQueue.size() >= batchSize) {
             sendBatch();
+            // Gate-2 finding (round 6): sendBatch() itself is a no-op under external drain mode
+            // (see its own early return), so the threshold crossing above would otherwise have
+            // no effect at all while monitoring is active. Notify the external owner instead, so
+            // it can perform its own immediate drain rather than waiting for its next scheduled
+            // tick -- see externalSizeThresholdCallback's own javadoc.
+            if (externalDrainMode.get() && externalSizeThresholdCallback != null) {
+                externalSizeThresholdCallback.run();
+            }
         }
     }
 
     /**
-     * Starts the batch-send task.
+     * (Re)starts the batch-send task at the current {@link #intervalMs}. Cancels whatever task
+     * was previously scheduled first, so this is safe to call to both start fresh and reschedule
+     * (#432).
      */
     private void startBatchSender() {
-        batchScheduler.scheduleWithFixedDelay(this::sendBatch, 
+        if (batchSenderTask != null) {
+            batchSenderTask.cancel(false);
+        }
+        batchSenderTask = batchScheduler.scheduleWithFixedDelay(this::sendBatch,
             intervalMs, intervalMs, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Cancels the currently-scheduled batch-send task, if any, and clears the reference.
+     */
+    private void stopBatchSender() {
+        if (batchSenderTask != null) {
+            batchSenderTask.cancel(false);
+            batchSenderTask = null;
+        }
+    }
+
+    /**
+     * Sets the batch-send interval, in milliseconds, and -- unlike the field it replaces as a
+     * plain Lombok setter -- reschedules the already-running batch-send task to actually use it
+     * (#432). A no-op, deliberately not touching the scheduler, when the requested value equals
+     * the current one, so a live-config-update round-trip that resends the same value does not
+     * churn the scheduler. Has no effect on the scheduler while batching is disabled (there is no
+     * running task to reschedule); the new value still takes effect the next time batching is
+     * enabled.
+     *
+     * @param intervalMs the new interval; must be at least {@link #MIN_INTERVAL_MS}
+     * @throws IllegalArgumentException if {@code intervalMs} is below {@link #MIN_INTERVAL_MS}
+     *         (including zero or negative) -- the previous interval is left in effect
+     */
+    public void setIntervalMs(int intervalMs) {
+        if (intervalMs < MIN_INTERVAL_MS) {
+            throw new IllegalArgumentException(
+                    "Batch interval must be at least " + MIN_INTERVAL_MS + "ms, got: " + intervalMs);
+        }
+        if (intervalMs == this.intervalMs) {
+            return;
+        }
+        this.intervalMs = intervalMs;
+        if (batchSenderTask != null) {
+            startBatchSender();
+        }
+    }
+
+    /**
+     * Sets the batch send-threshold size, rejecting anything below 1 (Gate-2 finding). A value of
+     * zero or negative would make {@link #sendBatch()}'s own {@code for (int i = 0; i < batchSize
+     * ...)} loop consume nothing on every scheduled run, while {@link #addToBatch(JsonObject)}'s
+     * {@code logQueue.size() >= batchSize} check is simultaneously always true (any non-negative
+     * queue size satisfies {@code >= 0} or {@code >= a negative number}) -- so every single
+     * enqueued record would trigger an immediate {@code sendBatch()} call that dequeues nothing,
+     * silently stalling delivery while burning CPU on every log line, rather than the panel
+     * request being rejected outright. {@code LogStreamManager#loadBatchConfiguration()}'s own
+     * boot-time path already clamped to {@code Math.max(1, batchSize)}; the live panel path had no
+     * lower bound at all before this fix, unlike {@link #setIntervalMs(int)}'s pre-existing floor.
+     *
+     * @param batchSize the new batch size; must be at least 1
+     * @throws IllegalArgumentException if {@code batchSize} is below 1 -- the previous value is
+     *         left in effect
+     */
+    public void setBatchSize(int batchSize) {
+        if (batchSize < 1) {
+            throw new IllegalArgumentException("Batch size must be at least 1, got: " + batchSize);
+        }
+        this.batchSize = batchSize;
+    }
+
+    /**
+     * Enables or disables batched delivery, and -- unlike the field it replaces as a plain Lombok
+     * setter -- actually starts or stops the scheduled batch-send task to match (#432): disabling
+     * cancels it outright rather than leaving it running with nothing useful to flush; re-enabling
+     * starts a fresh one at the current {@link #intervalMs}. A no-op when the requested value
+     * equals the current one.
+     *
+     * @param batchEnabled whether batched delivery should be active
+     */
+    public void setBatchEnabled(boolean batchEnabled) {
+        if (batchEnabled == this.batchEnabled) {
+            return;
+        }
+        if (batchEnabled) {
+            this.batchEnabled = true;
+            startBatchSender();
+            return;
+        }
+
+        // Gate-2 finding, round 6: flush and the flag flip must be atomic against sendLog's own
+        // dispatch decision, via the SAME batchModeLock sendLog holds -- see its own javadoc.
+        // Before this lock, this.batchEnabled was written BEFORE flushLogs() drained the existing
+        // queue, so a concurrent sendLog() call could read the new false value and send a NEWER
+        // record immediately while flushLogs() was still draining OLDER queued records, arriving
+        // at the panel out of order. Flushing while batchEnabled is STILL true is safe -- flushLogs
+        // (via sendBatch) never reads batchEnabled at all, only externalDrainMode -- so any record
+        // enqueued by a concurrent sendLog() during the flush (which the lock forces to happen
+        // entirely before or entirely after this block, never during) is picked up by the SAME
+        // ConcurrentLinkedQueue-backed flush that is already running, still in FIFO order.
+        synchronized (batchModeLock) {
+            // Gate-2 finding: cancelling the scheduled sender with entries still queued (fewer
+            // than batchSize, so addToBatch's own size-threshold send never fired) used to strand
+            // them -- new records after this point go out immediately (batching is now off), while
+            // the older queued ones sat unsent until batching was re-enabled or shutdown() ran,
+            // arriving late and out of order. Flush whatever is already queued BEFORE cancelling
+            // its only consumer, so disabling batching means "deliver what's pending now, then send
+            // immediately from here on" rather than "silently defer some records indefinitely."
+            flushLogs();
+            this.batchEnabled = false;
+        }
+        stopBatchSender();
     }
 
     /**
      * Sends the batched logs.
      * When externalDrainMode is true, only drops entries that exceed the queue cap and does not send.
+     * <p>
+     * Gate-2 finding (round 10): this method is ALSO reached directly, on the scheduler's own
+     * thread, by the periodically-firing {@link #batchSenderTask}. Before this fix, that call was
+     * completely unsynchronized -- a live {@code batchConfig.enabled: false} update could hold
+     * {@link #batchModeLock} across its own {@link #flushLogs()} call while the scheduled task
+     * fired concurrently on the scheduler's thread and called this method too, both polling the
+     * SAME {@link #logQueue} and both calling {@code webSocketClient.sendMessage(...)}
+     * independently -- interleaving queue polls between two frames with no ordering guarantee
+     * between the two {@code sendMessage} calls. Synchronizing the whole body on
+     * {@link #batchModeLock} serializes the scheduled tick against {@code setBatchEnabled(false)}'s
+     * own flush, against {@link #flushLogs()} however else it is reached (it now also acquires
+     * this same lock, see its own javadoc), and against {@code sendLog}'s own dispatch decision
+     * (reentrant when this method is reached via {@code addToBatch}'s size-threshold trigger,
+     * since that call chain already holds the lock). No new deadlock risk: this method never
+     * acquires any OTHER lock, so it can only ever be the innermost link in any lock chain that
+     * reaches it.
      */
     private void sendBatch() {
-        if (logQueue.isEmpty()) {
-            return;
-        }
+        synchronized (batchModeLock) {
+            if (logQueue.isEmpty()) {
+                return;
+            }
 
-        // Under external drain mode, only enforce queue-overflow protection (already handled by
-        // addToBatch), do not send
-        if (externalDrainMode.get()) {
-            return;
-        }
+            // Under external drain mode, only enforce queue-overflow protection (already handled
+            // by addToBatch), do not send
+            if (externalDrainMode.get()) {
+                return;
+            }
 
-        if (!webSocketClient.isConnected()) {
-            return;
-        }
+            if (!webSocketClient.isConnected()) {
+                return;
+            }
 
-        try {
-            JsonArray logs = new JsonArray();
+            try {
+                JsonArray logs = new JsonArray();
 
-            // Pull logs out of the queue
-            for (int i = 0; i < batchSize && !logQueue.isEmpty(); i++) {
-                JsonObject log = logQueue.poll();
-                if (log != null) {
-                    logs.add(log);
+                // Pull logs out of the queue
+                for (int i = 0; i < batchSize && !logQueue.isEmpty(); i++) {
+                    JsonObject log = logQueue.poll();
+                    if (log != null) {
+                        logs.add(log);
+                    }
                 }
+
+                if (logs.size() > 0) {
+                    // Send the batched-log message
+                    JsonObject batchMessage = new JsonObject();
+                    batchMessage.addProperty("type", "log_batch");
+                    batchMessage.addProperty("serverId", serverId);
+                    batchMessage.add("data", logs);
+                    batchMessage.addProperty("timestamp", System.currentTimeMillis());
+
+                    webSocketClient.sendMessage(batchMessage);
+
+                    // Gate-2 finding (round 6): this diagnostic USED to log via
+                    // UltiTools.getInstance().getLogger() at Level.FINE. That logger is the shared
+                    // PLUGIN logger (Bukkit's JavaPlugin#getLogger()), not a per-class logger named
+                    // after this class -- so SystemLogHandler#shouldProcessRecord's class-name-based
+                    // loop-prevention check (which matches on loggerName.contains("...")) could never
+                    // catch it. Before this plan, that was harmless because the handler's own JUL
+                    // level floor stayed at Level.INFO, silently dropping this FINE record before it
+                    // ever reached shouldProcessRecord. #433/CR-02 (this same PR) made "debug"
+                    // genuinely lower that floor to Level.FINEST -- so this record became reachable
+                    // for the first time, and with batchConfig.size:1 it recursively re-triggered
+                    // this very method (send -> log FINE -> SystemLogHandler -> sendLog -> addToBatch
+                    // -> threshold reached -> sendBatch -> log FINE -> ...) until StackOverflowError.
+                    // Removed rather than routed around the loop guard -- this line's information
+                    // value (a batch-size count) does not justify carrying a self-recursion hazard.
+                }
+
+            } catch (Exception e) {
+                System.err.println("[UltiPanel] 发送批量日志失败: " + e.getMessage());
             }
-
-            if (logs.size() > 0) {
-                // Send the batched-log message
-                JsonObject batchMessage = new JsonObject();
-                batchMessage.addProperty("type", "log_batch");
-                batchMessage.addProperty("serverId", serverId);
-                batchMessage.add("data", logs);
-                batchMessage.addProperty("timestamp", System.currentTimeMillis());
-
-                webSocketClient.sendMessage(batchMessage);
-
-                // Log the batch-send information
-                UltiTools.getInstance().getLogger().log(Level.FINE,
-                    String.format("[UltiPanel] 批量发送 %d 条日志", logs.size()));
-            }
-
-        } catch (Exception e) {
-            System.err.println("[UltiPanel] 发送批量日志失败: " + e.getMessage());
         }
     }
 
@@ -266,6 +486,28 @@ public class UltiPanelLogTransmitter {
      */
     public boolean isExternalDrainMode() {
         return externalDrainMode.get();
+    }
+
+    /**
+     * Sets the callback invoked when the queue reaches {@link #batchSize} while external drain
+     * mode is active (Gate-2 finding, round 6). Pass {@code null} to clear it.
+     *
+     * @param callback a no-argument, non-blocking callback; called on whichever thread
+     *        {@link #sendLog(String, String, String, Throwable)} happened to run on
+     */
+    public void setExternalSizeThresholdCallback(Runnable callback) {
+        this.externalSizeThresholdCallback = callback;
+    }
+
+    /**
+     * Sets the lock {@link #flushLogs()} coordinates disable-time flushes against (Gate-2
+     * finding, round 9). Pass {@code null} to clear it (flushLogs runs unsynchronized again).
+     *
+     * @param lock any object usable as a monitor; the SAME instance must be used by whatever
+     *        external code also drains this transmitter's queue (see this field's own javadoc)
+     */
+    public void setExternalDrainCoordinationLock(Object lock) {
+        this.externalDrainCoordinationLock = lock;
     }
 
     /**
@@ -344,8 +586,41 @@ public class UltiPanelLogTransmitter {
     /**
      * Immediately sends every log currently in the queue.
      * Temporarily disables external drain mode to make sure the logs actually get sent.
+     * <p>
+     * Gate-2 finding (round 10): now ALSO acquires {@link #batchModeLock} as the OUTERMOST lock,
+     * before the external coordination lock below -- {@link #sendBatch()} (which this method
+     * reaches via {@link #doFlushLogs()}) is itself now synchronized on {@link #batchModeLock}
+     * (see its own javadoc), so without this method also acquiring it first, a caller that had NOT
+     * already taken {@link #batchModeLock} (e.g. {@link #shutdown()}, or {@link
+     * com.ultikits.ultitools.handler.SystemLogHandler#flush()}/{@code close()}) would acquire the
+     * coordination lock FIRST and only then try for {@link #batchModeLock} inside {@code
+     * sendBatch()} -- the reverse of the order every other path in this class already establishes
+     * ({@link #batchModeLock} before {@code logDrainLock}, see {@link
+     * #setExternalDrainCoordinationLock(Object)}'s own javadoc), and a reverse-order acquisition
+     * on two different threads is exactly how a lock-ordering deadlock happens. Taking {@link
+     * #batchModeLock} first here keeps every acquisition path in this class consistent with that
+     * one order, so this addition introduces no new deadlock risk -- verified by enumerating every
+     * lock-acquiring path in this class and {@code ServerMonitorManager} (see this plan's gate
+     * record).
      */
     public void flushLogs() {
+        synchronized (batchModeLock) {
+            // Gate-2 finding (round 9): coordinate with ServerMonitorManager's own drain paths,
+            // when wired up, so a disable-time flush (setBatchEnabled(false)) cannot interleave
+            // with either of the monitor's own drains and reorder the backlog -- see
+            // externalDrainCoordinationLock's own javadoc.
+            Object coordinationLock = externalDrainCoordinationLock;
+            if (coordinationLock != null) {
+                synchronized (coordinationLock) {
+                    doFlushLogs();
+                }
+            } else {
+                doFlushLogs();
+            }
+        }
+    }
+
+    private void doFlushLogs() {
         boolean wasExternalDrain = externalDrainMode.getAndSet(false);
         try {
             // The continuation condition must be "the queue actually got shorter", not just

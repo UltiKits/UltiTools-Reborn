@@ -21,11 +21,31 @@ import java.util.logging.LogRecord;
  * @version 1.0.0
  */
 public class SystemLogHandler extends Handler {
-    
+
+    /**
+     * Reentrancy guard for {@link #publish(LogRecord)} (Gate-2 finding, round 9). Loop-prevention
+     * in this class was, until now, done entirely by matching the RECORD's own {@code loggerName}
+     * against a small set of known class-name substrings ({@link #shouldProcessRecord} below) --
+     * but every diagnostic this framework logs through the SHARED plugin logger
+     * ({@code UltiTools.getInstance().getLogger()}) carries that shared logger's own name, not the
+     * calling class's, so the substring check can never catch any of them. Round 6/7 found and
+     * removed two individual instances of this (a transmitter diagnostic, then a WebSocket-send
+     * diagnostic); round 9 found a THIRD, in an exception handler that cannot simply be deleted
+     * (reporting a genuine send failure has real value). Rather than keep chasing individual call
+     * sites the review keeps finding new instances of, this ThreadLocal closes the whole class at
+     * its root: if {@code publish} is entered while ALREADY running on the SAME thread (which is
+     * exactly what happens when delivering/draining record N synchronously produces record N+1 on
+     * the same call stack -- every reachable recursion in this subsystem is same-thread, since
+     * none of the delivery/drain paths hand off to a different thread before logging), the
+     * re-entrant call is dropped instead of recursing. A single dropped self-referential diagnostic
+     * is an acceptable cost for eliminating an entire StackOverflowError defect class.
+     */
+    private static final ThreadLocal<Boolean> PUBLISHING = ThreadLocal.withInitial(() -> false);
+
     private final UltiPanelLogTransmitter logTransmitter;
-    
+
     // Log-level filter configuration
-    @Getter @Setter
+    @Getter
     private Set<String> enabledLevels;
 
     // Excluded-logger configuration
@@ -71,7 +91,39 @@ public class SystemLogHandler extends Handler {
         // Apply the minimum level
         setLevel(minimumLevel);
     }
-    
+
+    /**
+     * Sets the panel-facing set of enabled log levels, and re-synchronises this handler's own
+     * {@code java.util.logging} level floor to match ({@link #syncHandlerLevelWithEnabledLevels()}).
+     *
+     * @param enabledLevels the new enabled-level set
+     */
+    public void setEnabledLevels(Set<String> enabledLevels) {
+        this.enabledLevels = enabledLevels;
+        syncHandlerLevelWithEnabledLevels();
+    }
+
+    /**
+     * Gate-2 finding: {@link #shouldProcessRecord(LogRecord)} calls {@link #isLoggable(LogRecord)}
+     * -- the base {@code Handler}'s own check against {@link #getLevel()} -- BEFORE this class's
+     * own {@link #enabledLevels} filter ever runs. {@link #getLevel()} defaults to
+     * {@link Level#INFO} ({@link #minimumLevel}), which rejects JUL {@code FINE}/{@code FINER}/
+     * {@code FINEST} records outright -- the levels {@link #mapLogLevel(Level)} maps to
+     * {@code "debug"}. So a panel request enabling {@code "debug"} in {@link #enabledLevels} used
+     * to have no effect: no debug-shaped record could ever reach the mapping step that would have
+     * recognised it. Called after every mutation of {@link #enabledLevels} (the setter above,
+     * {@link #addEnabledLevel(String)}, {@link #removeEnabledLevel(String)}, and
+     * {@link #loadConfiguration()}'s own direct mutation) so the handler's own floor tracks
+     * whether {@code "debug"} is currently enabled.
+     */
+    private void syncHandlerLevelWithEnabledLevels() {
+        if (enabledLevels != null && enabledLevels.contains("debug")) {
+            setLevel(Level.FINEST);
+        } else {
+            setLevel(minimumLevel);
+        }
+    }
+
     /**
      * Loads configuration from the config file.
      */
@@ -83,6 +135,7 @@ public class SystemLogHandler extends Handler {
                 for (String level : UltiTools.getInstance().getConfig().getStringList("ultipanel.logging.levels")) {
                     enabledLevels.add(level.toLowerCase());
                 }
+                syncHandlerLevelWithEnabledLevels();
             }
 
             // Load the excluded-logger configuration
@@ -102,30 +155,41 @@ public class SystemLogHandler extends Handler {
     
     @Override
     public void publish(LogRecord record) {
+        // Gate-2 finding (round 9): reentrancy guard -- see PUBLISHING's own javadoc. Checked
+        // before shouldProcessRecord() so a re-entrant call is dropped as cheaply as possible.
+        if (Boolean.TRUE.equals(PUBLISHING.get())) {
+            return;
+        }
+
         // Check whether this log record should be processed
         if (!shouldProcessRecord(record)) {
             return;
         }
 
+        PUBLISHING.set(true);
         try {
             // Map the log level
             String level = mapLogLevel(record.getLevel());
 
-            // Check whether the level is enabled
-            if (!enabledLevels.contains(level)) {
-                return;
-            }
-
-            // Format the message
-            String message = formatLogMessage(record);
-
-            // Determine the log source
+            // Determine the log source -- computed unconditionally: it feeds BOTH the panel
+            // delivery below (gated by enabledLevels) AND the ErrorReportCollector report
+            // (deliberately NOT gated by enabledLevels -- see the comment there, CR-02).
             String source = determineLogSource(record);
 
-            // Send the log
-            logTransmitter.sendLog(level, message, source, record.getThrown());
+            // Check whether the level is enabled for panel delivery
+            if (enabledLevels.contains(level)) {
+                // Format the message and send the log
+                String message = formatLogMessage(record);
+                logTransmitter.sendLog(level, message, source, record.getThrown());
+            }
 
-            // Report error-level logs with exceptions to ErrorReportCollector
+            // Report error-level logs with exceptions to ErrorReportCollector, regardless of
+            // whether the panel's own live log-view level filter currently excludes "error"
+            // (CR-02): the log stream (what the panel view shows) and the error-reporting
+            // pipeline (UltiPanel's automatic exception collection) are two independent
+            // declared surfaces. Before #433 made the levels filter genuinely effective, this
+            // coupling existed in code but was unreachable over the network; making one control
+            // real must not silently disable the other.
             if ("error".equals(level) && record.getThrown() != null) {
                 try {
                     UltiTools instance = UltiTools.getInstance();
@@ -145,9 +209,11 @@ public class SystemLogHandler extends Handler {
         } catch (Exception e) {
             // Avoid a logging loop by writing to System.err directly
             System.err.println("[UltiPanel] SystemLogHandler处理日志记录失败: " + e.getMessage());
+        } finally {
+            PUBLISHING.set(false);
         }
     }
-    
+
     /**
      * Checks whether this log record should be processed.
      */
@@ -369,6 +435,7 @@ public class SystemLogHandler extends Handler {
     public void addEnabledLevel(String level) {
         if (level != null) {
             enabledLevels.add(level.toLowerCase());
+            syncHandlerLevelWithEnabledLevels();
         }
     }
 
@@ -378,6 +445,7 @@ public class SystemLogHandler extends Handler {
     public void removeEnabledLevel(String level) {
         if (level != null) {
             enabledLevels.remove(level.toLowerCase());
+            syncHandlerLevelWithEnabledLevels();
         }
     }
 
