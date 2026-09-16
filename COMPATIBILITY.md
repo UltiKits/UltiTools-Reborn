@@ -306,8 +306,19 @@ descriptor** of a public method. Such a change necessarily breaks binary compati
 possibly not breaking source compatibility at all, and therefore bypasses every process that assumes
 somebody will notice.
 
-This has happened twice, and both cases are recorded here. The first in a MINOR, the second in a
-PATCH — **no release level is exempt**:
+A second, narrower class also cannot go on the removal list, for a different reason: the method is
+not removed at all, so there is no eventual deletion event to annotate with `@Deprecated(forRemoval =
+true)` and no descriptor change either. Adding `final` to a public method is exactly this — the
+method's name, return type and parameter types are all unchanged, so the removal list's two
+preconditions have no target, yet japicmp still reports it (`METHOD_NOW_FINAL`) because a subclass
+that overrode the method can no longer be loaded at all. Unlike the two descriptor cases below, this
+one is not invisible to its author — it is deliberate and recorded here in full, with its own
+japicmp exclude entry — but the removal-list mechanism still cannot express it, because nothing was
+removed for the annotation to describe.
+
+This has happened three times, and all three are recorded here — a JVM-descriptor change in a MINOR,
+the same in a PATCH, and a `final` addition in a MINOR still under development — **no release level
+is exempt, and no failure mode is exempt either**:
 
 ### First occurrence: 6.1.1 → 6.2.0, a MINOR
 
@@ -438,6 +449,55 @@ The measurement used one module's identical source, recompiled with only the pin
 artifact built against 6.2.0 is missing 3 symbols on 6.2.1 and 0 on 6.2.0; the artifact built against
 6.2.1 is the reverse, missing 3 on 6.2.0 and 0 on 6.2.1. It is symmetric, and neither side crosses
 over. "Runs but does not compile" describes the `getDataOperator` line only.
+
+### Third occurrence: 6.2.5 → 6.3.0, a MINOR (still under development)
+
+`UltiToolsPlugin.unregisterSelf()` and `UltiToolsPlugin.reloadSelf()` both gain `final`. Each keeps
+its exact name, return type (`void`) and parameter list (none) — there is no descriptor change here,
+unlike the first two occurrences — but japicmp still reports both as binary-incompatible
+(`METHOD_NOW_FINAL`), because a subclass compiled against 6.2.5 that overrides either method can no
+longer be loaded on 6.3.0 at all.
+
+**Same-release exception, clause 1 (proven non-functional).** Both overrides were already the
+declared extension point for module unload and reload work, and both were measured broken on every
+released version: **15 of 15** module `unregisterSelf()` overrides never call `super.unregisterSelf()`,
+so the framework's own `CommandManager.unregisterAll` / `ListenerManager.unregisterAll` step never
+runs on module unload — the module's commands keep resolving into a closed container after the
+module is gone. **9 of 11** module `reloadSelf()` overrides never call `super.reloadSelf()`, so the
+framework's own config-reload / language-refresh / `@ConditionalOnConfig`-drift-report steps never
+run on a `/ul reload` of that module. Real-machine instances: Phase 13's UltiLogin#13 and
+UltiWorlds#10. Making both methods `final` — with `onUnregister()` and `onReload()` as the new,
+unconditional-body-guaranteed hooks — is not a new restriction on working behaviour; it is the fix
+for a declared contract that never ran.
+
+**Why this could not simply be deprecated first.** `unregisterSelf()`/`reloadSelf()` are declared on
+the public `IPlugin` interface and were never going to be removed — only sealed against override.
+There is no future release where deprecation would mature into removal, so the ordinary one-MINOR
+warning window has nothing to count down to; the `final` keyword is the entire change, applied once.
+
+**What an un-recompiled downstream JAR sees.** A module JAR compiled against 6.2.5 that overrides
+either method fails at class-verification time — before the module's `registerSelf()` ever runs —
+with `VerifyError: class <ModuleClass> overrides final method
+com.ultikits.ultitools.abstracts.UltiToolsPlugin.unregisterSelf()V` (or `reloadSelf()V`). This is a
+loud, named failure at load time, not a silent no-op and not a delayed `NoSuchMethodError` on first
+use, unlike the first two occurrences in this section — the class naming its own offending method is
+exactly what a `VerifyError` for an overridden final method reports.
+
+**Migration guide for module authors.** The fix is a rename, not a rewrite, in every case but one:
+
+| Your current override | What to do |
+|---|---|
+| `unregisterSelf()` doing real cleanup work | Rename the override to `onUnregister()`, keep the body verbatim |
+| `unregisterSelf()` that is empty or log-only | Delete the override outright — the framework's own `onUnregister()` default body already does nothing, and the module's log line (if any) becomes dead weight once removed |
+| `reloadSelf()` doing real reload work | Rename the override to `onReload()`, keep the body verbatim. Drop any `super.reloadSelf()` call inside it — it is no longer callable, and the framework's three reload steps and its own log line now always run before `onReload()`, whether or not the old override called `super` |
+| `reloadSelf()` that only logs "reloaded" or similar | Delete the override outright, and delete the now-dead module `lang` key that message used — the framework logs its own per-module reload line (D-03) |
+| `reloadSelf()` that already called `super.reloadSelf()` (2 of 11 modules) | Rename to `onReload()` and drop the `super` call; no other change needed |
+
+Two member-level japicmp excludes cover this occurrence: `UltiToolsPlugin#unregisterSelf()` and
+`UltiToolsPlugin#reloadSelf()`, both member-level (the class itself is unchanged and still present),
+appended to the end of `pom.xml`'s existing `<excludes>` list. See
+[the 6.3.0 removal record](compatibility/records/6.3.0.md) for the full evidence and the
+downstream-author paragraph in that file's own format.
 
 ### What this means for you
 
