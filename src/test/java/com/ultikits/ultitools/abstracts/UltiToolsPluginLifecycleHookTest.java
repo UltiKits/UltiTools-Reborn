@@ -378,10 +378,70 @@ class UltiToolsPluginLifecycleHookTest {
         doThrow(new RuntimeException("command manager boom")).when(mockCommandManager).unregisterAll(plugin);
 
         // A single flat finally block runs its statements sequentially -- if the FIRST one
-        // throws, the SECOND never executes. Nesting is required so each cleanup step's own
-        // failure cannot suppress the other's.
+        // throws, the SECOND never executes. unregisterSelf() runs every step regardless of an
+        // earlier one's failure instead (see the exception-identity/suppression tests below for
+        // the assertions this test does not cover).
         assertThrows(RuntimeException.class, plugin::unregisterSelf);
 
+        verify(mockListenerManager, times(1)).unregisterAll(plugin);
+    }
+
+    @Test
+    @DisplayName("hook AND command cleanup both throw -- the hook's own exception propagates, "
+            + "the command-cleanup exception is suppressed on it, and listener cleanup still ran "
+            + "(Codex review on #457, issue #484: \"Preserve the hook failure when cleanup also throws\")")
+    void hookAndCommandCleanupBothThrow_hookExceptionPropagatesWithCommandFailureSuppressed() {
+        UltiToolsPlugin plugin = mock(FixturePlugin.class);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        RuntimeException hookFailure = new RuntimeException("hook failed");
+        RuntimeException commandFailure = new RuntimeException("command cleanup failed");
+        doThrow(hookFailure).when(plugin).onUnregister();
+        doThrow(commandFailure).when(mockCommandManager).unregisterAll(plugin);
+
+        // Plain finally-block semantics would let commandFailure silently REPLACE hookFailure --
+        // the module author's own exception, describing the module's own cleanup bug, would
+        // never reach the caller at all. The fix must instead surface hookFailure and attach
+        // commandFailure to it.
+        RuntimeException thrown = assertThrows(RuntimeException.class, plugin::unregisterSelf);
+
+        assertThat(thrown).isSameAs(hookFailure);
+        assertThat(thrown.getSuppressed()).containsExactly(commandFailure);
+        verify(mockListenerManager, times(1)).unregisterAll(plugin);
+    }
+
+    @Test
+    @DisplayName("hook succeeds but command AND listener cleanup both throw -- the command-cleanup "
+            + "exception propagates with the listener-cleanup exception suppressed on it")
+    void commandAndListenerCleanupBothThrow_commandExceptionPropagatesWithListenerFailureSuppressed() {
+        UltiToolsPlugin plugin = mock(FixturePlugin.class);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        RuntimeException commandFailure = new RuntimeException("command cleanup failed");
+        RuntimeException listenerFailure = new RuntimeException("listener cleanup failed");
+        doThrow(commandFailure).when(mockCommandManager).unregisterAll(plugin);
+        doThrow(listenerFailure).when(mockListenerManager).unregisterAll(plugin);
+
+        // The FIRST failure in source order (command cleanup runs before listener cleanup) must
+        // propagate, with the later one attached as suppressed -- not the other way around, and
+        // not one silently discarding the other.
+        RuntimeException thrown = assertThrows(RuntimeException.class, plugin::unregisterSelf);
+
+        assertThat(thrown).isSameAs(commandFailure);
+        assertThat(thrown.getSuppressed()).containsExactly(listenerFailure);
+    }
+
+    @Test
+    @DisplayName("when nothing throws, both command and listener cleanup run and unregisterSelf() completes normally")
+    // The assertion here IS verify(...) -- Mockito's invocation count check, which PMD does
+    // not recognise as an assert (documented pattern, see this repository's CLAUDE.md
+    // "Suppressing PMD in tests").
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
+    void nothingThrows_bothCleanupsRunAndNoExceptionPropagates() {
+        UltiToolsPlugin plugin = mock(FixturePlugin.class);
+        doCallRealMethod().when(plugin).unregisterSelf();
+
+        plugin.unregisterSelf();
+
+        verify(mockCommandManager, times(1)).unregisterAll(plugin);
         verify(mockListenerManager, times(1)).unregisterAll(plugin);
     }
 }
