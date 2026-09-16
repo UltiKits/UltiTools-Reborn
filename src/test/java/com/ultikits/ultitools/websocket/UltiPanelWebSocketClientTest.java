@@ -1,6 +1,8 @@
 package com.ultikits.ultitools.websocket;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -12,13 +14,16 @@ import java.util.function.Consumer;
 
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.mockito.MockedStatic;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
+import com.ultikits.ultitools.UltiTools;
 
 /**
  * Unit tests for {@link UltiPanelWebSocketClient}.
@@ -320,6 +325,52 @@ class UltiPanelWebSocketClientTest {
             Method method = UltiPanelWebSocketClient.class.getMethod("isConnected");
 
             assertThat(method.getReturnType()).isEqualTo(boolean.class);
+        }
+    }
+
+    /**
+     * Gate-2 finding (review round 13, pull request #467). {@code sendMessage()}'s
+     * {@code !isOpen()} branch used to log its warning via {@code UltiTools.getInstance()
+     * .getLogger()} -- the shared plugin logger {@link com.ultikits.ultitools.handler
+     * .SystemLogHandler} captures. Two callers of this exact method hold a lock while calling it:
+     * {@code ServerMonitorManager#sendBatchUpdate}/{@code #drainAndSendLogsOnly} hold
+     * {@code logDrainLock}; {@code UltiPanelLogTransmitter#sendLog}/{@code #sendBatch} hold
+     * {@code batchModeLock} before reaching this method indirectly (via the log record this
+     * branch used to emit, routed back through {@code SystemLogHandler}). If the socket closes
+     * between a caller's own {@code isConnected()} check and this method's {@code isOpen()}
+     * check, the warning fired while the caller still held its lock, re-entering the transmitter
+     * pipeline and acquiring the OTHER lock in the opposite order from the size-triggered drain
+     * path -- an AB-BA deadlock. Fixed by writing this diagnostic straight to {@code System.err},
+     * the same pattern {@code UltiPanelLogTransmitter#sendLog}'s own catch block already uses for
+     * the identical reason ("do not use the logger, to avoid the loop").
+     */
+    @Nested
+    @DisplayName("closed-socket sendMessage never re-enters the shared plugin logger")
+    class ClosedSocketSendDiagnosticTests {
+
+        private MockedStatic<UltiTools> ultiToolsMock;
+
+        @AfterEach
+        void tearDown() {
+            if (ultiToolsMock != null) {
+                ultiToolsMock.close();
+            }
+        }
+
+        @Test
+        @DisplayName("sendMessage on a never-opened client does not call UltiTools.getInstance()")
+        void sendMessageOnClosedSocketNeverCallsUltiToolsGetInstance() throws URISyntaxException {
+            ultiToolsMock = mockStatic(UltiTools.class);
+
+            UltiPanelWebSocketClient client = new UltiPanelWebSocketClient(
+                TEST_URL, TEST_SERVER_ID, TEST_TOKEN);
+            assertThat(client.isOpen()).isFalse(); // never connected -- exercises the !isOpen() branch
+
+            JsonObject message = new JsonObject();
+            message.addProperty("type", "batch_update");
+            client.sendMessage(message);
+
+            ultiToolsMock.verify(UltiTools::getInstance, never());
         }
     }
 

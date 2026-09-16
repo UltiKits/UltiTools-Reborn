@@ -130,7 +130,20 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
      */
     public void sendMessage(JsonObject message) {
         if (!isOpen()) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "WebSocket未连接，无法发送消息");
+            // Gate-2 finding (review round 13, #467): this used to log via
+            // UltiTools.getInstance().getLogger() -- the shared plugin logger SystemLogHandler
+            // captures. This method is the sole chokepoint every drain path routes through, and
+            // two of those callers hold a lock across this exact call:
+            // ServerMonitorManager#sendBatchUpdate/#drainAndSendLogsOnly hold logDrainLock;
+            // UltiPanelLogTransmitter#sendLog/#sendBatch hold batchModeLock before reaching this
+            // method. If the socket closes between a caller's own isConnected() check and this
+            // isOpen() check, logging through the shared logger here re-enters the transmitter
+            // pipeline and acquires the OTHER lock in the opposite order from the size-triggered
+            // drain path -- an AB-BA deadlock. Write straight to System.err instead, the same
+            // pattern UltiPanelLogTransmitter#sendLog's own catch block already uses for the
+            // identical reason ("do not use the logger, to avoid the loop"). Regression test:
+            // UltiPanelWebSocketClientTest$ClosedSocketSendDiagnosticTests.
+            System.err.println("[UltiPanel] WebSocket未连接，无法发送消息");
             return;
         }
 
