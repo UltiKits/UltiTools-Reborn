@@ -495,12 +495,93 @@ public final class EconomyUtils {
     }
 
     /**
+     * The three possible outcomes of matching one stack frame against {@code prefixToModule}
+     * (Codex P2, PR #463, round 3): a bare {@code null} return collapsed "this frame belongs to no
+     * registered module" and "this frame's closest root is claimed by two or more DIFFERENT
+     * modules" into the same value, and the last two review rounds both found a defect that traces
+     * straight back to that conflation — a {@code NONE} frame must let the per-frame walk continue
+     * outward (a real non-match, no evidence either way), while an {@code AMBIGUOUS} frame must
+     * terminate the walk immediately (real evidence that a module frame exists here, but WHICH
+     * module cannot be determined) — see {@link #attributeModule(StackTraceElement[], Map)}'s own
+     * javadoc for why continuing past an ambiguous frame is itself the bug.
+     */
+    private enum MatchKind {
+        /** No registered scan root matched this frame's class name at all. */
+        NONE,
+        /** The closest (longest) matching scan root for this frame has 2+ distinct owners. */
+        AMBIGUOUS,
+        /** The closest (longest) matching scan root has exactly one owner. */
+        RESOLVED
+    }
+
+    /**
+     * One frame's match outcome: the {@link MatchKind}, plus the resolved module name when (and
+     * only when) {@code kind == RESOLVED}. Immutable, package-visible only through
+     * {@link #matchFrame(String, Map)}'s return type.
+     */
+    private static final class FrameMatch {
+        private static final FrameMatch NO_MATCH = new FrameMatch(MatchKind.NONE, null);
+        private static final FrameMatch AMBIGUOUS_MATCH = new FrameMatch(MatchKind.AMBIGUOUS, null);
+
+        private final MatchKind kind;
+        private final String module;
+
+        private FrameMatch(MatchKind kind, String module) {
+            this.kind = kind;
+            this.module = module;
+        }
+
+        private static FrameMatch resolved(String module) {
+            return new FrameMatch(MatchKind.RESOLVED, module);
+        }
+    }
+
+    /**
+     * Matches a single frame's class name against every entry in {@code prefixToModule}, applying
+     * the same most-specific-(longest)-prefix-wins rule {@link #attributeModule} has always used,
+     * and reports the outcome as a {@link FrameMatch} rather than a bare, ambiguity-erasing
+     * {@code String}.
+     *
+     * @param className      the frame's fully-qualified class name
+     * @param prefixToModule package prefix to sole owner, or to {@code null} when 2+ distinct
+     *                       modules declared it (see {@link #mergeScanPackageOwner})
+     * @return {@link FrameMatch#NO_MATCH} when nothing matches, {@link FrameMatch#AMBIGUOUS_MATCH}
+     *         when the closest (longest) matching entry's value is {@code null}, or a
+     *         {@link FrameMatch#resolved} result carrying that entry's sole owner otherwise
+     */
+    private static FrameMatch matchFrame(String className, Map<String, String> prefixToModule) {
+        String bestPrefix = null;
+        String bestModule = null;
+        boolean bestHasSingleOwner = false;
+        for (Map.Entry<String, String> entry : prefixToModule.entrySet()) {
+            String pkg = entry.getKey();
+            // [Rule 1 fix, Codex P2, 16-07]: a raw String#startsWith("com.example.foo") also
+            // matches the unrelated sibling package "com.example.foobar" -- require an actual
+            // package boundary (either an exact match, or the prefix followed by '.').
+            boolean matches = className.equals(pkg) || className.startsWith(pkg + ".");
+            if (matches && (bestPrefix == null || pkg.length() > bestPrefix.length())) {
+                // [Rule 1 fix, Codex P2, PR #463/#482]: when this frame also matches a
+                // shorter/broader prefix already seen (e.g. "com.example" vs
+                // "com.example.shop"), keep the longer one -- the most specific package is the
+                // frame's actual owner, regardless of which entry the map iterates first.
+                bestPrefix = pkg;
+                bestModule = entry.getValue();
+                bestHasSingleOwner = bestModule != null;
+            }
+        }
+        if (bestPrefix == null) {
+            return FrameMatch.NO_MATCH;
+        }
+        return bestHasSingleOwner ? FrameMatch.resolved(bestModule) : FrameMatch.AMBIGUOUS_MATCH;
+    }
+
+    /**
      * Pure: given a stack trace and a map from package prefix to module name, returns the module
-     * name attributed to the first (most-recent) frame that matches ANY mapped prefix, or
-     * {@code null} when no frame matches — including the empty-input cases (a null/empty stack, or
-     * an empty prefix map, as when no module is registered yet). Package-private so
-     * {@code EconomyUtilsReportingTest} can unit-test the attribution logic itself with synthetic
-     * input, independent of a live {@link UltiTools} instance or real registered modules.
+     * name attributed to the CLOSEST (most-recent) frame that matches ANY mapped prefix, or
+     * {@code null} when no frame in the whole stack matches — including the empty-input cases (a
+     * null/empty stack, or an empty prefix map, as when no module is registered yet). Package-
+     * private so {@code EconomyUtilsReportingTest} can unit-test the attribution logic itself with
+     * synthetic input, independent of a live {@link UltiTools} instance or real registered modules.
      * <p>
      * When a single frame matches more than one mapped prefix — e.g. two registered modules declare
      * nested scan roots {@code "com.example"} and {@code "com.example.shop"}, and the frame's class
@@ -508,36 +589,39 @@ public final class EconomyUtils {
      * independent of {@code prefixToModule}'s iteration/insertion order (Codex P2, PR #463, #482).
      * Selecting by insertion order alone let module *load* order silently decide attribution for a
      * frame that unambiguously belongs to the more specific package.
+     * <p>
+     * <b>The closest matching frame identifies the requester — full stop (Codex P2, PR #463, round
+     * 3).</b> If that frame's own closest-matching root is itself ambiguous (2+ distinct modules
+     * declared it identically — see {@link #mergeScanPackageOwner}), the requester cannot be
+     * determined and this method returns {@code null} <em>immediately</em>, WITHOUT examining any
+     * more distant frame. An earlier version of this method treated an ambiguous frame exactly like
+     * a non-match and kept walking outward — which let a more distant, entirely unrelated module's
+     * unambiguous frame win the attribution, reproducing the wrong-module-name defect this whole
+     * fix exists to remove, just by a longer route. A module deeper in the call stack is not the
+     * requester merely because the real (closest) requester was ambiguous.
      *
      * @param stack          the stack trace to search, most-recent frame first
      * @param prefixToModule package prefix to module name; order does not affect the result
-     * @return the attributed module name, or {@code null} when nothing matches
+     * @return the attributed module name, or {@code null} when the closest matching frame (if any)
+     *         is ambiguous, or when no frame matches at all
      */
     static String attributeModule(StackTraceElement[] stack, Map<String, String> prefixToModule) {
         if (stack == null || prefixToModule == null || prefixToModule.isEmpty()) {
             return null;
         }
         for (StackTraceElement frame : stack) {
-            String className = frame.getClassName();
-            String bestPrefix = null;
-            String bestModule = null;
-            for (Map.Entry<String, String> entry : prefixToModule.entrySet()) {
-                String pkg = entry.getKey();
-                // [Rule 1 fix, Codex P2, 16-07]: a raw String#startsWith("com.example.foo") also
-                // matches the unrelated sibling package "com.example.foobar" -- require an actual
-                // package boundary (either an exact match, or the prefix followed by '.').
-                boolean matches = className.equals(pkg) || className.startsWith(pkg + ".");
-                if (matches && (bestPrefix == null || pkg.length() > bestPrefix.length())) {
-                    // [Rule 1 fix, Codex P2, PR #463/#482]: when this frame also matches a
-                    // shorter/broader prefix already seen (e.g. "com.example" vs
-                    // "com.example.shop"), keep the longer one -- the most specific package is the
-                    // frame's actual owner, regardless of which entry the map iterates first.
-                    bestPrefix = pkg;
-                    bestModule = entry.getValue();
-                }
-            }
-            if (bestModule != null) {
-                return bestModule;
+            FrameMatch match = matchFrame(frame.getClassName(), prefixToModule);
+            switch (match.kind) {
+                case RESOLVED:
+                    return match.module;
+                case AMBIGUOUS:
+                    // Terminate here -- do NOT fall through to a more distant frame. See this
+                    // method's own javadoc for why that would reintroduce the defect.
+                    return null;
+                case NONE:
+                default:
+                    // A genuine non-match for this frame only: no evidence either way, keep
+                    // walking outward to the next (less recent) frame.
             }
         }
         return null;
