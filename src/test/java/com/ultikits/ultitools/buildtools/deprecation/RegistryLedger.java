@@ -76,12 +76,34 @@ public final class RegistryLedger {
      *                       every caller knows the version it is building against.
      * @throws NullPointerException if {@code currentVersion} is {@code null}
      */
+    public static RegistryLedger merge(RegistryLedger prior, List<DeprecationEntry> freshScan,
+            Set<RegistryKey> japicmpRemovedKeys, String currentVersion) {
+        return merge(prior, freshScan, japicmpRemovedKeys, currentVersion, false);
+    }
+
+    /**
+     * Same as {@link #merge(RegistryLedger, List, Set, String)}, with an explicit signal for
+     * whether the japicmp report itself was empty (Codex P2, PR #480, #461/WR-03 follow-up).
+     * {@code japicmpRemovedKeys} alone cannot distinguish "japicmp ran and confirmed nothing
+     * about this key" (a real D-22 disagreement, still fatal) from "japicmp did not run at all"
+     * (an infrastructure state {@link RemovalConsistencyEvaluator}'s unconditional
+     * {@code REPORT_MISSING_OR_EMPTY} finding already exists to explain) -- both produce an
+     * empty {@code japicmpRemovedKeys} set, but only the second should avoid throwing
+     * {@link LedgerMergeConflictException} here. Throwing in that second case blamed a
+     * source/report *disagreement* for what was actually a missing *comparison*, and pre-empted
+     * {@code REPORT_MISSING_OR_EMPTY} from ever being emitted, since this merge runs before
+     * {@link RemovalConsistencyEvaluator#evaluate} in {@code DeprecationRegistryGenerator.run}.
+     *
+     * @param reportIsEmpty {@code true} when the japicmp report itself had zero entries (missing
+     *                      or unreadable {@code target/japicmp/japicmp.xml}), not merely "this
+     *                      particular key is absent from an otherwise populated report"
+     */
     // PMD.NPathComplexity: 216 against a 200 threshold. The method is one pass over each of
     // three inputs with a flat guard per entry -- no guard nests inside another, and the count
     // is the product of independent per-entry checks rather than a measure of reachable state.
     @SuppressWarnings("PMD.NPathComplexity")
     public static RegistryLedger merge(RegistryLedger prior, List<DeprecationEntry> freshScan,
-            Set<RegistryKey> japicmpRemovedKeys, String currentVersion) {
+            Set<RegistryKey> japicmpRemovedKeys, String currentVersion, boolean reportIsEmpty) {
         Objects.requireNonNull(currentVersion, "currentVersion");
         Map<String, DeprecationEntry> merged = new LinkedHashMap<>();
         Set<String> freshKeyStrings = new HashSet<>();
@@ -123,6 +145,13 @@ public final class RegistryLedger {
                 // removeIn -- see this method's javadoc. entry.getRemoveIn() is left unchanged by
                 // withRemoved(), so the original schedule stays readable on the same entry.
                 merged.put(keyString, entry.withRemoved(currentVersion));
+            } else if (reportIsEmpty) {
+                // Codex P2, PR #480: no comparison ran at all, so this is not evidence of
+                // disagreement -- carry the entry forward unchanged and let the caller's
+                // RemovalConsistencyEvaluator#REPORT_MISSING_OR_EMPTY finding explain why
+                // nothing could be confirmed this run, instead of failing here with a message
+                // that incorrectly blames a source/report disagreement.
+                merged.put(keyString, entry);
             } else {
                 conflicts.add("source scan no longer finds " + entry.getKey()
                         + " but japicmp does not report it as REMOVED");

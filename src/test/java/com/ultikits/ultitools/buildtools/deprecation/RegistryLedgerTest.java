@@ -158,6 +158,53 @@ class RegistryLedgerTest {
     }
 
     @Nested
+    @DisplayName("Codex P2, PR #480: an empty japicmp report is an infrastructure state, not a disagreement")
+    class EmptyReportTests {
+
+        @Test
+        @DisplayName("source-gone but the japicmp report itself is empty -> no exception, entry carried forward unchanged")
+        void reportIsEmptyCarriesTheEntryForwardWithoutConflict() {
+            DeprecationEntry priorEntry = deprecatedEntry("com.ultikits.ultitools.Foo", "bar", "6.3.0");
+            RegistryLedger prior = RegistryLedger.of(Collections.singletonList(priorEntry));
+            List<DeprecationEntry> freshScan = Collections.emptyList();
+
+            RegistryLedger merged = RegistryLedger.merge(
+                    prior, freshScan, Collections.emptySet(), "6.3.0", true);
+
+            DeprecationEntry carried = merged.entries().get(0);
+            assertThat(carried.getStatus())
+                    .as("no comparison ran, so nothing licenses a REMOVED transition")
+                    .isEqualTo(DeprecationEntry.Status.ANNOUNCED);
+            assertThat(carried.getRemovedIn()).isNull();
+        }
+
+        @Test
+        @DisplayName("the 4-arg overload is unchanged -- it still defaults to reportIsEmpty=false and stays fatal")
+        void fourArgOverloadStillDefaultsToFatal() {
+            DeprecationEntry priorEntry = deprecatedEntry("com.ultikits.ultitools.Foo", "bar", "6.3.0");
+            RegistryLedger prior = RegistryLedger.of(Collections.singletonList(priorEntry));
+            List<DeprecationEntry> freshScan = Collections.emptyList();
+
+            assertThatThrownBy(() -> RegistryLedger.merge(prior, freshScan, Collections.emptySet(), "6.3.0"))
+                    .isInstanceOf(LedgerMergeConflictException.class)
+                    .hasMessageContaining("com.ultikits.ultitools.Foo#bar()");
+        }
+
+        @Test
+        @DisplayName("report is empty but japicmp still (implausibly) reports a REMOVED key -> that key still transitions, unaffected by the reportIsEmpty branch")
+        void reportIsEmptyDoesNotSuppressAGenuineRemovedTransition() {
+            DeprecationEntry priorEntry = deprecatedEntry("com.ultikits.ultitools.Foo", "bar", "6.3.0");
+            RegistryLedger prior = RegistryLedger.of(Collections.singletonList(priorEntry));
+            Set<RegistryKey> japicmpRemoved = new LinkedHashSet<>(Collections.singletonList(priorEntry.getKey()));
+
+            RegistryLedger merged = RegistryLedger.merge(
+                    prior, Collections.emptyList(), japicmpRemoved, "6.3.0", true);
+
+            assertThat(merged.entries().get(0).getStatus()).isEqualTo(DeprecationEntry.Status.REMOVED);
+        }
+    }
+
+    @Nested
     @DisplayName("GEN-04 ordering: deterministic JSON serialization")
     class DeterminismTests {
 

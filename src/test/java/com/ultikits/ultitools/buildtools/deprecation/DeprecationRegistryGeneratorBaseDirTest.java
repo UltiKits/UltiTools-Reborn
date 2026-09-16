@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.buildtools.deprecation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -158,6 +159,56 @@ class DeprecationRegistryGeneratorBaseDirTest {
         // own 55-entry ledger (which would prove baseDir was silently ignored in favour of cwd).
         String jsonContent = new String(Files.readAllBytes(writtenJson), StandardCharsets.UTF_8).trim();
         assertThat(jsonContent).isEqualTo("[]");
+    }
+
+    @Test
+    @DisplayName("Codex P2, PR #480: an empty/missing japicmp report plus a prior ANNOUNCED entry "
+            + "gone from source fails as REPORT_MISSING_OR_EMPTY, not as a raw LedgerMergeConflictException")
+    void emptyReportWithVanishedAnnouncedEntryFailsAsReportMissingNotMergeConflict(
+            @TempDir Path tempProjectRoot) throws IOException {
+        Files.write(tempProjectRoot.resolve("pom.xml"), (
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                        + "<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n"
+                        + "    <modelVersion>4.0.0</modelVersion>\n"
+                        + "    <groupId>com.example</groupId>\n"
+                        + "    <artifactId>codex-p2-fixture</artifactId>\n"
+                        + "    <version>1.0.0-SNAPSHOT</version>\n"
+                        + "</project>\n").getBytes(StandardCharsets.UTF_8));
+
+        // No src/main/java package at all - the prior ledger's member below is absent from
+        // this run's fresh source scan, exactly like a real removal.
+        Files.createDirectories(tempProjectRoot.resolve("src/main/java"));
+
+        // No target/japicmp/japicmp.xml is written at all - readJapicmpReport falls back to
+        // JapicmpReportReader.Report.empty(), reproducing the exact infrastructure state the
+        // Codex finding names ("the japicmp report is missing or has no entries").
+        Path compatDir = tempProjectRoot.resolve("compatibility");
+        Files.createDirectories(compatDir);
+        Files.write(compatDir.resolve("deprecations.json"), (
+                "[\n"
+                        + "  {\n"
+                        + "    \"key\": \"com.example.codexp2.Vanished#gone()\",\n"
+                        + "    \"className\": \"com.example.codexp2.Vanished\",\n"
+                        + "    \"memberName\": \"gone\",\n"
+                        + "    \"kind\": \"METHOD\",\n"
+                        + "    \"since\": \"1.0.0\",\n"
+                        + "    \"forRemoval\": true,\n"
+                        + "    \"removeIn\": \"2.0.0\",\n"
+                        + "    \"replacement\": null,\n"
+                        + "    \"status\": \"ANNOUNCED\",\n"
+                        + "    \"removedIn\": null\n"
+                        + "  }\n"
+                        + "]\n").getBytes(StandardCharsets.UTF_8));
+
+        assertThatThrownBy(() -> DeprecationRegistryGenerator.run(tempProjectRoot))
+                .as("the japicmp report being empty must be diagnosed as REPORT_MISSING_OR_EMPTY "
+                        + "(RemovalConsistencyEvaluator's unconditional infrastructure finding), "
+                        + "not surfaced as a raw LedgerMergeConflictException from RegistryLedger.merge "
+                        + "blaming a source/report disagreement that never actually happened")
+                .isInstanceOf(IllegalStateException.class)
+                .isNotInstanceOf(LedgerMergeConflictException.class)
+                .hasMessageContaining("REPORT_MISSING_OR_EMPTY")
+                .hasMessageContaining("the japicmp report is missing or empty");
     }
 
     private static String projectVersion(Document doc) {

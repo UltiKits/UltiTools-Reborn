@@ -118,7 +118,12 @@ public final class DeprecationRegistryGenerator {
         Set<RegistryKey> japicmpRemoved = removedKeys(report);
         japicmpRemoved.addAll(impliedRemovedByPrivateVisibility(prior, freshScan, report));
 
-        RegistryLedger merged = RegistryLedger.merge(prior, freshScan, japicmpRemoved, currentVersion);
+        // Codex P2, PR #480: pass the report's own emptiness through explicitly so the merge
+        // can tell "japicmp ran and stayed silent on this key" (a real D-22 disagreement) apart
+        // from "japicmp did not run at all" (an infrastructure state the REPORT_MISSING_OR_EMPTY
+        // finding below already exists to explain, not a merge conflict).
+        RegistryLedger merged = RegistryLedger.merge(
+                prior, freshScan, japicmpRemoved, currentVersion, report.entries().isEmpty());
 
         Files.createDirectories(ledgerJson.getParent());
         Files.write(ledgerJson, merged.toJson().getBytes(StandardCharsets.UTF_8));
@@ -360,8 +365,11 @@ public final class DeprecationRegistryGenerator {
         // so a baseline that fails to resolve produces an empty report and the build continues --
         // at which point "absent from the report" is true of every key, and this method would imply
         // a REMOVED transition for the entire prior ledger on source evidence alone. D-22's rule is
-        // dual-source; with no old side there is no second source, so imply nothing and let the
-        // normal conflict path in RegistryLedger.merge speak.
+        // dual-source; with no old side there is no second source, so imply nothing here. When
+        // the report is empty, RegistryLedger.merge's own reportIsEmpty branch (Codex P2, PR
+        // #480) now carries such an entry forward unchanged rather than treating its absence
+        // from source as a conflict -- REPORT_MISSING_OR_EMPTY explains the infrastructure state
+        // to the reader instead.
         //
         // Note this guard is NOT about japicmp's <excludes>: an excluded symbol still appears in
         // target/japicmp/japicmp.xml (measured -- CglibProxyFactory, AopProxyBeanPostProcessor,
