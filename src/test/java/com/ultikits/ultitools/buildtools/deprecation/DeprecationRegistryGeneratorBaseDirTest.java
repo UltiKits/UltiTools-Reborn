@@ -166,6 +166,53 @@ class DeprecationRegistryGeneratorBaseDirTest {
             + "gone from source fails as REPORT_MISSING_OR_EMPTY, not as a raw LedgerMergeConflictException")
     void emptyReportWithVanishedAnnouncedEntryFailsAsReportMissingNotMergeConflict(
             @TempDir Path tempProjectRoot) throws IOException {
+        buildVanishedAnnouncedEntryFixture(tempProjectRoot);
+        // No target/japicmp/japicmp.xml is written at all - readJapicmpReport falls back to
+        // JapicmpReportReader.Report.empty(), reproducing the exact infrastructure state the
+        // Codex finding names ("the japicmp report is missing or has no entries").
+
+        assertThatThrownBy(() -> DeprecationRegistryGenerator.run(tempProjectRoot))
+                .as("the japicmp report being empty must be diagnosed as REPORT_MISSING_OR_EMPTY "
+                        + "(RemovalConsistencyEvaluator's unconditional infrastructure finding), "
+                        + "not surfaced as a raw LedgerMergeConflictException from RegistryLedger.merge "
+                        + "blaming a source/report disagreement that never actually happened")
+                .isInstanceOf(IllegalStateException.class)
+                .isNotInstanceOf(LedgerMergeConflictException.class)
+                .hasMessageContaining("REPORT_MISSING_OR_EMPTY")
+                .hasMessageContaining("the japicmp report is missing or empty");
+    }
+
+    @Test
+    @DisplayName("Codex P2, PR #480 round 2: a zero-byte japicmp.xml (exists, but nothing to parse) "
+            + "is treated the same as a missing one - REPORT_MISSING_OR_EMPTY, not a raw XML parse failure")
+    void zeroByteReportIsTreatedAsEmptyNotAsAParseFailure(@TempDir Path tempProjectRoot) throws IOException {
+        buildVanishedAnnouncedEntryFixture(tempProjectRoot);
+        // Unlike the sibling test above, target/japicmp/japicmp.xml DOES exist here - so
+        // Files.exists alone can no longer distinguish this from a genuine report, exactly the
+        // gap the Codex finding names (an interrupted or racing report write can leave a
+        // zero-byte file on disk).
+        Path japicmpDir = tempProjectRoot.resolve("target/japicmp");
+        Files.createDirectories(japicmpDir);
+        Files.write(japicmpDir.resolve("japicmp.xml"), new byte[0]);
+
+        assertThatThrownBy(() -> DeprecationRegistryGenerator.run(tempProjectRoot))
+                .as("a zero-byte japicmp.xml must be diagnosed as REPORT_MISSING_OR_EMPTY, "
+                        + "the same as a missing file - not surfaced as a generic XML parse failure "
+                        + "from JapicmpReportReader.read")
+                .isInstanceOf(IllegalStateException.class)
+                .isNotInstanceOf(LedgerMergeConflictException.class)
+                .hasMessageContaining("REPORT_MISSING_OR_EMPTY")
+                .hasMessageContaining("the japicmp report is missing or empty");
+    }
+
+    /**
+     * Shared fixture for both empty-report tests above: a minimal pom, no {@code src/main/java}
+     * package (so the prior ledger's one member below is absent from this run's fresh source
+     * scan, exactly like a real removal), and a prior ledger carrying one {@code ANNOUNCED}
+     * entry for that now-vanished member. Callers decide separately what (if anything) to put at
+     * {@code target/japicmp/japicmp.xml}.
+     */
+    private static void buildVanishedAnnouncedEntryFixture(Path tempProjectRoot) throws IOException {
         Files.write(tempProjectRoot.resolve("pom.xml"), (
                 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
                         + "<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n"
@@ -175,13 +222,8 @@ class DeprecationRegistryGeneratorBaseDirTest {
                         + "    <version>1.0.0-SNAPSHOT</version>\n"
                         + "</project>\n").getBytes(StandardCharsets.UTF_8));
 
-        // No src/main/java package at all - the prior ledger's member below is absent from
-        // this run's fresh source scan, exactly like a real removal.
         Files.createDirectories(tempProjectRoot.resolve("src/main/java"));
 
-        // No target/japicmp/japicmp.xml is written at all - readJapicmpReport falls back to
-        // JapicmpReportReader.Report.empty(), reproducing the exact infrastructure state the
-        // Codex finding names ("the japicmp report is missing or has no entries").
         Path compatDir = tempProjectRoot.resolve("compatibility");
         Files.createDirectories(compatDir);
         Files.write(compatDir.resolve("deprecations.json"), (
@@ -199,16 +241,6 @@ class DeprecationRegistryGeneratorBaseDirTest {
                         + "    \"removedIn\": null\n"
                         + "  }\n"
                         + "]\n").getBytes(StandardCharsets.UTF_8));
-
-        assertThatThrownBy(() -> DeprecationRegistryGenerator.run(tempProjectRoot))
-                .as("the japicmp report being empty must be diagnosed as REPORT_MISSING_OR_EMPTY "
-                        + "(RemovalConsistencyEvaluator's unconditional infrastructure finding), "
-                        + "not surfaced as a raw LedgerMergeConflictException from RegistryLedger.merge "
-                        + "blaming a source/report disagreement that never actually happened")
-                .isInstanceOf(IllegalStateException.class)
-                .isNotInstanceOf(LedgerMergeConflictException.class)
-                .hasMessageContaining("REPORT_MISSING_OR_EMPTY")
-                .hasMessageContaining("the japicmp report is missing or empty");
     }
 
     private static String projectVersion(Document doc) {

@@ -304,7 +304,12 @@ public final class DeprecationRegistryGenerator {
      * and root scope for every element, not just the REMOVED subset).
      */
     private static JapicmpReportReader.Report readJapicmpReport(Path japicmpReport) throws IOException {
-        if (!Files.exists(japicmpReport)) {
+        // Codex P2, PR #480: a zero-byte file (e.g. after an interrupted or racing report write)
+        // passes Files.exists just like a genuine report, but has nothing for
+        // JapicmpReportReader.read's XML parser to work with - it would throw a generic parse
+        // failure instead of the friendly infrastructure finding below. Treat "exists but is
+        // empty" the same as "does not exist": both mean no comparison ran.
+        if (!Files.exists(japicmpReport) || isEmptyFile(japicmpReport)) {
             // No japicmp report (e.g. `-DskipTests` ran before `verify`'s cmp goal on a partial
             // build, or #461's basedir mismatch). Nothing can be confirmed REMOVED without it - an
             // empty report is the safe, conservative default AT THIS LAYER ONLY: this generator
@@ -316,6 +321,15 @@ public final class DeprecationRegistryGenerator {
             return JapicmpReportReader.Report.empty();
         }
         return JapicmpReportReader.read(japicmpReport);
+    }
+
+    /**
+     * {@code true} for a zero-byte file. {@link Files#size} is used rather than reading the file
+     * and checking {@code String#isEmpty()} - this is purely a size probe, so it need not pull
+     * the whole file into memory only to discard it immediately afterward.
+     */
+    private static boolean isEmptyFile(Path file) throws IOException {
+        return Files.size(file) == 0L;
     }
 
     /**
