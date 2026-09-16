@@ -540,11 +540,11 @@ warning window has nothing to count down to; the `final` keyword is the entire c
 
 **What an un-recompiled downstream JAR sees.** A module JAR compiled against 6.2.5 that overrides
 either method fails at class-verification time — before the module's `registerSelf()` ever runs —
-with `VerifyError: class <ModuleClass> overrides final method
+with `IncompatibleClassChangeError: class <ModuleClass> overrides final method
 com.ultikits.ultitools.abstracts.UltiToolsPlugin.unregisterSelf()V` (or `reloadSelf()V`). This is a
 loud, named failure at load time, not a silent no-op and not a delayed `NoSuchMethodError` on first
 use, unlike the first two occurrences in this section — the class naming its own offending method is
-exactly what a `VerifyError` for an overridden final method reports.
+exactly what an `IncompatibleClassChangeError` for an overridden final method reports.
 
 **Migration guide for module authors.** The fix is a rename, not a rewrite, in every case but one:
 
