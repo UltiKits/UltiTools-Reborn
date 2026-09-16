@@ -54,18 +54,13 @@ two clauses holds, and the removal's own entry states which one and its evidence
    that calls it.** There is no working behaviour for a deprecation window to warn anyone away from,
    because no released version could ever have exercised it.
 
-Six removals in the 6.3.0 cycle used this exception: `aop.CglibProxyFactory` under clause 1
-(`--add-opens java.base/java.lang=ALL-UNNAMED` is not a flag a Paper server sets, so the class
-throws `ExceptionInInitializerError` on first use — the constructor throwing on every call is
-itself the reproduction); `aop.ProxyFactory.createProxy(T)`/`createProxy(Class<T>, T)` and
-`aop.AopProxyBeanPostProcessor` under clause 2 (neither ever reached a tagged release, or shipped
-but had zero callers in `src/main`); `annotations.Propagation.NESTED` under clause 2 for a
-different reason, controllability rather than impossibility; `PluginManager`'s seven-argument
-`register(...)` overload under clause 1 (proven non-functional on every release since 6.2.0); and
-`ListenerManager.registerAll(UltiToolsPlugin, String)` under clause 2 (zero callers anywhere in
-`src/main` at removal time). Full evidence for each is in
-["Same-release exceptions applied in 6.3.0"](#same-release-exceptions-applied-in-630) below and in
-[`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md).
+Each removal that relies on this exception names in its own entry which clause it used and the
+evidence for it. Those entries are enumerated in
+["Same-release exceptions applied in 6.3.0"](#same-release-exceptions-applied-in-630) below, and
+recorded in full — with the measurement behind each — in
+[`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md). No total is stated here: a
+count kept away from the list it counts goes stale the next time an entry is added, so the only
+total this document states is the one directly above that list.
 
 ### Two deliberate deviations from semver
 
@@ -136,8 +131,8 @@ disagreement between the two fails the build (`DeprecationRegistryGenerator` pro
 `compatibility/DEPRECATIONS.md`; see `compatibility/deprecations.json` for the machine-readable
 form). This document no longer carries the table itself — three artifacts now split the job:
 
-- **This document** — policy: what removal means, when an API becomes eligible, the two
-  same-release exceptions, and permanent lessons.
+- **This document** — policy: what removal means, when an API becomes eligible, the same-release
+  exception, and permanent lessons.
 - [`compatibility/DEPRECATIONS.md`](compatibility/DEPRECATIONS.md) — the generated, cumulative
   registry: every deprecated/announced/removed member, its `since`, its replacement, and its
   status.
@@ -201,11 +196,11 @@ above instead of waiting a full MINOR:
   return type, which is absent from the classpath when Vault is absent. Replacement:
   `EconomyUtils.getEconomy()`, the pre-existing façade six modules already call.
 
-Full reasoning and evidence for all eight live in
+Full reasoning and evidence for every entry above live in
 [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md).
 
 **One further exception, added by plan 16-09 (D-17, root-cause group "cloud session," part 2 of 3
-for issue #298) after the seven above:** `utils.CloudAuthManager`'s fine-grained public statics —
+for issue #298) after the list above:** `utils.CloudAuthManager`'s fine-grained public statics —
 `loadSavedToken()`, `refreshToken(String)`, `saveToken(TokenEntity)`, `clearToken()`,
 `currentCredentialGeneration()`, `invalidateCredentialOperations()`,
 `commitTokenIfCurrent(TokenEntity, long)`, `getCurrentToken()`, `hasValidToken()`,
@@ -546,7 +541,8 @@ loud, named failure at load time, not a silent no-op and not a delayed `NoSuchMe
 use, unlike the first two occurrences in this section — the class naming its own offending method is
 exactly what an `IncompatibleClassChangeError` for an overridden final method reports.
 
-**Migration guide for module authors.** The fix is a rename, not a rewrite, in every case but one:
+**Migration guide for module authors.** The fix is a rename, or a deletion where the override did
+no real work — never a rewrite:
 
 | Your current override | What to do |
 |---|---|
