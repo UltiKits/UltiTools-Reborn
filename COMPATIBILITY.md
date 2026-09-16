@@ -63,12 +63,13 @@ in [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md). No total 
 count kept away from the list it counts has nothing holding it honest, which is how the count that
 used to sit in this paragraph went stale.
 
-That section lists removals only. In 6.3.0 the exception also backs changes that keep the API under
-its existing name, and those are not listed there: `UltiToolsPlugin#unregisterSelf()` and
-`#reloadSelf()` becoming `final` (see the third occurrence under
+That section lists removals only. The exception as stated above covers removals, but in 6.3.0
+changes that are not removals also cite its clauses in their own entries, and they are not listed
+there: `UltiToolsPlugin#unregisterSelf()` and `#reloadSelf()` becoming `final` (see the third
+occurrence under
 [Binary incompatibilities the removal list cannot cover](#binary-incompatibilities-the-removal-list-cannot-cover)),
-and `GuiRenderer.initialize`'s first parameter changing from `Widget` to `Supplier<Widget>`. Each
-one's clause and evidence are recorded in
+and `GuiRenderer.initialize`'s first parameter changing from `Widget` to `Supplier<Widget>`. Their
+cited clause and evidence are recorded in
 [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md).
 
 ### Two deliberate deviations from semver
@@ -212,10 +213,14 @@ waiting a full MINOR:
   `has` — instead.
 - `abstracts.gui.declarative.widgets.Container.Builder.background(IconWrapper)` /
   `Container.getBackground()` and `GridView.Builder.rows(int)` / `GridView.getMaxRows()` — clause 2,
-  shipped but never wired into anything: all four were public in the released 6.2.5, and nothing
-  downstream ever read the value either pair stored, so no call could have had an observable effect
-  (plan 05-13). Their package carries `@ApiStatus.Experimental` and neither pair was ever
-  `@Deprecated(forRemoval = true)`, which is why the generated removal list does not carry them. See
+  zero callers at removal time (plan 05-13). All four were public in the released 6.2.5. Each pair
+  did return through its getter the value its builder method stored, but no framework code consumed
+  that value, and no downstream code called any of the four: measured 2026-09-17 on the
+  `origin/master` of every `Modules/` repository and of `Tooling/UltiTools-External-Example`, their
+  names have **0** hits and no file imports anything under `abstracts.gui.declarative`, against **9**
+  imports of the imperative `abstracts.gui` pages in the same search. Their package carries
+  `@ApiStatus.Experimental` and neither pair was ever `@Deprecated(forRemoval = true)`, which is why
+  the generated removal list does not carry them. See
   [their records entry](compatibility/records/6.3.0.md#recorded-instance-two-declarative-gui-builder-method-pairs-are-removed-rather-than-given-a-guessed-implementation-d-09-630).
 
 Full reasoning and evidence for every entry above live in
