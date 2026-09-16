@@ -92,13 +92,21 @@ public class UltiPanelLogTransmitter {
      */
     private volatile Object externalDrainCoordinationLock;
 
-    // Batch-send configuration
+    // Batch-send configuration. All three are written from the panel's WebSocket receive thread
+    // (setBatchEnabled/setBatchSize/setIntervalMs, reachable live over the panel's `config`
+    // action) and read without further synchronization from the logging thread (addToBatch's
+    // logQueue.size() >= batchSize check) and the batch scheduler thread (sendBatch's own
+    // for (int i = 0; i < batchSize ...) loop) -- volatile, like the two neighbouring
+    // cross-thread fields above (externalSizeThresholdCallback, externalDrainCoordinationLock),
+    // is required for the writer's value to ever become visible to those readers (Gate-2
+    // finding, review round 12, pull request #467). Structural regression test:
+    // UltiPanelLogTransmitterBatchFieldVolatilityInvariantTest.
     @Getter
-    private boolean batchEnabled = true; // setter below (#432) -- starts/stops the scheduled sender
+    private volatile boolean batchEnabled = true; // setter below (#432) -- starts/stops the scheduled sender
     @Getter
-    private int batchSize = 10; // setter below (Gate-2) -- rejects a value below 1
+    private volatile int batchSize = 10; // setter below (Gate-2) -- rejects a value below 1
     @Getter
-    private int intervalMs = 5000; // 5-second interval; setter below (#432) reschedules the sender
+    private volatile int intervalMs = 5000; // 5-second interval; setter below (#432) reschedules the sender
 
     // Batch-send queue and scheduler
     private final ConcurrentLinkedQueue<JsonObject> logQueue;
