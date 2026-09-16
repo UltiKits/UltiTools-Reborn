@@ -621,6 +621,31 @@
                                  `public` in this plan. -->
                             <exclude>com.ultikits.ultitools.utils.PluginInitiationUtils#loginWithToken(com.ultikits.ultitools.entities.TokenEntity)</exclude>
                             <exclude>com.ultikits.ultitools.utils.PluginInitiationUtils#activateCloudIfCurrent(long)</exclude>
+                            <!-- 16-06-PLAN.md (D-08, #451, same-release exception clause 2): UltiTools#getEconomy()
+                                 was the ONLY net.milkbowl.vault-typed signature on this class, and it is the reason
+                                 AopEligibility.findAopAnnotatedMethods(UltiTools.class), called from
+                                 SimpleContainer.registerSingleton the instant the core plugin bean is registered,
+                                 crashed the whole bootstrap on a server with no Vault plugin installed: Class#
+                                 getDeclaredMethods() resolves every declared method's return/parameter types
+                                 eagerly, and net.milkbowl.vault.economy.Economy is not on the classpath when Vault
+                                 is absent. Public, zero measured callers across this framework's own src/main, all
+                                 sixteen product modules and the external example (HiddenVaultBootstrapTest pins the
+                                 fix). Member-level exclude, not class-level - UltiTools itself is unchanged and
+                                 still present, only this one method is gone. Replacement:
+                                 EconomyUtils.getEconomy(), the pre-existing façade six modules already call. -->
+                            <exclude>com.ultikits.ultitools.UltiTools#getEconomy()</exclude>
+                            <!-- 16-02-PLAN.md (D-01, #419/#455): UltiToolsPlugin.unregisterSelf() gains
+                                 `final` so a module can no longer override it and skip the framework's
+                                 own CommandManager/ListenerManager unregistration; the class itself
+                                 still exists (a member-level exclude, not a whole-class one; the
+                                 over-broad-exclusion invariant only flags class-level entries, per its
+                                 own evaluate()). METHOD_NOW_FINAL is japicmp's change type here,
+                                 recorded as a formal COMPATIBILITY.md binary-incompatibility occurrence
+                                 (Task 3), not a same-release removal. -->
+                            <exclude>com.ultikits.ultitools.abstracts.UltiToolsPlugin#unregisterSelf()</exclude>
+                            <!-- 16-02-PLAN.md (D-01, #419/#455): same shape as the exclude immediately
+                                 above, for UltiToolsPlugin.reloadSelf() gaining `final`. -->
+                            <exclude>com.ultikits.ultitools.abstracts.UltiToolsPlugin#reloadSelf()</exclude>
                         </excludes>
                     </parameter>
                 </configuration>

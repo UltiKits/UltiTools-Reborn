@@ -1,13 +1,17 @@
 package com.ultikits.ultitools.abstracts;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.io.OutputStream;
+import java.lang.reflect.Type;
 import java.net.JarURLConnection;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -17,18 +21,27 @@ import java.security.CodeSource;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Arrays;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.jetbrains.annotations.ApiStatus;
+
+import com.google.gson.Gson;
+import com.google.gson.JsonParseException;
+import com.google.gson.reflect.TypeToken;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
@@ -51,6 +64,8 @@ import com.ultikits.ultitools.manager.ListenerManager;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.utils.DependencyUtils;
 import com.ultikits.ultitools.utils.FileUtils;
+import com.ultikits.ultitools.utils.PosixAttributePreserver;
+import com.ultikits.ultitools.utils.ResourceHashSidecar;
 import com.ultikits.ultitools.utils.VersionComparatorUtil;
 
 import lombok.Getter;
@@ -71,6 +86,50 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * and the loader silently produced an empty dictionary for every one of them.
      */
     private static final String[] LANGUAGE_EXTENSIONS = {".json", ".yml", ".yaml"};
+
+    /** Named logger for the D-03 per-module reload line -- see {@link #RELOAD_LOG_MESSAGE_KEY}. */
+    private static final Logger LOGGER = Logger.getLogger(UltiToolsPlugin.class.getName());
+
+    /**
+     * Framework i18n key (this class's own {@code lang/en.json}/{@code lang/zh.json} catalogue,
+     * not a module's) for the per-module reload line {@link #reloadSelf()} logs after its three
+     * steps (D-03). Package-private so {@code UltiToolsPluginLifecycleHookTest} can assert both
+     * shipped catalogues actually carry a translation for it, rather than duplicating the
+     * literal string between production and test code.
+     */
+    static final String RELOAD_LOG_MESSAGE_KEY = "Module '%s' reloaded.";
+    /**
+     * Matches a {@code java.util.Formatter} conversion specifier, e.g. {@code %s} in {@code
+     * "Hello, %s!"}, or {@code %1$s} for an explicit argument index. Used only by {@link
+     * #placeholderArity(String)} for the D-05 per-key comparison; not a change to how
+     * placeholders are substituted anywhere -- every parameterised {@code i18n(...)} value in
+     * this framework is formatted with {@code String.format}, never {@code MessageFormat}
+     * (measured: 0 {@code {n}}-style placeholders anywhere in {@code src/main/resources/lang}
+     * or across any {@code i18n(...)} call site; the shipped catalogues use {@code %s}/{@code
+     * %d} exclusively).
+     * <p>
+     * Codex round 6, P2: deliberately narrower than the full {@code Formatter} grammar --
+     * {@code %s}/{@code %d} (optionally explicit-indexed) or a literal {@code %%}, with NO flags,
+     * width or precision component. The earlier, more permissive pattern accepted a space as a
+     * flag character, so ordinary text like {@code "Progress: 90% done"} matched {@code "% d"} as
+     * a (bogus) {@code %d} conversion with a space flag -- an operator's customised value
+     * containing an innocent {@code '%'} could be reported as an arity mismatch against
+     * differently-worded bundled text and silently overwritten at runtime, even though the key
+     * carries no real {@code String.format} placeholder at all. Since this framework never emits
+     * anything outside {@code %s}/{@code %d}/{@code %%} (per the measurement above), restricting
+     * the pattern to exactly those forms eliminates the false-positive class rather than patching
+     * the specific "% d" instance -- no genuine placeholder this framework uses stops matching.
+     */
+    private static final Pattern PLACEHOLDER_PATTERN =
+            Pattern.compile("%(?:(\\d+)\\$)?([sd%])");
+
+    /**
+     * A private, independent JSON reader for the D-05 placeholder-arity comparison only -- not a
+     * change to {@link Language}'s own Gson usage, which stays entirely inside {@code
+     * Language.java} (untouched by this plan).
+     */
+    private static final Gson ARITY_GSON = new Gson();
+    private static final Type ARITY_MAP_TYPE = new TypeToken<Map<String, String>>() { }.getType();
 
     private Language language;
     @Getter
@@ -245,12 +304,320 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
 
     /**
      * Reads {@code <folderPath>/lang/<code><extension>} if it exists, else {@code null}.
+     * <p>
+     * D-05/D-06/D-07 (#441): before returning, applies the recorded-provenance decision -- an
+     * upgraded server whose language file was never touched since extraction gets it silently
+     * replaced by the current jar's copy; one an operator customised is left alone, with a
+     * per-key warning for any key whose placeholder count moved out from under it. Layered in
+     * front of the resolution split, not inside {@link Language}: {@link
+     * #resolveLanguageWithProvenance} decides which bytes/dictionary this method returns, and
+     * {@link Language#withFallback} (unchanged) still owns filling a key this dictionary lacks
+     * entirely.
+     * <p>
+     * 16-05 / CodeQL {@code java/zipslip} alert #11 (CWE-22): {@code code} is only lightly
+     * restricted by {@link com.ultikits.ultitools.interfaces.Localized#languageCodeOf(String)}'s
+     * character allowlist when it comes from a scanned jar/directory entry -- and not restricted
+     * at all when it comes from a hostile {@code config.yml language:} value, since {@link
+     * #resolveLanguageCode()} returns an unmatched configured code UNCHANGED whenever {@link
+     * com.ultikits.ultitools.interfaces.Localized#supported()} is empty. This is therefore the
+     * last line of defence: before this file is read (or, deeper in {@link
+     * #resolveLanguageWithProvenance}, overwritten), its canonical path must stay inside {@code
+     * <folderPath>/lang}'s own canonical path -- mirroring the guard {@link #saveResources()}
+     * already applies to extracted jar entries. A violation degrades to the same {@code null}
+     * (“not loadable”) outcome as a missing file, never a thrown exception.
      */
     private Language loadLanguageFromDisk(String folderPath, String code, String extension) {
-        File file = new File(folderPath + File.separator + "lang" + File.separator + code + extension);
+        File langDir = new File(folderPath, "lang");
+        File file = new File(langDir, code + extension);
+        if (!isWithinDirectory(langDir, file)) {
+            getLogger().warn("Module '" + getPluginName() + "' resolved a language code that would "
+                    + "escape its lang/ directory ('" + langDir + "'); refusing to load or write '"
+                    + file + "'.");
+            return null;
+        }
         if (!file.exists()) {
             return null;
         }
+        String resourcePath = "lang/" + code + extension;
+        return resolveLanguageWithProvenance(folderPath, file, resourcePath, extension);
+    }
+
+    /**
+     * Verifies that {@code candidate}'s canonical path is contained within {@code baseDir}'s own
+     * canonical path -- the same Zip Slip guard {@link #saveResources()} already applies to
+     * extracted jar entries, generalized here for every other place an untrusted language code is
+     * turned into a {@link File} (16-05 / CodeQL {@code java/zipslip} alert #11, CWE-22). Neither
+     * {@code baseDir} nor {@code candidate} needs to exist: {@link File#getCanonicalPath()} is
+     * defined for a non-existent path too, normalizing {@code ..} segments lexically wherever the
+     * real filesystem does not need to be consulted (the same property {@code saveResources()}
+     * already relies on for a file it is about to create).
+     * <p>
+     * Returns {@code false} (never throws) on any I/O failure resolving either canonical path,
+     * since an uncanonicalizable path is not a basis for trusting containment either.
+     *
+     * @param baseDir   the directory {@code candidate} must resolve inside
+     * @param candidate the file built from an untrusted language code
+     * @return whether {@code candidate}'s canonical path is {@code baseDir}'s canonical path or a
+     *         descendant of it
+     */
+    private static boolean isWithinDirectory(File baseDir, File candidate) {
+        try {
+            String canonicalBase = baseDir.getCanonicalPath() + File.separator;
+            String canonicalCandidate = candidate.getCanonicalPath() + File.separator;
+            return canonicalCandidate.startsWith(canonicalBase);
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Applies the D-05/D-06 recorded-provenance decision to a single on-disk language file. Four
+     * branches, mutually exclusive:
+     * <ol>
+     *   <li>Recorded hash present and equal to the disk file's current hash -- never touched by
+     *       the operator since extraction: overwrite the disk file with the current jar's bytes,
+     *       re-record the new (jar) hash as the baseline, and log one informative line.</li>
+     *   <li>Recorded hash present and different from the disk file's current hash: this by
+     *       ITSELF is NOT evidence of operator customisation -- see the branch-2 code comment
+     *       below (Codex finding, thread {@code PRRT_kwDOIcF9Es6i2kao}, P2) for why, and for the
+     *       content-comparison this branch now performs before concluding either way.</li>
+     *   <li>No recorded hash, but the disk bytes already equal the jar's -- provably unmodified,
+     *       unknown provenance only because an older jar (pre-#441) extracted it: record the hash
+     *       as the new baseline and enter the normal mechanism, with no overwrite this pass
+     *       (D-06). Never adopt an unequal disk hash as a baseline -- that would silently
+     *       overwrite a real customisation on the next jar change.</li>
+     *   <li>No recorded hash and the disk bytes differ from the jar's -- unknown provenance,
+     *       assume customisation: never record, never overwrite; the per-key placeholder-arity
+     *       override still applies.</li>
+     * </ol>
+     * A jar entry absent for this exact {@code resourcePath} (D-05's stated exception) short-
+     * circuits before any of the four branches: the disk file is left alone and nothing is
+     * recorded, since there is nothing to compare against.
+     * <p>
+     * Every branch above that concludes "customisation" derives that conclusion from an ACTUAL
+     * disk-bytes-vs-jar-bytes comparison, never from the record alone -- branches 3 and 4 already
+     * did (their own classification IS a content comparison); branch 2 was corrected to do the
+     * same (see its own code comment). The record is provenance BOOKKEEPING, not the source of
+     * truth for whether a file has been customised; it can go stale (most deterministically, since
+     * the previous round, when the sidecar itself is symlinked or read-only and its own write is
+     * refused) without that staleness ever being able to cause a PERMANENT misclassification.
+     *
+     * @param folderPath   the module's on-disk resource folder root
+     * @param file         the on-disk language file, already confirmed to exist
+     * @param resourcePath the extracted resource's path relative to the resource folder (e.g.
+     *                     {@code "lang/en.json"}), matching {@code saveResources()}'s own keys
+     * @param extension    the language file extension ({@code ".json"}, {@code ".yml"} or {@code
+     *                     ".yaml"})
+     * @return the language that {@link #loadLanguageFromDisk} should treat as "the disk language"
+     */
+    private Language resolveLanguageWithProvenance(String folderPath, File file, String resourcePath,
+                                                     String extension) {
+        // Branch-audit (Codex finding thread PRRT_kwDOIcF9Es6i2kao, P2): neither short-circuit
+        // below reaches a "customised" conclusion at all, so neither needed the branch-2-style
+        // content-comparison fix. jarBytes == null has literally nothing to compare the disk
+        // bytes against (there IS no bundled version of this resource for this module); the
+        // UncheckedIOException fallback below never classifies provenance either -- it degrades
+        // to a best-effort raw read (or an empty dictionary) precisely because it could not even
+        // compute diskHash, so no comparison of any kind is possible here.
+        byte[] jarBytes = readEmbeddedResourceBytes(resourcePath);
+        if (jarBytes == null) {
+            // Jar entry absent for this exact resource path: nothing to compare against, so the
+            // disk file is left alone and no record is written (D-05).
+            return readLanguageFile(file, extension);
+        }
+        File resourceFolder = new File(folderPath);
+        String diskHash;
+        try {
+            diskHash = ResourceHashSidecar.sha256(file);
+        } catch (UncheckedIOException e) {
+            // Codex round 1, P1: an unreadable disk file (or one accidentally replaced by a
+            // directory) must degrade to a best-effort read, exactly like the pre-#441 code
+            // path -- it must never abort this module's whole language resolution, let alone
+            // its startup. readLanguageFile()/Language(File) already catch a read failure on
+            // their own and return an empty dictionary, which Language.withFallback (in the
+            // caller) then backstops from the jar side.
+            getLogger().error("Could not hash on-disk language file " + file.getPath()
+                    + " for module '" + getPluginName() + "'; leaving it untouched.", e);
+            try {
+                return readLanguageFile(file, extension);
+            } catch (RuntimeException readFailure) {
+                // The same unreadable path (e.g. a directory where a file is expected) can also
+                // defeat the best-effort fallback read in a way Language's own IOException-only
+                // catch does not cover -- this method must still never propagate, so fall back
+                // one more step to an empty dictionary. Language.withFallback (in the caller)
+                // then resolves every key from the jar side instead.
+                getLogger().error("Also failed to read on-disk language file " + file.getPath()
+                        + " as a best-effort fallback for module '" + getPluginName() + "'.", readFailure);
+                return new Language("{}");
+            }
+        }
+        String jarHash = ResourceHashSidecar.sha256(jarBytes);
+        Optional<String> recorded = ResourceHashSidecar.readRecordedHash(resourceFolder, resourcePath);
+
+        if (recorded.isPresent()) {
+            if (recorded.get().equals(diskHash)) {
+                // Branch 1: never touched since extraction -> overwrite from the jar. Extracted
+                // into its own method (PMD NPathComplexity: this branch's own nested
+                // try/writeBytes/catch shape was the dominant contributor to this method's
+                // complexity once branch 2 below gained its own content-comparison check) --
+                // see resolveNeverTouchedSinceExtraction's own javadoc for the full behaviour.
+                return resolveNeverTouchedSinceExtraction(file, jarBytes, jarHash, diskHash,
+                        resourceFolder, resourcePath, extension);
+            }
+            // Branch 2: recorded hash present and mismatched against the disk file's CURRENT
+            // hash. Codex finding (thread PRRT_kwDOIcF9Es6i2kao, P2, on
+            // UltiToolsPlugin.java:515): a mismatch against the RECORD ALONE is not evidence of
+            // operator customisation -- it is also exactly what a STALE record looks like, which
+            // branch 1's own re-record step (above) can leave behind whenever the language file's
+            // own write succeeds but the follow-up ResourceHashSidecar.record(...) call does not
+            // persist. Before this fix that state was permanent: every later boot re-entered this
+            // branch and reclassified an up-to-date file as "customised" forever, silently
+            // stopping the module from ever receiving another bundled update, with nothing in the
+            // log to say why -- the defect class this milestone exists to remove (declared
+            // provenance-driven refresh, not delivered). The previous round's own symlink/
+            // read-only refusal on the SIDECAR's write path (PosixAttributePreserver#replaceInPlace)
+            // makes the stale-record precondition deterministic rather than rare: a symlinked or
+            // read-only sidecar now reliably refuses every re-record attempt, so this branch is
+            // reached on every subsequent boot.
+            //
+            // Root-cause fix, not a special case for "the sidecar write failed": derive the
+            // conclusion from what is ACTUALLY on disk, not from the record. If diskHash already
+            // equals jarHash, the file IS up to date regardless of what the stale record says --
+            // opportunistically re-record the correct hash (best-effort; record() already
+            // degrades silently on its own write failure per its own contract, and that failure
+            // must not change this classification or fail the boot) and proceed on the up-to-date
+            // path, exactly like branch 1's own jarHash.equals(diskHash) short-circuit above. Only
+            // fall through to "operator customisation" -- unchanged from before -- when the disk
+            // bytes are ACTUALLY different from the bundle.
+            if (diskHash.equals(jarHash)) {
+                ResourceHashSidecar.record(resourceFolder, resourcePath, diskHash);
+                return readLanguageFile(file, extension);
+            }
+            return applyPlaceholderArityOverride(file, jarBytes, extension, resourcePath);
+        }
+
+        // Branch-audit (Codex finding thread PRRT_kwDOIcF9Es6i2kao, P2): branches 3 and 4 below
+        // already derived their conclusion from an actual diskHash-vs-jarHash comparison before
+        // this finding was reported -- this `if` IS that comparison -- so neither needed the
+        // branch-2-style fix. Branch 3 concludes "not customised" (record now, proceed) only
+        // because diskHash.equals(jarHash) was just confirmed true; branch 4 concludes
+        // "customised" only because that same comparison was false. A record() failure inside
+        // branch 3 (e.g. a symlinked sidecar) cannot cause a permanent misclassification either:
+        // recorded stays Optional.empty() (nothing was ever persisted), so EVERY later boot
+        // re-enters this same "no recorded hash" path and re-derives fresh from content again --
+        // self-healing by construction, not merely by coincidence.
+        if (diskHash.equals(jarHash)) {
+            // Branch 3: unknown provenance, but provably unmodified -> record the baseline now;
+            // no overwrite this pass (D-06).
+            ResourceHashSidecar.record(resourceFolder, resourcePath, diskHash);
+            return readLanguageFile(file, extension);
+        }
+        // Branch 4: unknown provenance and the bytes differ -> assume customisation, never record.
+        return applyPlaceholderArityOverride(file, jarBytes, extension, resourcePath);
+    }
+
+    /**
+     * Branch 1 of {@link #resolveLanguageWithProvenance}: the recorded hash equals the disk
+     * file's current hash -- the operator has never touched this file since it was extracted,
+     * so it is safe to overwrite from the current jar. Extracted into its own method (PMD
+     * {@code NPathComplexity}: once branch 2 in the caller gained its own content-comparison
+     * check for the Codex finding on {@code UltiToolsPlugin.java:515}, thread {@code
+     * PRRT_kwDOIcF9Es6i2kao}, this branch's own nested {@code writeBytes}/try/catch shape pushed
+     * the combined method over Codacy's threshold; splitting it out is a structural change only,
+     * the behaviour below is unchanged from before that finding).
+     * <p>
+     * Codex round 1, P2: skip the write entirely when the bundled content has not actually
+     * changed since it was last synced -- the common case on every restart after the first
+     * successful sync, not an edge case. Rewriting identical bytes and logging "has been
+     * updated" every single time is misleading, touches the file's mtime for no reason, and
+     * fails needlessly on an installation that hardens module resources read-only after
+     * provisioning.
+     * <p>
+     * Only records the new baseline and logs success once the write is CONFIRMED to have
+     * landed -- re-hashes the bytes actually on disk afterward (mirroring {@code
+     * saveResources()}'s own pattern) rather than trusting the precomputed {@code jarHash}, so a
+     * partial/failed write can never be misreported as success (WR-01). Codex round 2, P2:
+     * {@code record(...)} swallows its own {@link IOException} and returns {@code void}, so a
+     * caller cannot otherwise tell a sidecar write failure from success -- the record is read
+     * back to confirm it actually persisted before claiming success in the log; logging "has
+     * been updated" when the file WAS refreshed but the sidecar was NOT would misrepresent
+     * provenance tracking as healthy. Deliberately not reverted on failure: a second write
+     * introduces its own atomicity risk for a genuinely rare failure, and the next boot's hash
+     * mismatch safely falls into branch 2's own content-comparison fix instead, rather than a
+     * second write attempt here.
+     * <p>
+     * Codex round on {@code UltiToolsPlugin.java:498}, P2: this used to be an unconditional
+     * {@code readLanguageFile(...)}, skipping the per-key placeholder-arity guard on EXACTLY the
+     * paths where a stale value is most likely -- {@code writeBytes(file, jarBytes)} returning
+     * {@code false} (read-only file, symlink, unpreservable ownership, or an I/O failure
+     * mid-write) leaves the OLD disk bytes in place while {@code jarBytes} has already moved on,
+     * so a key whose bundled arity shrank (two placeholders to one) can still carry the old,
+     * wider disk value. A stale disk value with MORE placeholders than the call site now
+     * supplies throws {@link java.util.MissingFormatArgumentException} at format time -- extra
+     * bundled arguments over a narrower stale value are silently ignored by {@link
+     * String#format}, not an error. Applying the override UNCONDITIONALLY -- not only on the
+     * {@code writeBytes}-failed path -- means the write's own outcome stops mattering for this
+     * guarantee: when the write succeeded, disk and jar bytes are now identical, so every key's
+     * arity trivially matches and this is a no-op past the extra parse; when it failed, this is
+     * precisely the protection this method exists to provide.
+     *
+     * @param file           the on-disk language file, already confirmed to exist
+     * @param jarBytes       the current bundled bytes for this resource, already confirmed
+     *                       non-null by the caller
+     * @param jarHash        {@code jarBytes}'s own SHA-256 digest, already computed by the caller
+     * @param diskHash       {@code file}'s current SHA-256 digest, already computed by the
+     *                       caller -- equal to the recorded provenance hash, which is what
+     *                       routed the caller into this method in the first place
+     * @param resourceFolder the module's resource folder root (the sidecar's own location)
+     * @param resourcePath   the extracted resource's path relative to the resource folder
+     * @param extension      the language file extension ({@code ".json"}, {@code ".yml"} or
+     *                       {@code ".yaml"})
+     * @return the resolved language for this file
+     */
+    private Language resolveNeverTouchedSinceExtraction(File file, byte[] jarBytes, String jarHash,
+            String diskHash, File resourceFolder, String resourcePath, String extension) {
+        if (jarHash.equals(diskHash)) {
+            return readLanguageFile(file, extension);
+        }
+        if (writeBytes(file, jarBytes)) {
+            try {
+                String newDiskHash = ResourceHashSidecar.sha256(file);
+                ResourceHashSidecar.record(resourceFolder, resourcePath, newDiskHash);
+                boolean recordPersisted = ResourceHashSidecar.readRecordedHash(resourceFolder, resourcePath)
+                        .filter(newDiskHash::equals).isPresent();
+                if (recordPersisted) {
+                    getLogger().info("Language file '" + resourcePath + "' for module '" + getPluginName()
+                            + "' was not modified since it was extracted and has been updated to the "
+                            + "current bundled version.");
+                } else {
+                    getLogger().error("Refreshed language file '" + resourcePath + "' for module '"
+                            + getPluginName() + "' but could not persist its provenance record; it may "
+                            + "be treated as customised on the next start until this is resolved.");
+                }
+            } catch (UncheckedIOException e) {
+                // Codex round 6, P1: the same gap fixed in saveResources() -- the file this
+                // branch just wrote could not be reopened for hashing immediately afterward
+                // (e.g. a write-only default ACL, or a transient filesystem error), and
+                // sha256(File)'s UncheckedIOException is not an IOException a plain IOException
+                // catch would see. Degrade rather than let it abort module construction: the
+                // file itself WAS refreshed and is still used below via readLanguageFile -- only
+                // its provenance record is skipped, so the next boot's hash comparison falls
+                // back to "unknown provenance" (branches 3/4) instead of crashing this one.
+                getLogger().error("Could not hash refreshed language file '" + resourcePath
+                        + "' for module '" + getPluginName() + "' immediately after writing it; "
+                        + "its provenance record was not updated.", e);
+            }
+        }
+        return applyPlaceholderArityOverride(file, jarBytes, extension, resourcePath);
+    }
+
+    /**
+     * Reads an on-disk language file exactly as the pre-#441 {@code loadLanguageFromDisk} did --
+     * extracted unchanged so both provenance branches that keep the disk file's own parse
+     * (branches 1 and 3 in {@link #resolveLanguageWithProvenance}) share the same reading logic
+     * the jar-absent short-circuit also uses.
+     */
+    private Language readLanguageFile(File file, String extension) {
         if (".json".equals(extension)) {
             return new Language(file);
         }
@@ -259,6 +626,316 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         } catch (IOException e) {
             getLogger().error("Failed to read language file " + file.getPath(), e);
             return new Language("{}");
+        }
+    }
+
+    /**
+     * Builds the disk language for the "operator customisation" branches (2 and 4 in {@link
+     * #resolveLanguageWithProvenance}): the disk dictionary stays authoritative for every key,
+     * except a key whose {@link #placeholderArity(String)} differs from the jar's value for the
+     * same key -- that key is overridden to the jar's value and warned about once, naming the
+     * module, the file and the key but never either value (T-16-04-02). A key present only in the
+     * jar is deliberately left out of the returned dictionary: {@link Language#withFallback}
+     * (unchanged) already resolves a key the disk dictionary lacks entirely, and duplicating that
+     * here would just be a second, redundant path to the same answer.
+     */
+    private Language applyPlaceholderArityOverride(File file, byte[] jarBytes, String extension,
+                                                     String resourcePath) {
+        Map<String, String> diskDictionary = readFlatDictionary(file, extension);
+        Map<String, String> jarDictionary = readFlatDictionary(jarBytes, extension);
+        Map<String, String> resolved = new LinkedHashMap<>(diskDictionary);
+        for (Map.Entry<String, String> jarEntry : jarDictionary.entrySet()) {
+            String key = jarEntry.getKey();
+            String diskValue = diskDictionary.get(key);
+            if (diskValue == null) {
+                // Missing from disk entirely: Language.withFallback already covers this key.
+                continue;
+            }
+            String jarValue = jarEntry.getValue();
+            boolean mismatch;
+            try {
+                mismatch = placeholderArity(diskValue) != placeholderArity(jarValue);
+            } catch (NumberFormatException e) {
+                // Codex round 3, P2: an explicit format-argument index too large for int (e.g.
+                // "%999999999999999999$s") overflows Integer.parseInt inside placeholderArity.
+                // Before this fix, that exception propagated out of THIS method, out of
+                // resolveLanguageWithProvenance, and aborted the whole module's construction --
+                // over a single malformed, possibly never-formatted translation value, whereas
+                // before D-05/D-06 existed only the affected key would have failed at format
+                // time. Treat a malformed index the same conservative way a genuine arity
+                // mismatch is already handled below: fall back to the bundled version's value
+                // for this key, and say why (never either value) in the warning.
+                resolved.put(key, jarValue);
+                getLogger().warn("Language key '" + key + "' in '" + resourcePath + "' for module '"
+                        + getPluginName() + "' has a malformed format-argument index and could "
+                        + "not be compared; using the current bundled version's value for this key.");
+                continue;
+            }
+            if (mismatch) {
+                resolved.put(key, jarValue);
+                getLogger().warn("Language key '" + key + "' in '" + resourcePath + "' for module '"
+                        + getPluginName() + "' has a different placeholder count than the current "
+                        + "bundled version; using the current version's value for this key.");
+            }
+        }
+        return new Language(resolved);
+    }
+
+    /**
+     * Returns the highest {@code String.format} argument POSITION {@code value} requires --
+     * not the count of distinct positions used (Codex round 2, P2). {@code "%2$s" alone}
+     * requires an args array of length (at least) 2, since {@code String.format} demands every
+     * position up to the highest one referenced be present, even if a lower position (here,
+     * 1) is never itself rendered -- so its arity is 2, not 1. Counting DISTINCT positions
+     * (a one-element set for both {@code "%2$s"} alone and {@code "%s"} alone) would wrongly
+     * call those two equal.
+     * <p>
+     * A value repeating one EXPLICIT index twice (e.g. {@code "%1$s and %1$s again"}) still
+     * has arity one, since both conversions consume the SAME argument and neither raises the
+     * highest-position watermark past 1; a naive occurrence count would call it two and warn
+     * on a rewording that changed nothing about the message's parameter shape. An unindexed
+     * conversion (this framework's own catalogues use only this form) consumes the NEXT
+     * sequential position, so two unindexed {@code %s} conversions in one value require arity
+     * two. {@code %%} (a literal percent) consumes no argument and is excluded -- {@link
+     * #PLACEHOLDER_PATTERN} itself (Codex round 6, P2) no longer matches anything outside
+     * {@code %s}/{@code %d}/{@code %%} at all, so {@code %n} and every other {@code Formatter}
+     * conversion this framework never emits cannot reach this method to begin with.
+     *
+     * @param value a language value, or {@code null}
+     * @return the highest argument position {@code value}'s {@code String.format} conversions
+     *         require, or {@code 0} for {@code null} or a value with none
+     */
+    private static int placeholderArity(String value) {
+        if (value == null) {
+            return 0;
+        }
+        Matcher matcher = PLACEHOLDER_PATTERN.matcher(value);
+        int highestPosition = 0;
+        int nextImplicitPosition = 1;
+        while (matcher.find()) {
+            char conversion = matcher.group(2).charAt(0);
+            if (conversion == '%') {
+                continue;
+            }
+            String explicitIndex = matcher.group(1);
+            if (explicitIndex != null) {
+                int position = Integer.parseInt(explicitIndex);
+                if (position == 0) {
+                    // Codex round 11, P2: java.util.Formatter argument indexes are 1-based --
+                    // String.format throws IllegalFormatArgumentIndexException for index 0, so
+                    // "%0$s" is exactly as malformed as an oversized index (round 3), not "no
+                    // placeholder at all". Math.max(highestPosition, 0) would otherwise never
+                    // raise highestPosition above 0, making this value compare EQUAL in arity to
+                    // one with no placeholder whatsoever -- the malformed value would then
+                    // survive completely unflagged. Reuse the same NumberFormatException signal
+                    // applyPlaceholderArityOverride's catch clause already treats as malformed.
+                    throw new NumberFormatException("Formatter argument index must be >= 1, was 0");
+                }
+                highestPosition = Math.max(highestPosition, position);
+            } else {
+                highestPosition = Math.max(highestPosition, nextImplicitPosition);
+                nextImplicitPosition++;
+            }
+        }
+        return highestPosition;
+    }
+
+    /**
+     * Reads a flat {@code key -> value} dictionary from a language file on disk, for the
+     * placeholder-arity comparison only -- {@link Language} itself exposes no way to enumerate its
+     * keys, so this is a small, independent read of the same file formats, not a change to {@link
+     * Language}'s own parsing. Degrades to an empty map on any read/parse failure (an empty file
+     * is "no keys", never an error, per D-05).
+     */
+    private static Map<String, String> readFlatDictionary(File file, String extension) {
+        if (file == null || !file.isFile()) {
+            return Collections.emptyMap();
+        }
+        try (Reader reader = Files.newBufferedReader(file.toPath(), StandardCharsets.UTF_8)) {
+            return readFlatDictionary(reader, extension);
+        } catch (IOException e) {
+            return Collections.emptyMap();
+        }
+    }
+
+    /**
+     * Reads a flat {@code key -> value} dictionary from jar-bundled bytes, mirroring the file
+     * overload above for the jar side of the comparison.
+     */
+    private static Map<String, String> readFlatDictionary(byte[] bytes, String extension) {
+        try (Reader reader = new InputStreamReader(new ByteArrayInputStream(bytes), StandardCharsets.UTF_8)) {
+            return readFlatDictionary(reader, extension);
+        } catch (IOException e) {
+            return Collections.emptyMap();
+        }
+    }
+
+    private static Map<String, String> readFlatDictionary(Reader reader, String extension) {
+        try {
+            if (".json".equals(extension)) {
+                Map<String, String> parsed = ARITY_GSON.fromJson(reader, ARITY_MAP_TYPE);
+                return parsed != null ? parsed : Collections.emptyMap();
+            }
+            // Mirrors Language.fromYaml's own flattening -- duplicated here (not called) because
+            // Language exposes no way to get its dictionary back out, and this plan does not touch
+            // Language.java at all.
+            YamlConfiguration yaml = YamlConfiguration.loadConfiguration(reader);
+            Map<String, String> flattened = new LinkedHashMap<>();
+            for (String key : yaml.getKeys(true)) {
+                if (yaml.isString(key)) {
+                    flattened.put(key, yaml.getString(key));
+                }
+            }
+            return flattened;
+        } catch (JsonParseException e) {
+            // Codex round 7, P2: JsonParseException is the common superclass of
+            // JsonSyntaxException (malformed JSON) AND JsonIOException -- Gson wraps an
+            // IOException it hits reading from `reader` mid-parse (e.g. a transient filesystem
+            // error on the second read of a customised catalogue) in the latter, which a catch
+            // (JsonSyntaxException) alone does not see, letting it escape
+            // applyPlaceholderArityOverride and abort this whole module's construction, contrary
+            // to this method's own documented empty-map degradation (see its own javadoc).
+            return Collections.emptyMap();
+        }
+    }
+
+    /**
+     * Writes {@code bytes} to {@code file}, returning whether the write actually succeeded
+     * (WR-01) -- the caller must not record a new provenance baseline or log a success line for
+     * a write that threw partway through.
+     * <p>
+     * Round following {@code PosixAttributePreserver.java:104} (symlink finding on {@code
+     * ResourceHashSidecar.java:320}, thread {@code PRRT_kwDOIcF9Es6i2I49}, P2): this method's
+     * entire operation -- the operator-pinned-read-only refusal, the symlink refusal, the
+     * temp-file-then-atomic-move mechanism, and the POSIX attribute preservation -- now lives in
+     * {@link PosixAttributePreserver#replaceInPlace}, shared with {@code
+     * ResourceHashSidecar#writeAll}'s identical contract, so the two write paths cannot disagree
+     * on any of these properties again the way they disagreed on attribute preservation (round 3),
+     * an unreadable-attributes edge case (round 6), and symlink handling (this round) one at a
+     * time. This method is now a thin {@link PosixAttributePreserver.ReplaceInPlaceListener}
+     * supplying this class's own {@link #getLogger()}/{@code getPluginName()} warning text; the
+     * full behavioural contract (what each refusal means, why each is conservative rather than
+     * best-effort) is documented on {@link PosixAttributePreserver#replaceInPlace} and {@link
+     * PosixAttributePreserver.ReplaceInPlaceListener} themselves, not duplicated here.
+     * <p>
+     * The symlink refusal's exact semantics, unchanged from Codex round 11, P2: a symlinked
+     * language file (an operator-managed shared-translations layout, e.g. {@code lang/en.json}
+     * pointing at a shared store) is left completely untouched -- REFUSE, not write-through to
+     * the link's target. See {@link PosixAttributePreserver.ReplaceInPlaceListener#onSymbolicLink()}.
+     */
+    private boolean writeBytes(File file, byte[] bytes) {
+        return PosixAttributePreserver.replaceInPlace(file, bytes, new PosixAttributePreserver.ReplaceInPlaceListener() {
+            @Override
+            public void onOperatorPinnedReadOnly() {
+                getLogger().warn("Language file '" + file.getPath() + "' for module '" + getPluginName()
+                        + "' is not writable; treating it as operator-pinned and leaving it untouched "
+                        + "instead of refreshing it from the bundled version.");
+            }
+
+            @Override
+            public void onSymbolicLink() {
+                getLogger().warn("Language file '" + file.getPath() + "' for module '" + getPluginName()
+                        + "' is a symbolic link; treating it as operator-pinned and leaving it "
+                        + "untouched instead of replacing the link with a regular file.");
+            }
+
+            @Override
+            public void onSourceAttributesUnreadable() {
+                getLogger().warn("Could not read the current permissions and owner/group of "
+                        + "language file '" + file.getPath() + "' for module '" + getPluginName()
+                        + "'; treating its identity as unreplicable and skipping the refresh instead "
+                        + "of silently replacing it with a process-owned copy.");
+            }
+
+            @Override
+            public void onPermissionCopyFailure() {
+                getLogger().warn("Could not preserve file permissions while refreshing '" + file.getPath()
+                        + "' for module '" + getPluginName() + "'; the refreshed file may not match the "
+                        + "original's permissions.");
+            }
+
+            @Override
+            public void onOwnershipCopyFailure(String ownerName, String groupName) {
+                getLogger().warn("Language file '" + file.getPath() + "' for module '"
+                        + getPluginName() + "' is owned by '" + ownerName + ":" + groupName
+                        + "', which this process cannot replicate onto the refreshed file; "
+                        + "skipping the refresh instead of silently changing the file's ownership.");
+            }
+
+            @Override
+            public void onWriteFailure(IOException cause) {
+                getLogger().error("Failed to write language file " + file.getPath(), cause);
+            }
+        });
+    }
+
+    /**
+     * Reads the raw bytes of {@code resourcePath} (e.g. {@code "lang/en.json"}) from this module's
+     * own {@link CodeSource} location, or {@code null} if it is not present there. Mirrors {@link
+     * #loadLanguageFromJar(String, String)}'s directory/jar dual branch exactly (13-REVIEW CR-01,
+     * issue #412 follow-up) but returns raw bytes instead of a parsed {@link Language}, so the
+     * D-05/D-06 provenance decision can hash and, in the overwrite branch, write those exact bytes
+     * to disk.
+     */
+    private byte[] readEmbeddedResourceBytes(String resourcePath) {
+        CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
+        if (src == null || src.getLocation() == null) {
+            return null;
+        }
+        File location = resolveCodeSourceFile(src.getLocation());
+        if (location.isDirectory()) {
+            return readEmbeddedResourceBytesFromDirectory(location, resourcePath);
+        }
+        try (JarFile jarFile = new JarFile(location)) {
+            JarEntry entry = jarFile.getJarEntry(resourcePath);
+            if (entry == null) {
+                return null;
+            }
+            try (InputStream in = jarFile.getInputStream(entry)) {
+                ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                byte[] chunk = new byte[4096];
+                int len;
+                while ((len = in.read(chunk)) != -1) {
+                    buffer.write(chunk, 0, len);
+                }
+                return buffer.toByteArray();
+            }
+        } catch (IOException e) {
+            getLogger().error(e, "Failed to read embedded resource " + resourcePath + " from " + location);
+            return null;
+        }
+    }
+
+    /**
+     * The exploded-classpath (directory {@code CodeSource}) branch of {@link
+     * #readEmbeddedResourceBytes(String)}, split out to keep that method's NPath complexity under
+     * the Codacy/PMD threshold once the 16-05 / CodeQL {@code java/zipslip} alert #11 containment
+     * guard was added -- purely a structural split, the guard's own behaviour is unchanged.
+     *
+     * @param location     the directory {@code CodeSource} location
+     * @param resourcePath the resource path to read, e.g. {@code "lang/en.json"}
+     * @return the resource's raw bytes, or {@code null} if absent, escaping, or unreadable
+     */
+    private byte[] readEmbeddedResourceBytesFromDirectory(File location, String resourcePath) {
+        File resource = new File(location, resourcePath.replace('/', File.separatorChar));
+        // 16-05 / CodeQL java/zipslip alert #11: resourcePath is built by the caller as
+        // "lang/" + code + extension from the same untrusted code loadLanguageFromDisk guards --
+        // mirror that guard here so this directory-CodeSource branch cannot be used to read
+        // outside the module's own resource folder either.
+        if (!isWithinDirectory(location, resource)) {
+            getLogger().warn("Module '" + getPluginName() + "' resolved an embedded resource "
+                    + "path that would escape its resource folder ('" + location + "'); "
+                    + "refusing to read '" + resource + "'.");
+            return null;
+        }
+        if (!resource.isFile()) {
+            return null;
+        }
+        try {
+            return Files.readAllBytes(resource.toPath());
+        } catch (IOException e) {
+            getLogger().error(e, "Failed to read embedded resource " + resource + " from " + location);
+            return null;
         }
     }
 
@@ -285,7 +962,18 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         if (location.isDirectory()) {
             // Exploded classpath (dev workspace, IDE launch, test) -- Localized.scanLangResources()
             // already treats this shape as first-class; loadLanguageFromJar must not disagree.
-            File resource = new File(location, "lang" + File.separator + code + extension);
+            File langDir = new File(location, "lang");
+            File resource = new File(langDir, code + extension);
+            // 16-05 / CodeQL java/zipslip alert #11: same guard as loadLanguageFromDisk -- code
+            // reaches this branch either lightly restricted (via Localized.languageCodeOf's
+            // allowlist) or not restricted at all (a hostile config.yml language: value), so the
+            // file boundary is still enforced here rather than trusted from upstream.
+            if (!isWithinDirectory(langDir, resource)) {
+                getLogger().warn("Module '" + getPluginName() + "' resolved a language code that "
+                        + "would escape its lang/ directory ('" + langDir + "'); refusing to load '"
+                        + resource + "'.");
+                return null;
+            }
             if (!resource.isFile()) {
                 return null;
             }
@@ -472,11 +1160,14 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     private void initConfig() throws IOException {
         EnableAutoRegister annotation = MergedAnnotationResolver.find(this.getClass(), EnableAutoRegister.class);
         if (annotation != null && annotation.config()) {
-            for (String packageName : DependencyUtils.getPluginPackages(this)) {
-                UltiTools.getInstance().getConfigManager().registerAll(
-                        this, packageName, UltiTools.getJavaPluginClassLoader()
-                );
-            }
+            // CR-01 (#358 Part 1 gate-1 finding): registered as one plugin-scoped batch across
+            // every scan package, not once per package with an independent rollback each -
+            // otherwise a later package's refusal would leave an earlier package's already-
+            // registered entries stranded. See ConfigManager#registerAll(UltiToolsPlugin,
+            // String[], ClassLoader)'s own javadoc for the full reasoning.
+            UltiTools.getInstance().getConfigManager().registerAll(
+                    this, DependencyUtils.getPluginPackages(this), UltiTools.getJavaPluginClassLoader()
+            );
             // D-06: diff getAllConfigs() against what package-scan auto-registration actually
             // registered. Runs only on this branch - on the config = false branch below,
             // getAllConfigs() is the sole registration path and there is nothing to diff against.
@@ -603,10 +1294,32 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * extracted entry's resolved destination is checked against the resource folder's own
      * canonical path, and any entry whose path would resolve outside it (a Zip Slip attempt) is
      * skipped with a warning rather than written.
+     * <p>
+     * Every file this method actually extracts gets its provenance recorded, in one batch via
+     * {@link ResourceHashSidecar#recordAll(File, Map)} after the whole extraction pass completes
+     * (Codex round 4, P2) -- across all three prefixes, D-07 -- so a later boot can tell "the
+     * operator edited this" from "an old jar extracted this and nobody has touched it since"
+     * (#441, D-05/D-06). A file this method skips (already present on disk) gets no record here:
+     * the skip already means the file predates this mechanism, or was already decided on by
+     * {@link #loadLanguageFromDisk} on a previous boot.
      */
     private void saveResources() {
         CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
         URL jar = src.getLocation();
+        // Codex round 4, P2: accumulated across the whole pass and persisted ONCE via
+        // ResourceHashSidecar.recordAll after the loop, instead of one record(...) call (one
+        // read-modify-write cycle of the WHOLE sidecar) per extracted file -- see recordAll's own
+        // javadoc for why that was quadratic for a module bundling many resources.
+        //
+        // Codex round 10, P2: recordAll is now called from a `finally` block (below), not as the
+        // last statement inside the try -- if a LATER entry throws before the while loop reaches
+        // it (e.g. File#getCanonicalPath() failing for a malformed name), the exception used to
+        // propagate straight past this call to the outer catch, silently discarding every hash
+        // already accumulated for entries that extracted successfully BEFORE the failure. The
+        // files those entries wrote remain on disk regardless of how the loop ends, so their
+        // provenance must be persisted regardless too -- recordAll is itself a no-op for an empty
+        // map, so this costs nothing on the ordinary all-succeeded path.
+        Map<String, String> hashesToRecord = new LinkedHashMap<>();
         try (JarFile jarFile = new JarFile(
                 jar.getPath().startsWith("/") ? jar.getPath() : jar.getPath().substring(1)
         )) {
@@ -642,13 +1355,23 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                                 out.write(buf, 0, len);
                             }
                         }
-                    } catch (IOException ex) {
+                        hashesToRecord.put(fileName, ResourceHashSidecar.sha256(outFile));
+                    } catch (IOException | UncheckedIOException ex) {
+                        // Codex round 5, P1: ResourceHashSidecar.sha256(File) wraps a read
+                        // failure in UncheckedIOException (a RuntimeException), which an
+                        // IOException-only catch here does NOT catch -- so a resource that was
+                        // successfully extracted but could not be reopened for hashing (e.g. a
+                        // write-only default ACL, or a filesystem error on the second open) let
+                        // that exception escape saveResources() entirely and abort this whole
+                        // module's construction, even though the file itself extracted fine.
                         UltiTools.getInstance().getLogger().log(Level.WARNING, "Could not save " + outFile.getName() + " to " + outFile);
                     }
                 }
             }
         } catch (IOException e) {
             getLogger().error("Failed to save resources from jar", e);
+        } finally {
+            ResourceHashSidecar.recordAll(new File(resourceFolderPath), hashesToRecord);
         }
     }
 
@@ -721,10 +1444,103 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         return VersionComparatorUtil.compare(this.getVersion(), plugin.getVersion()) > 0;
     }
 
+    /**
+     * Extension point for a module's own unload cleanup.
+     * <p>
+     * Called by {@link #unregisterSelf()} <em>before</em> the framework unregisters this
+     * plugin's commands and listeners (D-02), so the module's own beans are still alive
+     * while this runs. {@link #unregisterSelf()} is {@code final} and always calls this
+     * hook and the framework's own unregistration afterward -- a module cannot skip either
+     * by overriding {@link #unregisterSelf()} itself, because that is no longer possible
+     * (D-01). The default body does nothing; override this method, not
+     * {@link #unregisterSelf()}, to add cleanup work.
+     * <p>
+     * If this hook throws, {@link #unregisterSelf()} still unregisters this module's own
+     * commands and listeners before the exception propagates (WR-01,
+     * 16-REVIEW-lifecycle.md) -- a throwing hook is surfaced to the caller, not swallowed,
+     * but it cannot skip the framework's own cleanup the way an unguarded {@code super}
+     * call could. If a cleanup step also fails, that failure does not replace this hook's own
+     * exception: it is attached to it via {@link Throwable#addSuppressed} instead, so the
+     * module author's own failure is always the one that propagates and is never silently lost
+     * behind a secondary framework failure (Codex review on #457, issue #484).
+     */
+    // The empty body IS the design: it is what keeps every existing module unaffected --
+    // a module with no unload work needs no override at all (PMD.UncommentedEmptyMethodBody,
+    // matching CommandValidator#onComplete's established precedent for this exact shape).
+    @SuppressWarnings("PMD.UncommentedEmptyMethodBody")
+    protected void onUnregister() {
+    }
+
     @Override
-    public void unregisterSelf() {
-        getCommandManager().unregisterAll(this);
-        getListenerManager().unregisterAll(this);
+    public final void unregisterSelf() {
+        // Every step below runs regardless of an earlier step's failure (Codex review on #457:
+        // "Run listener cleanup even if command cleanup throws") -- a single flat try/finally
+        // would let CommandManager.unregisterAll(this) throwing skip
+        // ListenerManager.unregisterAll(this) entirely. But running every step is not enough on
+        // its own: plain finally-block semantics also let a LATER step's exception silently
+        // replace an EARLIER one, discarding it (Codex review on #457, issue #484: "Preserve the
+        // hook failure when cleanup also throws"). So failures are collected instead -- the
+        // FIRST one, in source order (hook, then command cleanup, then listener cleanup), is the
+        // one that propagates, and every later failure is attached to it via addSuppressed()
+        // rather than overwriting it.
+        Throwable failure = runUnregisterStep(null, this::onUnregister);
+        failure = runUnregisterStep(failure, () -> getCommandManager().unregisterAll(this));
+        failure = runUnregisterStep(failure, () -> getListenerManager().unregisterAll(this));
+        if (failure instanceof RuntimeException) {
+            throw (RuntimeException) failure;
+        } else if (failure instanceof Error) {
+            throw (Error) failure;
+        }
+    }
+
+    /**
+     * Runs one {@link #unregisterSelf()} cleanup step, collecting any failure onto {@code
+     * previousFailure} instead of letting it replace or be replaced by another step's failure.
+     * <p>
+     * {@code step} can only throw an unchecked exception -- {@link #onUnregister()},
+     * {@code CommandManager#unregisterAll}, and {@code ListenerManager#unregisterAll} all
+     * declare no checked exceptions -- so catching {@code RuntimeException | Error} here covers
+     * every real case without the width of catching {@link Throwable} (this is a deliberate
+     * cleanup barrier, not a broad catch: {@code unregisterSelf()} always runs every remaining
+     * step and always rethrows exactly one collected failure, per its own javadoc).
+     *
+     * @param previousFailure the failure already collected from an earlier step, or {@code null}
+     *                        if every earlier step (if any) succeeded
+     * @param step            the cleanup step to run
+     * @return {@code previousFailure}, with {@code step}'s own failure (if any) attached to it
+     *     via {@link Throwable#addSuppressed}; or, if {@code previousFailure} was {@code null},
+     *     {@code step}'s own failure, or {@code null} if {@code step} completed normally
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // deliberate cleanup barrier -- see javadoc above
+    private static Throwable runUnregisterStep(Throwable previousFailure, Runnable step) {
+        try {
+            step.run();
+        } catch (RuntimeException | Error e) {
+            if (previousFailure == null) {
+                return e;
+            }
+            previousFailure.addSuppressed(e);
+        }
+        return previousFailure;
+    }
+
+    /**
+     * Extension point for a module's own reload work.
+     * <p>
+     * Called by {@link #reloadSelf()} <em>after</em> the framework's own reload steps -- config
+     * reload, language-catalogue refresh, {@code @ConditionalOnConfig} drift report, and the
+     * framework-owned per-module reload log line (D-02, D-03) -- so a real-work override sees
+     * the already-reloaded configuration rather than the stale one. {@link #reloadSelf()} is
+     * {@code final} and always runs its own steps first; a module cannot skip them by
+     * overriding {@link #reloadSelf()} itself, because that is no longer possible (D-01). The
+     * default body does nothing; override this method, not {@link #reloadSelf()}, to add reload
+     * work.
+     */
+    // The empty body IS the design: it is what keeps every existing module unaffected --
+    // a module with no reload work needs no override at all (PMD.UncommentedEmptyMethodBody,
+    // matching CommandValidator#onComplete's established precedent for this exact shape).
+    @SuppressWarnings("PMD.UncommentedEmptyMethodBody")
+    protected void onReload() {
     }
 
     /**
@@ -733,18 +1549,21 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * Also reports (but does not act on) any {@code @ConditionalOnConfig} drift: the condition
      * is evaluated once, at component-scan time during startup, so a reload can only log that a
      * watched key has changed direction since then -- it never registers, unregisters, or
-     * rebuilds anything (issue #392, D-01). A module overriding {@code reloadSelf()} without
-     * calling {@code super.reloadSelf()} will not get this report; that is pre-existing
-     * behaviour for the two statements above too, stated here so it is not a surprise.
+     * rebuilds anything (issue #392, D-01). {@code final} and always runs its own three steps,
+     * then logs one framework-owned INFO line naming this module (D-03), then calls
+     * {@link #onReload()} -- a module can no longer skip any of this by overriding
+     * {@code reloadSelf()} itself, because that override point no longer exists (D-01).
      */
     @Override
-    public void reloadSelf() {
+    public final void reloadSelf() {
         getConfigManager().reloadConfigs(this);
         // Reinitialize language in case language setting changed
         language = createLanguageFromPath(resourceFolderPath);
         // @ConditionalOnConfig is evaluated once at component-scan time; a reload can only
         // report drift on a watched key, never re-register or rebuild anything (#392, D-01).
         ConditionalRegistrationEvaluator.reportDrift(this);
+        LOGGER.log(Level.INFO, String.format(UltiTools.getInstance().i18n(RELOAD_LOG_MESSAGE_KEY), getPluginName()));
+        onReload();
     }
 
     /**

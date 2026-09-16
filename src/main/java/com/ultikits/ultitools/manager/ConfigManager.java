@@ -48,12 +48,29 @@ public class ConfigManager {
                     throw new IOException("Failed to create directory: " + file.getPath());
                 }
             }
+            // #358 Part 1: a directory config expands to one entity per matching file in the
+            // loop below - a later file's refusal must not leave an earlier file's entity
+            // stranded in pluginConfigMap. Snapshot what this plugin already held before this
+            // call and roll back to exactly that snapshot on any refusal, so this directory's
+            // registration is all-or-nothing rather than a half-populated map.
+            Map<String, AbstractConfigEntity> registeredBeforeThisCall = snapshotRegisteredEntities(ultiToolsPlugin);
             for (File listFile : file.listFiles()) {
                 if (!listFile.isFile() || !listFile.getName().endsWith(".yml")) {
                     continue;
                 }
-                AbstractConfigEntity abstractConfigEntity = ReflectionUtil.newInstance(configEntity.getClass(), listFile.getPath().replace(ultiToolsPlugin.getResourceFolderPath() + File.separator, "").replaceAll("\\\\", "/"));
-                addConfigEntity(ultiToolsPlugin, abstractConfigEntity);
+                // Gate-1 review finding (line 62): constructing abstractConfigEntity used to sit
+                // OUTSIDE this try block, so a path-dependent constructor failure on a LATER file
+                // (ReflectionUtil.newInstance wraps a reflective constructor failure as a
+                // RuntimeException) escaped this loop without ever reaching the catch below -
+                // every earlier file's entity stayed registered, un-rolled-back. Construction is
+                // now inside the guarded region too.
+                try {
+                    AbstractConfigEntity abstractConfigEntity = ReflectionUtil.newInstance(configEntity.getClass(), listFile.getPath().replace(ultiToolsPlugin.getResourceFolderPath() + File.separator, "").replaceAll("\\\\", "/"));
+                    addConfigEntity(ultiToolsPlugin, abstractConfigEntity);
+                } catch (RuntimeException e) {
+                    rollBackRegisteredEntities(ultiToolsPlugin, registeredBeforeThisCall);
+                    throw e;
+                }
             }
         } else {
             addConfigEntity(ultiToolsPlugin, configEntity);
@@ -71,6 +88,55 @@ public class ConfigManager {
     }
 
     /**
+     * Snapshots the complete config-file-path-to-entity mapping {@code ultiToolsPlugin} already
+     * holds in {@link #pluginConfigMap}, before a caller is about to register a batch of entities
+     * in one call. Used by {@link #register(UltiToolsPlugin, AbstractConfigEntity)}'s directory
+     * branch, {@link #registerAll(UltiToolsPlugin, String, ClassLoader)}, and {@link
+     * #registerAll(UltiToolsPlugin, String[], ClassLoader)} to restore precisely what existed
+     * before this call, on a refusal, without touching anything a prior call already committed
+     * (#358 Part 1).
+     * <p>
+     * Gate-1 review finding: an earlier version of this snapshot captured only the KEY set, and
+     * {@link #rollBackRegisteredEntities} retained those keys via {@code retainAll} rather than
+     * restoring their values. That is correct only when a batch never replaces an already-
+     * registered path with a different entity instance before failing - but a supported flow
+     * (e.g. {@code registerAll} scanning a path a module also registered directly via {@code
+     * getAllConfigs()}) can do exactly that, per {@code ConfigManagerDualPathRegistrationTest}.
+     * Capturing entity VALUES, not just keys, is what lets a rollback actually restore the
+     * original entity rather than silently keeping whatever replaced it.
+     *
+     * @param ultiToolsPlugin the plugin whose current registrations to snapshot
+     * @return a defensive copy of the currently-registered path-to-entity map, or an empty map
+     *         if none
+     */
+    private Map<String, AbstractConfigEntity> snapshotRegisteredEntities(UltiToolsPlugin ultiToolsPlugin) {
+        Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(ultiToolsPlugin);
+        return configMap == null ? Collections.emptyMap() : new HashMap<>(configMap);
+    }
+
+    /**
+     * Restores {@code ultiToolsPlugin}'s entry in {@link #pluginConfigMap} to exactly {@code
+     * entitiesToRestore} - not just the same key set, but the same path-to-entity VALUES, so a
+     * path this call replaced with a different entity before failing is restored to the entity
+     * that was actually there before the call started (see {@link
+     * #snapshotRegisteredEntities}'s javadoc for why key-only retention was insufficient). The
+     * cleanup half of #358 Part 1's all-or-nothing registration.
+     *
+     * @param ultiToolsPlugin  the plugin to roll back
+     * @param entitiesToRestore the path-to-entity map to restore, as captured before this call
+     *                          started
+     */
+    private void rollBackRegisteredEntities(UltiToolsPlugin ultiToolsPlugin, Map<String, AbstractConfigEntity> entitiesToRestore) {
+        if (entitiesToRestore.isEmpty()) {
+            pluginConfigMap.remove(ultiToolsPlugin);
+            return;
+        }
+        Map<String, AbstractConfigEntity> configMap = pluginConfigMap.computeIfAbsent(ultiToolsPlugin, k -> new HashMap<>());
+        configMap.clear();
+        configMap.putAll(entitiesToRestore);
+    }
+
+    /**
      * Register all config entities in the specified package.
      *
      * @param plugin      UltiTools module
@@ -83,6 +149,13 @@ public class ConfigManager {
                 packageName,
                 classLoader
         );
+        // #358 Part 1: a package can carry more than one @ConfigEntity class, and
+        // PackageScanUtils.scanAnnotatedClasses returns them in an unspecified (HashSet) order.
+        // A validation refusal on any one of them must not leave a sibling that already
+        // registered successfully stranded in pluginConfigMap for a module that is about to be
+        // refused as a whole - snapshot what this plugin held before this scan and roll back to
+        // exactly that on any refusal, regardless of which class failed or when.
+        Map<String, AbstractConfigEntity> registeredBeforeThisCall = snapshotRegisteredEntities(plugin);
         for (Class<?> clazz : classes) {
             String path = clazz.getAnnotation(ConfigEntity.class).value();
             try {
@@ -103,6 +176,7 @@ public class ConfigManager {
                 // Neither the (String) nor the no-arg idiom resolved - refuse by name instead of
                 // vanishing silently (D-03). The no-arg-only idiom itself is untouched: it still
                 // succeeds on the first catch-free path above and never reaches this branch.
+                rollBackRegisteredEntities(plugin, registeredBeforeThisCall);
                 throw ConfigurationException.unconstructable(clazz.getName(), e);
             } catch (IOException e) {
                 // GATE-05 group two (08-21): routed to the typed configuration hierarchy. The
@@ -113,8 +187,51 @@ public class ConfigManager {
                 // via this call chain today. Typed anyway for defense in depth against that
                 // guard being fixed later, and because register()'s own declared "throws
                 // IOException" makes no promise about which branch produced it.
+                rollBackRegisteredEntities(plugin, registeredBeforeThisCall);
                 throw ConfigurationException.loadFailed(path, e);
+            } catch (RuntimeException e) {
+                // #358 Part 1's actual reproduction: a ConfigurationException from
+                // validateFields()/ensureConstructable(), raised inside init() deep beneath
+                // register() -> addConfigEntity(), is unchecked and was never caught here - it
+                // propagated straight out of this loop, leaving every entity this call had
+                // already registered stranded for a module that is refused as a whole.
+                rollBackRegisteredEntities(plugin, registeredBeforeThisCall);
+                throw e;
             }
+        }
+    }
+
+    /**
+     * Registers every {@code @ConfigEntity} class found across MULTIPLE scan packages for one
+     * plugin, as ONE atomic batch (CR-01, #358 Part 1 gate-1 finding).
+     * <p>
+     * {@code UltiToolsPlugin.initConfig()} calls {@link #registerAll(UltiToolsPlugin, String,
+     * ClassLoader)} once per surviving entry of {@code DependencyUtils.getPluginPackages(plugin)}
+     * - and #362's de-duplication only collapses NESTED scan packages, so two unrelated sibling
+     * packages (declared via {@code @ComponentScan(basePackages = {...})} or {@code
+     * @UltiToolsModule(scanBasePackages = {...})}) both survive and are scanned in two SEPARATE
+     * calls. Each single-package call's own snapshot/rollback is correctly scoped to not disturb
+     * a PRIOR call's successful work - which means a refusal on the SECOND package left the
+     * FIRST package's already-committed entries stranded, because neither call's snapshot ever
+     * captured "before this plugin's whole scan", only "before this one call". This overload
+     * snapshots once, before any package in {@code packageNames} is scanned, and rolls back to
+     * that ONE snapshot if any package's scan refuses - so a plugin whose scan packages span more
+     * than one package registers all of them, or none.
+     *
+     * @param plugin       UltiTools module
+     * @param packageNames every package name to scan, in the order {@code
+     *                     DependencyUtils.getPluginPackages} returns them
+     * @param classLoader  Class loader
+     */
+    public void registerAll(UltiToolsPlugin plugin, String[] packageNames, ClassLoader classLoader) {
+        Map<String, AbstractConfigEntity> registeredBeforeThisPlugin = snapshotRegisteredEntities(plugin);
+        try {
+            for (String packageName : packageNames) {
+                registerAll(plugin, packageName, classLoader);
+            }
+        } catch (RuntimeException e) {
+            rollBackRegisteredEntities(plugin, registeredBeforeThisPlugin);
+            throw e;
         }
     }
 
@@ -274,16 +391,47 @@ public class ConfigManager {
      * {@code @Pattern} constraint refuses with {@link com.ultikits.ultitools.exceptions.ConfigurationException}
      * instead of being written - the operator's file is not modified for that config entity
      * (SILENT-14).
+     * <p>
+     * Since gate-1 CR-02 (#358 Part 2), the WHOLE batch this call touches - potentially several
+     * config entities across several plugins in one JSON payload - is VALIDATED before any of
+     * them is persisted: a first pass calls {@link AbstractConfigEntity#validateProposedProperties}
+     * on every touched entity (applying nothing to disk, restoring every field it touched
+     * regardless of outcome), and only once every entity in the batch has passed does a second
+     * pass call {@link AbstractConfigEntity#updateProperties} on each to actually apply and
+     * persist. A validation refusal on entity N therefore leaves entities 1..N-1 exactly as they
+     * were before this call - none of them written to disk - rather than the pre-CR-02 behaviour
+     * where files 1..N-1 were already applied and persisted by the time entity N's refusal was
+     * discovered.
+     * <p>
+     * This guarantee covers VALIDATION refusals only, not a physical I/O failure during the
+     * second pass's own persist step (gate-1 review, line 425): if entity K's own {@code
+     * config.save(File)} throws {@link IOException} - a disk-full or permissions failure, not a
+     * validation constraint - entities 1..K-1 have already been applied and persisted by that
+     * point, and this call still throws, leaving a partially-applied batch. Making the persist
+     * phase itself durable against a physical write failure across N independent files would
+     * need staged writes (temp file + atomic rename) or a byte-level undo log for every touched
+     * file, which is a materially larger change than this fix's scope (see the follow-up issue
+     * filed for it). This is the same shape as #469 (WR-01): the registry-level guarantee this
+     * class makes is not a filesystem-durability guarantee.
      *
      * @param json JSON string
-     * @throws IOException              if an I/O error occurs
+     * @throws IOException              if an I/O error occurs while persisting - entities already
+     *                                 persisted earlier in this batch are NOT rolled back
      * @throws com.ultikits.ultitools.exceptions.ConfigurationException if a value violates its
-     *                                 validation constraint
+     *                                 validation constraint - nothing in this call's batch is
+     *                                 persisted when this is thrown, since validation runs to
+     *                                 completion across the whole batch before persistence starts
      */
     public final void loadFromJson(String json) throws IOException {
         Gson gson = new Gson();
         Type mapType = new TypeToken<Map<String, Map<String, JsonObject>>>() {}.getType();
         Map<String, Map<String, JsonObject>> parseObject = gson.fromJson(json, mapType);
+
+        // Phase one: collect every (entity, payload) pair this batch touches, in the same
+        // traversal order the pre-CR-02 implementation applied them in, and validate each
+        // WITHOUT persisting - a refusal here must not have written anything for ANY entity yet.
+        List<AbstractConfigEntity> touchedEntities = new ArrayList<>();
+        List<JsonObject> touchedPayloads = new ArrayList<>();
         for (String pluginName : parseObject.keySet()) {
             for (UltiToolsPlugin ultiToolsPlugin : pluginConfigMap.keySet()) {
                 if (!ultiToolsPlugin.getPluginName().equals(pluginName)) {
@@ -294,12 +442,23 @@ public class ConfigManager {
                 for (String configPath : configEntityMap.keySet()) {
                     if (pluginParseData.containsKey(configPath)) {
                         AbstractConfigEntity config = configEntityMap.get(configPath);
-                        config.updateProperties(pluginParseData.get(configPath));
-                        configEntityMap.put(configPath, config);
+                        JsonObject payload = pluginParseData.get(configPath);
+                        config.validateProposedProperties(payload);
+                        touchedEntities.add(config);
+                        touchedPayloads.add(payload);
                     }
                 }
-                pluginConfigMap.put(ultiToolsPlugin, configEntityMap);
             }
+        }
+
+        // Phase two: every entity in this batch passed validation - apply and persist each for
+        // real. updateProperties() re-validates (cheap on the documented construction idiom,
+        // per #363) before it writes, so this is never the first validation an entity sees.
+        // NOT covered here: a physical IOException from an individual save() partway through
+        // this loop still leaves entities already processed persisted - see this method's own
+        // javadoc and #469's sibling finding (WR-01) for why that is out of this fix's scope.
+        for (int i = 0; i < touchedEntities.size(); i++) {
+            touchedEntities.get(i).updateProperties(touchedPayloads.get(i));
         }
     }
 

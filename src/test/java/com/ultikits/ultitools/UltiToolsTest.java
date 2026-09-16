@@ -403,10 +403,10 @@ class UltiToolsTest {
         }
 
         @Test
-        @DisplayName("Should have getEconomy method")
-        void shouldHaveGetEconomyMethod() throws NoSuchMethodException {
-            Method method = UltiTools.class.getMethod("getEconomy");
-            assertThat(method.getReturnType()).isEqualTo(net.milkbowl.vault.economy.Economy.class);
+        @DisplayName("Should NOT have a getEconomy method — removed in 6.3.0 (#451, D-08, same-release exception clause 2)")
+        void shouldNotHaveGetEconomyMethod() {
+            assertThatThrownBy(() -> UltiTools.class.getMethod("getEconomy"))
+                    .isInstanceOf(NoSuchMethodException.class);
         }
     }
 

@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 import java.util.logging.Level;
 
 import org.bukkit.Bukkit;
@@ -23,6 +24,18 @@ import org.jetbrains.annotations.ApiStatus;
  * <p>
  * Scans beans for {@link Scheduled} annotated methods and registers them
  * as Bukkit tasks. Automatically cancels all tasks when a plugin is unloaded.
+ * <p>
+ * <b>Thread-confinement assumption (IN-02, gate-1 review, 16-REVIEW-residue.md):</b>
+ * {@link #pluginTasks}/{@link #externalTasks}/{@link #coreTasks} are plain, non-concurrent
+ * collections ({@code HashMap}/{@code ArrayList}). {@link #scanAndSchedule(Object, Consumer)}
+ * mutates them synchronously, once per successfully-scheduled task, inside its own scan loop
+ * (#410) - every current call site ({@code PluginManager.onPluginRegistered},
+ * {@link #registerScheduledMethodsCore(Object)}, {@link #registerScheduledMethodsExternal(String,
+ * Object)}) runs during plugin loading on the main thread, so this is safe today, but nothing
+ * enforces it. A future caller invoking any {@code registerScheduledMethods*} entry point from
+ * an async context would race these collections with no compile-time or runtime signal - the
+ * same main-thread-only contract {@link com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiScheduler}'s
+ * own class javadoc documents explicitly for its collections.
  *
  * @since 6.2.0
  */
@@ -58,10 +71,8 @@ public class TaskManager {
      * @param bean   the bean instance to scan
      */
     public void registerScheduledMethods(UltiToolsPlugin plugin, Object bean) {
-        List<BukkitTask> created = scanAndSchedule(bean);
-        if (!created.isEmpty()) {
-            pluginTasks.computeIfAbsent(plugin, k -> new ArrayList<>()).addAll(created);
-        }
+        scanAndSchedule(bean, task ->
+                pluginTasks.computeIfAbsent(plugin, k -> new ArrayList<>()).add(task));
     }
 
     /**
@@ -82,7 +93,7 @@ public class TaskManager {
      * @since 6.3.0
      */
     public void registerScheduledMethodsCore(Object bean) {
-        coreTasks.addAll(scanAndSchedule(bean));
+        scanAndSchedule(bean, coreTasks::add);
     }
 
     /**
@@ -107,20 +118,35 @@ public class TaskManager {
     }
 
     /**
-     * Scan one bean for {@link Scheduled} methods and schedule each valid one.
+     * Scan one bean for {@link Scheduled} methods and schedule each valid one, recording each
+     * task in its owning bucket as soon as it is created rather than batching them into a list
+     * returned at the end.
      * <p>
      * The single implementation behind all three registration entry points, which differ only in
-     * which bucket they file the resulting tasks under. Three copies of this body would be three
-     * places to keep a signature check, a scheduling rule or a log line in step.
+     * which bucket ({@code recorder}) they file the resulting tasks under. Three copies of this
+     * body would be three places to keep a signature check, a scheduling rule or a log line in
+     * step.
+     * <p>
+     * <b>#410:</b> before this, tasks were accumulated in a local list and handed to the owning
+     * bucket only via {@code created.addAll(...)} in the CALLER, after this method returned. If
+     * scheduling a later {@link Scheduled} method threw (e.g. {@code runTaskTimer} throwing
+     * because the host plugin became disabled mid-registration), every task already scheduled
+     * for earlier methods in this same scan was already a live Bukkit task, but the exception
+     * meant this method never returned, so {@code created} never reached any bucket -- {@code
+     * cancelAll}/{@code cancelAllExternal}/{@code cancelAllCore} had no record of them and could
+     * never cancel them at teardown. Calling {@code recorder} inside the loop, immediately after
+     * each task is scheduled, means an exception from a later method can no longer un-record an
+     * earlier one: whatever the loop reached before throwing is already exactly where it needs
+     * to be for teardown to find it. This also restores the original, pre-three-bucket-split
+     * behaviour of recording each task as it was scheduled, one at a time.
      *
-     * @param bean the instance to scan
-     * @return the tasks created, in declaration order; empty if the bean has no valid
-     *         {@link Scheduled} method
+     * @param bean     the instance to scan
+     * @param recorder invoked once per successfully scheduled task, in declaration order, with
+     *                 that task -- files it into this bean's owning bucket immediately
      * @since 6.3.0
      */
-    private List<BukkitTask> scanAndSchedule(Object bean) {
+    private void scanAndSchedule(Object bean, Consumer<BukkitTask> recorder) {
         Class<?> targetClass = getTargetClass(bean.getClass());
-        List<BukkitTask> created = new ArrayList<>();
 
         for (Method method : targetClass.getDeclaredMethods()) {
             Scheduled scheduled = method.getAnnotation(Scheduled.class);
@@ -171,7 +197,10 @@ public class TaskManager {
                         : runnable.runTaskTimer(hostPlugin, scheduled.delay(), scheduled.period());
             }
 
-            created.add(task);
+            // Record in the owning bucket NOW, before touching anything else -- an exception
+            // from a LATER @Scheduled method's own scheduling call must not be able to un-record
+            // this already-live task (#410).
+            recorder.accept(task);
 
             // INFO, not FINE. Bukkit's default logger configuration does not print FINE, which
             // made "registered but not firing" indistinguishable from "never registered" from
@@ -183,7 +212,6 @@ public class TaskManager {
                             targetClass.getSimpleName(), method.getName(),
                             scheduled.delay(), scheduled.period(), scheduled.async()));
         }
-        return created;
     }
 
     /**
@@ -227,10 +255,8 @@ public class TaskManager {
      * @since 6.2.2
      */
     public void registerScheduledMethodsExternal(String pluginName, Object bean) {
-        List<BukkitTask> created = scanAndSchedule(bean);
-        if (!created.isEmpty()) {
-            externalTasks.computeIfAbsent(pluginName, k -> new ArrayList<>()).addAll(created);
-        }
+        scanAndSchedule(bean, task ->
+                externalTasks.computeIfAbsent(pluginName, k -> new ArrayList<>()).add(task));
     }
 
     /**

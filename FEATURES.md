@@ -102,8 +102,9 @@ below). The row below therefore cites `#handleHelp`, the method that actually ex
 |---|---|---|---|---|---|---|---|---|
 | ultitools.ul.help | Print the /ul command usage summary | command | `/ul help` | none (requireOp=true) | both | admin | brief | UltiToolsCommands#handleHelp |
 | ultitools.ul.list | List every currently loaded module and its version | command | `/ul list` | none (requireOp=true) | both | admin | brief | UltiToolsCommands#listPlugins |
-| ultitools.ul.reload | Reload every loaded module | command | `/ul reload` | none (requireOp=true) | both | admin | brief | UltiToolsCommands#reloadPlugins |
-| ultitools.ul.reload-module | Reload a single named module | command | `/ul reload <name>` | none (requireOp=true) | both | admin | brief | UltiToolsCommands#reloadPlugin |
+| ultitools.ul.reload | Reload every loaded module; the framework logs one INFO console line per module reloaded, and any module reload work now runs in that module's `onReload()` hook after the framework's own config/language/drift steps (D-01/D-02/D-03) | command | `/ul reload` | none (requireOp=true) | both | admin | brief | UltiToolsCommands#reloadPlugins |
+| ultitools.ul.reload-module | Reload a single named module; the framework logs one INFO console line for that module, and any module reload work now runs in its `onReload()` hook after the framework's own config/language/drift steps (D-01/D-02/D-03) | command | `/ul reload <name>` | none (requireOp=true) | both | admin | brief | UltiToolsCommands#reloadPlugin |
+| ultitools.ul.reload-log-line | The framework itself logs exactly one INFO console line naming each module, immediately after that module's own config-reload/language-refresh/drift-report steps and before its `onReload()` hook runs — produced by the framework's own `lang/en.json`/`lang/zh.json` catalogue, never by the module (D-03) | gate | automatic, once per module, during `/ul reload` or `/ul reload <name>` | n/a | n/a | admin | brief | UltiToolsPlugin#reloadSelf |
 
 ## /upm — plugin management
 
@@ -171,11 +172,11 @@ session.
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
-| ultitools.boot.plugin-load-order | Order module loading by declared dependencies (Kahn's topological sort); a cycle or a missing hard dependency excludes only the affected module(s), not the whole load | event | console log during server startup | n/a | n/a | admin | brief | PluginManager#sortPluginsByDependencies |
+| ultitools.boot.plugin-load-order | Order module loading by declared dependencies (Kahn's topological sort); a cycle or a missing hard dependency excludes only the affected module(s), not the whole load. Fixed in 6.3.0 (UltiKits/UltiTools-Reborn#361): a module declaring several missing hard dependencies is named all of them in one message, not just the first; and two installed modules declaring the same `plugin.yml` `name:` produce a WARNING naming both sources and which one dependency resolution resolves the name to, instead of silently picking whichever was discovered first with nothing logged | event | console log during server startup | n/a | n/a | admin | brief | PluginManager#sortPluginsByDependencies |
 | ultitools.boot.plugin-load-order-legacy | Opt-in JVM system property that bypasses dependency resolution entirely and loads modules in filesystem order, modeled on Paper's own `-Dpaper.useLegacyPluginLoading=true` precedent | event | `-Dultitools.useLegacyPluginLoading=true` on the server's launch command line | n/a | n/a | internal | brief | PluginManager#sortPluginsByDependencies |
 | ultitools.boot.update-check | Check for a newer framework version and newer module versions once, asynchronously, shortly after startup | event | console log during server startup | n/a | n/a | admin | none | UpdateManager#checkUpdatesSync |
 | ultitools.listener.placeholderapi-bridge | On a player's first join needing an unregistered PlaceholderAPI expansion, download and reload it automatically | event | join the server as any player while PlaceholderAPI is installed | n/a | n/a | internal | none | PlayerJoinListener#onPlayerJoin |
-| ultitools.listener.update-notify | Notify an OP player once per connection, on join, if a framework or module update is available. `UpdateJoinListener`'s own javadoc claims "once per server session", but `PlayerCacheManager#onPlayerQuit` clears the backing `@PlayerCache` set on every quit, so a quit and rejoin re-sends the notification within the same session — a known product defect (UltiKits/UltiTools-Reborn#431), not the intended behaviour | event | join the server as an OP player after ultitools.boot.update-check has found an update | n/a | n/a | admin | none | UpdateJoinListener#onPlayerJoin |
+| ultitools.listener.update-notify | Notify an OP player once per server session, on join, if a framework or module update is available. Fixed in 6.3.0 (UltiKits/UltiTools-Reborn#431): `notifiedPlayers` is no longer `@PlayerCache`-annotated, so `PlayerCacheManager#onPlayerQuit` does not clear it, and a quit-and-rejoin within the same server run does not re-send the notification — matching `UpdateJoinListener`'s own javadoc claim. A restart (a new `UpdateManager` instance) does notify again | event | join the server as an OP player after ultitools.boot.update-check has found an update | n/a | n/a | admin | none | UpdateJoinListener#onPlayerJoin |
 
 **Reconciliation note (D-07):** the line-start form of the canonical command reports exactly one
 `@EventListener` site in this repository (`PlayerJoinListener`) against five `event`-Kind rows
@@ -191,6 +192,21 @@ same way: a direct `Bukkit.getPluginManager().registerEvents(...)` call inside
 `ultitools.boot.update-check`) are not driven by any annotation at all and reconcile against
 nothing, because module load-order (in either its resolved or legacy-bypass form) and the update
 check have no annotation-based instrument in this codebase.
+
+## Economy
+
+New in this section (D-08/D-09, #451, 6.3.0): before this, a module requesting the economy on a
+server with no Vault plugin — or with Vault present but no economy provider registered — crashed
+the entire framework at boot, before the request itself could even fail. Kept `event`-Kind and
+placed in its own section rather than folded into "Boot sequence and listeners" above, since
+neither row here is driven by a Bukkit event or an `@Scheduled`/`@EventListener` annotation the
+way every row in that section's own reconciliation note accounts for — both are triggered by an
+`EconomyUtils` call from module code, not by anything Bukkit dispatches.
+
+| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
+|---|---|---|---|---|---|---|---|---|
+| ultitools.economy.report-startup-state | Log one line at framework start naming the current economy service state — Vault not installed, Vault installed but no provider registered, or hooked into Vault naming the registered provider | event | console log during server startup | n/a | n/a | admin | none | EconomyUtils#logStartupState |
+| ultitools.economy.report-unavailable | On a module's first economy request while unavailable, log one WARNING per calling module per server session naming the module, distinguishing "Vault is not installed" from "Vault is installed but no provider is registered", stating the condition is the server's environment rather than a framework or module defect, and giving the install instruction. A request whose calling module cannot be attributed is still logged once, as an unknown caller | event | any module calls an `EconomyUtils` operation (`getBalance`, `has`, `deposit`, `withdraw`, `format`, `getCurrencyName`, `getCurrencyNamePlural`) while Vault is absent or has no registered provider | n/a | n/a | admin | none | EconomyUtils#reportEconomyStateIfUnavailable |
 
 ## Scheduled tasks
 
@@ -212,6 +228,8 @@ check have no annotation-based instrument in this codebase.
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
+| ultitools.language.file-preserve | An `UltiToolsPlugin` module's extracted `lang/<code><ext>` file that has been customised since extraction (its bytes no longer match the recorded provenance hash, or no provenance was ever recorded and its bytes differ from the jar's) is never overwritten; only the individual keys whose `String.format` placeholder arity (distinct argument positions, `%s`/`%d`-style) differs from the jar's bundled value for that key are resolved from the jar instead, each logged once as a WARN naming the module, file and key (D-05/D-06, #441) | gate | any loaded module's `plugins/UltiTools/pluginConfig/<module>/lang/<code><ext>` file, hand-edited after extraction, with the module jar later shipping a changed placeholder count for one of the edited keys — observed on the module's next start | n/a | n/a | admin | brief | UltiToolsPlugin#applyPlaceholderArityOverride |
+| ultitools.language.file-refresh | An `UltiToolsPlugin` module's extracted `lang/<code><ext>` file that has never been modified since extraction (its bytes still match the recorded provenance hash, or no provenance was recorded but its bytes already equal the jar's) is silently replaced by the current module jar's bundled copy on the next start, with one informative log line naming the file (D-05/D-06/D-07, #441) | gate | any loaded module's `plugins/UltiTools/pluginConfig/<module>/lang/<code><ext>` file, left untouched since extraction, with the module jar upgraded to a version shipping different `lang/<code><ext>` content — observed on the module's next start | n/a | n/a | admin | brief | UltiToolsPlugin#resolveLanguageWithProvenance |
 | ultitools.language.select | Choose the framework's message language (`zh` or `en`) via `config.yml`, applied on next start or `/ul reload` | gate | `language` in `plugins/UltiTools/config.yml`, applied on next start or `/ul reload` — unlike `datasource.type` above, `UltiTools#reloadPlugins` runs `reloadConfig()` then `initLanguage()`, so a reload alone is sufficient | n/a | n/a | admin | brief | UltiTools#initLanguage |
 
 ## Panel capabilities

@@ -209,16 +209,18 @@ class UpdateManagerTest {
     }
 
     /**
-     * GEN-08 / D-03: {@code notifiedPlayers} is now registered with the live {@link
-     * PlayerCacheManager} (lazy first-use, triggered from {@link UpdateManager#markPlayerNotified}),
-     * so a quitting player's UUID is pruned through the REAL quit path -- {@link
-     * PlayerCacheManager#onPlayerQuit(UUID)} -- rather than never at all. At HEAD nothing ever
-     * removes from this set (only {@code contains}/{@code add} exist), so this assertion fails
-     * on the pre-migration build.
+     * #431: {@code notifiedPlayers}'s lifetime is the manager instance's own lifetime (one server
+     * run), NOT the player's connection. GEN-08/D-03 (plan 05-04) had registered this field with
+     * {@link PlayerCacheManager} for quit-based sweeping to bound its size; that made a
+     * quitting-and-rejoining player look never-notified within the SAME server run, breaking
+     * {@link com.ultikits.ultitools.listeners.UpdateJoinListener}'s own documented promise of one
+     * notification per player per server session. This class asserts the reversed contract, and
+     * -- the guard against a fix that exempts too much -- that a REAL, unrelated
+     * {@code @PlayerCache} field on a different bean is still swept by the very same quit path.
      */
     @Nested
-    @DisplayName("PlayerCacheManager quit-based sweep (GEN-08, D-03)")
-    class PlayerCacheSweepTests {
+    @DisplayName("Notified-player state lifetime is the server run, not the connection (#431)")
+    class NotifiedStateLifetimeTests {
 
         private PlayerCacheManager liveManager;
         private MockedStatic<UltiTools> ultiToolsStatic;
@@ -242,33 +244,88 @@ class UpdateManagerTest {
         }
 
         @Test
-        @DisplayName("A notified player's UUID is gone after they quit, observed through the real quit path")
-        void notifiedPlayerUuidGoneAfterRealQuitPath() {
+        @DisplayName("Behavior 1: a notified player's UUID survives the real quit path -- no second "
+                + "notification is possible after a quit-and-rejoin within the same server run")
+        void notifiedPlayerSurvivesRealQuitPath() {
             UUID uuid = UUID.randomUUID();
 
-            // markPlayerNotified() both records the UUID and triggers lazy first-use
-            // registration with the live manager wired above.
             updateManager.markPlayerNotified(uuid);
             assertThat(updateManager.isPlayerNotified(uuid)).isTrue();
 
             liveManager.onPlayerQuit(uuid);
 
             assertThat(updateManager.isPlayerNotified(uuid))
-                    .withFailMessage("nothing removes from notifiedPlayers at HEAD -- this must "
-                            + "now be pruned by the real quit path, not merely still present")
-                    .isFalse();
+                    .withFailMessage("notifiedPlayers must survive a quit within the same server "
+                            + "run, or a rejoining player is wrongly notified a second time (#431)")
+                    .isTrue();
         }
 
         @Test
-        @DisplayName("Sweeping the same quitting player twice removes nothing further and throws nothing")
-        void sweepingSamePlayerTwiceIsIdempotent() {
+        @DisplayName("Behavior 1 (idempotency): sweeping the same quitting player twice leaves the "
+                + "notified mark intact and throws nothing")
+        void sweepingSamePlayerTwiceLeavesNotifiedMarkIntact() {
             UUID uuid = UUID.randomUUID();
             updateManager.markPlayerNotified(uuid);
 
             liveManager.onPlayerQuit(uuid);
             assertThatCode(() -> liveManager.onPlayerQuit(uuid)).doesNotThrowAnyException();
 
-            assertThat(updateManager.isPlayerNotified(uuid)).isFalse();
+            assertThat(updateManager.isPlayerNotified(uuid)).isTrue();
+        }
+
+        /**
+         * A minimal {@code @PlayerCache} fixture, structurally identical to real per-connection
+         * state (e.g. {@code InMemeryTeleportService}'s tracked-players set) that legitimately
+         * must still be cleared on quit.
+         */
+        class UnrelatedPerPlayerCacheBean {
+            @com.ultikits.ultitools.annotations.PlayerCache
+            final Set<UUID> activeSessions = new HashSet<>();
+        }
+
+        @Test
+        @DisplayName("Behavior 4: the same quit path still sweeps an UNRELATED bean's real "
+                + "@PlayerCache field -- this fix does not disable the sweep mechanism generally")
+        void quitStillSweepsUnrelatedPlayerCacheField() {
+            UUID uuid = UUID.randomUUID();
+            UnrelatedPerPlayerCacheBean unrelatedBean = new UnrelatedPerPlayerCacheBean();
+            unrelatedBean.activeSessions.add(uuid);
+            liveManager.registerBean(unrelatedBean);
+
+            updateManager.markPlayerNotified(uuid);
+
+            liveManager.onPlayerQuit(uuid);
+
+            assertThat(unrelatedBean.activeSessions)
+                    .as("PlayerCacheManager's general sweep must still clear a genuinely "
+                            + "connection-scoped @PlayerCache field")
+                    .doesNotContain(uuid);
+            assertThat(updateManager.isPlayerNotified(uuid))
+                    .as("...while UpdateManager's own notified mark, which is no longer "
+                            + "@PlayerCache-annotated, is untouched by the same quit event")
+                    .isTrue();
+        }
+    }
+
+    @Nested
+    @DisplayName("Restart resets notified state (#431)")
+    class RestartResetsStateTests {
+
+        @Test
+        @DisplayName("Behavior 5: a first-ever join on a freshly started server (a new UpdateManager "
+                + "instance) behaves as a first join -- notified state does not survive a restart")
+        void freshInstanceHasNoMemoryOfAnEarlierInstancesNotifications() {
+            UUID uuid = UUID.randomUUID();
+            updateManager.markPlayerNotified(uuid);
+            assertThat(updateManager.isPlayerNotified(uuid)).isTrue();
+
+            // UltiTools.scheduleStartupMessages() builds exactly one fresh UpdateManager per
+            // onEnable(), so a restart is modelled here as constructing a brand-new instance.
+            UpdateManager afterRestart = new UpdateManager(mock(Logger.class));
+
+            assertThat(afterRestart.isPlayerNotified(uuid))
+                    .as("a new server run must start with no players marked notified")
+                    .isFalse();
         }
     }
 }
