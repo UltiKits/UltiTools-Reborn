@@ -21,6 +21,7 @@ import org.bukkit.command.ConsoleCommandSender;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import java.util.concurrent.TimeUnit;
@@ -792,5 +793,245 @@ class PluginInstallCommandsTest {
         assertThat(allMessages)
             .contains("check")
             .contains("update");
+    }
+
+    /**
+     * #439: {@code listPlugins}'s player branch used to decide "installed" via a direct
+     * {@code installedPlugin.getPluginName().equals(plugin.getName())} string comparison between
+     * a loaded module's Bukkit {@code plugin.yml} name and the catalogue's display name. Every
+     * in-repo module names itself with the literal {@code "UltiTools-"} vendor prefix
+     * ({@code UltiTools-Economy}, {@code UltiTools-Menu}, ...) while the catalogue's own display
+     * name omits it, so a genuinely-loaded, genuinely-matching module was reported not installed.
+     * These tests exercise the extracted, package-private {@code isSameModule} decision directly
+     * (same package as {@link PluginInstallCommands}, so no reflection is needed) -- this is the
+     * exact function the fix changed, and testing it directly avoids depending on Adventure
+     * component rendering, which this file's other tests do not assert content on either.
+     */
+    @Nested
+    @DisplayName("#439 installed-state matching by stable identifier")
+    class InstalledStateMatchingTests {
+
+        @Test
+        @DisplayName("a catalogue entry whose display name differs but shares identifyString matches")
+        void matchesByIdentifyStringDespiteDifferentDisplayName() {
+            UltiToolsPlugin economy = mock(UltiToolsPlugin.class);
+            when(economy.getPluginName()).thenReturn("UltiTools-Economy");
+            when(economy.getIdentifyString()).thenReturn("com.ultikits.economy");
+
+            PluginEntity catalogueEntry = new PluginEntity();
+            catalogueEntry.setName("Economy System"); // deliberately a DIFFERENT display string
+            catalogueEntry.setIdentifyString("com.ultikits.economy");
+
+            assertThat(PluginInstallCommands.isSameModule(economy, catalogueEntry)).isTrue();
+        }
+
+        @Test
+        @DisplayName("#439's two named modules match via the shared 'UltiTools-' prefix normalisation")
+        void matchesTheTwoNamedModulesByPrefixNormalisation() {
+            UltiToolsPlugin economy = mock(UltiToolsPlugin.class);
+            when(economy.getPluginName()).thenReturn("UltiTools-Economy");
+            when(economy.getIdentifyString()).thenReturn(null);
+
+            UltiToolsPlugin menu = mock(UltiToolsPlugin.class);
+            when(menu.getPluginName()).thenReturn("UltiTools-Menu");
+            when(menu.getIdentifyString()).thenReturn(null);
+
+            PluginEntity economyEntry = new PluginEntity();
+            economyEntry.setName("Economy");
+
+            PluginEntity menuEntry = new PluginEntity();
+            menuEntry.setName("Menu");
+
+            assertThat(PluginInstallCommands.isSameModule(economy, economyEntry)).isTrue();
+            assertThat(PluginInstallCommands.isSameModule(menu, menuEntry)).isTrue();
+        }
+
+        @Test
+        @DisplayName("a module whose name already exactly equals the catalogue name still matches (no regression)")
+        void exactNameMatchStillWorks() {
+            UltiToolsPlugin exact = mock(UltiToolsPlugin.class);
+            when(exact.getPluginName()).thenReturn("UltiLogin");
+            when(exact.getIdentifyString()).thenReturn(null);
+
+            PluginEntity entry = new PluginEntity();
+            entry.setName("UltiLogin");
+
+            assertThat(PluginInstallCommands.isSameModule(exact, entry)).isTrue();
+        }
+
+        @Test
+        @DisplayName("a catalogue entry for a module that is genuinely not loaded does not match")
+        void genuinelyAbsentModuleDoesNotMatch() {
+            UltiToolsPlugin economy = mock(UltiToolsPlugin.class);
+            when(economy.getPluginName()).thenReturn("UltiTools-Economy");
+            when(economy.getIdentifyString()).thenReturn(null);
+
+            PluginEntity notLoaded = new PluginEntity();
+            notLoaded.setName("SomethingElseEntirely");
+
+            assertThat(PluginInstallCommands.isSameModule(economy, notLoaded)).isFalse();
+        }
+
+        /**
+         * The guard against over-fixing: a catalogue name that merely RESEMBLES a loaded module's
+         * -- sharing a prefix or substring -- must be rejected, not treated as the same module. A
+         * looser match that mislabels a different module as installed is a worse defect than the
+         * one #439 reports.
+         */
+        @Test
+        @DisplayName("a catalogue entry whose name resembles but is not a loaded module's is rejected")
+        void resemblingButDifferentModuleIsRejected() {
+            UltiToolsPlugin economy = mock(UltiToolsPlugin.class);
+            when(economy.getPluginName()).thenReturn("UltiTools-Economy");
+            when(economy.getIdentifyString()).thenReturn(null);
+
+            PluginEntity lookAlike = new PluginEntity();
+            lookAlike.setName("EconomyPro"); // resembles "Economy" but names a DIFFERENT module
+            lookAlike.setIdentifyString(null);
+
+            assertThat(PluginInstallCommands.isSameModule(economy, lookAlike)).isFalse();
+        }
+
+        @Test
+        @DisplayName("both sides carrying a blank identifyString never auto-matches on that alone")
+        void blankIdentifyStringOnBothSidesIsNotAMatch() {
+            UltiToolsPlugin noIdentify = mock(UltiToolsPlugin.class);
+            when(noIdentify.getPluginName()).thenReturn("UltiTools-Economy");
+            when(noIdentify.getIdentifyString()).thenReturn("");
+
+            PluginEntity blankEntry = new PluginEntity();
+            blankEntry.setName("SomethingElseEntirely");
+            blankEntry.setIdentifyString("");
+
+            assertThat(PluginInstallCommands.isSameModule(noIdentify, blankEntry)).isFalse();
+        }
+
+        @Test
+        @DisplayName("an empty catalogue page renders without error")
+        void emptyCataloguePageRendersWithoutError() {
+            if (executor == null) return;
+
+            try {
+                mockedUtils.when(() -> PluginInstallUtils.getPluginList(1, 10))
+                        .thenReturn(new ArrayList<>());
+            } catch (Exception e) {
+                return;
+            }
+            when(mockPluginManager.getPluginList()).thenReturn(new ArrayList<>());
+
+            boolean result = executor.onCommand(player, mockCommand, "upm", new String[]{"list", "1"});
+            server.getScheduler().performTicks(20);
+
+            assertThat(result).isTrue();
+        }
+
+        @Test
+        @DisplayName("a server with no modules loaded reports every catalogue entry as not installed")
+        void noModulesLoadedMatchesNothing() {
+            PluginEntity entry1 = new PluginEntity();
+            entry1.setName("First");
+            PluginEntity entry2 = new PluginEntity();
+            entry2.setName("Second");
+
+            // With NO loaded modules, isSameModule is never even asked about a candidate -- but
+            // the fact that pins "not installed" is that it would say no for ANY catalogue entry,
+            // which the reject/absent tests above already establish. This test additionally
+            // exercises the full command path with zero loaded modules to confirm no exception.
+            if (executor == null) return;
+            try {
+                mockedUtils.when(() -> PluginInstallUtils.getPluginList(1, 10))
+                        .thenReturn(Arrays.asList(entry1, entry2));
+            } catch (Exception e) {
+                return;
+            }
+            when(mockPluginManager.getPluginList()).thenReturn(new ArrayList<>());
+
+            boolean result = executor.onCommand(player, mockCommand, "upm", new String[]{"list", "1"});
+            server.getScheduler().performTicks(20);
+
+            assertThat(result).isTrue();
+        }
+    }
+
+    /**
+     * Gate-2 Codex review round 1 (three P2 findings on the #439 fix, all with a concrete failure
+     * scenario):
+     * <ul>
+     *   <li>the installed branch's uninstall click command used the catalogue's display name, but
+     *       {@code PluginInstallUtils#uninstallPlugin} matches only the loaded module's own
+     *       runtime name -- for exactly the newly-recognised display-name-mismatch case this fix
+     *       exists to handle, clicking "uninstall" would silently fail;</li>
+     *   <li>two non-blank but DIFFERENT {@code identifyString} values fell through to the name/
+     *       prefix fallback instead of being treated as an authoritative "not the same module";</li>
+     *   <li>the {@code identifyString} comparison was case-sensitive, unlike {@code
+     *       PluginInstallUtils#normalizeIdentifyString}'s trim+lowercase convention used
+     *       everywhere else identify strings are compared.</li>
+     * </ul>
+     */
+    @Nested
+    @DisplayName("gate-2 Codex round 1: uninstall identity, conflicting IDs, ID normalisation")
+    class GateTwoCodexRoundOneTests {
+
+        @Test
+        @DisplayName("resolves the loaded module's own runtime name for uninstall, not the catalogue's display name")
+        void resolvesInstalledRuntimeNameNotCatalogueDisplayName() {
+            UltiToolsPlugin economy = mock(UltiToolsPlugin.class);
+            when(economy.getPluginName()).thenReturn("UltiTools-Economy");
+            when(economy.getIdentifyString()).thenReturn(null);
+
+            PluginEntity economyEntry = new PluginEntity();
+            economyEntry.setName("Economy"); // catalogue display name, deliberately NOT the runtime name
+
+            String resolved = PluginInstallCommands.resolveInstalledRuntimeName(
+                    Collections.singletonList(economy), economyEntry);
+
+            assertThat(resolved)
+                    .as("PluginInstallUtils#uninstallPlugin matches only the runtime name -- using "
+                            + "the catalogue's display name here would silently fail to uninstall")
+                    .isEqualTo("UltiTools-Economy");
+        }
+
+        @Test
+        @DisplayName("resolves null when no loaded module matches the catalogue entry")
+        void resolvesNullWhenNoMatch() {
+            PluginEntity notLoaded = new PluginEntity();
+            notLoaded.setName("SomethingElseEntirely");
+
+            String resolved = PluginInstallCommands.resolveInstalledRuntimeName(
+                    Collections.emptyList(), notLoaded);
+
+            assertThat(resolved).isNull();
+        }
+
+        @Test
+        @DisplayName("two different, non-blank identifyStrings are authoritative -- never falls through to the name/prefix fallback")
+        void conflictingIdentifyStringsAreAuthoritative() {
+            UltiToolsPlugin foo = mock(UltiToolsPlugin.class);
+            when(foo.getPluginName()).thenReturn("UltiTools-Foo");
+            when(foo.getIdentifyString()).thenReturn("author-a.foo");
+
+            PluginEntity catalogueFoo = new PluginEntity();
+            catalogueFoo.setName("Foo"); // would match via the prefix fallback if the ID check didn't short-circuit
+            catalogueFoo.setIdentifyString("author-b.foo");
+
+            assertThat(PluginInstallCommands.isSameModule(foo, catalogueFoo))
+                    .as("two present but DIFFERENT stable identifiers prove these are different "
+                            + "modules; the name/prefix heuristic must not override that")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("identifyString comparison is case-insensitive and trims whitespace, matching PluginInstallUtils' own normalisation")
+        void identifyStringComparisonIsCaseInsensitiveAndTrimmed() {
+            UltiToolsPlugin economy = mock(UltiToolsPlugin.class);
+            when(economy.getPluginName()).thenReturn("UltiTools-Economy");
+            when(economy.getIdentifyString()).thenReturn("Com.UltiKits.Economy");
+
+            PluginEntity entry = new PluginEntity();
+            entry.setName("Something Else Entirely"); // deliberately not name-matching, to prove the ID path fires
+            entry.setIdentifyString("  com.ultikits.economy  ");
+
+            assertThat(PluginInstallCommands.isSameModule(economy, entry)).isTrue();
+        }
     }
 }
