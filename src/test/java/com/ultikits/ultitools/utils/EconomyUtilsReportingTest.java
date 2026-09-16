@@ -461,4 +461,85 @@ class EconomyUtilsReportingTest {
             assertThat(EconomyUtils.attributeModule(stack, prefixToModule)).isEqualTo("ModuleB");
         }
     }
+
+    @Nested
+    @DisplayName("scan-package ownership merging — ambiguous shared root handling (Codex P2, PR #463, EconomyUtils.java:440)")
+    class ScanPackageOwnershipTests {
+
+        @Test
+        @DisplayName("1: two DIFFERENT modules declaring the identical scan root make a frame in that root unattributed, not attributed to whichever module registered first")
+        void identicalScanRoot_twoDifferentModules_frameIsUnattributed() {
+            // Reproduces the finding directly: ModuleA and ModuleB both declare the exact same
+            // scan root, "com.example.shared". Before the fix, mergeScanPackageOwner() is a plain
+            // putIfAbsent -- ModuleA (registered first) silently wins and ModuleB is discarded, so
+            // a frame in the shared root is wrongly attributed to ModuleA even though it may
+            // genuinely belong to ModuleB. After the fix, the shared root is recognised as
+            // ambiguous and the frame is left unattributed (null), which the caller then reports
+            // as EconomyUtils.UNKNOWN_MODULE rather than naming either module.
+            Map<String, String> prefixToModule = new LinkedHashMap<>();
+            EconomyUtils.mergeScanPackageOwner(prefixToModule, "com.example.shared", "ModuleA");
+            EconomyUtils.mergeScanPackageOwner(prefixToModule, "com.example.shared", "ModuleB");
+
+            StackTraceElement[] stack = {
+                    new StackTraceElement("com.example.shared.SomeClass", "doThing", "SomeClass.java", 10),
+            };
+
+            assertThat(EconomyUtils.attributeModule(stack, prefixToModule)).isNull();
+        }
+
+        @Test
+        @DisplayName("2: the same two modules, but a longer root only ModuleA declares is still named -- the ambiguity rule does not swallow the normal case")
+        void longerRootDeclaredByOnlyOneModule_stillNamed_evenWhenShorterRootIsAmbiguous() {
+            // Same ambiguous shared root as test 1, PLUS a longer, more specific root that only
+            // ModuleA declares. A frame inside the longer root must still resolve to ModuleA --
+            // the longest-matching-prefix rule stays intact for the normal case; ambiguity only
+            // applies to a frame whose BEST (longest) match is itself an ambiguous root.
+            Map<String, String> prefixToModule = new LinkedHashMap<>();
+            EconomyUtils.mergeScanPackageOwner(prefixToModule, "com.example.shared", "ModuleA");
+            EconomyUtils.mergeScanPackageOwner(prefixToModule, "com.example.shared", "ModuleB");
+            EconomyUtils.mergeScanPackageOwner(prefixToModule, "com.example.shared.modulea", "ModuleA");
+
+            StackTraceElement[] stack = {
+                    new StackTraceElement("com.example.shared.modulea.SomeClass", "doThing", "SomeClass.java", 10),
+            };
+
+            assertThat(EconomyUtils.attributeModule(stack, prefixToModule)).isEqualTo("ModuleA");
+        }
+
+        @Test
+        @DisplayName("3: the same module registering its own scan root twice is not treated as ambiguous")
+        void sameModuleRegisteringSameRootTwice_isNotAmbiguous() {
+            // Guards the merge helper itself, not the reviewer's finding directly: re-declaring
+            // the identical (root, owner) pair -- e.g. a module present in more than one of
+            // PluginManager's scan sources -- must not be confused with two DIFFERENT modules
+            // sharing a root.
+            Map<String, String> prefixToModule = new LinkedHashMap<>();
+            EconomyUtils.mergeScanPackageOwner(prefixToModule, "com.example.shared", "ModuleA");
+            EconomyUtils.mergeScanPackageOwner(prefixToModule, "com.example.shared", "ModuleA");
+
+            StackTraceElement[] stack = {
+                    new StackTraceElement("com.example.shared.SomeClass", "doThing", "SomeClass.java", 10),
+            };
+
+            assertThat(EconomyUtils.attributeModule(stack, prefixToModule)).isEqualTo("ModuleA");
+        }
+    }
+
+    @Test
+    @DisplayName("13: an ambiguous attribution (shared scan root) consumes ONE shared UNKNOWN_MODULE dedup slot, not one per module (Codex P2, PR #463)")
+    void ambiguousAttribution_sharedDedupSlot_notOnePerModule() {
+        // attributeModule() resolves an ambiguous shared root to null (ScanPackageOwnershipTests
+        // test 1), and reportEconomyStateIfUnavailable(String) always maps a null moduleName onto
+        // the SAME constant, EconomyUtils.UNKNOWN_MODULE (EconomyUtils.java:354) -- there is no
+        // path by which two different modules' ambiguous requests can consume two different dedup
+        // slots. Simulated here as two separate reportEconomyStateIfUnavailable(null) calls
+        // (exactly what attributeCallingModule() now returns for both ModuleA's and ModuleB's
+        // calls into their shared root), asserting only ONE warning fires in total.
+        EconomyUtils.reportEconomyStateIfUnavailable(null);
+        EconomyUtils.reportEconomyStateIfUnavailable(null);
+
+        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+        verify(mockLogger, times(1)).warning(captor.capture());
+        assertThat(captor.getValue()).contains(EconomyUtils.UNKNOWN_MODULE);
+    }
 }

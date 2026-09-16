@@ -437,13 +437,27 @@ public final class EconomyUtils {
             List<UltiToolsPlugin> pluginsSnapshot = new ArrayList<>(pluginManager.getPluginList());
             for (UltiToolsPlugin plugin : pluginsSnapshot) {
                 for (String pkg : pluginManager.getPluginScanPackages(plugin.getClass())) {
-                    prefixToModule.putIfAbsent(pkg, plugin.getPluginName());
+                    mergeScanPackageOwner(prefixToModule, pkg, plugin.getPluginName());
                 }
             }
         } catch (ConcurrentModificationException | NullPointerException e) {
             return null;
         }
         return attributeModule(Thread.currentThread().getStackTrace(), prefixToModule);
+    }
+
+    /**
+     * [RED, Codex P2, PR #463, gate-2 finding on this branch's own code, was
+     * {@code prefixToModule.putIfAbsent(pkg, plugin.getPluginName())} inline above]: extracted
+     * verbatim (same first-registered-wins behaviour, not yet fixed) so the merge step is its own
+     * testable unit, ahead of the ambiguity fix in the paired GREEN commit.
+     *
+     * @param prefixToModule the map being built, mutated in place
+     * @param pkg            the scan package being registered
+     * @param owner          the module declaring it
+     */
+    static void mergeScanPackageOwner(Map<String, String> prefixToModule, String pkg, String owner) {
+        prefixToModule.putIfAbsent(pkg, owner);
     }
 
     /**
