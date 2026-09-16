@@ -456,77 +456,13 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
 
         if (recorded.isPresent()) {
             if (recorded.get().equals(diskHash)) {
-                // Branch 1: never touched since extraction -> overwrite from the jar. Codex
-                // round 1, P2: skip entirely when the bundled content has not actually
-                // changed since it was last synced -- the common case on every restart after
-                // the first successful sync, not an edge case. Rewriting identical bytes and
-                // logging "has been updated" every single time is misleading, touches the
-                // file's mtime for no reason, and fails needlessly on an installation that
-                // hardens module resources read-only after provisioning.
-                if (jarHash.equals(diskHash)) {
-                    return readLanguageFile(file, extension);
-                }
-                // Only record the new baseline and log success once the write is CONFIRMED to
-                // have landed -- re-hash the bytes actually on disk afterward (mirroring
-                // saveResources()'s own pattern) rather than trusting the precomputed jarHash,
-                // so a partial/failed write can never be misreported as success (WR-01).
-                if (writeBytes(file, jarBytes)) {
-                    try {
-                        String newDiskHash = ResourceHashSidecar.sha256(file);
-                        ResourceHashSidecar.record(resourceFolder, resourcePath, newDiskHash);
-                        // Codex round 2, P2: record(...) swallows its own IOException and returns
-                        // void, so a caller cannot otherwise tell a sidecar write failure from
-                        // success. Read the record back to confirm it actually persisted before
-                        // claiming success -- logging "has been updated" when the file WAS
-                        // refreshed but the sidecar was NOT would misrepresent provenance
-                        // tracking as healthy. Deliberately not reverted on failure: a second
-                        // write introduces its own atomicity risk for a genuinely rare failure;
-                        // the next boot's hash mismatch safely falls into branch 2 (treated as
-                        // customised) instead, which is this mechanism's own conservative default.
-                        boolean recordPersisted = ResourceHashSidecar.readRecordedHash(resourceFolder, resourcePath)
-                                .filter(newDiskHash::equals).isPresent();
-                        if (recordPersisted) {
-                            getLogger().info("Language file '" + resourcePath + "' for module '" + getPluginName()
-                                    + "' was not modified since it was extracted and has been updated to the "
-                                    + "current bundled version.");
-                        } else {
-                            getLogger().error("Refreshed language file '" + resourcePath + "' for module '"
-                                    + getPluginName() + "' but could not persist its provenance record; it may "
-                                    + "be treated as customised on the next start until this is resolved.");
-                        }
-                    } catch (UncheckedIOException e) {
-                        // Codex round 6, P1: the same gap fixed in saveResources() -- the file
-                        // this branch just wrote could not be reopened for hashing immediately
-                        // afterward (e.g. a write-only default ACL, or a transient filesystem
-                        // error), and sha256(File)'s UncheckedIOException is not an IOException a
-                        // plain IOException catch would see. Degrade rather than let it abort
-                        // module construction: the file itself WAS refreshed and is still used
-                        // below via readLanguageFile -- only its provenance record is skipped, so
-                        // the next boot's hash comparison falls back to "unknown provenance"
-                        // (branches 3/4) instead of crashing this one.
-                        getLogger().error("Could not hash refreshed language file '" + resourcePath
-                                + "' for module '" + getPluginName() + "' immediately after writing it; "
-                                + "its provenance record was not updated.", e);
-                    }
-                }
-                // Codex round on UltiToolsPlugin.java:498 (P2): this used to be an unconditional
-                // readLanguageFile(...), skipping the per-key placeholder-arity guard on EXACTLY
-                // the paths where a stale value is most likely -- writeBytes(file, jarBytes)
-                // returning false (read-only file, symlink, unpreservable ownership, or an I/O
-                // failure mid-write) leaves the OLD disk bytes in place while jarBytes has already
-                // moved on, so a key whose bundled arity shrank (two placeholders -> one) can
-                // still carry the old, wider disk value here. The corrected failure direction
-                // (the reviewer's own comment named the opposite, non-throwing direction): a
-                // stale disk value with MORE placeholders than the call site now supplies throws
-                // java.util.MissingFormatArgumentException at format time -- extra bundled
-                // arguments over a narrower stale value are silently ignored by String.format, not
-                // an error. Applying the override here UNCONDITIONALLY -- not only on the
-                // writeBytes-failed branch -- means the write's own outcome stops mattering for
-                // this guarantee: when the write succeeded, disk and jar bytes are now identical,
-                // so every key's arity trivially matches and this is a no-op past the extra
-                // parse; when it failed, this is precisely the protection this method exists to
-                // provide.
-                return applyPlaceholderArityOverride(file, jarBytes, extension, resourcePath);
+                // Branch 1: never touched since extraction -> overwrite from the jar. Extracted
+                // into its own method (PMD NPathComplexity: this branch's own nested
+                // try/writeBytes/catch shape was the dominant contributor to this method's
+                // complexity once branch 2 below gained its own content-comparison check) --
+                // see resolveNeverTouchedSinceExtraction's own javadoc for the full behaviour.
+                return resolveNeverTouchedSinceExtraction(file, jarBytes, jarHash, diskHash,
+                        resourceFolder, resourcePath, extension);
             }
             // Branch 2: recorded hash present and mismatched against the disk file's CURRENT
             // hash. Codex finding (thread PRRT_kwDOIcF9Es6i2kao, P2, on
@@ -577,6 +513,101 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             return readLanguageFile(file, extension);
         }
         // Branch 4: unknown provenance and the bytes differ -> assume customisation, never record.
+        return applyPlaceholderArityOverride(file, jarBytes, extension, resourcePath);
+    }
+
+    /**
+     * Branch 1 of {@link #resolveLanguageWithProvenance}: the recorded hash equals the disk
+     * file's current hash -- the operator has never touched this file since it was extracted,
+     * so it is safe to overwrite from the current jar. Extracted into its own method (PMD
+     * {@code NPathComplexity}: once branch 2 in the caller gained its own content-comparison
+     * check for the Codex finding on {@code UltiToolsPlugin.java:515}, thread {@code
+     * PRRT_kwDOIcF9Es6i2kao}, this branch's own nested {@code writeBytes}/try/catch shape pushed
+     * the combined method over Codacy's threshold; splitting it out is a structural change only,
+     * the behaviour below is unchanged from before that finding).
+     * <p>
+     * Codex round 1, P2: skip the write entirely when the bundled content has not actually
+     * changed since it was last synced -- the common case on every restart after the first
+     * successful sync, not an edge case. Rewriting identical bytes and logging "has been
+     * updated" every single time is misleading, touches the file's mtime for no reason, and
+     * fails needlessly on an installation that hardens module resources read-only after
+     * provisioning.
+     * <p>
+     * Only records the new baseline and logs success once the write is CONFIRMED to have
+     * landed -- re-hashes the bytes actually on disk afterward (mirroring {@code
+     * saveResources()}'s own pattern) rather than trusting the precomputed {@code jarHash}, so a
+     * partial/failed write can never be misreported as success (WR-01). Codex round 2, P2:
+     * {@code record(...)} swallows its own {@link IOException} and returns {@code void}, so a
+     * caller cannot otherwise tell a sidecar write failure from success -- the record is read
+     * back to confirm it actually persisted before claiming success in the log; logging "has
+     * been updated" when the file WAS refreshed but the sidecar was NOT would misrepresent
+     * provenance tracking as healthy. Deliberately not reverted on failure: a second write
+     * introduces its own atomicity risk for a genuinely rare failure, and the next boot's hash
+     * mismatch safely falls into branch 2's own content-comparison fix instead, rather than a
+     * second write attempt here.
+     * <p>
+     * Codex round on {@code UltiToolsPlugin.java:498}, P2: this used to be an unconditional
+     * {@code readLanguageFile(...)}, skipping the per-key placeholder-arity guard on EXACTLY the
+     * paths where a stale value is most likely -- {@code writeBytes(file, jarBytes)} returning
+     * {@code false} (read-only file, symlink, unpreservable ownership, or an I/O failure
+     * mid-write) leaves the OLD disk bytes in place while {@code jarBytes} has already moved on,
+     * so a key whose bundled arity shrank (two placeholders to one) can still carry the old,
+     * wider disk value. A stale disk value with MORE placeholders than the call site now
+     * supplies throws {@link java.util.MissingFormatArgumentException} at format time -- extra
+     * bundled arguments over a narrower stale value are silently ignored by {@link
+     * String#format}, not an error. Applying the override UNCONDITIONALLY -- not only on the
+     * {@code writeBytes}-failed path -- means the write's own outcome stops mattering for this
+     * guarantee: when the write succeeded, disk and jar bytes are now identical, so every key's
+     * arity trivially matches and this is a no-op past the extra parse; when it failed, this is
+     * precisely the protection this method exists to provide.
+     *
+     * @param file           the on-disk language file, already confirmed to exist
+     * @param jarBytes       the current bundled bytes for this resource, already confirmed
+     *                       non-null by the caller
+     * @param jarHash        {@code jarBytes}'s own SHA-256 digest, already computed by the caller
+     * @param diskHash       {@code file}'s current SHA-256 digest, already computed by the
+     *                       caller -- equal to the recorded provenance hash, which is what
+     *                       routed the caller into this method in the first place
+     * @param resourceFolder the module's resource folder root (the sidecar's own location)
+     * @param resourcePath   the extracted resource's path relative to the resource folder
+     * @param extension      the language file extension ({@code ".json"}, {@code ".yml"} or
+     *                       {@code ".yaml"})
+     * @return the resolved language for this file
+     */
+    private Language resolveNeverTouchedSinceExtraction(File file, byte[] jarBytes, String jarHash,
+            String diskHash, File resourceFolder, String resourcePath, String extension) {
+        if (jarHash.equals(diskHash)) {
+            return readLanguageFile(file, extension);
+        }
+        if (writeBytes(file, jarBytes)) {
+            try {
+                String newDiskHash = ResourceHashSidecar.sha256(file);
+                ResourceHashSidecar.record(resourceFolder, resourcePath, newDiskHash);
+                boolean recordPersisted = ResourceHashSidecar.readRecordedHash(resourceFolder, resourcePath)
+                        .filter(newDiskHash::equals).isPresent();
+                if (recordPersisted) {
+                    getLogger().info("Language file '" + resourcePath + "' for module '" + getPluginName()
+                            + "' was not modified since it was extracted and has been updated to the "
+                            + "current bundled version.");
+                } else {
+                    getLogger().error("Refreshed language file '" + resourcePath + "' for module '"
+                            + getPluginName() + "' but could not persist its provenance record; it may "
+                            + "be treated as customised on the next start until this is resolved.");
+                }
+            } catch (UncheckedIOException e) {
+                // Codex round 6, P1: the same gap fixed in saveResources() -- the file this
+                // branch just wrote could not be reopened for hashing immediately afterward
+                // (e.g. a write-only default ACL, or a transient filesystem error), and
+                // sha256(File)'s UncheckedIOException is not an IOException a plain IOException
+                // catch would see. Degrade rather than let it abort module construction: the
+                // file itself WAS refreshed and is still used below via readLanguageFile -- only
+                // its provenance record is skipped, so the next boot's hash comparison falls
+                // back to "unknown provenance" (branches 3/4) instead of crashing this one.
+                getLogger().error("Could not hash refreshed language file '" + resourcePath
+                        + "' for module '" + getPluginName() + "' immediately after writing it; "
+                        + "its provenance record was not updated.", e);
+            }
+        }
         return applyPlaceholderArityOverride(file, jarBytes, extension, resourcePath);
     }
 
