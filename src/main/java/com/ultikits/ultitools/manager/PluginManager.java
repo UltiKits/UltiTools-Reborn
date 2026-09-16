@@ -1170,6 +1170,39 @@ public class PluginManager {
         } catch (Exception | Error e) {
             Bukkit.getLogger().log(Level.WARNING, e, String::new);
             Bukkit.getLogger().log(Level.WARNING, String.format("[UltiTools-API] %s load failed！", plugin.getPluginName()));
+            // WR-02 (#410): onPluginRegistered() may have already run pluginList.add(plugin)
+            // and recorded some of this module's beans' @Scheduled tasks (correctly, per
+            // TaskManager's own #410 fix) before a LATER bean's own scheduling call threw.
+            // registerSelf() already returned true to reach onPluginRegistered() at all, so
+            // calling unregisterSelf() below is never "on a module that never finished
+            // registerSelf()" -- only a module whose OWN activation already succeeded, but
+            // whose framework-side post-registration bookkeeping failed partway, reaches here.
+            // unregister(plugin) itself is wrapped separately: it must not let a SECOND
+            // exception escape this handler, and the plugin must not stay in pluginList either
+            // way.
+            if (pluginList.contains(plugin)) {
+                try {
+                    unregister(plugin);
+                } catch (Exception | Error unregisterFailure) {
+                    Bukkit.getLogger().log(Level.WARNING, unregisterFailure, String::new);
+                    Bukkit.getLogger().log(Level.WARNING, String.format(
+                            "[UltiTools-API] %s failed to unregister cleanly after a failed load！",
+                            plugin.getPluginName()));
+                    // #457's unregister() now closes the context in a finally (see its
+                    // javadoc), so it has already run -- successfully or not -- by the time
+                    // this catch block is reached, regardless of what inside unregister()
+                    // threw. A second, independent close here (PR #478 round 1's original
+                    // fallback, needed only against #457's pre-merge unregister(), which
+                    // closed as its own final statement with nothing guaranteeing that ran
+                    // if an earlier step threw) is redundant on the merged contract and would
+                    // double-close instead. #478's own intent -- the container closes exactly
+                    // once even when unregister() itself throws during this teardown -- is
+                    // still met, now by #457's finally, and is still asserted by this same
+                    // test class's unregisterFailureDuringTeardownIsHandledAndPluginStillRemoved.
+                } finally {
+                    pluginList.remove(plugin);
+                }
+            }
             return false;
         }
     }
