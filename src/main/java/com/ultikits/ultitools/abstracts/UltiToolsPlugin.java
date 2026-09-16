@@ -11,9 +11,6 @@ import java.io.Reader;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.io.OutputStream;
-import java.nio.file.StandardCopyOption;
-import java.nio.file.attribute.PosixFileAttributeView;
-import java.nio.file.attribute.PosixFilePermission;
 import java.lang.reflect.Type;
 import java.net.JarURLConnection;
 import java.net.URI;
@@ -717,192 +714,73 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
-     * Returns whether {@code file} should be treated as pinned read-only by its operator, and
-     * therefore never refreshed by {@link #writeBytes} -- {@code false} for a file that does not
-     * exist yet (nothing to pin).
-     * <p>
-     * Codex round 8, P2 (discussion_r4012703529): {@code writeBytes}'s atomic move replaces a
-     * DIRECTORY ENTRY, which on POSIX only ever consults the containing directory's write
-     * permission, never the target file's own -- so an untouched file the operator made read-only
-     * (a deliberate hardening signal) was silently overwritten anyway if checked with
-     * {@link Files#isWritable} alone.
-     * <p>
-     * Codex round 10, P2 (discussion on this class, {@code UltiToolsPlugin.java:724} at the time
-     * of the finding): {@link Files#isWritable} alone reflects only this PROCESS's effective
-     * ability to write, which is unconditionally {@code true} under a privileged JVM (root, or
-     * {@code CAP_DAC_OVERRIDE}) regardless of the file's own mode bits -- a server running
-     * privileged would otherwise silently ignore an operator's {@code chmod 0444} pin. This method
-     * therefore also inspects the raw POSIX write bits directly as a fallback signal, independent
-     * of what this particular process happens to be privileged to do: if none of owner/group/other
-     * carries write permission, the operator's intent is unambiguous. A non-POSIX filesystem, or
-     * any failure reading the permissions, falls back to the (already passed) process-relative
-     * answer -- this fallback only ever STRENGTHENS the read-only determination, never weakens it.
-     *
-     * @param file the language file about to be refreshed
-     * @return whether the refresh must be skipped because the file is operator-pinned read-only
-     */
-    private boolean isOperatorPinnedReadOnly(File file) {
-        if (!file.exists()) {
-            return false;
-        }
-        if (!Files.isWritable(file.toPath())) {
-            return true;
-        }
-        try {
-            PosixFileAttributeView view = Files.getFileAttributeView(file.toPath(), PosixFileAttributeView.class);
-            if (view == null) {
-                return false;
-            }
-            Set<PosixFilePermission> permissions = view.readAttributes().permissions();
-            return !permissions.contains(PosixFilePermission.OWNER_WRITE)
-                    && !permissions.contains(PosixFilePermission.GROUP_WRITE)
-                    && !permissions.contains(PosixFilePermission.OTHERS_WRITE);
-        } catch (IOException e) {
-            return false;
-        }
-    }
-
-    /**
      * Writes {@code bytes} to {@code file}, returning whether the write actually succeeded
      * (WR-01) -- the caller must not record a new provenance baseline or log a success line for
      * a write that threw partway through.
      * <p>
-     * Codex round 1, P2: writes to a temporary file in {@code file}'s OWN parent directory
-     * first, then atomically replaces {@code file} only once the full write has succeeded --
-     * a direct {@code Files.write(file.toPath(), bytes)} truncates the destination immediately
-     * on open, so a write failure partway through (disk full, etc.) could otherwise leave a
-     * truncated or partial file in place of the original bytes. The temp file is created in
-     * the same directory specifically so the final move can be a same-filesystem atomic
-     * rename, not a copy.
+     * Round following {@code PosixAttributePreserver.java:104} (symlink finding on {@code
+     * ResourceHashSidecar.java:320}, thread {@code PRRT_kwDOIcF9Es6i2I49}, P2): this method's
+     * entire operation -- the operator-pinned-read-only refusal, the symlink refusal, the
+     * temp-file-then-atomic-move mechanism, and the POSIX attribute preservation -- now lives in
+     * {@link PosixAttributePreserver#replaceInPlace}, shared with {@code
+     * ResourceHashSidecar#writeAll}'s identical contract, so the two write paths cannot disagree
+     * on any of these properties again the way they disagreed on attribute preservation (round 3),
+     * an unreadable-attributes edge case (round 6), and symlink handling (this round) one at a
+     * time. This method is now a thin {@link PosixAttributePreserver.ReplaceInPlaceListener}
+     * supplying this class's own {@link #getLogger()}/{@code getPluginName()} warning text; the
+     * full behavioural contract (what each refusal means, why each is conservative rather than
+     * best-effort) is documented on {@link PosixAttributePreserver#replaceInPlace} and {@link
+     * PosixAttributePreserver.ReplaceInPlaceListener} themselves, not duplicated here.
      * <p>
-     * The atomic move replaces a DIRECTORY ENTRY, which on POSIX only ever consults the
-     * containing directory's write permission -- never the target file's own permission bits or
-     * identity, and not what the entry itself even IS. Three consequences this method now guards
-     * against, all only reachable through this method's one caller ({@link
-     * #resolveLanguageWithProvenance}'s branch 1, "never touched since extraction"):
-     * <ol>
-     *   <li>An untouched file the operator made read-only was silently overwritten anyway --
-     *       guarded by {@link #isOperatorPinnedReadOnly}; see its own javadoc for the full
-     *       Codex round 8 / round 10 history.</li>
-     *   <li>A writable file's non-default POSIX permissions (e.g. a hardened {@code 0640}), and
-     *       its owner/group (Codex round 9, P2, discussion_r4013501574), were silently replaced by
-     *       whatever {@link File#createTempFile} defaults to the moment the file WAS legitimately
-     *       refreshed. Guarded by {@link #copyPosixAttributesIfSupported}; see its own javadoc.</li>
-     *   <li>Codex round 11, P2 (discussion on this class at the time of the finding): a symlinked
-     *       language file (an operator-managed shared-translations layout, e.g. {@code
-     *       lang/en.json} pointing at a shared store) had the LINK ITSELF replaced by a regular
-     *       file, silently breaking the layout on the next refresh. Guarded by checking {@link
-     *       Files#isSymbolicLink} before doing anything and skipping the refresh entirely --
-     *       preserving the link's TARGET content through this mechanism is out of scope for this
-     *       fix (relative-vs-absolute links, a target shared by multiple language files, etc.);
-     *       the conservative "never touch it" choice already made for a read-only file applies
-     *       here too.</li>
-     * </ol>
-     * Deliberately POSIX-only throughout: there is no portable, dependency-free way to copy ACLs
-     * from Java's own file APIs, so a non-POSIX filesystem's ACLs are NOT preserved by this
-     * method -- silently dropping them without saying so would be worse than the status quo this
-     * fix improves on.
+     * The symlink refusal's exact semantics, unchanged from Codex round 11, P2: a symlinked
+     * language file (an operator-managed shared-translations layout, e.g. {@code lang/en.json}
+     * pointing at a shared store) is left completely untouched -- REFUSE, not write-through to
+     * the link's target. See {@link PosixAttributePreserver.ReplaceInPlaceListener#onSymbolicLink()}.
      */
     private boolean writeBytes(File file, byte[] bytes) {
-        if (isOperatorPinnedReadOnly(file)) {
-            getLogger().warn("Language file '" + file.getPath() + "' for module '" + getPluginName()
-                    + "' is not writable; treating it as operator-pinned and leaving it untouched "
-                    + "instead of refreshing it from the bundled version.");
-            return false;
-        }
-        if (Files.isSymbolicLink(file.toPath())) {
-            // Codex round 11, P2 (discussion on UltiToolsPlugin.java:776 at the time of the
-            // finding): the atomic move below replaces a DIRECTORY ENTRY -- for a symlink, that
-            // means replacing the LINK ITSELF with a regular file, not updating or preserving it,
-            // silently breaking an operator-managed catalogue layout (e.g. lang/en.json symlinked
-            // to a shared translations store) on the next refresh. Treat a symlink exactly like a
-            // read-only file: skip the refresh entirely rather than destroy the link.
-            getLogger().warn("Language file '" + file.getPath() + "' for module '" + getPluginName()
-                    + "' is a symbolic link; treating it as operator-pinned and leaving it "
-                    + "untouched instead of replacing the link with a regular file.");
-            return false;
-        }
-        File parentDir = file.getParentFile();
-        File tempFile = null;
-        try {
-            tempFile = File.createTempFile(file.getName(), ".tmp", parentDir);
-            if (!copyPosixAttributesIfSupported(file, tempFile)) {
-                // Codex round 9, P2: the replacement file's owner/group could not be made to
-                // match the original -- refusing to refresh rather than silently installing a
-                // file with the wrong identity. The WARNING explaining why was already logged by
-                // copyPosixAttributesIfSupported.
-                return false;
+        return PosixAttributePreserver.replaceInPlace(file, bytes, new PosixAttributePreserver.ReplaceInPlaceListener() {
+            @Override
+            public void onOperatorPinnedReadOnly() {
+                getLogger().warn("Language file '" + file.getPath() + "' for module '" + getPluginName()
+                        + "' is not writable; treating it as operator-pinned and leaving it untouched "
+                        + "instead of refreshing it from the bundled version.");
             }
-            Files.write(tempFile.toPath(), bytes);
-            Files.move(tempFile.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING,
-                    StandardCopyOption.ATOMIC_MOVE);
-            return true;
-        } catch (IOException e) {
-            getLogger().error("Failed to write language file " + file.getPath(), e);
-            return false;
-        } finally {
-            if (tempFile != null) {
-                // A successful move already renamed the temp file away from tempFile's own
-                // path, so this is a no-op on the success path and only cleans up a leftover
-                // staging file on any failure branch above.
-                // noinspection ResultOfMethodCallIgnored
-                tempFile.delete();
-            }
-        }
-    }
 
-    /**
-     * Copies {@code source}'s POSIX permissions AND owner/group onto {@code target} if the
-     * filesystem exposes a {@link PosixFileAttributeView} for it, so {@link #writeBytes}'s atomic
-     * move does not silently replace an untouched file's identity with {@link
-     * File#createTempFile}'s own defaults (Codex rounds 8 and 9, P2, discussion_r4012703529 and
-     * discussion_r4013501574).
-     * <p>
-     * Round 3 (Codex finding on {@code ResourceHashSidecar.java:285}, thread {@code
-     * PRRT_kwDOIcF9Es6i00gb}): the core copy logic now lives in {@link
-     * com.ultikits.ultitools.utils.PosixAttributePreserver#copyIfSupported}, shared with {@code
-     * ResourceHashSidecar#writeAll}'s identical atomic-replace contract (a private method, not
-     * javadoc-linkable from here) instead of a second, independent implementation of the same fix
-     * -- this method is now a thin wrapper that only supplies this class's own {@link
-     * #getLogger()}/{@code getPluginName()} warning text (the latter is a Lombok-generated
-     * accessor, not resolvable by the javadoc tool without delombok, hence {@code} rather than
-     * {@link} here). The contract described below is unchanged.
-     * <p>
-     * Permission bits are best-effort: a failure to read or apply them is logged and otherwise
-     * ignored, matching the original round-8 fix -- this is a genuine improvement layered onto
-     * the write, not something the write must abort over.
-     * <p>
-     * Owner/group are NOT best-effort, and this is the round-9 addition: an unprivileged JVM
-     * process can generally {@code chown} a file's GROUP to one it already belongs to, but never
-     * its USER owner to a different user at all -- so attempting to replicate a foreign owner
-     * onto {@code target} will typically fail. Rather than silently leave {@code target} owned by
-     * the JVM process (changing the file's identity on every refresh), a failure to match BOTH
-     * owner and group after the attempt makes this method return {@code false}, which {@link
-     * #writeBytes} treats as "do not refresh at all" -- the same conservative choice already made
-     * for a read-only file.
-     *
-     * @param source the file whose current permissions and owner/group should be preserved
-     * @param target the newly created temp file about to be moved into {@code source}'s place
-     * @return {@code true} if the refresh may proceed ({@code source} does not exist yet, the
-     *         filesystem is not POSIX, or {@code target} now matches {@code source}'s owner and
-     *         group); {@code false} if {@code source}'s own attributes could not be read (a POSIX
-     *         view exists but reading it failed -- distinct from "not POSIX at all", see {@link
-     *         PosixAttributePreserver#copyIfSupported} for why), or if {@code target}'s identity
-     *         could not be made to match and the refresh must be skipped
-     */
-    private boolean copyPosixAttributesIfSupported(File source, File target) {
-        return PosixAttributePreserver.copyIfSupported(source, target,
-                () -> getLogger().warn("Could not read the current permissions and owner/group of "
-                        + "language file '" + source.getPath() + "' for module '" + getPluginName()
+            @Override
+            public void onSymbolicLink() {
+                getLogger().warn("Language file '" + file.getPath() + "' for module '" + getPluginName()
+                        + "' is a symbolic link; treating it as operator-pinned and leaving it "
+                        + "untouched instead of replacing the link with a regular file.");
+            }
+
+            @Override
+            public void onSourceAttributesUnreadable() {
+                getLogger().warn("Could not read the current permissions and owner/group of "
+                        + "language file '" + file.getPath() + "' for module '" + getPluginName()
                         + "'; treating its identity as unreplicable and skipping the refresh instead "
-                        + "of silently replacing it with a process-owned copy."),
-                () -> getLogger().warn("Could not preserve file permissions while refreshing '" + source.getPath()
+                        + "of silently replacing it with a process-owned copy.");
+            }
+
+            @Override
+            public void onPermissionCopyFailure() {
+                getLogger().warn("Could not preserve file permissions while refreshing '" + file.getPath()
                         + "' for module '" + getPluginName() + "'; the refreshed file may not match the "
-                        + "original's permissions."),
-                (owner, group) -> getLogger().warn("Language file '" + source.getPath() + "' for module '"
-                        + getPluginName() + "' is owned by '" + owner + ":" + group + "', which this process "
-                        + "cannot replicate onto the refreshed file; skipping the refresh instead of silently "
-                        + "changing the file's ownership."));
+                        + "original's permissions.");
+            }
+
+            @Override
+            public void onOwnershipCopyFailure(String ownerName, String groupName) {
+                getLogger().warn("Language file '" + file.getPath() + "' for module '"
+                        + getPluginName() + "' is owned by '" + ownerName + ":" + groupName
+                        + "', which this process cannot replicate onto the refreshed file; "
+                        + "skipping the refresh instead of silently changing the file's ownership.");
+            }
+
+            @Override
+            public void onWriteFailure(IOException cause) {
+                getLogger().error("Failed to write language file " + file.getPath(), cause);
+            }
+        });
     }
 
     /**

@@ -52,6 +52,7 @@ import org.objenesis.ObjenesisStd;
 import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
 import com.ultikits.ultitools.manager.ConfigManager;
+import com.ultikits.ultitools.utils.PosixAttributePreserver;
 import com.ultikits.ultitools.utils.ResourceHashSidecar;
 import com.ultikits.ultitools.utils.TestHelper;
 
@@ -975,6 +976,15 @@ class UltiToolsPluginLanguageFallbackTest {
         // bits for both cases below, so this is a direct unit test of the new fallback signal's
         // own classification logic, not a demonstration that it changes the observable outcome
         // here. It documents and locks in the intended behaviour of the added code path.
+        //
+        // Reflective target moved from UltiToolsPlugin#isOperatorPinnedReadOnly to
+        // PosixAttributePreserver#isOperatorPinnedReadOnly (round following
+        // PosixAttributePreserver.java:104 / the ResourceHashSidecar.java:320 symlink finding,
+        // thread PRRT_kwDOIcF9Es6i2I49): consolidating the whole replace-in-place operation --
+        // this read-only-pin check, the symlink check, and attribute preservation -- into one
+        // shared helper both writeBytes and ResourceHashSidecar#writeAll delegate to. The method
+        // body is unchanged, so this test's own assertions are unchanged; only the class it
+        // reflects into, and the static (no-instance) invocation, follow the move.
         File readOnlyFile = new File(tempDir, "readonly.json");
         Files.write(readOnlyFile.toPath(), "{}".getBytes(StandardCharsets.UTF_8));
         PosixFileAttributeView view = Files.getFileAttributeView(readOnlyFile.toPath(), PosixFileAttributeView.class);
@@ -989,12 +999,11 @@ class UltiToolsPluginLanguageFallbackTest {
         Files.write(writableFile.toPath(), "{}".getBytes(StandardCharsets.UTF_8));
         Files.setPosixFilePermissions(writableFile.toPath(), PosixFilePermissions.fromString("rw-------"));
 
-        UltiToolsPlugin plugin = mock(FixturePlugin.class);
-        Method method = UltiToolsPlugin.class.getDeclaredMethod("isOperatorPinnedReadOnly", File.class);
+        Method method = PosixAttributePreserver.class.getDeclaredMethod("isOperatorPinnedReadOnly", File.class);
         method.setAccessible(true);
 
-        assertThat((Boolean) method.invoke(plugin, readOnlyFile)).isTrue();
-        assertThat((Boolean) method.invoke(plugin, writableFile)).isFalse();
+        assertThat((Boolean) method.invoke(null, readOnlyFile)).isTrue();
+        assertThat((Boolean) method.invoke(null, writableFile)).isFalse();
     }
 
     @Test

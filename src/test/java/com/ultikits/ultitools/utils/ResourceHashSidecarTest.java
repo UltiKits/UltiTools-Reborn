@@ -337,6 +337,50 @@ class ResourceHashSidecarTest {
     }
 
     @Test
+    @DisplayName("a resource-hash sidecar that is a symbolic link is treated as operator-pinned -- "
+            + "never replaced with a regular file, and the write is refused entirely rather than "
+            + "written through to the link's target (round following "
+            + "PosixAttributePreserver.java:104, symlink finding on ResourceHashSidecar.java:320, "
+            + "thread PRRT_kwDOIcF9Es6i2I49, P2)")
+    void symlinkSidecarIsTreatedAsOperatorPinnedAndNeverReplaced() throws IOException {
+        // Mirrors UltiToolsPluginLanguageFallbackTest#symlinkLanguageFileIsTreatedAsOperatorPinnedAndNeverReplaced
+        // -- same finding shape (a property UltiToolsPlugin#writeBytes already guarded, missing
+        // entirely from the sidecar's own write path), same fix (both now delegate to
+        // PosixAttributePreserver#replaceInPlace), now proven on the sidecar's own atomic-replace
+        // path. The contract, confirmed by reading writeBytes's own symlink guard before writing
+        // this test: REFUSE, not write-through-to-target -- a symlinked target is left completely
+        // untouched, exactly like an operator-pinned read-only file.
+        ResourceHashSidecar.record(tempDir, "lang/en.json", "hash-en-v1");
+        File sidecarFile = new File(tempDir, ".ultitools-resource-hashes.json");
+        byte[] originalBytes = Files.readAllBytes(sidecarFile.toPath());
+
+        // Simulates an operator-managed shared/persisted provenance layout: the sidecar is a
+        // symlink to a separate real file elsewhere, carrying the same bytes as the current
+        // sidecar content.
+        File linkTarget = new File(tempDir, "shared-resource-hashes.json");
+        Files.write(linkTarget.toPath(), originalBytes);
+        Files.delete(sidecarFile.toPath());
+        try {
+            Files.createSymbolicLink(sidecarFile.toPath(), linkTarget.toPath());
+        } catch (UnsupportedOperationException | IOException e) {
+            Assumptions.abort("Symbolic links not supported on this filesystem; skipping. " + e);
+            return;
+        }
+
+        ResourceHashSidecar.record(tempDir, "lang/zh.json", "hash-zh-v1");
+
+        // Not refreshed: the symlink survives, still pointing at the original content -- the
+        // atomic move must never have replaced it with a regular file. The new entry must not
+        // have been recorded anywhere: not in a replaced regular file, and not written through
+        // to the link's own target either (REFUSE, not write-through, per writeBytes's contract).
+        assertThat(Files.isSymbolicLink(sidecarFile.toPath())).isTrue();
+        assertThat(Files.readAllBytes(sidecarFile.toPath())).isEqualTo(originalBytes);
+        assertThat(Files.readAllBytes(linkTarget.toPath())).isEqualTo(originalBytes);
+        assertThat(ResourceHashSidecar.readRecordedHash(tempDir, "lang/en.json")).contains("hash-en-v1");
+        assertThat(ResourceHashSidecar.readRecordedHash(tempDir, "lang/zh.json")).isEmpty();
+    }
+
+    @Test
     @DisplayName("sha256(File) streams a larger file without reading it fully into memory, and still "
             + "matches the digest of an in-memory computation over the same bytes")
     void sha256StreamsLargerFileAndMatchesInMemoryDigest() throws Exception {

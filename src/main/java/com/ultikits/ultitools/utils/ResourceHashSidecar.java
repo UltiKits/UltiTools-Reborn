@@ -5,11 +5,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.Reader;
 import java.io.UncheckedIOException;
-import java.io.Writer;
 import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.LinkedHashMap;
@@ -256,85 +254,99 @@ public final class ResourceHashSidecar {
     }
 
     /**
-     * Writes {@code entries} to the sidecar file, via a temporary file in the sidecar's own
-     * parent directory that is atomically moved into place only once the full write has
-     * succeeded (Codex round 3, P2).
+     * Writes {@code entries} to the sidecar file, replacing it in place (Codex round 3, P2:
+     * atomically, via a temp file, never truncating the real sidecar on a failure partway
+     * through).
      * <p>
-     * Before this fix, this method opened the sidecar's real path directly with {@code
-     * TRUNCATE_EXISTING}, which truncates the file as PART OF the {@code open()} call itself --
-     * so a failure partway through serialization (e.g. the filesystem filling up) left every
-     * previously recorded hash replaced by empty or partial JSON. {@link #readAll(File)} degrades
-     * that state to "no record" for every path, not just the one being written, which could
-     * misclassify an untouched language file as an operator customisation and skip a legitimate
-     * update from the current jar. Writing to a temp file first means a failure never touches the
-     * real sidecar at all -- exactly the same fix already applied to {@code UltiToolsPlugin
-     * #writeBytes} for the language file itself.
+     * Round following {@code PosixAttributePreserver.java:104} (symlink finding on {@code
+     * ResourceHashSidecar.java:320}, thread {@code PRRT_kwDOIcF9Es6i2I49}, P2): this method's
+     * entire replace-in-place operation -- the operator-pinned-read-only refusal, the symlink
+     * refusal, the temp-file-then-atomic-move mechanism, and POSIX attribute preservation -- now
+     * lives in {@link PosixAttributePreserver#replaceInPlace}, the SAME shared operation {@code
+     * UltiToolsPlugin#writeBytes} uses for the language-file path, instead of the sidecar copying
+     * each of that operation's properties in one at a time across separate rounds (round 3:
+     * attribute preservation; round 6 (this same session): an unreadable-attributes edge case;
+     * this round: symlink handling, which had never been ported here at all). A third
+     * replace-in-place site now gets every one of these properties for free by calling {@link
+     * PosixAttributePreserver#replaceInPlace} instead of having to notice each property is
+     * missing one at a time.
      * <p>
-     * Round 3 (Codex finding on {@code ResourceHashSidecar.java:285}, thread {@code
-     * PRRT_kwDOIcF9Es6i00gb}, P2): the atomic move above replaces a DIRECTORY ENTRY, so on an
-     * installation where this sidecar is provisioned with shared ownership or group permissions,
-     * every update used to replace it with {@link File#createTempFile}'s own process-owned,
-     * restrictive-default-mode inode -- silently locking out a different account that previously
-     * shared read access, causing that account's next boot to treat every untouched catalogue as
-     * unknown/customised provenance. {@link PosixAttributePreserver#copyIfSupported} is now
-     * applied to the staging file before this method writes to it, exactly mirroring {@code
-     * UltiToolsPlugin#writeBytes}'s own use of the same shared helper for the language-file
-     * replacement path -- reusing that contract rather than a second, independent implementation
-     * of the identical fix. If the sidecar does not exist yet (this module's first write), there
-     * is nothing to copy attributes FROM: {@code copyIfSupported} returns {@code true}
-     * immediately and {@code tempFile} simply keeps the JVM's own default attributes, which is
-     * the correct outcome for freshly created state, not an oversight. If ownership could not be
-     * replicated, or if the existing sidecar's own attributes could not even be read (a POSIX
-     * view exists but reading it failed, e.g. a transient NFS error -- see {@link
-     * PosixAttributePreserver#copyIfSupported} for why this is distinct from "no POSIX view at
-     * all"), this method abandons the whole write -- exactly {@code writeBytes}'s own policy for
-     * the identical failure -- rather than let the sidecar silently become unreadable to the
-     * account that owned it.
+     * The entries are serialized to a {@code byte[]} BEFORE calling {@link
+     * PosixAttributePreserver#replaceInPlace}, rather than streaming {@code Gson.toJson(Object,
+     * Type, java.io.Writer)} directly onto the staging file's own {@code Writer} as an earlier version of
+     * this method did -- {@code GSON.toJson(entries, ENTRY_MAP_TYPE)}'s {@link String}-returning
+     * overload serializes into an in-memory {@link java.io.StringWriter}, which cannot throw a
+     * genuine I/O-based {@link JsonIOException} the way writing to a file-backed {@code Writer}
+     * could (Codex round 6, P2, on the pre-refactor version of this method). This is a
+     * simplification the refactor enables, not merely a byproduct: {@link
+     * PosixAttributePreserver#replaceInPlace} takes the exact bytes to write, uniformly for every
+     * caller, so the disk-I/O-during-serialization failure mode this class used to guard against
+     * separately no longer exists as a distinct case to catch.
      */
     private static void writeAll(File resourceFolder, Map<String, String> entries) {
         File file = sidecarFile(resourceFolder);
-        File parent = file.getParentFile();
-        File tempFile = null;
+        byte[] content;
         try {
-            if (parent != null && !parent.isDirectory()) {
-                Files.createDirectories(parent.toPath());
-            }
-            tempFile = File.createTempFile(SIDECAR_FILE_NAME, ".tmp", parent);
-            if (PosixAttributePreserver.copyIfSupported(file, tempFile,
-                    () -> LOGGER.log(Level.WARNING, "Could not read the current permissions and "
-                            + "owner/group of resource-hash sidecar " + file.getPath() + "; "
-                            + "treating its identity as unreplicable and leaving it untouched "
-                            + "instead of silently replacing it with a process-owned copy."),
-                    () -> LOGGER.log(Level.WARNING, "Could not preserve file permissions while "
-                            + "refreshing resource-hash sidecar " + file.getPath() + "; the "
-                            + "refreshed file may not match the original's permissions."),
-                    (owner, group) -> LOGGER.log(Level.WARNING, "Resource-hash sidecar "
-                            + file.getPath() + " is owned by '" + owner + ":" + group + "', which "
-                            + "this process cannot replicate onto the refreshed file; leaving the "
-                            + "existing sidecar untouched instead of silently changing its "
-                            + "ownership."))) {
-                try (Writer writer = Files.newBufferedWriter(tempFile.toPath(), StandardCharsets.UTF_8)) {
-                    GSON.toJson(entries, ENTRY_MAP_TYPE, writer);
-                }
-                Files.move(tempFile.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING,
-                        StandardCopyOption.ATOMIC_MOVE);
-            }
-        } catch (IOException | JsonIOException e) {
-            // Codex round 6, P2: GSON.toJson wraps an IOException it hits while actively
-            // serializing (e.g. the filesystem filling up mid-write) in its own unchecked
-            // JsonIOException, which a catch (IOException) alone does not see -- letting it
-            // escape record()/recordAll() into the plugin constructor and abort module startup,
-            // contrary to this class's own documented best-effort behaviour (see class javadoc).
-            LOGGER.log(Level.WARNING, "Failed to write resource-hash sidecar " + file.getPath(), e);
-        } finally {
-            if (tempFile != null) {
-                // A successful move already renamed the temp file away from tempFile's own path,
-                // so this is a no-op on the success path and only cleans up a leftover staging
-                // file on any failure branch above (including the ownership-abort branch, which
-                // never reaches the move).
-                // noinspection ResultOfMethodCallIgnored
-                tempFile.delete();
-            }
+            content = GSON.toJson(entries, ENTRY_MAP_TYPE).getBytes(StandardCharsets.UTF_8);
+        } catch (JsonIOException e) {
+            // Defensive only: serializing into an in-memory StringWriter (see this method's own
+            // javadoc) should never actually throw a genuine I/O-based JsonIOException, but
+            // degrading here rather than letting it escape keeps this class's documented
+            // best-effort contract (see class javadoc) true even if that assumption ever changes.
+            LOGGER.log(Level.WARNING, "Failed to serialize resource-hash sidecar " + file.getPath(), e);
+            return;
         }
+        PosixAttributePreserver.replaceInPlace(file, content, new PosixAttributePreserver.ReplaceInPlaceListener() {
+            @Override
+            public void onOperatorPinnedReadOnly() {
+                LOGGER.log(Level.WARNING, "Resource-hash sidecar " + file.getPath() + " is not "
+                        + "writable; treating it as operator-pinned and leaving it untouched "
+                        + "instead of updating it.");
+            }
+
+            @Override
+            public void onSymbolicLink() {
+                // Codex finding on ResourceHashSidecar.java:320, thread PRRT_kwDOIcF9Es6i2I49, P2:
+                // an operator-managed shared/persisted provenance layout (e.g.
+                // .ultitools-resource-hashes.json symlinked to a shared store) had the LINK ITSELF
+                // replaced by a regular file on every update, silently breaking the layout. Same
+                // REFUSE semantics as the language-file path -- see
+                // PosixAttributePreserver.ReplaceInPlaceListener#onSymbolicLink()'s own javadoc.
+                LOGGER.log(Level.WARNING, "Resource-hash sidecar " + file.getPath() + " is a "
+                        + "symbolic link; treating it as operator-pinned and leaving it untouched "
+                        + "instead of replacing the link with a regular file.");
+            }
+
+            @Override
+            public void onSourceAttributesUnreadable() {
+                LOGGER.log(Level.WARNING, "Could not read the current permissions and owner/group "
+                        + "of resource-hash sidecar " + file.getPath() + "; treating its identity "
+                        + "as unreplicable and leaving it untouched instead of silently replacing "
+                        + "it with a process-owned copy.");
+            }
+
+            @Override
+            public void onPermissionCopyFailure() {
+                LOGGER.log(Level.WARNING, "Could not preserve file permissions while refreshing "
+                        + "resource-hash sidecar " + file.getPath() + "; the refreshed file may "
+                        + "not match the original's permissions.");
+            }
+
+            @Override
+            public void onOwnershipCopyFailure(String ownerName, String groupName) {
+                LOGGER.log(Level.WARNING, "Resource-hash sidecar " + file.getPath() + " is owned "
+                        + "by '" + ownerName + ":" + groupName + "', which this process cannot "
+                        + "replicate onto the refreshed file; leaving the existing sidecar "
+                        + "untouched instead of silently changing its ownership.");
+            }
+
+            @Override
+            public void onWriteFailure(IOException cause) {
+                // Codex round 6, P2 (pre-refactor): this used to also need to catch JsonIOException
+                // here for the same reason -- no longer applicable, see this method's own javadoc
+                // for why serialization can no longer fail as part of this step.
+                LOGGER.log(Level.WARNING, "Failed to write resource-hash sidecar " + file.getPath(), cause);
+            }
+        });
     }
 }
