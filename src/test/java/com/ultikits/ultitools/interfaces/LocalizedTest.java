@@ -273,6 +273,71 @@ class LocalizedTest {
         }
     }
 
+    /**
+     * 16-05 (CodeQL {@code java/zipslip} alert #11): {@code languageCodeOf} must reject any
+     * stripped code that is not itself a plain language-code token, since it is downstream
+     * combined with a directory to build a {@link File} in {@code UltiToolsPlugin} without any
+     * other sanitisation. A jar entry such as {@code lang/..\..\evil.json} previously produced
+     * the code {@code ..\..\evil} unchanged; this must now be rejected (return {@code null})
+     * before it ever reaches {@code scanLangJar}/{@code scanLangDirectory}'s result set.
+     * <p>
+     * This environment is Linux, where a backslash is a legal, non-separator filename character
+     * (only {@code '/'} and the NUL byte are forbidden) -- so the directory-scan sibling test
+     * below can create a real on-disk file literally named {@code ..\..\evil.json} without it
+     * being interpreted as a path (nothing is skipped here).
+     */
+    @Nested
+    @DisplayName("16-05: languageCodeOf 拒绝越权字符 (CodeQL java/zipslip #11)")
+    class ZipSlipLanguageCodeAllowlistTests {
+
+        @TempDir
+        File tempDir;
+
+        @Test
+        @DisplayName("JAR 条目名包含反斜杠遍历序列时被拒绝，只保留合法的 en")
+        void scanLangJarRejectsBackslashTraversalEntry() throws IOException {
+            File jar = new File(tempDir, "malicious.jar");
+            try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(jar.toPath()))) {
+                writeEntry(out, "lang/en.json", "{}");
+                writeEntry(out, "lang/..\\..\\evil.json", "{}");
+                writeEntry(out, "lang/a.b.json", "{}");
+            }
+
+            assertThat(Localized.scanLangJar(jar)).containsExactly("en");
+        }
+
+        @Test
+        @DisplayName("目录扫描下同名的反斜杠遍历文件同样被拒绝，只保留合法的 en")
+        void scanLangDirectoryRejectsBackslashTraversalEntry() throws IOException {
+            File langDir = new File(tempDir, "lang");
+            assertThat(langDir.mkdirs()).isTrue();
+            Files.write(new File(langDir, "en.json").toPath(), "{}".getBytes(StandardCharsets.UTF_8));
+            Files.write(new File(langDir, "..\\..\\evil.json").toPath(), "{}".getBytes(StandardCharsets.UTF_8));
+            Files.write(new File(langDir, "a.b.json").toPath(), "{}".getBytes(StandardCharsets.UTF_8));
+
+            assertThat(Localized.scanLangDirectory(langDir)).containsExactly("en");
+        }
+
+        @Test
+        @DisplayName("languageCodeOf 直接拒绝含点号/斜杠/反斜杠的候选代码")
+        void languageCodeOfRejectsCodesOutsideTheCharacterAllowlist() {
+            assertThat(Localized.languageCodeOf("..\\..\\evil.json")).isNull();
+            assertThat(Localized.languageCodeOf("a.b.json")).isNull();
+            assertThat(Localized.languageCodeOf("../evil.json")).isNull();
+            // Still accepts every real-world shape this ecosystem's modules actually ship.
+            assertThat(Localized.languageCodeOf("en.json")).isEqualTo("en");
+            assertThat(Localized.languageCodeOf("zh.yml")).isEqualTo("zh");
+            assertThat(Localized.languageCodeOf("en_US.yaml")).isEqualTo("en_US");
+            assertThat(Localized.languageCodeOf("zh-CN.json")).isEqualTo("zh-CN");
+        }
+
+        private void writeEntry(JarOutputStream out, String name, String content) throws IOException {
+            out.putNextEntry(new JarEntry(name));
+            out.write(content.getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+    }
+
     @Nested
     @DisplayName("i18n 测试")
     class I18nTests {

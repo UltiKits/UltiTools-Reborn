@@ -528,6 +528,27 @@ class PermissionValidatorTest {
         }
 
         /**
+         * #413: a player who already holds the class-level permission is NOT filtered by the
+         * Bukkit-level check below, reaches {@code onCommand} normally, and is therefore still
+         * evaluated by this validator's class-level branch -- where it trivially passes. An
+         * earlier revision of this class's javadoc denied this (claiming the console was the
+         * ONLY sender reaching this branch); this test pins the corrected, permitted-player path.
+         */
+        @Test
+        @DisplayName("a player who holds the class-level permission also reaches the check, and passes it")
+        void playerWithPermissionReachesAndPassesTheClassLevelCheck() {
+            when(mockPlayer.hasPermission("some.permission")).thenReturn(true);
+            PermissionValidator validator = new PermissionValidator("some.permission", false);
+
+            CommandValidator.ValidationResult result = validator.validate(createPlayerContext(null));
+
+            assertTrue(result.isValid(),
+                    "the platform rejects a player LACKING the permission before dispatch, but a "
+                            + "player who holds it proceeds and is still evaluated here -- the "
+                            + "class-level branch is not console-only");
+        }
+
+        /**
          * The mechanism that makes the same branch unreachable for players, pinned so that
          * removing it is a deliberate act rather than an accident.
          * <p>

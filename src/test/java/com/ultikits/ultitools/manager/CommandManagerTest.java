@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -1439,6 +1440,56 @@ class CommandManagerTest {
             } catch (NullPointerException e) {
                 // 预期行为 - 有 @CmdExecutor 注解，调用 register 时 getCommandMap() 返回 null
             }
+        }
+    }
+
+    /**
+     * #347: the five-argument register(plugin, class, permission, description, aliases...) used
+     * to resolve the command bean from the CORE container ({@code UltiTools.getInstance()
+     * .getDependenceManagers().getContext()}) instead of the module's own container ({@code
+     * plugin.getContext()}), the way the two-argument overload register(plugin, class) already
+     * does -- a module author who explicitly passes permission/description/aliases got back a
+     * core-container bean of the same type, not the instance they registered themselves.
+     */
+    @Nested
+    @DisplayName("register(plugin, class, permission, description, aliases) container resolution (#347)")
+    class FiveArgRegisterContainerResolutionTests {
+
+        @Test
+        @DisplayName("should resolve the bean from the module's own container, not the core container")
+        void resolvesCommandBeanFromModuleContainerNotCoreContainer() {
+            // Arrange -- the module's own container holds ONE instance.
+            SimpleContainer moduleContext = mock(SimpleContainer.class);
+            TestCommandExecutor moduleExecutor = new TestCommandExecutor();
+            when(mockPlugin.getContext()).thenReturn(moduleContext);
+            when(moduleContext.getBean(TestCommandExecutor.class)).thenReturn(moduleExecutor);
+            when(mockPlugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
+
+            // Arrange -- the CORE container holds a DIFFERENT instance of the SAME type, so a
+            // registration path that resolves from the wrong container is observably wrong
+            // rather than accidentally correct (the shadowing case the plan requires).
+            DependenceManagers mockDependenceManagers = mock(DependenceManagers.class);
+            SimpleContainer coreContext = mock(SimpleContainer.class);
+            TestCommandExecutor coreExecutor = new TestCommandExecutor();
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+                when(ultiTools.getLogger()).thenReturn(mockLogger);
+                when(ultiTools.getDependenceManagers()).thenReturn(mockDependenceManagers);
+            });
+            when(mockDependenceManagers.getContext()).thenReturn(coreContext);
+            when(coreContext.getBean(TestCommandExecutor.class)).thenReturn(coreExecutor);
+
+            // Act -- getCommandMap() returns null under MockBukkit, so the eventual NPE is
+            // expected; it happens strictly AFTER the bean-resolution call below is already
+            // observable, so the assertions below are unaffected by it.
+            try {
+                commandManager.register(mockPlugin, TestCommandExecutor.class, "test.perm", "Test desc", "testcmd");
+            } catch (NullPointerException e) {
+                // Expected: getCommandMap() returns null under MockBukkit
+            }
+
+            // Assert -- the module's container was consulted; the core container never was.
+            verify(moduleContext).getBean(TestCommandExecutor.class);
+            verify(coreContext, never()).getBean(TestCommandExecutor.class);
         }
     }
 

@@ -73,8 +73,40 @@ public class DependencyUtils {
             packages.add(pluginClass.getPackage().getName());
         }
 
-        return packages.toArray(new String[0]);
+        return dedupeNestedPackages(packages).toArray(new String[0]);
     }
 
+    /**
+     * Drops any package that is a strict, segment-wise subpackage of another package already
+     * present in {@code packages} (#362). A scanner that recurses from the parent package
+     * already reaches every {@code @ConfigEntity} class the nested entry would find again, so
+     * keeping both means {@code ConfigManager.registerAll} initialises - and validates - the
+     * same class once per matching scan package instead of once overall.
+     * <p>
+     * "Strict subpackage" is tested by segment, not by string prefix: {@code com.example.modular}
+     * is NOT a subpackage of {@code com.example.mod}, even though the raw string starts with it -
+     * the comparison always appends a trailing {@code "."} before testing
+     * {@link String#startsWith(String)}.
+     *
+     * @param packages candidate packages, in declaration order; never mutated
+     * @return a new set containing only the packages with no ancestor also present in {@code
+     *         packages}, in the same relative order. Empty in, empty out - nothing throws.
+     */
+    static Set<String> dedupeNestedPackages(Set<String> packages) {
+        Set<String> result = new LinkedHashSet<>();
+        for (String candidate : packages) {
+            boolean hasAncestorInSet = false;
+            for (String other : packages) {
+                if (!other.equals(candidate) && candidate.startsWith(other + ".")) {
+                    hasAncestorInSet = true;
+                    break;
+                }
+            }
+            if (!hasAncestorInSet) {
+                result.add(candidate);
+            }
+        }
+        return result;
+    }
 
 }
