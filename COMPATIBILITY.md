@@ -55,13 +55,22 @@ two clauses holds, and the removal's own entry states which one and its evidence
    because no released version could ever have exercised it.
 
 Each removal that relies on this exception names in its own entry which clause it used and the
-evidence for it. Those entries are in
+evidence for it. For 6.3.0, every removal that relies on it is in
 ["Same-release exceptions applied in 6.3.0"](#same-release-exceptions-applied-in-630) below — read
 that section through rather than reading a number off it, because it carries a list of removals and
 then a further entry after that list — and each is recorded in full, with the measurement behind it,
 in [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md). No total is stated here: a
 count kept away from the list it counts has nothing holding it honest, which is how the count that
 used to sit in this paragraph went stale.
+
+That section lists removals only. The exception as stated above covers removals, but in 6.3.0
+changes that are not removals also cite its clauses in their own entries, and they are not listed
+there: `UltiToolsPlugin#unregisterSelf()` and `#reloadSelf()` becoming `final` (see the third
+occurrence under
+[Binary incompatibilities the removal list cannot cover](#binary-incompatibilities-the-removal-list-cannot-cover)),
+and `GuiRenderer.initialize`'s first parameter changing from `Widget` to `Supplier<Widget>`. Their
+cited clause and evidence are recorded in
+[`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md).
 
 ### Two deliberate deviations from semver
 
@@ -153,8 +162,9 @@ only, not because it is itself a compatibility event.
 
 ### Same-release exceptions applied in 6.3.0
 
-Eight removals used the [same-release exception](#exception-removal-in-the-same-release-that-announces-it)
-above instead of waiting a full MINOR:
+The removals in the nine entries below used the
+[same-release exception](#exception-removal-in-the-same-release-that-announces-it) above instead of
+waiting a full MINOR:
 
 - `aop.CglibProxyFactory` — clause 1, proven non-functional (issue #188).
 - `aop.ProxyFactory.createProxy(T)` / `createProxy(Class<T>, T)` and
@@ -195,7 +205,23 @@ above instead of waiting a full MINOR:
   installed: reflecting over `UltiTools`'s declared methods (done the instant the core plugin
   bean is registered) eagerly resolved this accessor's `net.milkbowl.vault.economy.Economy`
   return type, which is absent from the classpath when Vault is absent. Replacement:
-  `EconomyUtils.getEconomy()`, the pre-existing façade six modules already call.
+  `EconomyUtils.getEconomy()`, on the pre-existing `EconomyUtils` façade. No module calls that
+  accessor: measured 2026-09-17 on the `origin/master` of every `Modules/` repository and of
+  `Tooling/UltiTools-External-Example`, `EconomyUtils.getEconomy()` has **0** references, while the
+  four modules that use `EconomyUtils` at all (`UltiEssentials`, `UltiKits`, `UltiMenu`,
+  `UltiRemoteBag`) call its wrapper methods — `isAvailable`, `format`, `getBalance`, `withdraw`,
+  `has` — instead.
+- `abstracts.gui.declarative.widgets.Container.Builder.background(IconWrapper)` /
+  `Container.getBackground()` and `GridView.Builder.rows(int)` / `GridView.getMaxRows()` — clause 2,
+  zero callers at removal time (plan 05-13). All four were public in the released 6.2.5. Each pair
+  did return through its getter the value its builder method stored, but no framework code consumed
+  that value, and no downstream code called any of the four: measured 2026-09-17 on the
+  `origin/master` of every `Modules/` repository and of `Tooling/UltiTools-External-Example`, their
+  names have **0** hits and no file imports anything under `abstracts.gui.declarative`, against **9**
+  imports of the imperative `abstracts.gui` pages in the same search. Their package carries
+  `@ApiStatus.Experimental` and neither pair was ever `@Deprecated(forRemoval = true)`, which is why
+  the generated removal list does not carry them. See
+  [their records entry](compatibility/records/6.3.0.md#recorded-instance-two-declarative-gui-builder-method-pairs-are-removed-rather-than-given-a-guessed-implementation-d-09-630).
 
 Full reasoning and evidence for every entry above live in
 [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md).
@@ -212,7 +238,7 @@ and `#activateCloudIfCurrent(long)` — clause 2, zero external callers. Measure
 every module repository under `Modules/` (the 15 active modules, the discontinued `UltiBot`, and
 the non-product `ultikits-module-parent`) plus `Tooling/UltiTools-External-Example`: `grep -rlI
 "CloudAuthManager" --include=*.java` and the same for `"PluginInitiationUtils"`,
-`"loginWithToken"`, and `"activateCloudIfCurrent"` each return **0** files across all 17
+`"loginWithToken"`, and `"activateCloudIfCurrent"` each return **0** files across all 18
 repositories, against a control query for `"UltiToolsPlugin"` over the same roots returning **173**
 files (proving the search itself works — a bare zero is not evidence on its own). Separately,
 `strings`-scanning the one downstream consumer jar available locally
