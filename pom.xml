@@ -580,6 +580,49 @@
                             <exclude>com.ultikits.ultitools.websocket.handlers.LogStreamHandler</exclude>
                             <exclude>com.ultikits.ultitools.websocket.handlers.PongHandler</exclude>
                             <exclude>com.ultikits.ultitools.websocket.handlers.ServerStatusHandler</exclude>
+                            <!-- 16-13-PLAN.md (D-19, maintainer decision 2026-09-14): pause/resume
+                                 on the log stream is removed from the remote surface, not
+                                 implemented - the framework has no per-viewer identity to honour a
+                                 per-viewer pause with (see LogStreamManager's own javadoc on
+                                 sendPauseResumeRejection). Both public methods present in the
+                                 released 6.2.5 jar (confirmed via javap against
+                                 ~/.m2/repository/com/ultikits/UltiTools-API/6.2.5/
+                                 UltiTools-API-6.2.5.jar); measured zero external callers under
+                                 Modules/ and Tooling/UltiTools-External-Example (control:
+                                 UltiToolsPlugin references 182 files in the same search, re-measured
+                                 2026-09-14). Recorded in COMPATIBILITY.md and
+                                 compatibility/records/6.3.0.md. -->
+                            <exclude>com.ultikits.ultitools.manager.LogStreamManager#pauseLogStream(java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.LogStreamManager#resumeLogStream(java.lang.String)</exclude>
+                            <!-- D-20 addendum (maintainer decision 2026-09-14/2026-09-15, issue #468):
+                                 start/stop are no longer claimed by the framework either, for the
+                                 same reason as pause/resume above - the shipped frontend only ever
+                                 toggles start/stop from its own button and never gates rendering on
+                                 the response, the Worker's REST endpoint is a stateless relay with
+                                 no per-browser state, and stopLogStream mutated only bookkeeping
+                                 nothing on the delivery path consulted. All five removed here were
+                                 public in the released 6.2.5 jar (javap-confirmed against the same
+                                 baseline jar as the pause/resume entry above); measured zero external
+                                 callers under Modules/ and Tooling/UltiTools-External-Example (same
+                                 182-file UltiToolsPlugin control group). Recorded in COMPATIBILITY.md
+                                 and compatibility/records/6.3.0.md, same entry as D-19. -->
+                            <exclude>com.ultikits.ultitools.manager.LogStreamManager#startLogStream(java.lang.String, java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.LogStreamManager#startLogStream(java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.LogStreamManager#stopLogStream(java.lang.String)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.LogStreamManager#isStreaming()</exclude>
+                            <exclude>com.ultikits.ultitools.manager.LogStreamManager#getSubscriberCount()</exclude>
+                            <!-- 16-13-PLAN.md (Gate-2 external review finding): SetAllResult's public
+                                 5-arg constructor widened to 6 args to carry the D-15
+                                 NOT_PRESENT_ON_THIS_SERVER outcome as its own distinct list
+                                 (notPresentOnServer), rather than folding it into the generic
+                                 `failed` list where a version mismatch was indistinguishable from a
+                                 genuine disk I/O error. SetAllResult is @ApiStatus.Internal -
+                                 not a compatibility event per COMPATIBILITY.md's removal-list
+                                 preamble - but japicmp reads bytecode, not @ApiStatus, so it
+                                 still reports the old constructor as CONSTRUCTOR_REMOVED. Recorded
+                                 in compatibility/records/6.3.0.md anyway, same precedent as the
+                                 CommandExecutionManager/FileOperationManager AccessDecision entry. -->
+                            <exclude>com.ultikits.ultitools.manager.ServerPropertiesManager$SetAllResult#ServerPropertiesManager$SetAllResult(java.util.List, java.util.List, java.util.List, java.util.List, java.util.List)</exclude>
                             <!-- 16-09-PLAN.md (D-17/D-18, root-cause group "cloud session", part 2
                                  of 3 for issue #298): CloudAuthManager's fine-grained public statics
                                  (the generation triple, save/clear/refresh/load, the start/stop

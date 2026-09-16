@@ -150,7 +150,10 @@ Packages and types marked `@ApiStatus.Internal` are not part of the removal list
 japicmp's exclusion list carries an entry for them — japicmp reads bytecode, not `@ApiStatus`,
 so an internal-only removal still needs an exclusion entry to keep the binary-compatibility gate
 green, but it was never public API and its removal is not a compatibility event. See
-`compatibility/records/6.3.0.md`'s WIRE-17 entry for a worked example.
+`compatibility/records/6.3.0.md`'s WIRE-17 entry for a worked example; `manager.ServerPropertiesManager.SetAllResult`'s
+public constructor widening from five `List<String>` parameters to six (Gate-2, 6.3.0) is the same
+pattern — a same-release, internal-only signature change recorded there for japicmp traceability
+only, not because it is itself a compatibility event.
 
 ### Same-release exceptions applied in 6.3.0
 
@@ -171,6 +174,25 @@ above instead of waiting a full MINOR:
 - `listeners.EnhancedPlayerEventListener` — clause 1, proven non-functional: it carried
   `@EventListener`, nothing registered it, and all seven of its handlers were measured never to
   fire on a real 1.21.4 server (issue #387).
+- `manager.LogStreamManager.pauseLogStream(String)` / `resumeLogStream(String)` — clause 1, proven
+  non-functional: `LogStreamManager` auto-subscribes a permanent, never-paused `"auto"` client on
+  every WebSocket connect, so the delivery-suppression check these methods drove could never
+  observe "no active subscriber" for any real panel session on any released version — reproduced
+  by a test that pauses a distinctly-named client while `"auto"`'s entry survives untouched, which
+  still delivers (issue #434, maintainer decision D-19). Removed rather than fixed because a true
+  per-viewer pause needs Worker-side viewer identity this framework does not have and is not
+  authorized to add here; the framework now rejects `pause`/`resume` outright instead.
+  **Addendum (D-20, issue #468):** the same reasoning applies to `startLogStream(String, String)` /
+  `startLogStream(String)` / `stopLogStream(String)` — measured end to end, the shipped frontend
+  only ever toggles `start`/`stop` from its own button without gating rendering on the response,
+  the Worker's REST log-stream endpoint is a stateless relay minting a disposable `clientId` per
+  call with no per-browser stream state, and `stopLogStream` mutated only bookkeeping nothing on
+  the delivery path ever consulted — `stop` never actually stopped delivery for any real client on
+  any released version. `start`/`stop` are now rejected the same way as `pause`/`resume`; the
+  now-inert `isStreaming()`/`getSubscriberCount()` accessors are removed alongside them, and the
+  `status` action is answered with a redefined, genuinely-honest set of fields instead (no
+  behavioural contract existed for `status`'s exact response shape, so this is not itself a
+  removal).
 - `UltiTools#getEconomy()` — clause 2, public and zero measured callers anywhere in this
   framework's own `src/main`, all sixteen product modules, and the external example (issue #451).
   It was also the sole cause of a total bootstrap crash on a server with no Vault plugin
