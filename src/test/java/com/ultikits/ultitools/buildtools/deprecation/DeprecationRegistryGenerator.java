@@ -62,7 +62,7 @@ public final class DeprecationRegistryGenerator {
 
     public static void main(String[] args) {
         try {
-            run();
+            run(resolveBaseDir(args));
         } catch (LedgerMergeConflictException e) {
             System.err.println(e.getMessage());
             System.exit(1);
@@ -73,30 +73,64 @@ public final class DeprecationRegistryGenerator {
         }
     }
 
-    private static void run() throws IOException, ReflectiveOperationException {
-        // Read the pom FIRST (#377, WR-05, 16-REVIEW-cloud.md): the current project version is now an
-        // input to the merge itself, not just to the checks that run after it.
-        Document pomDocument = readPomDocument();
+    /**
+     * Resolves the base directory every relative path in this generator is read/written against.
+     * exec-maven-plugin's {@code java} goal runs in-process, in the Maven JVM's own working
+     * directory - NOT {@code ${project.basedir}} (#461). An invocation launched as {@code mvn -f
+     * &lt;worktree&gt;/pom.xml} from a different shell cwd therefore reads/writes the WRONG tree
+     * silently: the primary checkout's sources and pom, and a japicmp report that does not exist
+     * there, producing 15 false {@code STALE_EXCLUSION} findings that look like a real compatibility
+     * problem. The pom's {@code generate-deprecation-registry} execution passes {@code
+     * ${project.basedir}} as {@code args[0]}; a caller with no argument falls back to the JVM's
+     * actual working directory, preserving prior behaviour for that case (and for every existing
+     * test, which calls the package-private readers below directly, never through {@code main}).
+     */
+    static Path resolveBaseDir(String[] args) {
+        if (args != null && args.length > 0 && args[0] != null && !args[0].trim().isEmpty()) {
+            return Paths.get(args[0]);
+        }
+        return Paths.get("").toAbsolutePath();
+    }
+
+    /**
+     * Package-private (not {@code private}) so a test can exercise the full write-side pipeline -
+     * {@link #loadPriorLedger}, {@link JavadocDeprecationScanner#scan}, {@link #readJapicmpReport},
+     * and both {@link Files#write} calls - directly against an isolated {@code baseDir}, without
+     * going through {@link #main(String[])}'s {@code System.exit} on failure (WR-01). Do not narrow
+     * this back to {@code private}.
+     */
+    static void run(Path baseDir) throws IOException, ReflectiveOperationException {
+        // Read the pom FIRST (#377, WR-05, 16-REVIEW-cloud.md): the current project version is now
+        // an input to the merge itself, not just to the checks that run after it. Resolved against
+        // baseDir (#461) so this agrees with every other path this generator reads or writes.
+        Document pomDocument = readPomDocument(baseDir);
         String currentVersion = stripSnapshotSuffix(readProjectVersion(pomDocument));
 
-        RegistryLedger prior = loadPriorLedger();
+        Path ledgerJson = baseDir.resolve(LEDGER_JSON);
+        Path ledgerMarkdown = baseDir.resolve(LEDGER_MARKDOWN);
+        RegistryLedger prior = loadPriorLedger(ledgerJson);
 
         JavadocDeprecationScanner scanner = new JavadocDeprecationScanner(
                 Thread.currentThread().getContextClassLoader());
-        List<DeprecationEntry> freshScan = scanner.scan(SRC_ROOT);
+        List<DeprecationEntry> freshScan = scanner.scan(baseDir.resolve(SRC_ROOT));
 
-        JapicmpReportReader.Report report = readJapicmpReport();
+        JapicmpReportReader.Report report = readJapicmpReport(baseDir.resolve(JAPICMP_REPORT));
         Set<RegistryKey> japicmpRemoved = removedKeys(report);
         japicmpRemoved.addAll(impliedRemovedByPrivateVisibility(prior, freshScan, report));
 
-        RegistryLedger merged = RegistryLedger.merge(prior, freshScan, japicmpRemoved, currentVersion);
+        // Codex P2, PR #480: pass the report's own emptiness through explicitly so the merge
+        // can tell "japicmp ran and stayed silent on this key" (a real D-22 disagreement) apart
+        // from "japicmp did not run at all" (an infrastructure state the REPORT_MISSING_OR_EMPTY
+        // finding below already exists to explain, not a merge conflict).
+        RegistryLedger merged = RegistryLedger.merge(
+                prior, freshScan, japicmpRemoved, currentVersion, report.entries().isEmpty());
 
-        Files.createDirectories(LEDGER_JSON.getParent());
-        Files.write(LEDGER_JSON, merged.toJson().getBytes(StandardCharsets.UTF_8));
-        Files.write(LEDGER_MARKDOWN, merged.toMarkdown().getBytes(StandardCharsets.UTF_8));
+        Files.createDirectories(ledgerJson.getParent());
+        Files.write(ledgerJson, merged.toJson().getBytes(StandardCharsets.UTF_8));
+        Files.write(ledgerMarkdown, merged.toMarkdown().getBytes(StandardCharsets.UTF_8));
 
         System.out.println("DeprecationRegistryGenerator: wrote " + merged.size() + " entries to "
-                + LEDGER_JSON + " and " + LEDGER_MARKDOWN);
+                + ledgerJson + " and " + ledgerMarkdown);
 
         List<String> violations = new ArrayList<>();
         violations.addAll(collectRemovalConsistencyViolations(pomDocument, report, merged));
@@ -201,11 +235,11 @@ public final class DeprecationRegistryGenerator {
         throw new IllegalStateException(sb.toString());
     }
 
-    private static RegistryLedger loadPriorLedger() throws IOException {
-        if (!Files.exists(LEDGER_JSON)) {
+    private static RegistryLedger loadPriorLedger(Path ledgerJson) throws IOException {
+        if (!Files.exists(ledgerJson)) {
             return RegistryLedger.empty();
         }
-        String json = new String(Files.readAllBytes(LEDGER_JSON), StandardCharsets.UTF_8);
+        String json = new String(Files.readAllBytes(ledgerJson), StandardCharsets.UTF_8);
         if (json.trim().isEmpty()) {
             return RegistryLedger.empty();
         }
@@ -269,15 +303,33 @@ public final class DeprecationRegistryGenerator {
      * parse {@link RemovalConsistencyEvaluator} needs (changeStatus, old-side access modifier,
      * and root scope for every element, not just the REMOVED subset).
      */
-    private static JapicmpReportReader.Report readJapicmpReport() throws IOException {
-        if (!Files.exists(JAPICMP_REPORT)) {
+    private static JapicmpReportReader.Report readJapicmpReport(Path japicmpReport) throws IOException {
+        // Codex P2, PR #480: a zero-byte file (e.g. after an interrupted or racing report write)
+        // passes Files.exists just like a genuine report, but has nothing for
+        // JapicmpReportReader.read's XML parser to work with - it would throw a generic parse
+        // failure instead of the friendly infrastructure finding below. Treat "exists but is
+        // empty" the same as "does not exist": both mean no comparison ran.
+        if (!Files.exists(japicmpReport) || isEmptyFile(japicmpReport)) {
             // No japicmp report (e.g. `-DskipTests` ran before `verify`'s cmp goal on a partial
-            // build). Nothing can be confirmed REMOVED without it - an empty report is the safe,
-            // conservative default; D-22 requires agreement, and silence from japicmp never
-            // authorizes a REMOVED transition on its own.
+            // build, or #461's basedir mismatch). Nothing can be confirmed REMOVED without it - an
+            // empty report is the safe, conservative default AT THIS LAYER ONLY: this generator
+            // itself must not crash on a missing report. D-22 requires agreement, and silence from
+            // japicmp never authorizes a REMOVED transition on its own. The layer above turns
+            // "quiet" into "loud": RemovalConsistencyEvaluator#evaluate unconditionally reports this
+            // exact state as a single Finding.Kind.REPORT_MISSING_OR_EMPTY (WR-03) - so "safe
+            // default" here means "does not crash," never "the build passes silently" (#461).
             return JapicmpReportReader.Report.empty();
         }
-        return JapicmpReportReader.read(JAPICMP_REPORT);
+        return JapicmpReportReader.read(japicmpReport);
+    }
+
+    /**
+     * {@code true} for a zero-byte file. {@link Files#size} is used rather than reading the file
+     * and checking {@code String#isEmpty()} - this is purely a size probe, so it need not pull
+     * the whole file into memory only to discard it immediately afterward.
+     */
+    private static boolean isEmptyFile(Path file) throws IOException {
+        return Files.size(file) == 0L;
     }
 
     /**
@@ -327,8 +379,11 @@ public final class DeprecationRegistryGenerator {
         // so a baseline that fails to resolve produces an empty report and the build continues --
         // at which point "absent from the report" is true of every key, and this method would imply
         // a REMOVED transition for the entire prior ledger on source evidence alone. D-22's rule is
-        // dual-source; with no old side there is no second source, so imply nothing and let the
-        // normal conflict path in RegistryLedger.merge speak.
+        // dual-source; with no old side there is no second source, so imply nothing here. When
+        // the report is empty, RegistryLedger.merge's own reportIsEmpty branch (Codex P2, PR
+        // #480) now carries such an entry forward unchanged rather than treating its absence
+        // from source as a conflict -- REPORT_MISSING_OR_EMPTY explains the infrastructure state
+        // to the reader instead.
         //
         // Note this guard is NOT about japicmp's <excludes>: an excluded symbol still appears in
         // target/japicmp/japicmp.xml (measured -- CglibProxyFactory, AopProxyBeanPostProcessor,
@@ -361,7 +416,16 @@ public final class DeprecationRegistryGenerator {
      * the XML-reading logic. Do not narrow this back to {@code private}.
      */
     static Document readPomDocument() throws IOException {
-        String xml = new String(Files.readAllBytes(POM_XML), StandardCharsets.UTF_8);
+        return readPomDocument(Paths.get("").toAbsolutePath());
+    }
+
+    /**
+     * Same read as {@link #readPomDocument()}, against an explicit base directory (#461) - so
+     * {@code main()}'s {@code ${project.basedir}}-carrying invocation, and a test exercising that
+     * resolution against a temporary tree, never depend on the JVM's actual working directory.
+     */
+    static Document readPomDocument(Path baseDir) throws IOException {
+        String xml = new String(Files.readAllBytes(baseDir.resolve(POM_XML)), StandardCharsets.UTF_8);
         return parsePomXml(xml);
     }
 
