@@ -269,6 +269,24 @@ public final class ResourceHashSidecar {
      * update from the current jar. Writing to a temp file first means a failure never touches the
      * real sidecar at all -- exactly the same fix already applied to {@code UltiToolsPlugin
      * #writeBytes} for the language file itself.
+     * <p>
+     * Round 3 (Codex finding on {@code ResourceHashSidecar.java:285}, thread {@code
+     * PRRT_kwDOIcF9Es6i00gb}, P2): the atomic move above replaces a DIRECTORY ENTRY, so on an
+     * installation where this sidecar is provisioned with shared ownership or group permissions,
+     * every update used to replace it with {@link File#createTempFile}'s own process-owned,
+     * restrictive-default-mode inode -- silently locking out a different account that previously
+     * shared read access, causing that account's next boot to treat every untouched catalogue as
+     * unknown/customised provenance. {@link PosixAttributePreserver#copyIfSupported} is now
+     * applied to the staging file before this method writes to it, exactly mirroring {@code
+     * UltiToolsPlugin#writeBytes}'s own use of the same shared helper for the language-file
+     * replacement path -- reusing that contract rather than a second, independent implementation
+     * of the identical fix. If the sidecar does not exist yet (this module's first write), there
+     * is nothing to copy attributes FROM: {@code copyIfSupported} returns {@code true}
+     * immediately and {@code tempFile} simply keeps the JVM's own default attributes, which is
+     * the correct outcome for freshly created state, not an oversight. If ownership could not be
+     * replicated, this method abandons the whole write -- exactly {@code writeBytes}'s own
+     * policy for the identical failure -- rather than let the sidecar silently become unreadable
+     * to the account that owned it.
      */
     private static void writeAll(File resourceFolder, Map<String, String> entries) {
         File file = sidecarFile(resourceFolder);
@@ -279,11 +297,21 @@ public final class ResourceHashSidecar {
                 Files.createDirectories(parent.toPath());
             }
             tempFile = File.createTempFile(SIDECAR_FILE_NAME, ".tmp", parent);
-            try (Writer writer = Files.newBufferedWriter(tempFile.toPath(), StandardCharsets.UTF_8)) {
-                GSON.toJson(entries, ENTRY_MAP_TYPE, writer);
+            if (PosixAttributePreserver.copyIfSupported(file, tempFile,
+                    () -> LOGGER.log(Level.WARNING, "Could not preserve file permissions while "
+                            + "refreshing resource-hash sidecar " + file.getPath() + "; the "
+                            + "refreshed file may not match the original's permissions."),
+                    (owner, group) -> LOGGER.log(Level.WARNING, "Resource-hash sidecar "
+                            + file.getPath() + " is owned by '" + owner + ":" + group + "', which "
+                            + "this process cannot replicate onto the refreshed file; leaving the "
+                            + "existing sidecar untouched instead of silently changing its "
+                            + "ownership."))) {
+                try (Writer writer = Files.newBufferedWriter(tempFile.toPath(), StandardCharsets.UTF_8)) {
+                    GSON.toJson(entries, ENTRY_MAP_TYPE, writer);
+                }
+                Files.move(tempFile.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING,
+                        StandardCopyOption.ATOMIC_MOVE);
             }
-            Files.move(tempFile.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING,
-                    StandardCopyOption.ATOMIC_MOVE);
         } catch (IOException | JsonIOException e) {
             // Codex round 6, P2: GSON.toJson wraps an IOException it hits while actively
             // serializing (e.g. the filesystem filling up mid-write) in its own unchecked
@@ -295,7 +323,8 @@ public final class ResourceHashSidecar {
             if (tempFile != null) {
                 // A successful move already renamed the temp file away from tempFile's own path,
                 // so this is a no-op on the success path and only cleans up a leftover staging
-                // file on any failure branch above.
+                // file on any failure branch above (including the ownership-abort branch, which
+                // never reaches the move).
                 // noinspection ResultOfMethodCallIgnored
                 tempFile.delete();
             }

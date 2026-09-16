@@ -13,7 +13,6 @@ import java.nio.charset.StandardCharsets;
 import java.io.OutputStream;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.PosixFileAttributeView;
-import java.nio.file.attribute.PosixFileAttributes;
 import java.nio.file.attribute.PosixFilePermission;
 import java.lang.reflect.Type;
 import java.net.JarURLConnection;
@@ -68,6 +67,7 @@ import com.ultikits.ultitools.manager.ListenerManager;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.utils.DependencyUtils;
 import com.ultikits.ultitools.utils.FileUtils;
+import com.ultikits.ultitools.utils.PosixAttributePreserver;
 import com.ultikits.ultitools.utils.ResourceHashSidecar;
 import com.ultikits.ultitools.utils.VersionComparatorUtil;
 
@@ -841,6 +841,16 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * File#createTempFile}'s own defaults (Codex rounds 8 and 9, P2, discussion_r4012703529 and
      * discussion_r4013501574).
      * <p>
+     * Round 3 (Codex finding on {@code ResourceHashSidecar.java:285}, thread {@code
+     * PRRT_kwDOIcF9Es6i00gb}): the core copy logic now lives in {@link
+     * com.ultikits.ultitools.utils.PosixAttributePreserver#copyIfSupported}, shared with {@code
+     * ResourceHashSidecar#writeAll}'s identical atomic-replace contract (a private method, not
+     * javadoc-linkable from here) instead of a second, independent implementation of the same fix
+     * -- this method is now a thin wrapper that only supplies this class's own {@link
+     * #getLogger()}/{@code getPluginName()} warning text (the latter is a Lombok-generated
+     * accessor, not resolvable by the javadoc tool without delombok, hence {@code} rather than
+     * {@link} here). The contract described below is unchanged.
+     * <p>
      * Permission bits are best-effort: a failure to read or apply them is logged and otherwise
      * ignored, matching the original round-8 fix -- this is a genuine improvement layered onto
      * the write, not something the write must abort over.
@@ -862,44 +872,14 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      *         the refresh must be skipped
      */
     private boolean copyPosixAttributesIfSupported(File source, File target) {
-        if (!source.exists()) {
-            return true;
-        }
-        try {
-            PosixFileAttributeView sourceView =
-                    Files.getFileAttributeView(source.toPath(), PosixFileAttributeView.class);
-            if (sourceView == null) {
-                return true;
-            }
-            PosixFileAttributes sourceAttributes = sourceView.readAttributes();
-            Set<PosixFilePermission> permissions = sourceAttributes.permissions();
-            try {
-                Files.setPosixFilePermissions(target.toPath(), permissions);
-            } catch (IOException e) {
-                getLogger().warn("Could not preserve file permissions while refreshing '" + source.getPath()
+        return PosixAttributePreserver.copyIfSupported(source, target,
+                () -> getLogger().warn("Could not preserve file permissions while refreshing '" + source.getPath()
                         + "' for module '" + getPluginName() + "'; the refreshed file may not match the "
-                        + "original's permissions.");
-            }
-            PosixFileAttributeView targetView =
-                    Files.getFileAttributeView(target.toPath(), PosixFileAttributeView.class);
-            try {
-                targetView.setGroup(sourceAttributes.group());
-                targetView.setOwner(sourceAttributes.owner());
-                return true;
-            } catch (IOException | UnsupportedOperationException e) {
-                getLogger().warn("Language file '" + source.getPath() + "' for module '" + getPluginName()
-                        + "' is owned by '" + sourceAttributes.owner().getName() + ":"
-                        + sourceAttributes.group().getName() + "', which this process cannot replicate "
-                        + "onto the refreshed file; skipping the refresh instead of silently changing "
-                        + "the file's ownership.");
-                return false;
-            }
-        } catch (IOException | UnsupportedOperationException e) {
-            getLogger().warn("Could not preserve file permissions while refreshing '" + source.getPath()
-                    + "' for module '" + getPluginName() + "'; the refreshed file may not match the "
-                    + "original's permissions.");
-            return true;
-        }
+                        + "original's permissions."),
+                (owner, group) -> getLogger().warn("Language file '" + source.getPath() + "' for module '"
+                        + getPluginName() + "' is owned by '" + owner + ":" + group + "', which this process "
+                        + "cannot replicate onto the refreshed file; skipping the refresh instead of silently "
+                        + "changing the file's ownership."));
     }
 
     /**

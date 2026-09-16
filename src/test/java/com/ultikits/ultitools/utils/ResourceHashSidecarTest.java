@@ -16,16 +16,22 @@ import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFileAttributes;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -270,6 +276,64 @@ class ResourceHashSidecarTest {
         ResourceHashSidecar.recordAll(tempDir, Collections.emptyMap());
 
         assertThat(sidecarFile).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("updating an existing sidecar preserves its POSIX permissions instead of replacing "
+            + "them with createTempFile's process-owned defaults (round 3, Codex finding on "
+            + "ResourceHashSidecar.java:285, thread PRRT_kwDOIcF9Es6i00gb, P2)")
+    void sidecarUpdatePreservesExistingPosixPermissions() throws IOException {
+        // Mirrors UltiToolsPluginLanguageFallbackTest#refreshPreservesOriginalPosixPermissions --
+        // same finding shape, same fix (PosixAttributePreserver), now proven on the sidecar's own
+        // atomic-replace path rather than the language-file one.
+        ResourceHashSidecar.record(tempDir, "lang/en.json", "hash-en-v1");
+        File sidecarFile = new File(tempDir, ".ultitools-resource-hashes.json");
+        PosixFileAttributeView view = Files.getFileAttributeView(sidecarFile.toPath(), PosixFileAttributeView.class);
+        Assumptions.assumeTrue(view != null,
+                "Filesystem does not support POSIX file attributes; skipping this permission-"
+                        + "preservation test.");
+
+        // Deliberately distinctive: File.createTempFile's default (commonly rw------- / 0600)
+        // must NOT survive the update -- this permission set adds group-read, which a naive "just
+        // create a new temp file" implementation would silently drop.
+        Set<PosixFilePermission> distinctivePermissions = PosixFilePermissions.fromString("rw-r-----");
+        Files.setPosixFilePermissions(sidecarFile.toPath(), distinctivePermissions);
+
+        ResourceHashSidecar.record(tempDir, "lang/zh.json", "hash-zh-v1");
+
+        assertThat(ResourceHashSidecar.readRecordedHash(tempDir, "lang/en.json")).contains("hash-en-v1");
+        assertThat(ResourceHashSidecar.readRecordedHash(tempDir, "lang/zh.json")).contains("hash-zh-v1");
+        assertThat(Files.getPosixFilePermissions(sidecarFile.toPath())).isEqualTo(distinctivePermissions);
+    }
+
+    @Test
+    @DisplayName("updating an existing sidecar preserves its owner and group, not just its "
+            + "permission bits (round 3, Codex finding on ResourceHashSidecar.java:285, thread "
+            + "PRRT_kwDOIcF9Es6i00gb, P2)")
+    void sidecarUpdatePreservesExistingOwnerAndGroup() throws IOException {
+        // Cannot be a RED-then-GREEN pair for OWNERSHIP specifically: both the sidecar and the
+        // replacement temp file are created by this SAME test process, so owner/group already
+        // trivially match before this fix too -- a genuinely foreign owner needs a file
+        // provisioned by a different user, which cannot be constructed without root in this
+        // sandbox (mirrors UltiToolsPluginLanguageFallbackTest#refreshPreservesOriginalOwnerAndGroup's
+        // own documented limitation for the identical reason). This is a regression guard
+        // exercising the new self-chown code path on the sidecar's own write, not a demonstration
+        // that the old code corrupted ownership -- the permission-bits test above is this
+        // finding's true RED/GREEN pair. What this test does NOT assert: behaviour when the
+        // sidecar's owner differs from this process's own user -- that requires privileges this
+        // sandbox does not have.
+        ResourceHashSidecar.record(tempDir, "lang/en.json", "hash-en-v1");
+        File sidecarFile = new File(tempDir, ".ultitools-resource-hashes.json");
+        PosixFileAttributeView view = Files.getFileAttributeView(sidecarFile.toPath(), PosixFileAttributeView.class);
+        Assumptions.assumeTrue(view != null,
+                "Filesystem does not support POSIX file attributes; skipping.");
+        PosixFileAttributes before = view.readAttributes();
+
+        ResourceHashSidecar.record(tempDir, "lang/zh.json", "hash-zh-v1");
+
+        PosixFileAttributes after = Files.readAttributes(sidecarFile.toPath(), PosixFileAttributes.class);
+        assertThat(after.owner()).isEqualTo(before.owner());
+        assertThat(after.group()).isEqualTo(before.group());
     }
 
     @Test
