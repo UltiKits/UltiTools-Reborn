@@ -1,7 +1,6 @@
 package com.ultikits.ultitools.abstracts;
 
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -74,7 +73,11 @@ class UltiToolsPluginInitConfigTest {
 
         invokeInitConfig(plugin);
 
-        verify(mockConfigManager, times(1)).registerAll(org.mockito.ArgumentMatchers.eq(plugin), anyString(), any());
+        // CR-01 (#358 Part 1 gate-1 finding): initConfig() now calls the plugin-scoped
+        // registerAll(plugin, String[], ClassLoader) overload once for the whole scan, not the
+        // single-package overload once per package - see that overload's own javadoc.
+        verify(mockConfigManager, times(1))
+                .registerAll(org.mockito.ArgumentMatchers.eq(plugin), any(String[].class), any());
     }
 
     @Test
@@ -84,7 +87,7 @@ class UltiToolsPluginInitConfigTest {
 
         invokeInitConfig(plugin);
 
-        verify(mockConfigManager, never()).registerAll(any(), anyString(), any());
+        verify(mockConfigManager, never()).registerAll(any(), any(String[].class), any());
         verify(mockConfigManager, never()).register(any(), any());
     }
 

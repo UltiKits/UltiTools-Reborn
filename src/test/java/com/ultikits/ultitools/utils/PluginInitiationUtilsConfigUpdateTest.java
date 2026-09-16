@@ -77,18 +77,22 @@ class PluginInitiationUtilsConfigUpdateTest {
 
     @AfterEach
     void tearDown() throws Exception {
-        // panelWS 是静态字段，不还原会漏给同一个 JVM 里后面的测试类。
+        // CloudSession.current 是 JVM 级静态（surefire 未配 forkCount，issue #250），不还原
+        // 会漏给同一个 JVM 里后面的测试类。
         setPanelWs(previousPanelWs);
         Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
         instanceField.setAccessible(true);
         instanceField.set(null, null);
     }
 
+    /**
+     * 如今 WebSocket 客户端是 {@link CloudSession} 的实例状态（16-08 Task 2 起，替代已删除的
+     * {@code PluginInitiationUtils.panelWS} 静态字段）。本类与 {@code CloudSession} 同包
+     * ({@code utils})，直接调用即可，不需要反射。
+     */
     private Object setPanelWs(Object value) throws Exception {
-        Field field = PluginInitiationUtils.class.getDeclaredField("panelWS");
-        field.setAccessible(true);
-        Object previous = field.get(null);
-        field.set(null, value);
+        UltiPanelWebSocketClient previous = CloudSession.current().getWebSocketClient();
+        CloudSession.current().setWebSocketClient((UltiPanelWebSocketClient) value);
         return previous;
     }
 

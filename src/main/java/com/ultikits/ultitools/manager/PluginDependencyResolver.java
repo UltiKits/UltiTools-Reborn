@@ -13,6 +13,7 @@ import java.util.Queue;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.PluginDependency;
@@ -34,15 +35,17 @@ import org.jetbrains.annotations.ApiStatus;
 @ApiStatus.Internal
 public class PluginDependencyResolver {
 
+    private final Logger logger;
+
     /**
      * Constructs a new PluginDependencyResolver.
      *
-     * @param logger the logger to use for warnings and errors (reserved for future use)
+     * @param logger the logger used to warn about a duplicate {@code plugin.yml} {@code name:}
+     *               collision (#361 / IN-02) - a pick still has to be made, so this is the
+     *               operator's only signal that one was
      */
-    @SuppressWarnings("unused")
     public PluginDependencyResolver(Logger logger) {
-        // Logger parameter is reserved for future use
-        // Currently not stored as a field to satisfy code quality checks
+        this.logger = logger;
     }
 
     /**
@@ -60,7 +63,11 @@ public class PluginDependencyResolver {
         public PluginNode(Class<? extends UltiToolsPlugin> pluginClass) {
             this.pluginClass = pluginClass;
             this.pluginName = pluginClass.getSimpleName();
-            this.hardDependencies = new HashSet<>();
+            // LinkedHashSet, not HashSet (#361 / WR-05): several missing hard dependencies are
+            // now joined into one message (see buildMissingDependencyMessage below), and the
+            // operator-facing order should match declaration order in @PluginDependency's
+            // depends() array rather than an arbitrary hash-bucket order.
+            this.hardDependencies = new LinkedHashSet<>();
             this.softDependencies = new HashSet<>();
             this.loadBefore = new HashSet<>();
 
@@ -200,13 +207,15 @@ public class PluginDependencyResolver {
         // check below and that check can then use the same edges to find every transitive dependent.
         Map<String, Set<String>> adjacencyList = buildAdjacencyList(nodes, availablePlugins, aliasMap);
 
-        // Missing hard dependencies: collect-all instead of throw-on-first (D-10). A node whose hard
-        // dependency does not exist as a node is unloadable; everything that transitively depends on
-        // it (forward along the same edges Kahn's sort would use) is unloadable with it.
-        Map<String, String> missingDependencyByNode =
+        // Missing hard dependencies: collect-all instead of throw-on-first (D-10), and every
+        // missing dependency PER NODE is collected too, not just the first (#361 / WR-05). A
+        // node whose hard dependency does not exist as a node is unloadable; everything that
+        // transitively depends on it (forward along the same edges Kahn's sort would use) is
+        // unloadable with it.
+        Map<String, List<String>> missingDependenciesByNode =
             collectMissingHardDependencies(nodes, availablePlugins, aliasMap);
-        if (!missingDependencyByNode.isEmpty()) {
-            Set<String> refused = expandForward(missingDependencyByNode.keySet(), adjacencyList);
+        if (!missingDependenciesByNode.isEmpty()) {
+            Set<String> refused = expandForward(missingDependenciesByNode.keySet(), adjacencyList);
             Set<String> survivorNames = new LinkedHashSet<>(nodes.keySet());
             survivorNames.removeAll(refused);
 
@@ -215,7 +224,7 @@ public class PluginDependencyResolver {
             List<String> survivorSorted = kahnSort(survivorNames, survivorAdjacency, survivorInDegree);
 
             throw new MissingDependencyException(
-                buildMissingDependencyMessage(missingDependencyByNode),
+                buildMissingDependencyMessage(missingDependenciesByNode),
                 toClassList(survivorSorted, nodes),
                 refused
             );
@@ -268,6 +277,7 @@ public class PluginDependencyResolver {
         for (String simpleName : nodes.keySet()) {
             aliasMap.put(simpleName, simpleName);
         }
+        warnOnDuplicatePluginYmlNames(nodes);
         for (PluginNode node : nodes.values()) {
             String ymlName = node.getPluginYmlName();
             if (ymlName != null && !ymlName.isEmpty() && !aliasMap.containsKey(ymlName)) {
@@ -277,43 +287,119 @@ public class PluginDependencyResolver {
         return aliasMap;
     }
 
+    /**
+     * Detects two or more nodes declaring the same {@code plugin.yml} {@code name:} and logs one
+     * WARNING per colliding name, naming every module that declared it (#361).
+     * <p>
+     * This does not change which module wins the alias - that is still whichever comes first in
+     * {@code nodes} iteration order (discovery order), exactly as before. It only makes the
+     * operator aware that a pick happened, instead of the dependency graph silently depending on
+     * filesystem directory-listing order with nothing logged.
+     * <p>
+     * <b>IN-01 (gate-1 review, 16-REVIEW-residue.md):</b> "discovery order" here is deterministic
+     * GIVEN a deterministic {@code nodes} iteration order, but this class's only production
+     * caller, {@code PluginManager.init(ClassLoader)}, builds its input list from a raw
+     * {@code File.listFiles()} call with no sort - measured non-alphabetical and
+     * non-creation-order on this environment's filesystem (see #476). This WARNING's named
+     * "winner" is therefore only as reproducible as that upstream order; not a regression this
+     * change introduces (resolution already picked "whichever came first" before this fix), and
+     * not addressed here deliberately - sorting the upstream list would itself be a load-order
+     * behaviour change on existing installs, requiring its own decision. Tracked as #476.
+     * <p>
+     * <b>Gate-2 Codex finding, PR #478 round 1:</b> the naive "first plugin.yml declarer wins"
+     * answer is wrong whenever the colliding name ALSO equals some other node's own simple class
+     * name - {@link #buildAliasMap}'s FIRST loop claims every simple class name as its own alias
+     * before any {@code plugin.yml} {@code name:} is considered at all, so that OTHER node wins
+     * outright and none of the {@code plugin.yml} declarers do, regardless of their discovery
+     * order among themselves. This method now checks {@code nodes.containsKey(ymlName)} (keyed
+     * by simple class name) before falling back to "first declarer", so the reported winner
+     * always matches what {@link #buildAliasMap} actually produces.
+     */
+    private void warnOnDuplicatePluginYmlNames(Map<String, PluginNode> nodes) {
+        Map<String, List<String>> declaringModulesByYmlName = new LinkedHashMap<>();
+        for (PluginNode node : nodes.values()) {
+            String ymlName = node.getPluginYmlName();
+            if (ymlName != null && !ymlName.isEmpty()) {
+                declaringModulesByYmlName
+                    .computeIfAbsent(ymlName, k -> new ArrayList<>())
+                    .add(node.getPluginName());
+            }
+        }
+        for (Map.Entry<String, List<String>> entry : declaringModulesByYmlName.entrySet()) {
+            List<String> declaringModules = entry.getValue();
+            if (declaringModules.size() > 1) {
+                String ymlName = entry.getKey();
+                boolean claimedBySimpleClassName = nodes.containsKey(ymlName);
+                String winner = claimedBySimpleClassName ? ymlName : declaringModules.get(0);
+                String winnerReason = claimedBySimpleClassName
+                    ? "a module class literally named '" + ymlName + "', which always claims "
+                        + "this alias before any plugin.yml name: is considered"
+                    : "the module discovered first";
+                logger.warning(String.format(
+                    "[UltiTools-API] Multiple modules declare the same plugin.yml name '%s': "
+                        + "%s. Dependency resolution will resolve this name to '%s' (%s); rename "
+                        + "one module's plugin.yml name: to remove the ambiguity.",
+                    ymlName, declaringModules, winner, winnerReason));
+            }
+        }
+    }
+
     private String resolveAlias(String rawName, Map<String, String> aliasMap) {
         return aliasMap.getOrDefault(rawName, rawName);
     }
 
     /**
      * Collects every node that declares at least one hard dependency not present among the
-     * available plugins, mapped to the first such dependency it names (for the refusal message).
-     * Each declared dependency is resolved through {@code aliasMap} before the availability
-     * check; the message itself still names the raw declared value.
+     * available plugins, mapped to EVERY such dependency it names, not just the first (#361 /
+     * WR-05) - so a module missing three hard dependencies is told about all three in one
+     * refusal instead of one per restart. Each declared dependency is resolved through
+     * {@code aliasMap} before the availability check; the message itself still names the raw
+     * declared value.
      */
-    private Map<String, String> collectMissingHardDependencies(
+    private Map<String, List<String>> collectMissingHardDependencies(
             Map<String, PluginNode> nodes, Set<String> availablePlugins, Map<String, String> aliasMap) {
-        Map<String, String> missing = new LinkedHashMap<>();
+        Map<String, List<String>> missing = new LinkedHashMap<>();
         for (PluginNode node : nodes.values()) {
+            List<String> missingForNode = new ArrayList<>();
             for (String hardDep : node.getHardDependencies()) {
                 if (!availablePlugins.contains(resolveAlias(hardDep, aliasMap))) {
-                    missing.put(node.getPluginName(), hardDep);
-                    break;
+                    missingForNode.add(hardDep);
                 }
+            }
+            if (!missingForNode.isEmpty()) {
+                missing.put(node.getPluginName(), missingForNode);
             }
         }
         return missing;
     }
 
     /**
-     * Builds the refusal message naming every declaring module and the dependency it wanted,
-     * matching the wording this framework already used for a single missing dependency.
+     * Builds the refusal message naming every declaring module and every missing dependency it
+     * wanted (#361 / WR-05). A module with exactly one missing dependency keeps the exact
+     * singular wording this framework already used ({@code "requires dependency 'X' which is
+     * not available"}); a module with several gets the plural form joined into one clause
+     * ({@code "requires dependencies 'X', 'Y' which are not available"}) so the single-element
+     * case never reads as a degenerate list.
      */
-    private String buildMissingDependencyMessage(Map<String, String> missingDependencyByNode) {
+    private String buildMissingDependencyMessage(Map<String, List<String>> missingDependenciesByNode) {
         StringBuilder message = new StringBuilder();
-        for (Map.Entry<String, String> entry : missingDependencyByNode.entrySet()) {
+        for (Map.Entry<String, List<String>> entry : missingDependenciesByNode.entrySet()) {
             if (message.length() > 0) {
                 message.append("; ");
             }
-            message.append(String.format(
-                "Plugin '%s' requires dependency '%s' which is not available",
-                entry.getKey(), entry.getValue()));
+            List<String> missingDeps = entry.getValue();
+            String quotedDeps = missingDeps.stream()
+                .map(dep -> "'" + dep + "'")
+                .collect(Collectors.joining(", "));
+            if (missingDeps.size() == 1) {
+                message.append(String.format(
+                    "Plugin '%s' requires dependency %s which is not available",
+                    entry.getKey(), quotedDeps));
+            } else {
+                message.append(String.format(
+                    "Plugin '%s' requires dependencies %s which are not available",
+                    entry.getKey(), quotedDeps));
+            }
         }
         return message.toString();
     }

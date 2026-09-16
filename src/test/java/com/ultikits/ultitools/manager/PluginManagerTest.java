@@ -2,7 +2,9 @@ package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -247,6 +249,79 @@ class PluginManagerTest {
 
             verify(context).close();
             verify(registered).unregisterSelf();
+        }
+
+        @Test
+        @DisplayName("unregisterSelf() 抛出异常时仍会关闭 context（Codex review on #457: \"Close the module context when its unload hook throws\"）")
+        void unregisterSelfThrowing_stillClosesContext() {
+            UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+            when(plugin.getPluginName()).thenReturn("Throwing");
+            SimpleContainer context = mock(SimpleContainer.class);
+            when(plugin.getContext()).thenReturn(context);
+            doThrow(new RuntimeException("onUnregister boom")).when(plugin).unregisterSelf();
+
+            assertThrows(RuntimeException.class, () -> pluginManager.unregister(plugin));
+
+            verify(context).close();
+        }
+
+        @Test
+        @DisplayName("taskManager.cancelAll() 抛出异常时仍会运行 unregisterSelf() 并关闭 context（Codex review on #457: \"Preserve mandatory cleanup before swallowing unregister failures\"）")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // injecting a mock TaskManager
+        // mirrors the reflection idiom already used throughout this package's own field tests
+        void earlyStepThrowing_stillRunsUnregisterSelfAndClosesContext() throws Exception {
+            TaskManager mockTaskManager = mock(TaskManager.class);
+            UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+            when(plugin.getPluginName()).thenReturn("EarlyStepThrows");
+            SimpleContainer context = mock(SimpleContainer.class);
+            when(plugin.getContext()).thenReturn(context);
+            doThrow(new Error("BukkitTask.cancel() boom")).when(mockTaskManager).cancelAll(plugin);
+
+            Field taskManagerField = PluginManager.class.getDeclaredField("taskManager");
+            taskManagerField.setAccessible(true);
+            taskManagerField.set(pluginManager, mockTaskManager);
+
+            // An Error from a step BEFORE unregisterSelf() must not skip this module's own
+            // mandatory cleanup (its commands/listeners via unregisterSelf(), and its context) --
+            // otherwise the module's handlers and container stay live but PluginManager.close()'s
+            // own try/catch (WR-01) would still clear pluginList, losing track of them entirely.
+            // Each registry-cleanup step is isolated and logged, not rethrown (Codex review on
+            // #457, round 4: "Run all registry cleanup after an earlier failure") -- only
+            // unregisterSelf()'s own exception still propagates, matching WR-01's design ("a
+            // throwing hook is surfaced to the caller, not swallowed").
+            assertDoesNotThrow(() -> pluginManager.unregister(plugin));
+
+            verify(plugin).unregisterSelf();
+            verify(context).close();
+        }
+
+        @Test
+        @DisplayName("一个早期清理步骤抛出异常不会跳过后面的其它清理步骤（Codex review on #457: \"Run all registry cleanup after an earlier failure\"）")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // injecting a mock TaskManager
+        // mirrors the reflection idiom already used throughout this package's own field tests
+        void earlyStepThrowing_stillRunsLaterRegistryCleanupSteps() throws Exception {
+            EventBus mockEventBus = mock(EventBus.class);
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+                when(ultiTools.getLogger()).thenReturn(mockLogger);
+                when(ultiTools.getListenerManager()).thenReturn(new ListenerManager());
+                when(ultiTools.getEventBus()).thenReturn(mockEventBus);
+            });
+
+            TaskManager mockTaskManager = mock(TaskManager.class);
+            UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+            when(plugin.getPluginName()).thenReturn("EarlyStepThrows2");
+            doThrow(new Error("BukkitTask.cancel() boom")).when(mockTaskManager).cancelAll(plugin);
+
+            Field taskManagerField = PluginManager.class.getDeclaredField("taskManager");
+            taskManagerField.setAccessible(true);
+            taskManagerField.set(pluginManager, mockTaskManager);
+
+            assertDoesNotThrow(() -> pluginManager.unregister(plugin));
+
+            // EventBus.unregisterAll is a LATER registry-cleanup step than taskManager.cancelAll
+            // -- it must still run even though the earlier step threw.
+            verify(mockEventBus).unregisterAll(plugin.getPluginName());
+            verify(plugin).unregisterSelf();
         }
     }
 

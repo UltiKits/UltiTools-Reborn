@@ -9,8 +9,13 @@ import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Logger;
 
+import org.bukkit.Bukkit;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.scheduler.BukkitScheduler;
+import org.bukkit.scheduler.BukkitTask;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -18,6 +23,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Scheduled;
@@ -98,6 +104,28 @@ class TaskManagerTest {
         @Scheduled(period = 20)
         public String invalidReturn() {
             return "should be skipped";
+        }
+    }
+
+    // === #410 fixtures: beans whose scheduling is driven entirely through the mocked
+    // BukkitScheduler below, not through MockBukkit's own real scheduler ===
+
+    public static class OneScheduledMethodBean {
+        @Scheduled(period = 20)
+        public void only() {
+            // Never actually invoked in the #410 tests -- scheduling itself is what fails.
+        }
+    }
+
+    public static class TwoScheduledMethodsBean {
+        @Scheduled(period = 20)
+        public void first() {
+            // Never actually invoked in the #410 tests -- scheduling itself is what fails.
+        }
+
+        @Scheduled(period = 30)
+        public void second() {
+            // Never actually invoked in the #410 tests -- scheduling itself is what fails.
         }
     }
 
@@ -367,6 +395,88 @@ class TaskManagerTest {
             assertEquals(1, taskManager.getCoreTaskCount(),
                     "PlayerCacheManager declares exactly one @Scheduled method "
                             + "(sweepExpiredEntries); before #384 it was registered zero times");
+        }
+    }
+
+    // === #410: scanAndSchedule must not leak already-scheduled tasks when a LATER
+    // @Scheduled method's own scheduling call throws mid-scan ===
+    //
+    // Bukkit.getScheduler() is replaced with a Mockito mock for these tests (rather than
+    // relying on MockBukkit's real BukkitSchedulerMock, which never rejects a scheduling call
+    // regardless of plugin state) so the SECOND scheduling call can be made to throw
+    // deterministically, exactly as the real IllegalPluginAccessException would if the host
+    // plugin became disabled mid-registration.
+    @Nested
+    @DisplayName("scanAndSchedule does not leak already-scheduled tasks on a mid-scan failure (#410)")
+    class MidScanFailureTests {
+
+        @Test
+        @DisplayName("a bean with two @Scheduled methods where the second throws still records "
+                + "the first task in its owning bucket, and that task is cancellable")
+        void earlierTaskSurvivesALaterThrowAndStaysCancellable() {
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                BukkitScheduler mockScheduler = mock(BukkitScheduler.class);
+                bukkit.when(Bukkit::getScheduler).thenReturn(mockScheduler);
+                bukkit.when(Bukkit::getLogger).thenReturn(
+                        Logger.getLogger("TaskManagerTest.MidScanFailureTests.earlierTaskSurvives"));
+
+                BukkitTask firstTask = mock(BukkitTask.class);
+                when(mockScheduler.runTaskTimer(any(Plugin.class), any(Runnable.class), anyLong(), anyLong()))
+                        .thenReturn(firstTask)
+                        .thenThrow(new RuntimeException(
+                                "simulated: host plugin became disabled mid-registration"));
+
+                TwoScheduledMethodsBean bean = new TwoScheduledMethodsBean();
+
+                assertThrows(RuntimeException.class,
+                        () -> taskManager.registerScheduledMethods(mockUltiPlugin, bean),
+                        "the second method's scheduling failure must still propagate -- this "
+                                + "test is about what survives it, not about swallowing it");
+
+                assertEquals(1, taskManager.getTaskCount(mockUltiPlugin),
+                        "the task scheduled BEFORE the throwing one must already be recorded in "
+                                + "its owning bucket -- not lost because scanAndSchedule never "
+                                + "reached its own return statement (#410)");
+
+                // Not merely counted -- genuinely cancellable at teardown.
+                assertDoesNotThrow(() -> taskManager.cancelAll(mockUltiPlugin));
+                verify(firstTask).cancel();
+                assertEquals(0, taskManager.getTaskCount(mockUltiPlugin));
+            }
+        }
+
+        @Test
+        @DisplayName("a bean with a single @Scheduled method that throws leaves nothing behind")
+        void singleScheduledMethodThatThrowsLeavesNothingBehind() {
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                BukkitScheduler mockScheduler = mock(BukkitScheduler.class);
+                bukkit.when(Bukkit::getScheduler).thenReturn(mockScheduler);
+                bukkit.when(Bukkit::getLogger).thenReturn(
+                        Logger.getLogger("TaskManagerTest.MidScanFailureTests.singleThrows"));
+
+                when(mockScheduler.runTaskTimer(any(Plugin.class), any(Runnable.class), anyLong(), anyLong()))
+                        .thenThrow(new RuntimeException("simulated scheduling failure"));
+
+                OneScheduledMethodBean bean = new OneScheduledMethodBean();
+
+                assertThrows(RuntimeException.class,
+                        () -> taskManager.registerScheduledMethods(mockUltiPlugin, bean));
+
+                assertEquals(0, taskManager.getTaskCount(mockUltiPlugin),
+                        "a single scheduled method that throws immediately must leave nothing "
+                                + "recorded -- there was never a successfully-scheduled task to lose");
+            }
+        }
+
+        @Test
+        @DisplayName("a successful scan still records every created task in its owning bucket, as before")
+        void successfulScanStillRecordsEveryCreatedTask() {
+            ServiceWithScheduled bean = new ServiceWithScheduled();
+            taskManager.registerScheduledMethods(mockUltiPlugin, bean);
+
+            assertEquals(2, taskManager.getTaskCount(mockUltiPlugin),
+                    "the happy path (no exception) must be unaffected by recording tasks "
+                            + "immediately instead of batching them at the end of the scan");
         }
     }
 }

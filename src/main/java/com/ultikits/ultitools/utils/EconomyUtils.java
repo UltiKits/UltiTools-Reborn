@@ -1,80 +1,158 @@
 package com.ultikits.ultitools.utils;
 
 import net.milkbowl.vault.economy.Economy;
-import net.milkbowl.vault.economy.EconomyResponse;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.plugin.RegisteredServiceProvider;
 
 import javax.annotation.Nullable;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.ConcurrentModificationException;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.manager.PluginManager;
+import com.ultikits.ultitools.services.EconomyProvider;
+import com.ultikits.ultitools.services.impl.VaultEconomyProvider;
 
 /**
  * Utility class for economy operations using Vault.
  * Provides convenient static methods for common economy operations.
+ * <p>
+ * <b>{@code @ApiStatus.Internal} note (D-08/D-09, #451, 6.3.0):</b> this class's own PUBLIC
+ * signatures — including {@link #getEconomy()}'s Vault-typed return — are frozen for backward
+ * compatibility: six modules already call this façade directly, and this plan changes none of
+ * their call sites. That is the one deliberate exception to the framework's structural guard
+ * against soft-dependency types in reflected signatures
+ * ({@code buildtools.SoftDependencySignatureInvariantTest}) — this class carries its own explicit
+ * allowlist entry there, with this paragraph as the one-line reason required of every entry.
+ * <p>
+ * Internally, every operation now delegates to the internal {@link EconomyProvider} seam and
+ * reports the economy's unavailability honestly (D-08): the server's console gets exactly one
+ * {@code WARNING} per calling module per server session, naming the module, distinguishing
+ * "Vault is not installed" from "Vault is installed but no provider is registered", stating this
+ * is the server operator's environment rather than a framework or module defect, and giving the
+ * install instruction. This is a server-console line — it is never routed to the panel, since it
+ * names which modules are installed.
  *
  * @author wisdomme
  * @version 1.0.0
  * @since 6.2.0
  */
 public final class EconomyUtils {
-    
-    private static Economy economy;
-    private static boolean setupAttempted = false;
-    
+
+    /** Attribution key used when no registered module's package appears anywhere on the calling stack. */
+    static final String UNKNOWN_MODULE = "an unknown caller";
+
+    // The internal seam every operation below delegates to (D-08/D-09). Framework bootstrap
+    // (DependenceManagers) replaces this with the same instance it registers into the IoC
+    // container via setProvider(); the field starts non-null so a module calling EconomyUtils
+    // before the framework finishes booting (or in a test with no live UltiTools instance) still
+    // gets a safe, real answer rather than a NullPointerException.
+    private static volatile EconomyProvider provider = new VaultEconomyProvider();
+
+    private static final Set<String> warnedModules = Collections.synchronizedSet(new LinkedHashSet<>());
+
     private EconomyUtils() {
         // Utility class
     }
-    
+
     /**
-     * Sets up the economy provider from Vault.
+     * Framework-internal wiring point — called once by {@code DependenceManagers} at bootstrap
+     * with the same {@link EconomyProvider} instance it registers into the IoC container. Not
+     * meant to be called by module code; public only because {@code DependenceManagers} lives in
+     * another package.
+     *
+     * @param provider the active economy provider
+     */
+    public static void setProvider(EconomyProvider provider) {
+        EconomyUtils.provider = provider != null ? provider : new VaultEconomyProvider();
+    }
+
+    /**
+     * Logs the framework's one start-up line naming the current economy service state (D-08).
+     * Framework-internal — called once by {@code DependenceManagers} after {@link #setProvider}.
+     */
+    public static void logStartupState() {
+        EconomyProvider.State state = provider.getState();
+        String message;
+        switch (state) {
+            case VAULT_NOT_INSTALLED:
+                message = "[UltiTools-API] Vault not installed - economy service unavailable.";
+                break;
+            case NO_PROVIDER_REGISTERED:
+                message = "[UltiTools-API] Vault detected, but no economy provider is registered - "
+                        + "economy service unavailable.";
+                break;
+            case AVAILABLE:
+            default:
+                message = "[UltiTools-API] Hooked into Vault, economy provider: " + provider.getProviderName() + ".";
+                break;
+        }
+        log(message, true);
+    }
+
+    /**
+     * Checks whether the economy provider is currently set up.
+     * <p>
+     * [Rule 1 fix, CR-01, 16-07]: re-checks the live {@link #provider} on every call, exactly
+     * like every sibling operation, instead of latching a failed first attempt forever — Vault
+     * (or the economy plugin that registers a provider with it) can start after this framework's
+     * own bootstrap runs, since Bukkit gives no ordering guarantee beyond declared dependencies.
      *
      * @return true if economy was set up successfully
      */
     public static boolean setup() {
-        if (economy != null) {
-            return true;
-        }
-        
-        if (setupAttempted) {
-            return false;
-        }
-        
-        setupAttempted = true;
-        
-        if (Bukkit.getPluginManager().getPlugin("Vault") == null) {
-            return false;
-        }
-        
-        RegisteredServiceProvider<Economy> rsp = Bukkit.getServicesManager().getRegistration(Economy.class);
-        if (rsp == null) {
-            return false;
-        }
-        
-        economy = rsp.getProvider();
-        return economy != null;
+        reportIfUnavailable();
+        return provider.getState() == EconomyProvider.State.AVAILABLE;
     }
-    
+
     /**
      * Checks if Vault economy is available.
      *
      * @return true if economy is available
      */
     public static boolean isAvailable() {
-        return setup();
+        // [Rule 1/2 fix, 16-06]: this is the check every real consuming module actually calls
+        // before deciding whether to act (UltiEssentials#DeathPunishListener,
+        // UltiKits#KitServiceImpl and others all gate on isAvailable() first, and only call
+        // getBalance/has/deposit/withdraw when it returns true) -- so this is where a module's
+        // economy request is genuinely first observed. Reporting only from the data-operation
+        // methods below would mean the honest-reporting behaviour this plan exists to add almost
+        // never fires against real module call patterns, since none of those methods are reached
+        // once a module has already seen isAvailable() return false.
+        reportIfUnavailable();
+        return provider.getState() == EconomyProvider.State.AVAILABLE;
     }
-    
+
     /**
      * Gets the economy instance.
+     * <p>
+     * [Rule 1 fix, CR-01, 16-07]: re-checks the live {@link #provider} on every call and reports
+     * D-08's honest unavailability warning, exactly like every sibling operation, instead of
+     * caching a failed first attempt for the rest of the server's uptime (the same defect class
+     * this milestone exists to close, reproduced by this seam's own two frozen-signature methods —
+     * see {@code 16-REVIEW-economy.md} CR-01).
      *
      * @return the economy instance, or null if not available
      */
     @Nullable
     public static Economy getEconomy() {
-        setup();
-        return economy;
+        reportIfUnavailable();
+        if (provider.getState() != EconomyProvider.State.AVAILABLE) {
+            return null;
+        }
+        RegisteredServiceProvider<Economy> rsp = Bukkit.getServicesManager().getRegistration(Economy.class);
+        return rsp == null ? null : rsp.getProvider();
     }
-    
+
     /**
      * Gets the balance of a player.
      *
@@ -82,12 +160,10 @@ public final class EconomyUtils {
      * @return the balance, or 0 if economy is not available
      */
     public static double getBalance(OfflinePlayer player) {
-        if (!setup()) {
-            return 0;
-        }
-        return economy.getBalance(player);
+        reportIfUnavailable();
+        return provider.getBalance(player);
     }
-    
+
     /**
      * Gets the balance of a player by UUID.
      *
@@ -97,7 +173,7 @@ public final class EconomyUtils {
     public static double getBalance(UUID uuid) {
         return getBalance(Bukkit.getOfflinePlayer(uuid));
     }
-    
+
     /**
      * Checks if a player has at least the specified amount.
      *
@@ -106,12 +182,10 @@ public final class EconomyUtils {
      * @return true if the player has at least the amount
      */
     public static boolean has(OfflinePlayer player, double amount) {
-        if (!setup()) {
-            return false;
-        }
-        return economy.has(player, amount);
+        reportIfUnavailable();
+        return provider.has(player, amount);
     }
-    
+
     /**
      * Checks if a player has at least the specified amount.
      *
@@ -122,7 +196,7 @@ public final class EconomyUtils {
     public static boolean has(UUID uuid, double amount) {
         return has(Bukkit.getOfflinePlayer(uuid), amount);
     }
-    
+
     /**
      * Deposits money into a player's account.
      *
@@ -131,13 +205,10 @@ public final class EconomyUtils {
      * @return true if the deposit was successful
      */
     public static boolean deposit(OfflinePlayer player, double amount) {
-        if (!setup() || amount <= 0) {
-            return false;
-        }
-        EconomyResponse response = economy.depositPlayer(player, amount);
-        return response.transactionSuccess();
+        reportIfUnavailable();
+        return provider.deposit(player, amount);
     }
-    
+
     /**
      * Deposits money into a player's account.
      *
@@ -148,7 +219,7 @@ public final class EconomyUtils {
     public static boolean deposit(UUID uuid, double amount) {
         return deposit(Bukkit.getOfflinePlayer(uuid), amount);
     }
-    
+
     /**
      * Withdraws money from a player's account.
      *
@@ -157,16 +228,10 @@ public final class EconomyUtils {
      * @return true if the withdrawal was successful
      */
     public static boolean withdraw(OfflinePlayer player, double amount) {
-        if (!setup() || amount <= 0) {
-            return false;
-        }
-        if (!has(player, amount)) {
-            return false;
-        }
-        EconomyResponse response = economy.withdrawPlayer(player, amount);
-        return response.transactionSuccess();
+        reportIfUnavailable();
+        return provider.withdraw(player, amount);
     }
-    
+
     /**
      * Withdraws money from a player's account.
      *
@@ -177,7 +242,7 @@ public final class EconomyUtils {
     public static boolean withdraw(UUID uuid, double amount) {
         return withdraw(Bukkit.getOfflinePlayer(uuid), amount);
     }
-    
+
     /**
      * Transfers money from one player to another.
      *
@@ -187,7 +252,7 @@ public final class EconomyUtils {
      * @return true if the transfer was successful
      */
     public static boolean transfer(OfflinePlayer from, OfflinePlayer to, double amount) {
-        if (!setup() || amount <= 0) {
+        if (amount <= 0) {
             return false;
         }
         if (!has(from, amount)) {
@@ -203,7 +268,7 @@ public final class EconomyUtils {
         }
         return true;
     }
-    
+
     /**
      * Transfers money from one player to another.
      *
@@ -215,7 +280,7 @@ public final class EconomyUtils {
     public static boolean transfer(UUID from, UUID to, double amount) {
         return transfer(Bukkit.getOfflinePlayer(from), Bukkit.getOfflinePlayer(to), amount);
     }
-    
+
     /**
      * Formats an amount according to the economy's format.
      *
@@ -223,41 +288,342 @@ public final class EconomyUtils {
      * @return the formatted amount string
      */
     public static String format(double amount) {
-        if (!setup()) {
-            return String.format("%.2f", amount);
-        }
-        return economy.format(amount);
+        reportIfUnavailable();
+        return provider.format(amount);
     }
-    
+
     /**
      * Gets the currency name (singular).
      *
      * @return the currency name
      */
     public static String getCurrencyName() {
-        if (!setup()) {
-            return "coins";
-        }
-        return economy.currencyNameSingular();
+        reportIfUnavailable();
+        return provider.getCurrencyNameSingular();
     }
-    
+
     /**
      * Gets the currency name (plural).
      *
      * @return the currency name (plural)
      */
     public static String getCurrencyNamePlural() {
-        if (!setup()) {
-            return "coins";
-        }
-        return economy.currencyNamePlural();
+        reportIfUnavailable();
+        return provider.getCurrencyNamePlural();
     }
-    
+
     /**
      * Resets the economy setup state. Used primarily for testing.
      */
     public static void reset() {
-        economy = null;
-        setupAttempted = false;
+        warnedModules.clear();
+        provider = new VaultEconomyProvider();
+    }
+
+    // === D-08 honest reporting ===
+
+    /**
+     * Called by every public operation above before delegating to {@link #provider}. Reports at
+     * most once per calling module per server session, when the economy is unavailable — a
+     * request made while it IS available is always silent and never touches {@link #warnedModules}.
+     */
+    private static void reportIfUnavailable() {
+        if (provider.getState() == EconomyProvider.State.AVAILABLE) {
+            return;
+        }
+        reportEconomyStateIfUnavailable(attributeCallingModule());
+    }
+
+    /**
+     * The WARN/dedup logic, taking the calling module's name directly rather than resolving it
+     * from the live call stack. Package-private so {@code EconomyUtilsReportingTest} can drive the
+     * seven D-08 behaviours directly, without needing a fully-registered module fixture just to
+     * exercise dedup/state-text logic that does not semantically depend on how the module's name
+     * was obtained. {@link #reportIfUnavailable()} is the one real call site, which resolves the
+     * module name from the live stack via {@link #attributeCallingModule()}.
+     *
+     * @param moduleName the calling module's name, or {@code null} for an unattributed caller
+     *                    (behavior: a request whose stack contains no registered module package
+     *                    still logs once, attributed to {@link #UNKNOWN_MODULE}, and never throws)
+     */
+    static void reportEconomyStateIfUnavailable(String moduleName) {
+        EconomyProvider.State state = provider.getState();
+        if (state == EconomyProvider.State.AVAILABLE) {
+            return;
+        }
+        String dedupKey = moduleName == null ? UNKNOWN_MODULE : moduleName;
+        if (!warnedModules.add(dedupKey)) {
+            return;
+        }
+        log(buildWarningMessage(dedupKey, state), false);
+    }
+
+    private static String buildWarningMessage(String moduleName, EconomyProvider.State state) {
+        String cause = state == EconomyProvider.State.VAULT_NOT_INSTALLED
+                ? "Vault is not installed on this server"
+                : "Vault is installed, but no economy provider is registered with it";
+        return "[UltiTools-API] Module '" + moduleName + "' requested the economy service, but "
+                + cause + ". This is the server's environment, not a defect in UltiTools or in '"
+                + moduleName + "'. Install Vault and an economy plugin (e.g. EssentialsX) that "
+                + "registers a Vault economy provider to enable economy features.";
+    }
+
+    private static void log(String message, boolean info) {
+        UltiTools instance = UltiTools.getInstance();
+        if (instance != null && instance.getLogger() != null) {
+            if (info) {
+                instance.getLogger().info(message);
+            } else {
+                instance.getLogger().warning(message);
+            }
+            return;
+        }
+        // No live UltiTools instance -- fall back to Bukkit's own logger, but only when a live
+        // Server actually exists (Bukkit.getLogger() dereferences it internally too). Without
+        // either, there is nowhere safe left to log to; silently drop rather than throw --
+        // "never throws" is one of D-08's own truths. Measured: DependenceManagersTest invokes
+        // the real initCoreServices() against a bare Mockito JavaPlugin with no live Server at
+        // all, exactly this case.
+        if (Bukkit.getServer() == null) {
+            return;
+        }
+        if (info) {
+            Bukkit.getLogger().info(message);
+        } else {
+            Bukkit.getLogger().warning(message);
+        }
+    }
+
+    /**
+     * The module-attribution helper (D-08): the first stack frame belonging to a registered
+     * module's own scan packages, using the same {@link Thread#getStackTrace()} idiom
+     * {@code SystemLogHandler} already relies on for trigger inference — no {@code StackWalker},
+     * since this project's bytecode target is Java 8.
+     * <p>
+     * [Rule 1 fix, Codex P2, PR #463]: {@code pluginManager.getPluginList()} is
+     * {@code PluginManager}'s live, unsynchronized {@code ArrayList} (returned directly by its
+     * {@code @Getter}) — {@code PluginInstallUtils#uninstallPlugin} mutates that same list via
+     * {@code .remove(...)}, reachable from a normal {@code /upm uninstall} command. A module
+     * calling this facade from an async command or {@code @Scheduled(async = true)} task can race
+     * that mutation and see {@link ConcurrentModificationException} instead of a fallback value.
+     * Snapshotting into a fresh {@link ArrayList} narrows the window, but does not close it:
+     * {@code ArrayList}'s copy constructor reads via {@code toArray()}, which itself reads the
+     * live {@code elementData} array and {@code size} field with no synchronization and no
+     * fail-fast modCount check — under a genuine cross-thread race, a structural change mid-copy
+     * can leave a trailing {@code null} in the copied array instead of ever throwing
+     * {@link ConcurrentModificationException} at all (Codex P2, PR #463, follow-up finding), which
+     * would otherwise surface as an uncaught {@link NullPointerException} from
+     * {@code plugin.getClass()} below. Both are the same underlying condition — attribution raced
+     * a concurrent structural change — so both are caught together and treated exactly like an
+     * already-existing case this method documents: unattributable, return {@code null} — matching
+     * this class's "never throws" contract (see {@link #log(String, boolean)}).
+     *
+     * @return the attributed module's name, or {@code null} when nothing on the framework's own
+     *         plugin list is currently reachable (no live {@link UltiTools} instance, no plugin
+     *         manager, no registered module's scan package appears anywhere on the stack, the
+     *         calling frame's closest-matching scan package is declared by two or more DIFFERENT
+     *         modules — see {@link #mergeScanPackageOwner(Map, String, String)}, Codex P2, PR
+     *         #463 — or the plugin list raced a concurrent structural change during attribution)
+     */
+    private static String attributeCallingModule() {
+        UltiTools instance = UltiTools.getInstance();
+        if (instance == null) {
+            return null;
+        }
+        PluginManager pluginManager = instance.getPluginManager();
+        if (pluginManager == null) {
+            return null;
+        }
+        Map<String, String> prefixToModule = new LinkedHashMap<>();
+        try {
+            List<UltiToolsPlugin> pluginsSnapshot = new ArrayList<>(pluginManager.getPluginList());
+            for (UltiToolsPlugin plugin : pluginsSnapshot) {
+                for (String pkg : pluginManager.getPluginScanPackages(plugin.getClass())) {
+                    mergeScanPackageOwner(prefixToModule, pkg, plugin.getPluginName());
+                }
+            }
+        } catch (ConcurrentModificationException | NullPointerException e) {
+            return null;
+        }
+        return attributeModule(Thread.currentThread().getStackTrace(), prefixToModule);
+    }
+
+    /**
+     * Merges one (scan package, module name) declaration into {@code prefixToModule}, in place.
+     * Two or more DIFFERENT modules declaring the identical scan-package string is recorded as
+     * ambiguous ownership by setting that entry's value to {@code null} — GREEN fix, Codex P2,
+     * PR #463, gate-2 finding on this branch's own code, {@code EconomyUtils.java:440}. The
+     * previous behaviour ({@code Map#putIfAbsent}, now replaced) silently kept only the
+     * FIRST-registered module for a shared root and discarded every later one, so which module a
+     * shared root's frames got attributed to depended on module <b>load order</b>, not on which
+     * module the request actually came from — the D-08 warning could name the wrong module, and
+     * the wrongly-named module's dedup slot silently absorbed the true caller's one-per-session
+     * warning, suppressing it entirely.
+     * <p>
+     * {@link #attributeModule(StackTraceElement[], Map)} needs NO change to honour this: a
+     * {@code null}-valued winning (longest-matching) entry already falls through its existing
+     * {@code if (bestModule != null)} check exactly like "no match for this frame" — the loop
+     * moves on to the next (outer) frame, and if nothing else matches, attribution ends in the
+     * same {@code null} it already returns for an unattributable caller, which the D-08 reporting
+     * path already reports as {@link #UNKNOWN_MODULE} (never a second, per-module dedup slot).
+     * <p>
+     * <b>Why not resolve ownership from the calling class's {@code ClassLoader}/code source
+     * instead:</b> every module in this framework is loaded by the same shared
+     * {@code ultiToolsClassLoader} (see {@code UltiTools}'s bootstrap sequence), so neither signal
+     * cleanly separates two modules sharing one package in this codebase — building attribution on
+     * it would be the string-matching-on-a-third-party-convention mistake this project already
+     * removed once (see {@code SecurityPolicy}'s deleted name-based classload filters) in a new
+     * position. Keeping every owner seen for a root and reporting an honest "unknown" when a root
+     * has more than one is reliable regardless of classloader topology, and costs nothing the
+     * normal (single-owner) case was already paying.
+     *
+     * @param prefixToModule the map being built, mutated in place; an existing {@code null} value
+     *                       (already-ambiguous) is left as {@code null} — one differing later
+     *                       owner is enough to mark a root ambiguous permanently for this build
+     * @param pkg            the scan package being registered
+     * @param owner          the module declaring it
+     */
+    static void mergeScanPackageOwner(Map<String, String> prefixToModule, String pkg, String owner) {
+        if (prefixToModule.containsKey(pkg)) {
+            String existingOwner = prefixToModule.get(pkg);
+            if (existingOwner != null && !existingOwner.equals(owner)) {
+                prefixToModule.put(pkg, null);
+            }
+        } else {
+            prefixToModule.put(pkg, owner);
+        }
+    }
+
+    /**
+     * The three possible outcomes of matching one stack frame against {@code prefixToModule}
+     * (Codex P2, PR #463, round 3): a bare {@code null} return collapsed "this frame belongs to no
+     * registered module" and "this frame's closest root is claimed by two or more DIFFERENT
+     * modules" into the same value, and the last two review rounds both found a defect that traces
+     * straight back to that conflation — a {@code NONE} frame must let the per-frame walk continue
+     * outward (a real non-match, no evidence either way), while an {@code AMBIGUOUS} frame must
+     * terminate the walk immediately (real evidence that a module frame exists here, but WHICH
+     * module cannot be determined) — see {@link #attributeModule(StackTraceElement[], Map)}'s own
+     * javadoc for why continuing past an ambiguous frame is itself the bug.
+     */
+    private enum MatchKind {
+        /** No registered scan root matched this frame's class name at all. */
+        NONE,
+        /** The closest (longest) matching scan root for this frame has 2+ distinct owners. */
+        AMBIGUOUS,
+        /** The closest (longest) matching scan root has exactly one owner. */
+        RESOLVED
+    }
+
+    /**
+     * One frame's match outcome: the {@link MatchKind}, plus the resolved module name when (and
+     * only when) {@code kind == RESOLVED}. Immutable, package-visible only through
+     * {@link #matchFrame(String, Map)}'s return type.
+     */
+    private static final class FrameMatch {
+        private static final FrameMatch NO_MATCH = new FrameMatch(MatchKind.NONE, null);
+        private static final FrameMatch AMBIGUOUS_MATCH = new FrameMatch(MatchKind.AMBIGUOUS, null);
+
+        private final MatchKind kind;
+        private final String module;
+
+        private FrameMatch(MatchKind kind, String module) {
+            this.kind = kind;
+            this.module = module;
+        }
+
+        private static FrameMatch resolved(String module) {
+            return new FrameMatch(MatchKind.RESOLVED, module);
+        }
+    }
+
+    /**
+     * Matches a single frame's class name against every entry in {@code prefixToModule}, applying
+     * the same most-specific-(longest)-prefix-wins rule {@link #attributeModule} has always used,
+     * and reports the outcome as a {@link FrameMatch} rather than a bare, ambiguity-erasing
+     * {@code String}.
+     *
+     * @param className      the frame's fully-qualified class name
+     * @param prefixToModule package prefix to sole owner, or to {@code null} when 2+ distinct
+     *                       modules declared it (see {@link #mergeScanPackageOwner})
+     * @return {@link FrameMatch#NO_MATCH} when nothing matches, {@link FrameMatch#AMBIGUOUS_MATCH}
+     *         when the closest (longest) matching entry's value is {@code null}, or a
+     *         {@link FrameMatch#resolved} result carrying that entry's sole owner otherwise
+     */
+    private static FrameMatch matchFrame(String className, Map<String, String> prefixToModule) {
+        String bestPrefix = null;
+        String bestModule = null;
+        boolean bestHasSingleOwner = false;
+        for (Map.Entry<String, String> entry : prefixToModule.entrySet()) {
+            String pkg = entry.getKey();
+            // [Rule 1 fix, Codex P2, 16-07]: a raw String#startsWith("com.example.foo") also
+            // matches the unrelated sibling package "com.example.foobar" -- require an actual
+            // package boundary (either an exact match, or the prefix followed by '.').
+            boolean matches = className.equals(pkg) || className.startsWith(pkg + ".");
+            if (matches && (bestPrefix == null || pkg.length() > bestPrefix.length())) {
+                // [Rule 1 fix, Codex P2, PR #463/#482]: when this frame also matches a
+                // shorter/broader prefix already seen (e.g. "com.example" vs
+                // "com.example.shop"), keep the longer one -- the most specific package is the
+                // frame's actual owner, regardless of which entry the map iterates first.
+                bestPrefix = pkg;
+                bestModule = entry.getValue();
+                bestHasSingleOwner = bestModule != null;
+            }
+        }
+        if (bestPrefix == null) {
+            return FrameMatch.NO_MATCH;
+        }
+        return bestHasSingleOwner ? FrameMatch.resolved(bestModule) : FrameMatch.AMBIGUOUS_MATCH;
+    }
+
+    /**
+     * Pure: given a stack trace and a map from package prefix to module name, returns the module
+     * name attributed to the CLOSEST (most-recent) frame that matches ANY mapped prefix, or
+     * {@code null} when no frame in the whole stack matches — including the empty-input cases (a
+     * null/empty stack, or an empty prefix map, as when no module is registered yet). Package-
+     * private so {@code EconomyUtilsReportingTest} can unit-test the attribution logic itself with
+     * synthetic input, independent of a live {@link UltiTools} instance or real registered modules.
+     * <p>
+     * When a single frame matches more than one mapped prefix — e.g. two registered modules declare
+     * nested scan roots {@code "com.example"} and {@code "com.example.shop"}, and the frame's class
+     * is under {@code com.example.shop} — the <b>most specific (longest) matching prefix wins</b>,
+     * independent of {@code prefixToModule}'s iteration/insertion order (Codex P2, PR #463, #482).
+     * Selecting by insertion order alone let module *load* order silently decide attribution for a
+     * frame that unambiguously belongs to the more specific package.
+     * <p>
+     * <b>The closest matching frame identifies the requester — full stop (Codex P2, PR #463, round
+     * 3).</b> If that frame's own closest-matching root is itself ambiguous (2+ distinct modules
+     * declared it identically — see {@link #mergeScanPackageOwner}), the requester cannot be
+     * determined and this method returns {@code null} <em>immediately</em>, WITHOUT examining any
+     * more distant frame. An earlier version of this method treated an ambiguous frame exactly like
+     * a non-match and kept walking outward — which let a more distant, entirely unrelated module's
+     * unambiguous frame win the attribution, reproducing the wrong-module-name defect this whole
+     * fix exists to remove, just by a longer route. A module deeper in the call stack is not the
+     * requester merely because the real (closest) requester was ambiguous.
+     *
+     * @param stack          the stack trace to search, most-recent frame first
+     * @param prefixToModule package prefix to module name; order does not affect the result
+     * @return the attributed module name, or {@code null} when the closest matching frame (if any)
+     *         is ambiguous, or when no frame matches at all
+     */
+    static String attributeModule(StackTraceElement[] stack, Map<String, String> prefixToModule) {
+        if (stack == null || prefixToModule == null || prefixToModule.isEmpty()) {
+            return null;
+        }
+        for (StackTraceElement frame : stack) {
+            FrameMatch match = matchFrame(frame.getClassName(), prefixToModule);
+            switch (match.kind) {
+                case RESOLVED:
+                    return match.module;
+                case AMBIGUOUS:
+                    // Terminate here -- do NOT fall through to a more distant frame. See this
+                    // method's own javadoc for why that would reintroduce the defect.
+                    return null;
+                case NONE:
+                default:
+                    // A genuine non-match for this frame only: no evidence either way, keep
+                    // walking outward to the next (less recent) frame.
+            }
+        }
+        return null;
     }
 }

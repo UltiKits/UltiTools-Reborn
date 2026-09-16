@@ -94,12 +94,15 @@ class CapabilityGateTracerTest {
         return config;
     }
 
+    // As of plan 16-08 Task 2 the WebSocket client is CloudSession-owned, not a static field on
+    // PluginInitiationUtils. CloudSession itself is package-private (utils), so this different
+    // package (entities) cannot even compile a reference to it -- setWebSocketClientForTesting()
+    // is the seam PluginInitiationUtils exposes instead.
     private Object setPanelWs(Object value) throws Exception {
-        Field field = PluginInitiationUtils.class.getDeclaredField("panelWS");
-        field.setAccessible(true);
-        Object previous = field.get(null);
-        field.set(null, value);
-        return previous;
+        Method method = PluginInitiationUtils.class.getDeclaredMethod(
+                "setWebSocketClientForTesting", UltiPanelWebSocketClient.class);
+        method.setAccessible(true);
+        return method.invoke(null, (UltiPanelWebSocketClient) value);
     }
 
     private static void invokeHandleInboundMessage(JsonObject message) throws Exception {

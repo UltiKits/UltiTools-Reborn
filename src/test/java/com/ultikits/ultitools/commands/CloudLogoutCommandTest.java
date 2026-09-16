@@ -2,11 +2,12 @@ package com.ultikits.ultitools.commands;
 
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 import java.util.concurrent.TimeUnit;
 
+import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -14,131 +15,83 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.mockito.MockedStatic;
 
-import com.ultikits.ultitools.entities.TokenEntity;
 import com.ultikits.ultitools.utils.CloudAuthManager;
-import com.ultikits.ultitools.utils.PluginInitiationUtils;
 
 /**
- * {@code /ulticloud logout} 的拆线语义。
+ * {@code /ulticloud logout} 的拆线语义.
  *
  * <p>核心命题只有一条：<b>凭证的有效性不能作为生命周期拆解的门禁。</b>
  * access token 过期（例如主动刷新反复失败）之后，WebSocket、监控任务、日志 handler
  * 与玩家监听器可能全都还在跑，而 logout 是操作员唯一的停止手段——那正是最需要它
  * 生效的时刻，却恰恰是旧实现拒绝执行的时刻。
+ *
+ * <p>Plan 16-09 (D-17/D-18) folded the "tear down, then read, then clear" sequence this class used
+ * to assert step-by-step (via {@code PluginInitiationUtils.disableCloud()} +
+ * {@code CloudAuthManager.getCurrentToken()} + {@code CloudAuthManager.clearToken()}) into a single
+ * {@code CloudAuthManager.logout()} entry point — only three public statics remain on that class,
+ * and none of them accepts or returns a {@code TokenEntity} (D-18). This class now tests only the
+ * command layer: which message branch {@code CloudLoginCommand.logout(CommandSender)} prints for
+ * each of {@code logout()}'s two outcomes, and that an exception from {@code logout()} still
+ * produces the failure message rather than propagating. The "tear down before reading, read after
+ * teardown, tear down even when there is nothing to clear" semantics this class used to assert
+ * directly now live inside {@code CloudAuthManager.logout()} itself and are covered there (see
+ * {@code CloudAuthManagerTest}'s {@code LogoutTests} nested class).
  */
-@DisplayName("ulticloud logout 的拆线语义")
+@DisplayName("ulticloud logout 命令层：按 CloudAuthManager.logout() 的返回值分支")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
-// 本类断言的是「拆线动作有没有被调用」，用的是 MockedStatic.verify 而不是 assert*；
-// PMD 只按 assert*/fail* 的方法名识别断言，认不出这种形式。与仓库其它 verify-only
-// 测试的处理一致。
-@SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert")
 class CloudLogoutCommandTest {
 
-    /** 造一个已过期的 token：有 access_token，但 {@code hasValidToken()} 会判否。 */
-    private TokenEntity expiredToken() {
-        TokenEntity token = new TokenEntity();
-        token.setAccess_token("expired-access-token");
-        token.setRefresh_token("some-refresh-token");
-        // exp 落在过去 → isExpired() 为真
-        token.setExp((System.currentTimeMillis() / 1000) - 3600);
-        return token;
-    }
-
-    private TokenEntity validToken() {
-        TokenEntity token = new TokenEntity();
-        token.setAccess_token("good-access-token");
-        token.setRefresh_token("some-refresh-token");
-        token.setExp((System.currentTimeMillis() / 1000) + 3600);
-        return token;
-    }
-
     @Nested
-    @DisplayName("凭证有效性不得阻断拆线")
-    class TeardownIsNotGatedByCredentials {
+    @DisplayName("按 logout() 返回值选择消息分支")
+    class MessageBranchByLogoutResult {
 
         @Test
-        @DisplayName("access token 已过期时，logout 仍必须拆线并清凭证")
-        void expiredTokenStillTearsDown() throws Exception {
+        @DisplayName("logout() 返回 true（原有凭证被清除）时打印成功消息")
+        void logoutReturningTruePrintsSuccessMessages() throws Exception {
             CommandSender sender = mock(CommandSender.class);
 
-            try (MockedStatic<CloudAuthManager> auth = mockStatic(CloudAuthManager.class);
-                 MockedStatic<PluginInitiationUtils> init = mockStatic(PluginInitiationUtils.class)) {
-
-                auth.when(CloudAuthManager::hasValidToken).thenReturn(false);
-                auth.when(CloudAuthManager::getCurrentToken).thenReturn(expiredToken());
+            try (MockedStatic<CloudAuthManager> auth = mockStatic(CloudAuthManager.class)) {
+                auth.when(CloudAuthManager::logout).thenReturn(true);
 
                 new CloudLoginCommand().logout(sender);
 
-                // socket、监控任务、日志 handler、玩家监听器都只有这一条路能停下来
-                init.verify(PluginInitiationUtils::disableCloud, times(1));
-                auth.verify(CloudAuthManager::clearToken, times(1));
+                auth.verify(CloudAuthManager::logout, times(1));
+                verify(sender).sendMessage(ChatColor.GREEN
+                    + "Successfully logged out of UltiCloud. Cloud features are now disabled.");
+                verify(sender).sendMessage(ChatColor.GRAY + "Use /ulticloud login to re-authenticate.");
             }
         }
 
         @Test
-        @DisplayName("token 有效时照常拆线")
-        void validTokenTearsDownAsBefore() throws Exception {
+        @DisplayName("logout() 返回 false（本来就没有凭证）时打印“未登录”消息，拆线仍然发生")
+        void logoutReturningFalsePrintsNotLoggedInMessage() throws Exception {
             CommandSender sender = mock(CommandSender.class);
 
-            try (MockedStatic<CloudAuthManager> auth = mockStatic(CloudAuthManager.class);
-                 MockedStatic<PluginInitiationUtils> init = mockStatic(PluginInitiationUtils.class)) {
-
-                auth.when(CloudAuthManager::hasValidToken).thenReturn(true);
-                auth.when(CloudAuthManager::getCurrentToken).thenReturn(validToken());
+            try (MockedStatic<CloudAuthManager> auth = mockStatic(CloudAuthManager.class)) {
+                auth.when(CloudAuthManager::logout).thenReturn(false);
 
                 new CloudLoginCommand().logout(sender);
 
-                init.verify(PluginInitiationUtils::disableCloud, times(1));
-                auth.verify(CloudAuthManager::clearToken, times(1));
+                // 拆线本身发生在 CloudAuthManager.logout() 内部（本类已不再直接调用
+                // PluginInitiationUtils.disableCloud()）；这里只断言命令层收到 false
+                // 之后走的是「未登录」分支，而不是把它当异常处理。
+                auth.verify(CloudAuthManager::logout, times(1));
+                verify(sender).sendMessage(ChatColor.YELLOW + "Not currently logged in to UltiCloud.");
+                verify(sender).sendMessage(ChatColor.GRAY + "Cloud features have been stopped regardless.");
             }
         }
 
         @Test
-        @DisplayName("凭证必须在拆线之后读：在途登录刚提交的 token 也要被清掉")
-        void tokenCommittedDuringTeardownIsStillCleared() throws Exception {
+        @DisplayName("logout() 抛出异常时打印失败消息，而不是让异常向上传播")
+        void logoutThrowingPrintsFailureMessage() throws Exception {
             CommandSender sender = mock(CommandSender.class);
 
-            try (MockedStatic<CloudAuthManager> auth = mockStatic(CloudAuthManager.class);
-                 MockedStatic<PluginInitiationUtils> init = mockStatic(PluginInitiationUtils.class)) {
-
-                auth.when(CloudAuthManager::hasValidToken).thenReturn(false);
-
-                // 拆线之前没有凭证；拆线期间一次在途的 magic-link 轮询提交成功了。
-                // 若命令沿用拆线前的快照，就会走「未登录」分支而不清凭证，
-                // 于是 data.json 里留着一份可用 token，重启即自动重连。
-                java.util.concurrent.atomic.AtomicBoolean tornDown =
-                        new java.util.concurrent.atomic.AtomicBoolean(false);
-                init.when(PluginInitiationUtils::disableCloud).thenAnswer(invocation -> {
-                    tornDown.set(true);
-                    return null;
-                });
-                auth.when(CloudAuthManager::getCurrentToken)
-                        .thenAnswer(invocation -> tornDown.get() ? validToken() : null);
+            try (MockedStatic<CloudAuthManager> auth = mockStatic(CloudAuthManager.class)) {
+                auth.when(CloudAuthManager::logout).thenThrow(new java.io.IOException("disk full"));
 
                 new CloudLoginCommand().logout(sender);
 
-                auth.verify(CloudAuthManager::clearToken, times(1));
-            }
-        }
-
-        @Test
-        @DisplayName("从未登录过时不必清凭证，但拆线仍是无害且必要的")
-        void neverLoggedInStillStopsAnythingLeftRunning() throws Exception {
-            CommandSender sender = mock(CommandSender.class);
-
-            try (MockedStatic<CloudAuthManager> auth = mockStatic(CloudAuthManager.class);
-                 MockedStatic<PluginInitiationUtils> init = mockStatic(PluginInitiationUtils.class)) {
-
-                auth.when(CloudAuthManager::hasValidToken).thenReturn(false);
-                auth.when(CloudAuthManager::getCurrentToken).thenReturn(null);
-
-                new CloudLoginCommand().logout(sender);
-
-                // disableCloud 的每一步都对「本来就没起来」幂等，所以照调不误：
-                // 判断「有没有东西在跑」比判断「凭证还在不在」可靠得多。
-                init.verify(PluginInitiationUtils::disableCloud, times(1));
-                // 没有凭证就没什么可清的，不必去碰磁盘
-                auth.verify(CloudAuthManager::clearToken, never());
+                verify(sender).sendMessage(ChatColor.RED + "Failed to logout: disk full");
             }
         }
     }

@@ -28,7 +28,6 @@ import java.util.stream.Collectors;
 import org.bukkit.Bukkit;
 import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
-import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -62,8 +61,6 @@ import com.ultikits.ultitools.manager.ServerPropertiesManager;
 import com.ultikits.ultitools.manager.UpdateManager;
 import com.ultikits.ultitools.listeners.UpdateJoinListener;
 import com.ultikits.ultitools.events.EventBus;
-import com.ultikits.ultitools.utils.ApiRateLimiter;
-import com.ultikits.ultitools.utils.CloudAuthManager;
 import com.ultikits.ultitools.utils.Metrics;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.utils.SecurityPolicy;
@@ -71,7 +68,6 @@ import com.ultikits.ultitools.websocket.PanelResponderRegistry;
 
 import lombok.Getter;
 import lombok.Setter;
-import net.milkbowl.vault.economy.Economy;
 
 /**
  * UltiTools plugin main class.
@@ -280,7 +276,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
             // down.
             PluginInitiationUtils.enableCloud();
             initWebSocket();
-            CloudAuthManager.startTokenRefreshScheduler();
+            PluginInitiationUtils.startTokenRefreshScheduler();
         }
 
         registerCommands();
@@ -464,21 +460,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
     }
 
     private boolean attemptCloudLogin() {
-        try {
-            com.ultikits.ultitools.entities.TokenEntity savedToken = CloudAuthManager.loadSavedToken();
-            if (savedToken != null) {
-                getLogger().log(Level.INFO, "Found saved UltiCloud token, authenticating...");
-                if (ApiRateLimiter.isAllowed("startup-login")) {
-                    return PluginInitiationUtils.loginWithToken(savedToken);
-                }
-                getLogger().log(Level.INFO, "Skipping UltiCloud login (rate limited)");
-            } else {
-                getLogger().log(Level.FINE, "No saved UltiCloud token found. Use /ulticloud login to authenticate.");
-            }
-        } catch (Exception e) {
-            getLogger().log(Level.WARNING, "UltiCloud login failed (server will continue without cloud features): " + e.getMessage());
-        }
-        return false;
+        // Delegated to PluginInitiationUtils.resumeSavedCredentialOnStartup() (plan 16-09, D-18):
+        // loadSavedToken() and loginWithToken(TokenEntity) both had to stop being public statics
+        // that accept/return a TokenEntity across a package boundary, so this method's old inline
+        // body (load, log, rate-limit check, activate) moved to a package-private-reachable seam.
+        return PluginInitiationUtils.resumeSavedCredentialOnStartup();
     }
 
     private void initWebSocket() {
@@ -566,8 +552,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
             panelResponderRegistry.shutdown();
         }
 
-        CloudAuthManager.stopTokenRefreshScheduler();
-        CloudAuthManager.stopPolling();
+        PluginInitiationUtils.stopCredentialSchedulers();
         if (dependenceManagers != null) {
             dependenceManagers.closeAdventure();
         }
@@ -643,26 +628,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
         } catch (IOException ex) {
             return null;
         }
-    }
-
-    /**
-     * Get the economy provider
-     *
-     * @return the instance of the Economy provider
-     */
-    public Economy getEconomy() {
-        if (Bukkit.getPluginManager().getPlugin("Vault") == null) {
-            // GATE-05 group two (08-21): routed to the typed plugin-module hierarchy -- Vault is
-            // a missing plugin dependency, exactly what dependencyMissing exists for.
-            throw PluginModuleException.dependencyMissing("UltiTools", "Vault");
-        }
-        RegisteredServiceProvider<Economy> registration = Bukkit.getServicesManager().getRegistration(Economy.class);
-        if (registration == null) {
-            // GATE-05 group two (08-21): routed to the typed plugin-module hierarchy -- Vault is
-            // present but no economy provider (e.g. EssentialsX) has registered one.
-            throw PluginModuleException.dependencyMissing("UltiTools", "an Economy provider registered with Vault");
-        }
-        return registration.getProvider();
     }
 
     /**

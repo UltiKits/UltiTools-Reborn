@@ -1,9 +1,13 @@
 package com.ultikits.ultitools.abstracts.gui.declarative.engine;
 
 import com.ultikits.ultitools.abstracts.gui.declarative.core.BuildContext;
+import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderDepthExceededException;
+import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderDepthGuard;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.State;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.StatefulWidget;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.Widget;
+import com.ultikits.ultitools.abstracts.gui.declarative.widgets.Container;
+import com.ultikits.ultitools.abstracts.gui.declarative.widgets.GridView;
 import com.ultikits.ultitools.abstracts.gui.declarative.widgets.ItemDisplay;
 import com.ultikits.ultitools.abstracts.gui.declarative.widgets.ItemDisplayElement;
 import com.ultikits.ultitools.abstracts.gui.declarative.widgets.TextButton;
@@ -40,6 +44,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -350,6 +355,118 @@ class GuiRendererRepaintTest {
                 "the remounted root must actually render the new widget type");
         assertEquals("Confirm", displayNameAt(gui, 0),
                 "the remounted TextButton must show its own text as the display name");
+    }
+
+    // ==================================================================
+    // Render-depth guard (#371 / T-05-62): the four unbounded recursions in one render
+    // frame must fail loudly and attributably instead of overflowing the stack mid-frame.
+    // ==================================================================
+
+    @Test
+    @DisplayName("a widget tree deeper than the limit raises a named depth error from MOUNTING "
+            + "itself (Element.mount), before rebuildElement ever runs -- direct child path "
+            + "(CR-01)")
+    void deeplyNestedContainerChainThrowsNamedDepthErrorFromMountViaDirectChildPath() {
+        TestGui gui = newGui(1);
+        GuiRenderer renderer = newRenderer(gui);
+        BuildContext context = rootContext(1);
+
+        // MAX_DEPTH + 100 = 164 levels: nowhere near a REAL JVM stack overflow, deliberately --
+        // this depth exists to distinguish "the mount guard closed the hole" from "the tree
+        // happened to survive mounting and get caught by the already-guarded rebuild pass
+        // afterwards" (CR-01). Asserting the guard NAME below, not just the exception TYPE, is
+        // what makes that distinction observable.
+        Widget leaf = ItemDisplay.builder(new ItemStack(Material.DIAMOND)).slot(0).build();
+        Widget deepTree = nestedContainerChain(RenderDepthGuard.MAX_DEPTH + 100, leaf);
+
+        RenderDepthExceededException ex = assertThrows(RenderDepthExceededException.class,
+                () -> renderer.initialize(() -> deepTree, context),
+                "a tree far deeper than the guard's limit must raise a named, attributable "
+                        + "error -- not silently overflow the JVM stack mid-frame and leave the "
+                        + "inventory half-written");
+
+        assertTrue(ex.getMessage().contains(String.valueOf(RenderDepthGuard.MAX_DEPTH)),
+                "the error message must identify the limit that was exceeded: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("Element.mount"),
+                "CR-01: the exception must be raised by the MOUNT recursion itself "
+                        + "(Element.mount), not merely by the already-guarded rebuild/collect "
+                        + "passes that run AFTER mounting has already finished -- a tree this "
+                        + "shallow (164 levels) survives the mount cascade trivially if mount() "
+                        + "is unguarded, so seeing this exception at all does not by itself prove "
+                        + "the mount path is closed. Actual message: " + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("a widget tree deeper than the limit, nested inside a GridView cell, raises the "
+            + "same named depth error from MOUNTING, before collectRenderNodeLeaves ever runs -- "
+            + "grid path (CR-01)")
+    void deeplyNestedTreeInsideGridViewCellThrowsNamedDepthErrorFromMountViaGridPath() {
+        TestGui gui = newGui(1);
+        GuiRenderer renderer = newRenderer(gui);
+        BuildContext context = rootContext(1);
+
+        Widget leaf = ItemDisplay.builder(new ItemStack(Material.DIAMOND)).slot(0).build();
+        Widget deepTree = nestedContainerChain(RenderDepthGuard.MAX_DEPTH + 100, leaf);
+        Widget gridWithDeepCell = GridView.<Void>builder()
+                .startSlot(0)
+                .columns(9)
+                .child(deepTree)
+                .build();
+
+        RenderDepthExceededException ex = assertThrows(RenderDepthExceededException.class,
+                () -> renderer.initialize(() -> gridWithDeepCell, context),
+                "a GridView cell whose subtree is deeper than the limit must raise the same "
+                        + "named depth error -- guarding only the direct child path would leave "
+                        + "this walk unbounded");
+
+        assertTrue(ex.getMessage().contains("Element.mount"),
+                "CR-01: mounting the GridView cell's deep subtree must trip the mount guard "
+                        + "before GridViewElement.mount()'s own applyGridPositions() call ever "
+                        + "reaches the (separately guarded) collectRenderNodeLeaves walk. "
+                        + "Actual message: " + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("a widget tree at exactly the depth limit renders normally")
+    void treeAtExactlyTheDepthLimitRendersNormally() {
+        TestGui gui = newGui(1);
+        GuiRenderer renderer = newRenderer(gui);
+        BuildContext context = rootContext(1);
+
+        Widget leaf = ItemDisplay.builder(new ItemStack(Material.DIAMOND)).slot(0).build();
+        Widget treeAtLimit = nestedContainerChain(RenderDepthGuard.MAX_DEPTH, leaf);
+
+        assertDoesNotThrow(() -> renderer.initialize(() -> treeAtLimit, context),
+                "a tree exactly AT the limit must still render -- the guard rejects only depths "
+                        + "strictly GREATER than the limit");
+        assertEquals(Material.DIAMOND, itemAt(gui, 0).getType());
+    }
+
+    @Test
+    @DisplayName("a widget tree of depth one renders normally")
+    void treeOfDepthOneRendersNormally() {
+        TestGui gui = newGui(1);
+        GuiRenderer renderer = newRenderer(gui);
+        BuildContext context = rootContext(1);
+
+        Widget leaf = ItemDisplay.builder(new ItemStack(Material.DIAMOND)).slot(0).build();
+        Widget shallowTree = nestedContainerChain(1, leaf);
+
+        assertDoesNotThrow(() -> renderer.initialize(() -> shallowTree, context));
+        assertEquals(Material.DIAMOND, itemAt(gui, 0).getType());
+    }
+
+    /**
+     * Wraps {@code leaf} in {@code depth} nested {@link Container}s, one child each, so the
+     * leaf's own {@code Element} tree depth (ancestors from the mounted root) equals
+     * {@code depth} exactly. {@code depth == 0} returns {@code leaf} unwrapped, at depth 0.
+     */
+    private Widget nestedContainerChain(int depth, Widget leaf) {
+        Widget current = leaf;
+        for (int i = 0; i < depth; i++) {
+            current = Container.builder().child(current).build();
+        }
+        return current;
     }
 
     // ------------------------------------------------------------------

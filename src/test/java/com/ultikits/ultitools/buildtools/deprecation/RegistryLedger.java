@@ -11,6 +11,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -49,16 +50,39 @@ public final class RegistryLedger {
 
     /**
      * Merges {@code prior} with a fresh source scan and the set of keys japicmp's report marks
-     * {@code changeStatus="REMOVED"} (D-22). An entry may transition to {@code REMOVED} only when
-     * BOTH the source scan no longer finds it AND japicmp independently confirms the removal;
-     * either source disagreeing alone with the other is fatal (D-22) - see
-     * {@link LedgerMergeConflictException}.
+     * {@code changeStatus="REMOVED"} (D-22), recording a newly-{@code REMOVED} entry's
+     * {@code removedIn} as {@code currentVersion} -- the version actually being built right now,
+     * when japicmp and the source scan agree the member is gone -- rather than the member's own
+     * (possibly stale, possibly still-in-the-future) {@code removeIn} schedule (#377, WR-05,
+     * 16-REVIEW-cloud.md). An entry may transition to {@code REMOVED} only when BOTH the source
+     * scan no longer finds it AND japicmp independently confirms the removal; either source
+     * disagreeing alone with the other is fatal (D-22) - see {@link LedgerMergeConflictException}.
+     * <p>
+     * <b>Why this matters:</b> {@code removeIn} and the actual removal version happen to coincide
+     * for the ordinary cross-release case (deprecated in one released version, removed while
+     * building the very next one), so recording either value there produced the same answer. They
+     * diverge whenever a member is retained past its scheduled removal (#377's "later release"
+     * case), removed in the very release it was scheduled for (the coinciding case that must keep
+     * working), or removed with no schedule at all -- {@code removeIn == null} -- where the removal
+     * version must still be published rather than left absent. {@code currentVersion} is the value
+     * that is actually true in every one of those cases; the entry's own {@code removeIn} is left
+     * untouched by {@link DeprecationEntry#withRemoved(String)} so the original schedule remains
+     * readable alongside the actual removal version on the same entry (both fields are emitted by
+     * {@link #toJson()}).
+     *
+     * @param currentVersion the version being built right now (typically {@code ${project.version}}
+     *                       with any {@code -SNAPSHOT} suffix stripped) -- the value every
+     *                       newly-{@code REMOVED} entry's {@code removedIn} is set to. Required;
+     *                       every caller knows the version it is building against.
+     * @throws NullPointerException if {@code currentVersion} is {@code null}
      */
     // PMD.NPathComplexity: 216 against a 200 threshold. The method is one pass over each of
     // three inputs with a flat guard per entry -- no guard nests inside another, and the count
     // is the product of independent per-entry checks rather than a measure of reachable state.
     @SuppressWarnings("PMD.NPathComplexity")
-    public static RegistryLedger merge(RegistryLedger prior, List<DeprecationEntry> freshScan, Set<RegistryKey> japicmpRemovedKeys) {
+    public static RegistryLedger merge(RegistryLedger prior, List<DeprecationEntry> freshScan,
+            Set<RegistryKey> japicmpRemovedKeys, String currentVersion) {
+        Objects.requireNonNull(currentVersion, "currentVersion");
         Map<String, DeprecationEntry> merged = new LinkedHashMap<>();
         Set<String> freshKeyStrings = new HashSet<>();
         for (DeprecationEntry entry : freshScan) {
@@ -94,7 +118,11 @@ public final class RegistryLedger {
                 continue;
             }
             if (japicmpRemovedKeyStrings.contains(keyString)) {
-                merged.put(keyString, entry.withRemoved(entry.getRemoveIn()));
+                // #377/WR-05: the version this removal is recorded under is the version being
+                // built NOW (currentVersion), not the entry's own, possibly-stale or absent
+                // removeIn -- see this method's javadoc. entry.getRemoveIn() is left unchanged by
+                // withRemoved(), so the original schedule stays readable on the same entry.
+                merged.put(keyString, entry.withRemoved(currentVersion));
             } else {
                 conflicts.add("source scan no longer finds " + entry.getKey()
                         + " but japicmp does not report it as REMOVED");

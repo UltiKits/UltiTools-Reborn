@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 
@@ -21,6 +22,7 @@ import com.ultikits.testfixtures.configdualpath.DualPathConfig;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.ConfigFileStubs;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.utils.TestHelper;
 
 /**
@@ -117,5 +119,36 @@ class ConfigManagerDualPathRegistrationTest {
         assertThat(((DualPathConfig) surviving).getThreshold())
                 .as("the surviving entity read the operator's on-disk value")
                 .isEqualTo(42);
+    }
+
+    /**
+     * Gate-1 review finding (plan 16-14, {@code 16-REVIEW-config.md} line 114): the CR-01/#358
+     * Part 1 rollback used to snapshot only the KEY set and restore via {@code retainAll}, which
+     * keeps a key but not its ORIGINAL value. If a batch REPLACES an already-registered path with
+     * a different entity instance (a supported flow - this same path arriving through both
+     * routes, per the two tests above) before a LATER, unrelated package in the same batch fails,
+     * the key-only rollback would leave the REPLACEMENT entity in place rather than restoring the
+     * original. Forces deterministic ordering via the plugin-scoped {@code registerAll(plugin,
+     * String[], ClassLoader)} overload's own array order - {@code FIXTURE_PACKAGE} (replaces
+     * {@code CONFIG_PATH}'s entry) always runs before the always-failing sibling package, unlike
+     * a single package's {@code HashSet<Class<?>>} scan order which cannot be forced.
+     */
+    @Test
+    @DisplayName("批次内先替换、后失败时，被替换的路径应该恢复成原来的实体而不是保留替换品 (gate-1)")
+    void replacementBeforeLaterFailureRestoresOriginalEntityNotTheReplacement() throws Exception {
+        DualPathConfig original = new DualPathConfig(CONFIG_PATH);
+        configManager.register(plugin, original);
+
+        assertThatThrownBy(() -> configManager.registerAll(plugin,
+                new String[]{FIXTURE_PACKAGE, "com.ultikits.testfixtures.configstrandedmulti.pkgb"},
+                getClass().getClassLoader()))
+                .isInstanceOf(ConfigurationException.class);
+
+        AbstractConfigEntity survivor = configManager.getAllConfigEntities(plugin).get(CONFIG_PATH);
+        assertThat(survivor)
+                .as("the batch replaced CONFIG_PATH's entry before the sibling package failed - "
+                        + "rollback must restore the ORIGINAL instance, not merely keep the key "
+                        + "pointing at whatever replaced it")
+                .isSameAs(original);
     }
 }
