@@ -885,11 +885,17 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * @param target the newly created temp file about to be moved into {@code source}'s place
      * @return {@code true} if the refresh may proceed ({@code source} does not exist yet, the
      *         filesystem is not POSIX, or {@code target} now matches {@code source}'s owner and
-     *         group); {@code false} if {@code target}'s identity could not be made to match and
-     *         the refresh must be skipped
+     *         group); {@code false} if {@code source}'s own attributes could not be read (a POSIX
+     *         view exists but reading it failed -- distinct from "not POSIX at all", see {@link
+     *         PosixAttributePreserver#copyIfSupported} for why), or if {@code target}'s identity
+     *         could not be made to match and the refresh must be skipped
      */
     private boolean copyPosixAttributesIfSupported(File source, File target) {
         return PosixAttributePreserver.copyIfSupported(source, target,
+                () -> getLogger().warn("Could not read the current permissions and owner/group of "
+                        + "language file '" + source.getPath() + "' for module '" + getPluginName()
+                        + "'; treating its identity as unreplicable and skipping the refresh instead "
+                        + "of silently replacing it with a process-owned copy."),
                 () -> getLogger().warn("Could not preserve file permissions while refreshing '" + source.getPath()
                         + "' for module '" + getPluginName() + "'; the refreshed file may not match the "
                         + "original's permissions."),

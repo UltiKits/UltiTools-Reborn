@@ -54,54 +54,91 @@ public final class PosixAttributePreserver {
     /**
      * Copies {@code source}'s POSIX permissions and owner/group onto {@code target}, if the
      * filesystem exposes a {@link PosixFileAttributeView} for it.
+     * <p>
+     * Round on {@code PosixAttributePreserver.java:104} (thread {@code PRRT_kwDOIcF9Es6i12fM},
+     * P2): "no POSIX view for this filesystem" and "a POSIX view exists but reading it failed"
+     * are deliberately kept as two separate failure modes with two separate outcomes, not folded
+     * into one catch as an earlier version of this method did. The first case (the view lookup
+     * yields {@code null}, or {@link Files#getFileAttributeView} itself throws {@link
+     * UnsupportedOperationException}) means there is genuinely nothing to preserve -- proceeding
+     * without copying is correct (the Windows / exotic-filesystem case). The second case ({@code
+     * sourceView.readAttributes()} throws {@link IOException}, e.g. a transient NFS error) means
+     * the opposite: a POSIX identity DOES exist to preserve, and this call could not learn what it
+     * was. Treating that the same as "nothing to preserve" would silently let {@code target} keep
+     * {@link File#createTempFile}'s process-default identity -- reopening, on this error path,
+     * exactly the hole the ownership-preservation fix (Codex rounds 8/9) closed on the happy path.
+     * This method therefore returns {@code false} for an unreadable source view, the same outcome
+     * already returned when ownership cannot be replicated, so the caller's strict "abandon the
+     * whole replacement" half runs instead of silently proceeding.
      *
-     * @param source                  the file about to be replaced; its attributes are the ones
-     *                                to preserve. If it does not exist yet (the caller's first
-     *                                write -- nothing to copy attributes FROM), {@code target} is
-     *                                left with the JVM's own default attributes and this method
-     *                                returns {@code true} without invoking either callback.
-     * @param target                  the newly created staging file about to be moved into
-     *                                {@code source}'s place
-     * @param onPermissionCopyFailure invoked (with no arguments) if the permission bits could not
-     *                                be read or applied; the replacement still proceeds afterward
-     * @param onOwnershipCopyFailure  invoked with {@code (ownerName, groupName)} if {@code
-     *                                target}'s owner/group could not be made to match {@code
-     *                                source}'s
+     * @param source                       the file about to be replaced; its attributes are the
+     *                                     ones to preserve. If it does not exist yet (the
+     *                                     caller's first write -- nothing to copy attributes
+     *                                     FROM), {@code target} is left with the JVM's own
+     *                                     default attributes and this method returns {@code true}
+     *                                     without invoking any callback.
+     * @param target                       the newly created staging file about to be moved into
+     *                                     {@code source}'s place
+     * @param onSourceAttributesUnreadable invoked (with no arguments) if a POSIX view exists for
+     *                                     {@code source} but reading its attributes failed -- the
+     *                                     replacement MUST be abandoned; see the class/method
+     *                                     javadoc above for why this is distinct from "no POSIX
+     *                                     view at all"
+     * @param onPermissionCopyFailure      invoked (with no arguments) if {@code source}'s
+     *                                     permission bits were read successfully but could not be
+     *                                     applied to {@code target}; the replacement still
+     *                                     proceeds afterward (best-effort)
+     * @param onOwnershipCopyFailure       invoked with {@code (ownerName, groupName)} if {@code
+     *                                     target}'s owner/group could not be made to match
+     *                                     {@code source}'s
      * @return {@code true} if the replacement may proceed; {@code false} if it must be abandoned
-     *         because ownership could not be replicated
+     *         because {@code source}'s attributes could not be read, or its ownership could not
+     *         be replicated
      */
     public static boolean copyIfSupported(File source, File target,
+            Runnable onSourceAttributesUnreadable,
             Runnable onPermissionCopyFailure,
             BiConsumer<String, String> onOwnershipCopyFailure) {
         if (!source.exists()) {
             return true;
         }
+        PosixFileAttributeView sourceView;
         try {
-            PosixFileAttributeView sourceView =
-                    Files.getFileAttributeView(source.toPath(), PosixFileAttributeView.class);
-            if (sourceView == null) {
-                return true;
-            }
-            PosixFileAttributes sourceAttributes = sourceView.readAttributes();
-            Set<PosixFilePermission> permissions = sourceAttributes.permissions();
-            try {
-                Files.setPosixFilePermissions(target.toPath(), permissions);
-            } catch (IOException e) {
-                onPermissionCopyFailure.run();
-            }
-            PosixFileAttributeView targetView =
-                    Files.getFileAttributeView(target.toPath(), PosixFileAttributeView.class);
-            try {
-                targetView.setGroup(sourceAttributes.group());
-                targetView.setOwner(sourceAttributes.owner());
-                return true;
-            } catch (IOException | UnsupportedOperationException e) {
-                onOwnershipCopyFailure.accept(sourceAttributes.owner().getName(), sourceAttributes.group().getName());
-                return false;
-            }
-        } catch (IOException | UnsupportedOperationException e) {
-            onPermissionCopyFailure.run();
+            sourceView = Files.getFileAttributeView(source.toPath(), PosixFileAttributeView.class);
+        } catch (UnsupportedOperationException e) {
+            // Genuinely no POSIX view for this filesystem -- nothing to preserve, proceeding is
+            // correct.
             return true;
+        }
+        if (sourceView == null) {
+            return true;
+        }
+        PosixFileAttributes sourceAttributes;
+        try {
+            sourceAttributes = sourceView.readAttributes();
+        } catch (IOException e) {
+            // The view EXISTS -- this filesystem does support POSIX attributes -- but reading it
+            // failed. Unlike the "no view" case above, there IS an identity to preserve here and
+            // this call does not know what it is; abandon the replacement rather than silently
+            // let target keep createTempFile's process-default identity.
+            onSourceAttributesUnreadable.run();
+            return false;
+        }
+        Set<PosixFilePermission> permissions = sourceAttributes.permissions();
+        try {
+            Files.setPosixFilePermissions(target.toPath(), permissions);
+        } catch (IOException e) {
+            onPermissionCopyFailure.run();
+        }
+        PosixFileAttributeView targetView =
+                Files.getFileAttributeView(target.toPath(), PosixFileAttributeView.class);
+        try {
+            targetView.setGroup(sourceAttributes.group());
+            targetView.setOwner(sourceAttributes.owner());
+            return true;
+        } catch (IOException | UnsupportedOperationException e) {
+            onOwnershipCopyFailure.accept(sourceAttributes.owner().getName(), sourceAttributes.group().getName());
+            return false;
         }
     }
 }

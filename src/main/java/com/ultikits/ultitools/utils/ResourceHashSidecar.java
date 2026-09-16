@@ -284,9 +284,12 @@ public final class ResourceHashSidecar {
      * is nothing to copy attributes FROM: {@code copyIfSupported} returns {@code true}
      * immediately and {@code tempFile} simply keeps the JVM's own default attributes, which is
      * the correct outcome for freshly created state, not an oversight. If ownership could not be
-     * replicated, this method abandons the whole write -- exactly {@code writeBytes}'s own
-     * policy for the identical failure -- rather than let the sidecar silently become unreadable
-     * to the account that owned it.
+     * replicated, or if the existing sidecar's own attributes could not even be read (a POSIX
+     * view exists but reading it failed, e.g. a transient NFS error -- see {@link
+     * PosixAttributePreserver#copyIfSupported} for why this is distinct from "no POSIX view at
+     * all"), this method abandons the whole write -- exactly {@code writeBytes}'s own policy for
+     * the identical failure -- rather than let the sidecar silently become unreadable to the
+     * account that owned it.
      */
     private static void writeAll(File resourceFolder, Map<String, String> entries) {
         File file = sidecarFile(resourceFolder);
@@ -298,6 +301,10 @@ public final class ResourceHashSidecar {
             }
             tempFile = File.createTempFile(SIDECAR_FILE_NAME, ".tmp", parent);
             if (PosixAttributePreserver.copyIfSupported(file, tempFile,
+                    () -> LOGGER.log(Level.WARNING, "Could not read the current permissions and "
+                            + "owner/group of resource-hash sidecar " + file.getPath() + "; "
+                            + "treating its identity as unreplicable and leaving it untouched "
+                            + "instead of silently replacing it with a process-owned copy."),
                     () -> LOGGER.log(Level.WARNING, "Could not preserve file permissions while "
                             + "refreshing resource-hash sidecar " + file.getPath() + "; the "
                             + "refreshed file may not match the original's permissions."),
