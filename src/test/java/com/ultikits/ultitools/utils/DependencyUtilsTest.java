@@ -3,6 +3,9 @@ package com.ultikits.ultitools.utils;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.DisplayName;
@@ -346,6 +349,93 @@ class DependencyUtilsTest {
         }
     }
 
+    /**
+     * {@code DependencyUtils.dedupeNestedPackages(Set)} 直接单测 (#362) —— 六个行为里
+     * 除最后一个「一次初始化」之外的五个，都是这个去重函数自身的输入输出契约。
+     */
+    @Nested
+    @DisplayName("dedupeNestedPackages 去重测试 (#362)")
+    class DedupeNestedPackagesTests {
+
+        @Test
+        @DisplayName("给定一个包和它的严格子包，只有父包幸存")
+        void strictSubpackageIsDropped() {
+            Set<String> input = new LinkedHashSet<>();
+            input.add("com.example.mod");
+            input.add("com.example.mod.config");
+
+            Set<String> result = DependencyUtils.dedupeNestedPackages(input);
+
+            assertThat(result).containsExactly("com.example.mod");
+        }
+
+        @Test
+        @DisplayName("给定两个互为字符串前缀但不是分段祖先关系的包，两者都幸存")
+        void prefixButNotSegmentwiseAncestorSurvivesBoth() {
+            // com.example.modular 以 "com.example.mod" 开头，但按分段判断不是它的子包 ——
+            // 这正是朴素字符串前缀实现会误删的用例，必须在红灯阶段就出现。
+            Set<String> input = new LinkedHashSet<>();
+            input.add("com.example.mod");
+            input.add("com.example.modular");
+
+            Set<String> result = DependencyUtils.dedupeNestedPackages(input);
+
+            assertThat(result).containsExactlyInAnyOrder("com.example.mod", "com.example.modular");
+        }
+
+        @Test
+        @DisplayName("给定单个包，原样幸存")
+        void singlePackageSurvivesUnchanged() {
+            Set<String> input = Collections.singleton("com.example.solo");
+
+            Set<String> result = DependencyUtils.dedupeNestedPackages(input);
+
+            assertThat(result).containsExactly("com.example.solo");
+        }
+
+        @Test
+        @DisplayName("给定空集合，结果为空且不抛异常")
+        void emptySetYieldsEmptyResult() {
+            Set<String> result = DependencyUtils.dedupeNestedPackages(Collections.emptySet());
+
+            assertThat(result).isEmpty();
+        }
+
+        @Test
+        @DisplayName("给定三层嵌套，只有最外层幸存")
+        void threeLevelNestKeepsOnlyOutermost() {
+            Set<String> input = new LinkedHashSet<>();
+            input.add("com.example");
+            input.add("com.example.mod");
+            input.add("com.example.mod.sub");
+
+            Set<String> result = DependencyUtils.dedupeNestedPackages(input);
+
+            assertThat(result).containsExactly("com.example");
+        }
+    }
+
+    /**
+     * 「一个模块的扫描包发生嵌套时，只初始化一次配置类」这条消费侧行为 (#362 第六条) ——
+     * 通过 {@code getPluginPackages()} 的公开契约验证：嵌套声明被去重之后，{@code
+     * UltiToolsPlugin.initConfig()} 对 {@code registerAll} 的循环次数天然降到一次，
+     * 该配置类的构造与校验也就只跑一次，而不是每个命中的扫描包各跑一次。
+     */
+    @Nested
+    @DisplayName("getPluginPackages 嵌套扫描包去重的消费侧后果 (#362)")
+    class NestedScanPackageConsumerConsequenceTests {
+
+        @Test
+        @DisplayName("ComponentScan 声明了嵌套的两个包时，getPluginPackages 只返回外层")
+        void componentScanWithNestedPackagesReturnsOnlyOuter() {
+            UltiToolsPlugin mockPlugin = mock(MockPluginWithNestedComponentScanPackages.class);
+
+            String[] packages = DependencyUtils.getPluginPackages(mockPlugin);
+
+            assertThat(packages).containsExactly("com.nested.parent");
+        }
+    }
+
     // ========== Mock 插件类定义 ==========
     // 使用 abstract 类继承 UltiToolsPlugin，避免需要调用父类构造函数
     // Mockito 可以 mock abstract 类
@@ -458,5 +548,13 @@ class DependencyUtilsTest {
      */
     @ComponentScan(basePackageClasses = {UltiToolsModule.class})
     static abstract class MockPluginWithComponentScanBasePackageClasses extends UltiToolsPlugin {
+    }
+
+    /**
+     * {@code ComponentScan} 声明两个包，其中一个是另一个的严格子包 (#362) —— 去重之后
+     * {@code getPluginPackages} 只应该返回外层 {@code com.nested.parent}。
+     */
+    @ComponentScan(value = {"com.nested.parent", "com.nested.parent.config"})
+    static abstract class MockPluginWithNestedComponentScanPackages extends UltiToolsPlugin {
     }
 }

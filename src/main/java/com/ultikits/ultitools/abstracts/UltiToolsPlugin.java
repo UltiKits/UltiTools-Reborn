@@ -1160,11 +1160,14 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     private void initConfig() throws IOException {
         EnableAutoRegister annotation = MergedAnnotationResolver.find(this.getClass(), EnableAutoRegister.class);
         if (annotation != null && annotation.config()) {
-            for (String packageName : DependencyUtils.getPluginPackages(this)) {
-                UltiTools.getInstance().getConfigManager().registerAll(
-                        this, packageName, UltiTools.getJavaPluginClassLoader()
-                );
-            }
+            // CR-01 (#358 Part 1 gate-1 finding): registered as one plugin-scoped batch across
+            // every scan package, not once per package with an independent rollback each -
+            // otherwise a later package's refusal would leave an earlier package's already-
+            // registered entries stranded. See ConfigManager#registerAll(UltiToolsPlugin,
+            // String[], ClassLoader)'s own javadoc for the full reasoning.
+            UltiTools.getInstance().getConfigManager().registerAll(
+                    this, DependencyUtils.getPluginPackages(this), UltiTools.getJavaPluginClassLoader()
+            );
             // D-06: diff getAllConfigs() against what package-scan auto-registration actually
             // registered. Runs only on this branch - on the config = false branch below,
             // getAllConfigs() is the sole registration path and there is nothing to diff against.
