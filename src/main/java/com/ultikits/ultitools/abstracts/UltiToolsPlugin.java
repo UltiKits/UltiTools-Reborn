@@ -749,7 +749,10 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * commands and listeners before the exception propagates (WR-01,
      * 16-REVIEW-lifecycle.md) -- a throwing hook is surfaced to the caller, not swallowed,
      * but it cannot skip the framework's own cleanup the way an unguarded {@code super}
-     * call could.
+     * call could. If a cleanup step also fails, that failure does not replace this hook's own
+     * exception: it is attached to it via {@link Throwable#addSuppressed} instead, so the
+     * module author's own failure is always the one that propagates and is never silently lost
+     * behind a secondary framework failure (Codex review on #457, issue #484).
      */
     // The empty body IS the design: it is what keeps every existing module unaffected --
     // a module with no unload work needs no override at all (PMD.UncommentedEmptyMethodBody,
@@ -760,21 +763,55 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
 
     @Override
     public final void unregisterSelf() {
-        try {
-            onUnregister();
-        } finally {
-            // Nested, not sequential: if CommandManager.unregisterAll(this) itself throws
-            // (e.g. reflective Bukkit command-map access fails), a single flat finally block
-            // would exit before ListenerManager.unregisterAll(this) ever ran, leaving this
-            // unloaded module's listeners active (Codex review on #457: "Run listener cleanup
-            // even if command cleanup throws"). Nesting means each cleanup step's own failure
-            // cannot suppress the other's.
-            try {
-                getCommandManager().unregisterAll(this);
-            } finally {
-                getListenerManager().unregisterAll(this);
-            }
+        // Every step below runs regardless of an earlier step's failure (Codex review on #457:
+        // "Run listener cleanup even if command cleanup throws") -- a single flat try/finally
+        // would let CommandManager.unregisterAll(this) throwing skip
+        // ListenerManager.unregisterAll(this) entirely. But running every step is not enough on
+        // its own: plain finally-block semantics also let a LATER step's exception silently
+        // replace an EARLIER one, discarding it (Codex review on #457, issue #484: "Preserve the
+        // hook failure when cleanup also throws"). So failures are collected instead -- the
+        // FIRST one, in source order (hook, then command cleanup, then listener cleanup), is the
+        // one that propagates, and every later failure is attached to it via addSuppressed()
+        // rather than overwriting it.
+        Throwable failure = runUnregisterStep(null, this::onUnregister);
+        failure = runUnregisterStep(failure, () -> getCommandManager().unregisterAll(this));
+        failure = runUnregisterStep(failure, () -> getListenerManager().unregisterAll(this));
+        if (failure instanceof RuntimeException) {
+            throw (RuntimeException) failure;
+        } else if (failure instanceof Error) {
+            throw (Error) failure;
         }
+    }
+
+    /**
+     * Runs one {@link #unregisterSelf()} cleanup step, collecting any failure onto {@code
+     * previousFailure} instead of letting it replace or be replaced by another step's failure.
+     * <p>
+     * {@code step} can only throw an unchecked exception -- {@link #onUnregister()},
+     * {@code CommandManager#unregisterAll}, and {@code ListenerManager#unregisterAll} all
+     * declare no checked exceptions -- so catching {@code RuntimeException | Error} here covers
+     * every real case without the width of catching {@link Throwable} (this is a deliberate
+     * cleanup barrier, not a broad catch: {@code unregisterSelf()} always runs every remaining
+     * step and always rethrows exactly one collected failure, per its own javadoc).
+     *
+     * @param previousFailure the failure already collected from an earlier step, or {@code null}
+     *                        if every earlier step (if any) succeeded
+     * @param step            the cleanup step to run
+     * @return {@code previousFailure}, with {@code step}'s own failure (if any) attached to it
+     *     via {@link Throwable#addSuppressed}; or, if {@code previousFailure} was {@code null},
+     *     {@code step}'s own failure, or {@code null} if {@code step} completed normally
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // deliberate cleanup barrier -- see javadoc above
+    private static Throwable runUnregisterStep(Throwable previousFailure, Runnable step) {
+        try {
+            step.run();
+        } catch (RuntimeException | Error e) {
+            if (previousFailure == null) {
+                return e;
+            }
+            previousFailure.addSuppressed(e);
+        }
+        return previousFailure;
     }
 
     /**

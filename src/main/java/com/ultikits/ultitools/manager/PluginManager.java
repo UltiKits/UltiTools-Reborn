@@ -383,8 +383,10 @@ public class PluginManager {
             // Unlike the best-effort registry bookkeeping above, this step's own failure is
             // NOT swallowed: a module's onUnregister() throwing is a real defect the caller
             // needs to see (Codex review on #457, round 1: "a throwing hook is surfaced to
-            // the caller, not swallowed"). unregisterSelf() itself already isolates its own
-            // two framework calls from each other via a nested finally (see its javadoc).
+            // the caller, not swallowed"). unregisterSelf() itself already runs every one of
+            // its own three steps regardless of an earlier one's failure, and collects rather
+            // than discards any later failure via addSuppressed() (see its javadoc, and issue
+            // #484).
             plugin.unregisterSelf();
         } finally {
             // unregister() is reachable with an instance the caller constructed directly,
