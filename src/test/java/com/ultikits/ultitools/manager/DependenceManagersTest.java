@@ -2,25 +2,36 @@ package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
 import java.util.logging.Logger;
 
+import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.scheduler.BukkitScheduler;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
+import org.mockito.MockedStatic;
 import org.mockito.MockitoAnnotations;
 
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.services.EmailService;
 import com.ultikits.ultitools.services.NotificationService;
 import com.ultikits.ultitools.services.TeleportService;
+import com.ultikits.ultitools.utils.TestHelper;
 import com.ultikits.ultitools.utils.VersionComparatorUtil;
 
 import java.util.Comparator;
@@ -532,8 +543,8 @@ class DependenceManagersTest {
     class InitCoreServicesRegistrationTests {
 
         /**
-         * Drives the ACTUAL {@code initCoreServices()} private method -- not a reproduction of
-         * lines 70-81 -- so this test fails the moment the real registration shape in
+         * Drives the ACTUAL {@code initCoreServices(UltiTools)} private method -- not a
+         * reproduction of lines 70-81 -- so this test fails the moment the real registration shape in
          * {@code DependenceManagers} changes, not just when a copy of it drifts out of sync.
          *
          * <p>Before the identity-dedup fix in {@code SimpleContainer#getOrderedBeansOfType},
@@ -554,31 +565,89 @@ class DependenceManagersTest {
             SimpleContainer context = new SimpleContainer();
             setField(managers, "context", context);
 
-            // Act: invoke the real private initCoreServices() method -- the exact code path
-            // DependenceManagers' own constructor runs, not a hand-copied reproduction of it.
-            java.lang.reflect.Method initCoreServices =
-                    DependenceManagers.class.getDeclaredMethod("initCoreServices");
-            initCoreServices.setAccessible(true); // NOPMD
-            initCoreServices.invoke(managers);
+            // initCoreServices(UltiTools) now schedules the deferred economy start-up report via
+            // Bukkit.getScheduler().runTask(...) (Codex P2, PR #463) -- this test only cares about
+            // the three aliased core-service registrations above it, so the scheduler is mocked to
+            // accept and discard the task rather than actually running it (no live Bukkit server
+            // exists in this test class at all).
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                BukkitScheduler mockScheduler = mock(BukkitScheduler.class);
+                bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
 
-            // Assert: each interface-typed lookup resolves without throwing.
-            TeleportService teleportService = assertDoesNotThrow(
-                    () -> context.getBean(TeleportService.class),
-                    "TeleportService is aliased under two names (:70-71) -- must not be seen as "
-                            + "two ambiguous candidates");
-            assertThat(teleportService).isNotNull();
+                // Act: invoke the real private initCoreServices(UltiTools) method -- the exact
+                // code path DependenceManagers' own constructor runs, not a hand-copied
+                // reproduction of it.
+                java.lang.reflect.Method initCoreServices =
+                        DependenceManagers.class.getDeclaredMethod("initCoreServices", UltiTools.class);
+                initCoreServices.setAccessible(true); // NOPMD
+                initCoreServices.invoke(managers, mock(UltiTools.class));
 
-            NotificationService notificationService = assertDoesNotThrow(
-                    () -> context.getBean(NotificationService.class),
-                    "NotificationService is aliased under two names (:75-76) -- must not be seen "
-                            + "as two ambiguous candidates");
-            assertThat(notificationService).isNotNull();
+                // Assert: each interface-typed lookup resolves without throwing.
+                TeleportService teleportService = assertDoesNotThrow(
+                        () -> context.getBean(TeleportService.class),
+                        "TeleportService is aliased under two names (:70-71) -- must not be seen as "
+                                + "two ambiguous candidates");
+                assertThat(teleportService).isNotNull();
 
-            EmailService emailService = assertDoesNotThrow(
-                    () -> context.getBean(EmailService.class),
-                    "EmailService is aliased under two names (:80-81) -- must not be seen as two "
-                            + "ambiguous candidates");
-            assertThat(emailService).isNotNull();
+                NotificationService notificationService = assertDoesNotThrow(
+                        () -> context.getBean(NotificationService.class),
+                        "NotificationService is aliased under two names (:75-76) -- must not be seen "
+                                + "as two ambiguous candidates");
+                assertThat(notificationService).isNotNull();
+
+                EmailService emailService = assertDoesNotThrow(
+                        () -> context.getBean(EmailService.class),
+                        "EmailService is aliased under two names (:80-81) -- must not be seen as two "
+                                + "ambiguous candidates");
+                assertThat(emailService).isNotNull();
+            }
+        }
+
+        /**
+         * Codex P2, PR #463: {@code plugin.yml} only softdepends on {@code Vault} itself, not on
+         * any economy-providing plugin (e.g. EssentialsX) -- Vault is guaranteed to enable before
+         * UltiTools, but an economy plugin has no declared ordering relative to UltiTools at all,
+         * and commonly enables after it. Logging {@code EconomyUtils#logStartupState()}'s one-time
+         * start-up line synchronously, inside this constructor (itself called early from
+         * {@code UltiTools#onEnable()}), would permanently report {@code NO_PROVIDER_REGISTERED}
+         * for that ordinary case, even though a provider registers moments later in the same
+         * server start-up.
+         * <p>
+         * Asserts the OBSERVABLE fix directly: the report must be handed to
+         * {@link Bukkit#getScheduler()} as a deferred task, and must NOT have already logged
+         * anything by the time {@code initCoreServices(UltiTools)} returns (the mock scheduler
+         * never actually runs the captured task, so any log call caught here can only have
+         * happened synchronously, during {@code initCoreServices(UltiTools)} itself).
+         */
+        @Test
+        @DisplayName("logStartupState() is deferred via the Bukkit scheduler, not called synchronously (Codex P2, PR #463)")
+        void logStartupStateIsDeferredViaScheduler_notCalledSynchronously() throws Exception {
+            DependenceManagers managers = createManagersWithMockedFields();
+            SimpleContainer context = new SimpleContainer();
+            setField(managers, "context", context);
+
+            Logger mockUltiToolsLogger = mock(Logger.class);
+            UltiTools mockUltiTools = TestHelper.mockUltiToolsInstance(
+                    ultiTools -> when(ultiTools.getLogger()).thenReturn(mockUltiToolsLogger));
+
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                BukkitScheduler mockScheduler = mock(BukkitScheduler.class);
+                bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
+
+                java.lang.reflect.Method initCoreServices =
+                        DependenceManagers.class.getDeclaredMethod("initCoreServices", UltiTools.class);
+                initCoreServices.setAccessible(true); // NOPMD
+                initCoreServices.invoke(managers, mockUltiTools);
+
+                // The economy start-up report must be handed to the scheduler as a deferred task,
+                // not run inline.
+                verify(mockScheduler).runTask(eq(mockUltiTools), any(Runnable.class));
+                // logStartupState() must not have already logged anything synchronously -- the
+                // mock scheduler never runs the captured task, so any call caught here proves it
+                // ran too early.
+                verify(mockUltiToolsLogger, never()).info(anyString());
+                verify(mockUltiToolsLogger, never()).warning(anyString());
+            }
         }
     }
 

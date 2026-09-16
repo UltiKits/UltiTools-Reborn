@@ -1997,11 +1997,17 @@ public class PluginManager {
     /**
      * Get scan packages for a plugin class.
      * Reads from @UltiToolsModule or @ComponentScan annotations, defaults to plugin class package.
+     * <p>
+     * Widened from {@code private} to {@code public} by 16-06-PLAN.md (D-08): {@code EconomyUtils}'
+     * module-attribution helper needs the same real scan-package resolution this class already
+     * uses at registration time, rather than duplicating (and risking drifting from) this logic in
+     * another package. A new public method is additive, not a binary-compatibility break — japicmp
+     * reports only removed or changed members, never a widened one.
      *
      * @param pluginClass plugin class
      * @return scan packages
      */
-    private String[] getPluginScanPackages(Class<? extends UltiToolsPlugin> pluginClass) {
+    public String[] getPluginScanPackages(Class<? extends UltiToolsPlugin> pluginClass) {
         // Read through the merged resolver, not a bare pluginClass.getAnnotation(...) --
         // @UltiToolsModule is meta-annotated @ComponentScan, and its scanBasePackages()/
         // scanBasePackageClasses() attributes both declare @AliasFor onto ComponentScan's
