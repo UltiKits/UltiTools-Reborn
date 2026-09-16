@@ -523,6 +523,31 @@ class EconomyUtilsReportingTest {
 
             assertThat(EconomyUtils.attributeModule(stack, prefixToModule)).isEqualTo("ModuleA");
         }
+
+        @Test
+        @DisplayName("4: the closest frame's ambiguous root terminates attribution -- it does NOT fall through to a more distant frame's unambiguous module (Codex P2, PR #463, round 3)")
+        void closestFrameAmbiguousRoot_terminatesAttribution_doesNotFallThroughToMoreDistantModule() {
+            // The closest (most-recent) frame matches the ambiguous "com.example.shared" root
+            // (ModuleA and ModuleB both declared it). A MORE DISTANT frame, further up the same
+            // stack, unambiguously matches "com.example.other" (ModuleC alone declared it). The
+            // closest frame that matches ANY scan root identifies the requester; if THAT frame's
+            // root is ambiguous, the requester cannot be determined, full stop -- continuing past
+            // it and naming ModuleC (an unrelated, more distant module) would reproduce the exact
+            // wrong-module-name defect this fix removes, just by a longer route. Before this
+            // round's fix, an ambiguous frame was treated identically to "no match for this
+            // frame", so the walk continued outward and returned "ModuleC" -- wrong.
+            Map<String, String> prefixToModule = new LinkedHashMap<>();
+            EconomyUtils.mergeScanPackageOwner(prefixToModule, "com.example.shared", "ModuleA");
+            EconomyUtils.mergeScanPackageOwner(prefixToModule, "com.example.shared", "ModuleB");
+            EconomyUtils.mergeScanPackageOwner(prefixToModule, "com.example.other", "ModuleC");
+
+            StackTraceElement[] stack = {
+                    new StackTraceElement("com.example.shared.SomeClass", "doThing", "SomeClass.java", 10),
+                    new StackTraceElement("com.example.other.OtherClass", "doOtherThing", "OtherClass.java", 20),
+            };
+
+            assertThat(EconomyUtils.attributeModule(stack, prefixToModule)).isNull();
+        }
     }
 
     @Test
