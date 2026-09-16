@@ -55,12 +55,13 @@ two clauses holds, and the removal's own entry states which one and its evidence
    because no released version could ever have exercised it.
 
 Each removal that relies on this exception names in its own entry which clause it used and the
-evidence for it. Those entries are enumerated in
-["Same-release exceptions applied in 6.3.0"](#same-release-exceptions-applied-in-630) below, and
-recorded in full — with the measurement behind each — in
-[`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md). No total is stated here: a
-count kept away from the list it counts goes stale the next time an entry is added, so the only
-total this document states is the one directly above that list.
+evidence for it. Those entries are in
+["Same-release exceptions applied in 6.3.0"](#same-release-exceptions-applied-in-630) below — read
+that section through rather than reading a number off it, because it carries a list of removals and
+then a further entry after that list — and each is recorded in full, with the measurement behind it,
+in [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md). No total is stated here: a
+count kept away from the list it counts has nothing holding it honest, which is how the count that
+used to sit in this paragraph went stale.
 
 ### Two deliberate deviations from semver
 
@@ -541,8 +542,8 @@ loud, named failure at load time, not a silent no-op and not a delayed `NoSuchMe
 use, unlike the first two occurrences in this section — the class naming its own offending method is
 exactly what an `IncompatibleClassChangeError` for an overridden final method reports.
 
-**Migration guide for module authors.** The fix is a rename, or a deletion where the override did
-no real work — never a rewrite:
+**Migration guide for module authors.** The fix is a rename or a deletion — never a rewrite — with at
+most a `super` call or a now-dead `lang` key to drop alongside it:
 
 | Your current override | What to do |
 |---|---|
