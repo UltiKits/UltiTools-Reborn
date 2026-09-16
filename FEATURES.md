@@ -102,8 +102,9 @@ below). The row below therefore cites `#handleHelp`, the method that actually ex
 |---|---|---|---|---|---|---|---|---|
 | ultitools.ul.help | Print the /ul command usage summary | command | `/ul help` | none (requireOp=true) | both | admin | brief | UltiToolsCommands#handleHelp |
 | ultitools.ul.list | List every currently loaded module and its version | command | `/ul list` | none (requireOp=true) | both | admin | brief | UltiToolsCommands#listPlugins |
-| ultitools.ul.reload | Reload every loaded module | command | `/ul reload` | none (requireOp=true) | both | admin | brief | UltiToolsCommands#reloadPlugins |
-| ultitools.ul.reload-module | Reload a single named module | command | `/ul reload <name>` | none (requireOp=true) | both | admin | brief | UltiToolsCommands#reloadPlugin |
+| ultitools.ul.reload | Reload every loaded module; the framework logs one INFO console line per module reloaded, and any module reload work now runs in that module's `onReload()` hook after the framework's own config/language/drift steps (D-01/D-02/D-03) | command | `/ul reload` | none (requireOp=true) | both | admin | brief | UltiToolsCommands#reloadPlugins |
+| ultitools.ul.reload-module | Reload a single named module; the framework logs one INFO console line for that module, and any module reload work now runs in its `onReload()` hook after the framework's own config/language/drift steps (D-01/D-02/D-03) | command | `/ul reload <name>` | none (requireOp=true) | both | admin | brief | UltiToolsCommands#reloadPlugin |
+| ultitools.ul.reload-log-line | The framework itself logs exactly one INFO console line naming each module, immediately after that module's own config-reload/language-refresh/drift-report steps and before its `onReload()` hook runs — produced by the framework's own `lang/en.json`/`lang/zh.json` catalogue, never by the module (D-03) | gate | automatic, once per module, during `/ul reload` or `/ul reload <name>` | n/a | n/a | admin | brief | UltiToolsPlugin#reloadSelf |
 
 ## /upm — plugin management
 
