@@ -377,8 +377,10 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      *   <li>Recorded hash present and equal to the disk file's current hash -- never touched by
      *       the operator since extraction: overwrite the disk file with the current jar's bytes,
      *       re-record the new (jar) hash as the baseline, and log one informative line.</li>
-     *   <li>Recorded hash present and different -- operator customisation: leave the disk file
-     *       alone; apply the per-key placeholder-arity override for any key that moved.</li>
+     *   <li>Recorded hash present and different from the disk file's current hash: this by
+     *       ITSELF is NOT evidence of operator customisation -- see the branch-2 code comment
+     *       below (Codex finding, thread {@code PRRT_kwDOIcF9Es6i2kao}, P2) for why, and for the
+     *       content-comparison this branch now performs before concluding either way.</li>
      *   <li>No recorded hash, but the disk bytes already equal the jar's -- provably unmodified,
      *       unknown provenance only because an older jar (pre-#441) extracted it: record the hash
      *       as the new baseline and enter the normal mechanism, with no overwrite this pass
@@ -391,6 +393,14 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * A jar entry absent for this exact {@code resourcePath} (D-05's stated exception) short-
      * circuits before any of the four branches: the disk file is left alone and nothing is
      * recorded, since there is nothing to compare against.
+     * <p>
+     * Every branch above that concludes "customisation" derives that conclusion from an ACTUAL
+     * disk-bytes-vs-jar-bytes comparison, never from the record alone -- branches 3 and 4 already
+     * did (their own classification IS a content comparison); branch 2 was corrected to do the
+     * same (see its own code comment). The record is provenance BOOKKEEPING, not the source of
+     * truth for whether a file has been customised; it can go stale (most deterministically, since
+     * the previous round, when the sidecar itself is symlinked or read-only and its own write is
+     * refused) without that staleness ever being able to cause a PERMANENT misclassification.
      *
      * @param folderPath   the module's on-disk resource folder root
      * @param file         the on-disk language file, already confirmed to exist
@@ -402,6 +412,13 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      */
     private Language resolveLanguageWithProvenance(String folderPath, File file, String resourcePath,
                                                      String extension) {
+        // Branch-audit (Codex finding thread PRRT_kwDOIcF9Es6i2kao, P2): neither short-circuit
+        // below reaches a "customised" conclusion at all, so neither needed the branch-2-style
+        // content-comparison fix. jarBytes == null has literally nothing to compare the disk
+        // bytes against (there IS no bundled version of this resource for this module); the
+        // UncheckedIOException fallback below never classifies provenance either -- it degrades
+        // to a best-effort raw read (or an empty dictionary) precisely because it could not even
+        // compute diskHash, so no comparison of any kind is possible here.
         byte[] jarBytes = readEmbeddedResourceBytes(resourcePath);
         if (jarBytes == null) {
             // Jar entry absent for this exact resource path: nothing to compare against, so the
@@ -511,10 +528,48 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                 // provide.
                 return applyPlaceholderArityOverride(file, jarBytes, extension, resourcePath);
             }
-            // Branch 2: operator customisation -> leave the disk file alone.
+            // Branch 2: recorded hash present and mismatched against the disk file's CURRENT
+            // hash. Codex finding (thread PRRT_kwDOIcF9Es6i2kao, P2, on
+            // UltiToolsPlugin.java:515): a mismatch against the RECORD ALONE is not evidence of
+            // operator customisation -- it is also exactly what a STALE record looks like, which
+            // branch 1's own re-record step (above) can leave behind whenever the language file's
+            // own write succeeds but the follow-up ResourceHashSidecar.record(...) call does not
+            // persist. Before this fix that state was permanent: every later boot re-entered this
+            // branch and reclassified an up-to-date file as "customised" forever, silently
+            // stopping the module from ever receiving another bundled update, with nothing in the
+            // log to say why -- the defect class this milestone exists to remove (declared
+            // provenance-driven refresh, not delivered). The previous round's own symlink/
+            // read-only refusal on the SIDECAR's write path (PosixAttributePreserver#replaceInPlace)
+            // makes the stale-record precondition deterministic rather than rare: a symlinked or
+            // read-only sidecar now reliably refuses every re-record attempt, so this branch is
+            // reached on every subsequent boot.
+            //
+            // Root-cause fix, not a special case for "the sidecar write failed": derive the
+            // conclusion from what is ACTUALLY on disk, not from the record. If diskHash already
+            // equals jarHash, the file IS up to date regardless of what the stale record says --
+            // opportunistically re-record the correct hash (best-effort; record() already
+            // degrades silently on its own write failure per its own contract, and that failure
+            // must not change this classification or fail the boot) and proceed on the up-to-date
+            // path, exactly like branch 1's own jarHash.equals(diskHash) short-circuit above. Only
+            // fall through to "operator customisation" -- unchanged from before -- when the disk
+            // bytes are ACTUALLY different from the bundle.
+            if (diskHash.equals(jarHash)) {
+                ResourceHashSidecar.record(resourceFolder, resourcePath, diskHash);
+                return readLanguageFile(file, extension);
+            }
             return applyPlaceholderArityOverride(file, jarBytes, extension, resourcePath);
         }
 
+        // Branch-audit (Codex finding thread PRRT_kwDOIcF9Es6i2kao, P2): branches 3 and 4 below
+        // already derived their conclusion from an actual diskHash-vs-jarHash comparison before
+        // this finding was reported -- this `if` IS that comparison -- so neither needed the
+        // branch-2-style fix. Branch 3 concludes "not customised" (record now, proceed) only
+        // because diskHash.equals(jarHash) was just confirmed true; branch 4 concludes
+        // "customised" only because that same comparison was false. A record() failure inside
+        // branch 3 (e.g. a symlinked sidecar) cannot cause a permanent misclassification either:
+        // recorded stays Optional.empty() (nothing was ever persisted), so EVERY later boot
+        // re-enters this same "no recorded hash" path and re-derives fresh from content again --
+        // self-healing by construction, not merely by coincidence.
         if (diskHash.equals(jarHash)) {
             // Branch 3: unknown provenance, but provably unmodified -> record the baseline now;
             // no overwrite this pass (D-06).

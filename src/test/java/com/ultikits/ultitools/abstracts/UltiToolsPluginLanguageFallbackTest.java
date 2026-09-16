@@ -380,11 +380,13 @@ class UltiToolsPluginLanguageFallbackTest {
         final Object plugin;
         final File resourceFolder;
         final Logger mockLogger;
+        final File jarLangFile;
 
-        ProvenanceFixture(Object plugin, File resourceFolder, Logger mockLogger) {
+        ProvenanceFixture(Object plugin, File resourceFolder, Logger mockLogger, File jarLangFile) {
             this.plugin = plugin;
             this.resourceFolder = resourceFolder;
             this.mockLogger = mockLogger;
+            this.jarLangFile = jarLangFile;
         }
     }
 
@@ -438,7 +440,7 @@ class UltiToolsPluginLanguageFallbackTest {
             Mockito.lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
         });
 
-        return new ProvenanceFixture(plugin, resourceFolder, mockLogger);
+        return new ProvenanceFixture(plugin, resourceFolder, mockLogger, jarLangFile);
     }
 
     private Language resolveProvenanceLanguage(ProvenanceFixture fixture) throws Throwable {
@@ -1065,5 +1067,93 @@ class UltiToolsPluginLanguageFallbackTest {
         assertThat(Files.isSymbolicLink(diskFile.toPath())).isTrue();
         assertThat(Files.readAllBytes(diskFile.toPath())).isEqualTo(originalBytes);
         verify(fixture.mockLogger, never()).info(anyString());
+    }
+
+    @Test
+    @DisplayName("branch 2: a hash mismatch against a STALE record (left behind when the "
+            + "sidecar's own write is refused, e.g. a symlinked sidecar) is not treated as "
+            + "operator customisation when the disk bytes already match the bundle -- "
+            + "reclassified from actual content, not from the record alone, and re-derived "
+            + "fresh on every boot rather than cached (Codex finding on "
+            + "UltiToolsPlugin.java:515, thread PRRT_kwDOIcF9Es6i2kao, P2)")
+    void staleRecordFromARefusedSidecarWriteIsReclassifiedFromContentNotFromTheStaleRecord() throws Throwable {
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"greeting\":\"Hi v2\"}", "{\"greeting\":\"Hi v1\"}");
+        File diskFile = new File(fixture.resourceFolder, "lang" + File.separator + "en.json");
+        String v1Hash = ResourceHashSidecar.sha256(diskFile);
+        // Branch 1 baseline: recorded hash == the disk file's CURRENT (v1) hash -- "never
+        // touched since extraction".
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", v1Hash);
+
+        // Make the SIDECAR a symlink -- the cheapest deterministic way to make its own record
+        // write refuse, courtesy of the previous round's refusal in
+        // PosixAttributePreserver#replaceInPlace -- reproducing the exact precondition the
+        // finding describes: "a refresh succeeds but the sidecar update fails".
+        File sidecarFile = new File(fixture.resourceFolder, ".ultitools-resource-hashes.json");
+        byte[] sidecarBytesBeforeLink = Files.readAllBytes(sidecarFile.toPath());
+        File sidecarLinkTarget = new File(fixture.resourceFolder, "shared-resource-hashes.json");
+        Files.write(sidecarLinkTarget.toPath(), sidecarBytesBeforeLink);
+        Files.delete(sidecarFile.toPath());
+        try {
+            Files.createSymbolicLink(sidecarFile.toPath(), sidecarLinkTarget.toPath());
+        } catch (UnsupportedOperationException | IOException e) {
+            Assumptions.abort("Symbolic links not supported on this filesystem; skipping. " + e);
+            return;
+        }
+
+        // Boot 1: branch 1 fires (recorded == diskHash of v1). writeBytes(file, jarBytes)
+        // SUCCEEDS -- the language file itself is not a symlink -- refreshing disk to v2. The
+        // follow-up ResourceHashSidecar.record(...) call is refused because the sidecar is now
+        // a symlink, leaving the record frozen at the OLD (v1) hash while disk now holds v2
+        // (== the bundle).
+        Language afterFirstBoot = resolveProvenanceLanguage(fixture);
+        assertThat(afterFirstBoot.getLocalizedText("greeting")).isEqualTo("Hi v2");
+        assertThat(new String(Files.readAllBytes(diskFile.toPath()), StandardCharsets.UTF_8))
+                .contains("Hi v2");
+        assertThat(ResourceHashSidecar.readRecordedHash(fixture.resourceFolder, "lang/en.json"))
+                .as("the sidecar's own write was refused -- the record must still be stale")
+                .contains(v1Hash);
+        assertThat(Files.isSymbolicLink(sidecarFile.toPath())).isTrue();
+
+        // Restore normal write access to the sidecar before boot 2 -- isolating THIS fix's
+        // effect (reclassification from content) from round 7's already-separately-tested
+        // concern (a refused sidecar write never corrupts the layout). The stale-record
+        // PRECONDITION this fix addresses was already established during boot 1 above; whether
+        // the underlying cause of that staleness later clears (as modelled here) or persists
+        // (already covered by ResourceHashSidecarTest's own symlink test), the record itself
+        // does not self-correct without this fix -- boot 2 below is where that is proven.
+        Files.delete(sidecarFile.toPath());
+        Files.write(sidecarFile.toPath(), Files.readAllBytes(sidecarLinkTarget.toPath()));
+
+        // Boot 2: recorded (still v1's hash) != diskHash (now v2's hash) -- branch 2 is
+        // entered. Before this fix, a mismatch against the record ALONE was unconditionally
+        // classified "operator customised", and this branch never called
+        // ResourceHashSidecar.record(...) at all -- so even though the sidecar is writable
+        // again here, the record would stay stale forever. With the fix, diskHash equals
+        // jarHash (both v2), so the mismatch is recognised as a stale record, not evidence of
+        // customisation, and is opportunistically corrected.
+        Language afterSecondBoot = resolveProvenanceLanguage(fixture);
+        assertThat(afterSecondBoot.getLocalizedText("greeting")).isEqualTo("Hi v2");
+        String v2Hash = ResourceHashSidecar.sha256(diskFile);
+        assertThat(ResourceHashSidecar.readRecordedHash(fixture.resourceFolder, "lang/en.json"))
+                .as("RED/GREEN signal: only the fix opportunistically re-records here")
+                .contains(v2Hash);
+
+        // A subsequent bundled change must still be detected and handled correctly -- proving
+        // the reclassification is re-derived fresh on every boot, not a one-time/cached
+        // decision. Change the bundle to a DIFFERENT placeholder arity than what is still on
+        // disk (v2 has none); since the record was reconciled to v2's hash above, this now
+        // lands back in branch 1 ("never touched since extraction" relative to v2) and the
+        // language file gets genuinely refreshed via the normal write path -- the strongest
+        // available proof that this is not a permanent, cached classification.
+        Files.write(fixture.jarLangFile.toPath(),
+                "{\"greeting\":\"Hi %s (%s)\"}".getBytes(StandardCharsets.UTF_8));
+        Language afterThirdBoot = resolveProvenanceLanguage(fixture);
+        assertThat(afterThirdBoot.getLocalizedText("greeting")).isEqualTo("Hi %s (%s)");
+        assertThat(new String(Files.readAllBytes(diskFile.toPath()), StandardCharsets.UTF_8))
+                .as("the file must be genuinely refreshed on disk, not merely arity-protected "
+                        + "in memory -- proving branch 1's normal write path resumed, not that "
+                        + "this classification is permanently stuck")
+                .contains("Hi %s (%s)");
     }
 }
