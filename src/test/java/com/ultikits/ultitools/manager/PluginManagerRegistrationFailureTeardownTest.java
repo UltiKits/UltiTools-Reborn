@@ -177,11 +177,16 @@ class PluginManagerRegistrationFailureTeardownTest {
                     "even when unregister() itself throws partway, the plugin must still end up "
                             + "removed from pluginList -- a half-torn-down plugin staying in the "
                             + "list would be worse than the original gap");
-            // Codex P2 (PR #478 round 1): unregister() throwing at unregisterSelf() means its own
-            // final plugin.getContext().close() call never ran, and this plugin is about to be
-            // removed from pluginList -- PluginManager.close() can never retry teardown for it
-            // again after that. The failure path must close the context independently, or the
-            // module's container/beans/classloader stay referenced for the rest of the server run.
+            // Codex P2 (PR #478 round 1) established this contract against pre-#457 alpha, where
+            // unregister()'s plugin.getContext().close() was its own last statement and never ran
+            // if unregisterSelf() threw first -- attemptPluginRegistration()'s catch block closed
+            // the context independently to cover that gap. #457 (merged after this branch) moved
+            // that same close() into a finally inside unregister() itself, so it now runs
+            // unconditionally, including on this exact path; the independent fallback this test
+            // originally drove became redundant on the merged tree and was removed (it had started
+            // double-closing the container -- see PluginManager.attemptPluginRegistration()'s catch
+            // block javadoc). The contract this test asserts is unchanged: unregister() itself
+            // throwing during teardown must not skip closing the container, exactly once.
             verify(context).close();
         }
     }
