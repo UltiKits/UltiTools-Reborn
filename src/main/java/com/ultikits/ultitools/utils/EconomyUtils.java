@@ -420,8 +420,10 @@ public final class EconomyUtils {
      *
      * @return the attributed module's name, or {@code null} when nothing on the framework's own
      *         plugin list is currently reachable (no live {@link UltiTools} instance, no plugin
-     *         manager, no registered module's scan package appears anywhere on the stack, or the
-     *         plugin list raced a concurrent structural change during attribution)
+     *         manager, no registered module's scan package appears anywhere on the stack, the
+     *         calling frame's closest-matching scan package is declared by two or more DIFFERENT
+     *         modules — see {@link #mergeScanPackageOwner(Map, String, String)}, Codex P2, PR
+     *         #463 — or the plugin list raced a concurrent structural change during attribution)
      */
     private static String attributeCallingModule() {
         UltiTools instance = UltiTools.getInstance();
@@ -447,17 +449,49 @@ public final class EconomyUtils {
     }
 
     /**
-     * [RED, Codex P2, PR #463, gate-2 finding on this branch's own code, was
-     * {@code prefixToModule.putIfAbsent(pkg, plugin.getPluginName())} inline above]: extracted
-     * verbatim (same first-registered-wins behaviour, not yet fixed) so the merge step is its own
-     * testable unit, ahead of the ambiguity fix in the paired GREEN commit.
+     * Merges one (scan package, module name) declaration into {@code prefixToModule}, in place.
+     * Two or more DIFFERENT modules declaring the identical scan-package string is recorded as
+     * ambiguous ownership by setting that entry's value to {@code null} — GREEN fix, Codex P2,
+     * PR #463, gate-2 finding on this branch's own code, {@code EconomyUtils.java:440}. The
+     * previous behaviour ({@code Map#putIfAbsent}, now replaced) silently kept only the
+     * FIRST-registered module for a shared root and discarded every later one, so which module a
+     * shared root's frames got attributed to depended on module <b>load order</b>, not on which
+     * module the request actually came from — the D-08 warning could name the wrong module, and
+     * the wrongly-named module's dedup slot silently absorbed the true caller's one-per-session
+     * warning, suppressing it entirely.
+     * <p>
+     * {@link #attributeModule(StackTraceElement[], Map)} needs NO change to honour this: a
+     * {@code null}-valued winning (longest-matching) entry already falls through its existing
+     * {@code if (bestModule != null)} check exactly like "no match for this frame" — the loop
+     * moves on to the next (outer) frame, and if nothing else matches, attribution ends in the
+     * same {@code null} it already returns for an unattributable caller, which the D-08 reporting
+     * path already reports as {@link #UNKNOWN_MODULE} (never a second, per-module dedup slot).
+     * <p>
+     * <b>Why not resolve ownership from the calling class's {@code ClassLoader}/code source
+     * instead:</b> every module in this framework is loaded by the same shared
+     * {@code ultiToolsClassLoader} (see {@code UltiTools}'s bootstrap sequence), so neither signal
+     * cleanly separates two modules sharing one package in this codebase — building attribution on
+     * it would be the string-matching-on-a-third-party-convention mistake this project already
+     * removed once (see {@code SecurityPolicy}'s deleted name-based classload filters) in a new
+     * position. Keeping every owner seen for a root and reporting an honest "unknown" when a root
+     * has more than one is reliable regardless of classloader topology, and costs nothing the
+     * normal (single-owner) case was already paying.
      *
-     * @param prefixToModule the map being built, mutated in place
+     * @param prefixToModule the map being built, mutated in place; an existing {@code null} value
+     *                       (already-ambiguous) is left as {@code null} — one differing later
+     *                       owner is enough to mark a root ambiguous permanently for this build
      * @param pkg            the scan package being registered
      * @param owner          the module declaring it
      */
     static void mergeScanPackageOwner(Map<String, String> prefixToModule, String pkg, String owner) {
-        prefixToModule.putIfAbsent(pkg, owner);
+        if (prefixToModule.containsKey(pkg)) {
+            String existingOwner = prefixToModule.get(pkg);
+            if (existingOwner != null && !existingOwner.equals(owner)) {
+                prefixToModule.put(pkg, null);
+            }
+        } else {
+            prefixToModule.put(pkg, owner);
+        }
     }
 
     /**
