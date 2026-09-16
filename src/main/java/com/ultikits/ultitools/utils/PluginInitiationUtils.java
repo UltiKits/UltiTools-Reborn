@@ -1543,18 +1543,25 @@ public class PluginInitiationUtils {
      */
     private static void handleConfigUploadLogic(JsonObject data) throws Exception {
         String configType = data.get("configType").getAsString();
-        String configName = data.get("configName").getAsString();
-        Object configContent = data.get("configContent");
-        String format = data.get("format").getAsString();
-        boolean backup = data.get("backup").getAsBoolean();
 
-        UltiTools.getInstance().getLogger().log(Level.FINE,
-            String.format("处理配置上传: 类型=%s, 名称=%s, 格式=%s, 备份=%s",
-                configType, configName, format, backup));
-
-        // Handle different config files based on config type
+        // Gate-2 finding (review round 14, #467): branch on configType BEFORE reading
+        // configName/format/backup -- fields relevant only to plugin_config uploads. The
+        // documented negative-request shape (UAT-CHECKLIST.md:
+        // ultitools.remote.upload-config.neg-permissions) sends only configType, so reading
+        // those fields unconditionally threw an implementation-specific NullPointerException
+        // before the intended rejection message below was ever reached. Regression test:
+        // PluginInitiationUtilsTest$HandleConfigUploadLogicRejectionOrderingTests.
         switch (configType) {
             case "plugin_config":
+                Object configContent = data.get("configContent");
+                String configName = data.get("configName").getAsString();
+                String format = data.get("format").getAsString();
+                boolean backup = data.get("backup").getAsBoolean();
+
+                UltiTools.getInstance().getLogger().log(Level.FINE,
+                    String.format("处理配置上传: 类型=%s, 名称=%s, 格式=%s, 备份=%s",
+                        configType, configName, format, backup));
+
                 if (!(configContent instanceof JsonObject)) {
                     throw new IllegalArgumentException(
                         "Configuration content is required for plugin_config uploads");
