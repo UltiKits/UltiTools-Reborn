@@ -55,8 +55,7 @@ public class CommandManager {
      * @param aliases         Aliases
      */
     private void register(UltiToolsPlugin plugin, CommandExecutor commandExecutor, String permission, String description, String... aliases) {
-        registerCommandDirect(commandExecutor, permission, plugin.i18n(description), aliases);
-        PluginCommand command = getCommand(aliases[0], UltiTools.getInstance());
+        PluginCommand command = registerCommandDirect(commandExecutor, permission, plugin.i18n(description), aliases);
         List<Command> commands = commandListMap.computeIfAbsent(plugin, k -> new ArrayList<>());
         if (!commands.contains(command)) {
             commands.add(command);
@@ -98,25 +97,39 @@ public class CommandManager {
      * container involvement -- the primitive behind {@link #registerCoreCommand(CommandExecutor)},
      * {@link #registerExternalCommand(String, CommandExecutor, CmdExecutor)}, and the
      * unannotated-class fallback in {@link #register(UltiToolsPlugin, CommandExecutor)}.
+     * <p>
+     * Returns the exact {@link PluginCommand} instance handed to {@link
+     * CommandMap#register(String, Command)} so callers that need to unregister it later
+     * (e.g. {@link #register(UltiToolsPlugin, CommandExecutor, String, String, String...)},
+     * {@link #registerExternalCommand(String, CommandExecutor, CmdExecutor)}) can store and
+     * unregister THAT instance directly, rather than reconstructing a separate {@link
+     * #getCommand(String, Plugin)} decoy that was never actually registered (Codex review on
+     * PR #457, plan 16-02: a name/namespaced-key relookup at unregister time can resolve a
+     * DIFFERENT module's command if two modules share both the framework's fallback prefix
+     * and the same primary alias).
      *
      * @param commandExecutor Command executor instance
      * @param permission      Permission
      * @param description     Description
      * @param aliases         Aliases
+     * @return the actual registered {@link PluginCommand} instance
      */
-    private void registerCommandDirect(CommandExecutor commandExecutor, String permission, String description, String... aliases) {
+    private PluginCommand registerCommandDirect(CommandExecutor commandExecutor, String permission, String description, String... aliases) {
         PluginCommand command = getCommand(aliases[0], UltiTools.getInstance());
         command.setAliases(Arrays.asList(aliases));
         command.setPermission(permission);
         command.setDescription(description);
         getCommandMap().register(UltiTools.getInstance().getDescription().getName(), command);
         command.setExecutor(commandExecutor);
+        return command;
     }
 
     /**
      * Resolves {@code commandExecutor}'s {@code @CmdExecutor} annotation (if present) and
      * dispatches to {@link #registerCommandDirect(CommandExecutor, String, String, String...)};
-     * logs and does nothing otherwise.
+     * logs and does nothing otherwise. The registered command is not tracked for later
+     * unregistration -- this is the core-command path ({@link #registerCoreCommand(CommandExecutor)}),
+     * whose commands live for the whole plugin lifetime.
      *
      * @param commandExecutor Command executor instance
      */
@@ -164,21 +177,117 @@ public class CommandManager {
     }
 
     /**
+     * Unregisters the live command labelled {@code name} from Bukkit, including its entries
+     * in the command map's known-commands table.
+     * <p>
+     * This name-only overload is a best-effort public entry point for callers that hold
+     * nothing but a label (no {@link Command} reference to hand back). It resolves the
+     * actual currently-registered {@link Command} via its <em>namespaced</em> key ({@code
+     * fallbackPrefix:name}) rather than the bare {@code name} -- {@code
+     * SimpleCommandMap.register} lets a later, overridable registration steal the bare-label
+     * slot, so {@code getCommand(name)} could resolve a <em>different plugin's</em> command
+     * after such a takeover, while the namespaced key is put unconditionally regardless of
+     * any bare-label conflict.
+     * <p>
+     * That said, the namespaced key is only unique to <em>this framework's own</em>
+     * registrations: two different UltiTools modules sharing the same primary alias also
+     * share this framework's fallback prefix, so {@code fallbackPrefix:name} collides
+     * between them too, and this overload cannot tell them apart (Codex review on PR #457,
+     * plan 16-02). {@link #unregisterAll(UltiToolsPlugin)} and {@link
+     * #unregisterAllExternal(String)} do not have this ambiguity -- they hold the actual
+     * registered {@link Command} instance from {@link #commandListMap}/{@link
+     * #externalCommandMap} and unregister it directly via {@link #unregisterCommand(CommandMap,
+     * Command)}, bypassing name resolution entirely.
+     *
      * @param name Command name
      */
     public void unregister(String name) {
-        PluginCommand command = getCommand(name, UltiTools.getInstance());
-        command.unregister(getCommandMap());
+        CommandMap commandMap = getCommandMap();
+        if (commandMap == null) {
+            return;
+        }
+        Command realCommand = commandMap.getCommand(namespacedKey(name));
+        if (realCommand == null) {
+            return;
+        }
+        unregisterCommand(commandMap, realCommand);
     }
 
     /**
+     * Unregisters the exact {@code command} instance from Bukkit: purges its entries from
+     * the command map's known-commands table, then clears its own registration state.
+     * <p>
+     * This is the airtight form -- no name or key resolution is involved, so it cannot
+     * mis-resolve a different module's command the way {@link #unregister(String)}'s
+     * namespaced-key lookup can when two modules share both the framework's fallback prefix
+     * and a primary alias.
+     *
+     * @param commandMap the live Bukkit command map
+     * @param command    the specific, already-resolved command instance to unregister
+     */
+    private void unregisterCommand(CommandMap commandMap, Command command) {
+        removeFromKnownCommands(commandMap, command);
+        command.unregister(commandMap);
+    }
+
+    /**
+     * Builds the namespaced known-commands key ({@code fallbackPrefix:label}) that {@link
+     * #registerCommandDirect(CommandExecutor, String, String, String...)}'s {@link
+     * CommandMap#register(String, Command)} call always populates for {@code label},
+     * regardless of whether the bare label slot was won or lost to a bare-label conflict.
+     * The fallback prefix mirrors {@code registerCommandDirect}'s own: {@code
+     * UltiTools.getInstance().getDescription().getName()}.
+     *
+     * @param label the command's bare label or alias
+     * @return the namespaced key that uniquely identifies this framework's own registration
+     */
+    private String namespacedKey(String label) {
+        return UltiTools.getInstance().getDescription().getName() + ":" + label;
+    }
+
+    /**
+     * Removes every entry from {@code commandMap}'s known-commands table whose value is
+     * exactly {@code command} (reference identity, not key/label text matching).
+     * <p>
+     * {@link Command#unregister(CommandMap)} only clears the command's own {@code
+     * commandMap}/{@code label}/{@code activeAliases} fields (verified by reading its
+     * bytecode against this Paper version) -- it never touches {@link
+     * CommandMap#getKnownCommands()}. {@code SimpleCommandMap.register(String, String,
+     * Command)} puts a command under FOUR kinds of keys pointing at the same instance: the
+     * bare label, every bare alias, {@code fallbackPrefix:label}, and {@code
+     * fallbackPrefix:alias} for each alias. Left alone, every one of those keys keeps
+     * resolving to the unregistered module's executor after unload (measured on a real
+     * Paper 1.21.11 server: {@code /upm uninstall} followed by the module's own command
+     * still executing -- PR #457 real-machine UAT, plan 16-02).
+     * <p>
+     * Matching by reference identity rather than by key text is deliberate: Bukkit allows a
+     * later-registered overridable command to take over an earlier command's bare label
+     * slot, in which case that key's VALUE is a different {@link Command} instance and must
+     * be left untouched -- only entries whose value is {@code command} itself are removed.
+     *
+     * @param commandMap the live Bukkit command map
+     * @param command    the specific command instance to purge
+     */
+    private void removeFromKnownCommands(CommandMap commandMap, Command command) {
+        commandMap.getKnownCommands().values().removeIf(known -> known == command);
+    }
+
+    /**
+     * Unregisters every command this framework registered for {@code plugin}, using the
+     * actual registered {@link Command} instances tracked in {@link #commandListMap} (see
+     * {@link #register(UltiToolsPlugin, CommandExecutor, String, String, String...)}) --
+     * not a name-based relookup, which could mis-resolve a different module's command if
+     * two modules share a primary alias under this framework's shared fallback prefix.
+     *
      * @param plugin UltiTools Plugin instance
      */
     public void unregisterAll(UltiToolsPlugin plugin) {
         List<Command> commands = commandListMap.get(plugin);
         if (commands == null) return;
+        CommandMap commandMap = getCommandMap();
+        if (commandMap == null) return;
         for (Command command : commands) {
-            unregister(command.getName());
+            unregisterCommand(commandMap, command);
         }
     }
 
@@ -220,7 +329,10 @@ public class CommandManager {
     }
 
     /**
-     * Unregister all commands for an external plugin.
+     * Unregister all commands for an external plugin, using the actual registered {@link
+     * Command} instances tracked in {@link #externalCommandMap} (see {@link
+     * #registerExternalCommand(String, CommandExecutor, CmdExecutor)}) -- not a name-based
+     * relookup, for the same reason as {@link #unregisterAll(UltiToolsPlugin)}.
      *
      * @param pluginName the external plugin name
      * @since 6.2.2
@@ -228,14 +340,15 @@ public class CommandManager {
     public void unregisterAllExternal(String pluginName) {
         List<Command> commands = externalCommandMap.remove(pluginName);
         if (commands == null) return;
+        CommandMap commandMap = getCommandMap();
+        if (commandMap == null) return;
         for (Command command : commands) {
-            command.unregister(getCommandMap());
+            unregisterCommand(commandMap, command);
         }
     }
 
     private void registerExternalCommand(String pluginName, CommandExecutor executor, CmdExecutor annotation) {
-        registerCommandDirect(executor, annotation.permission(), annotation.description(), annotation.alias());
-        PluginCommand command = getCommand(annotation.alias()[0], UltiTools.getInstance());
+        PluginCommand command = registerCommandDirect(executor, annotation.permission(), annotation.description(), annotation.alias());
         externalCommandMap.computeIfAbsent(pluginName, k -> new ArrayList<>()).add(command);
     }
 

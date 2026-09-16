@@ -25,6 +25,7 @@ import java.util.Set;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -71,6 +72,18 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * and the loader silently produced an empty dictionary for every one of them.
      */
     private static final String[] LANGUAGE_EXTENSIONS = {".json", ".yml", ".yaml"};
+
+    /** Named logger for the D-03 per-module reload line -- see {@link #RELOAD_LOG_MESSAGE_KEY}. */
+    private static final Logger LOGGER = Logger.getLogger(UltiToolsPlugin.class.getName());
+
+    /**
+     * Framework i18n key (this class's own {@code lang/en.json}/{@code lang/zh.json} catalogue,
+     * not a module's) for the per-module reload line {@link #reloadSelf()} logs after its three
+     * steps (D-03). Package-private so {@code UltiToolsPluginLifecycleHookTest} can assert both
+     * shipped catalogues actually carry a translation for it, rather than duplicating the
+     * literal string between production and test code.
+     */
+    static final String RELOAD_LOG_MESSAGE_KEY = "Module '%s' reloaded.";
 
     private Language language;
     @Getter
@@ -721,10 +734,103 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         return VersionComparatorUtil.compare(this.getVersion(), plugin.getVersion()) > 0;
     }
 
+    /**
+     * Extension point for a module's own unload cleanup.
+     * <p>
+     * Called by {@link #unregisterSelf()} <em>before</em> the framework unregisters this
+     * plugin's commands and listeners (D-02), so the module's own beans are still alive
+     * while this runs. {@link #unregisterSelf()} is {@code final} and always calls this
+     * hook and the framework's own unregistration afterward -- a module cannot skip either
+     * by overriding {@link #unregisterSelf()} itself, because that is no longer possible
+     * (D-01). The default body does nothing; override this method, not
+     * {@link #unregisterSelf()}, to add cleanup work.
+     * <p>
+     * If this hook throws, {@link #unregisterSelf()} still unregisters this module's own
+     * commands and listeners before the exception propagates (WR-01,
+     * 16-REVIEW-lifecycle.md) -- a throwing hook is surfaced to the caller, not swallowed,
+     * but it cannot skip the framework's own cleanup the way an unguarded {@code super}
+     * call could. If a cleanup step also fails, that failure does not replace this hook's own
+     * exception: it is attached to it via {@link Throwable#addSuppressed} instead, so the
+     * module author's own failure is always the one that propagates and is never silently lost
+     * behind a secondary framework failure (Codex review on #457, issue #484).
+     */
+    // The empty body IS the design: it is what keeps every existing module unaffected --
+    // a module with no unload work needs no override at all (PMD.UncommentedEmptyMethodBody,
+    // matching CommandValidator#onComplete's established precedent for this exact shape).
+    @SuppressWarnings("PMD.UncommentedEmptyMethodBody")
+    protected void onUnregister() {
+    }
+
     @Override
-    public void unregisterSelf() {
-        getCommandManager().unregisterAll(this);
-        getListenerManager().unregisterAll(this);
+    public final void unregisterSelf() {
+        // Every step below runs regardless of an earlier step's failure (Codex review on #457:
+        // "Run listener cleanup even if command cleanup throws") -- a single flat try/finally
+        // would let CommandManager.unregisterAll(this) throwing skip
+        // ListenerManager.unregisterAll(this) entirely. But running every step is not enough on
+        // its own: plain finally-block semantics also let a LATER step's exception silently
+        // replace an EARLIER one, discarding it (Codex review on #457, issue #484: "Preserve the
+        // hook failure when cleanup also throws"). So failures are collected instead -- the
+        // FIRST one, in source order (hook, then command cleanup, then listener cleanup), is the
+        // one that propagates, and every later failure is attached to it via addSuppressed()
+        // rather than overwriting it.
+        Throwable failure = runUnregisterStep(null, this::onUnregister);
+        failure = runUnregisterStep(failure, () -> getCommandManager().unregisterAll(this));
+        failure = runUnregisterStep(failure, () -> getListenerManager().unregisterAll(this));
+        if (failure instanceof RuntimeException) {
+            throw (RuntimeException) failure;
+        } else if (failure instanceof Error) {
+            throw (Error) failure;
+        }
+    }
+
+    /**
+     * Runs one {@link #unregisterSelf()} cleanup step, collecting any failure onto {@code
+     * previousFailure} instead of letting it replace or be replaced by another step's failure.
+     * <p>
+     * {@code step} can only throw an unchecked exception -- {@link #onUnregister()},
+     * {@code CommandManager#unregisterAll}, and {@code ListenerManager#unregisterAll} all
+     * declare no checked exceptions -- so catching {@code RuntimeException | Error} here covers
+     * every real case without the width of catching {@link Throwable} (this is a deliberate
+     * cleanup barrier, not a broad catch: {@code unregisterSelf()} always runs every remaining
+     * step and always rethrows exactly one collected failure, per its own javadoc).
+     *
+     * @param previousFailure the failure already collected from an earlier step, or {@code null}
+     *                        if every earlier step (if any) succeeded
+     * @param step            the cleanup step to run
+     * @return {@code previousFailure}, with {@code step}'s own failure (if any) attached to it
+     *     via {@link Throwable#addSuppressed}; or, if {@code previousFailure} was {@code null},
+     *     {@code step}'s own failure, or {@code null} if {@code step} completed normally
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // deliberate cleanup barrier -- see javadoc above
+    private static Throwable runUnregisterStep(Throwable previousFailure, Runnable step) {
+        try {
+            step.run();
+        } catch (RuntimeException | Error e) {
+            if (previousFailure == null) {
+                return e;
+            }
+            previousFailure.addSuppressed(e);
+        }
+        return previousFailure;
+    }
+
+    /**
+     * Extension point for a module's own reload work.
+     * <p>
+     * Called by {@link #reloadSelf()} <em>after</em> the framework's own reload steps -- config
+     * reload, language-catalogue refresh, {@code @ConditionalOnConfig} drift report, and the
+     * framework-owned per-module reload log line (D-02, D-03) -- so a real-work override sees
+     * the already-reloaded configuration rather than the stale one. {@link #reloadSelf()} is
+     * {@code final} and always runs its own steps first; a module cannot skip them by
+     * overriding {@link #reloadSelf()} itself, because that is no longer possible (D-01). The
+     * default body does nothing; override this method, not {@link #reloadSelf()}, to add reload
+     * work.
+     */
+    // The empty body IS the design: it is what keeps every existing module unaffected --
+    // a module with no reload work needs no override at all (PMD.UncommentedEmptyMethodBody,
+    // matching CommandValidator#onComplete's established precedent for this exact shape).
+    @SuppressWarnings("PMD.UncommentedEmptyMethodBody")
+    protected void onReload() {
     }
 
     /**
@@ -733,18 +839,21 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * Also reports (but does not act on) any {@code @ConditionalOnConfig} drift: the condition
      * is evaluated once, at component-scan time during startup, so a reload can only log that a
      * watched key has changed direction since then -- it never registers, unregisters, or
-     * rebuilds anything (issue #392, D-01). A module overriding {@code reloadSelf()} without
-     * calling {@code super.reloadSelf()} will not get this report; that is pre-existing
-     * behaviour for the two statements above too, stated here so it is not a surprise.
+     * rebuilds anything (issue #392, D-01). {@code final} and always runs its own three steps,
+     * then logs one framework-owned INFO line naming this module (D-03), then calls
+     * {@link #onReload()} -- a module can no longer skip any of this by overriding
+     * {@code reloadSelf()} itself, because that override point no longer exists (D-01).
      */
     @Override
-    public void reloadSelf() {
+    public final void reloadSelf() {
         getConfigManager().reloadConfigs(this);
         // Reinitialize language in case language setting changed
         language = createLanguageFromPath(resourceFolderPath);
         // @ConditionalOnConfig is evaluated once at component-scan time; a reload can only
         // report drift on a watched key, never re-register or rebuild anything (#392, D-01).
         ConditionalRegistrationEvaluator.reportDrift(this);
+        LOGGER.log(Level.INFO, String.format(UltiTools.getInstance().i18n(RELOAD_LOG_MESSAGE_KEY), getPluginName()));
+        onReload();
     }
 
     /**
