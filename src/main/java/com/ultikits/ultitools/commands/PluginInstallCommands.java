@@ -221,6 +221,12 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             } else {
                 sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("卸载失败！请检查是否拼写正确！"));
             }
+        } catch (IllegalStateException e) {
+            // The module's own unload threw (review WR-01). It has still been removed from the
+            // loaded modules and its jars still deleted where possible: report both, so the
+            // operator knows whether it will come back on restart.
+            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("卸载出错！模块已从已加载列表移除，但其卸载过程抛出了异常，详见控制台。"));
+            sendJarOutcomeAfterUnloadError(sender, e);
         } catch (NoSuchFileException e) {
             // The module was found by this exact name and unloaded, but no jar carries it (review
             // WR-03) -- a spelling hint would be false here.
@@ -233,6 +239,29 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("删除失败！文件访问错误！请手动删除！"));
             sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"));
         }
+    }
+
+    /**
+     * Reports the jar outcome {@link PluginInstallUtils#uninstallPlugin} attached to its
+     * unload-error exception: none attached means every matching jar was deleted.
+     */
+    private static void sendJarOutcomeAfterUnloadError(CommandSender sender, IllegalStateException unloadError) {
+        for (Throwable jarFailure : unloadError.getSuppressed()) {
+            if (jarFailure instanceof NoSuchFileException) {
+                sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n("模块已卸载，但在 %s 中没有找到它的 JAR 文件。"), ((NoSuchFileException) jarFailure).getFile()));
+                return;
+            }
+            if (jarFailure instanceof FileSystemException) {
+                sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("卸载失败！以下模块 JAR 文件无法删除，重启后模块会再次加载，请手动删除：%s"), namedFiles((FileSystemException) jarFailure)));
+                return;
+            }
+            if (jarFailure instanceof IOException) {
+                sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("删除失败！文件访问错误！请手动删除！"));
+                sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"));
+                return;
+            }
+        }
+        sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("模块的 JAR 文件已全部删除。"));
     }
 
     /**

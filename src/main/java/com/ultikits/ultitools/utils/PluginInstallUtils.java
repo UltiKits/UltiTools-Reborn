@@ -498,12 +498,18 @@ public class PluginInstallUtils {
      * @throws java.nio.file.NoSuchFileException if a loaded module of that name was unloaded but
      *     no jar in the plugins folder carries its name; {@link
      *     java.nio.file.FileSystemException#getFile()} names the plugins folder
+     * @throws IllegalStateException if a matching module's own unload threw. The module has still
+     *     been removed from the loaded modules and every matching jar deletion has still been
+     *     attempted; the module's exception is the cause, and the jar outcome that would otherwise
+     *     have been thrown (a {@code FileSystemException} or {@code NoSuchFileException} as above)
+     *     is attached as a suppressed exception -- none is attached when every jar was deleted
      * @throws java.nio.file.FileSystemException if a matching jar could not be deleted; {@link
      *     java.nio.file.FileSystemException#getFile()} names one such jar and each further one is
      *     attached as a suppressed {@code FileSystemException}. Every jar named will load again on
      *     the next restart
      * @throws IOException if another I/O error occurs
      */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // deliberate barrier: a module's unload failure is collected and reported, see the loop
     public static boolean uninstallPlugin(String name) throws IOException {
         PluginManager pluginManager = UltiTools.getInstance().getPluginManager();
         List<UltiToolsPlugin> matches = new ArrayList<>();
@@ -512,6 +518,7 @@ public class PluginInstallUtils {
                 matches.add(plugin);
             }
         }
+        Throwable unloadFailure = null;
         for (UltiToolsPlugin plugin : matches) {
             // Unload through PluginManager#unregister, the framework's one full unload path
             // (#503): it cancels the module's @Scheduled tasks and releases its @PlayerCache,
@@ -520,16 +527,55 @@ public class PluginInstallUtils {
             // unregisterSelf() directly skipped all of that. The module leaves the plugin list
             // even if its own unload hook throws, because unregister() has closed its context
             // by then and a listed-but-closed module would be reported as still loaded.
+            //
+            // A throwing unload is collected, not propagated (review WR-01): the module is already
+            // unloaded and closed at that point, so the jar is still deleted -- keeping it would
+            // bring back on restart a module the operator asked to remove -- and the failure is
+            // reported together with the jar outcome below.
             try {
                 pluginManager.unregister(plugin);
+            } catch (Exception | Error e) {
+                LOGGER.log(Level.SEVERE, "Module " + name + " threw while unloading for uninstall; "
+                        + "it has been removed from the loaded modules", e);
+                if (unloadFailure == null) {
+                    unloadFailure = e;
+                } else {
+                    unloadFailure.addSuppressed(e);
+                }
             } finally {
                 pluginManager.getPluginList().remove(plugin);
             }
         }
+        boolean jarsDeleted;
+        try {
+            jarsDeleted = deleteModuleJars(name, !matches.isEmpty());
+        } catch (IOException jarFailure) {
+            if (unloadFailure != null) {
+                throw unloadFailed(name, unloadFailure, jarFailure);
+            }
+            throw jarFailure;
+        }
+        if (unloadFailure != null) {
+            throw unloadFailed(name, unloadFailure, null);
+        }
+        return jarsDeleted;
+    }
+
+    /**
+     * The jar half of {@link #uninstallPlugin(String)}: finds and deletes every jar whose {@code
+     * plugin.yml} {@code name} matches.
+     *
+     * @param name           the module name
+     * @param moduleUnloaded whether a loaded module of that name was unloaded first
+     * @return {@code true} if every matching jar was deleted; {@code false} if no jar matched and
+     *     no module was unloaded
+     * @throws IOException as documented on {@link #uninstallPlugin(String)}
+     */
+    private static boolean deleteModuleJars(String name, boolean moduleUnloaded) throws IOException {
         File folder = new File(UltiTools.getInstance().getDataFolder() + "/plugins");
         File[] listFiles = folder.listFiles();
         if (listFiles == null) {
-            return noJarFound(folder, name, !matches.isEmpty());
+            return noJarFound(folder, name, moduleUnloaded);
         }
         List<File> matchingJars = new ArrayList<>();
         for (File file : listFiles) {
@@ -546,13 +592,31 @@ public class PluginInstallUtils {
             }
         }
         if (matchingJars.isEmpty()) {
-            return noJarFound(folder, name, !matches.isEmpty());
+            return noJarFound(folder, name, moduleUnloaded);
         }
         // Delete every matching jar, not only the first one listed (review WR-02): a second jar of
         // the same module loads it again on restart. Report the real outcome (#501): every jar
         // that stays on disk is named, so success is reported only once all of them are gone.
         deleteAllOrThrow(matchingJars);
         return true;
+    }
+
+    /**
+     * Builds the failure {@link #uninstallPlugin(String)} throws when a module's own unload threw.
+     *
+     * @param name          the module name
+     * @param unloadFailure the module's exception
+     * @param jarFailure    the jar outcome that would otherwise have been thrown, or {@code null}
+     *                      when every matching jar was deleted
+     * @return the exception to throw
+     */
+    private static IllegalStateException unloadFailed(String name, Throwable unloadFailure, IOException jarFailure) {
+        IllegalStateException failure = new IllegalStateException(
+                "Module " + name + " was removed from the loaded modules, but its unload threw", unloadFailure);
+        if (jarFailure != null) {
+            failure.addSuppressed(jarFailure);
+        }
+        return failure;
     }
 
     /**
