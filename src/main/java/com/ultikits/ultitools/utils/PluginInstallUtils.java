@@ -707,11 +707,14 @@ public class PluginInstallUtils {
      *
      * @param identifyString the plugin identify string
      * @return {@code true} if the module was updated; {@code false} if the catalogue lookup or
-     *     download failed, the download is not a JAR of this module at the expected version, or an
-     *     update of the same module was already running -- in each of those cases nothing changed
+     *     download failed, the staging directory could not be prepared or is not on the modules
+     *     folder's file system, the download is not a JAR of this module at the expected version, a
+     *     JAR of the module newer than that version is already present, or an update or uninstall of
+     *     the same module was already running -- in each of those cases nothing changed
      * @throws java.io.UncheckedIOException wrapping a {@link java.nio.file.FileSystemException}
      *     when an older JAR could not be moved out of the modules folder or the new version could
-     *     not be moved in; {@link java.nio.file.FileSystemException#getFile()} names that JAR or
+     *     not be moved in, and whenever a set-aside JAR could not be moved back; the move's
+     *     exception is the cause; {@link java.nio.file.FileSystemException#getFile()} names that JAR or
      *     path, and the older JARs have been moved back (any that could not be are attached as
      *     suppressed {@code FileSystemException}s) (#505). This is an exception rather than
      *     {@code false} because {@code false} means nothing was changed, and a failed move can
