@@ -299,6 +299,34 @@ class PluginInstallUtilsUninstallTest {
         }
     }
 
+    @Test
+    @DisplayName("review r4 WR-03: an update of a module whose uninstall is running is refused")
+    void updateDuringAnUninstallOfTheSameModule_isRefused() throws Exception {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        when(plugin.getIdentifyString()).thenReturn("Uninstall-Fixture");
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        File jar = writeModuleJar(MODULE_NAME);
+        // An unreachable catalogue: an update that is NOT refused fails its lookup instead.
+        PluginInstallUtils.setBaseUrlForTesting("http://127.0.0.1:9");
+        AtomicReference<PluginInstallUtils.UpdateOutcome> duringUninstall = new AtomicReference<>();
+        org.mockito.Mockito.doAnswer(invocation -> {
+            duringUninstall.set(PluginInstallUtils.updatePluginTransactionally("uninstall-fixture"));
+            return null;
+        }).when(commandManager).unregisterAll(plugin);
+        try {
+            assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME)).isTrue();
+        } finally {
+            PluginInstallUtils.resetBaseUrl();
+        }
+
+        assertThat(duringUninstall.get().getStatus())
+                .as("the uninstall holds the module's guard, keyed by the loaded module's identify-string")
+                .isEqualTo(PluginInstallUtils.UpdateOutcome.Status.ALREADY_IN_PROGRESS);
+        assertThat(jar).doesNotExist();
+    }
+
     private static java.util.List<String> namedFiles(FileSystemException failure) {
         java.util.List<String> files = new java.util.ArrayList<>();
         files.add(failure.getFile());

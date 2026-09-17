@@ -56,6 +56,8 @@ class PluginInstallUtilsUpdateTransactionTest {
     private File stagingFolder;
     private byte[] newJarBytes;
     private RecordingOperations operations;
+    /** The catalogue's latest version; tests may change it before updating. */
+    private volatile String catalogueVersion = "2.0.0";
 
     @BeforeEach
     void setUp() throws IOException {
@@ -64,7 +66,12 @@ class PluginInstallUtilsUpdateTransactionTest {
         pluginsFolder = new File(dataFolder, "plugins");
         stagingFolder = new File(dataFolder, PluginInstallUtils.STAGING_DIRECTORY_NAME);
         assertThat(pluginsFolder.mkdirs()).isTrue();
-        TestHelper.mockUltiToolsInstance(ultiTools -> when(ultiTools.getDataFolder()).thenReturn(dataFolder));
+        com.ultikits.ultitools.manager.PluginManager pluginManager =
+                org.mockito.Mockito.mock(com.ultikits.ultitools.manager.PluginManager.class);
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
+            when(ultiTools.getDataFolder()).thenReturn(dataFolder);
+            when(ultiTools.getPluginManager()).thenReturn(pluginManager);
+        });
         newJarBytes = jarBytes("2.0.0");
 
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -72,8 +79,9 @@ class PluginInstallUtilsUpdateTransactionTest {
         server.createContext("/plugin/get", exchange -> respond(exchange,
                 "{\"code\":\"200\",\"data\":{\"id\":7,\"identifyString\":\"" + IDENTIFY_STRING + "\"}}"));
         server.createContext("/plugin/7/latest", exchange -> respond(exchange,
-                "{\"code\":\"200\",\"data\":\"2.0.0\"}"));
-        server.createContext("/plugin/7/2.0.0/download", exchange -> respond(exchange,
+                "{\"code\":\"200\",\"data\":\"" + catalogueVersion + "\"}"));
+        // Every /plugin/7/<version>/download request answers with the artifact link.
+        server.createContext("/plugin/7/", exchange -> respond(exchange,
                 "{\"code\":\"200\",\"data\":\"" + origin + "/artifact.jar\"}"));
         server.start();
         PluginInstallUtils.setBaseUrlForTesting(origin);
@@ -129,6 +137,7 @@ class PluginInstallUtilsUpdateTransactionTest {
 
         assertThat(outcome.getStatus()).isEqualTo(Status.OLD_JAR_NOT_MOVED);
         assertThat(outcome.getFiles()).hasSize(1);
+        assertThat(outcome.getFailureReason()).isEqualTo("java.io.IOException: injected: cannot move the old jar aside");
         assertThat(outcome.getFiles().get(0)).isIn(first.getAbsolutePath(), second.getAbsolutePath());
         assertThat(outcome.getUnrestoredFiles()).isEmpty();
         assertThat(first).as("the jar moved aside before the failure is moved back").hasBinaryContent(firstBytes);
@@ -149,6 +158,9 @@ class PluginInstallUtilsUpdateTransactionTest {
         assertThat(outcome.getStatus()).isEqualTo(Status.NEW_JAR_NOT_INSTALLED);
         assertThat(outcome.getFiles()).containsExactly(new File(pluginsFolder, NEW_JAR_NAME).getAbsolutePath());
         assertThat(outcome.getUnrestoredFiles()).isEmpty();
+        assertThat(outcome.getFailureReason())
+                .as("review r4 WR-04: the failed move's cause is carried, not dropped")
+                .isEqualTo("java.io.IOException: injected: cannot move the new version in");
         assertThat(oldJar).hasBinaryContent(oldBytes);
         assertThat(jarEntries()).containsExactly(oldJar.getName());
         assertThat(stagingEntries()).isEmpty();
@@ -168,6 +180,10 @@ class PluginInstallUtilsUpdateTransactionTest {
         Path aside = new File(outcome.getUnrestoredFiles().get(0)).toPath();
         assertThat(aside.getParent().toFile()).isEqualTo(stagingFolder);
         assertThat(aside).as("the unrestored jar still exists where the report says it is").exists();
+        assertThat(outcome.getUnrestoredTargets())
+                .as("review r4 WR-02: the original path, with its original file name, must be reported; "
+                        + "moving the .old file back under its staging name leaves it unloadable")
+                .containsExactly(new File(pluginsFolder, IDENTIFY_STRING + "-1.0.0.jar").getAbsolutePath());
     }
 
     @Test
@@ -217,6 +233,112 @@ class PluginInstallUtilsUpdateTransactionTest {
         assertThat(jarEntries()).containsExactly(oldJar.getName());
         assertThat(operations.count("find")).as("nothing is selected or moved after a failed validation").isZero();
         assertThat(stagingEntries()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("review r4 WR-04: updatePlugin keeps a failed move's exception as the cause of the thrown FileSystemException")
+    void updatePlugin_keepsTheMoveFailureAsCause() throws IOException {
+        writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        operations.failMoveIn = true;
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() -> PluginInstallUtils.updatePlugin(IDENTIFY_STRING));
+
+        assertThat(thrown).isInstanceOf(java.io.UncheckedIOException.class);
+        assertThat(thrown.getCause()).isInstanceOf(java.nio.file.FileSystemException.class);
+        assertThat(thrown.getCause().getCause())
+                .as("the operator's diagnosis needs the original exception, not only the status name")
+                .isInstanceOf(IOException.class)
+                .hasMessage("injected: cannot move the new version in");
+    }
+
+    @Test
+    @DisplayName("review r4 WR-01: staging and modules folders on different file systems are refused before anything is downloaded or moved")
+    void differentFileStores_areRefusedBeforeAnyChange() throws IOException {
+        File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        operations.sameFileStore = false;
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus()).isEqualTo(Status.FILE_SYSTEMS_DIFFER);
+        assertThat(outcome.getFiles()).containsExactly(stagingFolder.getAbsolutePath(), pluginsFolder.getAbsolutePath());
+        assertThat(operations.count("download")).isZero();
+        assertThat(jarEntries()).containsExactly(oldJar.getName());
+    }
+
+    @Test
+    @DisplayName("review r4 WR-01: a move that cannot be atomic is refused with nothing changed, never copied")
+    void atomicMoveNotSupported_isRefusedAndNothingChanges() throws IOException {
+        File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        byte[] oldBytes = Files.readAllBytes(oldJar.toPath());
+        operations.moveAsideNotAtomic = true;
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus()).isEqualTo(Status.FILE_SYSTEMS_DIFFER);
+        assertThat(oldJar).hasBinaryContent(oldBytes);
+        assertThat(jarEntries()).containsExactly(oldJar.getName());
+        assertThat(stagingEntries()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("review r4 IN-03: a staging directory that cannot be prepared is reported as such, not as a failed download")
+    void stagingCannotBePrepared_isStagingUnavailable() throws IOException {
+        File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        assertThat(stagingFolder.createNewFile()).as("staging path occupied by a regular file").isTrue();
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus()).isEqualTo(Status.STAGING_UNAVAILABLE);
+        assertThat(outcome.getFiles()).containsExactly(stagingFolder.getAbsolutePath());
+        assertThat(jarEntries()).containsExactly(oldJar.getName());
+    }
+
+    @Test
+    @DisplayName("review r4 WR-05: a jar newer than the catalogue's latest version is never replaced by it")
+    void newerJarInTheModulesFolder_isRefusedAndNothingChanges() throws IOException {
+        File older = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        File newer = writeJar("UltiChat-2.1.0-beta.jar", "2.1.0");
+        byte[] newerBytes = Files.readAllBytes(newer.toPath());
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus()).isEqualTo(Status.NEWER_VERSION_PRESENT);
+        assertThat(outcome.getFiles()).containsExactly(newer.getAbsolutePath());
+        assertThat(outcome.getFoundVersion()).isEqualTo("2.1.0");
+        assertThat(outcome.getExpectedVersion()).isEqualTo("2.0.0");
+        assertThat(newer).as("the operator's newer jar is kept").hasBinaryContent(newerBytes);
+        assertThat(jarEntries()).containsExactlyInAnyOrder(older.getName(), newer.getName());
+        assertThat(stagingEntries()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("review r4 IN-04: an unquoted plugin.yml version such as 2.10 is compared as written, not as the number 2.1")
+    void unquotedVersionTwoPointTen_matchesCatalogueTwoPointTen() throws IOException {
+        writeJar(IDENTIFY_STRING + "-2.9.0.jar", "2.9.0");
+        catalogueVersion = "2.10";
+        operations.downloadBytes = jarBytesWithRawYaml("name: Fixture\nversion: 2.10\nidentify-string: " + IDENTIFY_STRING + "\n");
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus()).isEqualTo(Status.UPDATED);
+        assertThat(jarEntries()).containsExactly(IDENTIFY_STRING + "-2.10.jar");
+    }
+
+    @Test
+    @DisplayName("review r4 WR-03: an uninstall of a module whose update is running is refused and removes nothing")
+    void uninstallDuringAnUpdateOfTheSameModule_isRefused() throws IOException {
+        writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        AtomicReference<Throwable> uninstallResult = new AtomicReference<>();
+        operations.duringDownload = () -> uninstallResult.set(org.assertj.core.api.Assertions.catchThrowable(
+                () -> PluginInstallUtils.uninstallPlugin("Fixture")));
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(uninstallResult.get())
+                .as("the uninstall resolves the same module through its jar's identify-string and meets the update's guard")
+                .isInstanceOf(java.util.ConcurrentModificationException.class);
+        assertThat(outcome.getStatus()).isEqualTo(Status.UPDATED);
+        assertThat(jarEntries()).containsExactly(NEW_JAR_NAME);
     }
 
     @Test
@@ -332,6 +454,8 @@ class PluginInstallUtilsUpdateTransactionTest {
         private volatile RuntimeException downloadThrowsUnchecked;
         private volatile IOException downloadThrowsAfterWriting;
         private volatile File extraFoundJar;
+        private volatile boolean sameFileStore = true;
+        private volatile boolean moveAsideNotAtomic;
         private int moveAsideCalls;
 
         @Override
@@ -387,6 +511,10 @@ class PluginInstallUtilsUpdateTransactionTest {
                 }
             } else {
                 events.add("move-aside");
+                if (moveAsideNotAtomic) {
+                    throw new java.nio.file.AtomicMoveNotSupportedException(source.toString(), target.toString(),
+                            "injected: different file stores");
+                }
                 moveAsideCalls++;
                 if (moveAsideCalls == failMoveAsideAtCall) {
                     throw new IOException("injected: cannot move the old jar aside");
@@ -402,6 +530,12 @@ class PluginInstallUtilsUpdateTransactionTest {
                 throw new IOException("injected: cannot delete the set-aside jar");
             }
             DEFAULT.delete(path);
+        }
+
+        @Override
+        public boolean isSameFileStore(Path first, Path second) {
+            events.add("same-store");
+            return sameFileStore;
         }
 
         int indexOf(String event) {
@@ -429,6 +563,16 @@ class PluginInstallUtilsUpdateTransactionTest {
             out.write(jarBytes(version));
         }
         return jar;
+    }
+
+    private static byte[] jarBytesWithRawYaml(String pluginYml) throws IOException {
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        try (JarOutputStream out = new JarOutputStream(bytes)) {
+            out.putNextEntry(new JarEntry("plugin.yml"));
+            out.write(pluginYml.getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+        return bytes.toByteArray();
     }
 
     private static byte[] jarBytes(String version) throws IOException {
