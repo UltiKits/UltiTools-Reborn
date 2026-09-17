@@ -1,6 +1,9 @@
 package com.ultikits.ultitools.commands;
 
 import java.io.IOException;
+import java.nio.file.FileSystemException;
+import java.nio.file.NoSuchFileException;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.bukkit.ChatColor;
@@ -19,6 +22,8 @@ import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.annotations.command.RunAsync;
 import com.ultikits.ultitools.entities.PluginEntity;
 import com.ultikits.ultitools.entities.UpdateInfo;
+import com.ultikits.ultitools.exceptions.ErrorCode;
+import com.ultikits.ultitools.exceptions.PluginModuleException;
 import com.ultikits.ultitools.manager.UpdateManager;
 import com.ultikits.ultitools.utils.MessageUtils;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
@@ -211,15 +216,78 @@ public class PluginInstallCommands extends BaseCommandExecutor {
     public void uninstallPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin) {
         try {
             if (PluginInstallUtils.uninstallPlugin(plugin)) {
-                sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("卸载成功！请手动删除本地文件，否则重启之后还会启用！"));
-                sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"));
+                // uninstallPlugin returns true only after every matching jar is deleted (#501), so
+                // there is nothing left for the operator to remove by hand.
+                sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("卸载成功！模块的 JAR 文件已全部删除。"));
             } else {
                 sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("卸载失败！请检查是否拼写正确！"));
             }
+        } catch (PluginModuleException e) {
+            if (e.getErrorCode() != ErrorCode.PLUGIN_OPERATION_IN_PROGRESS) {
+                throw e;
+            }
+            // An update or another uninstall of the same module is running (review r4 WR-03).
+            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("卸载失败！该模块正在进行更新或卸载，本次未做任何更改。"));
+        } catch (IllegalStateException e) {
+            // The module's own unload threw (review WR-01). It has still been removed from the
+            // loaded modules and its jars still deleted where possible: report both, so the
+            // operator knows whether it will come back on restart.
+            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("卸载出错！模块已从已加载列表移除，但其卸载过程抛出了异常，详见控制台。"));
+            sendJarOutcomeAfterUnloadError(sender, e);
+        } catch (NoSuchFileException e) {
+            // The module was found by this exact name and unloaded, but no jar carries it (review
+            // WR-03) -- a spelling hint would be false here.
+            sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n("模块已卸载，但在 %s 中没有找到它的 JAR 文件。"), e.getFile()));
+        } catch (FileSystemException e) {
+            // Matching jars were found but not all deleted (#501): each loads the module again on
+            // restart, so name every file the operator has to remove.
+            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("卸载失败！以下模块 JAR 文件无法删除，重启后模块会再次加载，请手动删除：%s"), namedFiles(e)));
         } catch (IOException e) {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("删除失败！文件访问错误！请手动删除！"));
             sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"));
         }
+    }
+
+    /**
+     * Reports the jar outcome {@link PluginInstallUtils#uninstallPlugin} attached to its
+     * unload-error exception: none attached means every matching jar was deleted.
+     */
+    private static void sendJarOutcomeAfterUnloadError(CommandSender sender, IllegalStateException unloadError) {
+        for (Throwable jarFailure : unloadError.getSuppressed()) {
+            if (jarFailure instanceof NoSuchFileException) {
+                sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n("模块已卸载，但在 %s 中没有找到它的 JAR 文件。"), ((NoSuchFileException) jarFailure).getFile()));
+                return;
+            }
+            if (jarFailure instanceof FileSystemException) {
+                sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("卸载失败！以下模块 JAR 文件无法删除，重启后模块会再次加载，请手动删除：%s"), namedFiles((FileSystemException) jarFailure)));
+                return;
+            }
+            if (jarFailure instanceof IOException) {
+                sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("删除失败！文件访问错误！请手动删除！"));
+                sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"));
+                return;
+            }
+        }
+        sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("模块的 JAR 文件已全部删除。"));
+    }
+
+    /**
+     * Joins the file named by {@code failure} and by every {@code FileSystemException} suppressed
+     * on it -- the shape {@link PluginInstallUtils} uses to report several files at once.
+     */
+    private static String namedFiles(FileSystemException failure) {
+        List<String> files = new ArrayList<>();
+        if (failure.getFile() != null) {
+            files.add(failure.getFile());
+        }
+        for (Throwable suppressed : failure.getSuppressed()) {
+            if (suppressed instanceof FileSystemException && ((FileSystemException) suppressed).getFile() != null) {
+                files.add(((FileSystemException) suppressed).getFile());
+            }
+        }
+        return files.isEmpty()
+                ? UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"
+                : String.join(", ", files);
     }
 
     @CmdMapping(format = "check")
@@ -263,11 +331,100 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         }
         sender.sendMessage(ChatColor.YELLOW + String.format(
             UltiTools.getInstance().i18n("正在更新 %s..."), pluginName));
-        if (PluginInstallUtils.updatePlugin(info.getIdentifyString())) {
-            sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("更新成功！请重启服务器以应用更新。"));
-        } else {
-            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("更新失败！"));
+        sendUpdateOutcome(sender, PluginInstallUtils.updatePluginTransactionally(info.getIdentifyString()), false);
+    }
+
+    /**
+     * Reports one staged update's outcome (#505, review r3). Every failure states whether the
+     * modules folder was left unchanged; an old JAR that could not be moved back is named, because
+     * the module would be missing after a restart until it is.
+     */
+    private void sendUpdateOutcome(CommandSender sender, PluginInstallUtils.UpdateOutcome outcome, boolean partOfUpdateAll) {
+        UltiTools ultiTools = UltiTools.getInstance();
+        switch (outcome.getStatus()) {
+            case UPDATED:
+                // Inside /upm update all the restart instruction waits for the summary: restarting on a
+                // per-module line kills the loop inside a later module's update (review r4 WR-01).
+                sender.sendMessage(ChatColor.GREEN + (partOfUpdateAll
+                        ? ultiTools.i18n("更新成功。")
+                        : ultiTools.i18n("更新成功！请重启服务器以应用更新。")));
+                if (!outcome.getLeftoverFiles().isEmpty()) {
+                    sender.sendMessage(ChatColor.YELLOW + String.format(ultiTools.i18n("以下已移出模块目录的旧版本 JAR 未能删除，它们不会被加载，可手动删除：%s"),
+                            String.join(", ", outcome.getLeftoverFiles())));
+                }
+                return;
+            case ALREADY_IN_PROGRESS:
+                sender.sendMessage(ChatColor.RED + ultiTools.i18n("更新失败！该模块正在进行另一项更新或卸载，本次未做任何更改。"));
+                return;
+            case INVALID_DOWNLOAD:
+                sender.sendMessage(ChatColor.RED + ultiTools.i18n("更新失败！下载的文件不是该模块对应版本的有效 JAR，未做任何更改。"));
+                return;
+            case NEWER_VERSION_PRESENT:
+                sender.sendMessage(ChatColor.RED + String.format(ultiTools.i18n("更新失败！模块目录中已有比最新目录版本 %s 更新的 JAR：%s（版本 %s），本次未做任何更改。"),
+                        outcome.getExpectedVersion(), String.join(", ", outcome.getFiles()), outcome.getFoundVersion()));
+                return;
+            case STAGING_UNAVAILABLE:
+                sender.sendMessage(ChatColor.RED + String.format(ultiTools.i18n("更新失败！无法准备暂存目录 %s，本次未做任何更改。"),
+                        String.join(", ", outcome.getFiles())));
+                sendFailureReason(sender, outcome);
+                return;
+            case FILE_SYSTEMS_DIFFER:
+                sender.sendMessage(ChatColor.RED + String.format(ultiTools.i18n("更新失败！暂存目录 %s 与模块目录 %s 不在同一文件系统上，无法原子地替换 JAR，本次未做任何更改。"),
+                        outcome.getFiles().isEmpty() ? "" : outcome.getFiles().get(0),
+                        outcome.getFiles().size() < 2 ? "" : outcome.getFiles().get(1)));
+                sendFailureReason(sender, outcome);
+                sendUnrestored(sender, outcome);
+                return;
+            case OLD_JAR_NOT_MOVED:
+                sender.sendMessage(ChatColor.RED + String.format(ultiTools.i18n("更新失败！无法将旧版本 JAR 文件移出模块目录：%s"),
+                        String.join(", ", outcome.getFiles())));
+                sendFailureReason(sender, outcome);
+                sendRestoreResult(sender, outcome);
+                return;
+            case NEW_JAR_NOT_INSTALLED:
+                sender.sendMessage(ChatColor.RED + String.format(ultiTools.i18n("更新失败！无法将新版本放入模块目录：%s"),
+                        String.join(", ", outcome.getFiles())));
+                sendFailureReason(sender, outcome);
+                sendRestoreResult(sender, outcome);
+                return;
+            case DOWNLOAD_FAILED:
+            default:
+                sender.sendMessage(ChatColor.RED + ultiTools.i18n("更新失败！"));
         }
+    }
+
+    /** Names the failed file operation's cause, so "already exists" and "access denied" read differently (review r4 WR-04). */
+    private static void sendFailureReason(CommandSender sender, PluginInstallUtils.UpdateOutcome outcome) {
+        if (outcome.getFailureReason() != null) {
+            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("原因：%s"), outcome.getFailureReason()));
+        }
+    }
+
+    private void sendRestoreResult(CommandSender sender, PluginInstallUtils.UpdateOutcome outcome) {
+        if (outcome.getUnrestoredFiles().isEmpty()) {
+            sender.sendMessage(ChatColor.YELLOW + UltiTools.getInstance().i18n("旧版本已全部恢复，模块目录未做任何更改。"));
+            return;
+        }
+        sendUnrestored(sender, outcome);
+    }
+
+    /**
+     * Names each set-aside JAR that could not be moved back together with the exact original path,
+     * file name included, to restore it to (review r4 WR-02): moved back under its staging name the
+     * JAR is not loaded.
+     */
+    private static void sendUnrestored(CommandSender sender, PluginInstallUtils.UpdateOutcome outcome) {
+        List<String> asides = outcome.getUnrestoredFiles();
+        if (asides.isEmpty()) {
+            return;
+        }
+        List<String> targets = outcome.getUnrestoredTargets();
+        List<String> pairs = new ArrayList<>();
+        for (int i = 0; i < asides.size(); i++) {
+            pairs.add(i < targets.size() ? asides.get(i) + " -> " + targets.get(i) : asides.get(i));
+        }
+        sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("以下旧版本 JAR 未能移回模块目录。重启前请将每个文件移动到箭头后的路径，恢复其原文件名：%s"),
+                String.join("; ", pairs)));
     }
 
     private void updateAllPlugins(CommandSender sender) {
@@ -278,14 +435,38 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         }
         int success = 0;
         int failed = 0;
+        int skipped = 0;
+        boolean unrestoredLeft = false;
         for (UpdateInfo info : updateManager.getModuleUpdates().values()) {
             sender.sendMessage(ChatColor.YELLOW + String.format(
                 UltiTools.getInstance().i18n("正在更新 %s..."), info.getPluginName()));
-            if (PluginInstallUtils.updatePlugin(info.getIdentifyString())) {
-                success++;
-            } else {
-                failed++;
+            PluginInstallUtils.UpdateOutcome outcome =
+                    PluginInstallUtils.updatePluginTransactionally(info.getIdentifyString());
+            sendUpdateOutcome(sender, outcome, true);
+            switch (outcome.getStatus()) {
+                case UPDATED:
+                    success++;
+                    break;
+                case ALREADY_IN_PROGRESS:
+                    skipped++;
+                    break;
+                default:
+                    failed++;
+                    unrestoredLeft |= !outcome.getUnrestoredFiles().isEmpty();
             }
+        }
+        if (unrestoredLeft) {
+            // Restarting before the old JARs named above are moved back loses those modules.
+            sender.sendMessage(ChatColor.YELLOW + String.format(
+                UltiTools.getInstance().i18n("全部更新完成！%d个成功，%d个失败，%d个跳过。请先按上面的提示将未能移回的旧版本 JAR 移回模块目录，再重启服务器。"),
+                success, failed, skipped));
+            return;
+        }
+        if (skipped > 0) {
+            sender.sendMessage(ChatColor.GREEN + String.format(
+                UltiTools.getInstance().i18n("全部更新完成！%d个成功，%d个失败，%d个因同一模块已有更新正在进行而跳过。请重启服务器。"),
+                success, failed, skipped));
+            return;
         }
         sender.sendMessage(ChatColor.GREEN + String.format(
             UltiTools.getInstance().i18n("全部更新完成！%d个成功，%d个失败。请重启服务器。"),

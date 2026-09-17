@@ -63,6 +63,7 @@ import com.ultikits.ultitools.listeners.UpdateJoinListener;
 import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.utils.Metrics;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
+import com.ultikits.ultitools.utils.PluginInstallUtils;
 import com.ultikits.ultitools.utils.SecurityPolicy;
 import com.ultikits.ultitools.websocket.PanelResponderRegistry;
 
@@ -686,9 +687,20 @@ public final class UltiTools extends JavaPlugin implements Localized {
      * @return collected URLs of the JARs that passed validation, empty if {@code pluginDir} is
      *         {@code null} or does not exist
      */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // deliberate barrier: update recovery must never break boot
     static List<URL> collectModuleJarUrls(File pluginDir) {
         List<URL> urls = new ArrayList<>();
-        if (pluginDir == null || !pluginDir.exists()) {
+        if (pluginDir == null) {
+            return urls;
+        }
+        // Recover module updates a crash or kill interrupted, before any module JAR is scanned or
+        // opened (review r4 WR-01). Isolated: a failure here is logged and boot continues.
+        try {
+            PluginInstallUtils.recoverInterruptedUpdates(pluginDir.getParentFile());
+        } catch (RuntimeException e) {
+            MODULE_SCAN_LOGGER.log(Level.WARNING, "[UltiTools-API] Could not recover interrupted module updates", e);
+        }
+        if (!pluginDir.exists()) {
             return urls;
         }
         File[] pluginFiles = pluginDir.listFiles((f) -> f.getName().endsWith(".jar"));
