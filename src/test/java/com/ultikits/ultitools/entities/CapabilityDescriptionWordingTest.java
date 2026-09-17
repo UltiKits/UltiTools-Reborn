@@ -71,9 +71,15 @@ class CapabilityDescriptionWordingTest {
         assertThat(joined)
                 .as("Capability.LOGS must not claim the panel may receive AND control the stream")
                 .doesNotContain("接收并控制");
-        assertThat(joinedLower)
-                .as("Capability.LOGS must still state it decides whether the stream is delivered")
-                .contains("stream");
+        // IN-02 (gate-1 review): assert the exact corrected sentence in both languages, not the
+        // weak `.contains("stream")` proxy a future edit could keep passing while dropping the
+        // substantive "receives" claim.
+        assertThat(lines)
+                .as("Capability.LOGS's English description must be exactly the corrected sentence")
+                .contains("Whether the panel receives the live console log stream.");
+        assertThat(lines)
+                .as("Capability.LOGS's Chinese description must be exactly the corrected sentence")
+                .contains("面板是否可以接收实时控制台日志流。");
     }
 
     @Test
