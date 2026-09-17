@@ -54,6 +54,8 @@ class PluginInstallUtilsUpdateOldJarTest {
     File dataFolder;
 
     private HttpServer server;
+    /** What the local catalogue serves as the artifact; a real jar only where a test needs one. */
+    private volatile byte[] artifactBytes = NEW_JAR_BYTES;
     private File pluginsFolder;
 
     @BeforeEach
@@ -73,8 +75,9 @@ class PluginInstallUtilsUpdateOldJarTest {
         server.createContext("/plugin/7/2.0.0/download", exchange -> respond(exchange,
                 "{\"code\":\"200\",\"data\":\"" + origin + "/artifact.jar\"}"));
         server.createContext("/artifact.jar", exchange -> {
-            exchange.sendResponseHeaders(200, NEW_JAR_BYTES.length);
-            exchange.getResponseBody().write(NEW_JAR_BYTES);
+            byte[] body = artifactBytes;
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
             exchange.close();
         });
         server.start();
@@ -190,6 +193,45 @@ class PluginInstallUtilsUpdateOldJarTest {
         } finally {
             Files.setPosixFilePermissions(folder, original);
         }
+    }
+
+    @Test
+    @DisplayName("review r2 WR-01: a second name for the downloaded file is recognised as the download, so the download is never deleted")
+    void aliasOfTheDownloadedFile_isNotDeletedAsAnOlderJar() throws IOException {
+        // A case-insensitive filesystem (NTFS, default APFS) writes the lower-cased download name
+        // into an existing differently-cased file and lists it under that stored name. Linux has no
+        // such aliasing, so a symbolic link models the same thing: two directory entries, one file.
+        File oldJar = writeOldJar("1.0.0");
+        File storedName = new File(pluginsFolder, "Fixture-Module-2.0.0.jar");
+        Path downloadName = new File(pluginsFolder, IDENTIFY_STRING + "-2.0.0.jar").toPath();
+        assertThat(storedName.createNewFile()).isTrue();
+        try {
+            Files.createSymbolicLink(downloadName, storedName.toPath().getFileName());
+        } catch (UnsupportedOperationException | IOException e) {
+            Assumptions.assumeTrue(false, "symbolic links are unavailable here, so the alias cannot be modelled: " + e);
+        }
+        byte[] newJar = jarBytes("2.0.0");
+        artifactBytes = newJar;
+
+        assertThat(PluginInstallUtils.updatePlugin(IDENTIFY_STRING)).isTrue();
+
+        assertThat(oldJar).doesNotExist();
+        assertThat(storedName)
+                .as("the stored name IS the downloaded file; deleting it as an 'older jar' loses the "
+                        + "update while the command reports success")
+                .exists();
+        assertThat(Files.readAllBytes(downloadName)).isEqualTo(newJar);
+    }
+
+    private static byte[] jarBytes(String version) throws IOException {
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        try (JarOutputStream out = new JarOutputStream(bytes)) {
+            out.putNextEntry(new JarEntry("plugin.yml"));
+            out.write(("name: Fixture\nversion: " + version + "\nidentify-string: " + IDENTIFY_STRING + "\n")
+                    .getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+        return bytes.toByteArray();
     }
 
     private File writeOldJar() throws IOException {
