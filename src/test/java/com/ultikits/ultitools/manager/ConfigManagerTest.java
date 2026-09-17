@@ -861,8 +861,8 @@ class ConfigManagerTest {
         }
 
         @Test
-        @DisplayName("目录配置应该被跳过")
-        void directoryShouldBeSkipped() throws Exception {
+        @DisplayName("A changed entity whose path is a directory is not skipped: its save failure is logged (#510)")
+        void directoryPathIsNotSkippedAndItsFailureIsLogged() throws Exception {
             // Arrange
             Field mapField = ConfigManager.class.getDeclaredField("pluginConfigMap");
             mapField.setAccessible(true);
@@ -878,8 +878,9 @@ class ConfigManagerTest {
             // Module-relative, as registered: resolved against the plugin's config folder (#510).
             when(mockConfig.getConfigFilePath()).thenReturn("configdir");
             when(mockConfig.getUltiToolsPlugin()).thenReturn(mockPlugin);
-            // Changed in memory, so only the directory check can skip it (#510).
+            // Changed in memory; saveAll() has no directory check, so it attempts the save (#510).
             when(mockConfig.isModifiedSinceSnapshot()).thenReturn(true);
+            org.mockito.Mockito.doThrow(new IOException("Is a directory")).when(mockConfig).save();
 
             Map<String, AbstractConfigEntity> configMap = new HashMap<>();
             configMap.put("configdir", mockConfig);
@@ -888,9 +889,39 @@ class ConfigManagerTest {
             // Act
             configManager.saveAll();
 
-            // Assert - save 不应该被调用，因为是目录
-            org.mockito.Mockito.verify(mockConfig, org.mockito.Mockito.never()).save();
+            verify(mockConfig).save();
+            verify(mockLogger).log(java.util.logging.Level.WARNING, "Configuration save failed！File path：configdir");
             assertThat(configDir.isDirectory()).as("Config dir should exist").isTrue();
+        }
+
+        @Test
+        @DisplayName("An unchecked exception from one entity is logged and does not stop the others being saved (#510)")
+        void runtimeExceptionFromOneEntityDoesNotAbortTheRest() throws Exception {
+            Field mapField = ConfigManager.class.getDeclaredField("pluginConfigMap");
+            mapField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Map<UltiToolsPlugin, Map<String, AbstractConfigEntity>> pluginConfigMap =
+                (Map<UltiToolsPlugin, Map<String, AbstractConfigEntity>>) mapField.get(configManager);
+
+            AbstractConfigEntity failing = mock(AbstractConfigEntity.class);
+            when(failing.getConfigFilePath()).thenReturn("config/failing.yml");
+            when(failing.isModifiedSinceSnapshot()).thenReturn(true);
+            org.mockito.Mockito.doThrow(new IllegalStateException("parser blew up")).when(failing).save();
+            AbstractConfigEntity healthy = mock(AbstractConfigEntity.class);
+            when(healthy.getConfigFilePath()).thenReturn("config/healthy.yml");
+            when(healthy.isModifiedSinceSnapshot()).thenReturn(true);
+
+            Map<String, AbstractConfigEntity> configMap = new java.util.LinkedHashMap<>();
+            configMap.put("config/failing.yml", failing);
+            configMap.put("config/healthy.yml", healthy);
+            pluginConfigMap.put(mockPlugin, configMap);
+
+            configManager.saveAll();
+
+            verify(healthy).save();
+            verify(mockLogger).log(org.mockito.ArgumentMatchers.eq(java.util.logging.Level.WARNING),
+                org.mockito.ArgumentMatchers.eq("Configuration save failed！File path：config/failing.yml"),
+                org.mockito.ArgumentMatchers.any(IllegalStateException.class));
         }
     }
 

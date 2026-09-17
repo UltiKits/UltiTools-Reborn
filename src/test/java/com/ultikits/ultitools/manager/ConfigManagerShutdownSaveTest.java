@@ -130,6 +130,24 @@ class ConfigManagerShutdownSaveTest {
         }
     }
 
+    /** Two independent keys, so a partial write or a partial file can leave one of them out. */
+    @ConfigEntity("config/two.yml")
+    public static class TwoKeyConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "a", comment = "First")
+        private String a = "a-default";
+
+        @ConfigEntry(path = "b", comment = "Second")
+        private String b = "b-default";
+
+        public TwoKeyConfig(String configFilePath) {
+            super(configFilePath);
+        }
+
+        void setA(String a) {
+            this.a = a;
+        }
+    }
+
     /** A list-typed configuration whose on-disk integers come back from the parser as strings. */
     @ConfigEntity("config/list.yml")
     public static class ListConfig extends AbstractConfigEntity {
@@ -431,10 +449,10 @@ class ConfigManagerShutdownSaveTest {
         assertThat(read(listFile)).isEqualTo(onDisk);
     }
 
-    // ==================== 10. explicit save() stays unconditional ====================
+    // ==================== 9. explicit save() stays unconditional ====================
 
     @Test
-    @DisplayName("10. An explicit save() still writes unconditionally, even for an untouched entity")
+    @DisplayName("9. An explicit save() still writes unconditionally, even for an untouched entity")
     void save_explicitCallStillWritesUntouchedEntity() throws IOException {
         File scalarFile = file("config/scalar.yml");
         write(scalarFile, "value: original\n");
@@ -445,5 +463,107 @@ class ConfigManagerShutdownSaveTest {
         config.save();
 
         assertThat(read(scalarFile)).contains("value: original").doesNotContain("operator-edit");
+    }
+
+    // ==================== 10. partial writes never absorb an unsaved change (gate-1 BL-01) ====================
+
+    @Test
+    @DisplayName("10. A panel write of one key does not mark another key's unsaved code change as saved")
+    void saveAll_keepsCodeChangeAcrossPartialPanelWrite() throws IOException {
+        File twoFile = file("config/two.yml");
+        write(twoFile, "a: a1\nb: b1\n");
+        TwoKeyConfig config = new TwoKeyConfig("config/two.yml");
+        configManager.register(plugin, config);
+
+        config.setA("a-by-code");
+        configManager.loadFromJson("config/two.yml", "{\"b\":\"b-by-panel\"}");
+        // Guard: the panel write did not itself write the code change.
+        assertThat(read(twoFile)).contains("a: a1").contains("b: b-by-panel");
+
+        configManager.saveAll();
+
+        assertThat(read(twoFile)).contains("a: a-by-code").contains("b: b-by-panel");
+    }
+
+    @Test
+    @DisplayName("10b. A reload of a file missing a key does not mark that key's unsaved code change as saved")
+    void saveAll_keepsCodeChangeWhenReloadFindsKeyMissing() throws IOException {
+        File twoFile = file("config/two.yml");
+        write(twoFile, "a: a1\nb: b1\n");
+        TwoKeyConfig config = new TwoKeyConfig("config/two.yml");
+        configManager.register(plugin, config);
+
+        config.setA("a-by-code");
+        write(twoFile, "b: b1\n");
+        config.reload();
+        // Guard: reload() kept the in-memory value for the absent key and wrote nothing.
+        assertThat(read(twoFile)).isEqualTo("b: b1\n");
+
+        configManager.saveAll();
+
+        assertThat(read(twoFile)).contains("a: a-by-code").contains("b: b1");
+    }
+
+    // ==================== 11. the comparison never touches the live configuration ====================
+
+    @Test
+    @DisplayName("11. Checking for changes and the shutdown save leave the panel-visible configuration unchanged")
+    void saveAll_leavesPanelVisibleConfigurationUnchanged() throws IOException {
+        File listFile = file("config/list.yml");
+        write(listFile, "ids:\n- 60\n- 70\n");
+        ListConfig config = new ListConfig("config/list.yml");
+        configManager.register(plugin, config);
+        String before = config.toJsonObject().toString();
+        // Guard: the panel sees numbers, which a parser-serialized render would turn into strings.
+        assertThat(before).contains("[60,70]");
+
+        assertThat(config.isModifiedSinceSnapshot()).isFalse();
+        configManager.saveAll();
+
+        assertThat(config.toJsonObject().toString()).isEqualTo(before);
+    }
+
+    // ==================== 12. a failed shutdown save claims no overwrite ====================
+
+    @Test
+    @DisplayName("12. A shutdown save that fails logs the failure and no 'overwritten' WARNING")
+    void saveAll_failedSaveLogsNoOverwriteWarning() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "value: original\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        configManager.register(plugin, config);
+
+        config.setValue("set-by-code");
+        write(scalarFile, "value: operator-edit\n");
+        assumeThat(scalarFile.setWritable(false)).as("file permissions are enforceable here").isTrue();
+        try {
+            assumeThat(scalarFile.canWrite()).as("not running with permission-bypassing privileges").isFalse();
+            configManager.saveAll();
+        } finally {
+            assertThat(scalarFile.setWritable(true)).isTrue();
+        }
+
+        assertThat(read(scalarFile)).isEqualTo("value: operator-edit\n");
+        assertThat(overwriteWarnings()).isEmpty();
+        assertThat(loggedMessages(Level.WARNING)).anyMatch(message -> message.contains("save failed"));
+    }
+
+    // ==================== 13. a change made by a reload listener ====================
+
+    @Test
+    @DisplayName("13. A change a config listener makes in memory while the entity loads is saved at shutdown")
+    void saveAll_savesChangeMadeByChangeListener() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "value: original\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        config.addChangeListener(changed -> ((ScalarConfig) changed).setValue("set-by-listener"));
+        configManager.register(plugin, config);
+        // Guard: the listener ran and changed memory only.
+        assertThat(config.getValue()).isEqualTo("set-by-listener");
+        assertThat(read(scalarFile)).isEqualTo("value: original\n");
+
+        configManager.saveAll();
+
+        assertThat(read(scalarFile)).contains("value: set-by-listener");
     }
 }

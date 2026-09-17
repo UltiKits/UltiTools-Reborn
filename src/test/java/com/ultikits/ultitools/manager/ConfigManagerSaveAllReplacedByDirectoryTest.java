@@ -33,16 +33,16 @@ import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 
 /**
- * {@link ConfigManager#saveAll()} skips an entity whose path names a directory. The check must
- * resolve the entity's relative {@code configFilePath} against the module's configuration folder,
- * where {@code save()} writes, not against the JVM working directory (the server root), where a
- * module-relative path such as {@code config/homes} never exists (#510 sweep finding).
+ * {@link ConfigManager#saveAll()} has no directory check (#510, gate-1 WR-01). No registered
+ * {@code @ConfigEntity} path is a directory; the only way one becomes a directory is being replaced
+ * by one while the server runs, and then a changed entity's save must fail loudly with the existing
+ * "Configuration save failed" line rather than be skipped without a trace.
  */
-@DisplayName("ConfigManager.saveAll resolves its directory check against the module config folder (#510)")
+@DisplayName("ConfigManager.saveAll logs, never silently skips, a changed config whose file became a directory (#510)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
-class ConfigManagerSaveAllDirectoryResolutionTest {
+class ConfigManagerSaveAllReplacedByDirectoryTest {
 
-    private static final String RELATIVE_PATH = "config/ultitools-reborn-510-directory-probe";
+    private static final String RELATIVE_PATH = "config/ultitools-reborn-510-directory-probe.yml";
 
     @TempDir
     File tempDir;
@@ -102,26 +102,22 @@ class ConfigManagerSaveAllDirectoryResolutionTest {
     }
 
     @Test
-    @DisplayName("A changed entity whose path is a directory under the module config folder is skipped, not written")
-    void saveAll_skipsEntityWhosePathIsDirectoryInModuleFolder() throws IOException {
+    @DisplayName("A changed entity whose file was replaced by a directory is attempted, and the failure is logged")
+    void saveAll_logsFailureForEntityWhoseFileBecameDirectory() throws IOException {
         File target = new File(tempDir, RELATIVE_PATH);
         Files.createDirectories(target.getParentFile().toPath());
         Files.write(target.toPath(), "value: original\n".getBytes(StandardCharsets.UTF_8));
         ProbeConfig config = new ProbeConfig(RELATIVE_PATH);
         configManager.register(plugin, config);
 
-        // The path becomes a directory after registration, and the entity is changed in memory.
+        // The file is replaced by a directory while the server runs, and the entity is changed in memory.
         Files.delete(target.toPath());
         assertThat(target.mkdir()).isTrue();
         config.setValue("set-by-code");
 
-        // Guard: the same relative path does not exist under the working directory, so a check
-        // resolved there cannot tell that this entity's path is a directory.
-        assertThat(new File(RELATIVE_PATH)).doesNotExist();
-
         configManager.saveAll();
 
         assertThat(target).isDirectory();
-        assertThat(warnings()).noneMatch(message -> message.contains("save failed"));
+        assertThat(warnings()).anyMatch(message -> message.contains("save failed") && message.contains(RELATIVE_PATH));
     }
 }
