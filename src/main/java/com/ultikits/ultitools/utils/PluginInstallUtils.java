@@ -25,6 +25,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -950,21 +951,60 @@ public class PluginInstallUtils {
             if (!SecurityPolicy.isSafeFileStructure(file.length(), jarFile.size())) {
                 return false;
             }
-            java.util.jar.JarEntry entry = jarFile.getJarEntry("plugin.yml");
-            if (entry == null) {
-                return false;
-            }
-            try (InputStream is = jarFile.getInputStream(entry);
-                 BufferedReader reader = new BufferedReader(new InputStreamReader(is))) {
-                YamlConfiguration config = YamlConfiguration.loadConfiguration(reader);
-                String version = config.getString("version");
-                return moduleKey.equals(normalizeIdentifyString(config.getString("identify-string")))
-                        && version != null && expectedVersion != null
-                        && VersionComparatorUtil.compare(version.trim(), expectedVersion.trim()) == 0;
-            }
+            Map<String, String> pluginYml = readPluginYmlScalars(jarFile);
+            String version = pluginYml.get("version");
+            return moduleKey.equals(normalizeIdentifyString(pluginYml.get("identify-string")))
+                    && version != null && expectedVersion != null
+                    && VersionComparatorUtil.compare(version.trim(), expectedVersion.trim()) == 0;
         } catch (IOException e) {
             LOGGER.log(Level.FINE, "Downloaded file is not a readable JAR: " + file, e);
             return false;
+        }
+    }
+
+    /**
+     * The {@code plugin.yml} {@code version} of the JAR at {@code file}, exactly as written, or
+     * {@code null} when the JAR, its {@code plugin.yml} or the key cannot be read.
+     */
+    static String readModuleVersion(File file) {
+        try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(file)) {
+            return readPluginYmlScalars(jarFile).get("version");
+        } catch (IOException e) {
+            LOGGER.log(Level.FINE, "Could not read the plugin.yml version of " + file, e);
+            return null;
+        }
+    }
+
+    /**
+     * The top-level scalar entries of {@code jarFile}'s {@code plugin.yml}, each value exactly as
+     * written (review r4 IN-04). Reading through YAML typing would turn an unquoted
+     * {@code version: 2.10} into the number {@code 2.1}; composing the node tree keeps the text.
+     *
+     * @return the entries; empty when there is no readable {@code plugin.yml}
+     */
+    private static Map<String, String> readPluginYmlScalars(java.util.jar.JarFile jarFile) throws IOException {
+        java.util.jar.JarEntry entry = jarFile.getJarEntry("plugin.yml");
+        if (entry == null) {
+            return Collections.emptyMap();
+        }
+        try (InputStream is = jarFile.getInputStream(entry);
+             BufferedReader reader = new BufferedReader(new InputStreamReader(is, java.nio.charset.StandardCharsets.UTF_8))) {
+            org.yaml.snakeyaml.nodes.Node root = new org.yaml.snakeyaml.Yaml().compose(reader);
+            if (!(root instanceof org.yaml.snakeyaml.nodes.MappingNode)) {
+                return Collections.emptyMap();
+            }
+            Map<String, String> scalars = new java.util.HashMap<>();
+            for (org.yaml.snakeyaml.nodes.NodeTuple tuple : ((org.yaml.snakeyaml.nodes.MappingNode) root).getValue()) {
+                if (tuple.getKeyNode() instanceof org.yaml.snakeyaml.nodes.ScalarNode
+                        && tuple.getValueNode() instanceof org.yaml.snakeyaml.nodes.ScalarNode) {
+                    scalars.put(((org.yaml.snakeyaml.nodes.ScalarNode) tuple.getKeyNode()).getValue(),
+                            ((org.yaml.snakeyaml.nodes.ScalarNode) tuple.getValueNode()).getValue());
+                }
+            }
+            return scalars;
+        } catch (org.yaml.snakeyaml.error.YAMLException e) {
+            LOGGER.log(Level.FINE, "plugin.yml is not valid YAML in " + jarFile.getName(), e);
+            return Collections.emptyMap();
         }
     }
 
