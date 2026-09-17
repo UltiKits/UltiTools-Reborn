@@ -31,6 +31,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.jetbrains.annotations.ApiStatus;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -532,9 +533,13 @@ public class PluginInstallUtils {
 
     /**
      * The outcome of {@link #updatePluginTransactionally(String)}.
+     * <p>
+     * <b>Framework-internal.</b> This is the {@code /upm update} command's outcome channel, not
+     * part of the module API, and may change without notice.
      *
      * @since 6.3.0
      */
+    @ApiStatus.Internal
     public static final class UpdateOutcome {
 
         /** What happened to the update. */
@@ -616,7 +621,9 @@ public class PluginInstallUtils {
      *     when an older JAR could not be moved out of the modules folder or the new version could
      *     not be moved in; {@link java.nio.file.FileSystemException#getFile()} names that JAR or
      *     path, and the older JARs have been moved back (any that could not be are attached as
-     *     suppressed {@code FileSystemException}s) (#505)
+     *     suppressed {@code FileSystemException}s) (#505). This is an exception rather than
+     *     {@code false} because {@code false} means nothing was changed, and a failed move can
+     *     leave the modules folder changed when a set-aside JAR cannot be moved back
      */
     public static boolean updatePlugin(String identifyString) {
         UpdateOutcome outcome = updatePluginTransactionally(identifyString);
@@ -649,11 +656,15 @@ public class PluginInstallUtils {
      * reported as updated. Set-aside JARs are deleted after the new version is in place; any that
      * cannot be deleted are inert and reported as leftovers. Only one update per module runs at a
      * time.
+     * <p>
+     * <b>Framework-internal.</b> This is the {@code /upm update} command's outcome channel, not
+     * part of the module API, and may change without notice.
      *
      * @param identifyString the plugin identify string
      * @return the outcome; never {@code null}
      * @since 6.3.0
      */
+    @ApiStatus.Internal
     public static UpdateOutcome updatePluginTransactionally(String identifyString) {
         String moduleKey = normalizeIdentifyString(identifyString);
         if (moduleKey == null) {
