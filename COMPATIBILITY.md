@@ -365,6 +365,29 @@ This section governs the third kind.
   before, with only the individual keys whose placeholder count moved resolved from the jar
   instead (see `ultitools.language.file-refresh`/`ultitools.language.file-preserve` in
   `FEATURES.md`). No operator who customised a file is affected either way.
+- Saving at shutdown only the configuration that module code changed. Before 6.3.0,
+  `UltiTools#onDisable()` rewrote **every** registered `@ConfigEntity` file from memory, so an edit
+  an operator made to a module's configuration file while the server was running was silently
+  discarded at the next stop (#510). That was a defect, not a guarantee: the documented contract is
+  only that a value set from code without calling `save()` is saved on disable, and that contract
+  is unchanged. As of 6.3.0 each configuration entity keeps a serialized snapshot of the state it
+  last loaded or saved (taken after `init()`, after every reload, and after every successful
+  `save()` or panel write), and the shutdown save writes only the entities whose current state
+  differs from it. What an operator sees:
+  - an edit made to a file while the server runs survives a restart, provided no module code
+    changed that configuration in memory;
+  - an unchanged file is no longer rewritten at shutdown at all, so its cosmetic rewrites — values
+    re-quoted (a list of integers such as UltiCleaner's `item.warn-times` coming back as `'60'`),
+    comments re-emitted in the serializer's own layout — no longer happen then;
+  - first-boot defaults for missing keys are still written when the configuration loads, exactly
+    as before;
+  - if module code did change a configuration in memory **and** its file was also edited on disk
+    since the snapshot, the in-memory state still wins and is written, and one WARNING per file
+    names the file and says the edits made while the server ran were overwritten.
+
+  An explicit `save()` call still writes unconditionally. A module that relied on the shutdown save
+  to reformat an untouched file should call `save()` itself (see `ultitools.config.shutdown-keeps-operator-edit`
+  and `ultitools.config.shutdown-saves-code-change` in `FEATURES.md`).
 
 ### Behavioral changes that do need one
 
