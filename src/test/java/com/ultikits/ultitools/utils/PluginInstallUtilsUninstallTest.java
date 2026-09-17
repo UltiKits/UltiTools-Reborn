@@ -263,6 +263,42 @@ class PluginInstallUtilsUninstallTest {
         assertThat(thrown.getSuppressed()).as("every jar was deleted, so no jar failure is attached").isEmpty();
     }
 
+    @Test
+    @DisplayName("#503 review r2 IN-01: an unload that throws AND a jar that cannot be deleted surfaces as IllegalStateException carrying the jar failure")
+    void unloadThrowsAndJarUndeletable_failureCarriesBothOutcomes() throws Exception {
+        Path folder = pluginsFolder.toPath();
+        Assumptions.assumeTrue(Files.getFileStore(folder).supportsFileAttributeView("posix"),
+                "needs POSIX permissions to make the delete fail");
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        IllegalStateException unloadFailure = new IllegalStateException("module unload step boom");
+        org.mockito.Mockito.doThrow(unloadFailure).when(commandManager).unregisterAll(plugin);
+        File jar = writeModuleJar(MODULE_NAME);
+
+        Set<PosixFilePermission> original = Files.getPosixFilePermissions(folder);
+        Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("r-xr-xr-x"));
+        try {
+            Assumptions.assumeFalse(Files.isWritable(folder),
+                    "running as a user that can write a read-only directory (e.g. root); the delete cannot be made to fail");
+
+            Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+            assertThat(thrown).isInstanceOf(IllegalStateException.class).hasCause(unloadFailure);
+            assertThat(thrown.getSuppressed())
+                    .as("the command reports the jar outcome from this suppressed exception; losing it "
+                            + "would hide that the jar loads again on restart")
+                    .hasSize(1);
+            assertThat(thrown.getSuppressed()[0]).isInstanceOf(FileSystemException.class);
+            assertThat(((FileSystemException) thrown.getSuppressed()[0]).getFile()).isEqualTo(jar.getAbsolutePath());
+            assertThat(jar).exists();
+            assertThat(pluginManager.getPluginList()).doesNotContain(plugin);
+        } finally {
+            Files.setPosixFilePermissions(folder, original);
+        }
+    }
+
     private static java.util.List<String> namedFiles(FileSystemException failure) {
         java.util.List<String> files = new java.util.ArrayList<>();
         files.add(failure.getFile());

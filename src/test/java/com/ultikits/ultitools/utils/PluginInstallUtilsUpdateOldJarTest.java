@@ -150,12 +150,15 @@ class PluginInstallUtilsUpdateOldJarTest {
     }
 
     @Test
-    @DisplayName("review CR-02: a retry after a failed old-jar delete, with the new jar already on disk, still deletes the old jar")
+    @DisplayName("review CR-02 (order-dependent regression guard): a retry with the new jar already on disk still deletes the old jar")
     void retryWithNewJarAlreadyPresent_deletesTheOldJar() throws IOException {
         File oldJar = writeOldJar("1.0.0");
         // The previous, failed attempt already left the new version on disk, carrying the same
-        // identify-string. Which of the two jars a single-match lookup returns depends on
-        // File#listFiles() order, so this test guards the retry even where that order hides the defect.
+        // identify-string. Order-dependent: the defective single-match lookup took whichever jar
+        // File#listFiles() returned first, so on a listing that returns the old jar first this
+        // test passes against the defective code too (it did in this repository's RED run). It
+        // pins the retry scenario as a regression guard only; twoOldJars_bothAreDeleted is the
+        // test that is deterministically red against the old code.
         writeOldJar("2.0.0");
 
         assertThat(PluginInstallUtils.updatePlugin(IDENTIFY_STRING)).isTrue();
