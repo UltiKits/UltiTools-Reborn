@@ -516,6 +516,25 @@ class PluginInstallCommandsTest {
         assertThat(all).contains("失败").contains(first).contains(second).doesNotContain("卸载成功");
     }
 
+    @Test
+    @DisplayName("#501 review WR-03: a module unloaded without a jar on disk is reported as such, not as a misspelling")
+    void uninstallLoadedModuleWithoutJar_replySaysUnloadedAndNoJarFound() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String folder = "/srv/minecraft/plugins/UltiTools/plugins";
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin"))
+                .thenThrow(new java.nio.file.NoSuchFileException(folder, null, "no module JAR named test-plugin"));
+
+        executor.uninstallPlugin(player, "test-plugin");
+
+        String all = String.join("\n", drainMessages());
+        assertThat(all)
+                .contains("模块已卸载")
+                .contains(folder)
+                .doesNotContain("拼写")
+                .doesNotContain("卸载成功")
+                .doesNotContain("文件访问错误");
+    }
+
     /**
      * #505: {@code updatePlugin} is {@code @RunAsync}, and Mockito's static mocks are
      * thread-local, so these tests call the public command method directly on the test thread

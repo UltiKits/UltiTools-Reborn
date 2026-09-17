@@ -210,6 +210,30 @@ class PluginInstallUtilsUninstallTest {
         }
     }
 
+    @Test
+    @DisplayName("#501 review WR-03: a loaded module with no jar on disk is unloaded and reported as NoSuchFileException naming the folder, not as a misspelling")
+    void loadedModuleWithoutJar_isUnloadedAndReportedAsNoJarFound() throws Exception {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+
+        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+        assertThat(thrown)
+                .as("returning false made the command say the name was misspelled, although the "
+                        + "module was found by exactly that name and unloaded")
+                .isInstanceOf(java.nio.file.NoSuchFileException.class);
+        assertThat(((FileSystemException) thrown).getFile()).isEqualTo(pluginsFolder.getAbsolutePath());
+        assertThat(pluginManager.getPluginList()).doesNotContain(plugin);
+    }
+
+    @Test
+    @DisplayName("#501 review WR-03 control: nothing loaded and no jar still returns false")
+    void nothingLoadedAndNoJar_returnsFalse() throws Exception {
+        assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME)).isFalse();
+    }
+
     private static java.util.List<String> namedFiles(FileSystemException failure) {
         java.util.List<String> files = new java.util.ArrayList<>();
         files.add(failure.getFile());
