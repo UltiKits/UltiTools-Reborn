@@ -461,6 +461,54 @@ class PluginInstallCommandsTest {
     }
 
     @Test
+    @DisplayName("#501: a successful uninstall has already deleted the jar, so the reply never asks for a manual delete")
+    void uninstallSuccess_replyDoesNotAskForManualDelete() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin")).thenReturn(true);
+
+        executor.onCommand(player, mockCommand, "upm", new String[]{"uninstall", "test-plugin"});
+        server.getScheduler().performOneTick();
+
+        List<String> messages = drainMessages();
+        assertThat(messages).as("the command must reply at all").isNotEmpty();
+        assertThat(messages.get(0)).contains("卸载成功");
+        assertThat(messages)
+                .as("uninstallPlugin returns true only after deleting the jar (#501) -- telling the "
+                        + "operator to delete it manually describes work that is not needed")
+                .noneMatch(m -> m.contains("手动删除"))
+                .noneMatch(m -> m.contains("文件位置"));
+    }
+
+    @Test
+    @DisplayName("#501: a failed jar delete is reported as a failure naming the jar that is still on disk")
+    void uninstallDeleteFailure_replyNamesTheJarStillOnDisk() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String jarPath = "/srv/minecraft/plugins/UltiTools/plugins/Fixture-1.0.0.jar";
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin"))
+                .thenThrow(new java.nio.file.FileSystemException(jarPath, null, "Permission denied"));
+
+        executor.onCommand(player, mockCommand, "upm", new String[]{"uninstall", "test-plugin"});
+        server.getScheduler().performOneTick();
+
+        List<String> messages = drainMessages();
+        assertThat(messages).as("the command must reply at all").isNotEmpty();
+        assertThat(messages).noneMatch(m -> m.contains("卸载成功"));
+        assertThat(messages.get(0)).contains("失败");
+        assertThat(String.join("\n", messages))
+                .as("the operator must be told which file will load again on restart")
+                .contains(jarPath);
+    }
+
+    private List<String> drainMessages() {
+        List<String> messages = new ArrayList<>();
+        String msg;
+        while ((msg = player.nextMessage()) != null) {
+            messages.add(msg);
+        }
+        return messages;
+    }
+
+    @Test
     @DisplayName("Should work with console sender for list")
     void testConsoleListCommand() {
         if (executor == null) return;
