@@ -219,6 +219,105 @@ class PluginInstallUtilsUpdateTransactionTest {
         assertThat(stagingEntries()).isEmpty();
     }
 
+    @Test
+    @DisplayName("review r4 WR-07 (M1): an existing file at the new version's name is never replaced")
+    void existingFileAtTheNewVersionName_isNotReplaced() throws IOException {
+        File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        File occupant = new File(pluginsFolder, NEW_JAR_NAME);
+        byte[] occupantBytes = "README saved under a jar name".getBytes(StandardCharsets.UTF_8);
+        try (FileOutputStream out = new FileOutputStream(occupant)) {
+            out.write(occupantBytes);
+        }
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus()).isEqualTo(Status.NEW_JAR_NOT_INSTALLED);
+        assertThat(occupant)
+                .as("an atomic rename replaces an existing target on POSIX unless the move refuses it first")
+                .hasBinaryContent(occupantBytes);
+        assertThat(oldJar).exists();
+    }
+
+    @Test
+    @DisplayName("review r4 WR-07 (M2): the per-module guard is keyed by the normalised identify string")
+    void guardIsKeyedByTheNormalisedIdentifyString() throws IOException {
+        writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        AtomicReference<UpdateOutcome> nested = new AtomicReference<>();
+        operations.duringDownload = () -> nested.set(PluginInstallUtils.updatePluginTransactionally("  FIXTURE-Module "));
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(nested.get().getStatus())
+                .as("another spelling of the same module must meet the same guard")
+                .isEqualTo(Status.ALREADY_IN_PROGRESS);
+        assertThat(outcome.getStatus()).isEqualTo(Status.UPDATED);
+    }
+
+    @Test
+    @DisplayName("review r4 WR-07 (M3): the guard is released even when an update throws")
+    void guardIsReleasedWhenAnUpdateThrows() throws IOException {
+        writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        operations.downloadThrowsUnchecked = new IllegalStateException("injected: unexpected failure");
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING));
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class);
+        assertThat(PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING).getStatus())
+                .as("a module whose update threw must not stay locked until restart")
+                .isEqualTo(Status.UPDATED);
+    }
+
+    @Test
+    @DisplayName("review r4 WR-07 (M4): an old jar that disappears after selection does not fail the update")
+    void oldJarGoneAfterSelection_doesNotFailTheUpdate() throws IOException {
+        writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        operations.extraFoundJar = new File(pluginsFolder, IDENTIFY_STRING + "-1.5.0.jar");
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus()).isEqualTo(Status.UPDATED);
+        assertThat(jarEntries()).containsExactly(NEW_JAR_NAME);
+    }
+
+    @Test
+    @DisplayName("review r4 WR-07 (M5): a download beyond the loader's entry limit is invalid, and the old jar survives")
+    void downloadBeyondTheEntryLimit_isAnInvalidDownload() throws IOException {
+        File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        try (JarOutputStream out = new JarOutputStream(bytes)) {
+            out.putNextEntry(new JarEntry("plugin.yml"));
+            out.write(("name: Fixture\nversion: 2.0.0\nidentify-string: " + IDENTIFY_STRING + "\n")
+                    .getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+            for (int i = 0; i < 10_001; i++) {
+                out.putNextEntry(new JarEntry("filler/" + i));
+                out.closeEntry();
+            }
+        }
+        operations.downloadBytes = bytes.toByteArray();
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus())
+                .as("the loader skips a jar over 10,000 entries at boot, so installing it would lose the module")
+                .isEqualTo(Status.INVALID_DOWNLOAD);
+        assertThat(jarEntries()).containsExactly(oldJar.getName());
+    }
+
+    @Test
+    @DisplayName("review r4 WR-07 (M12): a download that fails after writing bytes leaves nothing in staging")
+    void failedDownloadAfterWriting_leavesNothingInStaging() throws IOException {
+        File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        operations.downloadThrowsAfterWriting = new IOException("injected: connection reset mid-body");
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus()).isEqualTo(Status.DOWNLOAD_FAILED);
+        assertThat(stagingEntries()).as("the partial download is deleted").isEmpty();
+        assertThat(jarEntries()).containsExactly(oldJar.getName());
+    }
+
     /** Wraps the real operations, recording each step and injecting the configured failures. */
     private final class RecordingOperations implements PluginInstallUtils.UpdateFileOperations {
         private final List<String> events = new CopyOnWriteArrayList<>();
@@ -230,6 +329,9 @@ class PluginInstallUtilsUpdateTransactionTest {
         private volatile boolean failMoveIn;
         private volatile boolean failMoveBack;
         private volatile boolean failDeleteOfSetAside;
+        private volatile RuntimeException downloadThrowsUnchecked;
+        private volatile IOException downloadThrowsAfterWriting;
+        private volatile File extraFoundJar;
         private int moveAsideCalls;
 
         @Override
@@ -241,9 +343,19 @@ class PluginInstallUtilsUpdateTransactionTest {
                 duringDownload = null;
                 hook.run();
             }
+            RuntimeException unchecked = downloadThrowsUnchecked;
+            if (unchecked != null) {
+                downloadThrowsUnchecked = null;
+                throw unchecked;
+            }
             byte[] bytes = downloadBytes != null ? downloadBytes : newJarBytes;
             try (FileOutputStream out = new FileOutputStream(new File(directory, fileName))) {
                 out.write(bytes);
+            }
+            IOException afterWriting = downloadThrowsAfterWriting;
+            if (afterWriting != null) {
+                downloadThrowsAfterWriting = null;
+                throw afterWriting;
             }
         }
 
@@ -252,7 +364,11 @@ class PluginInstallUtilsUpdateTransactionTest {
             events.add("find");
             String[] names = folder.list();
             moduleFolderEntriesAtSelection = names == null ? Collections.emptyList() : new ArrayList<>(Arrays.asList(names));
-            return DEFAULT.findModuleJars(folder, identifyString);
+            List<File> found = new ArrayList<>(DEFAULT.findModuleJars(folder, identifyString));
+            if (extraFoundJar != null) {
+                found.add(extraFoundJar);
+            }
+            return found;
         }
 
         @Override
