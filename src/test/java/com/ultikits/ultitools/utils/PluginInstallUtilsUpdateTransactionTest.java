@@ -252,6 +252,21 @@ class PluginInstallUtilsUpdateTransactionTest {
     }
 
     @Test
+    @DisplayName("review r4: updatePlugin never answers false once a set-aside jar could not be moved back, whatever refused the move")
+    void updatePlugin_throwsWhenANonAtomicRefusalLeavesAnUnrestoredJar() throws IOException {
+        writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        writeJar(IDENTIFY_STRING + "-1.5.0.jar", "1.5.0");
+        operations.moveAsideNotAtomicAtCall = 2;
+        operations.failMoveBack = true;
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() -> PluginInstallUtils.updatePlugin(IDENTIFY_STRING));
+
+        assertThat(thrown)
+                .as("false means nothing was changed; a jar left in staging is a change the caller must see")
+                .isInstanceOf(java.io.UncheckedIOException.class);
+    }
+
+    @Test
     @DisplayName("review r4 WR-01: staging and modules folders on different file systems are refused before anything is downloaded or moved")
     void differentFileStores_areRefusedBeforeAnyChange() throws IOException {
         File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
@@ -456,6 +471,7 @@ class PluginInstallUtilsUpdateTransactionTest {
         private volatile File extraFoundJar;
         private volatile boolean sameFileStore = true;
         private volatile boolean moveAsideNotAtomic;
+        private volatile int moveAsideNotAtomicAtCall;
         private int moveAsideCalls;
 
         @Override
@@ -511,7 +527,7 @@ class PluginInstallUtilsUpdateTransactionTest {
                 }
             } else {
                 events.add("move-aside");
-                if (moveAsideNotAtomic) {
+                if (moveAsideNotAtomic || moveAsideCalls + 1 == moveAsideNotAtomicAtCall) {
                     throw new java.nio.file.AtomicMoveNotSupportedException(source.toString(), target.toString(),
                             "injected: different file stores");
                 }
