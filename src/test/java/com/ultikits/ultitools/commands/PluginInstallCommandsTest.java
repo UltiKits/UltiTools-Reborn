@@ -612,86 +612,154 @@ class PluginInstallCommandsTest {
         return mockUpdateManager;
     }
 
+    private static PluginInstallUtils.UpdateOutcome outcome(PluginInstallUtils.UpdateOutcome.Status status,
+            List<String> files, List<String> unrestored, List<String> leftovers) {
+        PluginInstallUtils.UpdateOutcome outcome = mock(PluginInstallUtils.UpdateOutcome.class);
+        when(outcome.getStatus()).thenReturn(status);
+        when(outcome.getFiles()).thenReturn(files);
+        when(outcome.getUnrestoredFiles()).thenReturn(unrestored);
+        when(outcome.getLeftoverFiles()).thenReturn(leftovers);
+        return outcome;
+    }
+
+    private static PluginInstallUtils.UpdateOutcome outcome(PluginInstallUtils.UpdateOutcome.Status status) {
+        return outcome(status, Collections.<String>emptyList(), Collections.<String>emptyList(),
+                Collections.<String>emptyList());
+    }
+
+    private void stubUpdateOutcome(String identifyString, PluginInstallUtils.UpdateOutcome result) {
+        mockedUtils.when(() -> PluginInstallUtils.updatePluginTransactionally(identifyString)).thenReturn(result);
+    }
+
+    private String updateReply(String pluginName) {
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> executor.updatePlugin(player, pluginName));
+        assertThat(thrown).as("the command must reply, never let a failure escape").isNull();
+        return String.join("\n", drainMessages());
+    }
+
     @Test
-    @DisplayName("#505: /upm update whose old jar cannot be deleted replies with a failure naming that jar, not success")
-    void updateOldJarDeleteFailure_replyNamesTheJarAndIsNotSuccess() {
+    @DisplayName("review r3: a successful staged update replies success and nothing else")
+    void updateUpdated_repliesSuccess() {
         assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
         stubModuleUpdates("TestPlugin", "test-plugin");
-        String oldJarPath = "/srv/minecraft/plugins/UltiTools/plugins/test-plugin-1.0.0.jar";
-        mockedUtils.when(() -> PluginInstallUtils.updatePlugin("test-plugin"))
-                .thenThrow(new java.io.UncheckedIOException(
-                        new java.nio.file.FileSystemException(oldJarPath, null, "Permission denied")));
+        stubUpdateOutcome("test-plugin", outcome(PluginInstallUtils.UpdateOutcome.Status.UPDATED));
 
-        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
-                () -> executor.updatePlugin(player, "TestPlugin"));
+        String reply = updateReply("TestPlugin");
 
-        assertThat(thrown).as("the command must report the failure, not let it escape").isNull();
+        assertThat(reply).contains("更新成功").doesNotContain("失败");
+    }
+
+    @Test
+    @DisplayName("review r3: a successful update with set-aside jars left in staging adds a note naming them, not a failure")
+    void updateUpdatedWithLeftovers_repliesSuccessAndNamesTheLeftover() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        stubModuleUpdates("TestPlugin", "test-plugin");
+        String leftover = "/srv/minecraft/plugins/UltiTools/.upm-staging/test-plugin-1.0.0.jar.x.old";
+        stubUpdateOutcome("test-plugin", outcome(PluginInstallUtils.UpdateOutcome.Status.UPDATED,
+                Collections.<String>emptyList(), Collections.<String>emptyList(), Collections.singletonList(leftover)));
+
+        String reply = updateReply("TestPlugin");
+
+        assertThat(reply).contains("更新成功").contains(leftover).doesNotContain("失败");
+    }
+
+    @Test
+    @DisplayName("review r3 WR-03: an update refused because the same module is already updating says so and claims no change")
+    void updateAlreadyInProgress_repliesRefusal() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        stubModuleUpdates("TestPlugin", "test-plugin");
+        stubUpdateOutcome("test-plugin", outcome(PluginInstallUtils.UpdateOutcome.Status.ALREADY_IN_PROGRESS));
+
+        String reply = updateReply("TestPlugin");
+
+        assertThat(reply).contains("已有更新正在进行").contains("未做任何更改").doesNotContain("更新成功");
+    }
+
+    @Test
+    @DisplayName("review r3 WR-02: a download that is not a jar of the module is reported as such, with nothing changed")
+    void updateInvalidDownload_repliesInvalidDownload() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        stubModuleUpdates("TestPlugin", "test-plugin");
+        stubUpdateOutcome("test-plugin", outcome(PluginInstallUtils.UpdateOutcome.Status.INVALID_DOWNLOAD));
+
+        String reply = updateReply("TestPlugin");
+
+        assertThat(reply).contains("不是该模块").contains("未做任何更改").doesNotContain("更新成功");
+    }
+
+    @Test
+    @DisplayName("#505: an old jar that cannot be moved out is named, and the reply says the folder was restored")
+    void updateOldJarNotMoved_namesTheJarAndSaysRestored() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        stubModuleUpdates("TestPlugin", "test-plugin");
+        String oldJar = "/srv/minecraft/plugins/UltiTools/plugins/test-plugin-1.0.0.jar";
+        stubUpdateOutcome("test-plugin", outcome(PluginInstallUtils.UpdateOutcome.Status.OLD_JAR_NOT_MOVED,
+                Collections.singletonList(oldJar), Collections.<String>emptyList(), Collections.<String>emptyList()));
+
+        String reply = updateReply("TestPlugin");
+
+        assertThat(reply).contains("失败").contains(oldJar).contains("旧版本已全部恢复").doesNotContain("更新成功");
+    }
+
+    @Test
+    @DisplayName("#505: a new version that cannot be moved in, with an old jar not moved back, names both paths")
+    void updateNewJarNotInstalledWithUnrestoredJar_namesTargetAndUnrestored() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        stubModuleUpdates("TestPlugin", "test-plugin");
+        String target = "/srv/minecraft/plugins/UltiTools/plugins/test-plugin-1.1.0.jar";
+        String unrestored = "/srv/minecraft/plugins/UltiTools/.upm-staging/test-plugin-1.0.0.jar.x.old";
+        stubUpdateOutcome("test-plugin", outcome(PluginInstallUtils.UpdateOutcome.Status.NEW_JAR_NOT_INSTALLED,
+                Collections.singletonList(target), Collections.singletonList(unrestored), Collections.<String>emptyList()));
+
+        String reply = updateReply("TestPlugin");
+
+        assertThat(reply)
+                .contains(target)
+                .as("an old jar left in staging must be named so it can be moved back before restarting")
+                .contains(unrestored)
+                .contains("移回")
+                .doesNotContain("旧版本已全部恢复")
+                .doesNotContain("更新成功");
+    }
+
+    @Test
+    @DisplayName("review r3: /upm update all counts successes, failures and refused updates separately in its summary")
+    void updateAll_summaryCountsRefusedUpdatesSeparately() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        stubModuleUpdates("Plugin1", "plugin-1", "Plugin2", "plugin-2", "Plugin3", "plugin-3");
+        stubUpdateOutcome("plugin-1", outcome(PluginInstallUtils.UpdateOutcome.Status.ALREADY_IN_PROGRESS));
+        stubUpdateOutcome("plugin-2", outcome(PluginInstallUtils.UpdateOutcome.Status.UPDATED));
+        stubUpdateOutcome("plugin-3", outcome(PluginInstallUtils.UpdateOutcome.Status.INVALID_DOWNLOAD));
+
+        executor.updatePlugin(player, "all");
+
         List<String> messages = drainMessages();
-        assertThat(messages).noneMatch(m -> m.contains("更新成功"));
-        assertThat(String.join("\n", messages))
-                .contains("失败")
-                .as("the operator must be told which old jar is still on disk")
-                .contains(oldJarPath);
+        String summary = messages.get(messages.size() - 1);
+        assertThat(summary).contains("1个成功，1个失败，1个");
+        assertThat(String.join("\n", messages)).contains("已有更新正在进行").contains("不是该模块");
     }
 
     @Test
-    @DisplayName("#505: /upm update all counts a failed old-jar delete as a failure and names the jar")
-    void updateAllOldJarDeleteFailure_countsFailureAndNamesTheJar() {
+    @DisplayName("review r3: /upm update all ends by asking for unrestored old jars to be moved back before restarting")
+    void updateAllWithUnrestoredJar_summaryAsksToMoveBackBeforeRestart() {
         assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
         stubModuleUpdates("Plugin1", "plugin-1", "Plugin2", "plugin-2");
-        String oldJarPath = "/srv/minecraft/plugins/UltiTools/plugins/plugin-1-1.0.0.jar";
-        mockedUtils.when(() -> PluginInstallUtils.updatePlugin("plugin-1"))
-                .thenThrow(new java.io.UncheckedIOException(
-                        new java.nio.file.FileSystemException(oldJarPath, null, "Permission denied")));
-        mockedUtils.when(() -> PluginInstallUtils.updatePlugin("plugin-2")).thenReturn(true);
-
-        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
-                () -> executor.updatePlugin(player, "all"));
-
-        assertThat(thrown).as("one module's failure must not abort the whole update-all run").isNull();
-        String all = String.join("\n", drainMessages());
-        assertThat(all)
-                .contains(oldJarPath)
-                .contains("1个成功，1个失败");
-    }
-
-    @Test
-    @DisplayName("review CR-02: /upm update names every old jar that could not be deleted")
-    void updateSeveralUndeletableOldJars_replyNamesEveryJar() {
-        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
-        stubModuleUpdates("TestPlugin", "test-plugin");
-        String first = "/srv/minecraft/plugins/UltiTools/plugins/test-plugin-1.0.0.jar";
-        String second = "/srv/minecraft/plugins/UltiTools/plugins/test-plugin-1.5.0.jar";
-        java.nio.file.FileSystemException failure =
-                new java.nio.file.FileSystemException(first, null, "Permission denied");
-        failure.addSuppressed(new java.nio.file.FileSystemException(second, null, "Permission denied"));
-        mockedUtils.when(() -> PluginInstallUtils.updatePlugin("test-plugin"))
-                .thenThrow(new java.io.UncheckedIOException(failure));
-
-        executor.updatePlugin(player, "TestPlugin");
-
-        assertThat(String.join("\n", drainMessages())).contains(first).contains(second).doesNotContain("更新成功");
-    }
-
-    @Test
-    @DisplayName("review IN-02: /upm update all does not end with a bare 'please restart' after an old-jar failure")
-    void updateAllOldJarDeleteFailure_summaryAsksToDeleteBeforeRestart() {
-        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
-        stubModuleUpdates("Plugin1", "plugin-1", "Plugin2", "plugin-2");
-        mockedUtils.when(() -> PluginInstallUtils.updatePlugin("plugin-1"))
-                .thenThrow(new java.io.UncheckedIOException(new java.nio.file.FileSystemException(
-                        "/srv/minecraft/plugins/UltiTools/plugins/plugin-1-1.0.0.jar", null, "Permission denied")));
-        mockedUtils.when(() -> PluginInstallUtils.updatePlugin("plugin-2")).thenReturn(true);
+        stubUpdateOutcome("plugin-1", outcome(PluginInstallUtils.UpdateOutcome.Status.NEW_JAR_NOT_INSTALLED,
+                Collections.singletonList("/srv/minecraft/plugins/UltiTools/plugins/plugin-1-1.1.0.jar"),
+                Collections.singletonList("/srv/minecraft/plugins/UltiTools/.upm-staging/plugin-1-1.0.0.jar.x.old"),
+                Collections.<String>emptyList()));
+        stubUpdateOutcome("plugin-2", outcome(PluginInstallUtils.UpdateOutcome.Status.UPDATED));
 
         executor.updatePlugin(player, "all");
 
         List<String> messages = drainMessages();
         String summary = messages.get(messages.size() - 1);
         assertThat(summary)
-                .as("restarting before the old jars named above are deleted loads two versions")
+                .as("restarting before the unrestored jar is moved back loses that module")
                 .contains("1个成功，1个失败")
-                .doesNotContain("请重启服务器。")
-                .contains("旧版本 JAR");
+                .contains("移回")
+                .doesNotContain("请重启服务器。");
     }
 
     private List<String> drainMessages() {
