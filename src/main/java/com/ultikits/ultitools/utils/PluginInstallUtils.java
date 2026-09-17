@@ -23,6 +23,7 @@ import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.ConcurrentModificationException;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -476,8 +477,12 @@ public class PluginInstallUtils {
      */
     static final String STAGING_DIRECTORY_NAME = ".upm-staging";
 
-    /** Normalised identify strings of the modules whose update is running right now. */
-    private static final Set<String> UPDATES_IN_PROGRESS = ConcurrentHashMap.newKeySet();
+    /**
+     * Normalised identify strings of the modules an update or an uninstall is changing right now.
+     * One guard for both operations (review r4 WR-03): an uninstall interleaved with an update of
+     * the same module otherwise replied success while the update put the module back.
+     */
+    private static final Set<String> MODULE_OPERATIONS_IN_PROGRESS = ConcurrentHashMap.newKeySet();
 
     /** File operations used by an update; replaced only by tests, to inject failures and record order. */
     static volatile UpdateFileOperations updateFileOperations = UpdateFileOperations.DEFAULT;
@@ -760,13 +765,13 @@ public class PluginInstallUtils {
         if (moduleKey == null) {
             return UpdateOutcome.of(UpdateOutcome.Status.DOWNLOAD_FAILED);
         }
-        if (!UPDATES_IN_PROGRESS.add(moduleKey)) {
+        if (!MODULE_OPERATIONS_IN_PROGRESS.add(moduleKey)) {
             return UpdateOutcome.of(UpdateOutcome.Status.ALREADY_IN_PROGRESS);
         }
         try {
             return runUpdateTransaction(identifyString, moduleKey);
         } finally {
-            UPDATES_IN_PROGRESS.remove(moduleKey);
+            MODULE_OPERATIONS_IN_PROGRESS.remove(moduleKey);
         }
     }
 
@@ -1042,11 +1047,68 @@ public class PluginInstallUtils {
      *     java.nio.file.FileSystemException#getFile()} names one such jar and each further one is
      *     attached as a suppressed {@code FileSystemException}. Every jar named will load again on
      *     the next restart
+     * @throws java.util.ConcurrentModificationException if an update or another uninstall of the
+     *     same module is running; nothing was changed
      * @throws IOException if another I/O error occurs
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException") // deliberate barrier: a module's unload failure is collected and reported, see the loop
     public static boolean uninstallPlugin(String name) throws IOException {
         PluginManager pluginManager = UltiTools.getInstance().getPluginManager();
+        // Take the module's guard before changing anything (review r4 WR-03). /upm uninstall names a
+        // module by its runtime name, while an update keys on its identify-string; both come from the
+        // same plugin.yml, so the uninstall resolves every identify-string that name stands for --
+        // from the loaded modules and from the JARs in the modules folder -- and holds all of them.
+        List<String> held = new ArrayList<>();
+        for (String key : moduleKeysForName(name, pluginManager)) {
+            if (!MODULE_OPERATIONS_IN_PROGRESS.add(key)) {
+                MODULE_OPERATIONS_IN_PROGRESS.removeAll(held);
+                throw new ConcurrentModificationException("An update or uninstall of module " + name
+                        + " is already running; nothing was changed");
+            }
+            held.add(key);
+        }
+        try {
+            return uninstallHoldingGuard(name, pluginManager);
+        } finally {
+            MODULE_OPERATIONS_IN_PROGRESS.removeAll(held);
+        }
+    }
+
+    /**
+     * The normalised identify strings the runtime module name {@code name} stands for: those of the
+     * loaded modules with that name and those declared by JARs in the modules folder whose
+     * {@code plugin.yml} {@code name} matches. A module without an identify-string contributes none;
+     * such a module is never offered an update, so it has nothing to be guarded against.
+     */
+    private static Set<String> moduleKeysForName(String name, PluginManager pluginManager) {
+        Set<String> keys = new java.util.TreeSet<>();
+        for (UltiToolsPlugin plugin : pluginManager.getPluginList()) {
+            if (name.equals(plugin.getPluginName())) {
+                String key = normalizeIdentifyString(plugin.getIdentifyString());
+                if (key != null) {
+                    keys.add(key);
+                }
+            }
+        }
+        File[] jars = new File(UltiTools.getInstance().getDataFolder(), "plugins")
+                .listFiles((f) -> f.getName().endsWith(".jar"));
+        if (jars != null) {
+            for (File jar : jars) {
+                try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(jar)) {
+                    Map<String, String> pluginYml = readPluginYmlScalars(jarFile);
+                    String key = normalizeIdentifyString(pluginYml.get("identify-string"));
+                    if (name.equals(pluginYml.get("name")) && key != null) {
+                        keys.add(key);
+                    }
+                } catch (IOException e) {
+                    LOGGER.log(Level.FINE, "Skipping unreadable JAR while resolving module " + name + ": " + jar, e);
+                }
+            }
+        }
+        return keys;
+    }
+
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // deliberate barrier: a module's unload failure is collected and reported, see the loop
+    private static boolean uninstallHoldingGuard(String name, PluginManager pluginManager) throws IOException {
         List<UltiToolsPlugin> matches = new ArrayList<>();
         for (UltiToolsPlugin plugin : pluginManager.getPluginList()) {
             if (plugin.getPluginName().equals(name)) {
