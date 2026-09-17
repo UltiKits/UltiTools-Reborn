@@ -375,18 +375,29 @@ This section governs the third kind.
   deleted (each further one attached as a suppressed `FileSystemException`), and a
   `java.nio.file.NoSuchFileException` naming the plugins folder when a loaded module was unloaded
   but no JAR carries its name. It also throws `IllegalStateException` when the module's own unload
-  threw; the module is still removed from the loaded modules and deletion of its JARs is still attempted, the
-  module's exception is the cause, and the JAR outcome above is attached as suppressed. A caller
-  that only checked the boolean now sees these as exceptions instead of a success it did not get.
+  threw; the module is still removed from the loaded modules and deletion of its JARs is still
+  attempted, the module's exception is the cause, and the JAR outcome above is attached as
+  suppressed. A caller that only checked the boolean now sees these as exceptions instead of a
+  success it did not get.
 - `PluginInstallUtils.updatePlugin(String)` reporting the outcome it documents (#505). Its javadoc
-  promised `true if update succeeded`, yet before 6.3.0 it returned `true` when the old version's
-  JAR could not be deleted, leaving two versions of the module to load on restart. As of 6.3.0 it
-  deletes every older JAR of the module after the download and, if any cannot be deleted, throws
+  promised `true if update succeeded`, yet before 6.3.0 it wrote the new JAR straight into the
+  modules folder and returned `true` even when an old JAR could not be deleted, leaving two versions
+  to load on restart. As of 6.3.0 an update is a staged transaction: the new version is downloaded
+  into `plugins/UltiTools/.upm-staging/`, validated as a JAR of that module at the catalogue's
+  latest version, the module's older JARs are moved aside, and the new JAR is moved in; set-aside
+  JARs are deleted afterwards. The method now returns `false`, with nothing changed, when the
+  download fails, when the downloaded file is not a JAR of that module at that version, and when an
+  update of the same module is already running (a concurrent update is refused). It throws
   `java.io.UncheckedIOException` wrapping a `java.nio.file.FileSystemException` whose `getFile()`
-  names one remaining JAR, each further one attached as suppressed. The exception is unchecked
-  because the method declares no checked exception and its signature is unchanged; a caller that
-  loops over modules expecting only a boolean, as `/upm update all` did, should catch it per
-  module.
+  names the old JAR that could not be moved aside or the path the new JAR could not be moved to; in
+  both cases the older JARs have been moved back, and any that could not be are attached as
+  suppressed `FileSystemException`s naming their place in the staging directory. The exception is
+  unchecked because the method declares no checked exception and its signature is unchanged; a
+  caller that loops over modules expecting only a boolean should catch it per module. A new method,
+  `PluginInstallUtils.updatePluginTransactionally(String)`, returns an `UpdateOutcome` that reports
+  each of these outcomes without exceptions, including set-aside JARs that could not be deleted:
+  those are left in the staging directory, outside the modules folder, never load, and are reported
+  as a note rather than as a failure.
 
 ### Behavioral changes that do need one
 
