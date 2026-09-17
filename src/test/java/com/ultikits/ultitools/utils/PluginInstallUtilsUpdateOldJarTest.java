@@ -207,7 +207,7 @@ class PluginInstallUtilsUpdateOldJarTest {
 
     @Test
     @DisplayName("review CR-02: when older jars cannot be removed, the failure names a jar still on disk and nothing changes")
-    void twoUndeletableOldJars_failureNamesEveryRemainingJar() throws IOException {
+    void twoUndeletableOldJars_failureNamesARemainingJarAndNothingChanges() throws IOException {
         Path folder = pluginsFolder.toPath();
         Assumptions.assumeTrue(Files.getFileStore(folder).supportsFileAttributeView("posix"),
                 "needs POSIX permissions to make the removal fail");
@@ -240,8 +240,8 @@ class PluginInstallUtilsUpdateOldJarTest {
     }
 
     @Test
-    @DisplayName("review r2 WR-01: a symbolic-link second name for an existing jar of the module never costs the update, and exactly one entry remains")
-    void aliasOfTheDownloadedFile_isNotDeletedAsAnOlderJar() throws IOException {
+    @DisplayName("a symbolic link to a jar of the module, plus that jar, end as exactly one entry holding the new bytes")
+    void symbolicLinkToAModuleJar_leavesExactlyOneEntryWithTheNewBytes() throws IOException {
         // Two directory entries naming one jar of the module: a regular jar under another spelling
         // and the download name as a symbolic link to it. Whatever the entries are, the update must
         // end with exactly one entry for the module, holding the downloaded bytes.
