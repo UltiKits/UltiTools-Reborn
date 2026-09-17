@@ -578,9 +578,12 @@ class PluginInstallCommandsEnhancedTest {
         List<String> messages = collectAllMessages(player);
         String fullMessage = String.join("\n", messages);
         
+        // #501: uninstallPlugin returns true only after deleting the jar, so the success reply
+        // no longer points the operator at the plugins folder to delete it by hand.
         assertThat(fullMessage)
             .contains("卸载成功")
-            .contains("文件位置");
+            .doesNotContain("文件位置")
+            .doesNotContain("手动删除");
     }
 
     @Test
