@@ -159,12 +159,9 @@ class ConfigManagerShutdownSaveTest {
     private List<String> loggedMessages(Level level) {
         ArgumentCaptor<Level> levels = ArgumentCaptor.forClass(Level.class);
         ArgumentCaptor<String> messages = ArgumentCaptor.forClass(String.class);
+        // atLeast(0) never fails; it only collects every log(Level, String) call made so far.
+        Mockito.verify(frameworkLogger, atLeast(0)).log(levels.capture(), messages.capture());
         List<String> result = new ArrayList<>();
-        try {
-            Mockito.verify(frameworkLogger, atLeast(0)).log(levels.capture(), messages.capture());
-        } catch (AssertionError e) {
-            return result;
-        }
         for (int i = 0; i < levels.getAllValues().size(); i++) {
             if (levels.getAllValues().get(i) == level) {
                 result.add(messages.getAllValues().get(i));
