@@ -498,6 +498,14 @@ public class PluginInstallUtils {
         /** Deletes {@code path} if it exists. */
         void delete(Path path) throws IOException;
 
+        /**
+         * Whether {@code first} and {@code second} are on the same file store, so a file can be
+         * renamed atomically between them.
+         */
+        default boolean isSameFileStore(Path first, Path second) throws IOException {
+            return Files.getFileStore(first).equals(Files.getFileStore(second));
+        }
+
         UpdateFileOperations DEFAULT = new UpdateFileOperations() {
             @Override
             public void download(String url, String fileName, File directory) throws IOException {
@@ -555,19 +563,57 @@ public class PluginInstallUtils {
             /** An older JAR could not be moved out of the modules folder; everything moved so far was moved back. */
             OLD_JAR_NOT_MOVED,
             /** The new version could not be moved into the modules folder; the older JARs were moved back. */
-            NEW_JAR_NOT_INSTALLED
+            NEW_JAR_NOT_INSTALLED,
+            /**
+             * The staging directory and the modules folder are not on the same file system, so a JAR
+             * cannot be renamed atomically between them; nothing was changed.
+             */
+            FILE_SYSTEMS_DIFFER,
+            /** The staging directory could not be prepared; nothing was changed. */
+            STAGING_UNAVAILABLE,
+            /** A JAR of the module newer than the catalogue's latest version is already in the modules folder; nothing was changed. */
+            NEWER_VERSION_PRESENT
         }
 
         private final Status status;
         private final List<String> files;
         private final List<String> unrestoredFiles;
+        private final List<String> unrestoredTargets;
         private final List<String> leftoverFiles;
+        private final Throwable failure;
+        private final String foundVersion;
+        private final String expectedVersion;
 
         UpdateOutcome(Status status, List<String> files, List<String> unrestoredFiles, List<String> leftoverFiles) {
+            this(status, files, unrestoredFiles, Collections.<String>emptyList(), leftoverFiles, null, null, null);
+        }
+
+        private UpdateOutcome(Status status, List<String> files, List<String> unrestoredFiles,
+                              List<String> unrestoredTargets, List<String> leftoverFiles, Throwable failure,
+                              String foundVersion, String expectedVersion) {
             this.status = status;
             this.files = Collections.unmodifiableList(new ArrayList<>(files));
             this.unrestoredFiles = Collections.unmodifiableList(new ArrayList<>(unrestoredFiles));
+            this.unrestoredTargets = Collections.unmodifiableList(new ArrayList<>(unrestoredTargets));
             this.leftoverFiles = Collections.unmodifiableList(new ArrayList<>(leftoverFiles));
+            this.failure = failure;
+            this.foundVersion = foundVersion;
+            this.expectedVersion = expectedVersion;
+        }
+
+        UpdateOutcome withFailure(Throwable cause) {
+            return new UpdateOutcome(status, files, unrestoredFiles, unrestoredTargets, leftoverFiles, cause,
+                    foundVersion, expectedVersion);
+        }
+
+        UpdateOutcome withUnrestoredTargets(List<String> targets) {
+            return new UpdateOutcome(status, files, unrestoredFiles, targets, leftoverFiles, failure,
+                    foundVersion, expectedVersion);
+        }
+
+        UpdateOutcome withVersions(String found, String expected) {
+            return new UpdateOutcome(status, files, unrestoredFiles, unrestoredTargets, leftoverFiles, failure,
+                    found, expected);
         }
 
         static UpdateOutcome of(Status status) {
@@ -599,11 +645,43 @@ public class PluginInstallUtils {
         }
 
         /**
+         * @return for each entry of {@link #getUnrestoredFiles()}, at the same index, the original
+         *     path in the modules folder -- including its original file name -- that the set-aside
+         *     file must be moved back to
+         */
+        public List<String> getUnrestoredTargets() {
+            return unrestoredTargets;
+        }
+
+        /**
          * @return after {@link Status#UPDATED}, set-aside older JARs in the staging directory that
          *     could not be deleted. They are outside the modules folder and never load.
          */
         public List<String> getLeftoverFiles() {
             return leftoverFiles;
+        }
+
+        /**
+         * @return the cause of a failed file operation as {@code <exception class>: <message>}, or
+         *     {@code null} when the outcome has no such cause
+         */
+        public String getFailureReason() {
+            return failure == null ? null : failure.getClass().getName() + ": " + failure.getMessage();
+        }
+
+        /** @return the failed file operation's exception, or {@code null} */
+        Throwable getFailure() {
+            return failure;
+        }
+
+        /** @return for {@link Status#NEWER_VERSION_PRESENT}, the newer JAR's version; otherwise {@code null} */
+        public String getFoundVersion() {
+            return foundVersion;
+        }
+
+        /** @return for {@link Status#NEWER_VERSION_PRESENT}, the catalogue's latest version; otherwise {@code null} */
+        public String getExpectedVersion() {
+            return expectedVersion;
         }
     }
 
