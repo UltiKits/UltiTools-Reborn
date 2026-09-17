@@ -655,6 +655,45 @@ class PluginInstallCommandsTest {
                 .contains("1个成功，1个失败");
     }
 
+    @Test
+    @DisplayName("review CR-02: /upm update names every old jar that could not be deleted")
+    void updateSeveralUndeletableOldJars_replyNamesEveryJar() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        stubModuleUpdates("TestPlugin", "test-plugin");
+        String first = "/srv/minecraft/plugins/UltiTools/plugins/test-plugin-1.0.0.jar";
+        String second = "/srv/minecraft/plugins/UltiTools/plugins/test-plugin-1.5.0.jar";
+        java.nio.file.FileSystemException failure =
+                new java.nio.file.FileSystemException(first, null, "Permission denied");
+        failure.addSuppressed(new java.nio.file.FileSystemException(second, null, "Permission denied"));
+        mockedUtils.when(() -> PluginInstallUtils.updatePlugin("test-plugin"))
+                .thenThrow(new java.io.UncheckedIOException(failure));
+
+        executor.updatePlugin(player, "TestPlugin");
+
+        assertThat(String.join("\n", drainMessages())).contains(first).contains(second).doesNotContain("更新成功");
+    }
+
+    @Test
+    @DisplayName("review IN-02: /upm update all does not end with a bare 'please restart' after an old-jar failure")
+    void updateAllOldJarDeleteFailure_summaryAsksToDeleteBeforeRestart() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        stubModuleUpdates("Plugin1", "plugin-1", "Plugin2", "plugin-2");
+        mockedUtils.when(() -> PluginInstallUtils.updatePlugin("plugin-1"))
+                .thenThrow(new java.io.UncheckedIOException(new java.nio.file.FileSystemException(
+                        "/srv/minecraft/plugins/UltiTools/plugins/plugin-1-1.0.0.jar", null, "Permission denied")));
+        mockedUtils.when(() -> PluginInstallUtils.updatePlugin("plugin-2")).thenReturn(true);
+
+        executor.updatePlugin(player, "all");
+
+        List<String> messages = drainMessages();
+        String summary = messages.get(messages.size() - 1);
+        assertThat(summary)
+                .as("restarting before the old jars named above are deleted loads two versions")
+                .contains("1个成功，1个失败")
+                .doesNotContain("请重启服务器。")
+                .contains("旧版本 JAR");
+    }
+
     private List<String> drainMessages() {
         List<String> messages = new ArrayList<>();
         String msg;

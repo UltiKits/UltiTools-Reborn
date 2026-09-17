@@ -131,11 +131,76 @@ class PluginInstallUtilsUpdateOldJarTest {
         }
     }
 
+    @Test
+    @DisplayName("review CR-02: every jar of the module other than the downloaded one is deleted, not only the first one found")
+    void twoOldJars_bothAreDeleted() throws IOException {
+        File first = writeOldJar("1.0.0");
+        File second = writeOldJar("1.5.0");
+
+        assertThat(PluginInstallUtils.updatePlugin(IDENTIFY_STRING)).isTrue();
+
+        assertThat(first).doesNotExist();
+        assertThat(second)
+                .as("any older jar left next to the new one loads a second version on restart")
+                .doesNotExist();
+        assertThat(new File(pluginsFolder, IDENTIFY_STRING + "-2.0.0.jar")).hasBinaryContent(NEW_JAR_BYTES);
+    }
+
+    @Test
+    @DisplayName("review CR-02: a retry after a failed old-jar delete, with the new jar already on disk, still deletes the old jar")
+    void retryWithNewJarAlreadyPresent_deletesTheOldJar() throws IOException {
+        File oldJar = writeOldJar("1.0.0");
+        // The previous, failed attempt already left the new version on disk, carrying the same
+        // identify-string. Which of the two jars a single-match lookup returns depends on
+        // File#listFiles() order, so this test guards the retry even where that order hides the defect.
+        writeOldJar("2.0.0");
+
+        assertThat(PluginInstallUtils.updatePlugin(IDENTIFY_STRING)).isTrue();
+
+        assertThat(oldJar).doesNotExist();
+        assertThat(new File(pluginsFolder, IDENTIFY_STRING + "-2.0.0.jar")).hasBinaryContent(NEW_JAR_BYTES);
+    }
+
+    @Test
+    @DisplayName("review CR-02: when several old jars cannot be deleted, the failure names every one of them")
+    void twoUndeletableOldJars_failureNamesEveryRemainingJar() throws IOException {
+        Path folder = pluginsFolder.toPath();
+        Assumptions.assumeTrue(Files.getFileStore(folder).supportsFileAttributeView("posix"),
+                "needs POSIX permissions to make the delete fail");
+        File first = writeOldJar("1.0.0");
+        File second = writeOldJar("1.5.0");
+        assertThat(new File(pluginsFolder, IDENTIFY_STRING + "-2.0.0.jar").createNewFile()).isTrue();
+
+        Set<PosixFilePermission> original = Files.getPosixFilePermissions(folder);
+        Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("r-xr-xr-x"));
+        try {
+            Assumptions.assumeFalse(Files.isWritable(folder),
+                    "running as a user that can write a read-only directory (e.g. root); the delete cannot be made to fail");
+
+            Throwable thrown = catchThrowable(() -> PluginInstallUtils.updatePlugin(IDENTIFY_STRING));
+
+            assertThat(thrown).isInstanceOf(UncheckedIOException.class).hasCauseInstanceOf(FileSystemException.class);
+            FileSystemException failure = (FileSystemException) thrown.getCause();
+            java.util.List<String> named = new java.util.ArrayList<>();
+            named.add(failure.getFile());
+            for (Throwable suppressed : failure.getSuppressed()) {
+                named.add(((FileSystemException) suppressed).getFile());
+            }
+            assertThat(named).containsExactlyInAnyOrder(first.getAbsolutePath(), second.getAbsolutePath());
+        } finally {
+            Files.setPosixFilePermissions(folder, original);
+        }
+    }
+
     private File writeOldJar() throws IOException {
-        File jar = new File(pluginsFolder, IDENTIFY_STRING + "-1.0.0.jar");
+        return writeOldJar("1.0.0");
+    }
+
+    private File writeOldJar(String version) throws IOException {
+        File jar = new File(pluginsFolder, IDENTIFY_STRING + "-" + version + ".jar");
         try (JarOutputStream out = new JarOutputStream(new FileOutputStream(jar))) {
             out.putNextEntry(new JarEntry("plugin.yml"));
-            out.write(("name: Fixture\nversion: 1.0.0\nidentify-string: " + IDENTIFY_STRING + "\n")
+            out.write(("name: Fixture\nversion: " + version + "\nidentify-string: " + IDENTIFY_STRING + "\n")
                     .getBytes(StandardCharsets.UTF_8));
             out.closeEntry();
         }
