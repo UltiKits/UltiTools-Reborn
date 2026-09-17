@@ -11,8 +11,10 @@ import java.net.URI;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.file.FileSystemException;
+import java.nio.file.LinkOption;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
 import java.io.UncheckedIOException;
 import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
@@ -488,9 +490,10 @@ public class PluginInstallUtils {
         // single pre-download lookup returns whichever matching JAR the folder lists first, and on
         // a retry after a failed delete that can be the already-downloaded new JAR, which skipped
         // the delete and reported success with the old JAR still on disk.
+        Path downloaded = new File(pluginsFolder, fileName).toPath();
         List<File> olderJars = new ArrayList<>();
         for (File jar : findPluginJars(pluginsFolder, identifyString)) {
-            if (!jar.getName().equals(fileName)) {
+            if (!isDownloadedFile(jar, downloaded)) {
                 olderJars.add(jar);
             }
         }
@@ -504,6 +507,28 @@ public class PluginInstallUtils {
         }
 
         return true;
+    }
+
+    /**
+     * Whether {@code candidate} is the file {@link #updatePlugin(String)} just downloaded to
+     * {@code downloaded}, compared by file identity rather than by name (review r2 WR-01). A
+     * second name for the same file -- a differently-cased stored name on a case-insensitive
+     * filesystem, a symbolic link, a short name -- otherwise made the download look like an older
+     * JAR and deleted it. A candidate that can no longer be examined because it has vanished is
+     * not the download, and there is nothing left to delete, so it is skipped by returning
+     * {@code true}; any other candidate that cannot be compared is treated as an older JAR, so its
+     * delete is attempted and a failure is reported.
+     *
+     * @param candidate  a JAR of the module found in the plugins folder after the download
+     * @param downloaded the path the new version was downloaded to
+     * @return whether {@code candidate} must be kept rather than deleted as an older JAR
+     */
+    private static boolean isDownloadedFile(File candidate, Path downloaded) {
+        try {
+            return Files.isSameFile(candidate.toPath(), downloaded);
+        } catch (IOException e) {
+            return !Files.exists(candidate.toPath(), LinkOption.NOFOLLOW_LINKS);
+        }
     }
 
     /**
