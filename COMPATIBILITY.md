@@ -57,10 +57,10 @@ two clauses holds, and the removal's own entry states which one and its evidence
 **6.3.0 is a one-time carve-out.** 6.3.0 is this project's first stable release. For 6.3.0 only,
 this exception was applied to other breaking changes as well as to removals, and none of the changes
 recorded as uses of it required the changed API to have carried `@Deprecated(forRemoval = true)`.
-The clauses' own evidence requirement still applied to every one of them: clause 1's reproduction,
-or clause 2's proof that the API was never published in a tagged release or was shipped but never
-wired into anything that calls it. From the release after 6.3.0 onward, the exception applies
-strictly as written above.
+The evidence recorded for those changes is kept as it was applied during the 6.3.0 cycle. It does
+not always match the clauses' wording above, and clause 2 in particular was assessed in more than one
+way. From the release after 6.3.0 onward, the exception, including both clauses' evidence
+requirements, applies strictly as written above.
 
 Each removal that relies on this exception names in its own entry which clause it used and the
 evidence for it. For 6.3.0, every removal that relies on it is in
