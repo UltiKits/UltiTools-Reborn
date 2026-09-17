@@ -1123,14 +1123,34 @@ public class PluginManager {
      * registerSelf()} returns false or throws, the caller closes the new container. If the old
      * version had already been unloaded before that point, the module would be left with neither
      * version -- while it was originally running fine.
+     * <p>
+     * Each superseded copy is unloaded through {@link #unregister(UltiToolsPlugin)}, the one full
+     * unload path, and then removed from the plugin list (#503). Calling its {@code
+     * unregisterSelf()} directly left its {@code @Scheduled} tasks, EventBus handlers, completers,
+     * panel responders and container live, and left it listed next to its replacement. A
+     * superseded copy whose unload throws is logged, not rethrown -- the new copy is already
+     * active by the time this runs, so failing its load here would leave it activated but
+     * unlisted -- and is removed from the list either way, as {@link #close()} does.
      */
     private void unregisterSupersededVersions(UltiToolsPlugin plugin) {
+        List<UltiToolsPlugin> superseded = new ArrayList<>();
         for (UltiToolsPlugin existing : pluginList) {
             if (!existing.getMainClass().equals(plugin.getMainClass())) {
                 continue;
             }
             if (plugin.isNewerVersionThan(existing)) {
-                existing.unregisterSelf();
+                superseded.add(existing);
+            }
+        }
+        // Collected first and removed afterwards: removing from pluginList while iterating it
+        // would throw ConcurrentModificationException.
+        for (UltiToolsPlugin existing : superseded) {
+            try {
+                unregister(existing);
+            } catch (Exception | Error e) {
+                logPluginUnregistrationFailure(existing.getPluginName(), e);
+            } finally {
+                pluginList.remove(existing);
             }
         }
     }
