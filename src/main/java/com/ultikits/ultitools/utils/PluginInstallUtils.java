@@ -727,7 +727,8 @@ public class PluginInstallUtils {
     }
 
     /**
-     * Deletes every file in {@code files}, attempting each even after an earlier one fails.
+     * Deletes every file in {@code files}, attempting each even after an earlier one fails. A file
+     * that no longer exists counts as deleted.
      *
      * @param files the files to delete
      * @throws FileSystemException if any file could not be deleted; {@link
@@ -738,7 +739,10 @@ public class PluginInstallUtils {
         FileSystemException failure = null;
         for (File file : files) {
             try {
-                Files.delete(file.toPath());
+                // A file already gone -- for example removed by an overlapping @RunAsync update
+                // that listed the same old jar (Codex P2 on #508) -- is the outcome asked for, not
+                // a failure: reporting it would name a jar that is no longer on disk.
+                Files.deleteIfExists(file.toPath());
             } catch (IOException e) {
                 FileSystemException fileFailure =
                         new FileSystemException(file.getAbsolutePath(), null, e.getMessage());
