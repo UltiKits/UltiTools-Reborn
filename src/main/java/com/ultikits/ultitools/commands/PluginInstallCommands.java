@@ -340,11 +340,10 @@ public class PluginInstallCommands extends BaseCommandExecutor {
      * (#505): both JARs would load on restart, so name the old one the operator has to remove.
      */
     private void sendOldJarDeleteFailure(CommandSender sender, UncheckedIOException e) {
-        String oldJar = e.getCause() instanceof FileSystemException
-                && ((FileSystemException) e.getCause()).getFile() != null
-                ? ((FileSystemException) e.getCause()).getFile()
+        String oldJars = e.getCause() instanceof FileSystemException
+                ? namedFiles((FileSystemException) e.getCause())
                 : UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins";
-        sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("更新失败！新版本已下载，但无法删除旧版本 JAR 文件，重启前请手动删除，否则两个版本会同时加载：%s"), oldJar));
+        sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("更新失败！新版本已下载，但以下旧版本 JAR 文件无法删除，重启前请手动删除，否则多个版本会同时加载：%s"), oldJars));
     }
 
     private void updateAllPlugins(CommandSender sender) {
@@ -355,6 +354,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         }
         int success = 0;
         int failed = 0;
+        boolean oldJarsLeft = false;
         for (UpdateInfo info : updateManager.getModuleUpdates().values()) {
             sender.sendMessage(ChatColor.YELLOW + String.format(
                 UltiTools.getInstance().i18n("正在更新 %s..."), info.getPluginName()));
@@ -367,7 +367,16 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             } catch (UncheckedIOException e) {
                 sendOldJarDeleteFailure(sender, e);
                 failed++;
+                oldJarsLeft = true;
             }
+        }
+        if (oldJarsLeft) {
+            // Restarting before the old JARs named above are deleted loads two versions of those
+            // modules (review IN-02), so the summary must not end with a bare restart instruction.
+            sender.sendMessage(ChatColor.YELLOW + String.format(
+                UltiTools.getInstance().i18n("全部更新完成！%d个成功，%d个失败。请先手动删除上面列出的旧版本 JAR 文件，再重启服务器。"),
+                success, failed));
+            return;
         }
         sender.sendMessage(ChatColor.GREEN + String.format(
             UltiTools.getInstance().i18n("全部更新完成！%d个成功，%d个失败。请重启服务器。"),

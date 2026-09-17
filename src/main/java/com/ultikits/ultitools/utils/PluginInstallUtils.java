@@ -411,13 +411,28 @@ public class PluginInstallUtils {
      * @return the matching JAR file, or null if not found
      */
     public static File findPluginJar(File pluginsFolder, String identifyString) {
+        List<File> jars = findPluginJars(pluginsFolder, identifyString);
+        return jars.isEmpty() ? null : jars.get(0);
+    }
+
+    /**
+     * Finds every jar in {@code pluginsFolder} whose {@code plugin.yml} {@code identify-string}
+     * matches, in the folder's listing order -- the same matching as {@link #findPluginJar}, which
+     * returns only the first.
+     *
+     * @param pluginsFolder  the folder to search
+     * @param identifyString the module's identify string
+     * @return every matching jar; empty when none matches or the folder cannot be listed
+     */
+    private static List<File> findPluginJars(File pluginsFolder, String identifyString) {
+        List<File> matches = new ArrayList<>();
         String normalizedIdentifyString = normalizeIdentifyString(identifyString);
         if (pluginsFolder == null || !pluginsFolder.isDirectory() || normalizedIdentifyString == null) {
-            return null;
+            return matches;
         }
         File[] jars = pluginsFolder.listFiles((f) -> f.getName().endsWith(".jar"));
         if (jars == null) {
-            return null;
+            return matches;
         }
         for (File jar : jars) {
             try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(jar)) {
@@ -430,14 +445,14 @@ public class PluginInstallUtils {
                     YamlConfiguration config = YamlConfiguration.loadConfiguration(reader);
                     String id = config.getString("identify-string");
                     if (normalizedIdentifyString.equals(normalizeIdentifyString(id))) {
-                        return jar;
+                        matches.add(jar);
                     }
                 }
             } catch (IOException e) {
                 LOGGER.log(Level.FINE, "Skipping unreadable plugin JAR: " + jar.getName(), e);
             }
         }
-        return null;
+        return matches;
     }
 
     /**
@@ -446,9 +461,10 @@ public class PluginInstallUtils {
      * @param identifyString the plugin identify string
      * @return true if the new version was downloaded and the old JAR (if any) deleted
      * @throws java.io.UncheckedIOException wrapping a {@link java.nio.file.FileSystemException}
-     *     when the new version was downloaded but the old JAR could not be deleted; {@link
-     *     java.nio.file.FileSystemException#getFile()} names that old JAR, which would otherwise
-     *     load next to the new one on restart (#505)
+     *     when the new version was downloaded but an older JAR of the module could not be deleted;
+     *     {@link java.nio.file.FileSystemException#getFile()} names one such JAR and each further
+     *     one is attached as a suppressed {@code FileSystemException}. Every JAR named would
+     *     otherwise load next to the new one on restart (#505)
      */
     public static boolean updatePlugin(String identifyString) {
         String latestVersion = getPluginLatestVersion(identifyString);
@@ -460,7 +476,6 @@ public class PluginInstallUtils {
 
         String pluginsPath = UltiTools.getInstance().getDataFolder() + "/plugins";
         File pluginsFolder = new File(pluginsPath);
-        File oldJar = findPluginJar(pluginsFolder, identifyString);
 
         try {
             HttpDownloadUtils.download(downloadLink, fileName, pluginsPath);
@@ -469,19 +484,23 @@ public class PluginInstallUtils {
             return false;
         }
 
-        // Delete old JAR if it's a different file than the new download
-        if (oldJar != null && !oldJar.getName().equals(fileName)) {
-            // Report the delete's real outcome (#505): an old JAR left on disk loads next to the
-            // new one on restart, so its failure must reach the operator rather than read as
-            // success. Unchecked, because this public method declares no checked exception.
-            try {
-                Files.delete(oldJar.toPath());
-            } catch (IOException e) {
-                FileSystemException failure =
-                        new FileSystemException(oldJar.getAbsolutePath(), null, e.getMessage());
-                failure.initCause(e);
-                throw new UncheckedIOException(failure);
+        // Delete every other JAR of this module, looked up AFTER the download (review CR-02): a
+        // single pre-download lookup returns whichever matching JAR the folder lists first, and on
+        // a retry after a failed delete that can be the already-downloaded new JAR, which skipped
+        // the delete and reported success with the old JAR still on disk.
+        List<File> olderJars = new ArrayList<>();
+        for (File jar : findPluginJars(pluginsFolder, identifyString)) {
+            if (!jar.getName().equals(fileName)) {
+                olderJars.add(jar);
             }
+        }
+        // Report the deletes' real outcome (#505): an old JAR left on disk loads next to the new
+        // one on restart, so every failure must reach the operator rather than read as success.
+        // Unchecked, because this public method declares no checked exception.
+        try {
+            deleteAllOrThrow(olderJars);
+        } catch (FileSystemException e) {
+            throw new UncheckedIOException(e);
         }
 
         return true;
