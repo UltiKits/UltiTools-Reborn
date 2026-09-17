@@ -491,9 +491,13 @@ public class PluginInstallUtils {
         // a retry after a failed delete that can be the already-downloaded new JAR, which skipped
         // the delete and reported success with the old JAR still on disk.
         Path downloaded = new File(pluginsFolder, fileName).toPath();
+        List<File> candidates = findPluginJars(pluginsFolder, identifyString);
+        Path entryToKeep = realEntry(downloadEntryToKeep(candidates, downloaded));
         List<File> olderJars = new ArrayList<>();
-        for (File jar : findPluginJars(pluginsFolder, identifyString)) {
-            if (!isDownloadedFile(jar, downloaded)) {
+        for (File jar : candidates) {
+            Path entry = jar.toPath();
+            // A candidate that has vanished since the listing has nothing left to delete.
+            if (Files.exists(entry, LinkOption.NOFOLLOW_LINKS) && !realEntry(entry).equals(entryToKeep)) {
                 olderJars.add(jar);
             }
         }
@@ -510,24 +514,64 @@ public class PluginInstallUtils {
     }
 
     /**
-     * Whether {@code candidate} is the file {@link #updatePlugin(String)} just downloaded to
-     * {@code downloaded}, compared by file identity rather than by name (review r2 WR-01). A
-     * second name for the same file -- a differently-cased stored name on a case-insensitive
-     * filesystem, a symbolic link, a short name -- otherwise made the download look like an older
-     * JAR and deleted it. A candidate that can no longer be examined because it has vanished is
-     * not the download, and there is nothing left to delete, so it is skipped by returning
-     * {@code true}; any other candidate that cannot be compared is treated as an older JAR, so its
-     * delete is attempted and a failure is reported.
+     * The one directory entry {@link #updatePlugin(String)} keeps for the file it just downloaded
+     * to {@code downloaded}; every other module JAR entry, including every further name for that
+     * same file, is deleted.
+     * <p>
+     * Identity is by file, not by name (review r2 WR-01): a differently-cased stored name on a
+     * case-insensitive filesystem, a symbolic link or a hard link are all second names for the
+     * download, and comparing names deleted the download itself. Keeping only one entry matters as
+     * much (Codex P2 on #508): the plugin loader enumerates every {@code .jar} entry, so two names
+     * for one JAR load the module twice. When the download path is itself a symbolic link, the
+     * entry kept is the regular file it resolves to inside the folder, because deleting that file
+     * would leave the link dangling and lose the download; deleting a symbolic link or a further
+     * hard link never loses the file's content.
      *
-     * @param candidate  a JAR of the module found in the plugins folder after the download
+     * @param candidates the module's JAR entries found in the plugins folder after the download
      * @param downloaded the path the new version was downloaded to
-     * @return whether {@code candidate} must be kept rather than deleted as an older JAR
+     * @return the entry to keep
      */
-    private static boolean isDownloadedFile(File candidate, Path downloaded) {
+    private static Path downloadEntryToKeep(List<File> candidates, Path downloaded) {
+        if (!Files.isSymbolicLink(downloaded)) {
+            return downloaded;
+        }
+        for (File jar : candidates) {
+            Path entry = jar.toPath();
+            if (!Files.isSymbolicLink(entry) && isSameFileQuietly(entry, downloaded)) {
+                return entry;
+            }
+        }
+        return downloaded;
+    }
+
+    /**
+     * {@link Files#isSameFile}, answering {@code false} when either path cannot be examined.
+     *
+     * @param first  a path
+     * @param second another path
+     * @return whether both locate the same file
+     */
+    private static boolean isSameFileQuietly(Path first, Path second) {
         try {
-            return Files.isSameFile(candidate.toPath(), downloaded);
+            return Files.isSameFile(first, second);
         } catch (IOException e) {
-            return !Files.exists(candidate.toPath(), LinkOption.NOFOLLOW_LINKS);
+            return false;
+        }
+    }
+
+    /**
+     * The directory entry {@code entry} names, as stored: symbolic links are not followed, and on
+     * a case-insensitive filesystem the stored case is returned, so two spellings of one entry
+     * compare equal while two hard links or a link and its target do not.
+     *
+     * @param entry a path in the plugins folder
+     * @return the stored entry, or {@code entry}'s normalised absolute path if it cannot be examined
+     */
+    private static Path realEntry(Path entry) {
+        try {
+            return entry.toRealPath(LinkOption.NOFOLLOW_LINKS);
+        } catch (IOException e) {
+            return entry.toAbsolutePath().normalize();
         }
     }
 
