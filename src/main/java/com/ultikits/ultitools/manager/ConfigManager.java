@@ -341,37 +341,41 @@ public class ConfigManager {
      * the in-memory state still wins and is written, and a WARNING names the file whose edits were
      * overwritten. The only caller is {@code UltiTools#onDisable()}; an explicit {@link
      * AbstractConfigEntity#save()} is unaffected and always writes.
+     * <p>
+     * Each entity's check-then-save runs under that entity's own monitor, the lock its read, write
+     * and snapshot paths also hold, so a panel write still in flight on the WebSocket thread is
+     * applied either wholly before or wholly after this entity's shutdown save. A save failure, or
+     * any unchecked exception from one entity, is logged and does not stop the remaining entities
+     * from being saved.
      */
     public void saveAll() {
         for (Map<String, AbstractConfigEntity> configMap : pluginConfigMap.values()) {
             for (AbstractConfigEntity config : configMap.values()) {
-                if (!config.isModifiedSinceSnapshot()) {
-                    continue;
-                }
-                // Resolved against the module's config folder, where save() writes - a bare
-                // new File(configFilePath) resolves against the server working directory and
-                // never matched (#510).
-                if (new File(config.getUltiToolsPlugin().getResourceFolderPath(), config.getConfigFilePath()).isDirectory()) {
-                    continue;
-                }
-                // Read before save(): a successful save refreshes the file fingerprint.
-                boolean overwritesOperatorEdit = config.isFileModifiedSinceSnapshot();
                 try {
-                    config.save();
-                    if (overwritesOperatorEdit) {
-                        warnOperatorEditOverwritten(config);
+                    synchronized (config) {
+                        if (!config.isModifiedSinceSnapshot()) {
+                            continue;
+                        }
+                        // Read before save(): a successful save refreshes the file fingerprint.
+                        boolean overwritesOperatorEdit = config.isFileModifiedSinceSnapshot();
+                        config.save();
+                        if (overwritesOperatorEdit) {
+                            warnOperatorEditOverwritten(config);
+                        }
                     }
                 } catch (IOException e) {
                     UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration save failed！File path：" + config.getConfigFilePath());
+                } catch (RuntimeException e) {
+                    UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration save failed！File path：" + config.getConfigFilePath(), e);
                 }
             }
         }
     }
 
     /**
-     * Logs that the shutdown save wrote an in-memory change over edits an operator made to the same
-     * file while the server was running (#510). The overwrite itself is the documented contract - a
-     * value set from code is saved on disable - but it must not be silent.
+     * Logs that the shutdown save wrote an in-memory change over a file that was changed or removed
+     * on disk while the server was running (#510). The overwrite itself is the documented contract -
+     * a value set from code is saved on disable - but it must not be silent.
      *
      * @param config the entity that was just saved
      */
@@ -379,9 +383,9 @@ public class ConfigManager {
         UltiToolsPlugin owner = config.getUltiToolsPlugin();
         File file = new File(owner.getResourceFolderPath(), config.getConfigFilePath());
         UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration file "
-                + file.getAbsolutePath() + " was edited on disk while the server was running, but module "
+                + file.getAbsolutePath() + " was changed or removed on disk while the server was running, but module "
                 + owner.getPluginName() + " also changed this configuration in memory. The in-memory"
-                + " configuration was saved, so the edits made to the file while the server ran were overwritten.");
+                + " configuration was saved, so the changes made to the file while the server ran were overwritten.");
     }
 
     /**
