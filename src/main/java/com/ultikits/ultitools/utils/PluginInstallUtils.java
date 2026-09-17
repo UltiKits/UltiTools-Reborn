@@ -10,6 +10,8 @@ import java.net.JarURLConnection;
 import java.net.URI;
 import java.net.URL;
 import java.net.URLEncoder;
+import java.nio.file.FileSystemException;
+import java.nio.file.Files;
 import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
 import java.util.List;
@@ -470,11 +472,16 @@ public class PluginInstallUtils {
     }
 
     /**
-     * Uninstall plugin.
+     * Uninstall plugin: unload every loaded module whose runtime name matches, then delete the
+     * jar in the plugins folder whose {@code plugin.yml} {@code name} matches.
      *
-     * @param name the plugin name
-     * @return whether the uninstall succeeded
-     * @throws IOException if an I/O error occurs
+     * @param name the plugin's runtime name ({@code plugin.yml} {@code name})
+     * @return {@code true} if a matching jar was found and deleted; {@code false} if no jar in the
+     *     plugins folder carries that name
+     * @throws java.nio.file.FileSystemException if the matching jar was found but could not be
+     *     deleted; {@link java.nio.file.FileSystemException#getFile()} names that jar, which will
+     *     load again on the next restart
+     * @throws IOException if another I/O error occurs
      */
     public static boolean uninstallPlugin(String name) throws IOException {
         PluginManager pluginManager = UltiTools.getInstance().getPluginManager();
@@ -513,7 +520,16 @@ public class PluginInstallUtils {
             if (name.equals(pluginName)) {
                 inputStream.close();
                 reader.close();
-                file.delete();
+                // Report the delete's real outcome (#501): a jar left on disk loads again on the
+                // next restart, so its failure must reach the operator rather than read as success.
+                try {
+                    Files.delete(file.toPath());
+                } catch (IOException e) {
+                    FileSystemException failure =
+                            new FileSystemException(file.getAbsolutePath(), null, e.getMessage());
+                    failure.initCause(e);
+                    throw failure;
+                }
                 return true;
             }
         }
