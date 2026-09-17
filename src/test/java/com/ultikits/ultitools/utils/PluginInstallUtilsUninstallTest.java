@@ -152,7 +152,7 @@ class PluginInstallUtilsUninstallTest {
         File jar = writeModuleJar(MODULE_NAME);
 
         Set<PosixFilePermission> original = Files.getPosixFilePermissions(folder);
-        Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("r-xr-xr-x"));
+        Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("r-x------"));
         try {
             Assumptions.assumeFalse(Files.isWritable(folder),
                     "running as a user that can write a read-only directory (e.g. root); the delete cannot be made to fail");
@@ -194,7 +194,7 @@ class PluginInstallUtilsUninstallTest {
         File second = writeModuleJar(MODULE_NAME, "2.0.0");
 
         Set<PosixFilePermission> original = Files.getPosixFilePermissions(folder);
-        Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("r-xr-xr-x"));
+        Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("r-x------"));
         try {
             Assumptions.assumeFalse(Files.isWritable(folder),
                     "running as a user that can write a read-only directory (e.g. root); the delete cannot be made to fail");
@@ -278,7 +278,7 @@ class PluginInstallUtilsUninstallTest {
         File jar = writeModuleJar(MODULE_NAME);
 
         Set<PosixFilePermission> original = Files.getPosixFilePermissions(folder);
-        Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("r-xr-xr-x"));
+        Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("r-x------"));
         try {
             Assumptions.assumeFalse(Files.isWritable(folder),
                     "running as a user that can write a read-only directory (e.g. root); the delete cannot be made to fail");

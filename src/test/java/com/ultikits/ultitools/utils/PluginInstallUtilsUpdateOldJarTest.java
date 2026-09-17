@@ -113,7 +113,7 @@ class PluginInstallUtilsUpdateOldJarTest {
         assertThat(newJar.createNewFile()).isTrue();
 
         Set<PosixFilePermission> original = Files.getPosixFilePermissions(folder);
-        Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("r-xr-xr-x"));
+        Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("r-x------"));
         try {
             Assumptions.assumeFalse(Files.isWritable(folder),
                     "running as a user that can write a read-only directory (e.g. root); the delete cannot be made to fail");
@@ -178,7 +178,7 @@ class PluginInstallUtilsUpdateOldJarTest {
         assertThat(new File(pluginsFolder, IDENTIFY_STRING + "-2.0.0.jar").createNewFile()).isTrue();
 
         Set<PosixFilePermission> original = Files.getPosixFilePermissions(folder);
-        Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("r-xr-xr-x"));
+        Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("r-x------"));
         try {
             Assumptions.assumeFalse(Files.isWritable(folder),
                     "running as a user that can write a read-only directory (e.g. root); the delete cannot be made to fail");
