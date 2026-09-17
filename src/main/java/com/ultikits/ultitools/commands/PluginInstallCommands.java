@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.nio.file.FileSystemException;
 import java.nio.file.NoSuchFileException;
 import java.util.ArrayList;
-import java.util.ConcurrentModificationException;
 import java.util.List;
 
 import org.bukkit.ChatColor;
@@ -23,6 +22,8 @@ import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.annotations.command.RunAsync;
 import com.ultikits.ultitools.entities.PluginEntity;
 import com.ultikits.ultitools.entities.UpdateInfo;
+import com.ultikits.ultitools.exceptions.ErrorCode;
+import com.ultikits.ultitools.exceptions.PluginModuleException;
 import com.ultikits.ultitools.manager.UpdateManager;
 import com.ultikits.ultitools.utils.MessageUtils;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
@@ -221,7 +222,10 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             } else {
                 sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("卸载失败！请检查是否拼写正确！"));
             }
-        } catch (ConcurrentModificationException e) {
+        } catch (PluginModuleException e) {
+            if (e.getErrorCode() != ErrorCode.PLUGIN_OPERATION_IN_PROGRESS) {
+                throw e;
+            }
             // An update or another uninstall of the same module is running (review r4 WR-03).
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("卸载失败！该模块正在进行更新或卸载，本次未做任何更改。"));
         } catch (IllegalStateException e) {

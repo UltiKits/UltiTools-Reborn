@@ -378,10 +378,11 @@ This section governs the third kind.
   threw; the module is still removed from the loaded modules and deletion of its JARs is still
   attempted, the module's exception is the cause, and the JAR outcome above is attached as
   suppressed. A caller that only checked the boolean now sees these as exceptions instead of a
-  success it did not get. It also throws `java.util.ConcurrentModificationException`, with nothing
-  changed, while an update or another uninstall of the same module is running: one per-module guard
-  covers both operations, keyed by the module's identify-string, which the uninstall resolves from
-  its runtime name.
+  success it did not get. It also throws `com.ultikits.ultitools.exceptions.PluginModuleException`
+  with error code `ErrorCode.PLUGIN_OPERATION_IN_PROGRESS` (new in 6.3.0), with nothing changed,
+  while an update or another uninstall of the same module is running: one per-module guard covers
+  both operations, keyed by the module's identify-string, which the uninstall resolves from its
+  runtime name.
 - `PluginInstallUtils.updatePlugin(String)` reporting the outcome it documents (#505). Its javadoc
   promised `true if update succeeded`, yet before 6.3.0 it wrote the new JAR straight into the
   modules folder and returned `true` even when an old JAR could not be deleted, leaving two versions

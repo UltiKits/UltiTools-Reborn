@@ -23,7 +23,6 @@ import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.ConcurrentModificationException;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -45,6 +44,8 @@ import com.google.gson.reflect.TypeToken;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.entities.PluginEntity;
+import com.ultikits.ultitools.exceptions.ErrorCode;
+import com.ultikits.ultitools.exceptions.PluginModuleException;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
 
@@ -1138,8 +1139,9 @@ public class PluginInstallUtils {
      *     java.nio.file.FileSystemException#getFile()} names one such jar and each further one is
      *     attached as a suppressed {@code FileSystemException}. Every jar named will load again on
      *     the next restart
-     * @throws java.util.ConcurrentModificationException if an update or another uninstall of the
-     *     same module is running; nothing was changed
+     * @throws com.ultikits.ultitools.exceptions.PluginModuleException with error code {@link
+     *     com.ultikits.ultitools.exceptions.ErrorCode#PLUGIN_OPERATION_IN_PROGRESS} if an update or
+     *     another uninstall of the same module is running; nothing was changed
      * @throws IOException if another I/O error occurs
      */
     public static boolean uninstallPlugin(String name) throws IOException {
@@ -1152,8 +1154,8 @@ public class PluginInstallUtils {
         for (String key : moduleKeysForName(name, pluginManager)) {
             if (!MODULE_OPERATIONS_IN_PROGRESS.add(key)) {
                 MODULE_OPERATIONS_IN_PROGRESS.removeAll(held);
-                throw new ConcurrentModificationException("An update or uninstall of module " + name
-                        + " is already running; nothing was changed");
+                throw new PluginModuleException(ErrorCode.PLUGIN_OPERATION_IN_PROGRESS, "An update or uninstall of module "
+                        + name + " is already running; nothing was changed");
             }
             held.add(key);
         }
