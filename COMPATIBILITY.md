@@ -54,6 +54,14 @@ two clauses holds, and the removal's own entry states which one and its evidence
    that calls it.** There is no working behaviour for a deprecation window to warn anyone away from,
    because no released version could ever have exercised it.
 
+**6.3.0 is a one-time carve-out.** 6.3.0 is this project's first stable release. For 6.3.0 only,
+this exception was applied to other breaking changes as well as to removals, and none of the changes
+recorded as uses of it required the changed API to have carried `@Deprecated(forRemoval = true)`.
+The clauses' own evidence requirement still applied to every one of them: clause 1's reproduction,
+or clause 2's proof that the API was never published in a tagged release or was shipped but never
+wired into anything that calls it. From the release after 6.3.0 onward, the exception applies
+strictly as written above.
+
 Each removal that relies on this exception names in its own entry which clause it used and the
 evidence for it. For 6.3.0, every removal that relies on it is in
 ["Same-release exceptions applied in 6.3.0"](#same-release-exceptions-applied-in-630) below — read
@@ -63,9 +71,10 @@ in [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md). No total 
 count kept away from the list it counts has nothing holding it honest, which is how the count that
 used to sit in this paragraph went stale.
 
-That section lists removals only. The exception as stated above covers removals, but in 6.3.0
-changes that are not removals also cite its clauses in their own entries, and they are not listed
-there: `UltiToolsPlugin#unregisterSelf()` and `#reloadSelf()` becoming `final` (see the third
+That section lists removals only. The exception as written covers removals, but under the
+one-time 6.3.0 carve-out above, changes that are not removals also cite its clauses in their own
+entries, and they are not listed there: `UltiToolsPlugin#unregisterSelf()` and `#reloadSelf()`
+becoming `final` (see the third
 occurrence under
 [Binary incompatibilities the removal list cannot cover](#binary-incompatibilities-the-removal-list-cannot-cover)),
 and `GuiRenderer.initialize`'s first parameter changing from `Widget` to `Supplier<Widget>`. Their
@@ -163,8 +172,8 @@ only, not because it is itself a compatibility event.
 ### Same-release exceptions applied in 6.3.0
 
 The removals in the nine entries below used the
-[same-release exception](#exception-removal-in-the-same-release-that-announces-it) above instead of
-waiting a full MINOR:
+[same-release exception](#exception-removal-in-the-same-release-that-announces-it) above, on the
+terms of its one-time 6.3.0 carve-out, instead of waiting a full MINOR:
 
 - `aop.CglibProxyFactory` — clause 1, proven non-functional (issue #188).
 - `aop.ProxyFactory.createProxy(T)` / `createProxy(Class<T>, T)` and
