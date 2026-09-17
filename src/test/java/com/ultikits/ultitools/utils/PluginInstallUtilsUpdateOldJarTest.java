@@ -255,6 +255,28 @@ class PluginInstallUtilsUpdateOldJarTest {
         assertThat(Files.readAllBytes(downloadName)).isEqualTo(newJar);
     }
 
+    @Test
+    @DisplayName("Codex P2 on #508: a jar another updater already removed counts as deleted, not as a failure")
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // the vanish-between-listing-and-delete race cannot be scheduled deterministically, so the private delete step is driven directly
+    void jarAlreadyRemovedByAnotherUpdater_isNotReportedAsAFailure() throws Exception {
+        File present = writeOldJar("1.0.0");
+        File alreadyRemoved = new File(pluginsFolder, IDENTIFY_STRING + "-1.5.0.jar");
+        java.lang.reflect.Method deleteAll =
+                PluginInstallUtils.class.getDeclaredMethod("deleteAllOrThrow", java.util.List.class);
+        deleteAll.setAccessible(true);
+
+        // Two overlapping @RunAsync /upm update runs can list the same old jar; when the first
+        // deletes it, the second's delete finds nothing. The file is gone, which is exactly the
+        // outcome asked for, so reporting it as a failure names a jar that is no longer on disk.
+        Throwable thrown = catchThrowable(
+                () -> deleteAll.invoke(null, java.util.Arrays.asList(alreadyRemoved, present)));
+
+        assertThat(thrown)
+                .as("an already-removed jar must not turn a completed update into a reported failure")
+                .isNull();
+        assertThat(present).doesNotExist();
+    }
+
     private java.util.List<String> remainingJarEntries() {
         String[] names = pluginsFolder.list((dir, name) -> name.endsWith(".jar"));
         return names == null ? java.util.Collections.emptyList() : java.util.Arrays.asList(names);
