@@ -351,7 +351,10 @@ class PluginInstallUtilsUpdateTransactionTest {
 
         assertThat(uninstallResult.get())
                 .as("the uninstall resolves the same module through its jar's identify-string and meets the update's guard")
-                .isInstanceOf(java.util.ConcurrentModificationException.class);
+                .isInstanceOf(com.ultikits.ultitools.exceptions.PluginModuleException.class);
+        assertThat(((com.ultikits.ultitools.exceptions.PluginModuleException) uninstallResult.get()).getErrorCode().name())
+                .as("the refusal is a typed framework failure, not a collection-iteration error")
+                .isEqualTo("PLUGIN_OPERATION_IN_PROGRESS");
         assertThat(outcome.getStatus()).isEqualTo(Status.UPDATED);
         assertThat(jarEntries()).containsExactly(NEW_JAR_NAME);
     }

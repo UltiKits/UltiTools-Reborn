@@ -851,7 +851,9 @@ class PluginInstallCommandsTest {
     void uninstallDuringUpdate_repliesRefusal() {
         assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
         mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin"))
-                .thenThrow(new java.util.ConcurrentModificationException("an update of this module is running"));
+                .thenThrow(new com.ultikits.ultitools.exceptions.PluginModuleException(
+                        com.ultikits.ultitools.exceptions.ErrorCode.valueOf("PLUGIN_OPERATION_IN_PROGRESS"),
+                        "an update of this module is running"));
 
         Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
                 () -> executor.uninstallPlugin(player, "test-plugin"));
