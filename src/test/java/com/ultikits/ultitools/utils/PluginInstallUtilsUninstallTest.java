@@ -168,11 +168,68 @@ class PluginInstallUtilsUninstallTest {
         }
     }
 
+    @Test
+    @DisplayName("#501 review WR-02: every jar carrying the module's name is deleted, not only the first one listed")
+    void twoJarsForOneModule_bothAreDeleted() throws Exception {
+        File first = writeModuleJar(MODULE_NAME, "1.0.0");
+        File second = writeModuleJar(MODULE_NAME, "2.0.0");
+
+        assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME)).isTrue();
+
+        assertThat(first)
+                .as("a second jar of the same module left on disk loads the module again on restart, "
+                        + "so success may only be reported once every matching jar is gone")
+                .doesNotExist();
+        assertThat(second).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("#501 review WR-02: when several matching jars cannot be deleted, the failure names every one of them")
+    void twoUndeletableJars_failureNamesEveryRemainingJar() throws Exception {
+        Path folder = pluginsFolder.toPath();
+        Assumptions.assumeTrue(Files.getFileStore(folder).supportsFileAttributeView("posix"),
+                "needs POSIX permissions to make the delete fail");
+        File first = writeModuleJar(MODULE_NAME, "1.0.0");
+        File second = writeModuleJar(MODULE_NAME, "2.0.0");
+
+        Set<PosixFilePermission> original = Files.getPosixFilePermissions(folder);
+        Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("r-xr-xr-x"));
+        try {
+            Assumptions.assumeFalse(Files.isWritable(folder),
+                    "running as a user that can write a read-only directory (e.g. root); the delete cannot be made to fail");
+
+            Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+            assertThat(thrown).isInstanceOf(FileSystemException.class);
+            assertThat(namedFiles((FileSystemException) thrown))
+                    .as("the operator must be told every jar that will load again, via getFile() and "
+                            + "one suppressed FileSystemException per further jar")
+                    .containsExactlyInAnyOrder(first.getAbsolutePath(), second.getAbsolutePath());
+        } finally {
+            Files.setPosixFilePermissions(folder, original);
+        }
+    }
+
+    private static java.util.List<String> namedFiles(FileSystemException failure) {
+        java.util.List<String> files = new java.util.ArrayList<>();
+        files.add(failure.getFile());
+        for (Throwable suppressed : failure.getSuppressed()) {
+            if (suppressed instanceof FileSystemException) {
+                files.add(((FileSystemException) suppressed).getFile());
+            }
+        }
+        return files;
+    }
+
     private File writeModuleJar(String moduleName) throws IOException {
-        File jar = new File(pluginsFolder, moduleName + "-1.0.0.jar");
+        return writeModuleJar(moduleName, "1.0.0");
+    }
+
+    private File writeModuleJar(String moduleName, String version) throws IOException {
+        File jar = new File(pluginsFolder, moduleName + "-" + version + ".jar");
         try (JarOutputStream out = new JarOutputStream(new FileOutputStream(jar))) {
             out.putNextEntry(new JarEntry("plugin.yml"));
-            out.write(("name: " + moduleName + "\nversion: 1.0.0\n").getBytes(StandardCharsets.UTF_8));
+            out.write(("name: " + moduleName + "\nversion: " + version + "\n").getBytes(StandardCharsets.UTF_8));
             out.closeEntry();
         }
         return jar;

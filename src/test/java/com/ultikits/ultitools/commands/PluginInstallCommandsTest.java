@@ -499,6 +499,23 @@ class PluginInstallCommandsTest {
                 .contains(jarPath);
     }
 
+    @Test
+    @DisplayName("#501 review WR-02: a failed uninstall names every module jar still on disk")
+    void uninstallSeveralUndeletableJars_replyNamesEveryJar() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String first = "/srv/minecraft/plugins/UltiTools/plugins/Fixture-1.0.0.jar";
+        String second = "/srv/minecraft/plugins/UltiTools/plugins/Fixture-2.0.0.jar";
+        java.nio.file.FileSystemException failure =
+                new java.nio.file.FileSystemException(first, null, "Permission denied");
+        failure.addSuppressed(new java.nio.file.FileSystemException(second, null, "Permission denied"));
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin")).thenThrow(failure);
+
+        executor.uninstallPlugin(player, "test-plugin");
+
+        String all = String.join("\n", drainMessages());
+        assertThat(all).contains("失败").contains(first).contains(second).doesNotContain("卸载成功");
+    }
+
     /**
      * #505: {@code updatePlugin} is {@code @RunAsync}, and Mockito's static mocks are
      * thread-local, so these tests call the public command method directly on the test thread
