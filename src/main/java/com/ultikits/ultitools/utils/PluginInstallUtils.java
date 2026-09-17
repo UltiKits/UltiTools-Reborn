@@ -12,6 +12,7 @@ import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.file.FileSystemException;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.io.UncheckedIOException;
 import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
@@ -492,7 +493,11 @@ public class PluginInstallUtils {
      *
      * @param name the plugin's runtime name ({@code plugin.yml} {@code name})
      * @return {@code true} if at least one matching jar was found and every matching jar was
-     *     deleted; {@code false} if no jar in the plugins folder carries that name
+     *     deleted; {@code false} if no module of that name was loaded and no jar in the plugins
+     *     folder carries that name
+     * @throws java.nio.file.NoSuchFileException if a loaded module of that name was unloaded but
+     *     no jar in the plugins folder carries its name; {@link
+     *     java.nio.file.FileSystemException#getFile()} names the plugins folder
      * @throws java.nio.file.FileSystemException if a matching jar could not be deleted; {@link
      *     java.nio.file.FileSystemException#getFile()} names one such jar and each further one is
      *     attached as a suppressed {@code FileSystemException}. Every jar named will load again on
@@ -524,7 +529,7 @@ public class PluginInstallUtils {
         File folder = new File(UltiTools.getInstance().getDataFolder() + "/plugins");
         File[] listFiles = folder.listFiles();
         if (listFiles == null) {
-            return false;
+            return noJarFound(folder, name, !matches.isEmpty());
         }
         List<File> matchingJars = new ArrayList<>();
         for (File file : listFiles) {
@@ -541,13 +546,32 @@ public class PluginInstallUtils {
             }
         }
         if (matchingJars.isEmpty()) {
-            return false;
+            return noJarFound(folder, name, !matches.isEmpty());
         }
         // Delete every matching jar, not only the first one listed (review WR-02): a second jar of
         // the same module loads it again on restart. Report the real outcome (#501): every jar
         // that stays on disk is named, so success is reported only once all of them are gone.
         deleteAllOrThrow(matchingJars);
         return true;
+    }
+
+    /**
+     * The "no matching jar" outcome of {@link #uninstallPlugin(String)} (review WR-03): {@code
+     * false} only when nothing of that name was loaded either, so the name really matched
+     * nothing; otherwise the module has just been unloaded, and reporting a misspelling would be
+     * false.
+     *
+     * @param folder        the plugins folder that was searched
+     * @param name          the module name that was searched for
+     * @param moduleUnloaded whether a loaded module of that name was unloaded
+     * @return {@code false} when {@code moduleUnloaded} is false
+     * @throws NoSuchFileException when {@code moduleUnloaded} is true, naming {@code folder}
+     */
+    private static boolean noJarFound(File folder, String name, boolean moduleUnloaded) throws NoSuchFileException {
+        if (moduleUnloaded) {
+            throw new NoSuchFileException(folder.getAbsolutePath(), null, "no module JAR named " + name);
+        }
+        return false;
     }
 
     /**

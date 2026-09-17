@@ -3,6 +3,7 @@ package com.ultikits.ultitools.commands;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.FileSystemException;
+import java.nio.file.NoSuchFileException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -220,6 +221,10 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             } else {
                 sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("卸载失败！请检查是否拼写正确！"));
             }
+        } catch (NoSuchFileException e) {
+            // The module was found by this exact name and unloaded, but no jar carries it (review
+            // WR-03) -- a spelling hint would be false here.
+            sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n("模块已卸载，但在 %s 中没有找到它的 JAR 文件。"), e.getFile()));
         } catch (FileSystemException e) {
             // Matching jars were found but not all deleted (#501): each loads the module again on
             // restart, so name every file the operator has to remove.
