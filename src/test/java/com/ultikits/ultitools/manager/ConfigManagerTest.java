@@ -821,7 +821,8 @@ class ConfigManagerTest {
 
             // 创建 mock 配置
             AbstractConfigEntity mockConfig = mock(AbstractConfigEntity.class);
-            when(mockConfig.getConfigFilePath()).thenReturn(new File(tempDir, "test.yml").getAbsolutePath());
+            when(mockConfig.getConfigFilePath()).thenReturn("test.yml");
+            when(mockConfig.getUltiToolsPlugin()).thenReturn(mockPlugin);
             // #510: saveAll() writes only entities changed since their snapshot.
             when(mockConfig.isModifiedSinceSnapshot()).thenReturn(true);
 
@@ -874,7 +875,9 @@ class ConfigManagerTest {
             configDir.mkdirs();
 
             AbstractConfigEntity mockConfig = mock(AbstractConfigEntity.class);
-            when(mockConfig.getConfigFilePath()).thenReturn(configDir.getAbsolutePath());
+            // Module-relative, as registered: resolved against the plugin's config folder (#510).
+            when(mockConfig.getConfigFilePath()).thenReturn("configdir");
+            when(mockConfig.getUltiToolsPlugin()).thenReturn(mockPlugin);
             // Changed in memory, so only the directory check can skip it (#510).
             when(mockConfig.isModifiedSinceSnapshot()).thenReturn(true);
 

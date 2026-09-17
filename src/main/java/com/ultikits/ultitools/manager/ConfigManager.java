@@ -345,10 +345,13 @@ public class ConfigManager {
     public void saveAll() {
         for (Map<String, AbstractConfigEntity> configMap : pluginConfigMap.values()) {
             for (AbstractConfigEntity config : configMap.values()) {
-                if (new File(config.getConfigFilePath()).isDirectory()) {
+                if (!config.isModifiedSinceSnapshot()) {
                     continue;
                 }
-                if (!config.isModifiedSinceSnapshot()) {
+                // Resolved against the module's config folder, where save() writes - a bare
+                // new File(configFilePath) resolves against the server working directory and
+                // never matched (#510).
+                if (new File(config.getUltiToolsPlugin().getResourceFolderPath(), config.getConfigFilePath()).isDirectory()) {
                     continue;
                 }
                 // Read before save(): a successful save refreshes the file fingerprint.
