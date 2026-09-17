@@ -375,7 +375,7 @@ This section governs the third kind.
   deleted (each further one attached as a suppressed `FileSystemException`), and a
   `java.nio.file.NoSuchFileException` naming the plugins folder when a loaded module was unloaded
   but no JAR carries its name. It also throws `IllegalStateException` when the module's own unload
-  threw; the module is still removed from the loaded modules and its JARs still deleted, the
+  threw; the module is still removed from the loaded modules and deletion of its JARs is still attempted, the
   module's exception is the cause, and the JAR outcome above is attached as suppressed. A caller
   that only checked the boolean now sees these as exceptions instead of a success it did not get.
 - `PluginInstallUtils.updatePlugin(String)` reporting the outcome it documents (#505). Its javadoc
