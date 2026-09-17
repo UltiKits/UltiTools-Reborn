@@ -10,16 +10,23 @@ import java.net.JarURLConnection;
 import java.net.URI;
 import java.net.URL;
 import java.net.URLEncoder;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystemException;
 import java.nio.file.LinkOption;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.io.UncheckedIOException;
 import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -458,120 +465,342 @@ public class PluginInstallUtils {
     }
 
     /**
-     * Update a plugin module: download latest version and delete old JAR.
+     * Name of the staging directory, directly under the framework's data folder and therefore
+     * outside the scanned modules folder, where an update keeps its download and the old JARs it
+     * sets aside.
+     *
+     * @since 6.3.0
+     */
+    static final String STAGING_DIRECTORY_NAME = ".upm-staging";
+
+    /** Normalised identify strings of the modules whose update is running right now. */
+    private static final Set<String> UPDATES_IN_PROGRESS = ConcurrentHashMap.newKeySet();
+
+    /** File operations used by an update; replaced only by tests, to inject failures and record order. */
+    static volatile UpdateFileOperations updateFileOperations = UpdateFileOperations.DEFAULT;
+
+    /**
+     * The file operations an update performs, in one place so a test can inject a failure into any
+     * step or record the order of the steps without platform-specific permission tricks.
+     */
+    interface UpdateFileOperations {
+
+        /** Downloads {@code url} into {@code directory} under {@code fileName}. */
+        void download(String url, String fileName, File directory) throws IOException;
+
+        /** Lists the module JARs in {@code pluginsFolder} whose {@code plugin.yml} identifies the module. */
+        List<File> findModuleJars(File pluginsFolder, String identifyString);
+
+        /** Moves {@code source} to {@code target}; never replaces an existing {@code target}. */
+        void move(Path source, Path target) throws IOException;
+
+        /** Deletes {@code path} if it exists. */
+        void delete(Path path) throws IOException;
+
+        UpdateFileOperations DEFAULT = new UpdateFileOperations() {
+            @Override
+            public void download(String url, String fileName, File directory) throws IOException {
+                HttpDownloadUtils.download(url, fileName, directory.getPath());
+            }
+
+            @Override
+            public List<File> findModuleJars(File pluginsFolder, String identifyString) {
+                return findPluginJars(pluginsFolder, identifyString);
+            }
+
+            @Override
+            public void move(Path source, Path target) throws IOException {
+                // An atomic rename replaces an existing target on POSIX, so refuse it explicitly.
+                if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+                    throw new FileAlreadyExistsException(target.toString());
+                }
+                try {
+                    Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+                } catch (AtomicMoveNotSupportedException e) {
+                    // The staging directory and the modules folder are on different file stores:
+                    // fall back to copy-then-delete, which Files.move performs without the flag.
+                    Files.move(source, target);
+                }
+            }
+
+            @Override
+            public void delete(Path path) throws IOException {
+                Files.deleteIfExists(path);
+            }
+        };
+    }
+
+    /**
+     * The outcome of {@link #updatePluginTransactionally(String)}.
+     *
+     * @since 6.3.0
+     */
+    public static final class UpdateOutcome {
+
+        /** What happened to the update. */
+        public enum Status {
+            /** The new version is in the modules folder and every older JAR of the module is out of it. */
+            UPDATED,
+            /** An update of the same module was already running; nothing was changed. */
+            ALREADY_IN_PROGRESS,
+            /** The catalogue lookup or the download failed; nothing was changed. */
+            DOWNLOAD_FAILED,
+            /** The downloaded file is not a loadable JAR of this module at the expected version; nothing was changed. */
+            INVALID_DOWNLOAD,
+            /** An older JAR could not be moved out of the modules folder; everything moved so far was moved back. */
+            OLD_JAR_NOT_MOVED,
+            /** The new version could not be moved into the modules folder; the older JARs were moved back. */
+            NEW_JAR_NOT_INSTALLED
+        }
+
+        private final Status status;
+        private final List<String> files;
+        private final List<String> unrestoredFiles;
+        private final List<String> leftoverFiles;
+
+        UpdateOutcome(Status status, List<String> files, List<String> unrestoredFiles, List<String> leftoverFiles) {
+            this.status = status;
+            this.files = Collections.unmodifiableList(new ArrayList<>(files));
+            this.unrestoredFiles = Collections.unmodifiableList(new ArrayList<>(unrestoredFiles));
+            this.leftoverFiles = Collections.unmodifiableList(new ArrayList<>(leftoverFiles));
+        }
+
+        static UpdateOutcome of(Status status) {
+            return new UpdateOutcome(status, Collections.<String>emptyList(),
+                    Collections.<String>emptyList(), Collections.<String>emptyList());
+        }
+
+        /** @return what happened */
+        public Status getStatus() {
+            return status;
+        }
+
+        /**
+         * @return for {@link Status#OLD_JAR_NOT_MOVED}, the older JAR that could not be moved; for
+         *     {@link Status#NEW_JAR_NOT_INSTALLED}, the path the new version could not be moved to;
+         *     otherwise empty
+         */
+        public List<String> getFiles() {
+            return files;
+        }
+
+        /**
+         * @return older JARs that were moved to the staging directory and could not be moved back
+         *     after a failure; each must be moved back into the modules folder by hand. Empty when
+         *     the rollback succeeded.
+         */
+        public List<String> getUnrestoredFiles() {
+            return unrestoredFiles;
+        }
+
+        /**
+         * @return after {@link Status#UPDATED}, set-aside older JARs in the staging directory that
+         *     could not be deleted. They are outside the modules folder and never load.
+         */
+        public List<String> getLeftoverFiles() {
+            return leftoverFiles;
+        }
+    }
+
+    /**
+     * Update a plugin module to its latest version.
+     * <p>
+     * Kept for callers that only need a boolean; {@link #updatePluginTransactionally(String)}
+     * reports every outcome.
      *
      * @param identifyString the plugin identify string
-     * @return true if the new version was downloaded and the old JAR (if any) deleted
+     * @return {@code true} if the module was updated; {@code false} if the catalogue lookup or
+     *     download failed, the download is not a JAR of this module at the expected version, or an
+     *     update of the same module was already running -- in each of those cases nothing changed
      * @throws java.io.UncheckedIOException wrapping a {@link java.nio.file.FileSystemException}
-     *     when the new version was downloaded but an older JAR of the module could not be deleted;
-     *     {@link java.nio.file.FileSystemException#getFile()} names one such JAR and each further
-     *     one is attached as a suppressed {@code FileSystemException}. Every JAR named would
-     *     otherwise load next to the new one on restart (#505)
+     *     when an older JAR could not be moved out of the modules folder or the new version could
+     *     not be moved in; {@link java.nio.file.FileSystemException#getFile()} names that JAR or
+     *     path, and the older JARs have been moved back (any that could not be are attached as
+     *     suppressed {@code FileSystemException}s) (#505)
      */
     public static boolean updatePlugin(String identifyString) {
+        UpdateOutcome outcome = updatePluginTransactionally(identifyString);
+        switch (outcome.getStatus()) {
+            case UPDATED:
+                return true;
+            case OLD_JAR_NOT_MOVED:
+            case NEW_JAR_NOT_INSTALLED:
+                FileSystemException failure = new FileSystemException(
+                        outcome.getFiles().isEmpty() ? null : outcome.getFiles().get(0), null,
+                        outcome.getStatus().name());
+                for (String unrestored : outcome.getUnrestoredFiles()) {
+                    failure.addSuppressed(new FileSystemException(unrestored, null, "not moved back"));
+                }
+                throw new UncheckedIOException(failure);
+            default:
+                return false;
+        }
+    }
+
+    /**
+     * Update a plugin module to its latest version as a staged transaction (#505).
+     * <p>
+     * The new version is downloaded into {@value #STAGING_DIRECTORY_NAME} under a unique name that
+     * does not end in {@code .jar}, and validated there as a JAR of this module at the expected
+     * version. Only then are the module's older JARs selected from the modules folder -- before the
+     * new version exists anywhere in it, so no name or file-identity comparison is needed to tell
+     * the new JAR from an old one -- and moved aside into the staging directory. The new version is
+     * moved in last; if any move fails, everything moved so far is moved back and nothing is
+     * reported as updated. Set-aside JARs are deleted after the new version is in place; any that
+     * cannot be deleted are inert and reported as leftovers. Only one update per module runs at a
+     * time.
+     *
+     * @param identifyString the plugin identify string
+     * @return the outcome; never {@code null}
+     * @since 6.3.0
+     */
+    public static UpdateOutcome updatePluginTransactionally(String identifyString) {
+        String moduleKey = normalizeIdentifyString(identifyString);
+        if (moduleKey == null) {
+            return UpdateOutcome.of(UpdateOutcome.Status.DOWNLOAD_FAILED);
+        }
+        if (!UPDATES_IN_PROGRESS.add(moduleKey)) {
+            return UpdateOutcome.of(UpdateOutcome.Status.ALREADY_IN_PROGRESS);
+        }
+        try {
+            return runUpdateTransaction(identifyString, moduleKey);
+        } finally {
+            UPDATES_IN_PROGRESS.remove(moduleKey);
+        }
+    }
+
+    private static UpdateOutcome runUpdateTransaction(String identifyString, String moduleKey) {
         String latestVersion = getPluginLatestVersion(identifyString);
         String downloadLink = getPluginVersionDownloadLink(identifyString, latestVersion);
         String fileName = installedJarName(identifyString, latestVersion);
         if (downloadLink == null || fileName == null) {
-            return false;
+            return UpdateOutcome.of(UpdateOutcome.Status.DOWNLOAD_FAILED);
         }
+        UpdateFileOperations operations = updateFileOperations;
+        File dataFolder = UltiTools.getInstance().getDataFolder();
+        File pluginsFolder = new File(dataFolder, "plugins");
+        File stagingFolder = new File(dataFolder, STAGING_DIRECTORY_NAME);
+        String unique = UUID.randomUUID().toString();
+        String stagedName = fileName.substring(0, fileName.length() - ".jar".length()) + "-" + unique + ".part";
+        Path staged = stagingFolder.toPath().resolve(stagedName);
 
-        String pluginsPath = UltiTools.getInstance().getDataFolder() + "/plugins";
-        File pluginsFolder = new File(pluginsPath);
-
+        // Step 1: download into the staging directory, never into the modules folder.
         try {
-            HttpDownloadUtils.download(downloadLink, fileName, pluginsPath);
-        } catch (IOException e) {
-            UltiTools.getInstance().getLogger().severe("Failed to download update: " + e.getMessage());
-            return false;
+            Files.createDirectories(stagingFolder.toPath());
+            operations.download(downloadLink, stagedName, stagingFolder);
+        } catch (IOException | SecurityException | IllegalArgumentException e) {
+            LOGGER.log(Level.SEVERE, "Failed to download update for " + identifyString + "; nothing was changed", e);
+            deleteQuietly(operations, staged);
+            return UpdateOutcome.of(UpdateOutcome.Status.DOWNLOAD_FAILED);
         }
 
-        // Delete every other JAR of this module, looked up AFTER the download (review CR-02): a
-        // single pre-download lookup returns whichever matching JAR the folder lists first, and on
-        // a retry after a failed delete that can be the already-downloaded new JAR, which skipped
-        // the delete and reported success with the old JAR still on disk.
-        Path downloaded = new File(pluginsFolder, fileName).toPath();
-        List<File> candidates = findPluginJars(pluginsFolder, identifyString);
-        Path entryToKeep = realEntry(downloadEntryToKeep(candidates, downloaded));
-        List<File> olderJars = new ArrayList<>();
-        for (File jar : candidates) {
-            Path entry = jar.toPath();
-            // A candidate that has vanished since the listing has nothing left to delete.
-            if (Files.exists(entry, LinkOption.NOFOLLOW_LINKS) && !realEntry(entry).equals(entryToKeep)) {
-                olderJars.add(jar);
+        // Step 2: validate before touching anything.
+        if (!isJarOfModule(staged.toFile(), moduleKey, latestVersion)) {
+            LOGGER.severe("Downloaded update for " + identifyString
+                    + " is not a loadable JAR of that module at version " + latestVersion
+                    + "; nothing was changed");
+            deleteQuietly(operations, staged);
+            return UpdateOutcome.of(UpdateOutcome.Status.INVALID_DOWNLOAD);
+        }
+
+        // Step 3: select the older JARs while the new version is not in the modules folder.
+        List<File> olderJars = operations.findModuleJars(pluginsFolder, identifyString);
+
+        // Step 4: move every older JAR aside; on failure, move back what was moved.
+        List<Path[]> movedAside = new ArrayList<>();
+        for (File olderJar : olderJars) {
+            Path original = olderJar.toPath();
+            Path aside = stagingFolder.toPath().resolve(olderJar.getName() + "." + unique + ".old");
+            try {
+                operations.move(original, aside);
+                movedAside.add(new Path[]{original, aside});
+            } catch (NoSuchFileException gone) {
+                // Removed since the listing: nothing left to move aside.
+            } catch (IOException e) {
+                List<String> unrestored = moveBack(operations, movedAside);
+                deleteQuietly(operations, staged);
+                return new UpdateOutcome(UpdateOutcome.Status.OLD_JAR_NOT_MOVED,
+                        Collections.singletonList(original.toAbsolutePath().toString()), unrestored,
+                        Collections.<String>emptyList());
             }
         }
-        // Report the deletes' real outcome (#505): an old JAR left on disk loads next to the new
-        // one on restart, so every failure must reach the operator rather than read as success.
-        // Unchecked, because this public method declares no checked exception.
+
+        // Step 5: move the new version in under its final name; on failure, restore the older JARs.
+        Path target = pluginsFolder.toPath().resolve(fileName);
         try {
-            deleteAllOrThrow(olderJars);
-        } catch (FileSystemException e) {
-            throw new UncheckedIOException(e);
+            operations.move(staged, target);
+        } catch (IOException e) {
+            List<String> unrestored = moveBack(operations, movedAside);
+            deleteQuietly(operations, staged);
+            return new UpdateOutcome(UpdateOutcome.Status.NEW_JAR_NOT_INSTALLED,
+                    Collections.singletonList(target.toAbsolutePath().toString()), unrestored,
+                    Collections.<String>emptyList());
         }
 
-        return true;
-    }
-
-    /**
-     * The one directory entry {@link #updatePlugin(String)} keeps for the file it just downloaded
-     * to {@code downloaded}; every other module JAR entry, including every further name for that
-     * same file, is deleted.
-     * <p>
-     * Identity is by file, not by name (review r2 WR-01): a differently-cased stored name on a
-     * case-insensitive filesystem, a symbolic link or a hard link are all second names for the
-     * download, and comparing names deleted the download itself. Keeping only one entry matters as
-     * much (Codex P2 on #508): the plugin loader enumerates every {@code .jar} entry, so two names
-     * for one JAR load the module twice. When the download path is itself a symbolic link, the
-     * entry kept is the regular file it resolves to inside the folder, because deleting that file
-     * would leave the link dangling and lose the download; deleting a symbolic link or a further
-     * hard link never loses the file's content.
-     *
-     * @param candidates the module's JAR entries found in the plugins folder after the download
-     * @param downloaded the path the new version was downloaded to
-     * @return the entry to keep
-     */
-    private static Path downloadEntryToKeep(List<File> candidates, Path downloaded) {
-        if (!Files.isSymbolicLink(downloaded)) {
-            return downloaded;
-        }
-        for (File jar : candidates) {
-            Path entry = jar.toPath();
-            if (!Files.isSymbolicLink(entry) && isSameFileQuietly(entry, downloaded)) {
-                return entry;
+        // Step 6: delete the set-aside JARs; any that remain are outside the modules folder and inert.
+        List<String> leftovers = new ArrayList<>();
+        for (Path[] move : movedAside) {
+            try {
+                operations.delete(move[1]);
+            } catch (IOException e) {
+                leftovers.add(move[1].toAbsolutePath().toString());
             }
         }
-        return downloaded;
+        return new UpdateOutcome(UpdateOutcome.Status.UPDATED, Collections.<String>emptyList(),
+                Collections.<String>emptyList(), leftovers);
     }
 
     /**
-     * {@link Files#isSameFile}, answering {@code false} when either path cannot be examined.
+     * Moves every set-aside JAR back to where it came from, newest move first.
      *
-     * @param first  a path
-     * @param second another path
-     * @return whether both locate the same file
+     * @return the set-aside paths that could not be moved back
      */
-    private static boolean isSameFileQuietly(Path first, Path second) {
+    private static List<String> moveBack(UpdateFileOperations operations, List<Path[]> movedAside) {
+        List<String> unrestored = new ArrayList<>();
+        for (int i = movedAside.size() - 1; i >= 0; i--) {
+            Path[] move = movedAside.get(i);
+            try {
+                operations.move(move[1], move[0]);
+            } catch (IOException e) {
+                LOGGER.log(Level.SEVERE, "Could not move " + move[1] + " back to " + move[0], e);
+                unrestored.add(move[1].toAbsolutePath().toString());
+            }
+        }
+        return unrestored;
+    }
+
+    private static void deleteQuietly(UpdateFileOperations operations, Path path) {
         try {
-            return Files.isSameFile(first, second);
+            operations.delete(path);
         } catch (IOException e) {
-            return false;
+            LOGGER.log(Level.WARNING, "Could not delete staged file " + path, e);
         }
     }
 
     /**
-     * The directory entry {@code entry} names, as stored: symbolic links are not followed, and on
-     * a case-insensitive filesystem the stored case is returned, so two spellings of one entry
-     * compare equal while two hard links or a link and its target do not.
-     *
-     * @param entry a path in the plugins folder
-     * @return the stored entry, or {@code entry}'s normalised absolute path if it cannot be examined
+     * Whether {@code file} is a JAR the loader would accept, whose {@code plugin.yml} names the
+     * module {@code moduleKey} at {@code expectedVersion}.
      */
-    private static Path realEntry(Path entry) {
-        try {
-            return entry.toRealPath(LinkOption.NOFOLLOW_LINKS);
+    static boolean isJarOfModule(File file, String moduleKey, String expectedVersion) {
+        try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(file)) {
+            if (!SecurityPolicy.isSafeFileStructure(file.length(), jarFile.size())) {
+                return false;
+            }
+            java.util.jar.JarEntry entry = jarFile.getJarEntry("plugin.yml");
+            if (entry == null) {
+                return false;
+            }
+            try (InputStream is = jarFile.getInputStream(entry);
+                 BufferedReader reader = new BufferedReader(new InputStreamReader(is))) {
+                YamlConfiguration config = YamlConfiguration.loadConfiguration(reader);
+                String version = config.getString("version");
+                return moduleKey.equals(normalizeIdentifyString(config.getString("identify-string")))
+                        && version != null && expectedVersion != null
+                        && VersionComparatorUtil.compare(version.trim(), expectedVersion.trim()) == 0;
+            }
         } catch (IOException e) {
-            return entry.toAbsolutePath().normalize();
+            LOGGER.log(Level.FINE, "Downloaded file is not a readable JAR: " + file, e);
+            return false;
         }
     }
 
