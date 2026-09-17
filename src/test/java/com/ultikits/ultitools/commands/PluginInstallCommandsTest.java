@@ -499,6 +499,70 @@ class PluginInstallCommandsTest {
                 .contains(jarPath);
     }
 
+    /**
+     * #505: {@code updatePlugin} is {@code @RunAsync}, and Mockito's static mocks are
+     * thread-local, so these tests call the public command method directly on the test thread
+     * instead of going through {@code onCommand}'s async dispatch.
+     */
+    private UpdateManager stubModuleUpdates(String... pluginNameAndIdPairs) {
+        UpdateManager mockUpdateManager = mock(UpdateManager.class);
+        Map<String, UpdateInfo> updates = new java.util.LinkedHashMap<>();
+        for (int i = 0; i < pluginNameAndIdPairs.length; i += 2) {
+            UpdateInfo info = new UpdateInfo();
+            info.setPluginName(pluginNameAndIdPairs[i]);
+            info.setIdentifyString(pluginNameAndIdPairs[i + 1]);
+            info.setCurrentVersion("1.0.0");
+            info.setLatestVersion("1.1.0");
+            updates.put(pluginNameAndIdPairs[i], info);
+        }
+        when(mockUpdateManager.getModuleUpdates()).thenReturn(updates);
+        when(UltiTools.getInstance().getUpdateManager()).thenReturn(mockUpdateManager);
+        return mockUpdateManager;
+    }
+
+    @Test
+    @DisplayName("#505: /upm update whose old jar cannot be deleted replies with a failure naming that jar, not success")
+    void updateOldJarDeleteFailure_replyNamesTheJarAndIsNotSuccess() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        stubModuleUpdates("TestPlugin", "test-plugin");
+        String oldJarPath = "/srv/minecraft/plugins/UltiTools/plugins/test-plugin-1.0.0.jar";
+        mockedUtils.when(() -> PluginInstallUtils.updatePlugin("test-plugin"))
+                .thenThrow(new java.io.UncheckedIOException(
+                        new java.nio.file.FileSystemException(oldJarPath, null, "Permission denied")));
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> executor.updatePlugin(player, "TestPlugin"));
+
+        assertThat(thrown).as("the command must report the failure, not let it escape").isNull();
+        List<String> messages = drainMessages();
+        assertThat(messages).noneMatch(m -> m.contains("更新成功"));
+        assertThat(String.join("\n", messages))
+                .contains("失败")
+                .as("the operator must be told which old jar is still on disk")
+                .contains(oldJarPath);
+    }
+
+    @Test
+    @DisplayName("#505: /upm update all counts a failed old-jar delete as a failure and names the jar")
+    void updateAllOldJarDeleteFailure_countsFailureAndNamesTheJar() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        stubModuleUpdates("Plugin1", "plugin-1", "Plugin2", "plugin-2");
+        String oldJarPath = "/srv/minecraft/plugins/UltiTools/plugins/plugin-1-1.0.0.jar";
+        mockedUtils.when(() -> PluginInstallUtils.updatePlugin("plugin-1"))
+                .thenThrow(new java.io.UncheckedIOException(
+                        new java.nio.file.FileSystemException(oldJarPath, null, "Permission denied")));
+        mockedUtils.when(() -> PluginInstallUtils.updatePlugin("plugin-2")).thenReturn(true);
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> executor.updatePlugin(player, "all"));
+
+        assertThat(thrown).as("one module's failure must not abort the whole update-all run").isNull();
+        String all = String.join("\n", drainMessages());
+        assertThat(all)
+                .contains(oldJarPath)
+                .contains("1个成功，1个失败");
+    }
+
     private List<String> drainMessages() {
         List<String> messages = new ArrayList<>();
         String msg;
