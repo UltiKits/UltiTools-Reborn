@@ -535,6 +535,62 @@ class PluginInstallCommandsTest {
                 .doesNotContain("文件访问错误");
     }
 
+    private static IllegalStateException unloadThrew(Exception jarOutcome) {
+        IllegalStateException failure = new IllegalStateException(
+                "Module test-plugin was removed from the loaded modules, but its unload threw",
+                new IllegalStateException("module unload step boom"));
+        if (jarOutcome != null) {
+            failure.addSuppressed(jarOutcome);
+        }
+        return failure;
+    }
+
+    @Test
+    @DisplayName("#503 review WR-01: an unload that throws is reported, together with the jars having been deleted")
+    void uninstallUnloadThrew_jarsDeleted_replyReportsBoth() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin")).thenThrow(unloadThrew(null));
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> executor.uninstallPlugin(player, "test-plugin"));
+
+        assertThat(thrown).as("the operator must get a reply, not a generic command error").isNull();
+        String all = String.join("\n", drainMessages());
+        assertThat(all).contains("卸载出错").contains("已全部删除").doesNotContain("卸载成功");
+    }
+
+    @Test
+    @DisplayName("#503 review WR-01: an unload that throws and a jar that cannot be deleted are both reported, naming the jar")
+    void uninstallUnloadThrew_jarNotDeleted_replyNamesTheJar() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String jar = "/srv/minecraft/plugins/UltiTools/plugins/Fixture-1.0.0.jar";
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin"))
+                .thenThrow(unloadThrew(new java.nio.file.FileSystemException(jar, null, "Permission denied")));
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> executor.uninstallPlugin(player, "test-plugin"));
+
+        assertThat(thrown).isNull();
+        String all = String.join("\n", drainMessages());
+        assertThat(all).contains("卸载出错").contains(jar).doesNotContain("已全部删除");
+    }
+
+    @Test
+    @DisplayName("#503 review WR-01: an unload that throws with no jar on disk says so")
+    void uninstallUnloadThrew_noJar_replySaysNoJarFound() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String folder = "/srv/minecraft/plugins/UltiTools/plugins";
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin"))
+                .thenThrow(unloadThrew(new java.nio.file.NoSuchFileException(folder, null, "no module JAR")));
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> executor.uninstallPlugin(player, "test-plugin"));
+
+        assertThat(thrown).isNull();
+        String all = String.join("\n", drainMessages());
+        assertThat(all).contains("卸载出错").contains(folder).doesNotContain("已全部删除");
+    }
+
     /**
      * #505: {@code updatePlugin} is {@code @RunAsync}, and Mockito's static mocks are
      * thread-local, so these tests call the public command method directly on the test thread

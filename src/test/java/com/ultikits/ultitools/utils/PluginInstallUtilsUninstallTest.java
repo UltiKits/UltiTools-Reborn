@@ -67,6 +67,7 @@ class PluginInstallUtilsUninstallTest {
     private ServerMock server;
     private PluginManager pluginManager;
     private File pluginsFolder;
+    private CommandManager commandManager;
 
     @BeforeEach
     void setUp() {
@@ -78,7 +79,7 @@ class PluginInstallUtilsUninstallTest {
         assertThat(pluginsFolder.mkdirs()).isTrue();
 
         AtomicReference<PluginManager> pluginManagerRef = new AtomicReference<>();
-        CommandManager commandManager = mock(CommandManager.class);
+        commandManager = mock(CommandManager.class);
         ListenerManager listenerManager = mock(ListenerManager.class);
         TestHelper.mockUltiToolsInstance(ultiTools -> {
             when(ultiTools.getDataFolder()).thenReturn(dataFolder);
@@ -232,6 +233,34 @@ class PluginInstallUtilsUninstallTest {
     @DisplayName("#501 review WR-03 control: nothing loaded and no jar still returns false")
     void nothingLoadedAndNoJar_returnsFalse() throws Exception {
         assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME)).isFalse();
+    }
+
+    @Test
+    @DisplayName("#503 review WR-01: a module whose unload throws is still delisted and its jar deleted, and the failure is reported, not lost")
+    void unloadThrows_jarIsStillDeletedAndFailureIsReported() throws Exception {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        IllegalStateException unloadFailure = new IllegalStateException("module unload step boom");
+        // unregisterSelf() rethrows its first failed step; a command-cleanup failure stands in for
+        // a throwing onUnregister(), which is protected and not stubbable from this package.
+        org.mockito.Mockito.doThrow(unloadFailure).when(commandManager).unregisterAll(plugin);
+        File jar = writeModuleJar(MODULE_NAME);
+
+        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+        assertThat(jar)
+                .as("the module is already unloaded and closed when its unload throws; keeping the jar "
+                        + "would bring back on restart a module the operator asked to remove")
+                .doesNotExist();
+        assertThat(pluginManager.getPluginList()).doesNotContain(plugin);
+        assertThat(thrown)
+                .as("the unload failure must reach the command as uninstallPlugin's own "
+                        + "IllegalStateException, carrying the module's exception as its cause")
+                .isInstanceOf(IllegalStateException.class)
+                .hasCause(unloadFailure);
+        assertThat(thrown.getSuppressed()).as("every jar was deleted, so no jar failure is attached").isEmpty();
     }
 
     private static java.util.List<String> namedFiles(FileSystemException failure) {
