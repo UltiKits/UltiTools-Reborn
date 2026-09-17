@@ -223,7 +223,41 @@ class PluginInstallUtilsUpdateOldJarTest {
                 .as("the stored name IS the downloaded file; deleting it as an 'older jar' loses the "
                         + "update while the command reports success")
                 .exists();
+        assertThat(Files.readAllBytes(storedName.toPath())).isEqualTo(newJar);
+        assertThat(remainingJarEntries())
+                .as("Codex P2 on #508: the link is a second directory entry for the same jar; left in "
+                        + "place, the module's jar is enumerated twice at the next start")
+                .containsExactly(storedName.getName());
+    }
+
+    @Test
+    @DisplayName("Codex P2 on #508: a hard-linked second name for the downloaded jar is unlinked, keeping exactly one entry with the new bytes")
+    void hardLinkedAliasOfTheDownloadedFile_leavesExactlyOneEntry() throws IOException {
+        File oldJar = writeOldJar("1.0.0");
+        File otherName = new File(pluginsFolder, "Fixture-Module-2.0.0.jar");
+        Path downloadName = new File(pluginsFolder, IDENTIFY_STRING + "-2.0.0.jar").toPath();
+        assertThat(otherName.createNewFile()).isTrue();
+        try {
+            Files.createLink(downloadName, otherName.toPath());
+        } catch (UnsupportedOperationException | IOException e) {
+            Assumptions.assumeTrue(false, "hard links are unavailable here, so the alias cannot be modelled: " + e);
+        }
+        byte[] newJar = jarBytes("2.0.0");
+        artifactBytes = newJar;
+
+        assertThat(PluginInstallUtils.updatePlugin(IDENTIFY_STRING)).isTrue();
+
+        assertThat(oldJar).doesNotExist();
+        assertThat(remainingJarEntries())
+                .as("both hard-linked names are the downloaded jar; keeping both makes the plugin loader "
+                        + "enumerate the module twice")
+                .containsExactly(downloadName.getFileName().toString());
         assertThat(Files.readAllBytes(downloadName)).isEqualTo(newJar);
+    }
+
+    private java.util.List<String> remainingJarEntries() {
+        String[] names = pluginsFolder.list((dir, name) -> name.endsWith(".jar"));
+        return names == null ? java.util.Collections.emptyList() : java.util.Arrays.asList(names);
     }
 
     private static byte[] jarBytes(String version) throws IOException {
