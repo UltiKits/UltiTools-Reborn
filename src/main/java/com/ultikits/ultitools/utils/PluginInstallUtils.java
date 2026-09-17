@@ -21,6 +21,7 @@ import java.nio.file.StandardCopyOption;
 import java.io.UncheckedIOException;
 import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
@@ -492,7 +493,12 @@ public class PluginInstallUtils {
         /** Lists the module JARs in {@code pluginsFolder} whose {@code plugin.yml} identifies the module. */
         List<File> findModuleJars(File pluginsFolder, String identifyString);
 
-        /** Moves {@code source} to {@code target}; never replaces an existing {@code target}. */
+        /**
+         * Moves {@code source} to {@code target} atomically; never replaces an existing {@code target},
+         * and never falls back to a copy.
+         *
+         * @throws AtomicMoveNotSupportedException if the two paths are not on the same file store
+         */
         void move(Path source, Path target) throws IOException;
 
         /** Deletes {@code path} if it exists. */
@@ -523,13 +529,10 @@ public class PluginInstallUtils {
                 if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
                     throw new FileAlreadyExistsException(target.toString());
                 }
-                try {
-                    Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
-                } catch (AtomicMoveNotSupportedException e) {
-                    // The staging directory and the modules folder are on different file stores:
-                    // fall back to copy-then-delete, which Files.move performs without the flag.
-                    Files.move(source, target);
-                }
+                // Never fall back to a copy (review r4 WR-01): a copy killed part-way leaves a
+                // truncated file, and into the modules folder it would carry the final .jar name.
+                // AtomicMoveNotSupportedException propagates and the update is refused.
+                Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
             }
 
             @Override
@@ -603,6 +606,11 @@ public class PluginInstallUtils {
 
         UpdateOutcome withFailure(Throwable cause) {
             return new UpdateOutcome(status, files, unrestoredFiles, unrestoredTargets, leftoverFiles, cause,
+                    foundVersion, expectedVersion);
+        }
+
+        UpdateOutcome withUnrestoredFiles(List<String> unrestored) {
+            return new UpdateOutcome(status, files, unrestored, unrestoredTargets, leftoverFiles, failure,
                     foundVersion, expectedVersion);
         }
 
@@ -773,9 +781,33 @@ public class PluginInstallUtils {
         String stagedName = fileName.substring(0, fileName.length() - ".jar".length()) + "-" + unique + ".part";
         Path staged = stagingFolder.toPath().resolve(stagedName);
 
-        // Step 1: download into the staging directory, never into the modules folder.
+        // Step 0: prepare the staging directory, and refuse unless a JAR can be renamed atomically
+        // between it and the modules folder -- a copy is what can leave a truncated JAR behind.
         try {
             Files.createDirectories(stagingFolder.toPath());
+        } catch (IOException | SecurityException e) {
+            LOGGER.log(Level.SEVERE, "Could not prepare the update staging directory " + stagingFolder
+                    + " for " + identifyString + "; nothing was changed", e);
+            return new UpdateOutcome(UpdateOutcome.Status.STAGING_UNAVAILABLE,
+                    Collections.singletonList(stagingFolder.getAbsolutePath()), Collections.<String>emptyList(),
+                    Collections.<String>emptyList()).withFailure(e);
+        }
+        try {
+            if (!operations.isSameFileStore(stagingFolder.toPath(), pluginsFolder.toPath())) {
+                LOGGER.severe("Refusing to update " + identifyString + ": the staging directory " + stagingFolder
+                        + " and the modules folder " + pluginsFolder + " are not on the same file system");
+                return fileSystemsDiffer(stagingFolder, pluginsFolder, null);
+            }
+        } catch (IOException | SecurityException e) {
+            LOGGER.log(Level.SEVERE, "Could not compare the file systems of " + stagingFolder + " and "
+                    + pluginsFolder + " for " + identifyString + "; nothing was changed", e);
+            return new UpdateOutcome(UpdateOutcome.Status.STAGING_UNAVAILABLE,
+                    Collections.singletonList(stagingFolder.getAbsolutePath()), Collections.<String>emptyList(),
+                    Collections.<String>emptyList()).withFailure(e);
+        }
+
+        // Step 1: download into the staging directory, never into the modules folder.
+        try {
             operations.download(downloadLink, stagedName, stagingFolder);
         } catch (IOException | SecurityException | IllegalArgumentException e) {
             LOGGER.log(Level.SEVERE, "Failed to download update for " + identifyString + "; nothing was changed", e);
@@ -805,6 +837,10 @@ public class PluginInstallUtils {
                 movedAside.add(new Path[]{original, aside});
             } catch (NoSuchFileException gone) {
                 // Removed since the listing: nothing left to move aside.
+            } catch (AtomicMoveNotSupportedException e) {
+                List<String> unrestored = moveBack(operations, movedAside);
+                deleteQuietly(operations, staged);
+                return fileSystemsDiffer(stagingFolder, pluginsFolder, e).withUnrestoredFiles(unrestored);
             } catch (IOException e) {
                 List<String> unrestored = moveBack(operations, movedAside);
                 deleteQuietly(operations, staged);
@@ -818,6 +854,10 @@ public class PluginInstallUtils {
         Path target = pluginsFolder.toPath().resolve(fileName);
         try {
             operations.move(staged, target);
+        } catch (AtomicMoveNotSupportedException e) {
+            List<String> unrestored = moveBack(operations, movedAside);
+            deleteQuietly(operations, staged);
+            return fileSystemsDiffer(stagingFolder, pluginsFolder, e).withUnrestoredFiles(unrestored);
         } catch (IOException e) {
             List<String> unrestored = moveBack(operations, movedAside);
             deleteQuietly(operations, staged);
@@ -837,6 +877,13 @@ public class PluginInstallUtils {
         }
         return new UpdateOutcome(UpdateOutcome.Status.UPDATED, Collections.<String>emptyList(),
                 Collections.<String>emptyList(), leftovers);
+    }
+
+    private static UpdateOutcome fileSystemsDiffer(File stagingFolder, File pluginsFolder, Throwable cause) {
+        UpdateOutcome outcome = new UpdateOutcome(UpdateOutcome.Status.FILE_SYSTEMS_DIFFER,
+                Arrays.asList(stagingFolder.getAbsolutePath(), pluginsFolder.getAbsolutePath()),
+                Collections.<String>emptyList(), Collections.<String>emptyList());
+        return cause == null ? outcome : outcome.withFailure(cause);
     }
 
     /**
