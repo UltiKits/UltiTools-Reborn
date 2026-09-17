@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.commands;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.FileSystemException;
 import java.util.List;
 
@@ -272,11 +273,27 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         }
         sender.sendMessage(ChatColor.YELLOW + String.format(
             UltiTools.getInstance().i18n("正在更新 %s..."), pluginName));
-        if (PluginInstallUtils.updatePlugin(info.getIdentifyString())) {
-            sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("更新成功！请重启服务器以应用更新。"));
-        } else {
-            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("更新失败！"));
+        try {
+            if (PluginInstallUtils.updatePlugin(info.getIdentifyString())) {
+                sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("更新成功！请重启服务器以应用更新。"));
+            } else {
+                sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("更新失败！"));
+            }
+        } catch (UncheckedIOException e) {
+            sendOldJarDeleteFailure(sender, e);
         }
+    }
+
+    /**
+     * Reports an update whose new version was downloaded but whose old JAR could not be deleted
+     * (#505): both JARs would load on restart, so name the old one the operator has to remove.
+     */
+    private void sendOldJarDeleteFailure(CommandSender sender, UncheckedIOException e) {
+        String oldJar = e.getCause() instanceof FileSystemException
+                && ((FileSystemException) e.getCause()).getFile() != null
+                ? ((FileSystemException) e.getCause()).getFile()
+                : UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins";
+        sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("更新失败！新版本已下载，但无法删除旧版本 JAR 文件，重启前请手动删除，否则两个版本会同时加载：%s"), oldJar));
     }
 
     private void updateAllPlugins(CommandSender sender) {
@@ -290,9 +307,14 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         for (UpdateInfo info : updateManager.getModuleUpdates().values()) {
             sender.sendMessage(ChatColor.YELLOW + String.format(
                 UltiTools.getInstance().i18n("正在更新 %s..."), info.getPluginName()));
-            if (PluginInstallUtils.updatePlugin(info.getIdentifyString())) {
-                success++;
-            } else {
+            try {
+                if (PluginInstallUtils.updatePlugin(info.getIdentifyString())) {
+                    success++;
+                } else {
+                    failed++;
+                }
+            } catch (UncheckedIOException e) {
+                sendOldJarDeleteFailure(sender, e);
                 failed++;
             }
         }

@@ -12,6 +12,7 @@ import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.file.FileSystemException;
 import java.nio.file.Files;
+import java.io.UncheckedIOException;
 import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
 import java.util.List;
@@ -442,7 +443,11 @@ public class PluginInstallUtils {
      * Update a plugin module: download latest version and delete old JAR.
      *
      * @param identifyString the plugin identify string
-     * @return true if update succeeded
+     * @return true if the new version was downloaded and the old JAR (if any) deleted
+     * @throws java.io.UncheckedIOException wrapping a {@link java.nio.file.FileSystemException}
+     *     when the new version was downloaded but the old JAR could not be deleted; {@link
+     *     java.nio.file.FileSystemException#getFile()} names that old JAR, which would otherwise
+     *     load next to the new one on restart (#505)
      */
     public static boolean updatePlugin(String identifyString) {
         String latestVersion = getPluginLatestVersion(identifyString);
@@ -465,7 +470,17 @@ public class PluginInstallUtils {
 
         // Delete old JAR if it's a different file than the new download
         if (oldJar != null && !oldJar.getName().equals(fileName)) {
-            oldJar.delete();
+            // Report the delete's real outcome (#505): an old JAR left on disk loads next to the
+            // new one on restart, so its failure must reach the operator rather than read as
+            // success. Unchecked, because this public method declares no checked exception.
+            try {
+                Files.delete(oldJar.toPath());
+            } catch (IOException e) {
+                FileSystemException failure =
+                        new FileSystemException(oldJar.getAbsolutePath(), null, e.getMessage());
+                failure.initCause(e);
+                throw new UncheckedIOException(failure);
+            }
         }
 
         return true;
