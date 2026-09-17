@@ -831,6 +831,20 @@ public class PluginInstallUtils {
         // Step 3: select the older JARs while the new version is not in the modules folder.
         List<File> olderJars = operations.findModuleJars(pluginsFolder, identifyString);
 
+        // Step 3b: never replace a JAR of the module that is newer than the catalogue's latest
+        // version (review r4 WR-05), for example a pre-release the operator placed since boot.
+        for (File olderJar : olderJars) {
+            String version = readModuleVersion(olderJar);
+            if (version != null && VersionComparatorUtil.compare(version.trim(), latestVersion.trim()) > 0) {
+                LOGGER.warning("Refusing to update " + identifyString + ": " + olderJar + " is version " + version
+                        + ", newer than the catalogue's latest version " + latestVersion + "; nothing was changed");
+                deleteQuietly(operations, staged);
+                return new UpdateOutcome(UpdateOutcome.Status.NEWER_VERSION_PRESENT,
+                        Collections.singletonList(olderJar.getAbsolutePath()), Collections.<String>emptyList(),
+                        Collections.<String>emptyList()).withVersions(version, latestVersion);
+            }
+        }
+
         // Step 4: move every older JAR aside; on failure, move back what was moved.
         List<Path[]> movedAside = new ArrayList<>();
         for (File olderJar : olderJars) {
