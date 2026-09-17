@@ -719,24 +719,26 @@ public class PluginInstallUtils {
      */
     public static boolean updatePlugin(String identifyString) {
         UpdateOutcome outcome = updatePluginTransactionally(identifyString);
-        switch (outcome.getStatus()) {
-            case UPDATED:
-                return true;
-            case OLD_JAR_NOT_MOVED:
-            case NEW_JAR_NOT_INSTALLED:
-                FileSystemException failure = new FileSystemException(
-                        outcome.getFiles().isEmpty() ? null : outcome.getFiles().get(0), null,
-                        outcome.getStatus().name());
-                if (outcome.getFailure() != null) {
-                    failure.initCause(outcome.getFailure());
-                }
-                for (String unrestored : outcome.getUnrestoredFiles()) {
-                    failure.addSuppressed(new FileSystemException(unrestored, null, "not moved back"));
-                }
-                throw new UncheckedIOException(failure);
-            default:
-                return false;
+        if (outcome.getStatus() == UpdateOutcome.Status.UPDATED) {
+            return true;
         }
+        // false promises that nothing was changed, so any outcome that moved a JAR and could not put
+        // it back -- whatever refused the move -- is thrown, as is every failed move.
+        if (outcome.getStatus() == UpdateOutcome.Status.OLD_JAR_NOT_MOVED
+                || outcome.getStatus() == UpdateOutcome.Status.NEW_JAR_NOT_INSTALLED
+                || !outcome.getUnrestoredFiles().isEmpty()) {
+            String file = !outcome.getFiles().isEmpty() ? outcome.getFiles().get(0)
+                    : outcome.getUnrestoredFiles().isEmpty() ? null : outcome.getUnrestoredFiles().get(0);
+            FileSystemException failure = new FileSystemException(file, null, outcome.getStatus().name());
+            if (outcome.getFailure() != null) {
+                failure.initCause(outcome.getFailure());
+            }
+            for (String unrestored : outcome.getUnrestoredFiles()) {
+                failure.addSuppressed(new FileSystemException(unrestored, null, "not moved back"));
+            }
+            throw new UncheckedIOException(failure);
+        }
+        return false;
     }
 
     /**
