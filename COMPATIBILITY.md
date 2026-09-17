@@ -391,13 +391,23 @@ This section governs the third kind.
   `java.io.UncheckedIOException` wrapping a `java.nio.file.FileSystemException` whose `getFile()`
   names the old JAR that could not be moved aside or the path the new JAR could not be moved to; in
   both cases the older JARs have been moved back, and any that could not be are attached as
-  suppressed `FileSystemException`s naming their place in the staging directory. The exception is
-  unchecked because the method declares no checked exception and its signature is unchanged; a
-  caller that loops over modules expecting only a boolean should catch it per module. A new method,
-  `PluginInstallUtils.updatePluginTransactionally(String)`, returns an `UpdateOutcome` that reports
-  each of these outcomes without exceptions, including set-aside JARs that could not be deleted:
-  those are left in the staging directory, outside the modules folder, never load, and are reported
-  as a note rather than as a failure.
+  suppressed `FileSystemException`s naming their place in the staging directory. This throw is new
+  for a method shipped in 6.2.5, which never threw: a caller that previously saw only `true` or
+  `false` now also sees this unchecked exception whenever a move fails. It is an exception rather
+  than `false` because `false` now means that nothing was changed, and a failed move can leave the
+  modules folder changed when a set-aside JAR cannot be moved back. The exception is unchecked
+  because the method declares no checked exception and its signature is unchanged; a caller that
+  loops over modules expecting only a boolean should catch it per module. Measured before this
+  change: a case-insensitive search for `updatePlugin(` across this repository's `Modules/` and
+  `Tooling/` trees finds no caller of this method (its only hit is an unrelated private method of
+  the same name in `ultitools-maven-plugin`'s `UltiToolsDeployMojo`), and `PluginInstallUtils` is
+  referenced nowhere in either tree; the same search over the framework finds it in
+  `PluginInstallUtils` and `PluginInstallCommands`, so the search does read Java sources. A new
+  method, `PluginInstallUtils.updatePluginTransactionally(String)`, returns an `UpdateOutcome` that
+  reports each of these outcomes without exceptions, including set-aside JARs that could not be
+  deleted: those are left in the staging directory, outside the modules folder, never load, and are
+  reported as a note rather than as a failure. Both are `@ApiStatus.Internal` — the `/upm update`
+  command's outcome channel, not module API — and may change without notice.
 
 ### Behavioral changes that do need one
 
