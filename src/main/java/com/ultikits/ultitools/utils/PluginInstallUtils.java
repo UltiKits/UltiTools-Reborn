@@ -721,6 +721,9 @@ public class PluginInstallUtils {
                 FileSystemException failure = new FileSystemException(
                         outcome.getFiles().isEmpty() ? null : outcome.getFiles().get(0), null,
                         outcome.getStatus().name());
+                if (outcome.getFailure() != null) {
+                    failure.initCause(outcome.getFailure());
+                }
                 for (String unrestored : outcome.getUnrestoredFiles()) {
                     failure.addSuppressed(new FileSystemException(unrestored, null, "not moved back"));
                 }
@@ -838,15 +841,19 @@ public class PluginInstallUtils {
             } catch (NoSuchFileException gone) {
                 // Removed since the listing: nothing left to move aside.
             } catch (AtomicMoveNotSupportedException e) {
-                List<String> unrestored = moveBack(operations, movedAside);
+                LOGGER.log(Level.WARNING, "Could not move " + original + " aside to " + aside
+                        + " atomically; refusing the update of " + identifyString, e);
+                List<Path[]> unrestored = moveBack(operations, movedAside);
                 deleteQuietly(operations, staged);
-                return fileSystemsDiffer(stagingFolder, pluginsFolder, e).withUnrestoredFiles(unrestored);
+                return withUnrestored(fileSystemsDiffer(stagingFolder, pluginsFolder, e), unrestored);
             } catch (IOException e) {
-                List<String> unrestored = moveBack(operations, movedAside);
+                LOGGER.log(Level.WARNING, "Could not move " + original + " aside to " + aside
+                        + "; rolling back the update of " + identifyString, e);
+                List<Path[]> unrestored = moveBack(operations, movedAside);
                 deleteQuietly(operations, staged);
-                return new UpdateOutcome(UpdateOutcome.Status.OLD_JAR_NOT_MOVED,
-                        Collections.singletonList(original.toAbsolutePath().toString()), unrestored,
-                        Collections.<String>emptyList());
+                return withUnrestored(new UpdateOutcome(UpdateOutcome.Status.OLD_JAR_NOT_MOVED,
+                        Collections.singletonList(original.toAbsolutePath().toString()), Collections.<String>emptyList(),
+                        Collections.<String>emptyList()).withFailure(e), unrestored);
             }
         }
 
@@ -855,15 +862,19 @@ public class PluginInstallUtils {
         try {
             operations.move(staged, target);
         } catch (AtomicMoveNotSupportedException e) {
-            List<String> unrestored = moveBack(operations, movedAside);
+            LOGGER.log(Level.WARNING, "Could not move the new version to " + target
+                    + " atomically; refusing the update of " + identifyString, e);
+            List<Path[]> unrestored = moveBack(operations, movedAside);
             deleteQuietly(operations, staged);
-            return fileSystemsDiffer(stagingFolder, pluginsFolder, e).withUnrestoredFiles(unrestored);
+            return withUnrestored(fileSystemsDiffer(stagingFolder, pluginsFolder, e), unrestored);
         } catch (IOException e) {
-            List<String> unrestored = moveBack(operations, movedAside);
+            LOGGER.log(Level.WARNING, "Could not move the new version to " + target
+                    + "; rolling back the update of " + identifyString, e);
+            List<Path[]> unrestored = moveBack(operations, movedAside);
             deleteQuietly(operations, staged);
-            return new UpdateOutcome(UpdateOutcome.Status.NEW_JAR_NOT_INSTALLED,
-                    Collections.singletonList(target.toAbsolutePath().toString()), unrestored,
-                    Collections.<String>emptyList());
+            return withUnrestored(new UpdateOutcome(UpdateOutcome.Status.NEW_JAR_NOT_INSTALLED,
+                    Collections.singletonList(target.toAbsolutePath().toString()), Collections.<String>emptyList(),
+                    Collections.<String>emptyList()).withFailure(e), unrestored);
         }
 
         // Step 6: delete the set-aside JARs; any that remain are outside the modules folder and inert.
@@ -872,6 +883,8 @@ public class PluginInstallUtils {
             try {
                 operations.delete(move[1]);
             } catch (IOException e) {
+                LOGGER.log(Level.WARNING, "Could not delete the set-aside JAR " + move[1]
+                        + " after updating " + identifyString + "; it is outside the modules folder and never loads", e);
                 leftovers.add(move[1].toAbsolutePath().toString());
             }
         }
@@ -889,20 +902,35 @@ public class PluginInstallUtils {
     /**
      * Moves every set-aside JAR back to where it came from, newest move first.
      *
-     * @return the set-aside paths that could not be moved back
+     * @return the {@code {original, set-aside}} pairs that could not be moved back
      */
-    private static List<String> moveBack(UpdateFileOperations operations, List<Path[]> movedAside) {
-        List<String> unrestored = new ArrayList<>();
+    private static List<Path[]> moveBack(UpdateFileOperations operations, List<Path[]> movedAside) {
+        List<Path[]> unrestored = new ArrayList<>();
         for (int i = movedAside.size() - 1; i >= 0; i--) {
             Path[] move = movedAside.get(i);
             try {
                 operations.move(move[1], move[0]);
             } catch (IOException e) {
                 LOGGER.log(Level.SEVERE, "Could not move " + move[1] + " back to " + move[0], e);
-                unrestored.add(move[1].toAbsolutePath().toString());
+                unrestored.add(move);
             }
         }
         return unrestored;
+    }
+
+    /**
+     * Records the pairs {@link #moveBack} could not restore on {@code outcome}: the set-aside path
+     * and, at the same index, the original path -- file name included -- it must be moved back to
+     * (review r4 WR-02; moving the set-aside file back under its staging name leaves it unloadable).
+     */
+    private static UpdateOutcome withUnrestored(UpdateOutcome outcome, List<Path[]> unrestored) {
+        List<String> asides = new ArrayList<>();
+        List<String> originals = new ArrayList<>();
+        for (Path[] move : unrestored) {
+            asides.add(move[1].toAbsolutePath().toString());
+            originals.add(move[0].toAbsolutePath().toString());
+        }
+        return outcome.withUnrestoredFiles(asides).withUnrestoredTargets(originals);
     }
 
     private static void deleteQuietly(UpdateFileOperations operations, Path path) {
