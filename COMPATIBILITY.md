@@ -370,10 +370,13 @@ This section governs the third kind.
   an operator made to a module's configuration file while the server was running was silently
   discarded at the next stop (#510). That was a defect, not a guarantee: the documented contract is
   only that a value set from code without calling `save()` is saved on disable, and that contract
-  is unchanged. As of 6.3.0 each configuration entity keeps a serialized snapshot of the state it
-  last loaded or saved (taken after `init()`, after every reload, and after every successful
-  `save()` or panel write), and the shutdown save writes only the entities whose current state
-  differs from it. What an operator sees:
+  is unchanged. As of 6.3.0 each configuration entity keeps a snapshot of what its file held when
+  the framework last read or wrote it (taken after `init()`, after every reload, and after every
+  successful `save()` or panel write, and derived from the file's text, never from the fields), and
+  the shutdown save writes only the entities whose current state differs from it. A value the file
+  does not hold therefore stays unsaved until it is written: a panel write that changes only some
+  keys, or a reload of a file from which a key was removed, does not hide an unsaved in-memory change
+  to another key. What an operator sees:
   - an edit made to a file while the server runs survives a restart, provided no module code
     changed that configuration in memory;
   - an unchanged file is no longer rewritten at shutdown at all, so its cosmetic rewrites — values
@@ -381,9 +384,22 @@ This section governs the third kind.
     comments re-emitted in the serializer's own layout — no longer happen then;
   - first-boot defaults for missing keys are still written when the configuration loads, exactly
     as before;
-  - if module code did change a configuration in memory **and** its file was also edited on disk
-    since the snapshot, the in-memory state still wins and is written, and one WARNING per file
-    names the file and says the edits made while the server ran were overwritten.
+  - if module code did change a configuration in memory **and** its file was also changed or removed
+    on disk since the snapshot, the in-memory state still wins and is written, and one WARNING per
+    file names the file and says the changes made while the server ran were overwritten;
+  - if that shutdown write fails (for example, the file was replaced by a directory, or is not
+    writable), the existing `Configuration save failed` WARNING is logged and no overwrite WARNING
+    is; a failure in one configuration does not stop the others from being saved.
+
+  Panel writes arrive on the WebSocket thread, not the server thread. `UltiTools#onDisable()` calls
+  `stopWebsocket()` before `saveAll()`, but that only starts the close handshake
+  (`WebSocketClient#close(int, String)` does not wait; `closeBlocking()` would), so a panel write
+  already being handled can still run while, or after, the shutdown save handles the same
+  configuration. Each configuration entity's own read, write and snapshot paths, and the shutdown
+  save's check-then-save of it, hold that entity's lock, so the two are applied one after the other,
+  each as a whole: a code change is never lost to an overlapping panel write, and a refused panel
+  value never reaches the file. Module code that changes a configuration from its own
+  asynchronous tasks is not covered by this lock.
 
   An explicit `save()` call still writes unconditionally. A module that relied on the shutdown save
   to reformat an untouched file should call `save()` itself (see `ultitools.config.shutdown-keeps-operator-edit`
