@@ -329,7 +329,18 @@ public class ConfigManager {
     }
 
     /**
-     * Save all configs.
+     * Saves, at shutdown, every registered configuration that module code changed in memory.
+     * <p>
+     * Since 6.3.0 (#510) this writes only the entities whose {@link
+     * AbstractConfigEntity#isModifiedSinceSnapshot()} is {@code true} - whose current state differs
+     * from the state they last loaded or saved. A configuration no code changed is left alone, so an
+     * operator's edit to its file made while the server was running survives the restart. Before
+     * 6.3.0 every file was rewritten from memory and such edits were silently discarded.
+     * <p>
+     * If an entity was changed in memory and its file was also changed on disk since that snapshot,
+     * the in-memory state still wins and is written, and a WARNING names the file whose edits were
+     * overwritten. The only caller is {@code UltiTools#onDisable()}; an explicit {@link
+     * AbstractConfigEntity#save()} is unaffected and always writes.
      */
     public void saveAll() {
         for (Map<String, AbstractConfigEntity> configMap : pluginConfigMap.values()) {
@@ -337,13 +348,37 @@ public class ConfigManager {
                 if (new File(config.getConfigFilePath()).isDirectory()) {
                     continue;
                 }
+                if (!config.isModifiedSinceSnapshot()) {
+                    continue;
+                }
+                // Read before save(): a successful save refreshes the file fingerprint.
+                boolean overwritesOperatorEdit = config.isFileModifiedSinceSnapshot();
                 try {
                     config.save();
+                    if (overwritesOperatorEdit) {
+                        warnOperatorEditOverwritten(config);
+                    }
                 } catch (IOException e) {
                     UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration save failed！File path：" + config.getConfigFilePath());
                 }
             }
         }
+    }
+
+    /**
+     * Logs that the shutdown save wrote an in-memory change over edits an operator made to the same
+     * file while the server was running (#510). The overwrite itself is the documented contract - a
+     * value set from code is saved on disable - but it must not be silent.
+     *
+     * @param config the entity that was just saved
+     */
+    private void warnOperatorEditOverwritten(AbstractConfigEntity config) {
+        UltiToolsPlugin owner = config.getUltiToolsPlugin();
+        File file = new File(owner.getResourceFolderPath(), config.getConfigFilePath());
+        UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration file "
+                + file.getAbsolutePath() + " was edited on disk while the server was running, but module "
+                + owner.getPluginName() + " also changed this configuration in memory. The in-memory"
+                + " configuration was saved, so the edits made to the file while the server ran were overwritten.");
     }
 
     /**

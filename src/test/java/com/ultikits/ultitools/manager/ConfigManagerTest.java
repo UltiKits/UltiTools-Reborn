@@ -822,6 +822,8 @@ class ConfigManagerTest {
             // 创建 mock 配置
             AbstractConfigEntity mockConfig = mock(AbstractConfigEntity.class);
             when(mockConfig.getConfigFilePath()).thenReturn(new File(tempDir, "test.yml").getAbsolutePath());
+            // #510: saveAll() writes only entities changed since their snapshot.
+            when(mockConfig.isModifiedSinceSnapshot()).thenReturn(true);
 
             Map<String, AbstractConfigEntity> configMap = new HashMap<>();
             configMap.put("test.yml", mockConfig);
@@ -832,6 +834,29 @@ class ConfigManagerTest {
 
             // Assert
             verify(mockConfig).save();
+        }
+
+        @Test
+        @DisplayName("An entity unchanged since its snapshot is not saved (#510)")
+        void unchangedConfigShouldNotBeSaved() throws Exception {
+            Field mapField = ConfigManager.class.getDeclaredField("pluginConfigMap");
+            mapField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Map<UltiToolsPlugin, Map<String, AbstractConfigEntity>> pluginConfigMap =
+                (Map<UltiToolsPlugin, Map<String, AbstractConfigEntity>>) mapField.get(configManager);
+
+            AbstractConfigEntity mockConfig = mock(AbstractConfigEntity.class);
+            when(mockConfig.getConfigFilePath()).thenReturn("config/test.yml");
+            when(mockConfig.isModifiedSinceSnapshot()).thenReturn(false);
+
+            Map<String, AbstractConfigEntity> configMap = new HashMap<>();
+            configMap.put("config/test.yml", mockConfig);
+            pluginConfigMap.put(mockPlugin, configMap);
+
+            configManager.saveAll();
+
+            verify(mockConfig).isModifiedSinceSnapshot();
+            org.mockito.Mockito.verify(mockConfig, org.mockito.Mockito.never()).save();
         }
 
         @Test
@@ -850,6 +875,8 @@ class ConfigManagerTest {
 
             AbstractConfigEntity mockConfig = mock(AbstractConfigEntity.class);
             when(mockConfig.getConfigFilePath()).thenReturn(configDir.getAbsolutePath());
+            // Changed in memory, so only the directory check can skip it (#510).
+            when(mockConfig.isModifiedSinceSnapshot()).thenReturn(true);
 
             Map<String, AbstractConfigEntity> configMap = new HashMap<>();
             configMap.put("configdir", mockConfig);

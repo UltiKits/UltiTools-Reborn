@@ -5,8 +5,12 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
+import java.nio.file.Files;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
@@ -29,6 +33,7 @@ import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.interfaces.ConfigChangeListener;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
+import lombok.AccessLevel;
 import lombok.Getter;
 
 /**
@@ -48,6 +53,16 @@ import lombok.Getter;
  * constructor that opens a file, registers a listener, or otherwise does real work pays that
  * cost again on every one of those events, purely to be thrown away. The documented {@code
  * super(configFilePath)}-only idiom is unaffected - it is a single, trivial reflective call.
+ * <p>
+ * Saved-state snapshot (#510, since 6.3.0): every entity remembers the exact YAML text {@link
+ * #save()} would have written at the moment it was last loaded or saved - after {@link
+ * #init(UltiToolsPlugin)} (including a first-boot defaults write), after {@link #reload()}, after
+ * every successful {@link #save()}, and after every successful {@link
+ * #updateProperties(JsonObject)} - together with a SHA-256 fingerprint of the file on disk at that
+ * same point. The shutdown save ({@code ConfigManager#saveAll()}) writes only the entities for which
+ * {@link #isModifiedSinceSnapshot()} is {@code true}, so an operator's edit to a file whose
+ * configuration no module code changed survives a restart. An explicit {@link #save()} call still
+ * writes unconditionally.
  */
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Config binder writes/reads private @ConfigEntry fields -- see 08-GATE05-TRIAGE.md
 @Getter
@@ -58,6 +73,22 @@ public abstract class AbstractConfigEntity {
     private final List<ConfigChangeListener> changeListeners = new CopyOnWriteArrayList<>();
     private UltiToolsPlugin ultiToolsPlugin;
     private YamlConfiguration config;
+    /**
+     * The exact text {@link #save()} would have written as of the last snapshot point (#510), or
+     * {@code null} before the first successful snapshot - which {@link #isModifiedSinceSnapshot()}
+     * treats as modified, so shutdown keeps the pre-#510 "save it" behaviour for an entity that was
+     * never in sync with its file. A serialized string, never a reference to or shallow copy of the
+     * field values: a module that mutates a collection field in place (UltiChat's auto-reply
+     * {@code rules} map) must still be detected as changed.
+     */
+    @Getter(AccessLevel.NONE)
+    private volatile String savedSnapshot;
+    /**
+     * Fingerprint of the file on disk as of the last snapshot point (#510), see {@link
+     * #fingerprintOf(File)}; {@code null} before the first snapshot.
+     */
+    @Getter(AccessLevel.NONE)
+    private volatile String savedFileFingerprint;
 
     /**
      * Constructor for AbstractConfigEntity.
@@ -70,11 +101,31 @@ public abstract class AbstractConfigEntity {
 
     /**
      * Saves the configuration to the file.
+     * <p>
+     * An explicit call always writes, whether or not anything changed since the last snapshot. Only
+     * the shutdown save ({@code ConfigManager#saveAll()}) is conditional on {@link
+     * #isModifiedSinceSnapshot()} (#510). A successful write refreshes the snapshot; a failed write
+     * leaves the previous snapshot in place, so the entity stays modified and the shutdown save
+     * retries it.
      *
      * @throws IOException if an I/O error occurs
      */
-    @SuppressWarnings("unchecked")
     public void save() throws IOException {
+        applyFieldsTo(config);
+        config.save(new File(ultiToolsPlugin.getConfigFolder() + File.separator + configFilePath));
+        takeSnapshot();
+    }
+
+    /**
+     * Copies every non-null {@code @ConfigEntry} field, serialized through its declared parser, onto
+     * {@code target}. The one serialization path shared by {@link #save()} and the snapshot
+     * rendering in {@link #renderSaveText()}, so the snapshot is by construction the text {@code
+     * save()} would write (#510).
+     *
+     * @param target the configuration to write the serialized field values into
+     */
+    @SuppressWarnings("unchecked")
+    private void applyFieldsTo(YamlConfiguration target) {
         for (Field field : ReflectionUtil.getFields(this.getClass())) {
             if (!field.isAnnotationPresent(ConfigEntry.class)) {
                 continue;
@@ -90,9 +141,123 @@ public abstract class AbstractConfigEntity {
                 continue;
             }
             Object serialized = ReflectionUtil.newInstance(annotation.parser()).serialize(fieldValue);
-            config.set(path, serialized);
+            target.set(path, serialized);
         }
-        config.save(new File(ultiToolsPlugin.getConfigFolder() + File.separator + configFilePath));
+    }
+
+    /**
+     * Renders the exact text {@link #save()} would write right now, without writing it and without
+     * touching the live {@link #config} (which {@link #toJsonObject()} still reports to the panel).
+     * The live configuration is copied through its own YAML text - comments included - and the
+     * fields are applied to the copy through {@link #applyFieldsTo(YamlConfiguration)}, the same
+     * path {@code save()} uses. Parser quirks (for example {@code DefaultConfigParser} reading the
+     * integers of a YAML list back as strings) are therefore present in both the snapshot and the
+     * later comparison, and cannot make an untouched entity look changed.
+     *
+     * @return the rendered text, or {@code null} if the live configuration's own text cannot be
+     *         parsed back
+     */
+    private String renderSaveText() {
+        YamlConfiguration copy = new YamlConfiguration();
+        copy.options().parseComments(true);
+        try {
+            copy.loadFromString(config.saveToString());
+        } catch (InvalidConfigurationException e) {
+            return null;
+        }
+        applyFieldsTo(copy);
+        return copy.saveToString();
+    }
+
+    /**
+     * Records the saved-state snapshot and the on-disk file fingerprint (#510). Called after {@link
+     * #init(UltiToolsPlugin)} and {@link #reload()} have loaded the file, and after {@link #save()}
+     * and {@link #updateProperties(JsonObject)} have written it successfully.
+     * <p>
+     * If the snapshot cannot be rendered, it is cleared rather than left stale, so the entity counts
+     * as modified and shutdown saves it exactly as it did before #510; a WARNING says so.
+     */
+    private void takeSnapshot() {
+        savedFileFingerprint = fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath));
+        try {
+            savedSnapshot = renderSaveText();
+        } catch (RuntimeException e) {
+            savedSnapshot = null;
+            LOGGER.log(Level.WARNING, "Cannot snapshot the saved state of " + configFilePath
+                    + "; it will be saved at shutdown whether or not it changed", e);
+        }
+    }
+
+    /**
+     * Whether this entity's current state differs from the state it last loaded or saved (#510):
+     * the text {@link #save()} would write now is compared with the snapshot taken at that point.
+     * This is what the shutdown save uses to decide whether to write this configuration at all.
+     * <p>
+     * An entity that was never initialized has nothing to save and reports {@code false}. An entity
+     * with no snapshot yet (its first-boot defaults write failed, or its snapshot could not be
+     * rendered) reports {@code true}, preserving the pre-#510 behaviour of saving it at shutdown.
+     *
+     * @return {@code true} if the shutdown save should write this configuration
+     * @since 6.3.0
+     */
+    public boolean isModifiedSinceSnapshot() {
+        if (config == null || ultiToolsPlugin == null) {
+            return false;
+        }
+        String snapshot = savedSnapshot;
+        if (snapshot == null) {
+            return true;
+        }
+        try {
+            return !snapshot.equals(renderSaveText());
+        } catch (RuntimeException e) {
+            LOGGER.log(Level.WARNING, "Cannot compare the state of " + configFilePath
+                    + " with its snapshot; treating it as changed", e);
+            return true;
+        }
+    }
+
+    /**
+     * Whether the file on disk differs from the file as it was at the last snapshot point (#510) -
+     * in practice, whether someone edited it while the server was running. Used by the shutdown save
+     * to warn that an in-memory change is about to overwrite those edits.
+     *
+     * @return {@code true} if the file's fingerprint changed since the last snapshot; {@code false}
+     *         if it did not, or if no snapshot has been taken yet
+     * @since 6.3.0
+     */
+    public boolean isFileModifiedSinceSnapshot() {
+        String fingerprint = savedFileFingerprint;
+        if (fingerprint == null || ultiToolsPlugin == null) {
+            return false;
+        }
+        return !fingerprint.equals(fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath)));
+    }
+
+    /**
+     * Fingerprints a configuration file by the SHA-256 digest of its bytes (#510). A content hash
+     * rather than size plus modification time: a typical operator edit changes one value to another
+     * of the same length ({@code 60} to {@code 90}, {@code true} to {@code TRUE}), which size alone
+     * cannot see, and modification time is coarse or preserved on common paths (two-second
+     * resolution on FAT and many network shares, {@code cp -p}, {@code rsync -t}, editors that
+     * restore it). Configuration files are small and this runs only at load, save and shutdown.
+     *
+     * @param file the configuration file, possibly {@code null} or missing
+     * @return {@code "absent"} for a missing file, {@code "unreadable"} if it cannot be read, or the
+     *         Base64 SHA-256 digest of its contents
+     */
+    private static String fingerprintOf(File file) {
+        if (file == null || !file.isFile()) {
+            return "absent";
+        }
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(file.toPath()));
+            return Base64.getEncoder().encodeToString(digest);
+        } catch (IOException e) {
+            return "unreadable";
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is required on every Java platform", e);
+        }
     }
 
     /**
@@ -154,6 +319,10 @@ public abstract class AbstractConfigEntity {
         if (!upToDate) {
             config.save(file);
         }
+        // #510: memory and disk agree here, after any first-boot defaults write and before
+        // validation or a change listener can run - a listener that changes a value in memory is a
+        // code change the shutdown save must still see.
+        takeSnapshot();
 
         // Validate fields and reset invalid values to defaults
         validateFields();
@@ -239,6 +408,7 @@ public abstract class AbstractConfigEntity {
             config.set(path, ReflectionUtil.getFieldValue(this, field));
         }
         config.save(ultiToolsPlugin.getConfigFile(configFilePath));
+        takeSnapshot();
     }
 
     /**
@@ -607,6 +777,9 @@ public abstract class AbstractConfigEntity {
                 }
             }
         }
+        // #510: same snapshot point as init() - after the file is loaded, before validation and
+        // change listeners.
+        takeSnapshot();
 
         // Validate fields and reset invalid values to defaults
         validateFields();
