@@ -919,6 +919,92 @@ public class PluginInstallUtils {
         return cause == null ? outcome : outcome.withFailure(cause);
     }
 
+    /** {@code <original name>.jar.<UUID>.old}, the name a set-aside JAR carries in the staging directory. */
+    private static final java.util.regex.Pattern SET_ASIDE_NAME = java.util.regex.Pattern.compile(
+            "^(.+\\.jar)\\.([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\\.old$");
+
+    /**
+     * Recovers module updates a crash or kill interrupted (review r4 WR-01). Must run before the
+     * modules folder is scanned. Never throws for a file it cannot handle; each such file is logged
+     * and left in place.
+     * <ul>
+     *   <li>A set-aside JAR named {@code <original name>.jar.<UUID>.old} whose module has no JAR in
+     *       the modules folder is moved back under its original name, with a WARNING naming it.</li>
+     *   <li>A set-aside JAR whose module already has a JAR in the modules folder is left, with a
+     *       WARNING that it is a leftover that can be deleted.</li>
+     *   <li>A {@code .part} file, a partial download, is deleted, with an INFO line.</li>
+     * </ul>
+     * <p>
+     * <b>Framework-internal.</b> Called by the framework at boot; not part of the module API.
+     *
+     * @param dataFolder the framework data folder holding {@code plugins/} and the staging directory
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public static void recoverInterruptedUpdates(File dataFolder) {
+        if (dataFolder == null) {
+            return;
+        }
+        File[] entries = new File(dataFolder, STAGING_DIRECTORY_NAME).listFiles();
+        if (entries == null) {
+            return;
+        }
+        Arrays.sort(entries);
+        File pluginsFolder = new File(dataFolder, "plugins");
+        for (File entry : entries) {
+            if (entry.getName().endsWith(".part")) {
+                try {
+                    Files.deleteIfExists(entry.toPath());
+                    LOGGER.info("Deleted a stale partial module update download: " + entry.getAbsolutePath());
+                } catch (IOException e) {
+                    LOGGER.log(Level.WARNING, "Could not delete a stale partial module update download: "
+                            + entry.getAbsolutePath(), e);
+                }
+                continue;
+            }
+            java.util.regex.Matcher name = SET_ASIDE_NAME.matcher(entry.getName());
+            if (name.matches()) {
+                recoverSetAsideJar(entry, name.group(1), pluginsFolder);
+            }
+        }
+    }
+
+    private static void recoverSetAsideJar(File setAside, String originalName, File pluginsFolder) {
+        String moduleKey;
+        try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(setAside)) {
+            moduleKey = normalizeIdentifyString(readPluginYmlScalars(jarFile).get("identify-string"));
+        } catch (IOException e) {
+            LOGGER.log(Level.WARNING, "Set-aside module JAR from an interrupted update cannot be read and was left in place: "
+                    + setAside.getAbsolutePath(), e);
+            return;
+        }
+        if (moduleKey == null) {
+            LOGGER.warning("Set-aside module JAR from an interrupted update declares no identify-string and was left in place: "
+                    + setAside.getAbsolutePath());
+            return;
+        }
+        if (!findPluginJars(pluginsFolder, moduleKey).isEmpty()) {
+            LOGGER.warning("Update leftover " + setAside.getAbsolutePath() + ": the modules folder already holds a JAR of module "
+                    + moduleKey + ", so this leftover was not restored and can be deleted");
+            return;
+        }
+        Path target = pluginsFolder.toPath().resolve(originalName);
+        if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+            LOGGER.warning("Set-aside module JAR " + setAside.getAbsolutePath() + " from an interrupted update was not restored: "
+                    + target.toAbsolutePath() + " already exists and is not a JAR of module " + moduleKey);
+            return;
+        }
+        try {
+            Files.createDirectories(pluginsFolder.toPath());
+            Files.move(setAside.toPath(), target, StandardCopyOption.ATOMIC_MOVE);
+            LOGGER.warning("Restored " + target.toAbsolutePath() + " from an interrupted module update (it was "
+                    + setAside.getAbsolutePath() + ")");
+        } catch (IOException e) {
+            LOGGER.log(Level.WARNING, "Could not restore the set-aside module JAR " + setAside.getAbsolutePath()
+                    + " to " + target.toAbsolutePath(), e);
+        }
+    }
+
     /**
      * Moves every set-aside JAR back to where it came from, newest move first.
      *
