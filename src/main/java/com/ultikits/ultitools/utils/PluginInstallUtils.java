@@ -14,7 +14,6 @@ import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -29,6 +28,7 @@ import com.google.gson.reflect.TypeToken;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.entities.PluginEntity;
+import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
 
 /**
@@ -477,12 +477,27 @@ public class PluginInstallUtils {
      * @throws IOException if an I/O error occurs
      */
     public static boolean uninstallPlugin(String name) throws IOException {
-        AtomicReference<UltiToolsPlugin> ultiToolsPluginAtomicReference = new AtomicReference<>();
-        UltiTools.getInstance().getPluginManager().getPluginList().stream().filter(plugin -> plugin.getPluginName().equals(name)).forEach(plugin -> {
-            ultiToolsPluginAtomicReference.set(plugin);
-            plugin.unregisterSelf();
-        });
-        UltiTools.getInstance().getPluginManager().getPluginList().remove(ultiToolsPluginAtomicReference.get());
+        PluginManager pluginManager = UltiTools.getInstance().getPluginManager();
+        List<UltiToolsPlugin> matches = new ArrayList<>();
+        for (UltiToolsPlugin plugin : pluginManager.getPluginList()) {
+            if (plugin.getPluginName().equals(name)) {
+                matches.add(plugin);
+            }
+        }
+        for (UltiToolsPlugin plugin : matches) {
+            // Unload through PluginManager#unregister, the framework's one full unload path
+            // (#503): it cancels the module's @Scheduled tasks and releases its @PlayerCache,
+            // tab-completion, EventBus, panel-responder and @ConditionalOnConfig registrations
+            // before calling unregisterSelf(), then closes the module context. Calling
+            // unregisterSelf() directly skipped all of that. The module leaves the plugin list
+            // even if its own unload hook throws, because unregister() has closed its context
+            // by then and a listed-but-closed module would be reported as still loaded.
+            try {
+                pluginManager.unregister(plugin);
+            } finally {
+                pluginManager.getPluginList().remove(plugin);
+            }
+        }
         File folder = new File(UltiTools.getInstance().getDataFolder() + "/plugins");
         File[] listFiles = folder.listFiles();
         if (listFiles == null) {
