@@ -487,15 +487,16 @@ public class PluginInstallUtils {
     }
 
     /**
-     * Uninstall plugin: unload every loaded module whose runtime name matches, then delete the
+     * Uninstall plugin: unload every loaded module whose runtime name matches, then delete every
      * jar in the plugins folder whose {@code plugin.yml} {@code name} matches.
      *
      * @param name the plugin's runtime name ({@code plugin.yml} {@code name})
-     * @return {@code true} if a matching jar was found and deleted; {@code false} if no jar in the
-     *     plugins folder carries that name
-     * @throws java.nio.file.FileSystemException if the matching jar was found but could not be
-     *     deleted; {@link java.nio.file.FileSystemException#getFile()} names that jar, which will
-     *     load again on the next restart
+     * @return {@code true} if at least one matching jar was found and every matching jar was
+     *     deleted; {@code false} if no jar in the plugins folder carries that name
+     * @throws java.nio.file.FileSystemException if a matching jar could not be deleted; {@link
+     *     java.nio.file.FileSystemException#getFile()} names one such jar and each further one is
+     *     attached as a suppressed {@code FileSystemException}. Every jar named will load again on
+     *     the next restart
      * @throws IOException if another I/O error occurs
      */
     public static boolean uninstallPlugin(String name) throws IOException {
@@ -525,6 +526,7 @@ public class PluginInstallUtils {
         if (listFiles == null) {
             return false;
         }
+        List<File> matchingJars = new ArrayList<>();
         for (File file : listFiles) {
             URL url = URI.create("jar:file:" + file.getAbsolutePath() + "!/plugin.yml").toURL();
             JarURLConnection jarConnection = (JarURLConnection) url.openConnection();
@@ -535,19 +537,45 @@ public class PluginInstallUtils {
             if (name.equals(pluginName)) {
                 inputStream.close();
                 reader.close();
-                // Report the delete's real outcome (#501): a jar left on disk loads again on the
-                // next restart, so its failure must reach the operator rather than read as success.
-                try {
-                    Files.delete(file.toPath());
-                } catch (IOException e) {
-                    FileSystemException failure =
-                            new FileSystemException(file.getAbsolutePath(), null, e.getMessage());
-                    failure.initCause(e);
-                    throw failure;
-                }
-                return true;
+                matchingJars.add(file);
             }
         }
-        return false;
+        if (matchingJars.isEmpty()) {
+            return false;
+        }
+        // Delete every matching jar, not only the first one listed (review WR-02): a second jar of
+        // the same module loads it again on restart. Report the real outcome (#501): every jar
+        // that stays on disk is named, so success is reported only once all of them are gone.
+        deleteAllOrThrow(matchingJars);
+        return true;
+    }
+
+    /**
+     * Deletes every file in {@code files}, attempting each even after an earlier one fails.
+     *
+     * @param files the files to delete
+     * @throws FileSystemException if any file could not be deleted; {@link
+     *     FileSystemException#getFile()} names the first such file and each further one is
+     *     attached as a suppressed {@code FileSystemException}
+     */
+    private static void deleteAllOrThrow(List<File> files) throws FileSystemException {
+        FileSystemException failure = null;
+        for (File file : files) {
+            try {
+                Files.delete(file.toPath());
+            } catch (IOException e) {
+                FileSystemException fileFailure =
+                        new FileSystemException(file.getAbsolutePath(), null, e.getMessage());
+                fileFailure.initCause(e);
+                if (failure == null) {
+                    failure = fileFailure;
+                } else {
+                    failure.addSuppressed(fileFailure);
+                }
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
     }
 }

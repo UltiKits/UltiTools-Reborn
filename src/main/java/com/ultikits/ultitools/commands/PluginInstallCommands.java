@@ -3,6 +3,7 @@ package com.ultikits.ultitools.commands;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.FileSystemException;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.bukkit.ChatColor;
@@ -213,23 +214,39 @@ public class PluginInstallCommands extends BaseCommandExecutor {
     public void uninstallPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin) {
         try {
             if (PluginInstallUtils.uninstallPlugin(plugin)) {
-                // uninstallPlugin returns true only after the jar is deleted (#501), so there is
-                // nothing left for the operator to remove by hand.
-                sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("卸载成功！模块 JAR 文件已删除。"));
+                // uninstallPlugin returns true only after every matching jar is deleted (#501), so
+                // there is nothing left for the operator to remove by hand.
+                sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("卸载成功！模块的 JAR 文件已全部删除。"));
             } else {
                 sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("卸载失败！请检查是否拼写正确！"));
             }
         } catch (FileSystemException e) {
-            // The matching jar was found but not deleted (#501): it loads again on restart, so
-            // name the exact file the operator has to remove.
-            String jarPath = e.getFile() != null
-                    ? e.getFile()
-                    : UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins";
-            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("卸载失败！无法删除模块 JAR 文件，重启后它会再次加载，请手动删除：%s"), jarPath));
+            // Matching jars were found but not all deleted (#501): each loads the module again on
+            // restart, so name every file the operator has to remove.
+            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("卸载失败！以下模块 JAR 文件无法删除，重启后模块会再次加载，请手动删除：%s"), namedFiles(e)));
         } catch (IOException e) {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("删除失败！文件访问错误！请手动删除！"));
             sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"));
         }
+    }
+
+    /**
+     * Joins the file named by {@code failure} and by every {@code FileSystemException} suppressed
+     * on it -- the shape {@link PluginInstallUtils} uses to report several files at once.
+     */
+    private static String namedFiles(FileSystemException failure) {
+        List<String> files = new ArrayList<>();
+        if (failure.getFile() != null) {
+            files.add(failure.getFile());
+        }
+        for (Throwable suppressed : failure.getSuppressed()) {
+            if (suppressed instanceof FileSystemException && ((FileSystemException) suppressed).getFile() != null) {
+                files.add(((FileSystemException) suppressed).getFile());
+            }
+        }
+        return files.isEmpty()
+                ? UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"
+                : String.join(", ", files);
     }
 
     @CmdMapping(format = "check")
