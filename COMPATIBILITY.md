@@ -365,6 +365,28 @@ This section governs the third kind.
   before, with only the individual keys whose placeholder count moved resolved from the jar
   instead (see `ultitools.language.file-refresh`/`ultitools.language.file-preserve` in
   `FEATURES.md`). No operator who customised a file is affected either way.
+- `PluginInstallUtils.uninstallPlugin(String)` reporting the outcome it documents (#501, #503).
+  Its javadoc promised `whether the uninstall succeeded`, yet before 6.3.0 it returned `true` even
+  when the module's JAR could not be deleted, deleted only the first of several JARs carrying the
+  module's name, and returned `false` for a module it had just unloaded but whose JAR was not on
+  disk. As of 6.3.0 it unloads through `PluginManager#unregister` and returns `true` only once
+  every matching JAR is deleted. Its declared `throws IOException` now carries two specific
+  outcomes: a `java.nio.file.FileSystemException` whose `getFile()` names a JAR that could not be
+  deleted (each further one attached as a suppressed `FileSystemException`), and a
+  `java.nio.file.NoSuchFileException` naming the plugins folder when a loaded module was unloaded
+  but no JAR carries its name. It also throws `IllegalStateException` when the module's own unload
+  threw; the module is still removed from the loaded modules and its JARs still deleted, the
+  module's exception is the cause, and the JAR outcome above is attached as suppressed. A caller
+  that only checked the boolean now sees these as exceptions instead of a success it did not get.
+- `PluginInstallUtils.updatePlugin(String)` reporting the outcome it documents (#505). Its javadoc
+  promised `true if update succeeded`, yet before 6.3.0 it returned `true` when the old version's
+  JAR could not be deleted, leaving two versions of the module to load on restart. As of 6.3.0 it
+  deletes every older JAR of the module after the download and, if any cannot be deleted, throws
+  `java.io.UncheckedIOException` wrapping a `java.nio.file.FileSystemException` whose `getFile()`
+  names one remaining JAR, each further one attached as suppressed. The exception is unchecked
+  because the method declares no checked exception and its signature is unchanged; a caller that
+  loops over modules expecting only a boolean, as `/upm update all` did, should catch it per
+  module.
 
 ### Behavioral changes that do need one
 
