@@ -418,6 +418,30 @@ class PluginInstallUtilsUninstallTest {
     }
 
     @Test
+    @DisplayName("state A: other entries are matched against what the loaded copy's JAR declares")
+    void stateA_secondCopyIsMatchedOnWhatTheLoadedJarDeclares() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        // A module built through UltiToolsPlugin(String, ...): its runtime name is whatever it was
+        // given, and its JAR declares something else entirely.
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        File loaded = writeModuleJar("DivergentName");
+        PluginInstallUtils.moduleCodeSource = module -> loaded;
+        File secondCopy = writeModuleJar("DivergentName", "0.9.0");
+
+        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+
+        assertThat(loaded).as("the code source is this module's whatever it declares").doesNotExist();
+        assertThat(secondCopy)
+                .as("it declares what the loaded copy's JAR declares, which is what makes it a copy; "
+                        + "matching on the typed runtime name would leave it to load the module again")
+                .doesNotExist();
+        assertThat(report.jarsDeleted()).isTrue();
+        assertThat(report.undeterminedEntries()).isEmpty();
+    }
+
+    @Test
     @DisplayName("states A-D: an entry is never classified by its file name")
     void fileNameNeverDecidesWhatAnEntryIs() throws IOException {
         File jar = writeModuleJar(MODULE_NAME);

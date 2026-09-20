@@ -581,7 +581,7 @@ class PluginInstallCommandsEnhancedTest {
         // #501: uninstallPlugin returns true only after deleting the jar, so the success reply
         // no longer points the operator at the plugins folder to delete it by hand.
         assertThat(fullMessage)
-            .contains("卸载成功")
+            .contains("卸载完成")
             .doesNotContain("文件位置")
             .doesNotContain("手动删除");
     }

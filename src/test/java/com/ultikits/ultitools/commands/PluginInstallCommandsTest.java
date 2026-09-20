@@ -413,7 +413,7 @@ class PluginInstallCommandsTest {
         
         assertThat(result).isTrue();
         String message = player.nextMessage();
-        assertThat(message).contains("卸载成功");
+        assertThat(message).contains("卸载完成");
     }
 
     @Test
@@ -472,7 +472,7 @@ class PluginInstallCommandsTest {
 
         List<String> messages = drainMessages();
         assertThat(messages).as("the command must reply at all").isNotEmpty();
-        assertThat(messages.get(0)).contains("卸载成功");
+        assertThat(messages.get(0)).contains("卸载完成");
         assertThat(messages)
                 .as("uninstallPlugin returns true only after deleting the jar (#501) -- telling the "
                         + "operator to delete it manually describes work that is not needed")
@@ -493,7 +493,7 @@ class PluginInstallCommandsTest {
 
         List<String> messages = drainMessages();
         assertThat(messages).as("the command must reply at all").isNotEmpty();
-        assertThat(messages).noneMatch(m -> m.contains("卸载成功"));
+        assertThat(messages).noneMatch(m -> m.contains("卸载完成"));
         assertThat(messages.get(0)).contains("失败");
         assertThat(String.join("\n", messages))
                 .as("the operator must be told which file will load again on restart")
@@ -514,7 +514,7 @@ class PluginInstallCommandsTest {
         executor.uninstallPlugin(player, "test-plugin");
 
         String all = String.join("\n", drainMessages());
-        assertThat(all).contains("失败").contains(first).contains(second).doesNotContain("卸载成功");
+        assertThat(all).contains("失败").contains(first).contains(second).doesNotContain("卸载完成");
     }
 
     @Test
@@ -532,7 +532,7 @@ class PluginInstallCommandsTest {
                 .contains("模块已卸载")
                 .contains(folder)
                 .doesNotContain("拼写")
-                .doesNotContain("卸载成功")
+                .doesNotContain("卸载完成")
                 .doesNotContain("文件访问错误");
     }
 
@@ -547,7 +547,7 @@ class PluginInstallCommandsTest {
 
         assertThat(thrown).as("the operator must get a reply, not a generic command error").isNull();
         String all = String.join("\n", drainMessages());
-        assertThat(all).contains("卸载出错").contains("已全部删除").doesNotContain("卸载成功");
+        assertThat(all).contains("卸载出错").contains("均已删除").doesNotContain("卸载完成");
     }
 
     @Test
@@ -563,7 +563,7 @@ class PluginInstallCommandsTest {
 
         assertThat(thrown).isNull();
         String all = String.join("\n", drainMessages());
-        assertThat(all).contains("卸载出错").contains(jar).doesNotContain("已全部删除");
+        assertThat(all).contains("卸载出错").contains(jar).doesNotContain("均已删除");
     }
 
     @Test
@@ -579,7 +579,7 @@ class PluginInstallCommandsTest {
 
         assertThat(thrown).isNull();
         String all = String.join("\n", drainMessages());
-        assertThat(all).contains("卸载出错").contains(folder).doesNotContain("已全部删除");
+        assertThat(all).contains("卸载出错").contains(folder).doesNotContain("均已删除");
     }
 
     @Test
@@ -593,7 +593,7 @@ class PluginInstallCommandsTest {
         executor.uninstallPlugin(player, "test-plugin");
 
         String all = String.join("\n", drainMessages());
-        assertThat(all).as("the uninstall succeeded and must say so").contains("卸载成功");
+        assertThat(all).as("the uninstall succeeded and must say so").contains("卸载完成");
         assertThat(all)
                 .as("the operator must be told what is unknown, and what follows from it")
                 .contains("1")
@@ -655,7 +655,7 @@ class PluginInstallCommandsTest {
         assertThat(all)
                 .contains("模块目录")
                 .contains(folder)
-                .doesNotContain("卸载成功")
+                .doesNotContain("卸载完成")
                 .doesNotContain("拼写");
     }
 
