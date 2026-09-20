@@ -426,7 +426,7 @@ class PluginInstallUtilsUpdateTransactionTest {
         when(loaded.getIdentifyString()).thenReturn(null);
         com.ultikits.ultitools.manager.PluginManager pluginManager =
                 com.ultikits.ultitools.UltiTools.getInstance().getPluginManager();
-        when(pluginManager.getPluginList()).thenReturn(new java.util.ArrayList<>(Collections.singletonList(loaded)));
+        when(pluginManager.getPluginList()).thenReturn(new ArrayList<>(Collections.singletonList(loaded)));
         java.util.concurrent.CountDownLatch holding = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
         org.mockito.Mockito.doAnswer(invocation -> {

@@ -610,8 +610,8 @@ public class PluginManager {
                 // without initialising them, which is what the loader does with a module JAR at
                 // startup; nothing here acts on a name from outside the artifact being examined.
                 // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
-                Class<? extends UltiToolsPlugin> mainClass =
-                        findModuleMainClass(candidateJar, (className) -> Class.forName(className, false, loader));
+                ModuleClassResolver resolver = (className) -> Class.forName(className, false, loader);
+                Class<? extends UltiToolsPlugin> mainClass = findModuleMainClass(candidateJar, resolver);
                 return mainClass != null && canBeInstantiatedAtBoot(mainClass, candidateJar);
             }
         } catch (IOException | RuntimeException | LinkageError e) {
