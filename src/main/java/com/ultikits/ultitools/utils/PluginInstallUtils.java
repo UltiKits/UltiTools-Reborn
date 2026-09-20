@@ -2054,8 +2054,10 @@ public class PluginInstallUtils {
                         && !journalNamesModule(entries, stagingFolder, name)) {
                     continue;
                 }
-                for (String[] pair : journalPairs(entries, journalFile, new java.util.concurrent.atomic.AtomicBoolean())) {
-                    failure = firstOrSuppressed(failure, deleteStagedFile(new File(stagingFolder, pair[1])));
+                // Every JAR the journal names, not only the pairs that read contiguously: one left
+                // behind can restore the module the operator just removed (Codex review r19).
+                for (String aside : everyAsideNamed(entries)) {
+                    failure = firstOrSuppressed(failure, deleteStagedFile(new File(stagingFolder, aside)));
                 }
                 failure = firstOrSuppressed(failure, deleteStagedFile(journalFile));
             } catch (IOException | RuntimeException e) {
@@ -2073,6 +2075,27 @@ public class PluginInstallUtils {
         if (failure != null) {
             throw failure;
         }
+    }
+
+    /**
+     * Every set-aside file name a journal records, whatever indices it uses. Recovery reads pairs
+     * in order and stops at a gap, because it must move each JAR back to a recorded path; an
+     * uninstall only deletes, so it takes them all (Codex review r19).
+     *
+     * @param entries the journal's properties
+     * @return the usable set-aside file names
+     */
+    private static List<String> everyAsideNamed(java.util.Properties entries) {
+        List<String> names = new ArrayList<>();
+        for (String key : entries.stringPropertyNames()) {
+            if (key.startsWith("aside.") && key.endsWith(".aside")) {
+                String name = entries.getProperty(key);
+                if (isPlainFileName(name)) {
+                    names.add(name);
+                }
+            }
+        }
+        return names;
     }
 
     /**

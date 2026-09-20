@@ -277,14 +277,30 @@ public class PluginInstallCommands extends BaseCommandExecutor {
      * instruction and one that leaves the module in place.
      */
     private static void sendFileSystemFailure(CommandSender sender, FileSystemException failure) {
-        String files = namedFiles(failure);
-        if (files.contains(".upm-staging")) {
-            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("卸载失败！以下更新残留文件无法删除，重启后可能会把该模块的旧版本 JAR 移回模块目录，请手动删除：%s"), files));
-            return;
+        List<String> all = new ArrayList<>();
+        collectNamedFiles(failure, all);
+        List<String> leftovers = new ArrayList<>();
+        List<String> moduleJars = new ArrayList<>();
+        for (String file : all) {
+            if (file.contains(".upm-staging")) {
+                leftovers.add(file);
+            } else {
+                moduleJars.add(file);
+            }
         }
-        // Matching jars were found but not all deleted (#501): each loads the module again on
-        // restart, so name every file the operator has to remove.
-        sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("卸载失败！以下模块 JAR 文件无法删除，重启后模块会再次加载，请手动删除：%s"), files));
+        // Both categories are reported, and separately (Codex review r19): a JAR in the modules
+        // folder reloads the module for certain, while an update leftover only can, and merging
+        // them would give the weaker instruction for the stronger problem.
+        if (!moduleJars.isEmpty() || leftovers.isEmpty()) {
+            // Matching jars were found but not all deleted (#501): each loads the module again on
+            // restart, so name every file the operator has to remove.
+            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("卸载失败！以下模块 JAR 文件无法删除，重启后模块会再次加载，请手动删除：%s"),
+                    moduleJars.isEmpty() ? namedFiles(failure) : String.join(", ", moduleJars)));
+        }
+        if (!leftovers.isEmpty()) {
+            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("卸载失败！以下更新残留文件无法删除，重启后可能会把该模块的旧版本 JAR 移回模块目录，请手动删除：%s"),
+                    String.join(", ", leftovers)));
+        }
     }
 
     /**
