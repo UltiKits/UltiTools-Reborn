@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -470,17 +471,93 @@ public class PluginInstallUtils {
     }
 
     /**
+     * The JAR a module class was loaded from, or {@code null} when it was not loaded from one.
+     *
+     * <p>A module that is loaded does not have to be identified by metadata at all: UltiTools
+     * modules are recognised by {@code @UltiToolsModule}, and {@code PluginManager} selects a
+     * module class with {@code UltiToolsPlugin.class.isAssignableFrom} and instantiates it through
+     * {@code getDeclaredConstructor().newInstance()} -- no {@code plugin.yml} is consulted. So the
+     * framework asks the instance instead, exactly as {@code UltiToolsPlugin} itself does when it
+     * reads its own embedded resources.
+     *
+     * <p>A code source that is a directory is a development checkout rather than an installed JAR,
+     * and answers nothing about which file to delete; the caller falls through to the table.
+     *
+     * @param moduleClass the loaded module's class
+     * @return the JAR, or {@code null} when there is none to name
+     */
+    static File codeSourceJarOf(Class<?> moduleClass) {
+        try {
+            java.security.CodeSource source = moduleClass.getProtectionDomain().getCodeSource();
+            if (source == null || source.getLocation() == null) {
+                return null;
+            }
+            File location = resolveCodeSourceFile(source.getLocation());
+            return location.isFile() ? location : null;
+        } catch (SecurityException | IllegalArgumentException e) {
+            LOGGER.log(Level.FINE, "Could not read the code source of " + moduleClass, e);
+            return null;
+        }
+    }
+
+    /** {@link #codeSourceJarOf(Class)} for a loaded module, and the seam a test replaces. */
+    static final java.util.function.Function<UltiToolsPlugin, File> DEFAULT_MODULE_CODE_SOURCE =
+            module -> codeSourceJarOf(module.getClass());
+
+    /** How the uninstall asks a loaded module which JAR it came from. */
+    static java.util.function.Function<UltiToolsPlugin, File> moduleCodeSource = DEFAULT_MODULE_CODE_SOURCE;
+
+    /** A code source URL as a file, whatever escaping it carries. */
+    private static File resolveCodeSourceFile(java.net.URL location) {
+        try {
+            return new File(location.toURI());
+        } catch (java.net.URISyntaxException e) {
+            String rawPath = location.getPath();
+            return new File(rawPath.startsWith("/") ? rawPath : rawPath.substring(1));
+        }
+    }
+
+    /**
+     * The JARs the loaded instances of this module were loaded from, read before they are unloaded
+     * -- afterwards the instance and its class loader may be gone, and with them the answer.
+     *
+     * @param modules the loaded instances
+     * @return their code-source JARs, by canonical path
+     */
+    private static Set<String> codeSourceJarsOf(List<UltiToolsPlugin> modules) {
+        Set<String> jars = new java.util.HashSet<>();
+        for (UltiToolsPlugin module : modules) {
+            File jar = moduleCodeSource.apply(module);
+            if (jar == null) {
+                continue;
+            }
+            jars.add(canonicalPathOf(jar));
+        }
+        return jars;
+    }
+
+    /** {@code file}'s canonical path, or its absolute path when it cannot be canonicalised. */
+    private static String canonicalPathOf(File file) {
+        try {
+            return file.getCanonicalPath();
+        } catch (IOException | SecurityException e) {
+            LOGGER.log(Level.FINE, "Could not canonicalise " + file, e);
+            return file.getAbsolutePath();
+        }
+    }
+
+    /**
      * What one entry of the modules folder is, relative to the module being uninstalled. Every
      * entry is exactly one of these, and each is decided by a positive test -- never by the file's
      * name, which says nothing about what a JAR declares.
      */
     private enum EntryState {
-        /** The archive opened, its {@code plugin.yml} was read, and it declares this module. */
-        THIS_MODULES,
         /**
-         * The archive opened and either declares another module or carries no {@code plugin.yml}
-         * at all -- a sources or javadoc JAR, which can never load a module.
+         * It is a loaded instance's own code-source JAR, or the archive opened and its
+         * {@code plugin.yml} declares this module.
          */
+        THIS_MODULES,
+        /** The archive opened and its {@code plugin.yml} declares another module. */
         NOT_THIS_MODULES,
         /**
          * Nothing could be read from it: the archive would not open, its {@code plugin.yml} entry
@@ -631,10 +708,13 @@ public class PluginInstallUtils {
                 matches.add(plugin);
             }
         }
+        // Before the unload: afterwards the instance and its class loader may be gone, and with
+        // them the only authoritative answer to "which JAR is this module's".
+        Set<String> codeSourceJars = codeSourceJarsOf(matches);
         Throwable unloadFailure = unloadEvery(name, matches, pluginManager);
         UninstallReport report;
         try {
-            report = deleteModuleJars(name, !matches.isEmpty());
+            report = deleteModuleJars(name, !matches.isEmpty(), codeSourceJars);
         } catch (IOException jarFailure) {
             // The JAR failure already carries the undetermined entries; see deleteModuleJars.
             if (unloadFailure != null) {
@@ -689,10 +769,12 @@ public class PluginInstallUtils {
      *
      * @param name           the module's runtime name
      * @param moduleUnloaded whether a loaded module of that name was unloaded first
+     * @param codeSourceJars the JARs the loaded instances were loaded from, read before the unload
      * @return what was deleted and what could not be determined
      * @throws IOException as documented on {@link #uninstallPlugin(String)}
      */
-    private static UninstallReport deleteModuleJars(String name, boolean moduleUnloaded) throws IOException {
+    private static UninstallReport deleteModuleJars(String name, boolean moduleUnloaded,
+                                                   Set<String> codeSourceJars) throws IOException {
         File folder = new File(UltiTools.getInstance().getDataFolder() + "/plugins");
         File[] listFiles = folder.listFiles();
         if (listFiles == null) {
@@ -716,7 +798,7 @@ public class PluginInstallUtils {
         List<File> matchingJars = new ArrayList<>();
         List<File> undetermined = new ArrayList<>();
         for (File file : listFiles) {
-            EntryState state = classify(file, name);
+            EntryState state = classify(file, name, codeSourceJars);
             if (state == EntryState.THIS_MODULES) {
                 matchingJars.add(file);
             } else if (state == EntryState.UNDETERMINED) {
@@ -752,11 +834,17 @@ public class PluginInstallUtils {
      * that cannot be read, and a {@code plugin.yml} that is not valid YAML are state C: nothing was
      * learned, which is not the same as learning "no".
      *
-     * @param file the entry
-     * @param name the module's runtime name
+     * @param file           the entry
+     * @param name           the module's runtime name
+     * @param codeSourceJars the JARs the loaded instances were loaded from
      * @return the state it is in
      */
-    private static EntryState classify(File file, String name) {
+    private static EntryState classify(File file, String name, Set<String> codeSourceJars) {
+        if (codeSourceJars.contains(canonicalPathOf(file))) {
+            // The module itself said this is where it came from. Nothing a file declares, or fails
+            // to declare, outranks that.
+            return EntryState.THIS_MODULES;
+        }
         if (!file.getName().endsWith(".jar") || file.isDirectory()) {
             // Not an archive this module could ever load from: a file of another kind, or a
             // directory. Both are answers, not the absence of one.
@@ -771,8 +859,15 @@ public class PluginInstallUtils {
         try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(file)) {
             java.util.jar.JarEntry entry = jarFile.getJarEntry("plugin.yml");
             if (entry == null) {
-                // Opened, and declares no module at all -- a sources or javadoc JAR.
-                return EntryState.NOT_THIS_MODULES;
+                // Undetermined, not "not this module's": a module needs no plugin.yml -- it is
+                // identified by @UltiToolsModule -- so a JAR without one may be a copy of this
+                // module that loads again after the next restart. The cost of saying so is that a
+                // stray sources JAR gets reported; the cost of not saying so is a module coming
+                // back from a folder the operator was told is clear. Do not "optimise" this into
+                // NOT_THIS_MODULES by reading it as metadata-free-means-unrelated; deciding it any
+                // other way means predicting what a class loader would do with the archive, which
+                // is the approach this work removed.
+                return EntryState.UNDETERMINED;
             }
             try (InputStream is = jarFile.getInputStream(entry);
                  BufferedReader reader = new BufferedReader(new InputStreamReader(is))) {
