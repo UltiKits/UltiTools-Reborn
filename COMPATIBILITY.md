@@ -387,8 +387,10 @@ This section governs the third kind.
   fails the uninstall (#504). Every entry of the modules folder is now placed in exactly one
   of four states, each decided by reading the archive rather than by its file name: it declares
   this module (deleted); it opened and declares another module, or carries no `plugin.yml` at all
-  and so can load nothing (ignored); nothing could be read from it, because the archive would not
-  open or its `plugin.yml` is not valid YAML (reported as undetermined — the uninstall still
+  and so can load nothing, or is a directory or a file of another kind (ignored); nothing could be
+  read from it, because the archive would not open, its `plugin.yml` is not valid YAML, or the
+  entry is named like a JAR and cannot be resolved at all — a link whose target is away (reported
+  as undetermined — the uninstall still
   succeeds, and the operator is told how many entries could not be read and that one of them, if it
   is a copy of this module, will load it again after a restart); or the modules folder exists but
   could not be listed, which is reported as `java.nio.file.AccessDeniedException` naming the folder
