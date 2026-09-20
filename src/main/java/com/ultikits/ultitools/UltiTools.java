@@ -63,6 +63,7 @@ import com.ultikits.ultitools.listeners.UpdateJoinListener;
 import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.utils.Metrics;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
 import com.ultikits.ultitools.utils.SecurityPolicy;
 import com.ultikits.ultitools.websocket.PanelResponderRegistry;
@@ -371,7 +372,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
     private void confirmModuleUpdates() {
         try {
             List<String> loaded = new ArrayList<>();
-            for (com.ultikits.ultitools.abstracts.UltiToolsPlugin plugin : pluginManager.getPluginList()) {
+            for (UltiToolsPlugin plugin : pluginManager.getPluginList()) {
                 loaded.add(plugin.getPluginName());
             }
             PluginInstallUtils.confirmUpdatesAfterBoot(getDataFolder(), loaded);

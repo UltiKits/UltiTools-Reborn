@@ -420,13 +420,16 @@ class PluginInstallUtilsUpdateTransactionTest {
         assertThat(staging)
                 .as("the journal is what tells the next boot there is something to confirm")
                 .anyMatch(name -> name.endsWith(".txn"));
-        String journal = new String(Files.readAllBytes(
-                new File(stagingFolder, staging.stream().filter(n -> n.endsWith(".txn")).findFirst().get()).toPath()),
-                StandardCharsets.UTF_8);
+        // The name comes from this test's own temporary staging directory listing.
+        // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
+        File journalFile = new File(stagingFolder, staging.stream().filter(n -> n.endsWith(".txn")).findFirst().get());
+        String journal = new String(Files.readAllBytes(journalFile.toPath()), StandardCharsets.UTF_8);
         assertThat(journal)
                 .contains("phase=awaiting-boot-confirmation")
                 .contains("name=Fixture")
                 .contains("target=" + NEW_JAR_NAME);
+        // Same: a name this test just listed from its own @TempDir.
+        // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
         File keptOldJar = new File(stagingFolder, staging.stream().filter(n -> n.endsWith(".old")).findFirst().get());
         assertThat(keptOldJar).hasBinaryContent(oldBytes);
     }
@@ -487,37 +490,6 @@ class PluginInstallUtilsUpdateTransactionTest {
                 .as("with no old JAR the journal records no pair, so it must name the module itself")
                 .isInstanceOf(com.ultikits.ultitools.exceptions.PluginModuleException.class);
         assertThat(outcome.getStatus()).isEqualTo(Status.UPDATED);
-    }
-
-    /** Reads one class this test compiled into its own temporary directory. */
-    private static byte[] compiledClass(File classesDirectory, String entryName) throws IOException {
-        // The directory is this test's @TempDir and the entry name is a literal above.
-        // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
-        File compiled = new File(classesDirectory, entryName);
-        return Files.readAllBytes(compiled.toPath());
-    }
-
-    /** A module JAR with the fixture plugin.yml and the given class entries. */
-    private byte[] moduleJarWith(String version, String[] entryNames, byte[][] classBytes) throws IOException {
-        return jarWith(IDENTIFY_STRING, version, entryNames, classBytes);
-    }
-
-    /** A module JAR of {@code identifyString} with the given class entries. */
-    private byte[] jarWith(String identifyString, String version, String[] entryNames, byte[][] classBytes)
-            throws IOException {
-        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
-        try (JarOutputStream out = new JarOutputStream(bytes)) {
-            out.putNextEntry(new JarEntry("plugin.yml"));
-            out.write(("name: Fixture\nversion: " + version + "\nidentify-string: " + identifyString + "\n")
-                    .getBytes(StandardCharsets.UTF_8));
-            out.closeEntry();
-            for (int i = 0; i < entryNames.length; i++) {
-                out.putNextEntry(new JarEntry(entryNames[i]));
-                out.write(classBytes[i]);
-                out.closeEntry();
-            }
-        }
-        return bytes.toByteArray();
     }
 
     @Test

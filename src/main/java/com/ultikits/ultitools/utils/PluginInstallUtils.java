@@ -1144,27 +1144,6 @@ public class PluginInstallUtils {
     }
 
     /**
-     * Deletes the JARs the transaction set aside.
-     *
-     * @return the absolute paths of those that could not be deleted; they are outside the modules
-     *         folder and never load
-     */
-    private static List<String> deleteSetAsideJars(UpdateFileOperations operations, List<Path[]> movedAside,
-                                                   String identifyString) {
-        List<String> leftovers = new ArrayList<>();
-        for (Path[] move : movedAside) {
-            try {
-                operations.delete(move[1]);
-            } catch (IOException e) {
-                LOGGER.log(Level.WARNING, "Could not delete the set-aside JAR " + move[1]
-                        + " after updating " + identifyString + "; it is outside the modules folder and never loads", e);
-                leftovers.add(move[1].toAbsolutePath().toString());
-            }
-        }
-        return leftovers;
-    }
-
-    /**
      * Writes {@code journal} atomically: a temporary file first, then an atomic rename, so boot
      * recovery never reads a half-written journal.
      * <p>
@@ -2111,26 +2090,7 @@ public class PluginInstallUtils {
         }
         List<File> matchingJars = new ArrayList<>();
         List<File> unreadableJars = new ArrayList<>();
-        for (File file : listFiles) {
-            // Anything that is not a readable module JAR is skipped, not fatal (#504, Codex review
-            // r6): the folder holds directories, notes and half-written downloads, and since this
-            // loop looks at every entry rather than stopping at the first match, one of them used
-            // to abort the uninstall after the module had already been unloaded.
-            Map<String, String> pluginYml = pluginYmlOf(file);
-            if (pluginYml == null) {
-                if (file.isFile() && file.getName().endsWith(".jar")) {
-                    unreadableJars.add(file);
-                }
-                continue;
-            }
-            // By runtime name, and by the identify-strings the loaded instances carry: an update
-            // may have changed the name in the JAR while the loaded module still answers to the
-            // old one (Codex review r21).
-            if (name.equals(pluginYml.get("name"))
-                    || identifyStrings.contains(normalizeIdentifyString(pluginYml.get("identify-string")))) {
-                matchingJars.add(file);
-            }
-        }
+        sortModuleFolderEntries(listFiles, name, identifyStrings, matchingJars, unreadableJars);
         if (matchingJars.isEmpty()) {
             // No JAR of the module here is exactly the state an update leaves when its rollback
             // could not move the module's JAR back: the only copies are in staging, and a journal
@@ -2273,6 +2233,36 @@ public class PluginInstallUtils {
         }
         first.addSuppressed(next);
         return first;
+    }
+
+    /**
+     * Sorts the modules folder's entries into the JARs of {@code name} and the JARs that cannot be
+     * read at all. Anything that is not a readable module JAR is skipped rather than fatal (#504,
+     * Codex review r6); a JAR is this module's by its {@code plugin.yml} name or by an
+     * identify-string one of the unloaded instances carries, because an update may have changed
+     * the name in the JAR while the loaded module still answers to the old one (Codex review r21).
+     *
+     * @param entries         the modules folder's entries
+     * @param name            the module's runtime name
+     * @param identifyStrings the identify-strings of the instances being unloaded
+     * @param matchingJars    collects the JARs of this module
+     * @param unreadableJars  collects the JARs that could not be read
+     */
+    private static void sortModuleFolderEntries(File[] entries, String name, Set<String> identifyStrings,
+                                                List<File> matchingJars, List<File> unreadableJars) {
+        for (File file : entries) {
+            Map<String, String> pluginYml = pluginYmlOf(file);
+            if (pluginYml == null) {
+                if (file.isFile() && file.getName().endsWith(".jar")) {
+                    unreadableJars.add(file);
+                }
+                continue;
+            }
+            if (name.equals(pluginYml.get("name"))
+                    || identifyStrings.contains(normalizeIdentifyString(pluginYml.get("identify-string")))) {
+                matchingJars.add(file);
+            }
+        }
     }
 
     /**
