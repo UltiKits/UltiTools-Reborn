@@ -591,16 +591,18 @@ class ModuleUpdateRecoveryTest {
         assertThat(journal).exists();
         assertThat(second).exists();
 
-        // Second boot: the restored JAR loads the module. The journal records unfinished rollback
-        // work, so this must not be read as an update to confirm.
+        // Second boot, in the real order: the pre-load hook runs before the modules load. A journal
+        // recording rollback work needs nothing from the load phase, so it is finished here - and
+        // the JAR it puts back is on the class path in time to load this session.
         assertThat(occupant.delete()).isTrue();
-        PluginInstallUtils.confirmUpdatesAfterBoot(dataFolder, Collections.singletonList(ID));
+        UltiTools.collectModuleJarUrls(pluginsFolder);
 
         assertThat(new File(pluginsFolder, ID + "-0.9.0.jar"))
-                .as("confirming here would delete the JAR the rollback still owes")
+                .as("deferring this to the confirmation hook costs the module another restart")
                 .exists();
         assertThat(second).doesNotExist();
         assertThat(journal).doesNotExist();
+        assertNotAdvertisedAsDeletable2(first);
     }
 
     @Test
@@ -640,6 +642,40 @@ class ModuleUpdateRecoveryTest {
                 .as("a JAR past the gap was never read, and deleting its journal strands it")
                 .exists();
         assertThat(journal).exists();
+    }
+
+    @Test
+    @DisplayName("sweep A12: a rejected candidate is not left on the class path for the load phase")
+    void rollingBackJournal_isFinishedBeforeTheModulesLoad() throws IOException {
+        File rejected = writeJar(new File(pluginsFolder, ID + "-2.0.0.jar"), ID, "2.0.0");
+        File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        File journal = writeRollingBack(UUID_A, ID, "Fixture", ID + "-2.0.0.jar",
+                ID + "-1.0.0.jar", aside.getName());
+
+        UltiTools.collectModuleJarUrls(pluginsFolder);
+
+        assertThat(rejected)
+                .as("the verdict was already made, so nothing has to wait for the modules to load")
+                .doesNotExist();
+        assertThat(new File(pluginsFolder, ID + "-1.0.0.jar")).exists();
+        assertThat(aside).doesNotExist();
+        assertThat(journal).doesNotExist();
+    }
+
+    /** A journal whose update was rejected and whose rollback has not finished. */
+    private File writeRollingBack(String transaction, String module, String name, String target,
+                                  String... originalAndAsideNames) throws IOException {
+        File journal = writeJournal(transaction, OTHER_PROCESS, module, target, originalAndAsideNames);
+        String text = new String(Files.readAllBytes(journal.toPath()), StandardCharsets.UTF_8)
+                + "name=" + name + "\nphase=rolling-back\n";
+        Files.write(journal.toPath(), text.getBytes(StandardCharsets.UTF_8));
+        return journal;
+    }
+
+    /** A JAR the rollback put back is accounted for, not advertised as a deletable leftover. */
+    private void assertNotAdvertisedAsDeletable2(File aside) {
+        assertThat(warnings())
+                .noneMatch(m -> m.contains(aside.getAbsolutePath()) && m.contains("no interrupted update refers to it"));
     }
 
     /** A journal of an update that installed its new version and is waiting for the next boot. */

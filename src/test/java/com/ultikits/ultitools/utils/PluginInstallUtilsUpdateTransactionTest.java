@@ -460,6 +460,24 @@ class PluginInstallUtilsUpdateTransactionTest {
     }
 
     @Test
+    @DisplayName("sweep C7: an update is refused while a journal in staging cannot be read at all")
+    void updateWhileAJournalCannotBeRead_isRefused() throws IOException {
+        writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        assertThat(stagingFolder.mkdirs()).isTrue();
+        // Nothing can show this journal is not this module's, and if it names an update awaiting a
+        // restart, proceeding leaves two journals for one boot to resolve.
+        File unreadable = new File(stagingFolder, "8420a849-1c2d-4e5f-9a0b-1c2d3e4f5a6b.txn");
+        assertThat(unreadable.mkdir()).isTrue();
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus()).isEqualTo(Status.STAGING_UNAVAILABLE);
+        assertThat(outcome.getFiles()).contains(unreadable.getAbsolutePath());
+        assertThat(operations.events()).as("nothing is downloaded either").doesNotContain("download");
+        assertThat(jarEntries()).containsExactly(IDENTIFY_STRING + "-1.0.0.jar");
+    }
+
+    @Test
     @DisplayName("sweep A-marker: the rollback removes the candidate before restoring a JAR of the same name")
     void markerFailureRollback_whenTheOldJarCarriesTheCandidateName() throws IOException {
         // A same-version retry: what is installed and what is set aside share one file name.
