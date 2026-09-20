@@ -425,6 +425,32 @@ class PluginInstallUtilsUpdateTransactionTest {
     }
 
     @Test
+    @DisplayName("codex r10 P1: a module class in the framework's own namespace is still read from the candidate")
+    void downloadShadowingAClassInTheFrameworkNamespace_isAnInvalidDownload() throws IOException {
+        File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        try (JarOutputStream out = new JarOutputStream(bytes)) {
+            out.putNextEntry(new JarEntry("plugin.yml"));
+            out.write(("name: Fixture\nversion: 2.0.0\nidentify-string: " + IDENTIFY_STRING + "\n")
+                    .getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+            // A module may live under com.ultikits.ultitools.* -- that namespace is not the
+            // framework's to claim, so its classes must come from the candidate like any other.
+            out.putNextEntry(new JarEntry("com/ultikits/ultitools/manager/PluginManagerClassScanningTest$ConcretePlugin.class"));
+            out.write("corrupt, not a class file".getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+        operations.downloadBytes = bytes.toByteArray();
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus())
+                .as("the entry holds no class, and no module can load from this JAR")
+                .isEqualTo(Status.INVALID_DOWNLOAD);
+        assertThat(jarEntries()).containsExactly(oldJar.getName());
+    }
+
+    @Test
     @DisplayName("codex r9 P1: a download whose module-class entry holds other bytes is invalid, not resolved from the installed module")
     void downloadWhoseModuleClassEntryHoldsOtherBytes_isAnInvalidDownload() throws IOException {
         File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");

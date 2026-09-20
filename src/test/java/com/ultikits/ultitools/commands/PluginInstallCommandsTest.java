@@ -902,6 +902,23 @@ class PluginInstallCommandsTest {
     }
 
     @Test
+    @DisplayName("codex r10 P2: a staging file that could not be deleted is not reported as a module JAR")
+    void uninstallStagingFailure_isNotReportedAsAModuleJar() {
+        String journal = "/srv/minecraft/plugins/UltiTools/.upm-staging/8420a849-1c2d-4e5f-9a0b-1c2d3e4f5a6b.txn";
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin"))
+                .thenThrow(new java.nio.file.FileSystemException(journal, null, "could not be read"));
+
+        executor.onCommand(player, mockCommand, "upm", new String[]{"uninstall", "test-plugin"});
+        server.getScheduler().performOneTick();
+
+        String reply = String.join("\n", drainMessages());
+        assertThat(reply).contains(journal);
+        assertThat(reply)
+                .as("this is an update leftover, not a module JAR: deleting only it leaves nothing else to do")
+                .doesNotContain("模块 JAR 文件无法删除");
+    }
+
+    @Test
     @DisplayName("codex r6 P2: a move that cannot be atomic is not reported as two file systems")
     void updateAtomicMoveUnsupported_doesNotBlameTheFileSystemLayout() {
         assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
