@@ -696,7 +696,11 @@ public class PluginInstallUtils {
         File folder = new File(UltiTools.getInstance().getDataFolder() + "/plugins");
         File[] listFiles = folder.listFiles();
         if (listFiles == null) {
-            if (folder.isDirectory()) {
+            // Checked without following the link too: a modules folder that is a link to a target
+            // which is away has unknown contents, and its JARs come back when the target does. Only
+            // a path that is not there at all is an absent folder.
+            if (folder.isDirectory()
+                    || java.nio.file.Files.exists(folder.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
                 // State D. The folder is there and its contents are unknown, so "no JAR of this
                 // module is here" would be a claim nothing supports: the module's JAR may be
                 // sitting in it, ready to load again.
