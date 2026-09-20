@@ -449,6 +449,30 @@ class ModuleUpdateRecoveryTest {
     }
 
     @Test
+    @DisplayName("codex r22 P1: the pre-load recovery hook leaves an awaiting journal for the confirmation hook")
+    void awaitingJournal_survivesThePreLoadRecoveryHook() throws IOException {
+        File installed = writeJar(new File(pluginsFolder, ID + "-2.0.0.jar"), ID, "2.0.0");
+        File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        File journal = writeAwaitingConfirmation(UUID_A, ID, "Fixture", ID + "-2.0.0.jar",
+                ID + "-1.0.0.jar", aside.getName());
+
+        // The real boot order: the pre-load hook first, then the modules load, then confirmation.
+        UltiTools.collectModuleJarUrls(pluginsFolder);
+
+        assertThat(journal)
+                .as("deleting it here leaves nothing for the confirmation hook, and the rollback never happens")
+                .exists();
+        assertThat(aside).exists();
+        assertThat(installed).exists();
+
+        PluginInstallUtils.confirmUpdatesAfterBoot(dataFolder, Collections.singletonList("SomethingElse"));
+
+        assertThat(installed).as("the module did not load, so the update is rolled back").doesNotExist();
+        assertThat(new File(pluginsFolder, ID + "-1.0.0.jar")).exists();
+        assertThat(journal).doesNotExist();
+    }
+
+    @Test
     @DisplayName("redesign: a module that loaded after its update confirms the update, and the old JAR goes")
     void updateConfirmedByTheNextBoot_deletesTheOldJarAndTheJournal() throws IOException {
         File installed = writeJar(new File(pluginsFolder, ID + "-2.0.0.jar"), ID, "2.0.0");

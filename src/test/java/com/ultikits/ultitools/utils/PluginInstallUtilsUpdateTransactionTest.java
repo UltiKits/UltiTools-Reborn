@@ -404,6 +404,33 @@ class PluginInstallUtilsUpdateTransactionTest {
     }
 
     @Test
+    @DisplayName("codex r22 P2: an update that cannot record what the boot must confirm rolls itself back")
+    void updateThatCannotRecordTheBootMarker_rollsItselfBack() throws IOException {
+        File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        byte[] oldBytes = Files.readAllBytes(oldJar.toPath());
+        // Occupy the name the marker is written through, so recording it is the only step that fails.
+        operations.duringMoveIn = () -> {
+            for (String name : stagingEntries()) {
+                if (name.endsWith(".txn")) {
+                    // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
+                    File blocker = new File(stagingFolder, name + ".tmp");
+                    assertThat(blocker.mkdir()).as("a directory cannot be written as a file").isTrue();
+                }
+            }
+        };
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus())
+                .as("with no record of what to confirm, an unloadable new version could never be rolled back")
+                .isEqualTo(Status.NEW_JAR_NOT_INSTALLED);
+        assertThat(jarEntries())
+                .as("the version that was working is back in the modules folder")
+                .containsExactly(oldJar.getName());
+        assertThat(oldJar).hasBinaryContent(oldBytes);
+    }
+
+    @Test
     @DisplayName("redesign: an update waits for the next boot to confirm it, keeping the old JAR and the journal")
     void updateLeavesItsOldJarAndJournalForTheNextBoot() throws IOException {
         File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
