@@ -942,7 +942,19 @@ public class PluginInstallUtils {
         // So the old JARs stay where they are and the journal stays with them, marked as awaiting
         // that boot: confirmUpdatesAfterBoot deletes them once the module has loaded, or puts the
         // old version back if it has not.
-        markJournalAwaitingBoot(journal, identifyString);
+        if (!markJournalAwaitingBoot(journal, identifyString)) {
+            // Without that record nothing can confirm or roll back this update at the next start,
+            // and the command has just promised that the restart decides it. So the update undoes
+            // itself now, while both versions are still on disk (Codex review r22).
+            LOGGER.severe("Could not record that the update of " + identifyString + " is waiting for the next"
+                    + " boot; rolling it back so the version that works stays installed");
+            List<Path[]> unrestored = moveBack(operations, movedAside);
+            deleteQuietly(operations, target);
+            deleteJournal(journal);
+            return withUnrestored(new UpdateOutcome(UpdateOutcome.Status.NEW_JAR_NOT_INSTALLED,
+                    Collections.singletonList(journal.toAbsolutePath().toString()), Collections.<String>emptyList(),
+                    Collections.<String>emptyList()), unrestored);
+        }
         return UpdateOutcome.of(UpdateOutcome.Status.UPDATED);
     }
 
@@ -1203,11 +1215,14 @@ public class PluginInstallUtils {
     }
 
     /**
-     * Marks a journal as waiting for the next boot to confirm the update it installed. A failure
-     * to write the marker is not a failed update -- the new version is in place -- but it is
-     * logged, and the journal is then deleted so the next boot reads no half-marked record.
+     * Marks a journal as waiting for the next boot to confirm the update it installed.
+     *
+     * @param journal        the transaction's journal
+     * @param identifyString the module being updated, for the log line
+     * @return whether the marker is on disk. {@code false} means nothing can confirm or roll back
+     *         this update later, so the caller undoes it while both versions are still there.
      */
-    private static void markJournalAwaitingBoot(Path journal, String identifyString) {
+    private static boolean markJournalAwaitingBoot(Path journal, String identifyString) {
         try {
             java.util.Properties entries = new java.util.Properties();
             try (java.io.Reader reader = Files.newBufferedReader(journal, java.nio.charset.StandardCharsets.UTF_8)) {
@@ -1215,15 +1230,11 @@ public class PluginInstallUtils {
             }
             entries.setProperty(JOURNAL_PHASE_KEY, JOURNAL_PHASE_AWAITING_BOOT);
             writeProperties(journal, entries);
+            return true;
         } catch (IOException | SecurityException e) {
             LOGGER.log(Level.WARNING, "Could not record that the update of " + identifyString
-                    + " is waiting for the next boot in " + journal + "; the update itself is complete", e);
-            deleteJournal(journal);
-            if (Files.exists(journal, LinkOption.NOFOLLOW_LINKS)) {
-                LOGGER.severe("The update of " + identifyString + " is complete, but its journal " + journal
-                        + " could neither be marked committed nor deleted. Delete that file: while it is there, a"
-                        + " restart after this module is uninstalled can move its old JAR back.");
-            }
+                    + " is waiting for the next boot in " + journal, e);
+            return false;
         }
     }
 
@@ -1517,6 +1528,18 @@ public class PluginInstallUtils {
                     + " is malformed and was left in place");
             return;
         }
+        if (awaitingBootConfirmation(entries)) {
+            // This update installed its new version and is waiting for the modules to load, which
+            // has not happened yet when this hook runs. Touching it here would delete the record
+            // the confirmation hook needs, and the rollback it promises could never happen
+            // (Codex review r22). confirmUpdatesAfterBoot owns this journal.
+            LOGGER.info("Module update journal " + journalFile.getAbsolutePath()
+                    + " is waiting for this boot to confirm it and was left for the confirmation step");
+            for (String[] pair : journalPairs(entries, journalFile, new java.util.concurrent.atomic.AtomicBoolean())) {
+                reported.add(pair[1]);
+            }
+            return;
+        }
         if (process.equals(currentProcessIdentity())) {
             LOGGER.info("Module update journal " + journalFile.getAbsolutePath()
                     + " belongs to an update running in this server process and was left in place");
@@ -1526,8 +1549,7 @@ public class PluginInstallUtils {
         List<String[]> pairs = journalPairs(entries, journalFile, skippedAPair);
         File stagingFolder = journalFile.getParentFile();
         Path targetPath = pluginsFolder.toPath().resolve(target);
-        boolean alreadyInstalled = awaitingBootConfirmation(entries)
-                || newVersionWasInstalled(targetPath, module, journalFile);
+        boolean alreadyInstalled = newVersionWasInstalled(targetPath, module, journalFile);
         boolean settled = !skippedAPair.get();
         for (String[] pair : pairs) {
             settled &= recoverPair(pair, stagingFolder, pluginsFolder, module, targetPath, alreadyInstalled, reported);
