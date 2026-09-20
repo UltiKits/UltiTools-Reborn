@@ -761,6 +761,33 @@ class PluginInstallUtilsUninstallTest {
     }
 
     @Test
+    @DisplayName("two unload failures that are the same object are still reported, and the JARs still go")
+    void twoUnloadsThrowingOneObject_areReportedWithoutSelfSuppression() throws Exception {
+        UltiToolsPlugin first = mock(UltiToolsPlugin.class);
+        when(first.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(first).unregisterSelf();
+        UltiToolsPlugin second = mock(UltiToolsPlugin.class);
+        when(second.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(second).unregisterSelf();
+        pluginManager.getPluginList().add(first);
+        pluginManager.getPluginList().add(second);
+        // One shared object, as a module reusing a static sentinel would throw.
+        IllegalStateException shared = new IllegalStateException("shared sentinel");
+        doThrow(shared).when(commandManager).unregisterAll(first);
+        doThrow(shared).when(commandManager).unregisterAll(second);
+        File jar = writeModuleJar(MODULE_NAME);
+
+        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+        assertThat(thrown)
+                .as("self-suppression would abort the uninstall past every handler, leaving the JAR")
+                .isInstanceOf(PluginInstallUtils.ModuleUnloadFailedException.class)
+                .hasCause(shared);
+        assertThat(jar).doesNotExist();
+        assertThat(pluginManager.getPluginList()).isEmpty();
+    }
+
+    @Test
     @DisplayName("states A-D: what an entry declares decides it, not what it is called")
     void whatAnEntryDeclaresDecidesIt_notWhatItIsCalled() throws IOException {
         File jar = writeModuleJar(MODULE_NAME);
