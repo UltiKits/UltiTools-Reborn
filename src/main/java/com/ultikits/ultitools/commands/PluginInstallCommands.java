@@ -369,7 +369,11 @@ public class PluginInstallCommands extends BaseCommandExecutor {
                 sendFailureReason(sender, outcome);
                 return;
             case FILE_SYSTEMS_DIFFER:
-                sender.sendMessage(ChatColor.RED + String.format(ultiTools.i18n("更新失败！暂存目录 %s 与模块目录 %s 不在同一文件系统上，无法原子地替换 JAR，本次未做任何更改。"),
+                // A JAR left in the staging folder IS a change, so only the outcome that moved
+                // everything back may say that nothing was changed (review r5 IN-01).
+                sender.sendMessage(ChatColor.RED + String.format(ultiTools.i18n(outcome.getUnrestoredFiles().isEmpty()
+                                ? "更新失败！暂存目录 %s 与模块目录 %s 不在同一文件系统上，无法原子地替换 JAR，本次未做任何更改。"
+                                : "更新失败！暂存目录 %s 与模块目录 %s 不在同一文件系统上，无法原子地替换 JAR。"),
                         outcome.getFiles().isEmpty() ? "" : outcome.getFiles().get(0),
                         outcome.getFiles().size() < 2 ? "" : outcome.getFiles().get(1)));
                 sendFailureReason(sender, outcome);
@@ -464,7 +468,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         }
         if (skipped > 0) {
             sender.sendMessage(ChatColor.GREEN + String.format(
-                UltiTools.getInstance().i18n("全部更新完成！%d个成功，%d个失败，%d个因同一模块已有更新正在进行而跳过。请重启服务器。"),
+                UltiTools.getInstance().i18n("全部更新完成！%d个成功，%d个失败，%d个因同一模块正在进行另一项更新或卸载而跳过。请重启服务器。"),
                 success, failed, skipped));
             return;
         }
