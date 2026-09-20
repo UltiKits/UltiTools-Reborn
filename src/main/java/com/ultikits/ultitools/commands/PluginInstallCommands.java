@@ -341,11 +341,29 @@ public class PluginInstallCommands extends BaseCommandExecutor {
 
     /** Collects the undetermined entries a failure carries, wherever in its suppressed chain they sit. */
     private static void collectUndetermined(Throwable failure, List<String> files) {
+        collectUndetermined(failure, files, java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()));
+    }
+
+    /**
+     * {@link #collectUndetermined(Throwable, List)}, remembering what it has already walked.
+     *
+     * <p>`addSuppressed` refuses a throwable suppressing itself but not a longer loop, and a walk
+     * that meets one never returns. Nothing here builds such a chain today; the uninstall's replies
+     * are not the place to find out that something else did.
+     *
+     * @param failure the failure to walk
+     * @param files   the paths collected so far
+     * @param seen    the throwables already visited, by identity
+     */
+    private static void collectUndetermined(Throwable failure, List<String> files, java.util.Set<Throwable> seen) {
+        if (!seen.add(failure)) {
+            return;
+        }
         if (failure instanceof PluginInstallUtils.UndeterminedEntriesException) {
             files.addAll(((PluginInstallUtils.UndeterminedEntriesException) failure).entries());
         }
         for (Throwable suppressed : failure.getSuppressed()) {
-            collectUndetermined(suppressed, files);
+            collectUndetermined(suppressed, files, seen);
         }
     }
 
@@ -373,7 +391,20 @@ public class PluginInstallCommands extends BaseCommandExecutor {
      * @param files   the names collected so far, in the order they were found
      */
     private static void collectNamedFiles(FileSystemException failure, List<String> files) {
-        if (failure instanceof PluginInstallUtils.UndeterminedEntriesException) {
+        collectNamedFiles(failure, files, java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()));
+    }
+
+    /**
+     * {@link #collectNamedFiles(FileSystemException, List)}, remembering what it has already walked,
+     * for the same reason {@link #collectUndetermined(Throwable, List, java.util.Set)} does.
+     *
+     * @param failure the failure to walk
+     * @param files   the paths collected so far
+     * @param seen    the throwables already visited, by identity
+     */
+    private static void collectNamedFiles(FileSystemException failure, List<String> files,
+                                          java.util.Set<Throwable> seen) {
+        if (!seen.add(failure) || failure instanceof PluginInstallUtils.UndeterminedEntriesException) {
             return;
         }
         if (failure.getFile() != null && !files.contains(failure.getFile())) {
@@ -381,7 +412,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         }
         for (Throwable suppressed : failure.getSuppressed()) {
             if (suppressed instanceof FileSystemException) {
-                collectNamedFiles((FileSystemException) suppressed, files);
+                collectNamedFiles((FileSystemException) suppressed, files, seen);
             }
         }
     }

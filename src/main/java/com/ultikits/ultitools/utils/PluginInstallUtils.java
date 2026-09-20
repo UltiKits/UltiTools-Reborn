@@ -1219,6 +1219,13 @@ public class PluginInstallUtils {
                 // to delete files is not a recovery, so it leaves untouched.
                 throw fatal;
             } catch (Exception | Error e) {
+                // ThreadDeath is collected here too, deliberately, though its historical contract
+                // asks a catcher to rethrow it. Measured on the JDK this builds against (21.0.12):
+                // Thread.stop() throws UnsupportedOperationException, so the platform cannot deliver
+                // a ThreadDeath at all and "this thread is terminating" would be false. The stronger
+                // reason is the guarantee this command exists to make: if it were rethrown, a module
+                // could abort its own uninstall by throwing ThreadDeath from its unload hook, and a
+                // module must not be able to refuse its own removal.
                 // Everything else a module's unload throws is that module's failure, which this
                 // uninstall reports and carries on from -- unregisterSelf() collects and rethrows
                 // whatever its steps throw, a NoClassDefFoundError from half-loaded classes and an
@@ -1241,13 +1248,42 @@ public class PluginInstallUtils {
         return unloadFailure;
     }
 
-    /** The first failure, with any later one attached to it. */
+    /**
+     * The first failure, with any later one attached to it.
+     *
+     * <p>Combining two failures has more ways to fail than it looks. {@code addSuppressed} rejects
+     * a throwable suppressing itself, which a module reusing a static sentinel produces from two
+     * instances -- and that {@code IllegalArgumentException} would escape past every handler,
+     * abandoning the uninstall with the modules delisted and their JARs still on disk. It also
+     * rejects {@code null}. Attaching the same object twice is not an error but says nothing, so it
+     * is skipped too.
+     *
+     * @param first the failure collected so far, or {@code null}
+     * @param next  the failure to attach
+     * @return the failure to carry on with
+     */
     private static Throwable firstOf(Throwable first, Throwable next) {
+        if (next == null) {
+            return first;
+        }
         if (first == null) {
             return next;
         }
+        if (first == next || alreadyAttached(first, next)) {
+            return first;
+        }
         first.addSuppressed(next);
         return first;
+    }
+
+    /** Whether {@code candidate} is already among {@code failure}'s suppressed throwables. */
+    private static boolean alreadyAttached(Throwable failure, Throwable candidate) {
+        for (Throwable suppressed : failure.getSuppressed()) {
+            if (suppressed == candidate) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
