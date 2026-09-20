@@ -456,6 +456,42 @@ class PluginInstallUtilsUpdateTransactionTest {
     }
 
     @Test
+    @DisplayName("codex r15 P1: a module class whose no-argument constructor the loader cannot reach is invalid")
+    void downloadWhoseModuleClassHidesItsConstructor_isAnInvalidDownload() throws Exception {
+        javax.tools.JavaCompiler compiler = javax.tools.ToolProvider.getSystemJavaCompiler();
+        org.junit.jupiter.api.Assumptions.assumeTrue(compiler != null, "a JDK compiler is required");
+        File classes = compileSource(compiler, "HiddenConstructor", "package fixture;\n"
+                + "public class HiddenConstructor extends com.ultikits.ultitools.abstracts.UltiToolsPlugin {\n"
+                + "  private HiddenConstructor() { }\n"
+                + "  @Override public boolean registerSelf() { return true; }\n}\n");
+        File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        operations.downloadBytes = moduleJarWith("2.0.0", new String[]{"fixture/HiddenConstructor.class"},
+                new byte[][]{compiledClass(classes, "fixture/HiddenConstructor.class")});
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus())
+                .as("boot calls newInstance from PluginManager, which cannot reach a private constructor")
+                .isEqualTo(Status.INVALID_DOWNLOAD);
+        assertThat(jarEntries()).containsExactly(oldJar.getName());
+    }
+
+    /** Compiles one source file into a fresh directory and returns that directory. */
+    private File compileSource(javax.tools.JavaCompiler compiler, String simpleName, String source)
+            throws IOException {
+        File sources = new File(dataFolder, simpleName + "-src/fixture");
+        assertThat(sources.mkdirs()).isTrue();
+        File classes = new File(dataFolder, simpleName + "-classes");
+        assertThat(classes.mkdirs()).isTrue();
+        File file = new File(sources, simpleName + ".java");
+        Files.write(file.toPath(), source.getBytes(StandardCharsets.UTF_8));
+        assertThat(compiler.run(null, null, null, "-nowarn", "-classpath", System.getProperty("java.class.path"),
+                "-d", classes.getAbsolutePath(), file.getAbsolutePath()))
+                .as("the fixture must compile").isZero();
+        return classes;
+    }
+
+    @Test
     @DisplayName("codex r14 P1: a module class the boot path could not instantiate is an invalid download")
     void downloadWhoseModuleClassHasNoNoArgConstructor_isAnInvalidDownload() throws Exception {
         javax.tools.JavaCompiler compiler = javax.tools.ToolProvider.getSystemJavaCompiler();
