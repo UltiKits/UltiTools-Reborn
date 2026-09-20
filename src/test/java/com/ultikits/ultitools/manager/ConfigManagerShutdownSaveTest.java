@@ -149,6 +149,26 @@ class ConfigManagerShutdownSaveTest {
         }
     }
 
+    /**
+     * A configuration with no {@code @ConfigEntry} field at all, and no constructor the framework
+     * can resolve. Registering it is legal - {@code validateFields()} returns before the
+     * constructability check for an entryless class - so nothing on the shutdown path may require
+     * constructing it either.
+     */
+    @ConfigEntity("config/entryless.yml")
+    public static class EntrylessConfig extends AbstractConfigEntity {
+        private final String unused;
+
+        public EntrylessConfig(String configFilePath, String unused) {
+            super(configFilePath);
+            this.unused = unused;
+        }
+
+        String getUnused() {
+            return unused;
+        }
+    }
+
     /** A list-typed configuration whose on-disk integers come back from the parser as strings. */
     @ConfigEntity("config/list.yml")
     public static class ListConfig extends AbstractConfigEntity {
@@ -702,5 +722,24 @@ class ConfigManagerShutdownSaveTest {
 
         assertThat(read(twoFile)).contains("a: a-by-code").contains("b: b-by-panel");
         assertThat(overwriteWarnings()).isEmpty();
+    }
+
+    // ==================== 17. an entryless configuration is not rewritten (Codex P2) ====================
+
+    @Test
+    @DisplayName("17. A configuration with no @ConfigEntry field keeps the operator's edit, even with no resolvable constructor")
+    void saveAll_keepsOperatorEditOfEntrylessConfig() throws IOException {
+        File entrylessFile = file("config/entryless.yml");
+        write(entrylessFile, "operator: value\n");
+        EntrylessConfig config = new EntrylessConfig("config/entryless.yml", "not-a-config-entry");
+        configManager.register(plugin, config);
+        assertThat(config.getUnused()).isEqualTo("not-a-config-entry");
+
+        String operatorEdit = "operator: edited\n# a comment\n";
+        write(entrylessFile, operatorEdit);
+
+        configManager.saveAll();
+
+        assertThat(read(entrylessFile)).isEqualTo(operatorEdit);
     }
 }

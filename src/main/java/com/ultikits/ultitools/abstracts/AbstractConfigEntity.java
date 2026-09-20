@@ -158,7 +158,7 @@ public abstract class AbstractConfigEntity {
     /**
      * Copies every non-null {@code @ConfigEntry} field, serialized through its declared parser, onto
      * {@code target}. The one serialization path shared by {@link #save()}, {@link
-     * #renderSaveText()} and {@link #canonicalizeOnce(String, AbstractConfigEntity)}, so the shutdown comparison renders
+     * #renderSaveText()} and {@link #canonicalizeOnce(String, AbstractConfigEntity, java.util.List)}, so the shutdown comparison renders
      * exactly what {@code save()} would write (#510).
      *
      * @param target the configuration to write the serialized field values into
@@ -230,22 +230,65 @@ public abstract class AbstractConfigEntity {
         if (text == null) {
             return null;
         }
+        List<Field> configFields = configEntryFields();
+        if (configFields.isEmpty()) {
+            // Nothing to read into an instance, so do not construct one. A class with no
+            // @ConfigEntry field never reaches validateFields()' constructability check either, so
+            // it may legitimately have no constructor this class can resolve; constructing one here
+            // would fail, clear the snapshot, and make the shutdown save rewrite an untouched file.
+            return renderParsed(text);
+        }
         // One throwaway instance for both passes, not one each: pass one writes a value for every
         // @ConfigEntry key, so pass two overwrites every field it reads and cannot see anything pass
         // one left behind. Reusing it ACROSS calls would not be safe - the declared defaults it
         // carries for absent keys are exactly what the comparison relies on.
         AbstractConfigEntity probe = constructSibling();
-        return canonicalizeOnce(canonicalizeOnce(text, probe), probe);
+        return canonicalizeOnce(canonicalizeOnce(text, probe, configFields), probe, configFields);
+    }
+
+    /**
+     * Every {@code @ConfigEntry} field this class declares or inherits, in {@link
+     * ReflectionUtil#getFields(Class)} order.
+     *
+     * @return the annotated fields, possibly empty
+     */
+    private List<Field> configEntryFields() {
+        List<Field> configFields = new ArrayList<>();
+        for (Field field : ReflectionUtil.getFields(this.getClass())) {
+            if (field.isAnnotationPresent(ConfigEntry.class)) {
+                configFields.add(field);
+            }
+        }
+        return configFields;
+    }
+
+    /**
+     * Parses {@code text} and renders it back, with no field applied - the whole of {@link
+     * #canonicalize(String)} for a class that declares no {@code @ConfigEntry} field.
+     *
+     * @param text a YAML text
+     * @return the re-rendered text, or {@code null} if it cannot be parsed
+     */
+    private String renderParsed(String text) {
+        YamlConfiguration parsed = new YamlConfiguration();
+        parsed.options().parseComments(true);
+        try {
+            parsed.loadFromString(text);
+        } catch (InvalidConfigurationException e) {
+            return null;
+        }
+        return parsed.saveToString();
     }
 
     /**
      * One pass of {@link #canonicalize(String)}.
      *
-     * @param text  a YAML text, possibly {@code null}
-     * @param probe the throwaway instance this pass reads {@code text} into
+     * @param text         a YAML text, possibly {@code null}
+     * @param probe        the throwaway instance this pass reads {@code text} into
+     * @param configFields this class's {@code @ConfigEntry} fields, never empty
      * @return the text after one read-and-render pass, or {@code null} if it cannot be parsed
      */
-    private String canonicalizeOnce(String text, AbstractConfigEntity probe) {
+    private String canonicalizeOnce(String text, AbstractConfigEntity probe, List<Field> configFields) {
         if (text == null) {
             return null;
         }
@@ -255,15 +298,6 @@ public abstract class AbstractConfigEntity {
             parsed.loadFromString(text);
         } catch (InvalidConfigurationException e) {
             return null;
-        }
-        List<Field> configFields = new ArrayList<>();
-        for (Field field : ReflectionUtil.getFields(this.getClass())) {
-            if (field.isAnnotationPresent(ConfigEntry.class)) {
-                configFields.add(field);
-            }
-        }
-        if (configFields.isEmpty()) {
-            return parsed.saveToString();
         }
         for (Field field : configFields) {
             ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
@@ -725,12 +759,7 @@ public abstract class AbstractConfigEntity {
      *                                 two framework-supported idioms (D-03)
      */
     protected void validateFields() {
-        List<Field> configFields = new ArrayList<>();
-        for (Field field : ReflectionUtil.getFields(this.getClass())) {
-            if (field.isAnnotationPresent(ConfigEntry.class)) {
-                configFields.add(field);
-            }
-        }
+        List<Field> configFields = configEntryFields();
         if (configFields.isEmpty()) {
             return;
         }
@@ -776,7 +805,7 @@ public abstract class AbstractConfigEntity {
      * Constructs a fresh instance of this config class through the {@code (String)} constructor, or
      * failing that the no-arg constructor - the two idioms {@link #ensureConstructable()} proves -
      * for {@link #ensureConstructable()} and for the throwaway reader {@link
-     * #canonicalizeOnce(String, AbstractConfigEntity)} uses (#510).
+     * #canonicalizeOnce(String, AbstractConfigEntity, java.util.List)} uses (#510).
      *
      * @return a new, uninitialized instance of this entity's class
      * @throws ConfigurationException if neither constructor resolves
