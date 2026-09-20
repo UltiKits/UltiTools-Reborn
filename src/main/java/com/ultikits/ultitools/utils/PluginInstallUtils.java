@@ -776,21 +776,29 @@ public class PluginInstallUtils {
     private static UninstallReport deleteModuleJars(String name, boolean moduleUnloaded,
                                                    Set<String> codeSourceJars) throws IOException {
         File folder = new File(UltiTools.getInstance().getDataFolder() + "/plugins");
-        File[] listFiles = folder.listFiles();
+        File[] listFiles;
+        try {
+            listFiles = folder.listFiles();
+        } catch (SecurityException denied) {
+            // A policy that denies reading the folder throws rather than answering null, and the
+            // module has already been unloaded by now: this is state D, not an abort.
+            LOGGER.log(Level.SEVERE, "Uninstalling module " + name + ": the modules folder "
+                    + folder.getAbsolutePath() + " could not be listed", denied);
+            java.nio.file.AccessDeniedException failure = modulesFolderUnlistable(folder);
+            failure.initCause(denied);
+            throw failure;
+        }
         if (listFiles == null) {
             // Checked without following the link too: a modules folder that is a link to a target
             // which is away has unknown contents, and its JARs come back when the target does. Only
             // a path that is not there at all is an absent folder.
-            if (folder.isDirectory()
-                    || java.nio.file.Files.exists(folder.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            if (folderIsThere(folder)) {
                 // State D. The folder is there and its contents are unknown, so "no JAR of this
                 // module is here" would be a claim nothing supports: the module's JAR may be
                 // sitting in it, ready to load again.
                 LOGGER.severe("Uninstalling module " + name + ": the modules folder "
                         + folder.getAbsolutePath() + " exists but could not be listed");
-                throw new java.nio.file.AccessDeniedException(folder.getAbsolutePath(), null,
-                        "the modules folder exists but could not be listed, so nothing can be concluded"
-                                + " about the JARs it holds");
+                throw modulesFolderUnlistable(folder);
             }
             return new UninstallReport(noJarFound(folder, name, moduleUnloaded, Collections.<String>emptyList()),
                     Collections.emptyList());
@@ -825,21 +833,59 @@ public class PluginInstallUtils {
         return new UninstallReport(true, undeterminedPaths);
     }
 
+    /** The state-D failure: the folder is there, and what it holds is unknown. */
+    private static java.nio.file.AccessDeniedException modulesFolderUnlistable(File folder) {
+        return new java.nio.file.AccessDeniedException(folder.getAbsolutePath(), null,
+                "the modules folder exists but could not be listed, so nothing can be concluded"
+                        + " about the JARs it holds");
+    }
+
+    /**
+     * Whether the modules folder is there at all -- following links or not, and treating a probe a
+     * security policy refuses to answer as "there", since a refusal is not an absence.
+     *
+     * @param folder the modules folder
+     * @return whether something is at that path
+     */
+    private static boolean folderIsThere(File folder) {
+        try {
+            return folder.isDirectory()
+                    || java.nio.file.Files.exists(folder.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS);
+        } catch (SecurityException denied) {
+            LOGGER.log(Level.FINE, "Could not probe " + folder, denied);
+            return true;
+        }
+    }
+
     /**
      * Which {@link EntryState} an entry of the modules folder is in.
      *
-     * <p>Each answer is positive. An entry that is not a JAR file, a JAR that opens and carries no
-     * {@code plugin.yml}, and a JAR that declares another module are all state B: they cannot load
-     * this module, and that is known rather than assumed. An archive that will not open, an entry
-     * that cannot be read, and a {@code plugin.yml} that is not valid YAML are state C: nothing was
-     * learned, which is not the same as learning "no".
+     * <p>The loaded instance's own code-source JAR is state A whatever it declares -- the module
+     * itself said where it came from. Otherwise each answer is positive: an entry that is not a JAR
+     * file, and a JAR that opens and declares another module, are state B. An archive that will not
+     * open, an entry that cannot be read, a {@code plugin.yml} that is not valid YAML, and a JAR
+     * that carries no {@code plugin.yml} at all are state C -- the last because a module is
+     * identified by {@code @UltiToolsModule} and needs no metadata, so its absence teaches nothing.
      *
      * @param file           the entry
      * @param name           the module's runtime name
      * @param codeSourceJars the JARs the loaded instances were loaded from
      * @return the state it is in
      */
+    @SuppressWarnings("PMD.CyclomaticComplexity") // one decision, four positive answers
     private static EntryState classify(File file, String name, Set<String> codeSourceJars) {
+        try {
+            return classifyByReadingIt(file, name, codeSourceJars);
+        } catch (SecurityException denied) {
+            // Even the type probes can be refused by a policy. A refusal answers nothing about what
+            // the entry is, which is state C.
+            LOGGER.log(Level.FINE, "Could not examine " + file + " while uninstalling " + name, denied);
+            return EntryState.UNDETERMINED;
+        }
+    }
+
+    /** {@link #classify} without its refusal guard: every answer here comes from reading the entry. */
+    private static EntryState classifyByReadingIt(File file, String name, Set<String> codeSourceJars) {
         if (codeSourceJars.contains(canonicalPathOf(file))) {
             // The module itself said this is where it came from. Nothing a file declares, or fails
             // to declare, outranks that.
@@ -882,7 +928,7 @@ public class PluginInstallUtils {
                 LOGGER.log(Level.FINE, "plugin.yml is not valid YAML in " + file, malformed);
                 return EntryState.UNDETERMINED;
             }
-        } catch (IOException | SecurityException e) {
+        } catch (IOException e) {
             LOGGER.log(Level.FINE, "Could not read " + file + " while uninstalling " + name, e);
             return EntryState.UNDETERMINED;
         }
