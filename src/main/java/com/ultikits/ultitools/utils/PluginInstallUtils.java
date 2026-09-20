@@ -46,7 +46,7 @@ public class PluginInstallUtils {
 
     /** How the uninstall asks a loaded module which JAR it came from; a test passes its own. */
     static final java.util.function.Function<UltiToolsPlugin, File> DEFAULT_MODULE_CODE_SOURCE =
-            module -> codeSourceJarOf(module.getClass());
+            module -> codeSourceLocationOf(module.getClass());
 
     private static final Gson GSON = new GsonBuilder()
             .setDateFormat("yyyy-MM-dd HH:mm:ss")
@@ -552,6 +552,31 @@ public class PluginInstallUtils {
         }
     }
 
+    /**
+     * Whether which JAR a module was loaded from could be determined at all.
+     *
+     * <p>Three answers through one value, because the difference matters: a file is the JAR the
+     * module came from; a directory is an exploded development checkout, which is no JAR at all and
+     * says so; and {@code null} is "could not be determined" -- a code source a policy refuses to
+     * reveal, or a class that has none. Unknown is not "none": while it holds, any entry matched
+     * only by a name might be that running module's own JAR.
+     *
+     * @param moduleClass the loaded module's class
+     * @return the code source's location, or {@code null} when it could not be determined
+     */
+    static File codeSourceLocationOf(Class<?> moduleClass) {
+        try {
+            java.security.CodeSource source = moduleClass.getProtectionDomain().getCodeSource();
+            if (source == null || source.getLocation() == null) {
+                return null;
+            }
+            return resolveCodeSourceFile(source.getLocation());
+        } catch (SecurityException | IllegalArgumentException e) {
+            LOGGER.log(Level.FINE, "Could not read the code source of " + moduleClass, e);
+            return null;
+        }
+    }
+
     /** A code source URL as a file, whatever escaping it carries. */
     private static File resolveCodeSourceFile(URL location) {
         try {
@@ -1017,11 +1042,12 @@ public class PluginInstallUtils {
         private final Set<String> bystanderJars;
         private final Map<String, String> bystanderOf;
         private final boolean resolvedFromLoadedModule;
+        private final boolean someCodeSourceUnknown;
 
         @SuppressWarnings("PMD.ExcessiveParameterList") // one resolution's result, built in one place
         private ModuleIdentity(String requested, List<UltiToolsPlugin> loaded, Set<String> ownJars,
                                Set<String> keys, Set<String> bystanderJars, Map<String, String> bystanderOf,
-                               boolean resolvedFromLoadedModule) {
+                               boolean resolvedFromLoadedModule, boolean someCodeSourceUnknown) {
             this.requested = requested;
             this.loaded = loaded;
             this.ownJars = ownJars;
@@ -1029,6 +1055,7 @@ public class PluginInstallUtils {
             this.bystanderJars = bystanderJars;
             this.bystanderOf = bystanderOf;
             this.resolvedFromLoadedModule = resolvedFromLoadedModule;
+            this.someCodeSourceUnknown = someCodeSourceUnknown;
         }
     }
 
@@ -1058,7 +1085,8 @@ public class PluginInstallUtils {
         List<UltiToolsPlugin> others = new ArrayList<>();
         Map<UltiToolsPlugin, File> jars = new java.util.LinkedHashMap<>();
         Map<UltiToolsPlugin, String> declared = new java.util.LinkedHashMap<>();
-        readLoadedModules(pluginManager, codeSource, others, jars, declared);
+        java.util.concurrent.atomic.AtomicBoolean unknown = new java.util.concurrent.atomic.AtomicBoolean();
+        readLoadedModules(pluginManager, codeSource, others, jars, declared, unknown);
         chooseTargets(requested, loaded, others, declared);
         Set<String> ownJars = new java.util.HashSet<>();
         Set<String> keys = new java.util.LinkedHashSet<>();
@@ -1089,7 +1117,8 @@ public class PluginInstallUtils {
         // even when it was the argument itself. The target's own JAR is still found through its
         // code source, and matching other entries on a name a running module answers to would take
         // that module's JAR (gate 1, BL-02).
-        return new ModuleIdentity(requested, loaded, ownJars, keys, bystanderJars, bystanderOf, !loaded.isEmpty());
+        return new ModuleIdentity(requested, loaded, ownJars, keys, bystanderJars, bystanderOf,
+                !loaded.isEmpty(), unknown.get());
     }
 
     /**
@@ -1104,13 +1133,23 @@ public class PluginInstallUtils {
      * @param others        collects every loaded instance, before any is chosen as a target
      * @param jars          collects each instance's code-source JAR
      * @param declared      collects what each instance's JAR declares
+     * @param someUnknown   set when some instance's code source could not be determined at all
      */
     private static void readLoadedModules(PluginManager pluginManager,
                                           java.util.function.Function<UltiToolsPlugin, File> codeSource,
-                                          List<UltiToolsPlugin> others,
-                                          Map<UltiToolsPlugin, File> jars, Map<UltiToolsPlugin, String> declared) {
+                                          List<UltiToolsPlugin> others, Map<UltiToolsPlugin, File> jars,
+                                          Map<UltiToolsPlugin, String> declared,
+                                          java.util.concurrent.atomic.AtomicBoolean someUnknown) {
         for (UltiToolsPlugin plugin : pluginManager.getPluginList()) {
-            File jar = codeSource.apply(plugin);
+            File location = codeSource.apply(plugin);
+            if (location == null) {
+                // Not "it has no JAR": the question could not be answered, and while that holds any
+                // entry matched only by a name might be this running module's own JAR.
+                someUnknown.set(true);
+            }
+            // A directory is an exploded checkout: no JAR of this module is in the folder, which is
+            // an answer rather than an absence of one.
+            File jar = location == null || probe(location) == Presence.DIRECTORY ? null : location;
             jars.put(plugin, jar);
             String name = jar == null ? null : readArchive(jar).declaredName;
             declared.put(plugin, name);
@@ -1308,8 +1347,16 @@ public class PluginInstallUtils {
             if (!archive.declaresAName()) {
                 return archive.state;
             }
-            return identity.keys.contains(archive.declaredName)
-                    ? EntryState.THIS_MODULES : EntryState.NOT_THIS_MODULES;
+            if (!identity.keys.contains(archive.declaredName)) {
+                return EntryState.NOT_THIS_MODULES;
+            }
+            if (identity.someCodeSourceUnknown) {
+                // A loaded module's own JAR could not be determined, so this entry may be that
+                // module's rather than the target's. Deleting it on a name alone would take a
+                // running module's JAR; it is reported as what it is instead.
+                return EntryState.UNDETERMINED;
+            }
+            return EntryState.THIS_MODULES;
         } catch (SecurityException denied) {
             // Even a type probe can be refused by a policy. A refusal answers nothing about what
             // the entry is, which is state C.
