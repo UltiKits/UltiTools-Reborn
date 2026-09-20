@@ -425,6 +425,112 @@ class PluginInstallUtilsUpdateTransactionTest {
     }
 
     @Test
+    @DisplayName("codex r11 P1: a candidate that omits a class of its own is not completed from the JAR it replaces")
+    void downloadMissingItsOwnSuperclass_isAnInvalidDownload() throws Exception {
+        javax.tools.JavaCompiler compiler = javax.tools.ToolProvider.getSystemJavaCompiler();
+        org.junit.jupiter.api.Assumptions.assumeTrue(compiler != null, "a JDK compiler is required");
+        File classes = compileModuleFixture(compiler);
+        byte[] base = Files.readAllBytes(new File(classes, "fixture/Base.class").toPath());
+        byte[] child = Files.readAllBytes(new File(classes, "fixture/Child.class").toPath());
+        // The installed JAR carries both classes; the candidate carries only the main class.
+        File oldJar = new File(pluginsFolder, IDENTIFY_STRING + "-1.0.0.jar");
+        try (FileOutputStream out = new FileOutputStream(oldJar)) {
+            out.write(moduleJarWith("1.0.0", new String[]{"fixture/Base.class", "fixture/Child.class"},
+                    new byte[][]{base, child}));
+        }
+        operations.downloadBytes = moduleJarWith("2.0.0", new String[]{"fixture/Child.class"}, new byte[][]{child});
+
+        UpdateOutcome outcome = withModuleLoaderOver(oldJar,
+                () -> PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING));
+
+        assertThat(outcome.getStatus())
+                .as("after the old JAR is gone nothing defines the superclass, so the module cannot load")
+                .isEqualTo(Status.INVALID_DOWNLOAD);
+        assertThat(jarEntries()).containsExactly(oldJar.getName());
+    }
+
+    @Test
+    @DisplayName("codex r11 control: a candidate carrying all of its own classes is still accepted")
+    void downloadCarryingItsOwnSuperclass_isAccepted() throws Exception {
+        javax.tools.JavaCompiler compiler = javax.tools.ToolProvider.getSystemJavaCompiler();
+        org.junit.jupiter.api.Assumptions.assumeTrue(compiler != null, "a JDK compiler is required");
+        File classes = compileModuleFixture(compiler);
+        byte[] base = Files.readAllBytes(new File(classes, "fixture/Base.class").toPath());
+        byte[] child = Files.readAllBytes(new File(classes, "fixture/Child.class").toPath());
+        File oldJar = new File(pluginsFolder, IDENTIFY_STRING + "-1.0.0.jar");
+        try (FileOutputStream out = new FileOutputStream(oldJar)) {
+            out.write(moduleJarWith("1.0.0", new String[]{"fixture/Base.class", "fixture/Child.class"},
+                    new byte[][]{base, child}));
+        }
+        operations.downloadBytes = moduleJarWith("2.0.0", new String[]{"fixture/Base.class", "fixture/Child.class"},
+                new byte[][]{base, child});
+
+        UpdateOutcome outcome = withModuleLoaderOver(oldJar,
+                () -> PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING));
+
+        assertThat(outcome.getStatus()).isEqualTo(Status.UPDATED);
+        assertThat(jarEntries()).containsExactly(NEW_JAR_NAME);
+    }
+
+    /**
+     * Runs {@code action} with the framework's module class loader set over {@code installedJar},
+     * which is the topology at runtime: the live loader has every installed module JAR on it,
+     * including the one an update is about to replace.
+     */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+    private UpdateOutcome withModuleLoaderOver(File installedJar, java.util.function.Supplier<UpdateOutcome> action)
+            throws Exception {
+        java.lang.reflect.Field field = com.ultikits.ultitools.UltiTools.class.getDeclaredField("ultiToolsClassLoader");
+        field.setAccessible(true);
+        Object instance = com.ultikits.ultitools.UltiTools.getInstance();
+        Object previous = field.get(instance);
+        try (java.net.URLClassLoader live = new java.net.URLClassLoader(
+                new java.net.URL[]{installedJar.toURI().toURL()}, getClass().getClassLoader())) {
+            field.set(instance, live);
+            return action.get();
+        } finally {
+            field.set(instance, previous);
+        }
+    }
+
+    /** Compiles a two-class module fixture: a module base class and the concrete main class. */
+    private File compileModuleFixture(javax.tools.JavaCompiler compiler) throws IOException {
+        File sources = new File(dataFolder, "fixture-src/fixture");
+        assertThat(sources.mkdirs()).isTrue();
+        File classes = new File(dataFolder, "fixture-classes");
+        assertThat(classes.mkdirs()).isTrue();
+        Files.write(new File(sources, "Base.java").toPath(), ("package fixture;\n"
+                + "public abstract class Base extends com.ultikits.ultitools.abstracts.UltiToolsPlugin {\n"
+                + "  @Override public boolean registerSelf() { return true; }\n}\n")
+                .getBytes(StandardCharsets.UTF_8));
+        Files.write(new File(sources, "Child.java").toPath(),
+                "package fixture;\npublic class Child extends Base { }\n".getBytes(StandardCharsets.UTF_8));
+        String classpath = System.getProperty("java.class.path");
+        int status = compiler.run(null, null, null, "-nowarn", "-classpath", classpath,
+                "-d", classes.getAbsolutePath(),
+                new File(sources, "Base.java").getAbsolutePath(), new File(sources, "Child.java").getAbsolutePath());
+        assertThat(status).as("the fixture module must compile").isZero();
+        return classes;
+    }
+
+    /** A module JAR with the fixture plugin.yml and the given class entries. */
+    private byte[] moduleJarWith(String version, String[] entryNames, byte[][] classBytes) throws IOException {
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        try (JarOutputStream out = new JarOutputStream(bytes)) {
+            out.putNextEntry(new JarEntry("plugin.yml"));
+            out.write(("name: Fixture\nversion: " + version + "\nidentify-string: " + IDENTIFY_STRING + "\n")
+                    .getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+            for (int i = 0; i < entryNames.length; i++) {
+                out.putNextEntry(new JarEntry(entryNames[i]));
+                out.write(classBytes[i]);
+                out.closeEntry();
+            }
+        }
+        return bytes.toByteArray();
+    }
+
+    @Test
     @DisplayName("codex r10 P1: a module class in the framework's own namespace is still read from the candidate")
     void downloadShadowingAClassInTheFrameworkNamespace_isAnInvalidDownload() throws IOException {
         File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
