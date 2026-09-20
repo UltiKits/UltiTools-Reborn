@@ -88,6 +88,9 @@ public class PluginInstallUtils {
     /** Journal format marker, so a future format can be recognised rather than misread. */
     private static final String JOURNAL_FORMAT = "1";
 
+    /** Identifies this run, and only this run: a new JVM gets a new token (see currentProcessIdentity). */
+    private static final String PROCESS_TOKEN = UUID.randomUUID().toString();
+
     /**
      * Normalised identify strings of the modules an update or an uninstall is changing right now.
      * One guard for both operations (review r4 WR-03): an uninstall interleaved with an update of
@@ -1117,9 +1120,17 @@ public class PluginInstallUtils {
         Files.move(temporary, journal, StandardCopyOption.ATOMIC_MOVE);
     }
 
-    /** This JVM's identity, as recorded in a journal and compared by boot recovery. */
+    /**
+     * This run's identity, as recorded in a journal and compared by boot recovery.
+     * <p>
+     * The JVM name alone ({@code <pid>@<host>}) is not enough: a container that runs Java as PID 1
+     * under a fixed hostname produces the same name on every start, so after a crash the new server
+     * would read its own identity in the crashed run's journal and skip it forever, leaving the
+     * module's JAR in the staging directory. The random token is generated once per JVM and cannot
+     * survive a restart, so only a journal this run wrote can match.
+     */
     static String currentProcessIdentity() {
-        return java.lang.management.ManagementFactory.getRuntimeMXBean().getName();
+        return java.lang.management.ManagementFactory.getRuntimeMXBean().getName() + "/" + PROCESS_TOKEN;
     }
 
     private static void deleteJournal(Path journal) {
