@@ -1772,15 +1772,11 @@ public class PluginInstallUtils {
         }
         List<File> matchingJars = new ArrayList<>();
         for (File file : listFiles) {
-            URL url = URI.create("jar:file:" + file.getAbsolutePath() + "!/plugin.yml").toURL();
-            JarURLConnection jarConnection = (JarURLConnection) url.openConnection();
-            InputStream inputStream = jarConnection.getInputStream();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
-            YamlConfiguration pluginConfig = YamlConfiguration.loadConfiguration(reader);
-            String pluginName = pluginConfig.getString("name");
-            if (name.equals(pluginName)) {
-                inputStream.close();
-                reader.close();
+            // Anything that is not a readable module JAR is skipped, not fatal (#504, Codex review
+            // r6): the folder holds directories, notes and half-written downloads, and since this
+            // loop looks at every entry rather than stopping at the first match, one of them used
+            // to abort the uninstall after the module had already been unloaded.
+            if (name.equals(moduleNameOf(file))) {
                 matchingJars.add(file);
             }
         }
@@ -1792,6 +1788,23 @@ public class PluginInstallUtils {
         // that stays on disk is named, so success is reported only once all of them are gone.
         deleteAllOrThrow(matchingJars);
         return true;
+    }
+
+    /**
+     * The {@code plugin.yml} {@code name} declared by the JAR at {@code file}.
+     *
+     * @return the name, or {@code null} when the file is not a readable JAR with a {@code plugin.yml}
+     */
+    private static String moduleNameOf(File file) {
+        if (!file.isFile() || !file.getName().endsWith(".jar")) {
+            return null;
+        }
+        try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(file)) {
+            return readPluginYmlScalars(jarFile).get("name");
+        } catch (IOException | SecurityException e) {
+            LOGGER.log(Level.FINE, "Skipping unreadable JAR while looking for a module's JARs: " + file, e);
+            return null;
+        }
     }
 
     /**
