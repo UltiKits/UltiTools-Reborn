@@ -411,6 +411,28 @@ class PluginInstallUtilsUninstallTest {
     }
 
     @Test
+    @DisplayName("codex r9 P2: an update journal that cannot be read fails the uninstall rather than passing silently")
+    void uninstall_reportsAJournalItCouldNotRead() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        writeModuleJar(MODULE_NAME);
+        File staging = new File(dataFolder, ".upm-staging");
+        assertThat(staging.mkdirs()).isTrue();
+        // A journal that cannot be read may be this module's; nothing can prove it is not.
+        File unreadable = new File(staging, "8420a849-1c2d-4e5f-9a0b-1c2d3e4f5a6b.txn");
+        assertThat(unreadable.mkdir()).isTrue();
+
+        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+        assertThat(thrown)
+                .as("once the read error clears, the next start can follow that journal")
+                .isInstanceOf(FileSystemException.class);
+        assertThat(((FileSystemException) thrown).getFile()).isEqualTo(unreadable.getAbsolutePath());
+    }
+
+    @Test
     @DisplayName("codex r8 P2: an uninstall with no JAR on disk still clears the module's staging state")
     void uninstallWithNoJar_stillClearsTheModulesUpdateJournals() throws IOException {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);

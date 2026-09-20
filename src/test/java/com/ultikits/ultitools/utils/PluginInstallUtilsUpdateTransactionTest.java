@@ -425,6 +425,33 @@ class PluginInstallUtilsUpdateTransactionTest {
     }
 
     @Test
+    @DisplayName("codex r9 P1: a download whose module-class entry holds other bytes is invalid, not resolved from the installed module")
+    void downloadWhoseModuleClassEntryHoldsOtherBytes_isAnInvalidDownload() throws IOException {
+        File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        try (JarOutputStream out = new JarOutputStream(bytes)) {
+            out.putNextEntry(new JarEntry("plugin.yml"));
+            out.write(("name: Fixture\nversion: 2.0.0\nidentify-string: " + IDENTIFY_STRING + "\n")
+                    .getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+            // The entry name of a module class that is already loadable from the parent, carrying
+            // bytes that are not a class at all: validation must read this JAR, not that one.
+            out.putNextEntry(new JarEntry(MODULE_CLASS_ENTRY));
+            out.write("corrupt, not a class file".getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+        operations.downloadBytes = bytes.toByteArray();
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus())
+                .as("after the restart nothing provides this class, so the module would be gone")
+                .isEqualTo(Status.INVALID_DOWNLOAD);
+        assertThat(jarEntries()).containsExactly(oldJar.getName());
+        assertThat(stagingEntries()).isEmpty();
+    }
+
+    @Test
     @DisplayName("codex r8 P1: a download whose only module class is abstract is invalid")
     void downloadWithOnlyAnAbstractModuleClass_isAnInvalidDownload() throws IOException {
         File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
