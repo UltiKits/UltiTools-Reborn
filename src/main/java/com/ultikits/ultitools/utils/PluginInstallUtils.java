@@ -88,9 +88,6 @@ public class PluginInstallUtils {
     /** Journal format marker, so a future format can be recognised rather than misread. */
     private static final String JOURNAL_FORMAT = "1";
 
-    /** Internal name of the class every module's main class descends from. */
-    private static final String MODULE_BASE_CLASS = "com/ultikits/ultitools/abstracts/UltiToolsPlugin";
-
     /** Journal key saying how far the transaction got; absent means it was still moving JARs. */
     private static final String JOURNAL_PHASE_KEY = "phase";
 
@@ -1544,7 +1541,7 @@ public class PluginInstallUtils {
             // load (Codex review r6). Refuse it here, while nothing has moved.
             return moduleKey.equals(normalizeIdentifyString(pluginYml.get("identify-string")))
                     && declaresAName(pluginYml, file)
-                    && couldCarryAModuleClass(jarFile, file)
+                    && PluginManager.carriesLoadableModuleMainClass(file)
                     && version != null && expectedVersion != null
                     && VersionComparatorUtil.compare(version.trim(), expectedVersion.trim()) == 0;
         } catch (IOException | SecurityException e) {
@@ -1552,127 +1549,6 @@ public class PluginInstallUtils {
             LOGGER.log(Level.FINE, "Downloaded file is not a readable JAR: " + file, e);
             return false;
         }
-    }
-
-    /**
-     * Whether {@code jarFile} could contain the module class the loader looks for, decided from the
-     * class files alone -- their own name and their superclass name, read from the class-file header
-     * without loading anything (Codex review r6/r7). A JAR carrying only a {@code plugin.yml}, or
-     * only classes whose ancestry provably stays inside the JAR and never reaches
-     * {@code UltiToolsPlugin}, cannot produce a module and is refused while nothing has moved.
-     * <p>
-     * It is deliberately one-sided. A class whose superclass is not in this JAR could descend from
-     * {@code UltiToolsPlugin} through the framework or a library, so it counts as possible: proving
-     * otherwise would mean loading a downloaded artifact's classes, which runs its static
-     * initialisers, and the loader itself only does that at startup under the security policy.
-     */
-    private static boolean couldCarryAModuleClass(java.util.jar.JarFile jarFile, File file) {
-        Map<String, String> superNames = new java.util.HashMap<>();
-        java.util.Enumeration<java.util.jar.JarEntry> entries = jarFile.entries();
-        while (entries.hasMoreElements() && superNames.size() <= 1000) {
-            java.util.jar.JarEntry entry = entries.nextElement();
-            String entryName = entry.getName();
-            if (!entryName.endsWith(".class") || entryName.startsWith("META-INF/")) {
-                continue;
-            }
-            try (InputStream in = jarFile.getInputStream(entry)) {
-                String[] names = readClassAndSuperName(in);
-                if (names != null) {
-                    superNames.put(names[0], names[1]);
-                }
-            } catch (IOException | RuntimeException e) {
-                // An unreadable class file says nothing either way; another entry may still qualify.
-                LOGGER.log(Level.FINE, "Could not read the class entry " + entryName + " of " + file, e);
-                return true;
-            }
-        }
-        if (superNames.isEmpty()) {
-            LOGGER.warning("JAR " + file + " carries no class the module loader could load");
-            return false;
-        }
-        for (String className : superNames.keySet()) {
-            if (mayDescendFromModuleBase(className, superNames)) {
-                return true;
-            }
-        }
-        LOGGER.warning("JAR " + file + " carries no class descending from UltiToolsPlugin, so no module can load from it");
-        return false;
-    }
-
-    /**
-     * Walks {@code className}'s superclass chain within one JAR.
-     *
-     * @return {@code true} when the chain reaches {@link #MODULE_BASE_CLASS}, or leaves the JAR --
-     *         where it cannot be followed without loading classes, and so cannot be ruled out
-     */
-    private static boolean mayDescendFromModuleBase(String className, Map<String, String> superNames) {
-        String current = className;
-        for (int depth = 0; depth < 64 && current != null; depth++) {
-            String superName = superNames.get(current);
-            if (superName == null) {
-                return false;
-            }
-            if (MODULE_BASE_CLASS.equals(superName)) {
-                return true;
-            }
-            if ("java/lang/Object".equals(superName)) {
-                return false;
-            }
-            if (!superNames.containsKey(superName)) {
-                return true;
-            }
-            current = superName;
-        }
-        return true;
-    }
-
-    /**
-     * The {@code {this class, superclass}} internal names in one class file's header.
-     *
-     * @return the pair, or {@code null} when the bytes are not a class file this can read
-     */
-    private static String[] readClassAndSuperName(InputStream in) throws IOException {
-        java.io.DataInputStream data = new java.io.DataInputStream(new java.io.BufferedInputStream(in));
-        if (data.readInt() != 0xCAFEBABE) {
-            return null;
-        }
-        data.readUnsignedShort();
-        data.readUnsignedShort();
-        int constantCount = data.readUnsignedShort();
-        String[] utf8 = new String[constantCount];
-        int[] classNameIndex = new int[constantCount];
-        for (int i = 1; i < constantCount; i++) {
-            int tag = data.readUnsignedByte();
-            switch (tag) {
-                case 1: utf8[i] = data.readUTF(); break;
-                case 7: case 8: case 16: case 19: case 20:
-                    int index = data.readUnsignedShort();
-                    if (tag == 7) {
-                        classNameIndex[i] = index;
-                    }
-                    break;
-                case 15: data.skipBytes(3); break;
-                case 5: case 6: data.skipBytes(8); i++; break;
-                case 3: case 4: case 9: case 10: case 11: case 12: case 17: case 18:
-                    data.skipBytes(4); break;
-                default: return null;
-            }
-        }
-        data.readUnsignedShort();
-        int thisClass = data.readUnsignedShort();
-        int superClass = data.readUnsignedShort();
-        String thisName = nameOfClassConstant(thisClass, classNameIndex, utf8);
-        String superName = nameOfClassConstant(superClass, classNameIndex, utf8);
-        return thisName == null ? null : new String[]{thisName, superName};
-    }
-
-    /** Resolves a {@code CONSTANT_Class} index to its internal name, or {@code null}. */
-    private static String nameOfClassConstant(int index, int[] classNameIndex, String[] utf8) {
-        if (index <= 0 || index >= classNameIndex.length) {
-            return null;
-        }
-        int nameIndex = classNameIndex[index];
-        return nameIndex > 0 && nameIndex < utf8.length ? utf8[nameIndex] : null;
     }
 
     /** Whether a {@code plugin.yml} carries the {@code name:} the module loader requires. */

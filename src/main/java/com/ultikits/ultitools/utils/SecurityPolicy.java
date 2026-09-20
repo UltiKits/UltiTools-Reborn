@@ -134,12 +134,29 @@ public class SecurityPolicy {
      * @since 6.3.0
      */
     public static boolean isValidModuleJar(File jarFile) {
-        if (jarFile == null || !jarFile.exists() || !jarFile.isFile()) {
+        if (jarFile == null || !jarFile.getName().toLowerCase().endsWith(".jar")) {
             return false;
         }
+        return isValidModuleArchive(jarFile);
+    }
 
-        // Check the file extension
-        if (!jarFile.getName().toLowerCase().endsWith(".jar")) {
+    /**
+     * The same check as {@link #isValidModuleJar(File)} without the file-extension rule: an
+     * existing, readable archive within the size and entry-count limits.
+     *
+     * <p>The extension rule belongs to the modules folder, where a file not named {@code .jar}
+     * must never be handed to a class loader. An update validates its download while it is still
+     * in the staging directory under a name that deliberately is not {@code .jar}, so a partly
+     * written file can never be loaded; it is renamed to its {@code .jar} name only once it has
+     * been accepted.</p>
+     *
+     * @param archive candidate archive
+     * @return true if the archive may be handed to a classloader, false otherwise
+     * @since 6.3.0
+     */
+    public static boolean isValidModuleArchive(File archive) {
+        File jarFile = archive;
+        if (jarFile == null || !jarFile.exists() || !jarFile.isFile()) {
             return false;
         }
 

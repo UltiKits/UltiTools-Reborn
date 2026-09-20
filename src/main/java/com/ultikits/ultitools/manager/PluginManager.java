@@ -2,6 +2,8 @@ package com.ultikits.ultitools.manager;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
@@ -25,6 +27,7 @@ import java.util.logging.Level;
 import javax.sql.DataSource;
 
 import org.bukkit.Bukkit;
+import org.jetbrains.annotations.ApiStatus;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -549,8 +552,83 @@ public class PluginManager {
      * @return Plugin main class
      */
     private Class<? extends UltiToolsPlugin> loadPluginMainClass(ClassLoader classLoader, File pluginJar) { // NOPMD - classLoader used implicitly by Class.forName
-        // Validate jar file security
-        if (!SecurityPolicy.isValidModuleJar(pluginJar)) {
+        try {
+            return findModuleMainClass(pluginJar, ClassLoaderUtils::loadClass);
+        } finally {
+            // D-19: fires whether the scan returned early (main class found), fell through
+            // (class-count cap reached / jar exhausted), or the jar itself could not be read --
+            // exactly once per call, after the scan, naming pluginJar as the module.
+            ModuleScanDiagnostics.emitSummary(pluginJar.getName());
+            // GEN-07 (D-14): the audit summary lands at the same point, so the two diagnostics
+            // read as one pattern rather than two.
+            ClassLoaderUtils.emitClassloadFilterAuditSummary(pluginJar.getName());
+        }
+    }
+
+    /** Resolves a class by binary name, so the same scan can run against different class loaders. */
+    @FunctionalInterface
+    interface ModuleClassResolver {
+        /**
+         * @param className the binary name taken from the JAR entry
+         * @return the class
+         * @throws ClassNotFoundException when the name cannot be resolved
+         * @throws SecurityException when the class is refused
+         */
+        Class<?> resolve(String className) throws ClassNotFoundException, SecurityException;
+    }
+
+    /**
+     * Whether {@code candidateJar} yields a module main class -- the same question, answered by the
+     * same scan, that {@link #loadPluginMainClass} answers at startup.
+     * <p>
+     * This exists so an update can ask before it replaces a module's installed JAR. It used to be
+     * asked by a second, approximate implementation in {@code PluginInstallUtils} that read class
+     * headers; every review round found one more way that copy and this scan disagreed (abstract
+     * classes, entry names that are not binary names, the class cap, ancestry leaving the JAR), so
+     * the copy was deleted and both callers now run this method.
+     * <p>
+     * The candidate is examined with the live module class loader as parent, so a module whose
+     * superclass lives in another module's JAR resolves exactly as it will after a restart.
+     * Classes are resolved without initialising them, so a downloaded artifact's static
+     * initialisers never run here, and the loader over the candidate is closed before returning, so
+     * no handle is left on a file the update is about to move.
+     *
+     * @param candidateJar the JAR to examine; it need not be in the modules folder
+     * @return whether a module would load from it
+     */
+    @ApiStatus.Internal
+    public static boolean carriesLoadableModuleMainClass(File candidateJar) {
+        if (candidateJar == null || !candidateJar.isFile()) {
+            return false;
+        }
+        try {
+            URL[] candidate = {candidateJar.toURI().toURL()};
+            try (URLClassLoader loader = new URLClassLoader(candidate, ClassLoaderUtils.getPluginClassLoader())) {
+                return findModuleMainClass(candidateJar, (className) -> Class.forName(className, false, loader)) != null;
+            }
+        } catch (IOException | RuntimeException | LinkageError e) {
+            Bukkit.getLogger().log(Level.WARNING,
+                "[UltiTools-API] Could not examine " + candidateJar + " for a module main class", e);
+            return false;
+        } finally {
+            ModuleScanDiagnostics.emitSummary(candidateJar.getName());
+            ClassLoaderUtils.emitClassloadFilterAuditSummary(candidateJar.getName());
+        }
+    }
+
+    /**
+     * The scan itself: the first concrete, non-interface {@link UltiToolsPlugin} subclass in the
+     * JAR, resolved through {@code resolver}.
+     *
+     * @param pluginJar the JAR to scan
+     * @param resolver  how to resolve a binary name to a class
+     * @return the module main class, or {@code null} when the JAR yields none
+     */
+    private static Class<? extends UltiToolsPlugin> findModuleMainClass(File pluginJar, ModuleClassResolver resolver) {
+        // Validate archive security: size and entry-count limits. The .jar extension rule belongs
+        // to the modules folder (PluginManager lists only .jar there); an update validates its
+        // download in the staging directory, where the file is deliberately not named .jar yet.
+        if (!SecurityPolicy.isValidModuleArchive(pluginJar)) {
             Bukkit.getLogger().log(Level.SEVERE, 
                 "[UltiTools-API] Security validation failed for jar: " + pluginJar.getName());
             return null;
@@ -586,13 +664,13 @@ public class PluginManager {
                 
                 try {
                     // GEN-07 (D-14): records what the removed classload filter layers would have
-                    // refused for className, independent of whether loadClass below succeeds,
+                    // refused for className, independent of whether the resolver below succeeds,
                     // throws ClassNotFoundException, or throws SecurityException -- classify() is
                     // a pure function of the name alone. Purely observational; never refuses.
                     ClassLoaderUtils.recordClassloadFilterAudit(pluginJar.getName(), className);
-                    // Use security-validated class loading (checks dangerous classes/packages)
-                    // but NOT loadPluginClass() which rejects non-UltiToolsPlugin classes
-                    Class<?> aClass = ClassLoaderUtils.loadClass(className);
+                    // Resolve through the caller's class loader: the framework's at startup, one
+                    // over the candidate when an update asks the question before installing it.
+                    Class<?> aClass = resolver.resolve(className);
                     if (UltiToolsPlugin.class.isAssignableFrom(aClass)
                             && !aClass.isInterface()
                             && !Modifier.isAbstract(aClass.getModifiers())) {
@@ -614,14 +692,6 @@ public class PluginManager {
         } catch (IOException | LinkageError | RuntimeException e) {
             Bukkit.getLogger().log(Level.SEVERE,
                 "[UltiTools-API] Failed to read jar file: " + pluginJar.getName(), e);
-        } finally {
-            // D-19: fires whether the method returned early (main class found), fell through
-            // (class-count cap reached / jar exhausted), or the jar itself could not be read --
-            // exactly once per call, after the scan loop, naming pluginJar as the module.
-            ModuleScanDiagnostics.emitSummary(pluginJar.getName());
-            // GEN-07 (D-14): the audit summary lands at the same point, so the two diagnostics
-            // read as one pattern rather than two.
-            ClassLoaderUtils.emitClassloadFilterAuditSummary(pluginJar.getName());
         }
         return null;
     }
