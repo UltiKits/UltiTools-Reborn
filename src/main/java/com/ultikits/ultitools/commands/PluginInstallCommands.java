@@ -234,9 +234,9 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             sendUndeterminedEntries(sender, report);
         } catch (java.nio.file.AccessDeniedException e) {
             sendUnlistableFolder(sender, e.getFile());
-        } catch (PluginInstallUtils.AmbiguousModuleNameException e) {
-            // Two loaded modules could be meant. A destructive command with two possible targets
-            // stops and says which, rather than choosing one of them.
+        } catch (PluginInstallUtils.UninstallRefusedException e) {
+            // The uninstall refused because its outcome would be undefined - two possible targets,
+            // or a JAR another running module shares. It changed nothing, and says which.
             sender.sendMessage(ChatColor.RED + e.getMessage());
         } catch (PluginInstallUtils.ModuleUnloadFailedException e) {
             // The module's own unload threw. It has still been removed from the loaded modules and

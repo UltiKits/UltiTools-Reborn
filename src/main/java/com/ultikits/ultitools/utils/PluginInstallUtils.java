@@ -505,10 +505,36 @@ public class PluginInstallUtils {
      * @return what is there
      */
     private static Presence probe(File file) {
+        return probe(file, java.nio.file.LinkOption.NOFOLLOW_LINKS);
+    }
+
+    /**
+     * What is at {@code file} with links followed: the question "is this one of the files the
+     * module loader would open?", which is a different question from "is anything at this path?".
+     *
+     * <p>{@code PluginManager#init} opens each entry through {@code new JarFile(file)}, which
+     * follows links, so a link to a real JAR is a file it loads from. The access question keeps
+     * {@code NOFOLLOW_LINKS}, because that is what separates absence from a denial; this one must
+     * match the loader.
+     *
+     * @param file the path to probe
+     * @return what is at the end of it
+     */
+    private static Presence probeFollowingLinks(File file) {
+        return probe(file, new java.nio.file.LinkOption[0]);
+    }
+
+    /**
+     * {@link #probe(File)} with the link options to use.
+     *
+     * @param file    the path to probe
+     * @param options how to treat a symbolic link
+     * @return what is there
+     */
+    private static Presence probe(File file, java.nio.file.LinkOption... options) {
         try {
             java.nio.file.attribute.BasicFileAttributes attributes = java.nio.file.Files.readAttributes(
-                    file.toPath(), java.nio.file.attribute.BasicFileAttributes.class,
-                    java.nio.file.LinkOption.NOFOLLOW_LINKS);
+                    file.toPath(), java.nio.file.attribute.BasicFileAttributes.class, options);
             if (attributes.isDirectory()) {
                 return Presence.DIRECTORY;
             }
@@ -545,7 +571,7 @@ public class PluginInstallUtils {
                 return null;
             }
             File location = resolveCodeSourceFile(source.getLocation());
-            return probe(location) == Presence.DIRECTORY ? null : location;
+            return probeFollowingLinks(location) == Presence.DIRECTORY ? null : location;
         } catch (SecurityException | IllegalArgumentException e) {
             LOGGER.log(Level.FINE, "Could not read the code source of " + moduleClass, e);
             return null;
@@ -626,13 +652,15 @@ public class PluginInstallUtils {
         if (!file.getName().endsWith(".jar")) {
             return new ArchiveIdentity(EntryState.NOT_THIS_MODULES, null);
         }
-        Presence presence = probe(file);
+        // Links followed: this asks what the loader would open, and `new JarFile(file)` follows
+        // them. A link to a real JAR is a file the module loads from, so calling it unidentifiable
+        // would leave a JAR that loads the module again; only a link that resolves to nothing, or
+        // that cannot be resolved at all, identifies nothing.
+        Presence presence = probeFollowingLinks(file);
         if (presence == Presence.DIRECTORY) {
             return new ArchiveIdentity(EntryState.NOT_THIS_MODULES, null);
         }
         if (presence != Presence.REGULAR_FILE) {
-            // Absent since the listing, a link to nowhere, or a probe that could not answer: named
-            // like a JAR and not readable as one, which identifies nothing.
             return new ArchiveIdentity(EntryState.UNDETERMINED, null);
         }
         try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(file)) {
@@ -725,15 +753,25 @@ public class PluginInstallUtils {
     }
 
     /**
-     * Raised when the name the operator typed could be more than one loaded module's, so the
-     * uninstall changed nothing.
-     *
-     * <p>Only reachable when no loaded module answers to the name by its runtime name and several
-     * modules' JARs declare it. Choosing one of them would delete a module the operator did not
-     * name; a destructive command with two possible targets stops instead.
+     * Raised when the uninstall refuses to act because its outcome would be undefined: two possible
+     * targets, or a target whose JAR another running module shares. A type the command owns, so the
+     * refusal is reported as itself rather than escaping as a command error.
      */
     @ApiStatus.Internal
-    public static final class AmbiguousModuleNameException extends IllegalStateException {
+    public static class UninstallRefusedException extends IllegalStateException {
+        private static final long serialVersionUID = 1L;
+
+        private UninstallRefusedException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * Raised when the name the operator typed could be more than one loaded module's, so the
+     * uninstall changed nothing.
+     */
+    @ApiStatus.Internal
+    public static final class AmbiguousModuleNameException extends UninstallRefusedException {
         private static final long serialVersionUID = 1L;
 
         private AmbiguousModuleNameException(String message) {
@@ -951,6 +989,7 @@ public class PluginInstallUtils {
         }
         PluginManager pluginManager = UltiTools.getInstance().getPluginManager();
         ModuleIdentity identity = resolveIdentity(name, pluginManager, codeSource);
+        refuseIfAnotherModuleSharesTheJar(identity);
         Throwable unloadFailure = unloadEvery(identity, pluginManager);
         UninstallReport report;
         try {
@@ -1149,7 +1188,7 @@ public class PluginInstallUtils {
             }
             // A directory is an exploded checkout: no JAR of this module is in the folder, which is
             // an answer rather than an absence of one.
-            File jar = location == null || probe(location) == Presence.DIRECTORY ? null : location;
+            File jar = location == null || probeFollowingLinks(location) == Presence.DIRECTORY ? null : location;
             jars.put(plugin, jar);
             String name = jar == null ? null : readArchive(jar).declaredName;
             declared.put(plugin, name);
@@ -1278,6 +1317,28 @@ public class PluginInstallUtils {
     }
 
     /**
+     * Refuses before anything is unloaded when a JAR this uninstall would act on is also the JAR
+     * another running module was loaded from.
+     *
+     * <p>Two module classes can be packaged in one archive and registered separately, so one
+     * physical JAR can be two loaded modules' code source. Deleting it would take a module the
+     * operator did not name, and unloading the target first would change the loaded state for an
+     * uninstall whose outcome is already known to be undefined -- so nothing happens at all. The
+     * invariant at the delete stays as well, for whatever future path reaches one by another route.
+     *
+     * @param identity the resolved identity
+     */
+    private static void refuseIfAnotherModuleSharesTheJar(ModuleIdentity identity) {
+        for (String jar : identity.ownJars) {
+            if (identity.bystanderJars.contains(jar)) {
+                throw new UninstallRefusedException("Refusing to uninstall " + identity.requested + ": "
+                        + jar + " is also the JAR module " + identity.bystanderOf.get(jar)
+                        + " is loaded from, so nothing was unloaded or deleted");
+            }
+        }
+    }
+
+    /**
      * The invariant, checked immediately before anything is deleted: no JAR another loaded module
      * was loaded from may be removed, whatever decided to get here.
      *
@@ -1293,7 +1354,7 @@ public class PluginInstallUtils {
         for (File file : toDelete) {
             String path = canonicalPathOf(file);
             if (identity.bystanderJars.contains(path)) {
-                throw new IllegalStateException("Refusing to uninstall " + identity.requested + ": "
+                throw new UninstallRefusedException("Refusing to uninstall " + identity.requested + ": "
                         + file.getAbsolutePath() + " is the JAR module " + identity.bystanderOf.get(path)
                         + " is loaded from, and nothing was deleted");
             }
