@@ -859,14 +859,9 @@ public class PluginInstallUtils {
     }
 
     private static UpdateOutcome runUpdateTransaction(String identifyString, String moduleKey) {
-        if (anUpdateAwaitsARestart(moduleKey)) {
-            // Two journals awaiting one restart cannot both be resolved correctly: the boot sees
-            // one module and two verdicts, and the journal resolved second can restore the
-            // candidate the first rejected (sweep row B1). The first update owns this module until
-            // the restart confirms or rolls it back.
-            LOGGER.warning("Refusing to update " + identifyString + ": an update of it is already installed and"
-                    + " waiting for a restart to confirm it; nothing was changed");
-            return UpdateOutcome.of(UpdateOutcome.Status.ALREADY_IN_PROGRESS);
+        UpdateOutcome refusedByStaging = refusedByTheStagingState(moduleKey, identifyString);
+        if (refusedByStaging != null) {
+            return refusedByStaging;
         }
         String latestVersion = getPluginLatestVersion(identifyString);
         String downloadLink = getPluginVersionDownloadLink(identifyString, latestVersion);
@@ -1294,17 +1289,19 @@ public class PluginInstallUtils {
     }
 
     /**
-     * Whether an update of this module has already installed its new version and is waiting for a
-     * restart to confirm or roll it back (sweep row B1).
+     * Whether the staging directory forbids starting an update of this module: one of its own
+     * updates is already installed and waiting for a restart (sweep row B1), or a journal there
+     * cannot be read at all and so cannot be ruled out as one (sweep row C7).
      *
-     * @param moduleKey the module's normalised identify-string
-     * @return whether a journal in the staging directory names it in a boot-confirmation phase
+     * @param moduleKey      the module's normalised identify-string
+     * @param identifyString the module, for the log line
+     * @return the outcome to report, or {@code null} when nothing in staging forbids the update
      */
-    private static boolean anUpdateAwaitsARestart(String moduleKey) {
+    private static UpdateOutcome refusedByTheStagingState(String moduleKey, String identifyString) {
         File stagingFolder = new File(UltiTools.getInstance().getDataFolder(), STAGING_DIRECTORY_NAME);
         File[] journals = stagingFolder.listFiles((f) -> f.getName().endsWith(JOURNAL_SUFFIX));
         if (journals == null || moduleKey == null) {
-            return false;
+            return null;
         }
         for (File journalFile : journals) {
             java.util.Properties entries = new java.util.Properties();
@@ -1312,20 +1309,29 @@ public class PluginInstallUtils {
                     java.nio.charset.StandardCharsets.UTF_8)) {
                 entries.load(reader);
             } catch (IOException | RuntimeException e) {
-                // Unreadable here is not a refusal: the uninstall path reports such a journal, and
-                // recovery names it at the next start.
-                LOGGER.log(Level.FINE, "Could not read " + journalFile + " while checking for an update"
-                        + " awaiting a restart", e);
-                continue;
+                // Nothing can show this journal is not this module's, and if it names an update
+                // awaiting a restart, going on leaves two journals for one boot to resolve -- the
+                // ambiguity the check below exists to prevent (sweep row C7).
+                LOGGER.log(Level.SEVERE, "Refusing to update " + identifyString + ": the update journal "
+                        + journalFile.getAbsolutePath() + " could not be read, so it cannot be ruled out as"
+                        + " an update of this module waiting for a restart; nothing was changed", e);
+                return new UpdateOutcome(UpdateOutcome.Status.STAGING_UNAVAILABLE,
+                        Collections.singletonList(journalFile.getAbsolutePath()), Collections.<String>emptyList(),
+                        Collections.<String>emptyList()).withFailure(e);
             }
             if (isBootConfirmationPhase(entries) && moduleKey.equals(normalizeIdentifyString(
                     entries.getProperty("module")))) {
-                return true;
+                // Two journals awaiting one restart cannot both be resolved correctly: the boot sees
+                // one module and two verdicts, and the journal resolved second can restore the
+                // candidate the first rejected (sweep row B1). The first update owns this module
+                // until the restart confirms or rolls it back.
+                LOGGER.warning("Refusing to update " + identifyString + ": an update of it is already installed"
+                        + " and waiting for a restart to confirm it; nothing was changed");
+                return UpdateOutcome.of(UpdateOutcome.Status.ALREADY_IN_PROGRESS);
             }
         }
-        return false;
+        return null;
     }
-
     /**
      * This run's identity, as recorded in a journal and compared by boot recovery.
      * <p>
@@ -1552,6 +1558,25 @@ public class PluginInstallUtils {
         // not an update awaiting a verdict, so a start that finds it half-done finishes it rather
         // than reading a restored old JAR as proof that the update loaded (sweep row A13).
         markJournalRollingBack(journalFile, name);
+        completeRollback(journalFile, pluginsFolder, stagingFolder, name, target, pairs, incomplete, null);
+    }
+
+    /**
+     * Finishes a rollback recorded by a journal, from either boot hook.
+     *
+     * @param journalFile   the journal in the staging directory
+     * @param pluginsFolder the modules folder
+     * @param stagingFolder the staging directory
+     * @param name          the module, for what the operator reads
+     * @param target        the file name the rejected update installed under
+     * @param pairs         the {@code {original, set-aside}} pairs to put back
+     * @param incomplete    whether the journal records a pair this start could not read
+     * @param reported      the pre-load hook's set of accounted-for JARs, or {@code null} after load
+     */
+    @SuppressWarnings("PMD.ExcessiveParameterList") // one rollback's state, passed rather than held in a field
+    private static void completeRollback(File journalFile, File pluginsFolder, File stagingFolder,
+                                         String name, String target, List<String[]> pairs,
+                                         boolean incomplete, Set<String> reported) {
         Path installed = pluginsFolder.toPath().resolve(target);
         boolean rolledBack = false;
         try {
@@ -1570,6 +1595,9 @@ public class PluginInstallUtils {
                 String version = readModuleVersion(original.toFile());
                 restoredVersion = version == null ? restoredVersion : version;
                 rolledBack |= version != null || Files.exists(original, LinkOption.NOFOLLOW_LINKS);
+                if (reported != null) {
+                    reported.add(pair[1]);
+                }
             } else {
                 // This JAR is still in staging and still needs a decision. The journal is the only
                 // record a later start could retry it from, so it stays (Codex review r23).
@@ -1593,6 +1621,25 @@ public class PluginInstallUtils {
             LOGGER.severe("Module " + name + " did not load from its update, and it had no previous version to"
                     + " put back: the module is not installed. Install it again once the cause is known.");
         }
+    }
+
+    /**
+     * Finishes a rollback the pre-load hook finds, before the modules load (sweep row A12).
+     *
+     * @param journalFile   the journal in the staging directory
+     * @param entries       what it holds
+     * @param pluginsFolder the modules folder
+     * @param reported      the set of set-aside JAR names this recovery has accounted for
+     */
+    private static void finishRollback(File journalFile, java.util.Properties entries, File pluginsFolder,
+                                       Set<String> reported) {
+        String module = normalizeIdentifyString(entries.getProperty("module"));
+        String recordedName = entries.getProperty("name");
+        String name = recordedName == null ? module : recordedName;
+        java.util.concurrent.atomic.AtomicBoolean skippedAPair = new java.util.concurrent.atomic.AtomicBoolean();
+        List<String[]> pairs = journalPairs(entries, journalFile, skippedAPair);
+        completeRollback(journalFile, pluginsFolder, journalFile.getParentFile(), name,
+                entries.getProperty("target"), pairs, skippedAPair.get(), reported);
     }
 
     /**
@@ -1752,6 +1799,13 @@ public class PluginInstallUtils {
         String module = entries.getProperty("module");
         String target = entries.getProperty("target");
         String process = entries.getProperty("process");
+        if (JOURNAL_PHASE_ROLLING_BACK.equals(entries.getProperty(JOURNAL_PHASE_KEY))) {
+            // The verdict was made at an earlier start, so this needs nothing from the load phase --
+            // and finishing it here is what puts the working JAR on the class path in time to load
+            // this session instead of the next (sweep row A12).
+            finishRollback(journalFile, entries, pluginsFolder, reported);
+            return;
+        }
         if (isBootConfirmationPhase(entries)) {
             leaveForBootConfirmation(journalFile, entries, reported);
             return;
