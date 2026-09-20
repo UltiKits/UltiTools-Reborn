@@ -1428,7 +1428,8 @@ public class PluginInstallUtils {
             return moduleKey.equals(normalizeIdentifyString(pluginYml.get("identify-string")))
                     && version != null && expectedVersion != null
                     && VersionComparatorUtil.compare(version.trim(), expectedVersion.trim()) == 0;
-        } catch (IOException e) {
+        } catch (IOException | SecurityException e) {
+            // SecurityException: a signed JAR whose plugin.yml changed after signing (Codex review r6).
             LOGGER.log(Level.FINE, "Downloaded file is not a readable JAR: " + file, e);
             return false;
         }
@@ -1444,7 +1445,7 @@ public class PluginInstallUtils {
                 return false;
             }
             return moduleKey.equals(normalizeIdentifyString(readPluginYmlScalars(jarFile).get("identify-string")));
-        } catch (IOException e) {
+        } catch (IOException | SecurityException e) {
             LOGGER.log(Level.FINE, "File is not a readable JAR of module " + moduleKey + ": " + file, e);
             return false;
         }
@@ -1457,7 +1458,7 @@ public class PluginInstallUtils {
     static String readModuleVersion(File file) {
         try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(file)) {
             return readPluginYmlScalars(jarFile).get("version");
-        } catch (IOException e) {
+        } catch (IOException | SecurityException e) {
             LOGGER.log(Level.FINE, "Could not read the plugin.yml version of " + file, e);
             return null;
         }
