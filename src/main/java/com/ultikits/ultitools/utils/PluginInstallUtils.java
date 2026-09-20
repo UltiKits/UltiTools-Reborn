@@ -1580,7 +1580,9 @@ public class PluginInstallUtils {
         Path installed = pluginsFolder.toPath().resolve(target);
         boolean rolledBack = false;
         try {
-            Files.deleteIfExists(installed);
+            if (!alreadyRestoredTo(installed, pairs, stagingFolder, target)) {
+                Files.deleteIfExists(installed);
+            }
         } catch (IOException | SecurityException e) {
             LOGGER.log(Level.SEVERE, "Module " + name + " did not load from " + installed.toAbsolutePath()
                     + ", which could not be deleted either; delete it by hand", e);
@@ -1621,6 +1623,32 @@ public class PluginInstallUtils {
             LOGGER.severe("Module " + name + " did not load from its update, and it had no previous version to"
                     + " put back: the module is not installed. Install it again once the cause is known.");
         }
+    }
+
+    /**
+     * Whether what sits at the rejected update's target path is a JAR an earlier attempt of this
+     * rollback already put back (sweep row A21).
+     *
+     * <p>A same-version retry sets aside a JAR whose own path is the one the candidate is installed
+     * to. Once that JAR has been restored there, its set-aside copy is gone -- and deleting the
+     * target on a later attempt would delete the module's only remaining copy, with nothing left to
+     * restore it from.
+     *
+     * @param installed     the target path
+     * @param pairs         the {@code {original, set-aside}} pairs the journal records
+     * @param stagingFolder the staging directory
+     * @param target        the target file name
+     * @return whether the file there is a restored original rather than the rejected candidate
+     */
+    private static boolean alreadyRestoredTo(Path installed, List<String[]> pairs, File stagingFolder,
+                                             String target) {
+        for (String[] pair : pairs) {
+            if (pair[0].equals(target) && !new File(stagingFolder, pair[1]).exists()
+                    && Files.exists(installed, LinkOption.NOFOLLOW_LINKS)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -1721,13 +1749,61 @@ public class PluginInstallUtils {
         Set<String> reported = new java.util.HashSet<>();
         for (File entry : entries) {
             String name = entry.getName();
-            if (name.endsWith(".part") || name.endsWith(JOURNAL_SUFFIX + ".tmp")) {
+            if (name.endsWith(JOURNAL_SUFFIX + ".tmp")) {
+                adoptOrDeleteTemporaryJournal(entry, pluginsFolder, reported);
+            } else if (name.endsWith(".part")) {
                 deleteStaleDownload(entry);
             } else if (name.endsWith(JOURNAL_SUFFIX)) {
                 recoverJournalIsolated(entry, pluginsFolder, reported);
             }
         }
         reportLeftovers(entries, reported, stagingFolder);
+    }
+
+    /**
+     * Decides what a temporary journal file is (sweep row A18).
+     *
+     * <p>A file store that refuses to replace a file atomically forces a rewrite to remove the old
+     * journal before renaming its replacement in, and a process that dies in that window leaves the
+     * replacement here with no journal beside it. Deleting it as stale would leave the set-aside
+     * JARs with nothing to name them, so a complete one is adopted instead. A half-written one -- a
+     * journal that was never finished being created -- is deleted as before.
+     *
+     * @param entry         the {@code .txn.tmp} file
+     * @param pluginsFolder the modules folder
+     * @param reported      the set of set-aside JAR names this recovery has accounted for
+     */
+    private static void adoptOrDeleteTemporaryJournal(File entry, File pluginsFolder, Set<String> reported) {
+        String name = entry.getName();
+        File journal = new File(entry.getParentFile(), name.substring(0, name.length() - ".tmp".length()));
+        if (journal.exists() || !isCompleteJournal(entry)) {
+            deleteStaleDownload(entry);
+            return;
+        }
+        try {
+            Files.move(entry.toPath(), journal.toPath(), StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException | SecurityException e) {
+            LOGGER.log(Level.WARNING, "A module update journal was left as " + entry.getAbsolutePath()
+                    + " and could not be renamed to " + journal.getAbsolutePath() + "; it was kept", e);
+            return;
+        }
+        LOGGER.info("Adopted " + entry.getAbsolutePath() + " as the update journal "
+                + journal.getAbsolutePath() + ": its rename had not finished");
+        recoverJournalIsolated(journal, pluginsFolder, reported);
+    }
+
+    /** Whether a file holds everything a journal needs to be acted on. */
+    private static boolean isCompleteJournal(File file) {
+        java.util.Properties entries = new java.util.Properties();
+        try (java.io.Reader reader = Files.newBufferedReader(file.toPath(),
+                java.nio.charset.StandardCharsets.UTF_8)) {
+            entries.load(reader);
+        } catch (IOException | RuntimeException e) {
+            LOGGER.log(Level.FINE, "Could not read " + file + " as a journal", e);
+            return false;
+        }
+        return JOURNAL_FORMAT.equals(entries.getProperty("format")) && entries.getProperty("process") != null
+                && entries.getProperty("module") != null && isPlainFileName(entries.getProperty("target"));
     }
 
     /** Deletes one partial download or half-written journal, logging either way. */
