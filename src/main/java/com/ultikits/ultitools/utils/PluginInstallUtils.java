@@ -812,7 +812,10 @@ public class PluginInstallUtils {
                 // A file already gone is the outcome asked for, not a failure: reporting it would
                 // name a JAR that is no longer on disk.
                 java.nio.file.Files.deleteIfExists(file.toPath());
-            } catch (IOException e) {
+            } catch (IOException | SecurityException e) {
+                // SecurityException too: a policy that allows reading a module JAR and denies
+                // deleting it throws an unchecked exception, which would otherwise escape past the
+                // rest of this loop and leave the operator with no report of the JAR still there.
                 java.nio.file.FileSystemException fileFailure =
                         new java.nio.file.FileSystemException(file.getAbsolutePath(), null, e.getMessage());
                 fileFailure.initCause(e);
