@@ -1258,16 +1258,25 @@ public class PluginInstallUtils {
         File stagingFolder = journalFile.getParentFile();
         Path targetPath = pluginsFolder.toPath().resolve(target);
         boolean alreadyInstalled = Files.exists(targetPath, LinkOption.NOFOLLOW_LINKS);
+        boolean settled = true;
         for (String[] pair : pairs) {
             File setAside = new File(stagingFolder, pair[1]);
             reported.add(pair[1]);
             if (alreadyInstalled) {
                 reportAsLeftoverOfAnInstalledUpdate(setAside, module, targetPath);
             } else {
-                restoreSetAsideJar(setAside, pluginsFolder.toPath().resolve(pair[0]), pluginsFolder, module);
+                settled &= restoreSetAsideJar(setAside, pluginsFolder.toPath().resolve(pair[0]), pluginsFolder, module);
             }
         }
-        deleteJournal(journalFile.toPath());
+        // Deleting the journal turns every JAR it names into a leftover nothing will ever move back,
+        // so it goes only once none of them still needs moving (Codex review r6).
+        if (settled) {
+            deleteJournal(journalFile.toPath());
+        } else {
+            LOGGER.warning("Module update journal " + journalFile.getAbsolutePath()
+                    + " was kept: a set-aside JAR of module " + module
+                    + " could not be restored, and the next start will try again");
+        }
     }
 
     /**
@@ -1309,25 +1318,31 @@ public class PluginInstallUtils {
      * Moves one set-aside JAR back to the path it came from. A JAR that is gone, a path that is
      * occupied again, and a failed move are each reported and skipped, so one of them never stops
      * the rest of the journal from being restored.
+     *
+     * @return whether this JAR needs nothing further: it was restored, it is already gone, or its
+     *         original path is occupied again. {@code false} means the move failed and is worth
+     *         retrying at the next start, which is only possible while the journal survives.
      */
-    private static void restoreSetAsideJar(File setAside, Path original, File pluginsFolder, String module) {
+    private static boolean restoreSetAsideJar(File setAside, Path original, File pluginsFolder, String module) {
         try {
             if (!Files.exists(setAside.toPath(), LinkOption.NOFOLLOW_LINKS)) {
-                return;
+                return true;
             }
             if (Files.exists(original, LinkOption.NOFOLLOW_LINKS)) {
                 LOGGER.warning("Set-aside module JAR " + setAside.getAbsolutePath()
                         + " from an interrupted update of module " + module + " was not restored: "
                         + original.toAbsolutePath() + " already exists");
-                return;
+                return true;
             }
             Files.createDirectories(pluginsFolder.toPath());
             Files.move(setAside.toPath(), original, StandardCopyOption.ATOMIC_MOVE);
             LOGGER.warning("Restored " + original.toAbsolutePath() + " from an interrupted module update (it was "
                     + setAside.getAbsolutePath() + ")");
+            return true;
         } catch (IOException | SecurityException e) {
             LOGGER.log(Level.WARNING, "Could not restore the set-aside module JAR " + setAside.getAbsolutePath()
                     + " to " + original.toAbsolutePath(), e);
+            return false;
         }
     }
 
