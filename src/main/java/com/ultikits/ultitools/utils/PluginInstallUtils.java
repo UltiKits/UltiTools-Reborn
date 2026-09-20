@@ -598,6 +598,12 @@ public class PluginInstallUtils {
              * cannot be renamed atomically between them; nothing was changed.
              */
             FILE_SYSTEMS_DIFFER,
+            /**
+             * Both directories are on one file system, but it cannot rename a JAR atomically, which
+             * is the only way this update moves one. Reported apart from {@link #FILE_SYSTEMS_DIFFER}
+             * (Codex review r6) because the remedy is a different one.
+             */
+            ATOMIC_MOVE_UNSUPPORTED,
             /** The staging directory could not be prepared; nothing was changed. */
             STAGING_UNAVAILABLE,
             /** A JAR of the module newer than the catalogue's latest version is already in the modules folder; nothing was changed. */
@@ -1012,7 +1018,7 @@ public class PluginInstallUtils {
             } catch (AtomicMoveNotSupportedException e) {
                 LOGGER.log(Level.WARNING, "Could not move " + original + " aside to " + aside
                         + " atomically; refusing the update of " + identifyString, e);
-                return UpdateOutcome.of(UpdateOutcome.Status.FILE_SYSTEMS_DIFFER).withFailure(e);
+                return UpdateOutcome.of(UpdateOutcome.Status.ATOMIC_MOVE_UNSUPPORTED).withFailure(e);
             } catch (IOException e) {
                 LOGGER.log(Level.WARNING, "Could not move " + original + " aside to " + aside
                         + "; rolling back the update of " + identifyString, e);
@@ -1037,7 +1043,7 @@ public class PluginInstallUtils {
         } catch (AtomicMoveNotSupportedException e) {
             LOGGER.log(Level.WARNING, "Could not move the new version to " + target
                     + " atomically; refusing the update of " + identifyString, e);
-            return UpdateOutcome.of(UpdateOutcome.Status.FILE_SYSTEMS_DIFFER).withFailure(e);
+            return UpdateOutcome.of(UpdateOutcome.Status.ATOMIC_MOVE_UNSUPPORTED).withFailure(e);
         } catch (IOException e) {
             LOGGER.log(Level.WARNING, "Could not move the new version to " + target
                     + "; rolling back the update of " + identifyString, e);
@@ -1060,8 +1066,8 @@ public class PluginInstallUtils {
         List<Path[]> unrestored = moveBack(operations, movedAside);
         deleteQuietly(operations, staged);
         deleteJournal(journal);
-        UpdateOutcome outcome = failure.getStatus() == UpdateOutcome.Status.FILE_SYSTEMS_DIFFER
-                ? fileSystemsDiffer(stagingFolder, pluginsFolder, failure.getFailure())
+        UpdateOutcome outcome = failure.getStatus() == UpdateOutcome.Status.ATOMIC_MOVE_UNSUPPORTED
+                ? bothFoldersNamed(failure.getStatus(), stagingFolder, pluginsFolder, failure.getFailure())
                 : failure;
         return withUnrestored(outcome, unrestored);
     }
@@ -1143,7 +1149,13 @@ public class PluginInstallUtils {
     }
 
     private static UpdateOutcome fileSystemsDiffer(File stagingFolder, File pluginsFolder, Throwable cause) {
-        UpdateOutcome outcome = new UpdateOutcome(UpdateOutcome.Status.FILE_SYSTEMS_DIFFER,
+        return bothFoldersNamed(UpdateOutcome.Status.FILE_SYSTEMS_DIFFER, stagingFolder, pluginsFolder, cause);
+    }
+
+    /** An outcome naming the staging directory and the modules folder, in that order. */
+    private static UpdateOutcome bothFoldersNamed(UpdateOutcome.Status status, File stagingFolder,
+                                                  File pluginsFolder, Throwable cause) {
+        UpdateOutcome outcome = new UpdateOutcome(status,
                 Arrays.asList(stagingFolder.getAbsolutePath(), pluginsFolder.getAbsolutePath()),
                 Collections.<String>emptyList(), Collections.<String>emptyList());
         return cause == null ? outcome : outcome.withFailure(cause);

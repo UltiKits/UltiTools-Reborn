@@ -379,6 +379,15 @@ public class PluginInstallCommands extends BaseCommandExecutor {
                 sendFailureReason(sender, outcome);
                 sendUnrestored(sender, outcome);
                 return;
+            case ATOMIC_MOVE_UNSUPPORTED:
+                // Both folders are on one file system: what it cannot do is rename atomically, and
+                // this update only ever renames (Codex review r6).
+                sender.sendMessage(ChatColor.RED + String.format(ultiTools.i18n("更新失败！暂存目录 %s 与模块目录 %s 所在的文件系统不支持原子重命名，无法安全地替换 JAR。"),
+                        outcome.getFiles().isEmpty() ? "" : outcome.getFiles().get(0),
+                        outcome.getFiles().size() < 2 ? "" : outcome.getFiles().get(1)));
+                sendFailureReason(sender, outcome);
+                sendUnrestored(sender, outcome);
+                return;
             case OLD_JAR_NOT_MOVED:
                 sender.sendMessage(ChatColor.RED + String.format(ultiTools.i18n("更新失败！无法将旧版本 JAR 文件移出模块目录：%s"),
                         String.join(", ", outcome.getFiles())));

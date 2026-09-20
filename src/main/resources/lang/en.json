@@ -126,6 +126,7 @@
   "更新失败！无法准备暂存目录 %s，本次未做任何更改。": "Update failed! Could not prepare the staging folder %s; nothing was changed.",
   "更新失败！暂存目录 %s 与模块目录 %s 不在同一文件系统上，无法原子地替换 JAR，本次未做任何更改。": "Update failed! The staging folder %s and the modules folder %s are not on the same file system, so the JAR cannot be replaced atomically; nothing was changed.",
   "更新失败！暂存目录 %s 与模块目录 %s 不在同一文件系统上，无法原子地替换 JAR。": "Update failed! The staging folder %s and the modules folder %s are not on the same file system, so the JAR cannot be replaced atomically.",
+  "更新失败！暂存目录 %s 与模块目录 %s 所在的文件系统不支持原子重命名，无法安全地替换 JAR。": "Update failed! The file system holding the staging folder %s and the modules folder %s does not support atomic renames, so the JAR cannot be replaced safely.",
   "原因：%s": "Cause: %s",
   "以下旧版本 JAR 未能移回模块目录。重启前请将每个文件移动到箭头后的路径，恢复其原文件名：%s": "These old JAR files could not be moved back. Before restarting, move each file to the path after its arrow, restoring its original file name: %s",
   "全部更新完成！%d个成功，%d个失败，%d个跳过。请先按上面的提示将未能移回的旧版本 JAR 移回模块目录，再重启服务器。": "All updates complete! %d succeeded, %d failed, %d skipped. Move the old JAR files listed above back into the modules folder before restarting.",
