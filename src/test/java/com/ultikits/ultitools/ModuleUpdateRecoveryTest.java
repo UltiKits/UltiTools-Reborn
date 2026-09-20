@@ -662,6 +662,52 @@ class ModuleUpdateRecoveryTest {
         assertThat(journal).doesNotExist();
     }
 
+    @Test
+    @DisplayName("sweep A21: a rollback retried does not delete the JAR the first attempt put back")
+    void rollbackRetried_keepsWhatTheFirstAttemptRestored() throws IOException {
+        // A same-version retry: the JAR set aside came from the path the candidate was installed to.
+        File restored = writeJar(new File(pluginsFolder, ID + "-2.0.0.jar"), ID, "2.0.0");
+        byte[] restoredBytes = Files.readAllBytes(restored.toPath());
+        File secondAside = setAsideJar(ID + "-0.9.0.jar", UUID_A, "0.9.0");
+        File occupant = new File(pluginsFolder, ID + "-0.9.0.jar");
+        Files.write(occupant.toPath(), "in the way".getBytes(StandardCharsets.UTF_8));
+        // The first attempt restored the first pair, and its set-aside file is gone; the second
+        // could not be placed, so the journal is still here.
+        File journal = writeRollingBack(UUID_A, ID, "Fixture", ID + "-2.0.0.jar",
+                ID + "-2.0.0.jar", ID + "-2.0.0.jar." + UUID_A + ".old",
+                ID + "-0.9.0.jar", secondAside.getName());
+
+        UltiTools.collectModuleJarUrls(pluginsFolder);
+
+        assertThat(restored)
+                .as("deleting this deletes the only copy the rollback had, and its set-aside file is gone")
+                .exists();
+        assertThat(restored).hasBinaryContent(restoredBytes);
+        assertThat(journal).as("the second pair still has nowhere to go").exists();
+    }
+
+    @Test
+    @DisplayName("sweep A18: a journal whose replacement was interrupted mid-publish is adopted, not deleted")
+    void completeTemporaryJournal_isAdoptedWhenTheJournalIsGone() throws IOException {
+        File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        File staging = new File(dataFolder, ".upm-staging");
+        // What a file store that refuses an atomic replace leaves if the process dies between
+        // removing the old journal and renaming its replacement into place.
+        File temporary = new File(staging, UUID_A + ".txn.tmp");
+        Files.write(temporary.toPath(), ("format=1\nprocess=" + OTHER_PROCESS + "\nmodule=" + ID + "\n"
+                + "name=Fixture\ntarget=" + ID + "-2.0.0.jar\n"
+                + "aside.0.original=" + ID + "-1.0.0.jar\naside.0.aside=" + aside.getName() + "\n")
+                .getBytes(StandardCharsets.UTF_8));
+
+        UltiTools.collectModuleJarUrls(pluginsFolder);
+
+        assertThat(new File(pluginsFolder, ID + "-1.0.0.jar"))
+                .as("deleting it as a stale temporary file leaves the module with no JAR at all")
+                .exists();
+        assertThat(aside).doesNotExist();
+        assertThat(temporary).doesNotExist();
+    }
+
     /** A journal whose update was rejected and whose rollback has not finished. */
     private File writeRollingBack(String transaction, String module, String name, String target,
                                   String... originalAndAsideNames) throws IOException {
