@@ -610,7 +610,9 @@ public class PluginManager {
                 // without initialising them, which is what the loader does with a module JAR at
                 // startup; nothing here acts on a name from outside the artifact being examined.
                 // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
-                return findModuleMainClass(candidateJar, (className) -> Class.forName(className, false, loader)) != null;
+                Class<? extends UltiToolsPlugin> mainClass =
+                        findModuleMainClass(candidateJar, (className) -> Class.forName(className, false, loader));
+                return mainClass != null && canBeInstantiatedAtBoot(mainClass, candidateJar);
             }
         } catch (IOException | RuntimeException | LinkageError e) {
             Bukkit.getLogger().log(Level.WARNING,
@@ -619,6 +621,28 @@ public class PluginManager {
         } finally {
             ModuleScanDiagnostics.emitSummary(candidateJar.getName());
             ClassLoaderUtils.emitClassloadFilterAuditSummary(candidateJar.getName());
+        }
+    }
+
+    /**
+     * Whether {@code mainClass} has the constructor the boot path calls. {@link #initializePlugin}
+     * creates a module with {@code getDeclaredConstructor().newInstance()}, so a class without a
+     * no-argument constructor loads and then fails to register (Codex review r14). The constructor
+     * is only looked up, never invoked: instantiating a downloaded artifact here would run its code
+     * before the operator has installed it.
+     *
+     * @param mainClass    the module main class the scan found
+     * @param candidateJar the JAR it came from, for the log line
+     * @return whether boot could create it
+     */
+    private static boolean canBeInstantiatedAtBoot(Class<? extends UltiToolsPlugin> mainClass, File candidateJar) {
+        try {
+            mainClass.getDeclaredConstructor();
+            return true;
+        } catch (NoSuchMethodException | RuntimeException e) {
+            Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + candidateJar
+                + " carries " + mainClass.getName() + ", which has no constructor the loader could call", e);
+            return false;
         }
     }
 
