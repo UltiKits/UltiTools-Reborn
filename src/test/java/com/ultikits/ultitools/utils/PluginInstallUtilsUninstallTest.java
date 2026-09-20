@@ -574,6 +574,80 @@ class PluginInstallUtilsUninstallTest {
     }
 
     @Test
+    @DisplayName("a runtime-name match wins outright, and no declared-name lookup runs beside it")
+    void runtimeNameMatch_winsOverAnotherModulesDeclaredName() throws IOException {
+        UltiToolsPlugin target = mock(UltiToolsPlugin.class);
+        when(target.getPluginName()).thenReturn("Foo");
+        doCallRealMethod().when(target).unregisterSelf();
+        UltiToolsPlugin other = mock(UltiToolsPlugin.class);
+        when(other.getPluginName()).thenReturn("OtherModule");
+        doCallRealMethod().when(other).unregisterSelf();
+        pluginManager.getPluginList().add(target);
+        pluginManager.getPluginList().add(other);
+        File targetJar = writeModuleJar("Foo");
+        // Another loaded module whose JAR happens to declare the name that was typed.
+        File otherJar = writeModuleJar("Foo", "9.9.9");
+
+        PluginInstallUtils.UninstallReport report = uninstallReporting("Foo",
+                module -> module == target ? targetJar : otherJar);
+
+        assertThat(targetJar).doesNotExist();
+        assertThat(otherJar)
+                .as("the runtime name answered the question, so nothing else needed asking")
+                .exists();
+        assertThat(pluginManager.getPluginList()).containsExactly(other);
+        assertThat(report.deletedFiles()).containsExactly(targetJar.getAbsolutePath());
+    }
+
+    @Test
+    @DisplayName("an ambiguous declared-name match is refused, and nothing is unloaded or deleted")
+    void ambiguousDeclaredName_refusesAndChangesNothing() throws IOException {
+        UltiToolsPlugin first = mock(UltiToolsPlugin.class);
+        when(first.getPluginName()).thenReturn("FirstModule");
+        doCallRealMethod().when(first).unregisterSelf();
+        UltiToolsPlugin second = mock(UltiToolsPlugin.class);
+        when(second.getPluginName()).thenReturn("SecondModule");
+        doCallRealMethod().when(second).unregisterSelf();
+        pluginManager.getPluginList().add(first);
+        pluginManager.getPluginList().add(second);
+        // No loaded module answers to "Foo" by name, and two JARs declare it.
+        File firstJar = writeModuleJar("Foo");
+        File secondJar = writeModuleJar("Foo", "2.0.0");
+
+        Throwable thrown = catchThrowable(() -> uninstallReporting("Foo",
+                module -> module == first ? firstJar : secondJar));
+
+        assertThat(thrown)
+                .as("a destructive command with two possible targets must stop, not choose one")
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(thrown).hasMessageContaining("FirstModule").hasMessageContaining("SecondModule");
+        assertThat(pluginManager.getPluginList())
+                .as("the refusal's value is the absence of an effect")
+                .containsExactly(first, second);
+        assertThat(firstJar).exists();
+        assertThat(secondJar).exists();
+    }
+
+    @Test
+    @DisplayName("a declared name that is present but blank identifies nothing")
+    void blankDeclaredName_isUndeterminedAndNeverAKey() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        File loaded = writeJarDeclaring("zz-blank-loaded.jar", "name: \"   \"\n");
+        File other = writeJarDeclaring("zz-blank-other.jar", "name: \"\"\n");
+
+        PluginInstallUtils.UninstallReport report = uninstallReporting(MODULE_NAME, module -> loaded);
+
+        assertThat(loaded).as("the code source is this module's whatever it declares").doesNotExist();
+        assertThat(other)
+                .as("a blank name is not a name: it must never become a key that matches other archives")
+                .exists();
+        assertThat(report.undeterminedEntries()).containsExactly(other.getAbsolutePath());
+    }
+
+    @Test
     @DisplayName("states A-D: what an entry declares decides it, not what it is called")
     void whatAnEntryDeclaresDecidesIt_notWhatItIsCalled() throws IOException {
         File jar = writeModuleJar(MODULE_NAME);
@@ -807,6 +881,17 @@ class PluginInstallUtilsUninstallTest {
     private PluginInstallUtils.UninstallReport uninstallReporting(
             String name, java.util.function.Function<UltiToolsPlugin, File> codeSource) throws IOException {
         return PluginInstallUtils.uninstallPluginReporting(name, codeSource);
+    }
+
+    /** A JAR whose {@code plugin.yml} is exactly {@code content}. */
+    private File writeJarDeclaring(String fileName, String content) throws IOException {
+        File jar = new File(pluginsFolder, fileName);
+        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(jar))) {
+            out.putNextEntry(new JarEntry("plugin.yml"));
+            out.write(content.getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+        return jar;
     }
 
     /** A JAR carrying no {@code plugin.yml}: what a module identified only by {@code @UltiToolsModule} looks like. */
