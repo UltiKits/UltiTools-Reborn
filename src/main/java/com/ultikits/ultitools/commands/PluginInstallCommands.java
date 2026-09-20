@@ -379,6 +379,11 @@ public class PluginInstallCommands extends BaseCommandExecutor {
                 sendFailureReason(sender, outcome);
                 sendUnrestored(sender, outcome);
                 return;
+            case JOURNAL_NOT_WRITTEN:
+                sender.sendMessage(ChatColor.RED + String.format(ultiTools.i18n("更新失败！无法写入更新日志文件 %s，本次未做任何更改。"),
+                        String.join(", ", outcome.getFiles())));
+                sendFailureReason(sender, outcome);
+                return;
             case ATOMIC_MOVE_UNSUPPORTED:
                 // Both folders are on one file system: what it cannot do is rename atomically, and
                 // this update only ever renames (Codex review r6).

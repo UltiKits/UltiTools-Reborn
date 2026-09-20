@@ -124,6 +124,7 @@
   "更新失败！该模块正在进行另一项更新或卸载，本次未做任何更改。": "Update failed! Another update or uninstall of this module is running; nothing was changed.",
   "更新失败！模块目录中已有比最新目录版本 %s 更新的 JAR：%s（版本 %s），本次未做任何更改。": "Update failed! The modules folder already holds a JAR newer than the catalogue's latest version %s: %s (version %s); nothing was changed.",
   "更新失败！无法准备暂存目录 %s，本次未做任何更改。": "Update failed! Could not prepare the staging folder %s; nothing was changed.",
+  "更新失败！无法写入更新日志文件 %s，本次未做任何更改。": "Update failed! The update journal %s could not be written; nothing was changed.",
   "更新失败！暂存目录 %s 与模块目录 %s 不在同一文件系统上，无法原子地替换 JAR，本次未做任何更改。": "Update failed! The staging folder %s and the modules folder %s are not on the same file system, so the JAR cannot be replaced atomically; nothing was changed.",
   "更新失败！暂存目录 %s 与模块目录 %s 不在同一文件系统上，无法原子地替换 JAR。": "Update failed! The staging folder %s and the modules folder %s are not on the same file system, so the JAR cannot be replaced atomically.",
   "更新失败！暂存目录 %s 与模块目录 %s 所在的文件系统不支持原子重命名，无法安全地替换 JAR。": "Update failed! The file system holding the staging folder %s and the modules folder %s does not support atomic renames, so the JAR cannot be replaced safely.",

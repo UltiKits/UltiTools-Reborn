@@ -607,6 +607,11 @@ public class PluginInstallUtils {
              * (Codex review r6) because the remedy is a different one.
              */
             ATOMIC_MOVE_UNSUPPORTED,
+            /**
+             * The transaction's journal could not be written, so no JAR was moved: without a
+             * journal a crash mid-move would leave JARs nothing ever moves back (review r6 IN-04).
+             */
+            JOURNAL_NOT_WRITTEN,
             /** The staging directory could not be prepared; nothing was changed. */
             STAGING_UNAVAILABLE,
             /** A JAR of the module newer than the catalogue's latest version is already in the modules folder; nothing was changed. */
@@ -858,7 +863,8 @@ public class PluginInstallUtils {
         // of a finished transaction and is never moved back.
         List<Path[]> planned = plannedMoves(olderJars, stagingFolder, unique);
         Path journal = stagingFolder.toPath().resolve(unique + JOURNAL_SUFFIX);
-        UpdateOutcome journalFailed = openJournal(journal, moduleKey, fileName, planned, stagingFolder, identifyString);
+        UpdateOutcome journalFailed = openJournal(journal, moduleKey, readModuleName(staged.toFile()), fileName,
+                planned, stagingFolder, identifyString);
         if (journalFailed != null) {
             deleteQuietly(operations, staged);
             return journalFailed;
@@ -968,15 +974,17 @@ public class PluginInstallUtils {
      *
      * @return the outcome to report, or {@code null} when the journal is on disk
      */
-    private static UpdateOutcome openJournal(Path journal, String moduleKey, String targetName,
+    private static UpdateOutcome openJournal(Path journal, String moduleKey, String moduleName, String targetName,
                                              List<Path[]> planned, File stagingFolder, String identifyString) {
         try {
-            writeTransactionJournal(journal, moduleKey, targetName, planned);
+            writeTransactionJournal(journal, moduleKey, moduleName, targetName, planned);
             return null;
         } catch (IOException | SecurityException e) {
             LOGGER.log(Level.SEVERE, "Could not write the update journal " + journal + " for " + identifyString
                     + "; nothing was changed", e);
-            return stagingUnavailable(stagingFolder, e);
+            return new UpdateOutcome(UpdateOutcome.Status.JOURNAL_NOT_WRITTEN,
+                    Collections.singletonList(journal.toAbsolutePath().toString()), Collections.<String>emptyList(),
+                    Collections.<String>emptyList()).withFailure(e);
         }
     }
 
@@ -1117,13 +1125,18 @@ public class PluginInstallUtils {
      * @param targetName the new version's file name
      * @param planned the {@code {original, aside}} pairs the transaction is about to move
      */
-    private static void writeTransactionJournal(Path journal, String moduleKey, String targetName,
+    private static void writeTransactionJournal(Path journal, String moduleKey, String moduleName, String targetName,
                                                 List<Path[]> planned) throws IOException {
         java.util.Properties entries = new java.util.Properties();
         entries.setProperty("format", JOURNAL_FORMAT);
         entries.setProperty("process", currentProcessIdentity());
         entries.setProperty("module", moduleKey);
         entries.setProperty("target", targetName);
+        if (moduleName != null) {
+            // The runtime name an uninstall goes by. Without it a transaction that set no JAR aside
+            // names its module nowhere, and an uninstall in its move window runs unguarded (r6 IN-05).
+            entries.setProperty("name", moduleName);
+        }
         for (int i = 0; i < planned.size(); i++) {
             entries.setProperty("aside." + i + ".original", planned.get(i)[0].getFileName().toString());
             entries.setProperty("aside." + i + ".aside", planned.get(i)[1].getFileName().toString());
@@ -1131,13 +1144,29 @@ public class PluginInstallUtils {
         writeProperties(journal, entries);
     }
 
-    /** Writes {@code entries} to {@code journal} through a temporary file and an atomic rename. */
+    /**
+     * Writes {@code entries} to {@code journal} through a temporary file and an atomic rename, so
+     * recovery never reads a half-written journal. The temporary file is removed if anything fails
+     * (review r6 IN-04); boot recovery sweeps it as a second line of defence.
+     */
     private static void writeProperties(Path journal, java.util.Properties entries) throws IOException {
         Path temporary = journal.resolveSibling(journal.getFileName() + ".tmp");
-        try (java.io.Writer writer = Files.newBufferedWriter(temporary, java.nio.charset.StandardCharsets.UTF_8)) {
-            entries.store(writer, "UltiTools module update journal");
+        boolean renamed = false;
+        try {
+            try (java.io.Writer writer = Files.newBufferedWriter(temporary, java.nio.charset.StandardCharsets.UTF_8)) {
+                entries.store(writer, "UltiTools module update journal");
+            }
+            Files.move(temporary, journal, StandardCopyOption.ATOMIC_MOVE);
+            renamed = true;
+        } finally {
+            if (!renamed) {
+                try {
+                    Files.deleteIfExists(temporary);
+                } catch (IOException | SecurityException e) {
+                    LOGGER.log(Level.FINE, "Could not delete the half-written journal " + temporary, e);
+                }
+            }
         }
-        Files.move(temporary, journal, StandardCopyOption.ATOMIC_MOVE);
     }
 
     /**
@@ -1516,6 +1545,20 @@ public class PluginInstallUtils {
     }
 
     /**
+     * The {@code plugin.yml} {@code name} of the JAR at {@code file} -- the runtime name an
+     * uninstall goes by -- or {@code null} when the JAR, its {@code plugin.yml} or the key cannot
+     * be read.
+     */
+    static String readModuleName(File file) {
+        try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(file)) {
+            return readPluginYmlScalars(jarFile).get("name");
+        } catch (IOException | SecurityException e) {
+            LOGGER.log(Level.FINE, "Could not read the plugin.yml name of " + file, e);
+            return null;
+        }
+    }
+
+    /**
      * The {@code plugin.yml} {@code version} of the JAR at {@code file}, exactly as written, or
      * {@code null} when the JAR, its {@code plugin.yml} or the key cannot be read.
      */
@@ -1680,7 +1723,7 @@ public class PluginInstallUtils {
                 if (key == null || !JOURNAL_FORMAT.equals(entries.getProperty("format"))) {
                     continue;
                 }
-                if (journalNamesModule(entries, stagingFolder, name)) {
+                if (name.equals(entries.getProperty("name")) || journalNamesModule(entries, stagingFolder, name)) {
                     keys.add(key);
                 }
             } catch (IOException | RuntimeException e) {
