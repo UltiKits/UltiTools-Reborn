@@ -626,10 +626,12 @@ public class PluginManager {
 
     /**
      * Whether {@code mainClass} has the constructor the boot path calls. {@link #initializePlugin}
-     * creates a module with {@code getDeclaredConstructor().newInstance()}, so a class without a
-     * no-argument constructor loads and then fails to register (Codex review r14). The constructor
-     * is only looked up, never invoked: instantiating a downloaded artifact here would run its code
-     * before the operator has installed it.
+     * creates a module with {@code getDeclaredConstructor().newInstance()} and does not make it
+     * accessible first, so the constructor and its class must both be public for that call to
+     * succeed from here: a class without a no-argument constructor, or one that hides it, loads and
+     * then fails to register (Codex reviews r14, r15). The constructor is only looked up, never
+     * invoked: instantiating a downloaded artifact here would run its code before the operator has
+     * installed it.
      *
      * @param mainClass    the module main class the scan found
      * @param candidateJar the JAR it came from, for the log line
@@ -637,7 +639,12 @@ public class PluginManager {
      */
     private static boolean canBeInstantiatedAtBoot(Class<? extends UltiToolsPlugin> mainClass, File candidateJar) {
         try {
-            mainClass.getDeclaredConstructor();
+            Constructor<? extends UltiToolsPlugin> constructor = mainClass.getDeclaredConstructor();
+            if (!Modifier.isPublic(constructor.getModifiers()) || !Modifier.isPublic(mainClass.getModifiers())) {
+                Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + candidateJar + " carries "
+                    + mainClass.getName() + ", whose no-argument constructor the loader cannot reach");
+                return false;
+            }
             return true;
         } catch (NoSuchMethodException | RuntimeException e) {
             Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + candidateJar
