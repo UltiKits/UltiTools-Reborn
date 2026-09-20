@@ -804,7 +804,7 @@ public class PluginInstallUtils {
         String latestVersion = getPluginLatestVersion(identifyString);
         String downloadLink = getPluginVersionDownloadLink(identifyString, latestVersion);
         String fileName = installedJarName(identifyString, latestVersion);
-        if (downloadLink == null || fileName == null) {
+        if (catalogueLookupFailed(downloadLink, fileName)) {
             return UpdateOutcome.of(UpdateOutcome.Status.DOWNLOAD_FAILED);
         }
         UpdateFileOperations operations = updateFileOperations;
@@ -822,22 +822,12 @@ public class PluginInstallUtils {
             return unusableStaging;
         }
 
-        // Step 1: download into the staging directory, never into the modules folder.
-        try {
-            operations.download(downloadLink, stagedName, stagingFolder);
-        } catch (IOException | SecurityException | IllegalArgumentException e) {
-            LOGGER.log(Level.SEVERE, "Failed to download update for " + identifyString + "; nothing was changed", e);
-            deleteQuietly(operations, staged);
-            return UpdateOutcome.of(UpdateOutcome.Status.DOWNLOAD_FAILED);
-        }
-
-        // Step 2: validate before touching anything.
-        if (!isJarOfModule(staged.toFile(), moduleKey, latestVersion)) {
-            LOGGER.severe("Downloaded update for " + identifyString
-                    + " is not a loadable JAR of that module at version " + latestVersion
-                    + "; nothing was changed");
-            deleteQuietly(operations, staged);
-            return UpdateOutcome.of(UpdateOutcome.Status.INVALID_DOWNLOAD);
+        // Steps 1 and 2: download into the staging directory, never into the modules folder, and
+        // validate it there before anything in the modules folder is touched.
+        UpdateOutcome unusableDownload = downloadAndValidate(operations, downloadLink, stagedName, stagingFolder,
+                staged, moduleKey, latestVersion, identifyString);
+        if (unusableDownload != null) {
+            return unusableDownload;
         }
 
         // Step 3: select the older JARs while the new version is not in the modules folder.
@@ -854,21 +844,12 @@ public class PluginInstallUtils {
         // Step 3c: record the transaction before moving anything (review r5 WR-01). Boot recovery
         // restores only what a surviving journal names; a set-aside JAR without one is a leftover
         // of a finished transaction and is never moved back.
-        List<Path[]> planned = new ArrayList<>();
-        for (File olderJar : olderJars) {
-            planned.add(new Path[]{olderJar.toPath(),
-                    stagingFolder.toPath().resolve(olderJar.getName() + "." + unique + ".old")});
-        }
+        List<Path[]> planned = plannedMoves(olderJars, stagingFolder, unique);
         Path journal = stagingFolder.toPath().resolve(unique + JOURNAL_SUFFIX);
-        try {
-            writeTransactionJournal(journal, moduleKey, fileName, planned);
-        } catch (IOException | SecurityException e) {
-            LOGGER.log(Level.SEVERE, "Could not write the update journal " + journal + " for " + identifyString
-                    + "; nothing was changed", e);
+        UpdateOutcome journalFailed = openJournal(journal, moduleKey, fileName, planned, stagingFolder, identifyString);
+        if (journalFailed != null) {
             deleteQuietly(operations, staged);
-            return new UpdateOutcome(UpdateOutcome.Status.STAGING_UNAVAILABLE,
-                    Collections.singletonList(stagingFolder.getAbsolutePath()), Collections.<String>emptyList(),
-                    Collections.<String>emptyList()).withFailure(e);
+            return journalFailed;
         }
 
         // Step 4: move every older JAR aside; on failure, move back what was moved.
@@ -921,6 +902,64 @@ public class PluginInstallUtils {
             return stagingUnavailable(stagingFolder, e);
         }
         return null;
+    }
+
+    /** Whether the catalogue gave neither a download link nor a file name to install under. */
+    private static boolean catalogueLookupFailed(String downloadLink, String fileName) {
+        return downloadLink == null || fileName == null;
+    }
+
+    /**
+     * Downloads the new version into the staging directory and validates it there.
+     *
+     * @return the outcome to report, or {@code null} when a valid JAR of that module is staged
+     */
+    private static UpdateOutcome downloadAndValidate(UpdateFileOperations operations, String downloadLink,
+                                                     String stagedName, File stagingFolder, Path staged,
+                                                     String moduleKey, String latestVersion, String identifyString) {
+        try {
+            operations.download(downloadLink, stagedName, stagingFolder);
+        } catch (IOException | SecurityException | IllegalArgumentException e) {
+            LOGGER.log(Level.SEVERE, "Failed to download update for " + identifyString + "; nothing was changed", e);
+            deleteQuietly(operations, staged);
+            return UpdateOutcome.of(UpdateOutcome.Status.DOWNLOAD_FAILED);
+        }
+        if (!isJarOfModule(staged.toFile(), moduleKey, latestVersion)) {
+            LOGGER.severe("Downloaded update for " + identifyString
+                    + " is not a loadable JAR of that module at version " + latestVersion
+                    + "; nothing was changed");
+            deleteQuietly(operations, staged);
+            return UpdateOutcome.of(UpdateOutcome.Status.INVALID_DOWNLOAD);
+        }
+        return null;
+    }
+
+    /** The {@code {original, set-aside}} pairs the transaction is about to move, one per older JAR. */
+    private static List<Path[]> plannedMoves(List<File> olderJars, File stagingFolder, String unique) {
+        List<Path[]> planned = new ArrayList<>();
+        for (File olderJar : olderJars) {
+            planned.add(new Path[]{olderJar.toPath(),
+                    stagingFolder.toPath().resolve(olderJar.getName() + "." + unique + ".old")});
+        }
+        return planned;
+    }
+
+    /**
+     * Records the transaction before it moves anything (review r5 WR-01). Boot recovery moves back
+     * only what a surviving journal names, so a transaction that cannot write one must not start.
+     *
+     * @return the outcome to report, or {@code null} when the journal is on disk
+     */
+    private static UpdateOutcome openJournal(Path journal, String moduleKey, String targetName,
+                                             List<Path[]> planned, File stagingFolder, String identifyString) {
+        try {
+            writeTransactionJournal(journal, moduleKey, targetName, planned);
+            return null;
+        } catch (IOException | SecurityException e) {
+            LOGGER.log(Level.SEVERE, "Could not write the update journal " + journal + " for " + identifyString
+                    + "; nothing was changed", e);
+            return stagingUnavailable(stagingFolder, e);
+        }
     }
 
     /** The {@code STAGING_UNAVAILABLE} outcome naming {@code stagingFolder} and its cause. */
