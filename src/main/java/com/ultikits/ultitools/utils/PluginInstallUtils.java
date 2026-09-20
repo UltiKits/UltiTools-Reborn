@@ -859,6 +859,46 @@ public class PluginInstallUtils {
             return unusableDownload;
         }
 
+        // The module's runtime name is only knowable once the download has been validated, and it is
+        // the key an uninstall goes by. Taking it here closes the case where an update and an
+        // uninstall of one module share no other key -- a module with no identify-string of its own,
+        // or none installed yet (Codex review r16). An uninstall already holding it wins: this
+        // update has changed nothing so far.
+        String moduleName = readModuleName(staged.toFile());
+        String nameKey = moduleName == null ? null : UNINSTALL_NAME_KEY_PREFIX + moduleName.toLowerCase(Locale.ROOT);
+        if (nameKey != null) {
+            synchronized (MODULE_OPERATIONS_IN_PROGRESS) {
+                if (MODULE_OPERATIONS_IN_PROGRESS.contains(nameKey)) {
+                    LOGGER.warning("Refusing to update " + identifyString + ": an uninstall of module "
+                            + moduleName + " is running; nothing was changed");
+                    deleteQuietly(operations, staged);
+                    return UpdateOutcome.of(UpdateOutcome.Status.ALREADY_IN_PROGRESS);
+                }
+                MODULE_OPERATIONS_IN_PROGRESS.add(nameKey);
+            }
+        }
+        try {
+            return moveTheJars(operations, identifyString, moduleKey, moduleName, fileName, latestVersion,
+                    olderJars, staged, stagingFolder, pluginsFolder, unique);
+        } finally {
+            if (nameKey != null) {
+                MODULE_OPERATIONS_IN_PROGRESS.remove(nameKey);
+            }
+        }
+    }
+
+    /**
+     * The part of the transaction that touches the modules folder: refuse a newer JAR, write the
+     * journal, move the old JARs aside, move the new version in, clean up.
+     *
+     * @return the outcome to report
+     */
+    @SuppressWarnings("PMD.ExcessiveParameterList") // one transaction's state, passed rather than held in a field
+    private static UpdateOutcome moveTheJars(UpdateFileOperations operations, String identifyString, String moduleKey,
+                                             String moduleName, String fileName, String latestVersion,
+                                             List<File> olderJars, Path staged, File stagingFolder,
+                                             File pluginsFolder, String unique) {
+
         // Step 3b: never replace a JAR of the module that is newer than the catalogue's latest
         // version (review r4 WR-05), for example a pre-release the operator placed since boot.
         UpdateOutcome newerPresent = refuseIfNewerJarPresent(olderJars, identifyString, latestVersion);
@@ -872,7 +912,7 @@ public class PluginInstallUtils {
         // of a finished transaction and is never moved back.
         List<Path[]> planned = plannedMoves(olderJars, stagingFolder, unique);
         Path journal = stagingFolder.toPath().resolve(unique + JOURNAL_SUFFIX);
-        UpdateOutcome journalFailed = openJournal(journal, moduleKey, readModuleName(staged.toFile()), fileName,
+        UpdateOutcome journalFailed = openJournal(journal, moduleKey, moduleName, fileName,
                 planned, identifyString);
         if (journalFailed != null) {
             deleteQuietly(operations, staged);

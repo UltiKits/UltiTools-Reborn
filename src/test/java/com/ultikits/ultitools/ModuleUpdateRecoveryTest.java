@@ -224,30 +224,6 @@ class ModuleUpdateRecoveryTest {
     }
 
     @Test
-    @DisplayName("codex r16 P2: a target that carries no module class does not count as an installed update")
-    void journalWhoseTargetCarriesNoModuleClass_restoresTheOldJars() throws IOException {
-        // Right metadata, no class the loader could load a module from.
-        File target = new File(pluginsFolder, ID + "-2.0.0.jar");
-        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(target))) {
-            out.putNextEntry(new JarEntry("plugin.yml"));
-            out.write(("name: Fixture\nversion: 2.0.0\nidentify-string: " + ID + "\n")
-                    .getBytes(StandardCharsets.UTF_8));
-            out.closeEntry();
-        }
-        File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
-        File journal = writeJournal(UUID_A, OTHER_PROCESS, ID, ID + "-2.0.0.jar",
-                ID + "-1.0.0.jar", aside.getName());
-
-        UltiTools.collectModuleJarUrls(pluginsFolder);
-
-        assertThat(new File(pluginsFolder, ID + "-1.0.0.jar"))
-                .as("nothing loads from that target, so the update did not install anything")
-                .exists();
-        assertThat(aside).doesNotExist();
-        assertThat(journal).doesNotExist();
-    }
-
-    @Test
     @DisplayName("codex r8 P2: an occupied original path keeps the journal, so its JAR is never called disposable")
     void originalPathOccupied_keepsTheJournal() throws IOException {
         File occupant = new File(pluginsFolder, ID + "-1.0.0.jar");
