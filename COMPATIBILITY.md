@@ -366,6 +366,26 @@ This section governs the third kind.
   instead (see `ultitools.language.file-refresh`/`ultitools.language.file-preserve` in
   `FEATURES.md`). No operator who customised a file is affected either way.
 
+- `PluginInstallUtils.uninstallPlugin(String)` unloading through the framework's one full unload
+  path, and reporting the outcome it documents (#503, #501). It used to call
+  `plugin.unregisterSelf()` directly, skipping everything `PluginManager#unregister` does first —
+  cancelling the module's `@Scheduled` tasks, releasing its `@PlayerCache` beans, its
+  tab-completion completers, its EventBus handlers and its conditional-bean records, then closing
+  its context — so an "uninstalled" module kept running its repeating tasks until the next restart.
+  It also ignored `File#delete()`'s result and stopped at the first matching jar, and returned
+  `true` either way. As of 6.3.0 it deletes every jar whose `plugin.yml` `name` matches and
+  **throws** where it used to report success: `java.nio.file.FileSystemException` naming every jar
+  still on disk when one could not be deleted, `java.nio.file.NoSuchFileException` when a loaded
+  module was unloaded but no jar of it was found (which is not a misspelling and must not be
+  reported as one), and `IllegalStateException` when the module's own unload threw — the module is
+  still removed from the loaded modules and its jars are still deleted in that case, with the jar
+  outcome attached as suppressed, because `unregister` has closed its context by then and keeping
+  the jar would bring the module back on the next restart. `false` now means only "no jar matched
+  and nothing was unloaded either". A caller that checked the boolean alone now sees these as
+  exceptions rather than a success it did not get. The method also no longer builds a `jar:file:`
+  URL for every entry of the modules folder, so a stray file or a subdirectory there no longer
+  fails the uninstall (#504).
+
 ### Behavioral changes that do need one
 
 - A documented default value flipping.
