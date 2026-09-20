@@ -68,6 +68,39 @@ public class PluginInstallUtils {
     
     // Custom base URL for testing purposes
     private static String customBaseUrl;
+
+    /**
+     * Name of the staging directory, directly under the framework's data folder and therefore
+     * outside the scanned modules folder, where an update keeps its download and the old JARs it
+     * sets aside.
+     *
+     * @since 6.3.0
+     */
+    static final String STAGING_DIRECTORY_NAME = ".upm-staging";
+
+    /**
+     * Suffix of a transaction journal in the staging directory. A journal exists exactly while one
+     * update transaction is moving JARs, which is how boot recovery tells that transaction's
+     * set-aside JARs from the leftovers of a finished one (review r5 WR-01).
+     */
+    static final String JOURNAL_SUFFIX = ".txn";
+
+    /** Journal format marker, so a future format can be recognised rather than misread. */
+    private static final String JOURNAL_FORMAT = "1";
+
+    /**
+     * Normalised identify strings of the modules an update or an uninstall is changing right now.
+     * One guard for both operations (review r4 WR-03): an uninstall interleaved with an update of
+     * the same module otherwise replied success while the update put the module back.
+     */
+    private static final Set<String> MODULE_OPERATIONS_IN_PROGRESS = ConcurrentHashMap.newKeySet();
+
+    /** File operations used by an update; replaced only by tests, to inject failures and record order. */
+    static volatile UpdateFileOperations updateFileOperations = UpdateFileOperations.DEFAULT;
+
+    /** {@code <original name>.jar.<UUID>.old}, the name a set-aside JAR carries in the staging directory. */
+    private static final java.util.regex.Pattern SET_ASIDE_NAME = java.util.regex.Pattern.compile(
+            "^(.+\\.jar)\\.([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\\.old$");
     
     /**
      * Get the base URL for API calls.
@@ -472,35 +505,6 @@ public class PluginInstallUtils {
     }
 
     /**
-     * Name of the staging directory, directly under the framework's data folder and therefore
-     * outside the scanned modules folder, where an update keeps its download and the old JARs it
-     * sets aside.
-     *
-     * @since 6.3.0
-     */
-    static final String STAGING_DIRECTORY_NAME = ".upm-staging";
-
-    /**
-     * Suffix of a transaction journal in the staging directory. A journal exists exactly while one
-     * update transaction is moving JARs, which is how boot recovery tells that transaction's
-     * set-aside JARs from the leftovers of a finished one (review r5 WR-01).
-     */
-    static final String JOURNAL_SUFFIX = ".txn";
-
-    /** Journal format marker, so a future format can be recognised rather than misread. */
-    private static final String JOURNAL_FORMAT = "1";
-
-    /**
-     * Normalised identify strings of the modules an update or an uninstall is changing right now.
-     * One guard for both operations (review r4 WR-03): an uninstall interleaved with an update of
-     * the same module otherwise replied success while the update put the module back.
-     */
-    private static final Set<String> MODULE_OPERATIONS_IN_PROGRESS = ConcurrentHashMap.newKeySet();
-
-    /** File operations used by an update; replaced only by tests, to inject failures and record order. */
-    static volatile UpdateFileOperations updateFileOperations = UpdateFileOperations.DEFAULT;
-
-    /**
      * The file operations an update performs, in one place so a test can inject a failure into any
      * step or record the order of the steps without platform-specific permission tricks.
      */
@@ -813,27 +817,9 @@ public class PluginInstallUtils {
 
         // Step 0: prepare the staging directory, and refuse unless a JAR can be renamed atomically
         // between it and the modules folder -- a copy is what can leave a truncated JAR behind.
-        try {
-            Files.createDirectories(stagingFolder.toPath());
-        } catch (IOException | SecurityException e) {
-            LOGGER.log(Level.SEVERE, "Could not prepare the update staging directory " + stagingFolder
-                    + " for " + identifyString + "; nothing was changed", e);
-            return new UpdateOutcome(UpdateOutcome.Status.STAGING_UNAVAILABLE,
-                    Collections.singletonList(stagingFolder.getAbsolutePath()), Collections.<String>emptyList(),
-                    Collections.<String>emptyList()).withFailure(e);
-        }
-        try {
-            if (!operations.isSameFileStore(stagingFolder.toPath(), pluginsFolder.toPath())) {
-                LOGGER.severe("Refusing to update " + identifyString + ": the staging directory " + stagingFolder
-                        + " and the modules folder " + pluginsFolder + " are not on the same file system");
-                return fileSystemsDiffer(stagingFolder, pluginsFolder, null);
-            }
-        } catch (IOException | SecurityException e) {
-            LOGGER.log(Level.SEVERE, "Could not compare the file systems of " + stagingFolder + " and "
-                    + pluginsFolder + " for " + identifyString + "; nothing was changed", e);
-            return new UpdateOutcome(UpdateOutcome.Status.STAGING_UNAVAILABLE,
-                    Collections.singletonList(stagingFolder.getAbsolutePath()), Collections.<String>emptyList(),
-                    Collections.<String>emptyList()).withFailure(e);
+        UpdateOutcome unusableStaging = prepareStaging(operations, stagingFolder, pluginsFolder, identifyString);
+        if (unusableStaging != null) {
+            return unusableStaging;
         }
 
         // Step 1: download into the staging directory, never into the modules folder.
@@ -859,16 +845,10 @@ public class PluginInstallUtils {
 
         // Step 3b: never replace a JAR of the module that is newer than the catalogue's latest
         // version (review r4 WR-05), for example a pre-release the operator placed since boot.
-        for (File olderJar : olderJars) {
-            String version = readModuleVersion(olderJar);
-            if (version != null && VersionComparatorUtil.compare(version.trim(), latestVersion.trim()) > 0) {
-                LOGGER.warning("Refusing to update " + identifyString + ": " + olderJar + " is version " + version
-                        + ", newer than the catalogue's latest version " + latestVersion + "; nothing was changed");
-                deleteQuietly(operations, staged);
-                return new UpdateOutcome(UpdateOutcome.Status.NEWER_VERSION_PRESENT,
-                        Collections.singletonList(olderJar.getAbsolutePath()), Collections.<String>emptyList(),
-                        Collections.<String>emptyList()).withVersions(version, latestVersion);
-            }
+        UpdateOutcome newerPresent = refuseIfNewerJarPresent(olderJars, identifyString, latestVersion);
+        if (newerPresent != null) {
+            deleteQuietly(operations, staged);
+            return newerPresent;
         }
 
         // Step 3c: record the transaction before moving anything (review r5 WR-01). Boot recovery
@@ -893,6 +873,92 @@ public class PluginInstallUtils {
 
         // Step 4: move every older JAR aside; on failure, move back what was moved.
         List<Path[]> movedAside = new ArrayList<>();
+        UpdateOutcome asideFailed = moveOlderJarsAside(operations, planned, movedAside, identifyString);
+        if (asideFailed != null) {
+            return rollBack(operations, asideFailed, movedAside, staged, journal, stagingFolder, pluginsFolder);
+        }
+
+        // Step 5: move the new version in under its final name; on failure, restore the older JARs.
+        Path target = pluginsFolder.toPath().resolve(fileName);
+        UpdateOutcome moveInFailed = installNewVersion(operations, staged, target, identifyString);
+        if (moveInFailed != null) {
+            return rollBack(operations, moveInFailed, movedAside, staged, journal, stagingFolder, pluginsFolder);
+        }
+
+        // Step 6: delete the set-aside JARs; any that remain are outside the modules folder and inert.
+        List<String> leftovers = deleteSetAsideJars(operations, movedAside, identifyString);
+        // The transaction has reached its final state: the journal must go, so the next boot treats
+        // any set-aside JAR still here as a leftover rather than restoring it (review r5 WR-01).
+        deleteJournal(journal);
+        return new UpdateOutcome(UpdateOutcome.Status.UPDATED, Collections.<String>emptyList(),
+                Collections.<String>emptyList(), leftovers);
+    }
+
+    /**
+     * Prepares the staging directory and refuses a pair of directories a JAR cannot be renamed
+     * between atomically.
+     *
+     * @return the outcome to report, or {@code null} when the staging directory is usable
+     */
+    private static UpdateOutcome prepareStaging(UpdateFileOperations operations, File stagingFolder,
+                                                File pluginsFolder, String identifyString) {
+        try {
+            Files.createDirectories(stagingFolder.toPath());
+        } catch (IOException | SecurityException e) {
+            LOGGER.log(Level.SEVERE, "Could not prepare the update staging directory " + stagingFolder
+                    + " for " + identifyString + "; nothing was changed", e);
+            return stagingUnavailable(stagingFolder, e);
+        }
+        try {
+            if (!operations.isSameFileStore(stagingFolder.toPath(), pluginsFolder.toPath())) {
+                LOGGER.severe("Refusing to update " + identifyString + ": the staging directory " + stagingFolder
+                        + " and the modules folder " + pluginsFolder + " are not on the same file system");
+                return fileSystemsDiffer(stagingFolder, pluginsFolder, null);
+            }
+        } catch (IOException | SecurityException e) {
+            LOGGER.log(Level.SEVERE, "Could not compare the file systems of " + stagingFolder + " and "
+                    + pluginsFolder + " for " + identifyString + "; nothing was changed", e);
+            return stagingUnavailable(stagingFolder, e);
+        }
+        return null;
+    }
+
+    /** The {@code STAGING_UNAVAILABLE} outcome naming {@code stagingFolder} and its cause. */
+    private static UpdateOutcome stagingUnavailable(File stagingFolder, Throwable cause) {
+        return new UpdateOutcome(UpdateOutcome.Status.STAGING_UNAVAILABLE,
+                Collections.singletonList(stagingFolder.getAbsolutePath()), Collections.<String>emptyList(),
+                Collections.<String>emptyList()).withFailure(cause);
+    }
+
+    /**
+     * Refuses the update when a JAR of the module in the modules folder is newer than the
+     * catalogue's latest version (review r4 WR-05), for example a pre-release placed since boot.
+     *
+     * @return the outcome to report, or {@code null} when no JAR is newer
+     */
+    private static UpdateOutcome refuseIfNewerJarPresent(List<File> olderJars, String identifyString,
+                                                         String latestVersion) {
+        for (File olderJar : olderJars) {
+            String version = readModuleVersion(olderJar);
+            if (version != null && VersionComparatorUtil.compare(version.trim(), latestVersion.trim()) > 0) {
+                LOGGER.warning("Refusing to update " + identifyString + ": " + olderJar + " is version " + version
+                        + ", newer than the catalogue's latest version " + latestVersion + "; nothing was changed");
+                return new UpdateOutcome(UpdateOutcome.Status.NEWER_VERSION_PRESENT,
+                        Collections.singletonList(olderJar.getAbsolutePath()), Collections.<String>emptyList(),
+                        Collections.<String>emptyList()).withVersions(version, latestVersion);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Moves every planned JAR aside, recording what was moved in {@code movedAside} so the caller
+     * can roll back. A JAR removed since the listing is not a failure: there is nothing to move.
+     *
+     * @return the outcome to report, or {@code null} when every JAR was moved aside
+     */
+    private static UpdateOutcome moveOlderJarsAside(UpdateFileOperations operations, List<Path[]> planned,
+                                                    List<Path[]> movedAside, String identifyString) {
         for (Path[] move : planned) {
             Path original = move[0];
             Path aside = move[1];
@@ -904,45 +970,68 @@ public class PluginInstallUtils {
             } catch (AtomicMoveNotSupportedException e) {
                 LOGGER.log(Level.WARNING, "Could not move " + original + " aside to " + aside
                         + " atomically; refusing the update of " + identifyString, e);
-                List<Path[]> unrestored = moveBack(operations, movedAside);
-                deleteQuietly(operations, staged);
-                deleteJournal(journal);
-                return withUnrestored(fileSystemsDiffer(stagingFolder, pluginsFolder, e), unrestored);
+                return UpdateOutcome.of(UpdateOutcome.Status.FILE_SYSTEMS_DIFFER).withFailure(e);
             } catch (IOException e) {
                 LOGGER.log(Level.WARNING, "Could not move " + original + " aside to " + aside
                         + "; rolling back the update of " + identifyString, e);
-                List<Path[]> unrestored = moveBack(operations, movedAside);
-                deleteQuietly(operations, staged);
-                deleteJournal(journal);
-                return withUnrestored(new UpdateOutcome(UpdateOutcome.Status.OLD_JAR_NOT_MOVED,
+                return new UpdateOutcome(UpdateOutcome.Status.OLD_JAR_NOT_MOVED,
                         Collections.singletonList(original.toAbsolutePath().toString()), Collections.<String>emptyList(),
-                        Collections.<String>emptyList()).withFailure(e), unrestored);
+                        Collections.<String>emptyList()).withFailure(e);
             }
         }
+        return null;
+    }
 
-        // Step 5: move the new version in under its final name; on failure, restore the older JARs.
-        Path target = pluginsFolder.toPath().resolve(fileName);
+    /**
+     * Moves the validated download in under its final name.
+     *
+     * @return the outcome to report, or {@code null} when the new version is in place
+     */
+    private static UpdateOutcome installNewVersion(UpdateFileOperations operations, Path staged, Path target,
+                                                   String identifyString) {
         try {
             operations.move(staged, target);
+            return null;
         } catch (AtomicMoveNotSupportedException e) {
             LOGGER.log(Level.WARNING, "Could not move the new version to " + target
                     + " atomically; refusing the update of " + identifyString, e);
-            List<Path[]> unrestored = moveBack(operations, movedAside);
-            deleteQuietly(operations, staged);
-            deleteJournal(journal);
-            return withUnrestored(fileSystemsDiffer(stagingFolder, pluginsFolder, e), unrestored);
+            return UpdateOutcome.of(UpdateOutcome.Status.FILE_SYSTEMS_DIFFER).withFailure(e);
         } catch (IOException e) {
             LOGGER.log(Level.WARNING, "Could not move the new version to " + target
                     + "; rolling back the update of " + identifyString, e);
-            List<Path[]> unrestored = moveBack(operations, movedAside);
-            deleteQuietly(operations, staged);
-            deleteJournal(journal);
-            return withUnrestored(new UpdateOutcome(UpdateOutcome.Status.NEW_JAR_NOT_INSTALLED,
+            return new UpdateOutcome(UpdateOutcome.Status.NEW_JAR_NOT_INSTALLED,
                     Collections.singletonList(target.toAbsolutePath().toString()), Collections.<String>emptyList(),
-                    Collections.<String>emptyList()).withFailure(e), unrestored);
+                    Collections.<String>emptyList()).withFailure(e);
         }
+    }
 
-        // Step 6: delete the set-aside JARs; any that remain are outside the modules folder and inert.
+    /**
+     * Undoes a failed transaction: moves back every JAR it had set aside, deletes the download, and
+     * deletes the journal, because the transaction has reached a final state. A cross-file-system
+     * failure is re-stated with both directories named, which is what the operator has to act on.
+     *
+     * @return {@code failure}, with the JARs that could not be moved back attached
+     */
+    private static UpdateOutcome rollBack(UpdateFileOperations operations, UpdateOutcome failure,
+                                          List<Path[]> movedAside, Path staged, Path journal,
+                                          File stagingFolder, File pluginsFolder) {
+        List<Path[]> unrestored = moveBack(operations, movedAside);
+        deleteQuietly(operations, staged);
+        deleteJournal(journal);
+        UpdateOutcome outcome = failure.getStatus() == UpdateOutcome.Status.FILE_SYSTEMS_DIFFER
+                ? fileSystemsDiffer(stagingFolder, pluginsFolder, failure.getFailure())
+                : failure;
+        return withUnrestored(outcome, unrestored);
+    }
+
+    /**
+     * Deletes the JARs the transaction set aside.
+     *
+     * @return the absolute paths of those that could not be deleted; they are outside the modules
+     *         folder and never load
+     */
+    private static List<String> deleteSetAsideJars(UpdateFileOperations operations, List<Path[]> movedAside,
+                                                   String identifyString) {
         List<String> leftovers = new ArrayList<>();
         for (Path[] move : movedAside) {
             try {
@@ -953,11 +1042,7 @@ public class PluginInstallUtils {
                 leftovers.add(move[1].toAbsolutePath().toString());
             }
         }
-        // The transaction has reached its final state: the journal must go, so the next boot treats
-        // any set-aside JAR still here as a leftover rather than restoring it (review r5 WR-01).
-        deleteJournal(journal);
-        return new UpdateOutcome(UpdateOutcome.Status.UPDATED, Collections.<String>emptyList(),
-                Collections.<String>emptyList(), leftovers);
+        return leftovers;
     }
 
     /**
@@ -1014,10 +1099,6 @@ public class PluginInstallUtils {
         return cause == null ? outcome : outcome.withFailure(cause);
     }
 
-    /** {@code <original name>.jar.<UUID>.old}, the name a set-aside JAR carries in the staging directory. */
-    private static final java.util.regex.Pattern SET_ASIDE_NAME = java.util.regex.Pattern.compile(
-            "^(.+\\.jar)\\.([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\\.old$");
-
     /**
      * Recovers module updates a crash or kill interrupted (reviews r4/r5 WR-01). Must run before the
      * modules folder is scanned.
@@ -1035,7 +1116,6 @@ public class PluginInstallUtils {
      * @since 6.3.0
      */
     @ApiStatus.Internal
-    @SuppressWarnings("PMD.AvoidCatchingGenericException") // deliberate barrier: one bad journal must not stop the others
     public static void recoverInterruptedUpdates(File dataFolder) {
         if (dataFolder == null) {
             return;
@@ -1051,25 +1131,41 @@ public class PluginInstallUtils {
         for (File entry : entries) {
             String name = entry.getName();
             if (name.endsWith(".part") || name.endsWith(JOURNAL_SUFFIX + ".tmp")) {
-                try {
-                    Files.deleteIfExists(entry.toPath());
-                    LOGGER.info("Deleted a stale partial module update download: " + entry.getAbsolutePath());
-                } catch (IOException e) {
-                    LOGGER.log(Level.WARNING, "Could not delete a stale partial module update download: "
-                            + entry.getAbsolutePath(), e);
-                }
-                continue;
-            }
-            if (!name.endsWith(JOURNAL_SUFFIX)) {
-                continue;
-            }
-            try {
-                recoverJournal(entry, pluginsFolder, reported);
-            } catch (IOException | RuntimeException e) {
-                LOGGER.log(Level.WARNING, "Module update journal " + entry.getAbsolutePath()
-                        + " could not be read and was left in place", e);
+                deleteStaleDownload(entry);
+            } else if (name.endsWith(JOURNAL_SUFFIX)) {
+                recoverJournalIsolated(entry, pluginsFolder, reported);
             }
         }
+        reportLeftovers(entries, reported);
+    }
+
+    /** Deletes one partial download or half-written journal, logging either way. */
+    private static void deleteStaleDownload(File entry) {
+        try {
+            Files.deleteIfExists(entry.toPath());
+            LOGGER.info("Deleted a stale partial module update download: " + entry.getAbsolutePath());
+        } catch (IOException e) {
+            LOGGER.log(Level.WARNING, "Could not delete a stale partial module update download: "
+                    + entry.getAbsolutePath(), e);
+        }
+    }
+
+    /** Recovers one journal; an unusable one is logged and left in place, never failing the sweep. */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // deliberate barrier: one bad journal must not stop the others
+    private static void recoverJournalIsolated(File entry, File pluginsFolder, Set<String> reported) {
+        try {
+            recoverJournal(entry, pluginsFolder, reported);
+        } catch (IOException | RuntimeException e) {
+            LOGGER.log(Level.WARNING, "Module update journal " + entry.getAbsolutePath()
+                    + " could not be read and was left in place", e);
+        }
+    }
+
+    /**
+     * Names every set-aside JAR no journal referred to. Its transaction finished, so it is never
+     * moved back (review r5 WR-01) and the operator can delete it.
+     */
+    private static void reportLeftovers(File[] entries, Set<String> reported) {
         for (File entry : entries) {
             if (SET_ASIDE_NAME.matcher(entry.getName()).matches() && !reported.contains(entry.getName())
                     && Files.exists(entry.toPath(), LinkOption.NOFOLLOW_LINKS)) {
@@ -1105,59 +1201,84 @@ public class PluginInstallUtils {
                     + " belongs to an update running in this server process and was left in place");
             return;
         }
+        List<String[]> pairs = journalPairs(entries, journalFile);
+        if (pairs == null) {
+            return;
+        }
+        File stagingFolder = journalFile.getParentFile();
+        Path targetPath = pluginsFolder.toPath().resolve(target);
+        boolean alreadyInstalled = Files.exists(targetPath, LinkOption.NOFOLLOW_LINKS);
+        for (String[] pair : pairs) {
+            File setAside = new File(stagingFolder, pair[1]);
+            reported.add(pair[1]);
+            if (alreadyInstalled) {
+                reportAsLeftoverOfAnInstalledUpdate(setAside, module, targetPath);
+            } else {
+                restoreSetAsideJar(setAside, pluginsFolder.toPath().resolve(pair[0]), pluginsFolder, module);
+            }
+        }
+        deleteJournal(journalFile.toPath());
+    }
+
+    /**
+     * The {@code {original, set-aside}} file-name pairs a journal records.
+     *
+     * @return the pairs, or {@code null} when the journal names a file that cannot be used, in
+     *         which case it is left in place for the operator
+     */
+    private static List<String[]> journalPairs(java.util.Properties entries, File journalFile) {
         List<String[]> pairs = new ArrayList<>();
         for (int i = 0; ; i++) {
             String original = entries.getProperty("aside." + i + ".original");
             String aside = entries.getProperty("aside." + i + ".aside");
             if (original == null && aside == null) {
-                break;
+                return pairs;
             }
             if (!isPlainFileName(original) || !isPlainFileName(aside)) {
                 LOGGER.warning("Module update journal " + journalFile.getAbsolutePath()
                         + " names an unusable file and was left in place");
-                return;
+                return null;
             }
             pairs.add(new String[]{original, aside});
         }
-        File stagingFolder = journalFile.getParentFile();
-        Path targetPath = pluginsFolder.toPath().resolve(target);
-        if (Files.exists(targetPath, LinkOption.NOFOLLOW_LINKS)) {
-            for (String[] pair : pairs) {
-                File setAside = new File(stagingFolder, pair[1]);
-                reported.add(pair[1]);
-                if (Files.exists(setAside.toPath(), LinkOption.NOFOLLOW_LINKS)) {
-                    LOGGER.warning("Update leftover " + setAside.getAbsolutePath() + ": the interrupted update of module "
-                            + module + " had already installed " + targetPath.toAbsolutePath()
-                            + ", so it is never restored and can be deleted");
-                }
-            }
-            deleteJournal(journalFile.toPath());
-            return;
+    }
+
+    /**
+     * Names a set-aside JAR of a transaction that had already installed its new version. Moving it
+     * back would reinstall the version the update replaced, so it is only reported.
+     */
+    private static void reportAsLeftoverOfAnInstalledUpdate(File setAside, String module, Path target) {
+        if (Files.exists(setAside.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+            LOGGER.warning("Update leftover " + setAside.getAbsolutePath() + ": the interrupted update of module "
+                    + module + " had already installed " + target.toAbsolutePath()
+                    + ", so it is never restored and can be deleted");
         }
-        for (String[] pair : pairs) {
-            File setAside = new File(stagingFolder, pair[1]);
-            reported.add(pair[1]);
-            Path original = pluginsFolder.toPath().resolve(pair[0]);
-            try {
-                if (!Files.exists(setAside.toPath(), LinkOption.NOFOLLOW_LINKS)) {
-                    continue;
-                }
-                if (Files.exists(original, LinkOption.NOFOLLOW_LINKS)) {
-                    LOGGER.warning("Set-aside module JAR " + setAside.getAbsolutePath()
-                            + " from an interrupted update of module " + module + " was not restored: "
-                            + original.toAbsolutePath() + " already exists");
-                    continue;
-                }
-                Files.createDirectories(pluginsFolder.toPath());
-                Files.move(setAside.toPath(), original, StandardCopyOption.ATOMIC_MOVE);
-                LOGGER.warning("Restored " + original.toAbsolutePath() + " from an interrupted module update (it was "
-                        + setAside.getAbsolutePath() + ")");
-            } catch (IOException | SecurityException e) {
-                LOGGER.log(Level.WARNING, "Could not restore the set-aside module JAR " + setAside.getAbsolutePath()
-                        + " to " + original.toAbsolutePath(), e);
+    }
+
+    /**
+     * Moves one set-aside JAR back to the path it came from. A JAR that is gone, a path that is
+     * occupied again, and a failed move are each reported and skipped, so one of them never stops
+     * the rest of the journal from being restored.
+     */
+    private static void restoreSetAsideJar(File setAside, Path original, File pluginsFolder, String module) {
+        try {
+            if (!Files.exists(setAside.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                return;
             }
+            if (Files.exists(original, LinkOption.NOFOLLOW_LINKS)) {
+                LOGGER.warning("Set-aside module JAR " + setAside.getAbsolutePath()
+                        + " from an interrupted update of module " + module + " was not restored: "
+                        + original.toAbsolutePath() + " already exists");
+                return;
+            }
+            Files.createDirectories(pluginsFolder.toPath());
+            Files.move(setAside.toPath(), original, StandardCopyOption.ATOMIC_MOVE);
+            LOGGER.warning("Restored " + original.toAbsolutePath() + " from an interrupted module update (it was "
+                    + setAside.getAbsolutePath() + ")");
+        } catch (IOException | SecurityException e) {
+            LOGGER.log(Level.WARNING, "Could not restore the set-aside module JAR " + setAside.getAbsolutePath()
+                    + " to " + original.toAbsolutePath(), e);
         }
-        deleteJournal(journalFile.toPath());
     }
 
     /** Whether {@code name} is a plain file name: not empty, no path separator, not a directory hop. */
