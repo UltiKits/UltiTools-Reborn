@@ -668,36 +668,32 @@ public class PluginManager {
             }
             // The candidate first, so its own classes win over a namesake in another module, as they
             // do at boot where only one JAR of a module is present.
-            List<File> jars = new ArrayList<>();
-            jars.add(candidateJar);
+            List<URL> urls = new ArrayList<>();
+            urls.add(candidateJar.toURI().toURL());
             File modulesFolder = new File(UltiTools.getInstance().getDataFolder(), "plugins");
             File[] installed = modulesFolder.listFiles((file) -> file.getName().endsWith(".jar"));
             if (installed != null) {
                 for (File jar : installed) {
-                    if (!replaced.contains(jar.getAbsolutePath())) {
-                        jars.add(jar);
+                    // The same filter the boot class path applies (UltiTools#collectModuleJarUrls):
+                    // a JAR the server will skip provides nothing after the restart, so a candidate
+                    // must not be validated against it (Codex review r13).
+                    if (!replaced.contains(jar.getAbsolutePath()) && SecurityPolicy.isValidModuleJar(jar)) {
+                        urls.add(jar.toURI().toURL());
                     }
                 }
             }
+            // Only the candidate's own names are resolved ahead of the parent. A surviving module
+            // that shades a framework class must not decide this candidate's fate: at boot the
+            // framework's copy wins, because the module loader is parent-first (Codex review r13).
             Set<String> ownClassNames = new HashSet<>();
-            List<URL> urls = new ArrayList<>();
-            for (File jar : jars) {
-                try (JarFile jarFile = new JarFile(jar)) {
-                    Enumeration<JarEntry> entries = jarFile.entries();
-                    while (entries.hasMoreElements()) {
-                        String entryName = entries.nextElement().getName();
-                        if (entryName.endsWith(".class") && !entryName.contains("META-INF")) {
-                            ownClassNames.add(entryName.replace('/', '.').replace(".class", ""));
-                        }
+            try (JarFile jarFile = new JarFile(candidateJar)) {
+                Enumeration<JarEntry> entries = jarFile.entries();
+                while (entries.hasMoreElements()) {
+                    String entryName = entries.nextElement().getName();
+                    if (entryName.endsWith(".class") && !entryName.contains("META-INF")) {
+                        ownClassNames.add(entryName.replace('/', '.').replace(".class", ""));
                     }
-                } catch (IOException unreadable) {
-                    // A file in the modules folder that is not a readable archive provides no class
-                    // at boot either; it is left off this class path rather than failing the check.
-                    Bukkit.getLogger().log(Level.FINE,
-                        "[UltiTools-API] Not a readable archive, left off the validation class path: " + jar);
-                    continue;
                 }
-                urls.add(jar.toURI().toURL());
             }
             return new CandidateClassLoader(urls.toArray(new URL[0]),
                     PluginManager.class.getClassLoader(), ownClassNames);
