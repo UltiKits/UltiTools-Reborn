@@ -94,7 +94,6 @@ class PluginInstallUtilsUninstallTest {
 
     @AfterEach
     void tearDown() {
-        PluginInstallUtils.moduleCodeSource = PluginInstallUtils.DEFAULT_MODULE_CODE_SOURCE;
         MockBukkitHelper.safeUnmock();
     }
 
@@ -329,9 +328,7 @@ class PluginInstallUtilsUninstallTest {
         // A module JAR carrying no plugin.yml at all: UltiTools modules are identified by
         // @UltiToolsModule, so this loads perfectly well and metadata cannot rule it in or out.
         File jar = writeJarWithoutPluginYml(MODULE_NAME + "-1.0.0.jar");
-        PluginInstallUtils.moduleCodeSource = module -> jar;
-
-        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+        PluginInstallUtils.UninstallReport report = uninstallReporting(MODULE_NAME, module -> jar);
 
         assertThat(jar)
                 .as("the framework can ask the instance which JAR it came from; leaving it means the "
@@ -350,12 +347,10 @@ class PluginInstallUtilsUninstallTest {
         pluginManager.getPluginList().add(plugin);
         File jar = writeJarWithoutPluginYml(MODULE_NAME + "-1.0.0.jar");
         java.util.List<Boolean> stillLoadedWhenAsked = new java.util.ArrayList<>();
-        PluginInstallUtils.moduleCodeSource = module -> {
+        uninstallReporting(MODULE_NAME, module -> {
             stillLoadedWhenAsked.add(pluginManager.getPluginList().contains(module));
             return jar;
-        };
-
-        PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+        });
 
         assertThat(stillLoadedWhenAsked)
                 .as("after the unload the instance and its loader may be gone, and with them the answer")
@@ -371,11 +366,10 @@ class PluginInstallUtilsUninstallTest {
         doCallRealMethod().when(plugin).unregisterSelf();
         pluginManager.getPluginList().add(plugin);
         File codeSource = writeModuleJar(MODULE_NAME);
-        PluginInstallUtils.moduleCodeSource = module -> codeSource;
         // Another JAR with no metadata: it may be a module too, since a module needs no plugin.yml.
         File metadataFree = writeJarWithoutPluginYml("zz-no-metadata.jar");
 
-        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+        PluginInstallUtils.UninstallReport report = uninstallReporting(MODULE_NAME, module -> codeSource);
 
         assertThat(codeSource).doesNotExist();
         assertThat(report.undeterminedEntries())
@@ -396,9 +390,7 @@ class PluginInstallUtilsUninstallTest {
         // A development checkout: the module runs from an exploded class directory.
         File exploded = new File(dataFolder, "classes");
         assertThat(exploded.mkdirs()).isTrue();
-        PluginInstallUtils.moduleCodeSource = module -> exploded;
-
-        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+        PluginInstallUtils.UninstallReport report = uninstallReporting(MODULE_NAME, module -> exploded);
 
         assertThat(jar).as("the plugin.yml still identifies it, which is the table's own answer").doesNotExist();
         assertThat(report.jarsDeleted()).isTrue();
@@ -427,10 +419,9 @@ class PluginInstallUtilsUninstallTest {
         doCallRealMethod().when(plugin).unregisterSelf();
         pluginManager.getPluginList().add(plugin);
         File loaded = writeModuleJar("DivergentName");
-        PluginInstallUtils.moduleCodeSource = module -> loaded;
         File secondCopy = writeModuleJar("DivergentName", "0.9.0");
 
-        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+        PluginInstallUtils.UninstallReport report = uninstallReporting(MODULE_NAME, module -> loaded);
 
         assertThat(loaded).as("the code source is this module's whatever it declares").doesNotExist();
         assertThat(secondCopy)
@@ -439,6 +430,119 @@ class PluginInstallUtilsUninstallTest {
                 .doesNotExist();
         assertThat(report.jarsDeleted()).isTrue();
         assertThat(report.undeterminedEntries()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("BL-01: naming the module by what its JAR declares unloads it, not only deletes its JAR")
+    void bl01_requestByDeclaredName_unloadsTheLoadedInstance() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn("RuntimeName");
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        File jar = writeModuleJar("DeclaredName");
+        PluginInstallUtils.UninstallReport report = uninstallReporting("DeclaredName", module -> jar);
+
+        assertThat(jar).doesNotExist();
+        assertThat(pluginManager.getPluginList())
+                .as("deleting a loaded module's JAR while leaving the module running is the state #503 exists to prevent")
+                .doesNotContain(plugin);
+        assertThat(report.jarsDeleted()).isTrue();
+    }
+
+    @Test
+    @DisplayName("BL-02: a name lifted off the target's JAR never retargets the scan at another loaded module")
+    void bl02_declaredKeyOwnedByAnotherLoadedModule_isNotUsed() throws IOException {
+        UltiToolsPlugin target = mock(UltiToolsPlugin.class);
+        when(target.getPluginName()).thenReturn("RuntimeName");
+        doCallRealMethod().when(target).unregisterSelf();
+        UltiToolsPlugin bystander = mock(UltiToolsPlugin.class);
+        when(bystander.getPluginName()).thenReturn("Bystander");
+        doCallRealMethod().when(bystander).unregisterSelf();
+        pluginManager.getPluginList().add(target);
+        pluginManager.getPluginList().add(bystander);
+        // The target's own JAR declares the bystander's name -- the retarget this must not follow.
+        File targetJar = writeModuleJar("Bystander", "2.0.0");
+        File bystanderJar = writeModuleJar("Bystander");
+
+        PluginInstallUtils.UninstallReport report = uninstallReporting("RuntimeName",
+                module -> module == target ? targetJar : bystanderJar);
+
+        assertThat(targetJar).as("the module the operator named still goes").doesNotExist();
+        assertThat(bystanderJar)
+                .as("a module the operator never named must not lose its JAR")
+                .exists();
+        assertThat(pluginManager.getPluginList()).contains(bystander);
+        assertThat(report.deletedFiles()).containsExactly(targetJar.getAbsolutePath());
+    }
+
+    @Test
+    @DisplayName("BL-02 invariant: a delete that would take another loaded module's JAR fails loudly instead")
+    void bl02_invariant_refusesToDeleteAnotherLoadedModulesCodeSource() throws IOException {
+        UltiToolsPlugin target = mock(UltiToolsPlugin.class);
+        when(target.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(target).unregisterSelf();
+        UltiToolsPlugin bystander = mock(UltiToolsPlugin.class);
+        when(bystander.getPluginName()).thenReturn("Bystander");
+        doCallRealMethod().when(bystander).unregisterSelf();
+        pluginManager.getPluginList().add(target);
+        pluginManager.getPluginList().add(bystander);
+        // A JAR that declares the target and is also the bystander's code source: whatever decided
+        // to get here, destroying a running module's JAR is not an outcome to let through.
+        File shared = writeModuleJar(MODULE_NAME);
+
+        Throwable thrown = catchThrowable(() -> uninstallReporting(MODULE_NAME,
+                module -> module == bystander ? shared : null));
+
+        assertThat(thrown)
+                .as("the guard must fire at the point of destruction, not silently upstream")
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(thrown).hasMessageContaining("Bystander").hasMessageContaining(shared.getAbsolutePath());
+        assertThat(shared).exists();
+    }
+
+    @Test
+    @DisplayName("WR-01: a plugin.yml with no name key cannot be identified either")
+    void wr01_pluginYmlWithoutANameKey_isUndetermined() throws IOException {
+        File jar = writeModuleJar(MODULE_NAME);
+        File nameless = new File(pluginsFolder, "zz-nameless.jar");
+        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(nameless))) {
+            out.putNextEntry(new JarEntry("plugin.yml"));
+            out.write("main: com.example.Module\nversion: 1.0.0\n".getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+
+        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+
+        assertThat(jar).doesNotExist();
+        assertThat(report.undeterminedEntries())
+                .as("a plugin.yml that names no module says exactly what no plugin.yml says: nothing")
+                .containsExactly(nameless.getAbsolutePath());
+    }
+
+    @Test
+    @DisplayName("sweep: a modules folder whose ancestor cannot be searched is unknown, not absent")
+    void sweep_folderUnderAnUnsearchableAncestor_isAScanFailure() throws Exception {
+        Assumptions.assumeTrue(Files.getFileStore(dataFolder.toPath()).supportsFileAttributeView("posix"),
+                "needs POSIX permissions to remove search permission");
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        writeModuleJar(MODULE_NAME);
+
+        Set<PosixFilePermission> original = Files.getPosixFilePermissions(dataFolder.toPath());
+        Files.setPosixFilePermissions(dataFolder.toPath(), PosixFilePermissions.fromString("---------"));
+        try {
+            Assumptions.assumeFalse(pluginsFolder.exists(), "running as a user who can search an unsearchable directory");
+
+            Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+            assertThat(thrown)
+                    .as("every probe answers false here because the answer is unknown, not because it is no")
+                    .isInstanceOf(java.nio.file.AccessDeniedException.class);
+        } finally {
+            Files.setPosixFilePermissions(dataFolder.toPath(), original);
+        }
     }
 
     @Test
@@ -669,6 +773,12 @@ class PluginInstallUtilsUninstallTest {
             }
         }
         return files;
+    }
+
+    /** The uninstall with the code-source resolver this test wants, which is the seam. */
+    private PluginInstallUtils.UninstallReport uninstallReporting(
+            String name, java.util.function.Function<UltiToolsPlugin, File> codeSource) throws IOException {
+        return PluginInstallUtils.uninstallPluginReporting(name, codeSource);
     }
 
     /** A JAR carrying no {@code plugin.yml}: what a module identified only by {@code @UltiToolsModule} looks like. */
