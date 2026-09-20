@@ -1881,6 +1881,11 @@ public class PluginInstallUtils {
     private static boolean deleteModuleJars(String name, boolean moduleUnloaded) throws IOException {
         File folder = new File(UltiTools.getInstance().getDataFolder() + "/plugins");
         File[] listFiles = folder.listFiles();
+        // Whatever the modules folder holds, the staging directory must not keep anything that can
+        // bring this module back (Codex review r8). This runs before the no-JAR paths below,
+        // because that is exactly the state an update leaves when its rollback could not move the
+        // module's JAR back: the only copies are in staging, and a journal there would restore one.
+        clearStagingOf(name);
         if (listFiles == null) {
             return noJarFound(folder, name, moduleUnloaded);
         }
@@ -1901,10 +1906,6 @@ public class PluginInstallUtils {
         // the same module loads it again on restart. Report the real outcome (#501): every jar
         // that stays on disk is named, so success is reported only once all of them are gone.
         deleteAllOrThrow(matchingJars);
-        // Nothing in the staging directory may bring this module back after an uninstall (Codex
-        // review r6): boot recovery moves back whatever a surviving journal names, so a journal of
-        // this module from an interrupted or half-cleaned update goes with it.
-        clearStagingOf(name);
         return true;
     }
 
