@@ -490,6 +490,48 @@ public class PluginInstallUtils {
     }
 
     /**
+     * The entries an uninstall could not read, carried on whatever failure leaves the method.
+     *
+     * <p>State C outlives every other outcome: a module whose unload threw, a JAR that could not
+     * be deleted and "nothing here could be identified as this module's" are all still true beside
+     * "these entries said nothing", and one of those entries may be the module's own JAR. An
+     * explicit type is what lets a caller tell this apart from the failures it travels with,
+     * rather than guessing from the shape of a {@code FileSystemException}.
+     */
+    @ApiStatus.Internal
+    public static final class UndeterminedEntriesException extends java.nio.file.FileSystemException {
+        private static final long serialVersionUID = 1L;
+
+        private final List<String> entries;
+
+        private UndeterminedEntriesException(List<String> entries) {
+            super(entries.isEmpty() ? null : entries.get(0), null,
+                    "could not be read, so whether any of them is a JAR of this module is unknown");
+            this.entries = Collections.unmodifiableList(new ArrayList<>(entries));
+        }
+
+        /** @return the absolute paths of the entries whose identity could not be determined */
+        public List<String> entries() {
+            return entries;
+        }
+    }
+
+    /**
+     * Attaches the undetermined entries to a failure on its way out, when there are any.
+     *
+     * @param failure the failure leaving the uninstall
+     * @param entries the absolute paths of the entries nothing could be read from
+     * @param <T>     the failure's type
+     * @return {@code failure}
+     */
+    private static <T extends Throwable> T carrying(T failure, List<String> entries) {
+        if (!entries.isEmpty()) {
+            failure.addSuppressed(new UndeterminedEntriesException(entries));
+        }
+        return failure;
+    }
+
+    /**
      * What an uninstall did, and what it could not determine.
      *
      * <p>The entries it could not classify are not failures -- an entry nothing can be read from
@@ -586,13 +628,14 @@ public class PluginInstallUtils {
         try {
             report = deleteModuleJars(name, !matches.isEmpty());
         } catch (IOException jarFailure) {
+            // The JAR failure already carries the undetermined entries; see deleteModuleJars.
             if (unloadFailure != null) {
                 throw unloadFailed(name, unloadFailure, jarFailure);
             }
             throw jarFailure;
         }
         if (unloadFailure != null) {
-            throw unloadFailed(name, unloadFailure, null);
+            throw carrying(unloadFailed(name, unloadFailure, null), report.undeterminedEntries());
         }
         return report;
     }
@@ -655,7 +698,7 @@ public class PluginInstallUtils {
                         "the modules folder exists but could not be listed, so nothing can be concluded"
                                 + " about the JARs it holds");
             }
-            return new UninstallReport(noJarFound(folder, name, moduleUnloaded, Collections.<File>emptyList()),
+            return new UninstallReport(noJarFound(folder, name, moduleUnloaded, Collections.<String>emptyList()),
                     Collections.emptyList());
         }
         List<File> matchingJars = new ArrayList<>();
@@ -678,9 +721,13 @@ public class PluginInstallUtils {
             // State C outlives this answer: "nothing here could be identified as this module's" is
             // true, and so is "these entries said nothing", and one of them may be the module's own
             // JAR. Both facts travel together rather than the first discarding the second.
-            return new UninstallReport(noJarFound(folder, name, moduleUnloaded, undetermined), undeterminedPaths);
+            return new UninstallReport(noJarFound(folder, name, moduleUnloaded, undeterminedPaths), undeterminedPaths);
         }
-        deleteAllOrThrow(matchingJars);
+        try {
+            deleteAllOrThrow(matchingJars);
+        } catch (java.nio.file.FileSystemException deleteFailure) {
+            throw carrying(deleteFailure, undeterminedPaths);
+        }
         return new UninstallReport(true, undeterminedPaths);
     }
 
@@ -778,17 +825,12 @@ public class PluginInstallUtils {
      *     with one suppressed entry per undetermined file
      */
     private static boolean noJarFound(File folder, String name, boolean moduleUnloaded,
-                                      List<File> undetermined) throws java.nio.file.NoSuchFileException {
+                                      List<String> undetermined) throws java.nio.file.NoSuchFileException {
         if (moduleUnloaded) {
             // The module was loaded from somewhere, so "check the spelling" is the wrong answer:
             // the operator needs to know the module is unloaded and its JAR was not found (#501).
-            java.nio.file.NoSuchFileException failure = new java.nio.file.NoSuchFileException(
-                    folder.getAbsolutePath(), null, "no module JAR named " + name);
-            for (File entry : undetermined) {
-                failure.addSuppressed(new java.nio.file.FileSystemException(entry.getAbsolutePath(), null,
-                        "could not be read, so whether it is a JAR of module " + name + " is unknown"));
-            }
-            throw failure;
+            throw carrying(new java.nio.file.NoSuchFileException(folder.getAbsolutePath(), null,
+                    "no module JAR named " + name), undetermined);
         }
         return false;
     }

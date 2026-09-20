@@ -237,6 +237,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             sendUnreadableEntriesOf(sender, e);
         } catch (FileSystemException e) {
             sendUndeletedJars(sender, e);
+            sendUnreadableEntriesOf(sender, e);
         } catch (IOException e) {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("删除失败！文件访问错误！请手动删除！"));
             sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"));
@@ -255,13 +256,9 @@ public class PluginInstallCommands extends BaseCommandExecutor {
      * Names the entries a no-JAR-found failure carries with it: state C survives that answer, and
      * one of those entries may be the module's own JAR.
      */
-    private static void sendUnreadableEntriesOf(CommandSender sender, FileSystemException failure) {
+    private static void sendUnreadableEntriesOf(CommandSender sender, Throwable failure) {
         List<String> files = new ArrayList<>();
-        for (Throwable suppressed : failure.getSuppressed()) {
-            if (suppressed instanceof FileSystemException && ((FileSystemException) suppressed).getFile() != null) {
-                files.add(((FileSystemException) suppressed).getFile());
-            }
-        }
+        collectUndetermined(failure, files);
         if (files.isEmpty()) {
             return;
         }
@@ -289,7 +286,12 @@ public class PluginInstallCommands extends BaseCommandExecutor {
      * unload-error exception: none attached means every matching jar was deleted.
      */
     private static void sendJarOutcomeAfterUnloadError(CommandSender sender, IllegalStateException unloadError) {
+        sendUnreadableEntriesOf(sender, unloadError);
         for (Throwable jarFailure : unloadError.getSuppressed()) {
+            if (jarFailure instanceof PluginInstallUtils.UndeterminedEntriesException) {
+                // Already reported above, and it is not a JAR outcome.
+                continue;
+            }
             if (jarFailure instanceof java.nio.file.AccessDeniedException) {
                 // State D reached through a failed unload: a directory is not a JAR, and saying it
                 // will load the module again would be nonsense.
@@ -314,6 +316,23 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("模块的 JAR 文件已全部删除。"));
     }
 
+    /** The undetermined entries a failure carries. */
+    private static List<String> undeterminedOf(Throwable failure) {
+        List<String> files = new ArrayList<>();
+        collectUndetermined(failure, files);
+        return files;
+    }
+
+    /** Collects the undetermined entries a failure carries, wherever in its suppressed chain they sit. */
+    private static void collectUndetermined(Throwable failure, List<String> files) {
+        if (failure instanceof PluginInstallUtils.UndeterminedEntriesException) {
+            files.addAll(((PluginInstallUtils.UndeterminedEntriesException) failure).entries());
+        }
+        for (Throwable suppressed : failure.getSuppressed()) {
+            collectUndetermined(suppressed, files);
+        }
+    }
+
     /**
      * Names every jar the uninstall could not delete. Each one loads the module again at the next
      * start, so an instruction that names only the first is one the operator cannot act on (#501).
@@ -321,6 +340,9 @@ public class PluginInstallCommands extends BaseCommandExecutor {
     private static void sendUndeletedJars(CommandSender sender, FileSystemException failure) {
         List<String> files = new ArrayList<>();
         collectNamedFiles(failure, files);
+        // The undetermined entries travel on the same failure and are reported separately: they
+        // are not JARs this uninstall failed to delete.
+        files.removeAll(undeterminedOf(failure));
         sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("卸载失败！以下模块 JAR 文件无法删除，重启后模块会再次加载，请手动删除：%s"),
                 files.isEmpty()
                         ? UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"
@@ -335,6 +357,9 @@ public class PluginInstallCommands extends BaseCommandExecutor {
      * @param files   the names collected so far, in the order they were found
      */
     private static void collectNamedFiles(FileSystemException failure, List<String> files) {
+        if (failure instanceof PluginInstallUtils.UndeterminedEntriesException) {
+            return;
+        }
         if (failure.getFile() != null && !files.contains(failure.getFile())) {
             files.add(failure.getFile());
         }
