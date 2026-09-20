@@ -1975,9 +1975,26 @@ public class PluginInstallUtils {
         // that stays on disk is named, so success is reported only once all of them are gone.
         // The module's own JARs first: they are what loads it again on a restart. Only then the
         // staging state, so a failure to clear that is never reported before -- or instead of --
-        // a JAR still sitting in the modules folder (Codex review r10).
-        deleteAllOrThrow(matchingJars);
-        clearStagingOf(name);
+        // a JAR still sitting in the modules folder (Codex review r10). Both run even if the first
+        // fails, because a JAR left behind is not a reason to leave a journal behind too (r17):
+        // the operator would delete the JAR, restart, and have the module restored from staging.
+        IOException jarFailure = null;
+        try {
+            deleteAllOrThrow(matchingJars);
+        } catch (IOException e) {
+            jarFailure = e;
+        }
+        try {
+            clearStagingOf(name);
+        } catch (IOException stagingFailure) {
+            if (jarFailure == null) {
+                throw stagingFailure;
+            }
+            jarFailure.addSuppressed(stagingFailure);
+        }
+        if (jarFailure != null) {
+            throw jarFailure;
+        }
         return true;
     }
 

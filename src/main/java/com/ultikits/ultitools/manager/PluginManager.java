@@ -610,7 +610,14 @@ public class PluginManager {
                 // without initialising them, which is what the loader does with a module JAR at
                 // startup; nothing here acts on a name from outside the artifact being examined.
                 // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
-                ModuleClassResolver resolver = (className) -> Class.forName(className, false, loader);
+                ModuleClassResolver resolver = (className) -> {
+                    if (!ClassLoaderUtils.isResolvableClassName(className)) {
+                        // The boot scan refuses this name, so a class of it cannot produce a module
+                        // after the restart either (Codex review r17).
+                        throw new SecurityException("Not a class name the module scan resolves: " + className);
+                    }
+                    return Class.forName(className, false, loader);
+                };
                 Class<? extends UltiToolsPlugin> mainClass = findModuleMainClass(candidateJar, resolver);
                 return mainClass != null && canBeInstantiatedAtBoot(mainClass, candidateJar);
             }

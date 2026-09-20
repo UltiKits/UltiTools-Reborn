@@ -439,12 +439,13 @@ class PluginInstallUtilsUninstallTest {
 
             assertThat(thrown).isInstanceOf(FileSystemException.class);
             assertThat(namedFiles((FileSystemException) thrown))
-                    .as("the operator must be told about both the JAR and the journal")
-                    .contains(jar.getAbsolutePath())
-                    .contains(journal.getAbsolutePath());
+                    .as("the JAR that is still on disk is what the operator must remove")
+                    .contains(jar.getAbsolutePath());
             assertThat(journal)
-                    .as("a JAR that could not be deleted must not leave the journal behind as well")
+                    .as("the cleanup still ran: deleting that JAR by hand must not leave a journal "
+                            + "that restores the module on the next start")
                     .doesNotExist();
+            assertThat(aside).doesNotExist();
         } finally {
             Files.setPosixFilePermissions(pluginsFolder.toPath(), original);
         }

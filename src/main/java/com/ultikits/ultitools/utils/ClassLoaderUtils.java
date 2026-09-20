@@ -28,6 +28,19 @@ public class ClassLoaderUtils {
      * @param className class name to validate
      * @throws SecurityException if the class name is null or does not match the expected format
      */
+    /**
+     * The name check the module scan applies before it resolves a class. An update asks the same
+     * question of a download, so an artifact it accepts is not one the boot scan then refuses
+     * (Codex review r17).
+     *
+     * @param className binary class name
+     * @return whether the scan would resolve a class of this name
+     * @since 6.3.0
+     */
+    public static boolean isResolvableClassName(String className) {
+        return className != null && VALID_CLASS_NAME_PATTERN.matcher(className).matches();
+    }
+
     private static void validateClassName(String className) throws SecurityException {
         if (className == null || !VALID_CLASS_NAME_PATTERN.matcher(className).matches()) {
             throw new SecurityException("Invalid class name format: " + className);
