@@ -1255,7 +1255,13 @@ public class PluginInstallUtils {
         }
         try (InputStream is = jarFile.getInputStream(entry);
              BufferedReader reader = new BufferedReader(new InputStreamReader(is, java.nio.charset.StandardCharsets.UTF_8))) {
-            org.yaml.snakeyaml.nodes.Node root = new org.yaml.snakeyaml.Yaml().compose(reader);
+            // The safe constructor cannot instantiate an arbitrary class named by a YAML tag. Composing
+            // never constructs an object at all, but a JAR's plugin.yml is not this framework's file, so
+            // the parser is configured as if it were loading one. SafeConstructor(LoaderOptions) exists in
+            // every SnakeYAML a supported Paper ships (measured: 1.26 through 2.2).
+            org.yaml.snakeyaml.Yaml parser = new org.yaml.snakeyaml.Yaml(
+                    new org.yaml.snakeyaml.constructor.SafeConstructor(new org.yaml.snakeyaml.LoaderOptions()));
+            org.yaml.snakeyaml.nodes.Node root = parser.compose(reader);
             if (!(root instanceof org.yaml.snakeyaml.nodes.MappingNode)) {
                 return Collections.emptyMap();
             }
