@@ -411,6 +411,37 @@ class PluginInstallUtilsUninstallTest {
     }
 
     @Test
+    @DisplayName("codex r8 P2: an uninstall with no JAR on disk still clears the module's staging state")
+    void uninstallWithNoJar_stillClearsTheModulesUpdateJournals() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        // The module's only copy is in staging: an earlier update moved it aside and could not
+        // move it back, so the modules folder has no JAR of it at all.
+        File staging = new File(dataFolder, ".upm-staging");
+        assertThat(staging.mkdirs()).isTrue();
+        String transaction = "8420a849-1c2d-4e5f-9a0b-1c2d3e4f5a6b";
+        File aside = new File(staging, MODULE_NAME + "-1.0.0.jar." + transaction + ".old");
+        Files.write(aside.toPath(), "old jar".getBytes(StandardCharsets.UTF_8));
+        File journal = new File(staging, transaction + ".txn");
+        Files.write(journal.toPath(), ("format=1\nprocess=4242@another-host\nmodule=uninstallfixture\n"
+                + "name=" + MODULE_NAME + "\ntarget=" + MODULE_NAME + "-2.0.0.jar\n"
+                + "aside.0.original=" + MODULE_NAME + "-1.0.0.jar\naside.0.aside=" + aside.getName() + "\n")
+                .getBytes(StandardCharsets.UTF_8));
+
+        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+        assertThat(thrown)
+                .as("the module was unloaded but no JAR was found, which is still reported")
+                .isInstanceOf(java.nio.file.NoSuchFileException.class);
+        assertThat(journal)
+                .as("the next start would follow this journal and bring the module back")
+                .doesNotExist();
+        assertThat(aside).doesNotExist();
+    }
+
+    @Test
     @DisplayName("codex r8 P2: a module with no identify-string is still guarded, by its name")
     void uninstallOfAModuleWithoutAnIdentifyString_isSerialised() throws IOException {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
