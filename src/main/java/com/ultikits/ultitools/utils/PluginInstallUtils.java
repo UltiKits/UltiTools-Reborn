@@ -571,19 +571,102 @@ public class PluginInstallUtils {
             return noJarFound(folder, name, moduleUnloaded);
         }
         List<File> matchingJars = new ArrayList<>();
+        List<File> unreadableJars = new ArrayList<>();
         for (File file : listFiles) {
             // Anything that is not a readable module JAR is skipped rather than fatal: the old
             // implementation built a `jar:file:` URL for every entry in the folder, so a stray
-            // file or a subdirectory failed the whole uninstall (#504).
-            if (name.equals(moduleNameOf(file))) {
+            // file or a subdirectory failed the whole uninstall (#504). A JAR that cannot be read
+            // is kept separately: it says nothing about itself, which is not the same as saying it
+            // is not this module's.
+            String declared = moduleNameOf(file);
+            if (name.equals(declared)) {
                 matchingJars.add(file);
+            } else if (declared == null && file.isFile() && file.getName().endsWith(".jar")) {
+                unreadableJars.add(file);
             }
         }
         if (matchingJars.isEmpty()) {
+            if (moduleUnloaded && !unreadableJars.isEmpty()) {
+                // The module was loaded from somewhere and no JAR here can say whether it is the
+                // one. Reporting them beats reporting that the module has no JAR at all.
+                throw unreadableJarsMayBeThisModules(name, unreadableJars);
+            }
+            List<File> suspects = namedLikeThisModule(unreadableJars, name);
+            if (!suspects.isEmpty()) {
+                throw unreadableJarsMayBeThisModules(name, suspects);
+            }
             return noJarFound(folder, name, moduleUnloaded);
         }
-        deleteAllOrThrow(matchingJars);
+        IOException jarFailure = null;
+        try {
+            deleteAllOrThrow(matchingJars);
+        } catch (IOException e) {
+            jarFailure = e;
+        }
+        // Deleting the JARs that could be identified says nothing about one that could not be read:
+        // a second copy of this module loads it again once the file is readable, and the uninstall
+        // would have reported that every copy is gone. Only the ones named like this module, since
+        // an unrelated unreadable file must not stop an uninstall and the file name is the only
+        // evidence left once the metadata cannot be read.
+        List<File> suspects = namedLikeThisModule(unreadableJars, name);
+        if (!suspects.isEmpty()) {
+            java.nio.file.FileSystemException unreadable = unreadableJarsMayBeThisModules(name, suspects);
+            if (jarFailure == null) {
+                throw unreadable;
+            }
+            jarFailure.addSuppressed(unreadable);
+        }
+        if (jarFailure != null) {
+            throw jarFailure;
+        }
         return true;
+    }
+
+    /**
+     * The JARs among {@code candidates} whose file name reads like a copy of this module: the
+     * framework installs a module as {@code <identify-string>-<version>.jar} and an operator's own
+     * copy is normally named after the module too.
+     *
+     * @param candidates JARs whose metadata could not be read
+     * @param name       the module's runtime name
+     * @return the subset that cannot be ruled out on its name
+     */
+    private static List<File> namedLikeThisModule(List<File> candidates, String name) {
+        List<File> named = new ArrayList<>();
+        String prefix = name.toLowerCase(Locale.ROOT);
+        for (File candidate : candidates) {
+            String fileName = candidate.getName().toLowerCase(Locale.ROOT);
+            if (fileName.startsWith(prefix + "-") || fileName.equals(prefix + ".jar")) {
+                named.add(candidate);
+            }
+        }
+        return named;
+    }
+
+    /**
+     * The failure reported for JARs that could not be read while uninstalling {@code name}. Each is
+     * named, because each loads the module again once it is readable.
+     *
+     * @param name       the module's runtime name
+     * @param unreadable the JARs that could not be read
+     * @return the exception to throw, one suppressed entry per further JAR
+     */
+    private static java.nio.file.FileSystemException unreadableJarsMayBeThisModules(String name,
+                                                                                    List<File> unreadable) {
+        java.nio.file.FileSystemException failure = null;
+        for (File jar : unreadable) {
+            java.nio.file.FileSystemException next = new java.nio.file.FileSystemException(
+                    jar.getAbsolutePath(), null, "could not be read, so it cannot be ruled out as a JAR of module "
+                    + name + "; it loads the module again once it is readable");
+            if (failure == null) {
+                failure = next;
+            } else {
+                failure.addSuppressed(next);
+            }
+        }
+        LOGGER.severe("Uninstalling module " + name + ": " + unreadable.size() + " JAR(s) could not be read and"
+                + " are reported rather than deleted");
+        return failure;
     }
 
     /**
