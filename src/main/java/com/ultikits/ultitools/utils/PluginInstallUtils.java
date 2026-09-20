@@ -1236,7 +1236,7 @@ public class PluginInstallUtils {
                 recoverJournalIsolated(entry, pluginsFolder, reported);
             }
         }
-        reportLeftovers(entries, reported);
+        reportLeftovers(entries, reported, stagingFolder);
     }
 
     /** Deletes one partial download or half-written journal, logging either way. */
@@ -1262,13 +1262,28 @@ public class PluginInstallUtils {
     }
 
     /**
-     * Names every set-aside JAR no journal referred to. Its transaction finished, so it is never
-     * moved back (review r5 WR-01) and the operator can delete it.
+     * Names every set-aside JAR recovery did not act on.
+     * <p>
+     * A JAR whose transaction left no journal belongs to a transaction that finished: it is never
+     * moved back (review r5 WR-01) and the operator can delete it. A JAR whose journal is still in
+     * the staging directory -- because that journal could not be read, could not be parsed, or
+     * belongs to an update running right now -- is the opposite: something still needs it, and
+     * telling the operator it can be deleted would cost them the module's only copy (review r6
+     * WR-03). The two are told apart by the transaction id both file names carry.
      */
-    private static void reportLeftovers(File[] entries, Set<String> reported) {
+    private static void reportLeftovers(File[] entries, Set<String> reported, File stagingFolder) {
         for (File entry : entries) {
-            if (SET_ASIDE_NAME.matcher(entry.getName()).matches() && !reported.contains(entry.getName())
-                    && Files.exists(entry.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+            java.util.regex.Matcher name = SET_ASIDE_NAME.matcher(entry.getName());
+            if (!name.matches() || reported.contains(entry.getName())
+                    || !Files.exists(entry.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                continue;
+            }
+            File journal = new File(stagingFolder, name.group(2) + JOURNAL_SUFFIX);
+            if (Files.exists(journal.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                LOGGER.warning("Set-aside module JAR " + entry.getAbsolutePath() + " belongs to update journal "
+                        + journal.getAbsolutePath() + ", which was kept because it could not be processed; "
+                        + "do not delete either until that is resolved");
+            } else {
                 LOGGER.warning("Update leftover " + entry.getAbsolutePath()
                         + ": no interrupted update refers to it, so it is never restored and can be deleted");
             }
@@ -1302,9 +1317,6 @@ public class PluginInstallUtils {
             return;
         }
         List<String[]> pairs = journalPairs(entries, journalFile);
-        if (pairs == null) {
-            return;
-        }
         File stagingFolder = journalFile.getParentFile();
         Path targetPath = pluginsFolder.toPath().resolve(target);
         boolean alreadyInstalled = JOURNAL_PHASE_COMMITTED.equals(entries.getProperty(JOURNAL_PHASE_KEY))
@@ -1352,9 +1364,10 @@ public class PluginInstallUtils {
 
     /**
      * The {@code {original, set-aside}} file-name pairs a journal records.
-     *
-     * @return the pairs, or {@code null} when the journal names a file that cannot be used, in
-     *         which case it is left in place for the operator
+     * <p>
+     * A pair naming a file that cannot be used -- a path separator, a directory hop -- is skipped
+     * with a warning rather than abandoning the transaction's other JARs (review r6 IN-02): those
+     * are ordinary names and moving them back is what keeps their module loadable.
      */
     private static List<String[]> journalPairs(java.util.Properties entries, File journalFile) {
         List<String[]> pairs = new ArrayList<>();
@@ -1364,12 +1377,12 @@ public class PluginInstallUtils {
             if (original == null && aside == null) {
                 return pairs;
             }
-            if (!isPlainFileName(original) || !isPlainFileName(aside)) {
+            if (isPlainFileName(original) && isPlainFileName(aside)) {
+                pairs.add(new String[]{original, aside});
+            } else {
                 LOGGER.warning("Module update journal " + journalFile.getAbsolutePath()
-                        + " names an unusable file and was left in place");
-                return null;
+                        + " names an unusable file, which was skipped: " + original + " <- " + aside);
             }
-            pairs.add(new String[]{original, aside});
         }
     }
 
