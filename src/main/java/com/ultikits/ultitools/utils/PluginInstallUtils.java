@@ -94,9 +94,6 @@ public class PluginInstallUtils {
     /** Journal phase written once the new version is in the modules folder: never restore after this. */
     private static final String JOURNAL_PHASE_COMMITTED = "committed";
 
-    /** Identifies this run, and only this run: a new JVM gets a new token (see currentProcessIdentity). */
-    private static final String PROCESS_TOKEN = UUID.randomUUID().toString();
-
     /**
      * Normalised identify strings of the modules an update or an uninstall is changing right now.
      * One guard for both operations (review r4 WR-03): an uninstall interleaved with an update of
@@ -1167,13 +1164,17 @@ public class PluginInstallUtils {
      * This run's identity, as recorded in a journal and compared by boot recovery.
      * <p>
      * The JVM name alone ({@code <pid>@<host>}) is not enough: a container that runs Java as PID 1
-     * under a fixed hostname produces the same name on every start, so after a crash the new server
-     * would read its own identity in the crashed run's journal and skip it forever, leaving the
-     * module's JAR in the staging directory. The random token is generated once per JVM and cannot
-     * survive a restart, so only a journal this run wrote can match.
+     * under a fixed hostname produces the same name on every start -- measured byte-identical across
+     * three restarts of one container -- so after a crash the new server would read its own identity
+     * in the crashed run's journal, skip it forever, and leave the module's JAR in the staging
+     * directory (review r6 BL-01). The JVM's start time cannot repeat across restarts and does not
+     * change when a plugin is re-enabled inside one JVM, which is exactly the pair of properties
+     * this comparison needs. A value without the start-time marker was written by an older build and
+     * is therefore another run's.
      */
     static String currentProcessIdentity() {
-        return java.lang.management.ManagementFactory.getRuntimeMXBean().getName() + "/" + PROCESS_TOKEN;
+        java.lang.management.RuntimeMXBean jvm = java.lang.management.ManagementFactory.getRuntimeMXBean();
+        return jvm.getName() + "#" + jvm.getStartTime();
     }
 
     private static void deleteJournal(Path journal) {
