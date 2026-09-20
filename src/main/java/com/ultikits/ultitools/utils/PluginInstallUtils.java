@@ -1869,36 +1869,65 @@ public class PluginInstallUtils {
         try (java.io.Reader reader = Files.newBufferedReader(journalFile.toPath(), java.nio.charset.StandardCharsets.UTF_8)) {
             entries.load(reader);
         }
-        if (isMalformed(entries, journalFile)) {
+        if (isMalformed(entries, journalFile) || handledElsewhere(entries, journalFile, pluginsFolder, reported)) {
             return;
         }
-        String module = entries.getProperty("module");
-        String target = entries.getProperty("target");
-        String process = entries.getProperty("process");
+        restoreEveryPair(entries, journalFile, pluginsFolder, reported);
+    }
+
+    /**
+     * Whether this journal belongs to something other than the plain restore below, and has been
+     * dealt with accordingly.
+     *
+     * @param entries       the journal's properties
+     * @param journalFile   the journal in the staging directory
+     * @param pluginsFolder the modules folder
+     * @param reported      the set of set-aside JAR names this recovery has accounted for
+     * @return whether the caller is done with it
+     */
+    private static boolean handledElsewhere(java.util.Properties entries, File journalFile, File pluginsFolder,
+                                            Set<String> reported) {
         if (JOURNAL_PHASE_ROLLING_BACK.equals(entries.getProperty(JOURNAL_PHASE_KEY))) {
             // The verdict was made at an earlier start, so this needs nothing from the load phase --
             // and finishing it here is what puts the working JAR on the class path in time to load
             // this session instead of the next (sweep row A12).
             finishRollback(journalFile, entries, pluginsFolder, reported);
-            return;
+            return true;
         }
         if (isBootConfirmationPhase(entries)) {
             leaveForBootConfirmation(journalFile, entries, reported);
-            return;
+            return true;
         }
-        if (process.equals(currentProcessIdentity())) {
+        if (entries.getProperty("process").equals(currentProcessIdentity())) {
             LOGGER.info("Module update journal " + journalFile.getAbsolutePath()
                     + " belongs to an update running in this server process and was left in place");
-            return;
+            return true;
         }
-        if (newVersionWasInstalled(pluginsFolder.toPath().resolve(target), module, journalFile)) {
+        Path target = pluginsFolder.toPath().resolve(entries.getProperty("target"));
+        if (newVersionWasInstalled(target, entries.getProperty("module"), journalFile)) {
             // The update had installed its new version when the process died, and only the phase
             // write was missed (sweep row A8). Whether the module loads from it is undecided, and
             // the set-aside JARs are the rollback's only material, so this is the confirmation
             // hook's business exactly as a marked journal is.
             leaveForBootConfirmation(journalFile, entries, reported);
-            return;
+            return true;
         }
+        return false;
+    }
+
+    /**
+     * Moves back every JAR an interrupted transaction set aside, and deletes the journal once none
+     * of them still needs moving -- deleting it turns each into a leftover nothing will ever move
+     * back (Codex review r6).
+     *
+     * @param entries       the journal's properties
+     * @param journalFile   the journal in the staging directory
+     * @param pluginsFolder the modules folder
+     * @param reported      the set of set-aside JAR names this recovery has accounted for
+     */
+    private static void restoreEveryPair(java.util.Properties entries, File journalFile, File pluginsFolder,
+                                         Set<String> reported) {
+        String module = entries.getProperty("module");
         java.util.concurrent.atomic.AtomicBoolean skippedAPair = new java.util.concurrent.atomic.AtomicBoolean();
         List<String[]> pairs = journalPairs(entries, journalFile, skippedAPair);
         File stagingFolder = journalFile.getParentFile();
@@ -1906,8 +1935,6 @@ public class PluginInstallUtils {
         for (String[] pair : pairs) {
             settled &= recoverPair(pair, stagingFolder, pluginsFolder, module, reported);
         }
-        // Deleting the journal turns every JAR it names into a leftover nothing will ever move back,
-        // so it goes only once none of them still needs moving (Codex review r6).
         if (settled) {
             deleteJournal(journalFile.toPath());
         } else {
