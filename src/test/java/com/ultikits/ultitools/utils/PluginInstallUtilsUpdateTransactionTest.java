@@ -436,8 +436,8 @@ class PluginInstallUtilsUpdateTransactionTest {
         javax.tools.JavaCompiler compiler = javax.tools.ToolProvider.getSystemJavaCompiler();
         org.junit.jupiter.api.Assumptions.assumeTrue(compiler != null, "a JDK compiler is required");
         File classes = compileModuleFixture(compiler);
-        byte[] base = Files.readAllBytes(new File(classes, "fixture/Base.class").toPath());
-        byte[] child = Files.readAllBytes(new File(classes, "fixture/Child.class").toPath());
+        byte[] base = compiledClass(classes, "fixture/Base.class");
+        byte[] child = compiledClass(classes, "fixture/Child.class");
         // The installed JAR carries both classes; the candidate carries only the main class.
         File oldJar = new File(pluginsFolder, IDENTIFY_STRING + "-1.0.0.jar");
         try (FileOutputStream out = new FileOutputStream(oldJar)) {
@@ -479,8 +479,8 @@ class PluginInstallUtilsUpdateTransactionTest {
         javax.tools.JavaCompiler compiler = javax.tools.ToolProvider.getSystemJavaCompiler();
         org.junit.jupiter.api.Assumptions.assumeTrue(compiler != null, "a JDK compiler is required");
         File classes = compileModuleFixture(compiler);
-        byte[] base = Files.readAllBytes(new File(classes, "fixture/Base.class").toPath());
-        byte[] child = Files.readAllBytes(new File(classes, "fixture/Child.class").toPath());
+        byte[] base = compiledClass(classes, "fixture/Base.class");
+        byte[] child = compiledClass(classes, "fixture/Child.class");
         // A module JAR over the entry-count limit: boot's own filter leaves it off the class path.
         File oversized = new File(pluginsFolder, "oversized-module-1.0.0.jar");
         try (JarOutputStream out = new JarOutputStream(new FileOutputStream(oversized))) {
@@ -517,8 +517,8 @@ class PluginInstallUtilsUpdateTransactionTest {
         javax.tools.JavaCompiler compiler = javax.tools.ToolProvider.getSystemJavaCompiler();
         org.junit.jupiter.api.Assumptions.assumeTrue(compiler != null, "a JDK compiler is required");
         File classes = compileModuleFixture(compiler);
-        byte[] base = Files.readAllBytes(new File(classes, "fixture/Base.class").toPath());
-        byte[] child = Files.readAllBytes(new File(classes, "fixture/Child.class").toPath());
+        byte[] base = compiledClass(classes, "fixture/Base.class");
+        byte[] child = compiledClass(classes, "fixture/Child.class");
         // A different module, which this update does not touch, provides the superclass.
         File otherModule = new File(pluginsFolder, "other-module-1.0.0.jar");
         try (FileOutputStream out = new FileOutputStream(otherModule)) {
@@ -545,8 +545,8 @@ class PluginInstallUtilsUpdateTransactionTest {
         javax.tools.JavaCompiler compiler = javax.tools.ToolProvider.getSystemJavaCompiler();
         org.junit.jupiter.api.Assumptions.assumeTrue(compiler != null, "a JDK compiler is required");
         File classes = compileModuleFixture(compiler);
-        byte[] base = Files.readAllBytes(new File(classes, "fixture/Base.class").toPath());
-        byte[] child = Files.readAllBytes(new File(classes, "fixture/Child.class").toPath());
+        byte[] base = compiledClass(classes, "fixture/Base.class");
+        byte[] child = compiledClass(classes, "fixture/Child.class");
         File oldJar = new File(pluginsFolder, IDENTIFY_STRING + "-1.0.0.jar");
         try (FileOutputStream out = new FileOutputStream(oldJar)) {
             out.write(moduleJarWith("1.0.0", new String[]{"fixture/Base.class", "fixture/Child.class"},
@@ -581,6 +581,14 @@ class PluginInstallUtilsUpdateTransactionTest {
         } finally {
             field.set(instance, previous);
         }
+    }
+
+    /** Reads one class this test compiled into its own temporary directory. */
+    private static byte[] compiledClass(File classesDirectory, String entryName) throws IOException {
+        // The directory is this test's @TempDir and the entry name is a literal above.
+        // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
+        File compiled = new File(classesDirectory, entryName);
+        return Files.readAllBytes(compiled.toPath());
     }
 
     /** Compiles a two-class module fixture: a module base class and the concrete main class. */
