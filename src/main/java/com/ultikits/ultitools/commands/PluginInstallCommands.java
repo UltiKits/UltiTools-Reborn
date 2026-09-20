@@ -239,9 +239,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             // WR-03) -- a spelling hint would be false here.
             sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n("模块已卸载，但在 %s 中没有找到它的 JAR 文件。"), e.getFile()));
         } catch (FileSystemException e) {
-            // Matching jars were found but not all deleted (#501): each loads the module again on
-            // restart, so name every file the operator has to remove.
-            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("卸载失败！以下模块 JAR 文件无法删除，重启后模块会再次加载，请手动删除：%s"), namedFiles(e)));
+            sendFileSystemFailure(sender, e);
         } catch (IOException e) {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("删除失败！文件访问错误！请手动删除！"));
             sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"));
@@ -259,7 +257,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
                 return;
             }
             if (jarFailure instanceof FileSystemException) {
-                sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("卸载失败！以下模块 JAR 文件无法删除，重启后模块会再次加载，请手动删除：%s"), namedFiles((FileSystemException) jarFailure)));
+                sendFileSystemFailure(sender, (FileSystemException) jarFailure);
                 return;
             }
             if (jarFailure instanceof IOException) {
@@ -269,6 +267,24 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             }
         }
         sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("模块的 JAR 文件已全部删除。"));
+    }
+
+    /**
+     * Reports files an uninstall could not remove. A file in the staging directory is an update
+     * leftover of this module, not a JAR the server loads: deleting it stops a later start from
+     * moving an old version back, while a JAR in the modules folder is what loads the module again
+     * (Codex review r10). Telling the operator which is which is the difference between a complete
+     * instruction and one that leaves the module in place.
+     */
+    private static void sendFileSystemFailure(CommandSender sender, FileSystemException failure) {
+        String files = namedFiles(failure);
+        if (files.contains(".upm-staging")) {
+            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("卸载失败！以下更新残留文件无法删除，重启后可能会把该模块的旧版本 JAR 移回模块目录，请手动删除：%s"), files));
+            return;
+        }
+        // Matching jars were found but not all deleted (#501): each loads the module again on
+        // restart, so name every file the operator has to remove.
+        sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("卸载失败！以下模块 JAR 文件无法删除，重启后模块会再次加载，请手动删除：%s"), files));
     }
 
     /**

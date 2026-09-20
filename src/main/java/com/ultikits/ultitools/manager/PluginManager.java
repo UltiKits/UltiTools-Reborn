@@ -604,6 +604,10 @@ public class PluginManager {
         try {
             try (CandidateClassLoader loader = CandidateClassLoader.over(candidateJar,
                     ClassLoaderUtils.getPluginClassLoader())) {
+                // The names come from the candidate JAR's own entries, and the classes are resolved
+                // without initialising them, which is what the loader does with a module JAR at
+                // startup; nothing here acts on a name from outside the artifact being examined.
+                // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
                 return findModuleMainClass(candidateJar, (className) -> Class.forName(className, false, loader)) != null;
             }
         } catch (IOException | RuntimeException | LinkageError e) {
@@ -622,14 +626,18 @@ public class PluginManager {
      * A plain parent-first loader would answer a name the installed module already provides from
      * the installed JAR, so a candidate carrying different bytes under the same entry name would
      * be judged on the old module's classes and never read (Codex review r9). Names the candidate
-     * declares are therefore resolved from it first. Framework classes are the exception: they are
-     * always taken from the parent, which is what happens at runtime too, since the framework's
-     * own class loader provides them to every module.
+     * declares are therefore resolved from it first, with no exemption: a package-name exemption
+     * would cover module classes too, since a module may live under {@code com.ultikits.ultitools.*},
+     * and asking a loader "does the framework supply this name" answers "yes" wherever the
+     * framework and the modules share one loader (Codex review r10).
+     * <p>
+     * One divergence from the boot environment is accepted knowingly: a candidate that packages
+     * its own copy of a framework class is judged on that copy, while at boot the framework's copy
+     * wins because the framework's loader is the parent of the module loader. A module is not
+     * meant to package the API -- it is a {@code provided} dependency -- and the consequence here
+     * is a refusal, which changes nothing on disk, rather than an acceptance that would.
      */
     private static final class CandidateClassLoader extends URLClassLoader {
-
-        /** The framework's own package: always the parent's copy, as at runtime. */
-        private static final String FRAMEWORK_PACKAGE = "com.ultikits.ultitools.";
 
         private final Set<String> ownClassNames;
 
@@ -662,7 +670,7 @@ public class PluginManager {
         protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
             synchronized (getClassLoadingLock(name)) {
                 Class<?> loaded = findLoadedClass(name);
-                if (loaded == null && ownClassNames.contains(name) && !name.startsWith(FRAMEWORK_PACKAGE)) {
+                if (loaded == null && ownClassNames.contains(name)) {
                     loaded = findClass(name);
                 }
                 if (loaded == null) {

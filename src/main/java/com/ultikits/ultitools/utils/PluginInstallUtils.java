@@ -1373,20 +1373,7 @@ public class PluginInstallUtils {
                 || newVersionWasInstalled(targetPath, module, journalFile);
         boolean settled = !skippedAPair.get();
         for (String[] pair : pairs) {
-            File setAside = new File(stagingFolder, pair[1]);
-            boolean handled = true;
-            if (alreadyInstalled) {
-                reportAsLeftoverOfAnInstalledUpdate(setAside, module, targetPath);
-            } else {
-                handled = restoreSetAsideJar(setAside, pluginsFolder.toPath().resolve(pair[0]), pluginsFolder, module);
-            }
-            // Only a JAR this recovery finished with is "reported": one still waiting is left to
-            // the leftover pass, which names it as belonging to the journal that was kept rather
-            // than saying nothing about it at all (Codex review r8).
-            if (handled) {
-                reported.add(pair[1]);
-            }
-            settled &= handled;
+            settled &= recoverPair(pair, stagingFolder, pluginsFolder, module, targetPath, alreadyInstalled, reported);
         }
         // Deleting the journal turns every JAR it names into a leftover nothing will ever move back,
         // so it goes only once none of them still needs moving (Codex review r6).
@@ -1417,6 +1404,29 @@ public class PluginInstallUtils {
                 + targetPath.toAbsolutePath() + ": that file is not a JAR of module " + module
                 + ", so the module's own JARs are moved back");
         return false;
+    }
+
+    /**
+     * Recovers one {@code {original, set-aside}} pair of a journal.
+     *
+     * @return whether the pair needs nothing further. Only a JAR this recovery finished with is
+     *         marked reported: one still waiting is left to the leftover pass, which names it as
+     *         belonging to the journal that was kept rather than saying nothing at all about it
+     *         (Codex review r8).
+     */
+    private static boolean recoverPair(String[] pair, File stagingFolder, File pluginsFolder, String module,
+                                       Path targetPath, boolean alreadyInstalled, Set<String> reported) {
+        File setAside = new File(stagingFolder, pair[1]);
+        boolean handled = true;
+        if (alreadyInstalled) {
+            reportAsLeftoverOfAnInstalledUpdate(setAside, module, targetPath);
+        } else {
+            handled = restoreSetAsideJar(setAside, pluginsFolder.toPath().resolve(pair[0]), pluginsFolder, module);
+        }
+        if (handled) {
+            reported.add(pair[1]);
+        }
+        return handled;
     }
 
     /**
@@ -1881,12 +1891,8 @@ public class PluginInstallUtils {
     private static boolean deleteModuleJars(String name, boolean moduleUnloaded) throws IOException {
         File folder = new File(UltiTools.getInstance().getDataFolder() + "/plugins");
         File[] listFiles = folder.listFiles();
-        // Whatever the modules folder holds, the staging directory must not keep anything that can
-        // bring this module back (Codex review r8). This runs before the no-JAR paths below,
-        // because that is exactly the state an update leaves when its rollback could not move the
-        // module's JAR back: the only copies are in staging, and a journal there would restore one.
-        clearStagingOf(name);
         if (listFiles == null) {
+            clearStagingOf(name);
             return noJarFound(folder, name, moduleUnloaded);
         }
         List<File> matchingJars = new ArrayList<>();
@@ -1900,12 +1906,20 @@ public class PluginInstallUtils {
             }
         }
         if (matchingJars.isEmpty()) {
+            // No JAR of the module here is exactly the state an update leaves when its rollback
+            // could not move the module's JAR back: the only copies are in staging, and a journal
+            // there would restore one (Codex review r8).
+            clearStagingOf(name);
             return noJarFound(folder, name, moduleUnloaded);
         }
         // Delete every matching jar, not only the first one listed (review WR-02): a second jar of
         // the same module loads it again on restart. Report the real outcome (#501): every jar
         // that stays on disk is named, so success is reported only once all of them are gone.
+        // The module's own JARs first: they are what loads it again on a restart. Only then the
+        // staging state, so a failure to clear that is never reported before -- or instead of --
+        // a JAR still sitting in the modules folder (Codex review r10).
         deleteAllOrThrow(matchingJars);
+        clearStagingOf(name);
         return true;
     }
 

@@ -40,6 +40,7 @@
   "/upm uninstall [插件] - 删除插件": "/upm uninstall [plugin] - Uninstall plugin",
   "卸载成功！模块的 JAR 文件已全部删除。": "Uninstalled! All of the module's JAR files have been deleted.",
   "卸载失败！以下模块 JAR 文件无法删除，重启后模块会再次加载，请手动删除：%s": "Uninstall failed! These module JAR files could not be deleted, so the module will load again after a restart. Delete them manually: %s",
+  "卸载失败！以下更新残留文件无法删除，重启后可能会把该模块的旧版本 JAR 移回模块目录，请手动删除：%s": "Uninstall failed! These update leftovers could not be deleted; a later start may move this module's old JAR back into the modules folder. Please delete them by hand: %s",
   "文件位置：%s": "File Location: %s",
   "模块已卸载，但在 %s 中没有找到它的 JAR 文件。": "The module was unloaded, but no JAR file for it was found in %s.",
   "卸载出错！模块已从已加载列表移除，但其卸载过程抛出了异常，详见控制台。": "Uninstall error! The module was removed from the loaded modules, but its unload threw an exception; see the console.",
