@@ -378,7 +378,10 @@ This section governs the third kind.
   threw; the module is still removed from the loaded modules and deletion of its JARs is still
   attempted, the module's exception is the cause, and the JAR outcome above is attached as
   suppressed. A caller that only checked the boolean now sees these as exceptions instead of a
-  success it did not get. It also throws `com.ultikits.ultitools.exceptions.PluginModuleException`
+  success it did not get. A `java.nio.file.FileSystemException` is also thrown when a file an
+  update of this module left in `plugins/UltiTools/.upm-staging/` could not be deleted: while it is
+  there, the next start can move the module's old JAR back, so the uninstall is not complete.
+  It also throws `com.ultikits.ultitools.exceptions.PluginModuleException`
   with error code `ErrorCode.PLUGIN_OPERATION_IN_PROGRESS` (new in 6.3.0), with nothing changed,
   while an update or another uninstall of the same module is running: one per-module guard covers
   both operations, keyed by the module's identify-string, which the uninstall resolves from its

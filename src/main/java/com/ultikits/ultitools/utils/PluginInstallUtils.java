@@ -1082,7 +1082,14 @@ public class PluginInstallUtils {
                                           File stagingFolder, File pluginsFolder) {
         List<Path[]> unrestored = moveBack(operations, movedAside);
         deleteQuietly(operations, staged);
-        deleteJournal(journal);
+        if (unrestored.isEmpty()) {
+            deleteJournal(journal);
+        } else {
+            // The journal is what lets the next start move these JARs back; deleting it would make
+            // them leftovers nothing ever restores (Codex review r7).
+            LOGGER.warning("Update journal " + journal + " was kept: " + unrestored.size()
+                    + " JAR(s) could not be moved back, and the next start will try again");
+        }
         UpdateOutcome outcome = failure.getStatus() == UpdateOutcome.Status.ATOMIC_MOVE_UNSUPPORTED
                 ? bothFoldersNamed(failure.getStatus(), stagingFolder, pluginsFolder, failure.getFailure())
                 : failure;
@@ -1534,6 +1541,7 @@ public class PluginInstallUtils {
             // load (Codex review r6). Refuse it here, while nothing has moved.
             return moduleKey.equals(normalizeIdentifyString(pluginYml.get("identify-string")))
                     && declaresAName(pluginYml, file)
+                    && couldCarryAModuleClass(jarFile, file)
                     && version != null && expectedVersion != null
                     && VersionComparatorUtil.compare(version.trim(), expectedVersion.trim()) == 0;
         } catch (IOException | SecurityException e) {
@@ -1541,6 +1549,130 @@ public class PluginInstallUtils {
             LOGGER.log(Level.FINE, "Downloaded file is not a readable JAR: " + file, e);
             return false;
         }
+    }
+
+    /** Internal name of the class every module's main class descends from. */
+    private static final String MODULE_BASE_CLASS = "com/ultikits/ultitools/abstracts/UltiToolsPlugin";
+
+    /**
+     * Whether {@code jarFile} could contain the module class the loader looks for, decided from the
+     * class files alone -- their own name and their superclass name, read from the class-file header
+     * without loading anything (Codex review r6/r7). A JAR carrying only a {@code plugin.yml}, or
+     * only classes whose ancestry provably stays inside the JAR and never reaches
+     * {@code UltiToolsPlugin}, cannot produce a module and is refused while nothing has moved.
+     * <p>
+     * It is deliberately one-sided. A class whose superclass is not in this JAR could descend from
+     * {@code UltiToolsPlugin} through the framework or a library, so it counts as possible: proving
+     * otherwise would mean loading a downloaded artifact's classes, which runs its static
+     * initialisers, and the loader itself only does that at startup under the security policy.
+     */
+    private static boolean couldCarryAModuleClass(java.util.jar.JarFile jarFile, File file) {
+        Map<String, String> superNames = new java.util.HashMap<>();
+        java.util.Enumeration<java.util.jar.JarEntry> entries = jarFile.entries();
+        while (entries.hasMoreElements() && superNames.size() <= 1000) {
+            java.util.jar.JarEntry entry = entries.nextElement();
+            String entryName = entry.getName();
+            if (!entryName.endsWith(".class") || entryName.startsWith("META-INF/")) {
+                continue;
+            }
+            try (InputStream in = jarFile.getInputStream(entry)) {
+                String[] names = readClassAndSuperName(in);
+                if (names != null) {
+                    superNames.put(names[0], names[1]);
+                }
+            } catch (IOException | RuntimeException e) {
+                // An unreadable class file says nothing either way; another entry may still qualify.
+                LOGGER.log(Level.FINE, "Could not read the class entry " + entryName + " of " + file, e);
+                return true;
+            }
+        }
+        if (superNames.isEmpty()) {
+            LOGGER.warning("JAR " + file + " carries no class the module loader could load");
+            return false;
+        }
+        for (String className : superNames.keySet()) {
+            if (mayDescendFromModuleBase(className, superNames)) {
+                return true;
+            }
+        }
+        LOGGER.warning("JAR " + file + " carries no class descending from UltiToolsPlugin, so no module can load from it");
+        return false;
+    }
+
+    /**
+     * Walks {@code className}'s superclass chain within one JAR.
+     *
+     * @return {@code true} when the chain reaches {@link #MODULE_BASE_CLASS}, or leaves the JAR --
+     *         where it cannot be followed without loading classes, and so cannot be ruled out
+     */
+    private static boolean mayDescendFromModuleBase(String className, Map<String, String> superNames) {
+        String current = className;
+        for (int depth = 0; depth < 64 && current != null; depth++) {
+            String superName = superNames.get(current);
+            if (superName == null) {
+                return false;
+            }
+            if (MODULE_BASE_CLASS.equals(superName)) {
+                return true;
+            }
+            if ("java/lang/Object".equals(superName)) {
+                return false;
+            }
+            if (!superNames.containsKey(superName)) {
+                return true;
+            }
+            current = superName;
+        }
+        return true;
+    }
+
+    /**
+     * The {@code {this class, superclass}} internal names in one class file's header.
+     *
+     * @return the pair, or {@code null} when the bytes are not a class file this can read
+     */
+    private static String[] readClassAndSuperName(InputStream in) throws IOException {
+        java.io.DataInputStream data = new java.io.DataInputStream(new java.io.BufferedInputStream(in));
+        if (data.readInt() != 0xCAFEBABE) {
+            return null;
+        }
+        data.readUnsignedShort();
+        data.readUnsignedShort();
+        int constantCount = data.readUnsignedShort();
+        String[] utf8 = new String[constantCount];
+        int[] classNameIndex = new int[constantCount];
+        for (int i = 1; i < constantCount; i++) {
+            int tag = data.readUnsignedByte();
+            switch (tag) {
+                case 1: utf8[i] = data.readUTF(); break;
+                case 7: case 8: case 16: case 19: case 20:
+                    int index = data.readUnsignedShort();
+                    if (tag == 7) {
+                        classNameIndex[i] = index;
+                    }
+                    break;
+                case 15: data.skipBytes(3); break;
+                case 5: case 6: data.skipBytes(8); i++; break;
+                case 3: case 4: case 9: case 10: case 11: case 12: case 17: case 18:
+                    data.skipBytes(4); break;
+                default: return null;
+            }
+        }
+        data.readUnsignedShort();
+        int thisClass = data.readUnsignedShort();
+        int superClass = data.readUnsignedShort();
+        String thisName = nameOfClassConstant(thisClass, classNameIndex, utf8);
+        String superName = nameOfClassConstant(superClass, classNameIndex, utf8);
+        return thisName == null ? null : new String[]{thisName, superName};
+    }
+
+    /** Resolves a {@code CONSTANT_Class} index to its internal name, or {@code null}. */
+    private static String nameOfClassConstant(int index, int[] classNameIndex, String[] utf8) {
+        if (index <= 0 || index >= classNameIndex.length) {
+            return null;
+        }
+        int nameIndex = classNameIndex[index];
+        return nameIndex > 0 && nameIndex < utf8.length ? utf8[nameIndex] : null;
     }
 
     /** Whether a {@code plugin.yml} carries the {@code name:} the module loader requires. */
@@ -1883,12 +2015,14 @@ public class PluginInstallUtils {
      * journals record. Best effort: what cannot be deleted is logged, because the uninstall's own
      * outcome is about the module's JARs in the modules folder.
      */
-    private static void clearStagingOf(String name) {
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // an unreadable journal must not hide the ones that matter
+    private static void clearStagingOf(String name) throws IOException {
         File stagingFolder = new File(UltiTools.getInstance().getDataFolder(), STAGING_DIRECTORY_NAME);
         File[] journals = stagingFolder.listFiles((f) -> f.getName().endsWith(JOURNAL_SUFFIX));
         if (journals == null) {
             return;
         }
+        FileSystemException failure = null;
         for (File journalFile : journals) {
             try {
                 java.util.Properties entries = new java.util.Properties();
@@ -1901,27 +2035,54 @@ public class PluginInstallUtils {
                     continue;
                 }
                 for (String[] pair : journalPairs(entries, journalFile, new java.util.concurrent.atomic.AtomicBoolean())) {
-                    deleteStagedFile(new File(stagingFolder, pair[1]));
+                    failure = firstOrSuppressed(failure, deleteStagedFile(new File(stagingFolder, pair[1])));
                 }
-                deleteStagedFile(journalFile);
+                failure = firstOrSuppressed(failure, deleteStagedFile(journalFile));
             } catch (IOException | RuntimeException e) {
-                LOGGER.log(Level.WARNING, "Could not clear the update journal " + journalFile
-                        + " while uninstalling " + name + "; delete it by hand, or the next start may"
-                        + " move that module's old JAR back", e);
+                // The journal cannot be read, so it cannot be shown to name this module either; it
+                // is reported rather than deleted, and boot recovery will leave it in place.
+                LOGGER.log(Level.WARNING, "Could not read the update journal " + journalFile
+                        + " while uninstalling " + name, e);
             }
+        }
+        if (failure != null) {
+            throw failure;
         }
     }
 
-    /** Deletes one file of the staging directory, logging rather than failing the uninstall. */
-    private static void deleteStagedFile(File file) {
+    /**
+     * Deletes one file left in the staging directory by an update of the module being uninstalled.
+     * A file that survives can move the module's old JAR back at the next start, which would undo
+     * the uninstall (Codex review r7), so the failure is reported rather than logged alone.
+     *
+     * @return the failure, or {@code null} when the file is gone
+     */
+    private static FileSystemException deleteStagedFile(File file) {
         try {
             if (Files.deleteIfExists(file.toPath())) {
                 LOGGER.info("Deleted " + file.getAbsolutePath() + ", left by an update of a module being uninstalled");
             }
+            return null;
         } catch (IOException | SecurityException e) {
-            LOGGER.log(Level.WARNING, "Could not delete " + file + " while uninstalling its module; "
+            LOGGER.log(Level.SEVERE, "Could not delete " + file + " while uninstalling its module; "
                     + "delete it by hand, or the next start may move that module's old JAR back", e);
+            FileSystemException failure = new FileSystemException(file.getAbsolutePath(), null,
+                    "left by an update of this module; while it is there, the next start can move the module's old JAR back");
+            failure.initCause(e);
+            return failure;
         }
+    }
+
+    /** Keeps the first failure and attaches any later one to it. */
+    private static FileSystemException firstOrSuppressed(FileSystemException first, FileSystemException next) {
+        if (next == null) {
+            return first;
+        }
+        if (first == null) {
+            return next;
+        }
+        first.addSuppressed(next);
+        return first;
     }
 
     /**
