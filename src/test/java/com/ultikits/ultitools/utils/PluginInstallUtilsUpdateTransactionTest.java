@@ -416,6 +416,49 @@ class PluginInstallUtilsUpdateTransactionTest {
     }
 
     @Test
+    @DisplayName("codex r16 P2: an uninstall started while a first-time update is moving is refused by name")
+    void updateOfAModuleAnUninstallIsHolding_isRefused() throws Exception {
+        // The uninstall targets a loaded module with the same runtime name and no identify-string,
+        // so the two operations share no key except the one derived from that name (codex r16).
+        com.ultikits.ultitools.abstracts.UltiToolsPlugin loaded =
+                org.mockito.Mockito.mock(com.ultikits.ultitools.abstracts.UltiToolsPlugin.class);
+        when(loaded.getPluginName()).thenReturn("Fixture");
+        when(loaded.getIdentifyString()).thenReturn(null);
+        com.ultikits.ultitools.manager.PluginManager pluginManager =
+                com.ultikits.ultitools.UltiTools.getInstance().getPluginManager();
+        when(pluginManager.getPluginList()).thenReturn(new java.util.ArrayList<>(Collections.singletonList(loaded)));
+        java.util.concurrent.CountDownLatch holding = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        org.mockito.Mockito.doAnswer(invocation -> {
+            holding.countDown();
+            assertThat(release.await(20, TimeUnit.SECONDS)).isTrue();
+            return null;
+        }).when(pluginManager).unregister(loaded);
+        Thread uninstall = new Thread(() -> {
+            try {
+                PluginInstallUtils.uninstallPlugin("Fixture");
+            } catch (IOException | RuntimeException expected) {
+                // The uninstall's own outcome is not what this test is about.
+            }
+        });
+        uninstall.start();
+        try {
+            assertThat(holding.await(20, TimeUnit.SECONDS)).as("the uninstall must reach its unload").isTrue();
+
+            UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+            assertThat(outcome.getStatus())
+                    .as("the module's name is held by a running uninstall, so this update must not proceed")
+                    .isEqualTo(Status.ALREADY_IN_PROGRESS);
+            assertThat(jarEntries()).isEmpty();
+            assertThat(stagingEntries()).as("a refused update leaves nothing behind").isEmpty();
+        } finally {
+            release.countDown();
+            uninstall.join(20_000);
+        }
+    }
+
+    @Test
     @DisplayName("review r6 IN-05: an uninstall during an update that had no old JAR to move aside is still refused")
     void uninstallDuringAnUpdateWithNoOlderJar_isRefused() throws IOException {
         AtomicReference<Throwable> uninstallResult = new AtomicReference<>();
