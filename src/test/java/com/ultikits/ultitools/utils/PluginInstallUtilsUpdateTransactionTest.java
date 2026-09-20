@@ -509,8 +509,9 @@ class PluginInstallUtilsUpdateTransactionTest {
         for (String name : stagingEntries()) {
             if (name.endsWith(".txn")) {
                 java.util.Properties entries = new java.util.Properties();
-                // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
-                try (java.io.Reader reader = Files.newBufferedReader(new File(stagingFolder, name).toPath(),
+                // The path is this test's own @TempDir listing, which is why it is built this way.
+                // nosemgrep
+                try (java.io.Reader reader = Files.newBufferedReader(new File(stagingFolder, name).toPath(), // nosemgrep
                         StandardCharsets.UTF_8)) {
                     entries.load(reader);
                 }

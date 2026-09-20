@@ -909,16 +909,11 @@ public class PluginInstallUtils {
         // update has changed nothing so far.
         String moduleName = readModuleName(staged.toFile());
         String nameKey = moduleName == null ? null : UNINSTALL_NAME_KEY_PREFIX + moduleName.toLowerCase(Locale.ROOT);
-        if (nameKey != null) {
-            synchronized (MODULE_OPERATIONS_IN_PROGRESS) {
-                if (MODULE_OPERATIONS_IN_PROGRESS.contains(nameKey)) {
-                    LOGGER.warning("Refusing to update " + identifyString + ": an uninstall of module "
-                            + moduleName + " is running; nothing was changed");
-                    deleteQuietly(operations, staged);
-                    return UpdateOutcome.of(UpdateOutcome.Status.ALREADY_IN_PROGRESS);
-                }
-                MODULE_OPERATIONS_IN_PROGRESS.add(nameKey);
-            }
+        if (!claimNameKey(nameKey)) {
+            LOGGER.warning("Refusing to update " + identifyString + ": an uninstall of module "
+                    + moduleName + " is running; nothing was changed");
+            deleteQuietly(operations, staged);
+            return UpdateOutcome.of(UpdateOutcome.Status.ALREADY_IN_PROGRESS);
         }
         try {
             return moveTheJars(operations, identifyString, moduleKey, moduleName, fileName, latestVersion,
@@ -927,6 +922,25 @@ public class PluginInstallUtils {
             if (nameKey != null) {
                 MODULE_OPERATIONS_IN_PROGRESS.remove(nameKey);
             }
+        }
+    }
+
+    /**
+     * Claims the module's runtime-name key, the one an uninstall goes by.
+     *
+     * @param nameKey the key, or {@code null} when the download names no module
+     * @return whether this transaction may go on: {@code false} means an uninstall holds the key
+     */
+    private static boolean claimNameKey(String nameKey) {
+        if (nameKey == null) {
+            return true;
+        }
+        synchronized (MODULE_OPERATIONS_IN_PROGRESS) {
+            if (MODULE_OPERATIONS_IN_PROGRESS.contains(nameKey)) {
+                return false;
+            }
+            MODULE_OPERATIONS_IN_PROGRESS.add(nameKey);
+            return true;
         }
     }
 
@@ -1432,36 +1446,50 @@ public class PluginInstallUtils {
                 java.nio.charset.StandardCharsets.UTF_8)) {
             entries.load(reader);
         }
-        if (!JOURNAL_FORMAT.equals(entries.getProperty("format"))) {
-            // Unreadable as a journal; recoverInterruptedUpdates reports that.
+        if (!thisBootHasToDecide(entries, journalFile, pluginsFolder)) {
             return;
         }
-        String phase = entries.getProperty(JOURNAL_PHASE_KEY);
-        boolean rollingBack = JOURNAL_PHASE_ROLLING_BACK.equals(phase);
-        boolean awaiting = JOURNAL_PHASE_AWAITING_BOOT.equals(phase);
-        String target = entries.getProperty("target");
         String module = normalizeIdentifyString(entries.getProperty("module"));
-        if (module == null || !isPlainFileName(target)) {
-            if (awaiting || rollingBack) {
-                LOGGER.warning("Module update journal " + journalFile.getAbsolutePath()
-                        + " names no module or no installed file and was left in place");
-            }
-            return;
-        }
-        if (!awaiting && !rollingBack && !installedByAnInterruptedUpdate(entries, journalFile, pluginsFolder,
-                target, module)) {
-            // A transaction still moving JARs: recoverInterruptedUpdates owns it.
-            return;
-        }
-        String name = entries.getProperty("name") == null ? module : entries.getProperty("name");
+        String recordedName = entries.getProperty("name");
+        String name = recordedName == null ? module : recordedName;
         java.util.concurrent.atomic.AtomicBoolean skippedAPair = new java.util.concurrent.atomic.AtomicBoolean();
         List<String[]> pairs = journalPairs(entries, journalFile, skippedAPair);
+        boolean rollingBack = JOURNAL_PHASE_ROLLING_BACK.equals(entries.getProperty(JOURNAL_PHASE_KEY));
         if (!rollingBack && loaded.contains(module)) {
             confirmUpdate(journalFile, stagingFolder, name, pairs, skippedAPair.get());
         } else {
-            rollBackUnloadableUpdate(journalFile, pluginsFolder, stagingFolder, name, target, pairs,
-                    skippedAPair.get());
+            rollBackUnloadableUpdate(journalFile, pluginsFolder, stagingFolder, name,
+                    entries.getProperty("target"), pairs, skippedAPair.get());
         }
+    }
+
+    /**
+     * Whether this journal is the confirmation hook's business: an update awaiting a verdict, a
+     * rollback that has not finished, or an update that installed its new version and died before
+     * it could record either (sweep row A8). Anything else belongs to
+     * {@link #recoverInterruptedUpdates} or is not a journal at all.
+     *
+     * @param entries       the journal's properties
+     * @param journalFile   the journal in the staging directory
+     * @param pluginsFolder the modules folder
+     * @return whether the caller resolves it now
+     */
+    private static boolean thisBootHasToDecide(java.util.Properties entries, File journalFile, File pluginsFolder) {
+        if (!JOURNAL_FORMAT.equals(entries.getProperty("format"))) {
+            // Unreadable as a journal; recoverInterruptedUpdates reports that.
+            return false;
+        }
+        boolean marked = isBootConfirmationPhase(entries);
+        String target = entries.getProperty("target");
+        String module = normalizeIdentifyString(entries.getProperty("module"));
+        if (module == null || !isPlainFileName(target)) {
+            if (marked) {
+                LOGGER.warning("Module update journal " + journalFile.getAbsolutePath()
+                        + " names no module or no installed file and was left in place");
+            }
+            return false;
+        }
+        return marked || installedByAnInterruptedUpdate(entries, journalFile, pluginsFolder, target, module);
     }
 
     /**
@@ -1718,15 +1746,12 @@ public class PluginInstallUtils {
         try (java.io.Reader reader = Files.newBufferedReader(journalFile.toPath(), java.nio.charset.StandardCharsets.UTF_8)) {
             entries.load(reader);
         }
+        if (isMalformed(entries, journalFile)) {
+            return;
+        }
         String module = entries.getProperty("module");
         String target = entries.getProperty("target");
         String process = entries.getProperty("process");
-        if (!JOURNAL_FORMAT.equals(entries.getProperty("format")) || process == null
-                || module == null || !isPlainFileName(target)) {
-            LOGGER.warning("Module update journal " + journalFile.getAbsolutePath()
-                    + " is malformed and was left in place");
-            return;
-        }
         if (isBootConfirmationPhase(entries)) {
             leaveForBootConfirmation(journalFile, entries, reported);
             return;
@@ -1760,6 +1785,24 @@ public class PluginInstallUtils {
                     + " was kept: a set-aside JAR of module " + module
                     + " could not be restored, and the next start will try again");
         }
+    }
+
+    /**
+     * Whether a journal is missing what recovery needs to act on it, which is reported once and
+     * leaves the journal in place.
+     *
+     * @param entries     the journal's properties
+     * @param journalFile the journal in the staging directory
+     * @return whether it cannot be acted on
+     */
+    private static boolean isMalformed(java.util.Properties entries, File journalFile) {
+        if (JOURNAL_FORMAT.equals(entries.getProperty("format")) && entries.getProperty("process") != null
+                && entries.getProperty("module") != null && isPlainFileName(entries.getProperty("target"))) {
+            return false;
+        }
+        LOGGER.warning("Module update journal " + journalFile.getAbsolutePath()
+                + " is malformed and was left in place");
+        return true;
     }
 
     /**
