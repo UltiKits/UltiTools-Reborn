@@ -383,8 +383,11 @@ This section governs the third kind.
   there, the next start can move the module's old JAR back, so the uninstall is not complete.
   It also selects a JAR by the identify-string of the module instance it
   unloaded, not only by the `plugin.yml` `name`, so a JAR an update renamed is still recognised as
-  that module's; and when no JAR could be identified while JARs in the folder could not be read at
-  all, those are reported rather than passed over, because one of them may be the module's.
+  that module's; and a JAR in the folder that could not be read at all is reported rather than
+  passed over, because it may be a copy of the module that loads it again once it is readable --
+  every unreadable JAR when none could be identified, and the ones named like this module when its
+  JAR was found and deleted, the file name being the only evidence left when the metadata cannot be
+  read.
   It also throws `com.ultikits.ultitools.exceptions.PluginModuleException`
   with error code `ErrorCode.PLUGIN_OPERATION_IN_PROGRESS` (new in 6.3.0), with nothing changed,
   while an update or another uninstall of the same module is running: one per-module guard covers
