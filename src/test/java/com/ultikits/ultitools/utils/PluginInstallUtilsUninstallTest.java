@@ -3,6 +3,7 @@ package com.ultikits.ultitools.utils;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.Mockito.doCallRealMethod;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -236,6 +237,67 @@ class PluginInstallUtilsUninstallTest {
         assertThat(namedFiles((FileSystemException) thrown))
                 .as("the entry that could not be read must be named too, or the operator is told half the story")
                 .contains(unreadable.getAbsolutePath());
+    }
+
+    @Test
+    @DisplayName("state C survives every exit: an unload that threw still carries what could not be read")
+    void stateC_isCarriedThroughAnUnloadFailure() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doThrow(new IllegalStateException("module unload step boom")).when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        writeModuleJar(MODULE_NAME);
+        File unreadable = new File(pluginsFolder, "zz-corrupt.jar");
+        Files.write(unreadable.toPath(), "not an archive".getBytes(StandardCharsets.UTF_8));
+
+        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPluginReporting(MODULE_NAME));
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class);
+        assertThat(undeterminedIn(thrown))
+                .as("the unload failure must not swallow what state C established")
+                .containsExactly(unreadable.getAbsolutePath());
+    }
+
+    @Test
+    @DisplayName("state C survives every exit: a JAR that could not be deleted carries it too")
+    void stateC_isCarriedThroughADeleteFailure() throws Exception {
+        Path folder = pluginsFolder.toPath();
+        Assumptions.assumeTrue(Files.getFileStore(folder).supportsFileAttributeView("posix"),
+                "needs POSIX permissions to make the delete fail");
+        writeModuleJar(MODULE_NAME);
+        File unreadable = new File(pluginsFolder, "zz-corrupt.jar");
+        Files.write(unreadable.toPath(), "not an archive".getBytes(StandardCharsets.UTF_8));
+
+        Set<PosixFilePermission> original = Files.getPosixFilePermissions(folder);
+        Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("r-x------"));
+        try {
+            Assumptions.assumeFalse(Files.isWritable(folder), "running as a user who can write a read-only directory");
+
+            Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPluginReporting(MODULE_NAME));
+
+            assertThat(thrown).isInstanceOf(FileSystemException.class);
+            assertThat(undeterminedIn(thrown))
+                    .as("a failed delete must not swallow it either")
+                    .containsExactly(unreadable.getAbsolutePath());
+        } finally {
+            Files.setPosixFilePermissions(folder, original);
+        }
+    }
+
+    /** The entries a failure carries as undetermined, wherever in its suppressed chain they sit. */
+    private static java.util.List<String> undeterminedIn(Throwable thrown) {
+        java.util.List<String> files = new java.util.ArrayList<>();
+        collectUndetermined(thrown, files);
+        return files;
+    }
+
+    private static void collectUndetermined(Throwable thrown, java.util.List<String> files) {
+        if (thrown instanceof PluginInstallUtils.UndeterminedEntriesException) {
+            files.addAll(((PluginInstallUtils.UndeterminedEntriesException) thrown).entries());
+        }
+        for (Throwable suppressed : thrown.getSuppressed()) {
+            collectUndetermined(suppressed, files);
+        }
     }
 
     @Test
