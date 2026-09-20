@@ -1,4 +1,9 @@
 {
+  "卸载成功！模块的 JAR 文件已全部删除。": "Uninstalled! Every JAR file of the module has been deleted.",
+  "卸载出错！模块已从已加载列表移除，但其卸载过程抛出了异常，详见控制台。": "Uninstall error! The module was removed from the loaded modules, but its own unload threw; see the console.",
+  "模块已卸载，但在 %s 中没有找到它的 JAR 文件。": "The module was unloaded, but no JAR file of it was found in %s.",
+  "模块的 JAR 文件已全部删除。": "Every JAR file of the module has been deleted.",
+  "卸载失败！以下模块 JAR 文件无法删除，重启后模块会再次加载，请手动删除：%s": "Uninstall failed! These module JAR files could not be deleted and will load the module again after a restart; delete them by hand: %s",
   "传送中...": "Teleporting...",
   "传送成功！": "Teleport Succeed!",
   "传送失败！": "Teleport Failed!",
