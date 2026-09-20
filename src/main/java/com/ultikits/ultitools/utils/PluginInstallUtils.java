@@ -572,12 +572,31 @@ public class PluginInstallUtils {
         }
         List<File> matchingJars = new ArrayList<>();
         List<File> unreadableJars = new ArrayList<>();
-        for (File file : listFiles) {
-            // Anything that is not a readable module JAR is skipped rather than fatal: the old
-            // implementation built a `jar:file:` URL for every entry in the folder, so a stray
-            // file or a subdirectory failed the whole uninstall (#504). A JAR that cannot be read
-            // is kept separately: it says nothing about itself, which is not the same as saying it
-            // is not this module's.
+        sortModuleFolderEntries(listFiles, name, matchingJars, unreadableJars);
+        if (matchingJars.isEmpty()) {
+            return nothingMatched(folder, name, moduleUnloaded, unreadableJars);
+        }
+        deleteJarsAndReportWhatCouldNotBeRead(name, matchingJars, namedLikeThisModule(unreadableJars, name));
+        return true;
+    }
+
+    /**
+     * Sorts the modules folder's entries into this module's JARs and the JARs that cannot be read.
+     *
+     * <p>Anything that is not a readable module JAR is skipped rather than fatal: the old
+     * implementation built a {@code jar:file:} URL for every entry in the folder, so a stray file or
+     * a subdirectory failed the whole uninstall (#504). A JAR that cannot be read is kept
+     * separately, because saying nothing about itself is not the same as saying it is not this
+     * module's.
+     *
+     * @param entries        the modules folder's entries
+     * @param name           the module's runtime name
+     * @param matchingJars   collects the JARs of this module
+     * @param unreadableJars collects the JARs that could not be read
+     */
+    private static void sortModuleFolderEntries(File[] entries, String name, List<File> matchingJars,
+                                                List<File> unreadableJars) {
+        for (File file : entries) {
             String declared = moduleNameOf(file);
             if (name.equals(declared)) {
                 matchingJars.add(file);
@@ -585,30 +604,54 @@ public class PluginInstallUtils {
                 unreadableJars.add(file);
             }
         }
-        if (matchingJars.isEmpty()) {
-            if (moduleUnloaded && !unreadableJars.isEmpty()) {
-                // The module was loaded from somewhere and no JAR here can say whether it is the
-                // one. Reporting them beats reporting that the module has no JAR at all.
-                throw unreadableJarsMayBeThisModules(name, unreadableJars);
-            }
-            List<File> suspects = namedLikeThisModule(unreadableJars, name);
-            if (!suspects.isEmpty()) {
-                throw unreadableJarsMayBeThisModules(name, suspects);
-            }
-            return noJarFound(folder, name, moduleUnloaded);
+    }
+
+    /**
+     * What "no JAR of this module could be identified" means, which depends on what else is there.
+     *
+     * @param folder         the modules folder
+     * @param name           the module's runtime name
+     * @param moduleUnloaded whether a loaded module of that name was unloaded first
+     * @param unreadableJars the JARs that could not be read
+     * @return {@code false}, the "no such module" answer
+     * @throws IOException when a JAR that could not be read may be this module's
+     */
+    private static boolean nothingMatched(File folder, String name, boolean moduleUnloaded,
+                                          List<File> unreadableJars) throws IOException {
+        if (moduleUnloaded && !unreadableJars.isEmpty()) {
+            // The module was loaded from somewhere and no JAR here can say whether it is the one.
+            // Reporting them beats reporting that the module has no JAR at all.
+            throw unreadableJarsMayBeThisModules(name, unreadableJars);
         }
+        List<File> suspects = namedLikeThisModule(unreadableJars, name);
+        if (!suspects.isEmpty()) {
+            throw unreadableJarsMayBeThisModules(name, suspects);
+        }
+        return noJarFound(folder, name, moduleUnloaded);
+    }
+
+    /**
+     * Deletes this module's JARs and reports what is left behind.
+     *
+     * <p>Deleting the JARs that could be identified says nothing about one that could not be read:
+     * a second copy of this module loads it again once the file is readable, and the uninstall would
+     * have reported that every copy is gone. Only the ones named like this module, since an
+     * unrelated unreadable file must not stop an uninstall and the file name is the only evidence
+     * left once the metadata cannot be read.
+     *
+     * @param name         the module's runtime name
+     * @param matchingJars the JARs identified as this module's
+     * @param suspects     unreadable JARs that cannot be ruled out as copies of this module
+     * @throws IOException when a JAR could not be deleted, or an unreadable one may be this module's
+     */
+    private static void deleteJarsAndReportWhatCouldNotBeRead(String name, List<File> matchingJars,
+                                                              List<File> suspects) throws IOException {
         IOException jarFailure = null;
         try {
             deleteAllOrThrow(matchingJars);
         } catch (IOException e) {
             jarFailure = e;
         }
-        // Deleting the JARs that could be identified says nothing about one that could not be read:
-        // a second copy of this module loads it again once the file is readable, and the uninstall
-        // would have reported that every copy is gone. Only the ones named like this module, since
-        // an unrelated unreadable file must not stop an uninstall and the file name is the only
-        // evidence left once the metadata cannot be read.
-        List<File> suspects = namedLikeThisModule(unreadableJars, name);
         if (!suspects.isEmpty()) {
             java.nio.file.FileSystemException unreadable = unreadableJarsMayBeThisModules(name, suspects);
             if (jarFailure == null) {
@@ -619,7 +662,6 @@ public class PluginInstallUtils {
         if (jarFailure != null) {
             throw jarFailure;
         }
-        return true;
     }
 
     /**
