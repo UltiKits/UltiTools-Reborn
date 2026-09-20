@@ -94,6 +94,7 @@ class PluginInstallUtilsUninstallTest {
 
     @AfterEach
     void tearDown() {
+        PluginInstallUtils.moduleCodeSource = PluginInstallUtils.DEFAULT_MODULE_CODE_SOURCE;
         MockBukkitHelper.safeUnmock();
     }
 
@@ -342,6 +343,104 @@ class PluginInstallUtilsUninstallTest {
     }
 
     @Test
+    @DisplayName("state A: the loaded instance's own code-source JAR is deleted, plugin.yml or not")
+    void stateA_codeSourceJarOfTheLoadedModule_isDeleted() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        // A module JAR carrying no plugin.yml at all: UltiTools modules are identified by
+        // @UltiToolsModule, so this loads perfectly well and metadata cannot rule it in or out.
+        File jar = writeJarWithoutPluginYml(MODULE_NAME + "-1.0.0.jar");
+        PluginInstallUtils.moduleCodeSource = module -> jar;
+
+        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+
+        assertThat(jar)
+                .as("the framework can ask the instance which JAR it came from; leaving it means the "
+                        + "module returns at the next restart")
+                .doesNotExist();
+        assertThat(report.jarsDeleted()).isTrue();
+        assertThat(report.undeterminedEntries()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("state A: the code source is read before the module is unloaded")
+    void stateA_codeSourceIsCapturedBeforeTheUnload() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        File jar = writeJarWithoutPluginYml(MODULE_NAME + "-1.0.0.jar");
+        java.util.List<Boolean> stillLoadedWhenAsked = new java.util.ArrayList<>();
+        PluginInstallUtils.moduleCodeSource = module -> {
+            stillLoadedWhenAsked.add(pluginManager.getPluginList().contains(module));
+            return jar;
+        };
+
+        PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+
+        assertThat(stillLoadedWhenAsked)
+                .as("after the unload the instance and its loader may be gone, and with them the answer")
+                .containsExactly(true);
+        assertThat(jar).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("state C: a JAR with no plugin.yml that is not the code source is reported, not ignored")
+    void stateC_metadataFreeJarThatIsNotTheCodeSource_isReported() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        File codeSource = writeModuleJar(MODULE_NAME);
+        PluginInstallUtils.moduleCodeSource = module -> codeSource;
+        // Another JAR with no metadata: it may be a module too, since a module needs no plugin.yml.
+        File metadataFree = writeJarWithoutPluginYml("zz-no-metadata.jar");
+
+        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+
+        assertThat(codeSource).doesNotExist();
+        assertThat(report.undeterminedEntries())
+                .as("a JAR with no plugin.yml is not proof of not being a module -- modules are "
+                        + "identified by @UltiToolsModule, so nothing here rules it out")
+                .containsExactly(metadataFree.getAbsolutePath());
+        assertThat(metadataFree).exists();
+    }
+
+    @Test
+    @DisplayName("state A: a code source that is a directory falls through to the table without throwing")
+    void stateA_codeSourceThatIsADirectory_fallsThroughToTheTable() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        File jar = writeModuleJar(MODULE_NAME);
+        // A development checkout: the module runs from an exploded class directory.
+        File exploded = new File(dataFolder, "classes");
+        assertThat(exploded.mkdirs()).isTrue();
+        PluginInstallUtils.moduleCodeSource = module -> exploded;
+
+        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+
+        assertThat(jar).as("the plugin.yml still identifies it, which is the table's own answer").doesNotExist();
+        assertThat(report.jarsDeleted()).isTrue();
+        assertThat(exploded).exists();
+    }
+
+    @Test
+    @DisplayName("the code source of a class loaded from a JAR is that JAR, and of one loaded from a directory is nothing")
+    void codeSourceOf_readsWhatTheClassWasLoadedFrom() {
+        // Real reflection, no seam: JUnit's own class comes from a jar, this test class does not.
+        File fromJar = PluginInstallUtils.codeSourceJarOf(org.junit.jupiter.api.Test.class);
+        assertThat(fromJar).isNotNull();
+        assertThat(fromJar.getName()).endsWith(".jar");
+        assertThat(PluginInstallUtils.codeSourceJarOf(PluginInstallUtilsUninstallTest.class))
+                .as("an exploded class directory names no JAR, and must not be mistaken for one")
+                .isNull();
+    }
+
+    @Test
     @DisplayName("states A-D: an entry is never classified by its file name")
     void fileNameNeverDecidesWhatAnEntryIs() throws IOException {
         File jar = writeModuleJar(MODULE_NAME);
@@ -569,6 +668,17 @@ class PluginInstallUtilsUninstallTest {
             }
         }
         return files;
+    }
+
+    /** A JAR carrying no {@code plugin.yml}: what a module identified only by {@code @UltiToolsModule} looks like. */
+    private File writeJarWithoutPluginYml(String fileName) throws IOException {
+        File jar = new File(pluginsFolder, fileName);
+        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(jar))) {
+            out.putNextEntry(new JarEntry("com/example/Module.class"));
+            out.write(new byte[]{(byte) 0xCA, (byte) 0xFE, (byte) 0xBA, (byte) 0xBE});
+            out.closeEntry();
+        }
+        return jar;
     }
 
     private File writeModuleJar(String moduleName) throws IOException {
