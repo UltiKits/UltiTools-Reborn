@@ -97,63 +97,140 @@ class PluginInstallUtilsUninstallTest {
     }
 
     @Test
-    @DisplayName("codex #514: a JAR of this module that cannot be read is reported, not counted as deleted")
-    void unreadableJarNamedLikeTheModule_isReported() throws IOException {
+    @DisplayName("state A: an entry whose plugin.yml declares this module is deleted")
+    void stateA_entryDeclaringThisModule_isDeleted() throws IOException {
+        File jar = writeModuleJar(MODULE_NAME);
+
+        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+
+        assertThat(jar).doesNotExist();
+        assertThat(report.jarsDeleted()).isTrue();
+        assertThat(report.undeterminedEntries()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("state B: an entry that opened and declares another module is ignored in silence")
+    void stateB_entryDeclaringAnotherModule_isIgnored() throws IOException {
+        File jar = writeModuleJar(MODULE_NAME);
+        File other = writeModuleJar("SomethingElse");
+
+        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+
+        assertThat(jar).doesNotExist();
+        assertThat(other).exists();
+        assertThat(report.jarsDeleted()).isTrue();
+        assertThat(report.undeterminedEntries())
+                .as("its identity was read and it is not this module's -- there is nothing uncertain about it")
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("state B: a JAR that opened and carries no plugin.yml at all is ignored in silence")
+    void stateB_jarWithoutAPluginYml_isIgnored() throws IOException {
+        File jar = writeModuleJar(MODULE_NAME);
+        // A sources or javadoc JAR beside the module's own: it opened, and it declares no module,
+        // so it cannot load anything. That is a positive answer, not an unknown one.
+        File sources = new File(pluginsFolder, MODULE_NAME + "-sources.jar");
+        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(sources))) {
+            out.putNextEntry(new JarEntry("com/example/Thing.java"));
+            out.write("class Thing {}".getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+
+        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+
+        assertThat(jar).doesNotExist();
+        assertThat(sources).exists();
+        assertThat(report.jarsDeleted()).isTrue();
+        assertThat(report.undeterminedEntries())
+                .as("a JAR carrying no module metadata can never load this module")
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("state C: an entry that could not be opened is reported, and the uninstall still succeeds")
+    void stateC_entryThatCouldNotBeOpened_isReported() throws IOException {
+        File jar = writeModuleJar(MODULE_NAME);
+        File unopenable = new File(pluginsFolder, "zz-corrupt.jar");
+        Files.write(unopenable.toPath(), "not an archive".getBytes(StandardCharsets.UTF_8));
+
+        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+
+        assertThat(jar).as("what could be identified is still deleted").doesNotExist();
+        assertThat(report.jarsDeleted())
+                .as("an entry nothing could be read from must not stop an uninstall")
+                .isTrue();
+        assertThat(report.undeterminedEntries())
+                .as("nothing here says whether this is a copy of the module, and that is what must be said")
+                .containsExactly(unopenable.getAbsolutePath());
+        assertThat(unopenable).exists();
+    }
+
+    @Test
+    @DisplayName("state C: a plugin.yml that is not valid YAML leaves the identity undetermined")
+    void stateC_malformedPluginYml_isUndetermined() throws IOException {
+        File jar = writeModuleJar(MODULE_NAME);
+        File malformed = new File(pluginsFolder, "zz-malformed.jar");
+        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(malformed))) {
+            out.putNextEntry(new JarEntry("plugin.yml"));
+            // Valid as a file, not as YAML: an unclosed flow mapping.
+            out.write("name: {unclosed
+	broken: [".getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+
+        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+
+        assertThat(jar).doesNotExist();
+        assertThat(report.jarsDeleted()).isTrue();
+        assertThat(report.undeterminedEntries())
+                .as("a plugin.yml that cannot be parsed says nothing, which is not the same as saying no")
+                .containsExactly(malformed.getAbsolutePath());
+    }
+
+    @Test
+    @DisplayName("state D: a modules folder that exists but cannot be listed is a scan failure, not an absent JAR")
+    void stateD_modulesFolderThatCannotBeListed_isReportedAsAScanFailure() throws Exception {
+        Path folder = pluginsFolder.toPath();
+        Assumptions.assumeTrue(Files.getFileStore(folder).supportsFileAttributeView("posix"),
+                "needs POSIX permissions to make the listing fail");
+        writeModuleJar(MODULE_NAME);
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
         when(plugin.getPluginName()).thenReturn(MODULE_NAME);
         doCallRealMethod().when(plugin).unregisterSelf();
         pluginManager.getPluginList().add(plugin);
-        File matching = writeModuleJar(MODULE_NAME);
-        // A second copy of the module whose metadata cannot be read right now: nothing here can
-        // say it is not this module's, and it loads the module again once it is readable.
-        File unreadable = new File(pluginsFolder, MODULE_NAME + "-0.9.0.jar");
-        Files.write(unreadable.toPath(), "not readable as a jar".getBytes(StandardCharsets.UTF_8));
 
-        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+        Set<PosixFilePermission> original = Files.getPosixFilePermissions(folder);
+        Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("---------"));
+        try {
+            Assumptions.assumeFalse(pluginsFolder.listFiles() != null,
+                    "running as a user that can list an unreadable directory (e.g. root)");
 
-        assertThat(matching).as("the JAR that could be identified still goes").doesNotExist();
-        assertThat(thrown)
-                .as("reporting success leaves a JAR that loads the module again once it is readable")
-                .isInstanceOf(FileSystemException.class);
-        assertThat(namedFiles((FileSystemException) thrown)).contains(unreadable.getAbsolutePath());
-        assertThat(unreadable).exists();
+            Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+            assertThat(thrown)
+                    .as("the module's JAR is there and will load again; saying no JAR was found is false")
+                    .isInstanceOf(java.nio.file.AccessDeniedException.class);
+            assertThat(((FileSystemException) thrown).getFile()).isEqualTo(pluginsFolder.getAbsolutePath());
+        } finally {
+            Files.setPosixFilePermissions(folder, original);
+        }
     }
 
     @Test
-    @DisplayName("codex #514: the same holds when no instance was loaded to unload")
-    void unreadableJarNamedLikeTheModule_isReportedWithNothingUnloaded() throws IOException {
-        // The module failed to load this boot, so there is no instance to unload.
-        File matching = writeModuleJar(MODULE_NAME);
-        File unreadable = new File(pluginsFolder, MODULE_NAME + "-0.9.0.jar");
-        Files.write(unreadable.toPath(), "not readable as a jar".getBytes(StandardCharsets.UTF_8));
+    @DisplayName("states A-D: an entry is never classified by its file name")
+    void fileNameNeverDecidesWhatAnEntryIs() throws IOException {
+        File jar = writeModuleJar(MODULE_NAME);
+        // Named exactly like a copy of the module, and positively not one: it declares another.
+        File impostor = writeModuleJar("SomethingElse", "9.9.9");
+        File renamed = new File(pluginsFolder, MODULE_NAME + "-9.9.9.jar");
+        assertThat(impostor.renameTo(renamed)).isTrue();
 
-        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
 
-        assertThat(matching).doesNotExist();
-        assertThat(thrown)
-                .as("whether an instance happened to be loaded says nothing about the second copy")
-                .isInstanceOf(FileSystemException.class);
-        assertThat(namedFiles((FileSystemException) thrown)).contains(unreadable.getAbsolutePath());
-    }
-
-    @Test
-    @DisplayName("codex #514: an unreadable JAR is reported when no JAR of the module could be identified")
-    void unreadableJar_isReportedWhenNothingMatched() throws IOException {
-        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
-        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
-        doCallRealMethod().when(plugin).unregisterSelf();
-        pluginManager.getPluginList().add(plugin);
-        // The module was loaded from somewhere, and the only JAR here cannot say whether it is it.
-        File unreadable = new File(pluginsFolder, MODULE_NAME + "-1.0.0.jar");
-        Files.write(unreadable.toPath(), "not readable as a jar".getBytes(StandardCharsets.UTF_8));
-
-        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
-
-        assertThat(thrown)
-                .as("saying no JAR is here lets this one load the module again once it is readable")
-                .isInstanceOf(FileSystemException.class);
-        assertThat(namedFiles((FileSystemException) thrown)).contains(unreadable.getAbsolutePath());
-        assertThat(unreadable).exists();
+        assertThat(jar).doesNotExist();
+        assertThat(renamed).as("its plugin.yml names another module, whatever the file is called").exists();
+        assertThat(report.undeterminedEntries()).isEmpty();
     }
 
     /** A module bean carrying one repeating {@code @Scheduled} task that counts its own runs. */
@@ -368,33 +445,6 @@ class PluginInstallUtilsUninstallTest {
             }
         }
         return files;
-    }
-
-    @Test
-    @DisplayName("codex r6 P2: an unrelated entry in the modules folder does not stop the uninstall")
-    void unreadableEntriesInTheModulesFolder_areSkipped() throws IOException {
-        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
-        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
-        doCallRealMethod().when(plugin).unregisterSelf();
-        pluginManager.getPluginList().add(plugin);
-        File jar = writeModuleJar(MODULE_NAME);
-        // Entries that are not readable module JARs, both before and after the match in a sorted
-        // listing: a stray file, a directory, and a JAR-named file that is not a JAR.
-        File note = new File(pluginsFolder, "0-readme.txt");
-        Files.write(note.toPath(), "not a JAR".getBytes(StandardCharsets.UTF_8));
-        File directory = new File(pluginsFolder, "zz-subfolder");
-        assertThat(directory.mkdirs()).isTrue();
-        File corrupt = new File(pluginsFolder, "zz-corrupt.jar");
-        Files.write(corrupt.toPath(), "not a JAR either".getBytes(StandardCharsets.UTF_8));
-
-        assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME))
-                .as("the module's own JAR is what the uninstall must act on")
-                .isTrue();
-
-        assertThat(jar).doesNotExist();
-        assertThat(note).exists();
-        assertThat(directory).exists();
-        assertThat(corrupt).exists();
     }
 
     private File writeModuleJar(String moduleName) throws IOException {

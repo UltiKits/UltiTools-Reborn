@@ -581,6 +581,45 @@ class PluginInstallCommandsTest {
         assertThat(all).contains("卸载出错").contains(folder).doesNotContain("已全部删除");
     }
 
+    @Test
+    @DisplayName("state C: the reply says how many JARs could not be read, and what that means")
+    void uninstallWithUndeterminedEntries_replySaysWhatIsUnknown() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String unreadable = "/srv/minecraft/plugins/UltiTools/plugins/zz-corrupt.jar";
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
+                .thenReturn(PluginInstallUtils.UninstallReport.of(true, java.util.Collections.singletonList(unreadable)));
+
+        executor.uninstallPlugin(player, "test-plugin");
+
+        String all = String.join("\n", drainMessages());
+        assertThat(all).as("the uninstall succeeded and must say so").contains("卸载成功");
+        assertThat(all)
+                .as("the operator must be told what is unknown, and what follows from it")
+                .contains("1")
+                .contains("重启");
+        assertThat(all)
+                .as("nothing here says those files are copies of this module")
+                .doesNotContain("副本");
+    }
+
+    @Test
+    @DisplayName("state D: a modules folder that could not be listed is reported as that")
+    void uninstallWithUnlistableFolder_replySaysNothingCanBeConcluded() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String folder = "/srv/minecraft/plugins/UltiTools/plugins";
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
+                .thenThrow(new java.nio.file.AccessDeniedException(folder, null, "could not be listed"));
+
+        executor.uninstallPlugin(player, "test-plugin");
+
+        String all = String.join("\n", drainMessages());
+        assertThat(all)
+                .contains("模块目录")
+                .contains(folder)
+                .doesNotContain("卸载成功")
+                .doesNotContain("拼写");
+    }
+
     private static IllegalStateException unloadThrew(Exception jarOutcome) {
         IllegalStateException failure = new IllegalStateException(
                 "Module test-plugin was removed from the loaded modules, but its unload threw",
