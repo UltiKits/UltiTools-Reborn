@@ -602,8 +602,8 @@ public class PluginManager {
             return false;
         }
         try {
-            URL[] candidate = {candidateJar.toURI().toURL()};
-            try (URLClassLoader loader = new URLClassLoader(candidate, ClassLoaderUtils.getPluginClassLoader())) {
+            try (CandidateClassLoader loader = CandidateClassLoader.over(candidateJar,
+                    ClassLoaderUtils.getPluginClassLoader())) {
                 return findModuleMainClass(candidateJar, (className) -> Class.forName(className, false, loader)) != null;
             }
         } catch (IOException | RuntimeException | LinkageError e) {
@@ -613,6 +613,66 @@ public class PluginManager {
         } finally {
             ModuleScanDiagnostics.emitSummary(candidateJar.getName());
             ClassLoaderUtils.emitClassloadFilterAuditSummary(candidateJar.getName());
+        }
+    }
+
+    /**
+     * A class loader over one candidate module JAR whose own classes come from that JAR.
+     * <p>
+     * A plain parent-first loader would answer a name the installed module already provides from
+     * the installed JAR, so a candidate carrying different bytes under the same entry name would
+     * be judged on the old module's classes and never read (Codex review r9). Names the candidate
+     * declares are therefore resolved from it first. Framework classes are the exception: they are
+     * always taken from the parent, which is what happens at runtime too, since the framework's
+     * own class loader provides them to every module.
+     */
+    private static final class CandidateClassLoader extends URLClassLoader {
+
+        /** The framework's own package: always the parent's copy, as at runtime. */
+        private static final String FRAMEWORK_PACKAGE = "com.ultikits.ultitools.";
+
+        private final Set<String> ownClassNames;
+
+        private CandidateClassLoader(URL[] urls, ClassLoader parent, Set<String> ownClassNames) {
+            super(urls, parent);
+            this.ownClassNames = ownClassNames;
+        }
+
+        /**
+         * @param candidateJar the JAR to load from
+         * @param parent       the loader providing the framework and the other modules
+         * @return a loader whose own classes come from {@code candidateJar}
+         * @throws IOException when the JAR cannot be read
+         */
+        static CandidateClassLoader over(File candidateJar, ClassLoader parent) throws IOException {
+            Set<String> ownClassNames = new HashSet<>();
+            try (JarFile jarFile = new JarFile(candidateJar)) {
+                Enumeration<JarEntry> entries = jarFile.entries();
+                while (entries.hasMoreElements()) {
+                    String entryName = entries.nextElement().getName();
+                    if (entryName.endsWith(".class") && !entryName.contains("META-INF")) {
+                        ownClassNames.add(entryName.replace('/', '.').replace(".class", ""));
+                    }
+                }
+            }
+            return new CandidateClassLoader(new URL[]{candidateJar.toURI().toURL()}, parent, ownClassNames);
+        }
+
+        @Override
+        protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+            synchronized (getClassLoadingLock(name)) {
+                Class<?> loaded = findLoadedClass(name);
+                if (loaded == null && ownClassNames.contains(name) && !name.startsWith(FRAMEWORK_PACKAGE)) {
+                    loaded = findClass(name);
+                }
+                if (loaded == null) {
+                    return super.loadClass(name, resolve);
+                }
+                if (resolve) {
+                    resolveClass(loaded);
+                }
+                return loaded;
+            }
         }
     }
 

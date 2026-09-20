@@ -1938,10 +1938,15 @@ public class PluginInstallUtils {
                 }
                 failure = firstOrSuppressed(failure, deleteStagedFile(journalFile));
             } catch (IOException | RuntimeException e) {
-                // The journal cannot be read, so it cannot be shown to name this module either; it
-                // is reported rather than deleted, and boot recovery will leave it in place.
-                LOGGER.log(Level.WARNING, "Could not read the update journal " + journalFile
+                // Nothing can show this journal is not this module's, and once the read error
+                // clears the next start can follow it and bring the module back (Codex review r9).
+                // So it fails the uninstall rather than passing quietly.
+                LOGGER.log(Level.SEVERE, "Could not read the update journal " + journalFile
                         + " while uninstalling " + name, e);
+                FileSystemException unreadable = new FileSystemException(journalFile.getAbsolutePath(), null,
+                        "an update journal that could not be read; while it is there, the next start can move a module's old JAR back");
+                unreadable.initCause(e);
+                failure = firstOrSuppressed(failure, unreadable);
             }
         }
         if (failure != null) {
