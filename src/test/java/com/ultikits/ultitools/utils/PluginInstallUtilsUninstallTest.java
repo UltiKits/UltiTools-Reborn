@@ -465,7 +465,7 @@ class PluginInstallUtilsUninstallTest {
         IllegalStateException unloadFailure = new IllegalStateException("module unload step boom");
         // unregisterSelf() rethrows its first failed step; a command-cleanup failure stands in for
         // a throwing onUnregister(), which is protected and not stubbable from this package.
-        org.mockito.Mockito.doThrow(unloadFailure).when(commandManager).unregisterAll(plugin);
+        doThrow(unloadFailure).when(commandManager).unregisterAll(plugin);
         File jar = writeModuleJar(MODULE_NAME);
 
         Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
@@ -494,7 +494,7 @@ class PluginInstallUtilsUninstallTest {
         doCallRealMethod().when(plugin).unregisterSelf();
         pluginManager.getPluginList().add(plugin);
         IllegalStateException unloadFailure = new IllegalStateException("module unload step boom");
-        org.mockito.Mockito.doThrow(unloadFailure).when(commandManager).unregisterAll(plugin);
+        doThrow(unloadFailure).when(commandManager).unregisterAll(plugin);
         File jar = writeModuleJar(MODULE_NAME);
 
         Set<PosixFilePermission> original = Files.getPosixFilePermissions(folder);
