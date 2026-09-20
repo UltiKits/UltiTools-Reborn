@@ -383,6 +383,34 @@ class PluginInstallUtilsUninstallTest {
     }
 
     @Test
+    @DisplayName("codex r6 P2: an uninstall clears that module's leftover update journals, so nothing can restore it")
+    void uninstall_clearsTheModulesUpdateJournals() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        File jar = writeModuleJar(MODULE_NAME);
+        File staging = new File(dataFolder, ".upm-staging");
+        assertThat(staging.mkdirs()).isTrue();
+        String transaction = "8420a849-1c2d-4e5f-9a0b-1c2d3e4f5a6b";
+        File aside = new File(staging, MODULE_NAME + "-0.9.0.jar." + transaction + ".old");
+        Files.write(aside.toPath(), "old jar".getBytes(StandardCharsets.UTF_8));
+        File journal = new File(staging, transaction + ".txn");
+        Files.write(journal.toPath(), ("format=1\nprocess=4242@another-host\nmodule=uninstallfixture\n"
+                + "name=" + MODULE_NAME + "\ntarget=" + MODULE_NAME + "-1.0.0.jar\n"
+                + "aside.0.original=" + MODULE_NAME + "-0.9.0.jar\naside.0.aside=" + aside.getName() + "\n")
+                .getBytes(StandardCharsets.UTF_8));
+
+        assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME)).isTrue();
+
+        assertThat(jar).doesNotExist();
+        assertThat(journal)
+                .as("a journal left after the uninstall makes the next boot restore the module")
+                .doesNotExist();
+        assertThat(aside).doesNotExist();
+    }
+
+    @Test
     @DisplayName("codex r6 P2: an unrelated entry in the modules folder does not stop the uninstall")
     void unreadableEntriesInTheModulesFolder_areSkipped() throws IOException {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);

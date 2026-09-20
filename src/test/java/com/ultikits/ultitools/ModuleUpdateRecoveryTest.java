@@ -225,9 +225,10 @@ class ModuleUpdateRecoveryTest {
     @DisplayName("review r6 IN-02: one unusable name in a journal does not abandon that journal's other JARs")
     void oneUnusableNameInAJournal_skipsOnlyThatPair() throws IOException {
         File good = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        File skipped = setAsideJar(ID + "-9.0.0.jar", UUID_A, "9.0.0");
         File journal = new File(stagingFolder, UUID_A + ".txn");
         String text = "format=1\nprocess=" + OTHER_PROCESS + "\nmodule=" + ID + "\ntarget=" + ID + "-2.0.0.jar\n"
-                + "aside.0.original=../escape.jar\naside.0.aside=../escape.jar." + UUID_A + ".old\n"
+                + "aside.0.original=../escape.jar\naside.0.aside=" + skipped.getName() + "\n"
                 + "aside.1.original=" + ID + "-1.0.0.jar\naside.1.aside=" + good.getName() + "\n";
         Files.write(journal.toPath(), text.getBytes(StandardCharsets.UTF_8));
 
@@ -238,6 +239,11 @@ class ModuleUpdateRecoveryTest {
                 .exists();
         assertThat(new File(dataFolder, "escape.jar")).doesNotExist();
         assertThat(warnings()).anyMatch(m -> m.contains(journal.getAbsolutePath()));
+        assertThat(journal)
+                .as("codex r6: a journal with an unresolved pair is kept, so its JAR stays protected")
+                .exists();
+        assertThat(skipped).exists();
+        assertNotAdvertisedAsDeletable(skipped);
     }
 
     @Test

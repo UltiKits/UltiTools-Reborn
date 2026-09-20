@@ -421,6 +421,44 @@ class PluginInstallUtilsUpdateTransactionTest {
     }
 
     @Test
+    @DisplayName("codex r6 P1: a download missing the name the loader requires is invalid, before any JAR moves")
+    void downloadWithoutTheNameKey_isAnInvalidDownload() throws IOException {
+        File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        operations.downloadBytes = jarBytesWithRawYaml("version: 2.0.0\nidentify-string: " + IDENTIFY_STRING + "\n");
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus())
+                .as("UltiToolsPlugin refuses a module JAR with no name:, so installing one loses the module")
+                .isEqualTo(Status.INVALID_DOWNLOAD);
+        assertThat(jarEntries()).containsExactly(oldJar.getName());
+        assertThat(stagingEntries()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("codex r6 P2: a journal that cannot be marked committed is removed instead, never left uncommitted")
+    void journalThatCannotBeMarkedCommitted_isDeleted() throws IOException {
+        writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        // Occupy the name the committed marker is written through, so that write is the only failure.
+        operations.duringMoveIn = () -> {
+            for (String name : stagingEntries()) {
+                if (name.endsWith(".txn")) {
+                    // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
+                    File blocker = new File(stagingFolder, name + ".tmp");
+                    assertThat(blocker.mkdir()).as("a directory cannot be written as a file").isTrue();
+                }
+            }
+        };
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus()).isEqualTo(Status.UPDATED);
+        assertThat(stagingEntries())
+                .as("an uncommitted journal would make the next boot undo a later uninstall")
+                .noneMatch(name -> name.endsWith(".txn"));
+    }
+
+    @Test
     @DisplayName("review r6 IN-04: a journal that cannot be written is reported as itself and leaves no temporary file")
     void journalThatCannotBeWritten_isReportedAsSuchAndCleansUp() throws IOException {
         File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
