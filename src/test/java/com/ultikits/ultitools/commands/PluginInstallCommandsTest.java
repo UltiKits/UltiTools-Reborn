@@ -902,6 +902,28 @@ class PluginInstallCommandsTest {
     }
 
     @Test
+    @DisplayName("codex r19 P2: a mixed failure keeps the module-JAR warning as well as the leftover one")
+    void uninstallMixedFailure_reportsBothCategories() {
+        String jar = "/srv/minecraft/plugins/UltiTools/plugins/Fixture-1.0.0.jar";
+        String leftover = "/srv/minecraft/plugins/UltiTools/.upm-staging/8420a849.txn";
+        java.nio.file.FileSystemException failure =
+                new java.nio.file.FileSystemException(jar, null, "Permission denied");
+        failure.addSuppressed(new java.nio.file.FileSystemException(leftover, null, "Permission denied"));
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin")).thenThrow(failure);
+
+        executor.onCommand(player, mockCommand, "upm", new String[]{"uninstall", "test-plugin"});
+        server.getScheduler().performOneTick();
+
+        String reply = String.join("\n", drainMessages());
+        assertThat(reply)
+                .as("the JAR reloads the module for certain; the leftover only might, and they need different words")
+                .contains("模块 JAR 文件无法删除")
+                .contains(jar)
+                .contains("更新残留文件")
+                .contains(leftover);
+    }
+
+    @Test
     @DisplayName("codex r18 P2: every file an uninstall could not delete is named, however deeply attached")
     void uninstallFailure_namesNestedSuppressedFiles() {
         String jar = "/srv/minecraft/plugins/UltiTools/plugins/Fixture-1.0.0.jar";

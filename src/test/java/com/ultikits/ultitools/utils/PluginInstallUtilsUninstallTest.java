@@ -411,6 +411,37 @@ class PluginInstallUtilsUninstallTest {
     }
 
     @Test
+    @DisplayName("codex r19 P2: an uninstall clears every JAR a damaged journal names, gap or not")
+    void uninstall_clearsEveryPairOfAGappedJournal() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        writeModuleJar(MODULE_NAME);
+        File staging = new File(dataFolder, ".upm-staging");
+        assertThat(staging.mkdirs()).isTrue();
+        String transaction = "8420a849-1c2d-4e5f-9a0b-1c2d3e4f5a6b";
+        File first = new File(staging, MODULE_NAME + "-0.9.0.jar." + transaction + ".old");
+        Files.write(first.toPath(), "first".getBytes(StandardCharsets.UTF_8));
+        File afterTheGap = new File(staging, MODULE_NAME + "-0.8.0.jar." + transaction + ".old");
+        Files.write(afterTheGap.toPath(), "second".getBytes(StandardCharsets.UTF_8));
+        File journal = new File(staging, transaction + ".txn");
+        Files.write(journal.toPath(), ("format=1\nprocess=4242@another-host\nmodule=uninstallfixture\n"
+                + "name=" + MODULE_NAME + "\ntarget=" + MODULE_NAME + "-1.0.0.jar\n"
+                + "aside.0.original=" + MODULE_NAME + "-0.9.0.jar\naside.0.aside=" + first.getName() + "\n"
+                + "aside.2.original=" + MODULE_NAME + "-0.8.0.jar\naside.2.aside=" + afterTheGap.getName() + "\n")
+                .getBytes(StandardCharsets.UTF_8));
+
+        assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME)).isTrue();
+
+        assertThat(first).doesNotExist();
+        assertThat(afterTheGap)
+                .as("a JAR the journal names past a gap would still be there to restore the module")
+                .doesNotExist();
+        assertThat(journal).doesNotExist();
+    }
+
+    @Test
     @DisplayName("codex r17 P2: a JAR that cannot be deleted does not stop the staging cleanup")
     void uninstall_clearsStagingEvenWhenAJarCannotBeDeleted() throws IOException {
         Assumptions.assumeFalse("root".equals(System.getProperty("user.name")),
