@@ -773,7 +773,7 @@ class PluginInstallCommandsTest {
         String staging = "/srv/minecraft/plugins/UltiTools/.upm-staging";
         String modules = "/mnt/shared/modules";
         stubUpdateOutcome("test-plugin", outcome(PluginInstallUtils.UpdateOutcome.Status.FILE_SYSTEMS_DIFFER,
-                java.util.Arrays.asList(staging, modules), Collections.<String>emptyList(), Collections.<String>emptyList()));
+                Arrays.asList(staging, modules), Collections.<String>emptyList(), Collections.<String>emptyList()));
 
         String reply = updateReply("TestPlugin");
 
@@ -909,7 +909,7 @@ class PluginInstallCommandsTest {
         String aside = "/srv/minecraft/plugins/UltiTools/.upm-staging/test-plugin-1.0.0.jar.8420a849.old";
         String original = "/srv/minecraft/plugins/UltiTools/plugins/test-plugin-1.0.0.jar";
         PluginInstallUtils.UpdateOutcome result = outcome(PluginInstallUtils.UpdateOutcome.Status.FILE_SYSTEMS_DIFFER,
-                java.util.Arrays.asList("/srv/minecraft/plugins/UltiTools/.upm-staging",
+                Arrays.asList("/srv/minecraft/plugins/UltiTools/.upm-staging",
                         "/srv/minecraft/plugins/UltiTools/plugins"),
                 Collections.singletonList(aside), Collections.<String>emptyList());
         when(result.getUnrestoredTargets()).thenReturn(Collections.singletonList(original));

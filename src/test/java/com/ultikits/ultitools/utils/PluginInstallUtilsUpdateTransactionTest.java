@@ -368,8 +368,11 @@ class PluginInstallUtilsUpdateTransactionTest {
             for (String name : stagingEntries()) {
                 if (name.endsWith(".txn")) {
                     try {
+                        // The name comes from this test's own temporary staging directory listing.
+                        // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
+                        File journal = new File(stagingFolder, name);
                         journalWhileMoving.add(name + "\n"
-                                + new String(Files.readAllBytes(new File(stagingFolder, name).toPath()), StandardCharsets.UTF_8));
+                                + new String(Files.readAllBytes(journal.toPath()), StandardCharsets.UTF_8));
                     } catch (IOException e) {
                         throw new java.io.UncheckedIOException(e);
                     }
