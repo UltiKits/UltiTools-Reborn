@@ -783,8 +783,11 @@ public class PluginInstallUtils {
         if (moduleKey == null) {
             return UpdateOutcome.of(UpdateOutcome.Status.DOWNLOAD_FAILED);
         }
-        if (!MODULE_OPERATIONS_IN_PROGRESS.add(moduleKey)) {
-            return UpdateOutcome.of(UpdateOutcome.Status.ALREADY_IN_PROGRESS);
+        synchronized (MODULE_OPERATIONS_IN_PROGRESS) {
+            if (MODULE_OPERATIONS_IN_PROGRESS.contains(moduleKey)) {
+                return UpdateOutcome.of(UpdateOutcome.Status.ALREADY_IN_PROGRESS);
+            }
+            MODULE_OPERATIONS_IN_PROGRESS.add(moduleKey);
         }
         try {
             return runUpdateTransaction(identifyString, moduleKey);
@@ -1302,14 +1305,18 @@ public class PluginInstallUtils {
         // module by its runtime name, while an update keys on its identify-string; both come from the
         // same plugin.yml, so the uninstall resolves every identify-string that name stands for --
         // from the loaded modules and from the JARs in the modules folder -- and holds all of them.
-        List<String> held = new ArrayList<>();
-        for (String key : moduleKeysForName(name, pluginManager)) {
-            if (!MODULE_OPERATIONS_IN_PROGRESS.add(key)) {
-                MODULE_OPERATIONS_IN_PROGRESS.removeAll(held);
-                throw new PluginModuleException(ErrorCode.PLUGIN_OPERATION_IN_PROGRESS, "An update or uninstall of module "
-                        + name + " is already running; nothing was changed");
+        // Every key is taken or none is (review r5 IN-03): checking and taking them one at a time
+        // could leave this uninstall holding the first key after refusing on the second, which would
+        // block the module's next operation for good.
+        Set<String> held = moduleKeysForName(name, pluginManager);
+        synchronized (MODULE_OPERATIONS_IN_PROGRESS) {
+            for (String key : held) {
+                if (MODULE_OPERATIONS_IN_PROGRESS.contains(key)) {
+                    throw new PluginModuleException(ErrorCode.PLUGIN_OPERATION_IN_PROGRESS, "An update or uninstall of module "
+                            + name + " is already running; nothing was changed");
+                }
             }
-            held.add(key);
+            MODULE_OPERATIONS_IN_PROGRESS.addAll(held);
         }
         try {
             return uninstallHoldingGuard(name, pluginManager);
@@ -1320,9 +1327,10 @@ public class PluginInstallUtils {
 
     /**
      * The normalised identify strings the runtime module name {@code name} stands for: those of the
-     * loaded modules with that name and those declared by JARs in the modules folder whose
-     * {@code plugin.yml} {@code name} matches. A module without an identify-string contributes none;
-     * such a module is never offered an update, so it has nothing to be guarded against.
+     * loaded modules with that name, those declared by JARs in the modules folder whose
+     * {@code plugin.yml} {@code name} matches, and those named by the journal of an update that is
+     * moving JARs right now. A module without an identify-string contributes none; such a module is
+     * never offered an update, so it has nothing to be guarded against.
      */
     private static Set<String> moduleKeysForName(String name, PluginManager pluginManager) {
         Set<String> keys = new java.util.TreeSet<>();
@@ -1349,7 +1357,71 @@ public class PluginInstallUtils {
                 }
             }
         }
+        keys.addAll(keysFromUpdateJournals(name));
         return keys;
+    }
+
+    /**
+     * The normalised identify strings that the journals of currently running update transactions
+     * record for the runtime module name {@code name}. Between moving the old JAR aside and moving
+     * the new one in, the module has no JAR in the modules folder, so the journal -- and the
+     * set-aside JAR it names -- is the only thing that still names the module (review r5 IN-03).
+     * A journal that cannot be read contributes nothing rather than failing the uninstall.
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // one bad journal must not fail the uninstall
+    private static Set<String> keysFromUpdateJournals(String name) {
+        Set<String> keys = new java.util.TreeSet<>();
+        File stagingFolder = new File(UltiTools.getInstance().getDataFolder(), STAGING_DIRECTORY_NAME);
+        File[] journals = stagingFolder.listFiles((f) -> f.getName().endsWith(JOURNAL_SUFFIX));
+        if (journals == null) {
+            return keys;
+        }
+        for (File journalFile : journals) {
+            try {
+                java.util.Properties entries = new java.util.Properties();
+                try (java.io.Reader reader = Files.newBufferedReader(journalFile.toPath(),
+                        java.nio.charset.StandardCharsets.UTF_8)) {
+                    entries.load(reader);
+                }
+                String key = normalizeIdentifyString(entries.getProperty("module"));
+                if (key == null || !JOURNAL_FORMAT.equals(entries.getProperty("format"))) {
+                    continue;
+                }
+                if (journalNamesModule(entries, stagingFolder, name)) {
+                    keys.add(key);
+                }
+            } catch (IOException | RuntimeException e) {
+                LOGGER.log(Level.FINE, "Skipping unreadable update journal while resolving module "
+                        + name + ": " + journalFile, e);
+            }
+        }
+        return keys;
+    }
+
+    /**
+     * Whether any set-aside JAR named by {@code entries} declares the runtime module name
+     * {@code name}. The set-aside JAR is the module's own JAR, moved out of the modules folder by
+     * the transaction that wrote the journal, so its {@code plugin.yml} answers the question.
+     */
+    private static boolean journalNamesModule(java.util.Properties entries, File stagingFolder, String name) {
+        for (int i = 0; ; i++) {
+            String aside = entries.getProperty("aside." + i + ".aside");
+            if (aside == null) {
+                return false;
+            }
+            if (!isPlainFileName(aside)) {
+                continue;
+            }
+            File asideFile = new File(stagingFolder, aside);
+            try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(asideFile)) {
+                if (name.equals(readPluginYmlScalars(jarFile).get("name"))) {
+                    return true;
+                }
+            } catch (IOException | SecurityException e) {
+                LOGGER.log(Level.FINE, "Skipping unreadable set-aside JAR while resolving module "
+                        + name + ": " + asideFile, e);
+            }
+        }
     }
 
     @SuppressWarnings("PMD.AvoidCatchingGenericException") // deliberate barrier: a module's unload failure is collected and reported, see the loop
