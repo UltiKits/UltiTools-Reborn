@@ -288,19 +288,32 @@ public class PluginInstallCommands extends BaseCommandExecutor {
     }
 
     /**
+     * Collects the file named by {@code failure} and by every {@code FileSystemException} attached
+     * to it, at any depth. A staging failure hangs off the JAR failure and carries further staging
+     * failures of its own, so walking one level leaves files unnamed - and a file the operator is
+     * not told about is one they leave behind (Codex review r18).
+     *
+     * @param failure the failure to walk
+     * @param files   the names collected so far, in the order they were found
+     */
+    private static void collectNamedFiles(FileSystemException failure, List<String> files) {
+        if (failure.getFile() != null && !files.contains(failure.getFile())) {
+            files.add(failure.getFile());
+        }
+        for (Throwable suppressed : failure.getSuppressed()) {
+            if (suppressed instanceof FileSystemException) {
+                collectNamedFiles((FileSystemException) suppressed, files);
+            }
+        }
+    }
+
+    /**
      * Joins the file named by {@code failure} and by every {@code FileSystemException} suppressed
      * on it -- the shape {@link PluginInstallUtils} uses to report several files at once.
      */
     private static String namedFiles(FileSystemException failure) {
         List<String> files = new ArrayList<>();
-        if (failure.getFile() != null) {
-            files.add(failure.getFile());
-        }
-        for (Throwable suppressed : failure.getSuppressed()) {
-            if (suppressed instanceof FileSystemException && ((FileSystemException) suppressed).getFile() != null) {
-                files.add(((FileSystemException) suppressed).getFile());
-            }
-        }
+        collectNamedFiles(failure, files);
         return files.isEmpty()
                 ? UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"
                 : String.join(", ", files);
