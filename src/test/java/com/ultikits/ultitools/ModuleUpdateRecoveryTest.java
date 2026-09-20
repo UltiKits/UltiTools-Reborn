@@ -243,6 +243,26 @@ class ModuleUpdateRecoveryTest {
     }
 
     @Test
+    @DisplayName("codex r18 P2: a gap in a journal's pair indices keeps the journal, and its JARs protected")
+    void journalWithAGapInItsPairIndices_isKept() throws IOException {
+        File first = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        File afterTheGap = setAsideJar(ID + "-9.0.0.jar", UUID_A, "9.0.0");
+        File journal = new File(stagingFolder, UUID_A + ".txn");
+        String text = "format=1\nprocess=" + OTHER_PROCESS + "\nmodule=" + ID + "\ntarget=" + ID + "-2.0.0.jar\n"
+                + "aside.0.original=" + ID + "-1.0.0.jar\naside.0.aside=" + first.getName() + "\n"
+                + "aside.2.original=" + ID + "-9.0.0.jar\naside.2.aside=" + afterTheGap.getName() + "\n";
+        Files.write(journal.toPath(), text.getBytes(StandardCharsets.UTF_8));
+
+        UltiTools.collectModuleJarUrls(pluginsFolder);
+
+        assertThat(journal)
+                .as("a pair this recovery never read is a reason to keep the record of it")
+                .exists();
+        assertThat(afterTheGap).exists();
+        assertNotAdvertisedAsDeletable(afterTheGap);
+    }
+
+    @Test
     @DisplayName("review r6 IN-02: one unusable name in a journal does not abandon that journal's other JARs")
     void oneUnusableNameInAJournal_skipsOnlyThatPair() throws IOException {
         File good = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
