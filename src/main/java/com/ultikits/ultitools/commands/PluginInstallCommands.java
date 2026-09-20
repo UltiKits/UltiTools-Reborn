@@ -213,13 +213,19 @@ public class PluginInstallCommands extends BaseCommandExecutor {
     @CmdMapping(format = "uninstall <plugin>")
     public void uninstallPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin) {
         try {
-            if (PluginInstallUtils.uninstallPlugin(plugin)) {
-                // uninstallPlugin returns true only after every matching jar is deleted (#501), so
-                // there is nothing left for the operator to remove by hand.
+            PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(plugin);
+            if (report.jarsDeleted()) {
+                // uninstallPlugin returns true only after every JAR identified as the module's is
+                // deleted (#501), so there is nothing left for the operator to remove by hand.
                 sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("卸载成功！模块的 JAR 文件已全部删除。"));
             } else {
                 sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("卸载失败！请检查是否拼写正确！"));
             }
+            sendUndeterminedEntries(sender, report);
+        } catch (java.nio.file.AccessDeniedException e) {
+            // The modules folder is there and its contents are unknown, so nothing may be claimed
+            // about what it still holds.
+            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("模块目录 %s 无法读取，因此无法确认其中是否还有该模块的 JAR 文件。"), e.getFile()));
         } catch (IllegalStateException e) {
             // The module's own unload threw. It has still been removed from the loaded modules and
             // its jars still deleted where possible: report both, so the operator knows whether it
@@ -236,6 +242,20 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("删除失败！文件访问错误！请手动删除！"));
             sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"));
         }
+    }
+
+    /**
+     * Says what the uninstall could not determine: entries it could not read at all. They are not
+     * called copies of the module, because nothing established that they are -- what the operator
+     * needs is the count and what follows from it if one of them turns out to be one.
+     */
+    private static void sendUndeterminedEntries(CommandSender sender, PluginInstallUtils.UninstallReport report) {
+        if (report.undeterminedEntries().isEmpty()) {
+            return;
+        }
+        sender.sendMessage(ChatColor.YELLOW + String.format(
+                UltiTools.getInstance().i18n("模块目录中有 %d 个文件无法读取，无法判断其中是否有该模块的副本；如果有，重启后该模块会再次加载：%s"),
+                report.undeterminedEntries().size(), String.join(", ", report.undeterminedEntries())));
     }
 
     /**

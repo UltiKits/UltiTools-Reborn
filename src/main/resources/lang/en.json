@@ -1,4 +1,6 @@
 {
+  "模块目录 %s 无法读取，因此无法确认其中是否还有该模块的 JAR 文件。": "The modules folder %s could not be read, so it cannot be confirmed whether it still holds a JAR of this module.",
+  "模块目录中有 %d 个文件无法读取，无法判断其中是否有该模块的副本；如果有，重启后该模块会再次加载：%s": "%d file(s) in the modules folder could not be read, so whether any of them is a copy of this module is unknown; if one is, the module will load again after a restart: %s",
   "卸载成功！模块的 JAR 文件已全部删除。": "Uninstalled! Every JAR file of the module has been deleted.",
   "卸载出错！模块已从已加载列表移除，但其卸载过程抛出了异常，详见控制台。": "Uninstall error! The module was removed from the loaded modules, but its own unload threw; see the console.",
   "模块已卸载，但在 %s 中没有找到它的 JAR 文件。": "The module was unloaded, but no JAR file of it was found in %s.",
