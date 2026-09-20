@@ -381,6 +381,10 @@ This section governs the third kind.
   success it did not get. A `java.nio.file.FileSystemException` is also thrown when a file an
   update of this module left in `plugins/UltiTools/.upm-staging/` could not be deleted: while it is
   there, the next start can move the module's old JAR back, so the uninstall is not complete.
+  It also selects a JAR by the identify-string of the module instance it
+  unloaded, not only by the `plugin.yml` `name`, so a JAR an update renamed is still recognised as
+  that module's; and when no JAR could be identified while JARs in the folder could not be read at
+  all, those are reported rather than passed over, because one of them may be the module's.
   It also throws `com.ultikits.ultitools.exceptions.PluginModuleException`
   with error code `ErrorCode.PLUGIN_OPERATION_IN_PROGRESS` (new in 6.3.0), with nothing changed,
   while an update or another uninstall of the same module is running: one per-module guard covers
@@ -419,7 +423,16 @@ This section governs the third kind.
   hit is an unrelated private method of the same name in `ultitools-maven-plugin`'s
   `UltiToolsDeployMojo`), and `PluginInstallUtils` is referenced nowhere in either tree; the same
   search over the framework finds it in `PluginInstallUtils` and `PluginInstallCommands`, so the
-  search does read Java sources. At the next start, before modules load, the framework reads
+  search does read Java sources. **An update is completed by the next start, not by the command.** `updatePlugin` installs the
+  new version and stops: the JARs it replaced stay in `plugins/UltiTools/.upm-staging/` and the
+  transaction's journal stays with them, marked as awaiting boot confirmation. After the modules
+  load, the framework checks whether the module is among them. If it is, the replaced JARs and the
+  journal are deleted. If it is not, the installed JAR is deleted, the replaced JAR is moved back,
+  and a SEVERE line states which module, which version it was rolled back to, that the module is
+  not available in this session, and that a restart loads it again. This replaced a pre-flight check
+  that tried to predict whether a module would load from a download; what an update validates now is
+  the `plugin.yml` contract alone — identify-string, name, version. At the next start, before
+  modules load, the framework reads
   every journal left in the staging directory by an update that never finished and moves each JAR
   that journal named back to the path it came from, unless that path is occupied again or the
   journal records that the new version was already installed; it then deletes the journal. A
