@@ -648,6 +648,29 @@ class PluginInstallUtilsUninstallTest {
     }
 
     @Test
+    @DisplayName("a loaded module whose code source cannot be read blocks deleting by a declared name")
+    void unknownCodeSource_blocksDeletingWhatMightBeThatModulesJar() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn("RuntimeName");
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        // Its JAR declares another name, and a policy denies reading which JAR it came from: the
+        // answer is unknown, not "it has none".
+        File jar = writeModuleJar("DeclaredName");
+
+        PluginInstallUtils.UninstallReport report = uninstallReporting("DeclaredName", module -> null);
+
+        assertThat(jar)
+                .as("this may be the running module's own JAR, and nothing here can say it is not")
+                .exists();
+        assertThat(pluginManager.getPluginList()).containsExactly(plugin);
+        assertThat(report.deletedFiles()).isEmpty();
+        assertThat(report.undeterminedEntries())
+                .as("what cannot be identified is reported, which is what state C is for")
+                .containsExactly(jar.getAbsolutePath());
+    }
+
+    @Test
     @DisplayName("states A-D: what an entry declares decides it, not what it is called")
     void whatAnEntryDeclaresDecidesIt_notWhatItIsCalled() throws IOException {
         File jar = writeModuleJar(MODULE_NAME);
