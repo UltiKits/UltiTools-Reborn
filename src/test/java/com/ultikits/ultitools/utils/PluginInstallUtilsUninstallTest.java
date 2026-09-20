@@ -407,7 +407,9 @@ class PluginInstallUtilsUninstallTest {
         // Hermetic: a class written into a JAR here and loaded through a throwaway loader, rather
         // than a library that happens to ship as one on this classpath.
         File jar = new File(dataFolder, "code-source-fixture.jar");
-        byte[] classFile = Files.readAllBytes(Paths.get(compiledFixture()));
+        // The path comes from this class's own getResource, not from input.
+        // nosemgrep
+        byte[] classFile = Files.readAllBytes(Paths.get(compiledFixture())); // nosemgrep
         try (JarOutputStream out = new JarOutputStream(new FileOutputStream(jar))) {
             out.putNextEntry(new JarEntry(FIXTURE_CLASS + ".class"));
             out.write(classFile);

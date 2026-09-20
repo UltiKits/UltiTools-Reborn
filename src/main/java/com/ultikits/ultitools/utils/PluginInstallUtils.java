@@ -983,19 +983,7 @@ public class PluginInstallUtils {
         List<UltiToolsPlugin> others = new ArrayList<>();
         Map<UltiToolsPlugin, File> jars = new java.util.LinkedHashMap<>();
         Map<UltiToolsPlugin, String> declared = new java.util.LinkedHashMap<>();
-        for (UltiToolsPlugin plugin : pluginManager.getPluginList()) {
-            // Read before anything is unloaded: afterwards the instance and its class loader may be
-            // gone, and with them the only authoritative answer to "which JAR is this module's".
-            File jar = codeSource.apply(plugin);
-            jars.put(plugin, jar);
-            String name = jar == null ? null : readArchive(jar).declaredName;
-            declared.put(plugin, name);
-            if (requested.equals(plugin.getPluginName()) || requested.equals(name)) {
-                loaded.add(plugin);
-            } else {
-                others.add(plugin);
-            }
-        }
+        readLoadedModules(requested, pluginManager, codeSource, loaded, others, jars, declared);
         Set<String> ownJars = new java.util.HashSet<>();
         Set<String> keys = new java.util.LinkedHashSet<>();
         keys.add(requested);
@@ -1017,15 +1005,50 @@ public class PluginInstallUtils {
                 bystanderJars.add(path);
                 bystanderOf.put(path, plugin.getPluginName());
             }
+            // A key another loaded module owns is not this module's to match on (gate 1, BL-02).
             keys.remove(plugin.getPluginName());
             keys.remove(declared.get(plugin));
         }
-        if (!keys.contains(requested) && loaded.isEmpty()) {
-            // The argument itself belongs to a loaded module that is not the target: nothing here
-            // can be uninstalled under it.
+        if (keys.isEmpty()) {
+            // Everything the argument could have meant belongs to a module that is not the target.
             keys.add(requested);
         }
         return new ModuleIdentity(requested, loaded, ownJars, keys, bystanderJars, bystanderOf, !loaded.isEmpty());
+    }
+
+    /**
+     * Reads every loaded module once -- which JAR it came from and what that JAR declares -- and
+     * sorts the instances into the ones the argument names and the ones it does not.
+     *
+     * <p>Read before anything is unloaded: afterwards the instance and its class loader may be
+     * gone, and with them the only authoritative answer to "which JAR is this module's".
+     *
+     * @param requested     the operator's argument
+     * @param pluginManager the manager that owns the plugin list
+     * @param codeSource    how to ask a loaded module which JAR it came from
+     * @param loaded        collects the instances the argument names
+     * @param others        collects every other loaded instance
+     * @param jars          collects each instance's code-source JAR
+     * @param declared      collects what each instance's JAR declares
+     */
+    @SuppressWarnings("PMD.ExcessiveParameterList") // one pass over the plugin list, filling four views of it
+    private static void readLoadedModules(String requested, PluginManager pluginManager,
+                                          java.util.function.Function<UltiToolsPlugin, File> codeSource,
+                                          List<UltiToolsPlugin> loaded, List<UltiToolsPlugin> others,
+                                          Map<UltiToolsPlugin, File> jars, Map<UltiToolsPlugin, String> declared) {
+        for (UltiToolsPlugin plugin : pluginManager.getPluginList()) {
+            File jar = codeSource.apply(plugin);
+            jars.put(plugin, jar);
+            String name = jar == null ? null : readArchive(jar).declaredName;
+            declared.put(plugin, name);
+            // Either namespace names the module: its runtime name, or what the JAR it was loaded
+            // from declares (gate 1, BL-01).
+            if (requested.equals(plugin.getPluginName()) || requested.equals(name)) {
+                loaded.add(plugin);
+            } else {
+                others.add(plugin);
+            }
+        }
     }
 
     /**
@@ -1191,23 +1214,6 @@ public class PluginInstallUtils {
         return new java.nio.file.AccessDeniedException(folder.getAbsolutePath(), null,
                 "the modules folder exists but could not be listed, so nothing can be concluded"
                         + " about the JARs it holds");
-    }
-
-    /**
-     * Whether the modules folder is there at all -- following links or not, and treating a probe a
-     * security policy refuses to answer as "there", since a refusal is not an absence.
-     *
-     * @param folder the modules folder
-     * @return whether something is at that path
-     */
-    private static boolean folderIsThere(File folder) {
-        try {
-            return folder.isDirectory()
-                    || java.nio.file.Files.exists(folder.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS);
-        } catch (SecurityException denied) {
-            LOGGER.log(Level.FINE, "Could not probe " + folder, denied);
-            return true;
-        }
     }
 
     /**
