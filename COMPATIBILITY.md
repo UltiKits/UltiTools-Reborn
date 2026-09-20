@@ -396,7 +396,11 @@ This section governs the third kind.
   contents are unknown. A second entry point,
   `PluginInstallUtils.uninstallPluginReporting(String)` (`@ApiStatus.Internal`), returns both what
   was deleted and the entries whose identity could not be determined; `uninstallPlugin(String)`
-  keeps its signature and returns the first half.
+  keeps its signature and returns the first half. When the uninstall leaves by a failure instead —
+  a module whose unload threw, a JAR that could not be deleted, or nothing identifiable found —
+  those entries travel with it as a suppressed
+  `PluginInstallUtils.UndeterminedEntriesException` (`@ApiStatus.Internal`), so no outcome
+  discards what another established.
 
 ### Behavioral changes that do need one
 
