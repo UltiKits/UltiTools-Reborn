@@ -848,14 +848,16 @@ public class PluginInstallUtils {
 
         // Steps 1 and 2: download into the staging directory, never into the modules folder, and
         // validate it there before anything in the modules folder is touched.
+        // Step 3: select the older JARs while the new version is not in the modules folder. This
+        // happens before validation, because those JARs are what the download must NOT be completed
+        // from: they are deleted by this transaction (Codex review r11).
+        List<File> olderJars = operations.findModuleJars(pluginsFolder, identifyString);
+
         UpdateOutcome unusableDownload = downloadAndValidate(operations, downloadLink, stagedName, stagingFolder,
-                staged, moduleKey, latestVersion, identifyString);
+                staged, moduleKey, latestVersion, identifyString, olderJars);
         if (unusableDownload != null) {
             return unusableDownload;
         }
-
-        // Step 3: select the older JARs while the new version is not in the modules folder.
-        List<File> olderJars = operations.findModuleJars(pluginsFolder, identifyString);
 
         // Step 3b: never replace a JAR of the module that is newer than the catalogue's latest
         // version (review r4 WR-05), for example a pre-release the operator placed since boot.
@@ -947,7 +949,8 @@ public class PluginInstallUtils {
      */
     private static UpdateOutcome downloadAndValidate(UpdateFileOperations operations, String downloadLink,
                                                      String stagedName, File stagingFolder, Path staged,
-                                                     String moduleKey, String latestVersion, String identifyString) {
+                                                     String moduleKey, String latestVersion, String identifyString,
+                                                     List<File> replacedJars) {
         try {
             operations.download(downloadLink, stagedName, stagingFolder);
         } catch (IOException | SecurityException | IllegalArgumentException e) {
@@ -955,7 +958,7 @@ public class PluginInstallUtils {
             deleteQuietly(operations, staged);
             return UpdateOutcome.of(UpdateOutcome.Status.DOWNLOAD_FAILED);
         }
-        if (!isJarOfModule(staged.toFile(), moduleKey, latestVersion)) {
+        if (!isJarOfModule(staged.toFile(), moduleKey, latestVersion, replacedJars)) {
             LOGGER.severe("Downloaded update for " + identifyString
                     + " is not a loadable JAR of that module at version " + latestVersion
                     + "; nothing was changed");
@@ -1557,6 +1560,21 @@ public class PluginInstallUtils {
      * module {@code moduleKey} at {@code expectedVersion}.
      */
     static boolean isJarOfModule(File file, String moduleKey, String expectedVersion) {
+        return isJarOfModule(file, moduleKey, expectedVersion, Collections.<File>emptyList());
+    }
+
+    /**
+     * As {@link #isJarOfModule(File, String, String)}, for a download that would replace
+     * {@code replacedJars}: those JARs are gone after the update, so they must not answer for a
+     * class the candidate omits (Codex review r11).
+     *
+     * @param file           the candidate JAR
+     * @param moduleKey      the module's normalised identify-string
+     * @param expectedVersion the version the catalogue offers
+     * @param replacedJars   the installed JARs this candidate would replace
+     * @return whether the file is a loadable JAR of that module at that version
+     */
+    static boolean isJarOfModule(File file, String moduleKey, String expectedVersion, List<File> replacedJars) {
         try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(file)) {
             if (!SecurityPolicy.isSafeFileStructure(file.length(), jarFile.size())) {
                 return false;
@@ -1568,7 +1586,7 @@ public class PluginInstallUtils {
             // load (Codex review r6). Refuse it here, while nothing has moved.
             return moduleKey.equals(normalizeIdentifyString(pluginYml.get("identify-string")))
                     && declaresAName(pluginYml, file)
-                    && PluginManager.carriesLoadableModuleMainClass(file)
+                    && PluginManager.carriesLoadableModuleMainClass(file, replacedJars)
                     && version != null && expectedVersion != null
                     && VersionComparatorUtil.compare(version.trim(), expectedVersion.trim()) == 0;
         } catch (IOException | SecurityException e) {

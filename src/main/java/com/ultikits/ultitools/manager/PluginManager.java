@@ -10,6 +10,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Parameter;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashSet;
@@ -594,16 +595,18 @@ public class PluginManager {
      * no handle is left on a file the update is about to move.
      *
      * @param candidateJar the JAR to examine; it need not be in the modules folder
+     * @param replacedJars the installed JARs this candidate would replace, which are therefore not
+     *                     available to it after the update and must not answer for it here
      * @return whether a module would load from it
      */
     @ApiStatus.Internal
-    public static boolean carriesLoadableModuleMainClass(File candidateJar) {
+    public static boolean carriesLoadableModuleMainClass(File candidateJar, Collection<File> replacedJars) {
         if (candidateJar == null || !candidateJar.isFile()) {
             return false;
         }
         try {
             try (CandidateClassLoader loader = CandidateClassLoader.over(candidateJar,
-                    ClassLoaderUtils.getPluginClassLoader())) {
+                    postUpdateClassLoader(replacedJars))) {
                 // The names come from the candidate JAR's own entries, and the classes are resolved
                 // without initialising them, which is what the loader does with a module JAR at
                 // startup; nothing here acts on a name from outside the artifact being examined.
@@ -618,6 +621,39 @@ public class PluginManager {
             ModuleScanDiagnostics.emitSummary(candidateJar.getName());
             ClassLoaderUtils.emitClassloadFilterAuditSummary(candidateJar.getName());
         }
+    }
+
+    /**
+     * The class path a candidate would load in after the update: every installed module JAR except
+     * the ones it replaces, over the framework's own class loader.
+     * <p>
+     * Delegating to the live module loader instead would let a candidate borrow a class from the
+     * very JAR it is about to delete -- an omitted internal superclass resolves, the update is
+     * accepted, and the module fails to load after the restart (Codex review r11).
+     *
+     * @param replacedJars the installed JARs the candidate would replace
+     * @return the loader to use as the candidate's parent
+     * @throws IOException when a modules-folder entry cannot be turned into a URL
+     */
+    private static ClassLoader postUpdateClassLoader(Collection<File> replacedJars) throws IOException {
+        ClassLoader frameworkOnly = PluginManager.class.getClassLoader();
+        File modulesFolder = new File(UltiTools.getInstance().getDataFolder(), "plugins");
+        File[] installed = modulesFolder.listFiles((file) -> file.getName().endsWith(".jar"));
+        if (installed == null) {
+            return frameworkOnly;
+        }
+        Set<String> replaced = new HashSet<>();
+        for (File jar : replacedJars) {
+            replaced.add(jar.getAbsolutePath());
+        }
+        List<URL> urls = new ArrayList<>();
+        for (File jar : installed) {
+            if (!replaced.contains(jar.getAbsolutePath())) {
+                urls.add(jar.toURI().toURL());
+            }
+        }
+        return urls.isEmpty() ? frameworkOnly
+                : new URLClassLoader(urls.toArray(new URL[0]), frameworkOnly);
     }
 
     /**

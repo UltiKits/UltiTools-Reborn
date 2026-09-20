@@ -123,7 +123,10 @@ class PluginInstallUtilsUpdateTransactionTest {
         assertThat(operations.downloadDirectory.get())
                 .as("the download is written to the staging directory, never into the modules folder")
                 .isEqualTo(stagingFolder);
-        assertThat(select).as("old jars are selected after the download").isGreaterThan(download);
+        assertThat(select)
+                .as("the selection runs before validation, so the JARs it finds are excluded from the "
+                        + "class path the download is validated against (codex r11)")
+                .isLessThan(download);
         assertThat(moveIn).as("the new version enters the modules folder only after the selection").isGreaterThan(select);
         assertThat(operations.moduleFolderEntriesAtSelection)
                 .as("when the old jars are selected, the modules folder holds nothing of the new version, "
@@ -241,7 +244,10 @@ class PluginInstallUtilsUpdateTransactionTest {
 
         assertThat(outcome.getStatus()).isEqualTo(Status.INVALID_DOWNLOAD);
         assertThat(jarEntries()).containsExactly(oldJar.getName());
-        assertThat(operations.count("find")).as("nothing is selected or moved after a failed validation").isZero();
+        assertThat(operations.count("move-aside"))
+                .as("nothing is moved after a failed validation").isZero();
+        assertThat(operations.count("move-in"))
+                .as("nothing is installed after a failed validation").isZero();
         assertThat(stagingEntries()).isEmpty();
     }
 
