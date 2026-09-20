@@ -217,6 +217,28 @@ class PluginInstallUtilsUninstallTest {
     }
 
     @Test
+    @DisplayName("state C survives the no-JAR-found answer: both facts are reported, not one")
+    void stateC_isReportedEvenWhenNothingCouldBeIdentified() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        // The module loaded from a JAR that has since become unreadable: nothing can be identified
+        // as its own, and the entry that may be it says nothing.
+        File unreadable = new File(pluginsFolder, MODULE_NAME + "-1.0.0.jar");
+        Files.write(unreadable.toPath(), "not an archive".getBytes(StandardCharsets.UTF_8));
+
+        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPluginReporting(MODULE_NAME));
+
+        assertThat(thrown)
+                .as("no JAR of the module could be identified, which is true and is still said")
+                .isInstanceOf(java.nio.file.NoSuchFileException.class);
+        assertThat(namedFiles((FileSystemException) thrown))
+                .as("the entry that could not be read must be named too, or the operator is told half the story")
+                .contains(unreadable.getAbsolutePath());
+    }
+
+    @Test
     @DisplayName("states A-D: an entry is never classified by its file name")
     void fileNameNeverDecidesWhatAnEntryIs() throws IOException {
         File jar = writeModuleJar(MODULE_NAME);

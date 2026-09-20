@@ -605,6 +605,23 @@ class PluginInstallCommandsTest {
     }
 
     @Test
+    @DisplayName("state D reached through a failed unload is still reported as a folder, not as a JAR")
+    void uninstallUnloadThrew_folderUnlistable_replySaysNothingCanBeConcluded() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String folder = "/srv/minecraft/plugins/UltiTools/plugins";
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
+                .thenThrow(unloadThrew(new java.nio.file.AccessDeniedException(folder, null, "could not be listed")));
+
+        executor.uninstallPlugin(player, "test-plugin");
+
+        String all = String.join("\n", drainMessages());
+        assertThat(all).contains("卸载出错").contains("模块目录").contains(folder);
+        assertThat(all)
+                .as("the folder is not a JAR that failed to delete, and must not be named as one")
+                .doesNotContain("JAR 文件无法删除");
+    }
+
+    @Test
     @DisplayName("state D: a modules folder that could not be listed is reported as that")
     void uninstallWithUnlistableFolder_replySaysNothingCanBeConcluded() {
         assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
