@@ -425,6 +425,89 @@ class PluginInstallUtilsUpdateTransactionTest {
     }
 
     @Test
+    @DisplayName("codex r8 P1: a download whose only module class is abstract is invalid")
+    void downloadWithOnlyAnAbstractModuleClass_isAnInvalidDownload() throws IOException {
+        File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        operations.downloadBytes = jarBytesCarrying("com/ultikits/ultitools/utils/DependencyUtilsTest$PlainMockPlugin.class",
+                "com/ultikits/ultitools/utils/DependencyUtilsTest$PlainMockPlugin.class");
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus())
+                .as("the loader refuses an abstract class, so this artifact produces no module")
+                .isEqualTo(Status.INVALID_DOWNLOAD);
+        assertThat(jarEntries()).containsExactly(oldJar.getName());
+        assertThat(stagingEntries()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("codex r8 P1: a download whose module class sits under a different entry name is invalid")
+    void downloadWithAMisnamedModuleClassEntry_isAnInvalidDownload() throws IOException {
+        File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        operations.downloadBytes = jarBytesCarrying(MODULE_CLASS_ENTRY, "com/ultikits/renamed/NotWhereItSaysItIs.class");
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus())
+                .as("the loader derives the class name from the entry, so a misnamed entry defines nothing")
+                .isEqualTo(Status.INVALID_DOWNLOAD);
+        assertThat(jarEntries()).containsExactly(oldJar.getName());
+        assertThat(stagingEntries()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("codex r8 P1: a download whose classes only extend types outside it is invalid")
+    void downloadWhoseClassesExtendTypesOutsideIt_isAnInvalidDownload() throws IOException {
+        File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        operations.downloadBytes = jarBytesCarrying("com/ultikits/ultitools/exceptions/ConfigurationException.class",
+                "com/ultikits/ultitools/exceptions/ConfigurationException.class");
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus())
+                .as("a superclass outside the JAR is not evidence of a module class; the loader asks the class itself")
+                .isEqualTo(Status.INVALID_DOWNLOAD);
+        assertThat(jarEntries()).containsExactly(oldJar.getName());
+        assertThat(stagingEntries()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("codex r8: validating a download keeps no handle on it, so the transaction can still delete it")
+    void validationLeavesTheStagedFileDeletable() throws IOException {
+        writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        operations.downloadBytes = jarBytesCarrying("com/ultikits/ultitools/exceptions/ConfigurationException.class",
+                "com/ultikits/ultitools/exceptions/ConfigurationException.class");
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus()).isEqualTo(Status.INVALID_DOWNLOAD);
+        // A class loader still open over the download would hold the file; deleting it is the
+        // observable that fails on Windows when validation leaks one.
+        assertThat(stagingEntries()).isEmpty();
+    }
+
+    /** A JAR carrying one compiled class from the test class path, written under {@code entryName}. */
+    private byte[] jarBytesCarrying(String classPathEntry, String entryName) throws IOException {
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        try (JarOutputStream out = new JarOutputStream(bytes)) {
+            out.putNextEntry(new JarEntry("plugin.yml"));
+            out.write(("name: Fixture\nversion: 2.0.0\nidentify-string: " + IDENTIFY_STRING + "\n")
+                    .getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+            try (InputStream in = getClass().getClassLoader().getResourceAsStream(classPathEntry)) {
+                assertThat(in).as("compiled fixture %s must be on the test class path", classPathEntry).isNotNull();
+                out.putNextEntry(new JarEntry(entryName));
+                byte[] buffer = new byte[4096];
+                for (int read = in.read(buffer); read > 0; read = in.read(buffer)) {
+                    out.write(buffer, 0, read);
+                }
+                out.closeEntry();
+            }
+        }
+        return bytes.toByteArray();
+    }
+
+    @Test
     @DisplayName("codex r7 P1: a download carrying no class the loader could load is invalid, before any JAR moves")
     void downloadWithoutAModuleClass_isAnInvalidDownload() throws IOException {
         File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
