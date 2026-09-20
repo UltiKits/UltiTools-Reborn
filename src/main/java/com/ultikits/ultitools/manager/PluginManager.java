@@ -2,12 +2,15 @@ package com.ultikits.ultitools.manager;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Parameter;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashSet;
@@ -25,6 +28,7 @@ import java.util.logging.Level;
 import javax.sql.DataSource;
 
 import org.bukkit.Bukkit;
+import org.jetbrains.annotations.ApiStatus;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -548,6 +552,13 @@ public class PluginManager {
      * @param pluginJar   Plugin jar file
      * @return Plugin main class
      */
+    /**
+     * Load module main class.
+     *
+     * @param classLoader Class loader
+     * @param pluginJar   Plugin jar file
+     * @return Plugin main class
+     */
     private Class<? extends UltiToolsPlugin> loadPluginMainClass(ClassLoader classLoader, File pluginJar) { // NOPMD - classLoader used implicitly by Class.forName
         // Validate jar file security
         if (!SecurityPolicy.isValidModuleJar(pluginJar)) {
@@ -586,7 +597,7 @@ public class PluginManager {
                 
                 try {
                     // GEN-07 (D-14): records what the removed classload filter layers would have
-                    // refused for className, independent of whether loadClass below succeeds,
+                    // refused for className, independent of whether the resolver below succeeds,
                     // throws ClassNotFoundException, or throws SecurityException -- classify() is
                     // a pure function of the name alone. Purely observational; never refuses.
                     ClassLoaderUtils.recordClassloadFilterAudit(pluginJar.getName(), className);

@@ -51,6 +51,12 @@ public class HttpDownloadUtils {
         }
 
         URL url = URI.create(urlString).toURL();
+        // Only HTTP(S) connections are HttpURLConnections; any other scheme would otherwise escape as an
+        // unchecked ClassCastException instead of a download failure (review r4 IN-02).
+        String lowerCaseUrl = urlString.trim().toLowerCase(java.util.Locale.ROOT);
+        if (!lowerCaseUrl.startsWith("http://") && !lowerCaseUrl.startsWith("https://")) {
+            throw new IOException("Unsupported download URL scheme: " + urlString);
+        }
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         
         try {
@@ -121,6 +127,12 @@ public class HttpDownloadUtils {
         }
 
         URL url = URI.create(urlString).toURL();
+        // Only HTTP(S) connections are HttpURLConnections; any other scheme would otherwise escape as an
+        // unchecked ClassCastException instead of a download failure (review r4 IN-02).
+        String lowerCaseUrl = urlString.trim().toLowerCase(java.util.Locale.ROOT);
+        if (!lowerCaseUrl.startsWith("http://") && !lowerCaseUrl.startsWith("https://")) {
+            throw new IOException("Unsupported download URL scheme: " + urlString);
+        }
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         
         try {
@@ -192,6 +204,12 @@ public class HttpDownloadUtils {
         }
 
         URL url = URI.create(urlString).toURL();
+        // Only HTTP(S) connections are HttpURLConnections; any other scheme would otherwise escape as an
+        // unchecked ClassCastException instead of a download failure (review r4 IN-02).
+        String lowerCaseUrl = urlString.trim().toLowerCase(java.util.Locale.ROOT);
+        if (!lowerCaseUrl.startsWith("http://") && !lowerCaseUrl.startsWith("https://")) {
+            throw new IOException("Unsupported download URL scheme: " + urlString);
+        }
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         
         try {

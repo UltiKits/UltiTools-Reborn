@@ -64,6 +64,13 @@ public enum ErrorCode {
     PLUGIN_UNLOAD_FAILED(6002, "Plugin unload failed"),
     PLUGIN_DEPENDENCY_ERROR(6003, "Plugin dependency error"),
     PLUGIN_CIRCULAR_DEPENDENCY(6004, "Plugin circular dependency"),
+    /**
+     * An update or uninstall of the same module is already running, so this one was refused with
+     * nothing changed.
+     *
+     * @since 6.3.0
+     */
+    PLUGIN_OPERATION_IN_PROGRESS(6005, "Another update or uninstall of this plugin is in progress"),
 
     // ===== WebSocket Errors (7000-7999) =====
     WEBSOCKET_ERROR(7000, "WebSocket error"),

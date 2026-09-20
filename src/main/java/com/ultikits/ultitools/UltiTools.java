@@ -63,6 +63,8 @@ import com.ultikits.ultitools.listeners.UpdateJoinListener;
 import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.utils.Metrics;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.utils.PluginInstallUtils;
 import com.ultikits.ultitools.utils.SecurityPolicy;
 import com.ultikits.ultitools.websocket.PanelResponderRegistry;
 
@@ -351,6 +353,33 @@ public final class UltiTools extends JavaPlugin implements Localized {
             // module is even identified.
             throw new PluginModuleException(ErrorCode.PLUGIN_LOAD_FAILED,
                     "Failed to initialize plugin module loading", e);
+        }
+        confirmModuleUpdates();
+    }
+
+    /**
+     * Resolves the updates that were waiting for this boot, now that the modules have loaded.
+     * <p>
+     * An update installs its new version and stops; whether a module loads from it is not
+     * predicted, it is observed here. A module that loaded confirms its update, and the version it
+     * replaced is deleted; one that did not is rolled back to the version that did load, and the
+     * operator is told it returns at the next restart.
+     * <p>
+     * Isolated like the recovery hook at the other end of the boot: a failure here is logged and
+     * the server continues.
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // a failure confirming an update must not stop the server
+    private void confirmModuleUpdates() {
+        try {
+            List<String> loaded = new ArrayList<>();
+            for (UltiToolsPlugin plugin : pluginManager.getPluginList()) {
+                // The identify-string, not the runtime name: a journal is confirmed by the module
+                // it identifies, and two modules can answer to the same name (Codex review r23).
+                loaded.add(plugin.getIdentifyString());
+            }
+            PluginInstallUtils.confirmUpdatesAfterBoot(getDataFolder(), loaded);
+        } catch (RuntimeException | LinkageError e) {
+            MODULE_SCAN_LOGGER.log(Level.WARNING, "[UltiTools-API] Could not confirm module updates", e);
         }
     }
 
@@ -686,9 +715,20 @@ public final class UltiTools extends JavaPlugin implements Localized {
      * @return collected URLs of the JARs that passed validation, empty if {@code pluginDir} is
      *         {@code null} or does not exist
      */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // deliberate barrier: update recovery must never break boot
     static List<URL> collectModuleJarUrls(File pluginDir) {
         List<URL> urls = new ArrayList<>();
-        if (pluginDir == null || !pluginDir.exists()) {
+        if (pluginDir == null) {
+            return urls;
+        }
+        // Recover module updates a crash or kill interrupted, before any module JAR is scanned or
+        // opened (review r4 WR-01). Isolated: a failure here is logged and boot continues.
+        try {
+            PluginInstallUtils.recoverInterruptedUpdates(pluginDir.getParentFile());
+        } catch (RuntimeException e) {
+            MODULE_SCAN_LOGGER.log(Level.WARNING, "[UltiTools-API] Could not recover interrupted module updates", e);
+        }
+        if (!pluginDir.exists()) {
             return urls;
         }
         File[] pluginFiles = pluginDir.listFiles((f) -> f.getName().endsWith(".jar"));

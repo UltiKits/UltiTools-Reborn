@@ -1344,4 +1344,16 @@ class HttpDownloadUtilsTest {
             }
         }
     }
+
+    @Test
+    @DisplayName("review r4 IN-02: a download link that is not http or https is refused as an IOException")
+    void nonHttpDownloadLink_isRefusedAsIOException(@TempDir Path directory) throws IOException {
+        Path source = Files.write(directory.resolve("source.jar"), "bytes".getBytes(StandardCharsets.UTF_8));
+
+        assertThatThrownBy(() -> HttpDownloadUtils.download(source.toUri().toString(), "target.jar", directory.toString()))
+                .as("a file:, ftp: or jar: link from the catalogue must fail as a download error, not escape as "
+                        + "an unchecked ClassCastException")
+                .isInstanceOf(IOException.class);
+        assertThat(directory.resolve("target.jar")).doesNotExist();
+    }
 }

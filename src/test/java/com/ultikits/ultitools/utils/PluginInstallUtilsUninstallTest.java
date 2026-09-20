@@ -1,0 +1,784 @@
+package com.ultikits.ultitools.utils;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.mockito.Mockito.doCallRealMethod;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystemException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.jar.JarEntry;
+import java.util.jar.JarOutputStream;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
+import org.mockbukkit.mockbukkit.MockBukkit;
+import org.mockbukkit.mockbukkit.ServerMock;
+import org.mockbukkit.mockbukkit.plugin.PluginMock;
+
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.annotations.Scheduled;
+import com.ultikits.ultitools.manager.CommandManager;
+import com.ultikits.ultitools.manager.ListenerManager;
+import com.ultikits.ultitools.manager.PluginManager;
+import com.ultikits.ultitools.manager.TaskManager;
+
+/**
+ * {@link PluginInstallUtils#uninstallPlugin(String)} -- the method behind {@code /upm uninstall}.
+ * <p>
+ * #503: the method unloaded a module with {@code plugin.unregisterSelf()} alone, bypassing
+ * {@link PluginManager#unregister(UltiToolsPlugin)}, the framework's one full unload path. Every
+ * registry cleanup that lives only there -- cancelling the module's {@code @Scheduled} tasks first
+ * among them -- was skipped, so an "uninstalled" module's repeating task kept firing until restart.
+ * The test below drives a real {@link TaskManager} on MockBukkit's scheduler and asserts the
+ * observable effect (the task stops running), not merely that some method was called.
+ * <p>
+ * #501: the method ignored {@code File#delete()}'s result and returned {@code true} whether or not
+ * the jar was removed, so the command could not report a failed delete. A delete that fails must
+ * now surface as a {@link FileSystemException} naming the jar that is still on disk.
+ */
+@DisplayName("PluginInstallUtils#uninstallPlugin (#503 single unload path, #501 honest delete result)")
+@Timeout(value = 30, unit = TimeUnit.SECONDS)
+class PluginInstallUtilsUninstallTest {
+
+    private static final String MODULE_NAME = "UninstallFixture";
+
+    @TempDir
+    File dataFolder;
+
+    private ServerMock server;
+    private PluginManager pluginManager;
+    private File pluginsFolder;
+    private CommandManager commandManager;
+    private final java.util.List<java.util.logging.LogRecord> logs =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+    private java.util.logging.Logger utilsLogger;
+    private java.util.logging.Handler capture;
+
+    @BeforeEach
+    void setUp() {
+        MockBukkitHelper.ensureCleanState();
+        server = MockBukkit.mock();
+        MockBukkit.createMockPlugin();
+
+        pluginsFolder = new File(dataFolder, "plugins");
+        assertThat(pluginsFolder.mkdirs()).isTrue();
+
+        AtomicReference<PluginManager> pluginManagerRef = new AtomicReference<>();
+        commandManager = mock(CommandManager.class);
+        ListenerManager listenerManager = mock(ListenerManager.class);
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
+            when(ultiTools.getDataFolder()).thenReturn(dataFolder);
+            when(ultiTools.getPluginManager()).thenAnswer(invocation -> pluginManagerRef.get());
+            when(ultiTools.getCommandManager()).thenReturn(commandManager);
+            when(ultiTools.getListenerManager()).thenReturn(listenerManager);
+        });
+        pluginManager = new PluginManager();
+        pluginManagerRef.set(pluginManager);
+
+        utilsLogger = java.util.logging.Logger.getLogger(PluginInstallUtils.class.getName());
+        capture = new java.util.logging.Handler() {
+            @Override
+            public void publish(java.util.logging.LogRecord record) {
+                logs.add(record);
+            }
+
+            @Override
+            public void flush() {
+                // nothing buffered
+            }
+
+            @Override
+            public void close() {
+                // nothing to release
+            }
+        };
+        utilsLogger.addHandler(capture);
+        utilsLogger.setLevel(java.util.logging.Level.ALL);
+    }
+
+    @AfterEach
+    void tearDown() {
+        utilsLogger.removeHandler(capture);
+        logs.clear();
+        MockBukkitHelper.safeUnmock();
+    }
+
+    /** A module bean carrying one repeating {@code @Scheduled} task that counts its own runs. */
+    public static class TickingBean {
+        private final AtomicInteger runs = new AtomicInteger();
+
+        @Scheduled(period = 1)
+        public void tick() {
+            runs.incrementAndGet();
+        }
+    }
+
+    @Test
+    @DisplayName("#503: uninstalling a loaded module cancels its @Scheduled task, removes it from the plugin list and deletes its jar")
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // injecting a real TaskManager bound to a MockBukkit host plugin
+    void uninstallLoadedModule_stopsItsScheduledTask() throws Exception {
+        PluginMock host = MockBukkit.createMockPlugin("UninstallHost");
+        TaskManager taskManager = new TaskManager(host);
+        Field taskManagerField = PluginManager.class.getDeclaredField("taskManager");
+        taskManagerField.setAccessible(true);
+        taskManagerField.set(pluginManager, taskManager);
+
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+
+        TickingBean bean = new TickingBean();
+        taskManager.registerScheduledMethods(plugin, bean);
+        File jar = writeModuleJar(MODULE_NAME);
+
+        server.getScheduler().performTicks(5);
+        int runsBeforeUninstall = bean.runs.get();
+        assertThat(runsBeforeUninstall)
+                .as("control: the fixture task must actually be running before the uninstall, "
+                        + "otherwise 'it stopped' below would pass vacuously")
+                .isPositive();
+
+        assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME)).isTrue();
+
+        server.getScheduler().performTicks(10);
+        assertThat(bean.runs.get())
+                .as("an uninstalled module's @Scheduled task must stop running -- it is cancelled "
+                        + "only by PluginManager#unregister, which uninstallPlugin must go through (#503)")
+                .isEqualTo(runsBeforeUninstall);
+        assertThat(pluginManager.getPluginList()).doesNotContain(plugin);
+        assertThat(jar).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("#501: a jar that cannot be deleted is reported as a FileSystemException naming that jar, never as success")
+    void undeletableJar_isReportedAsFailureNamingTheJar() throws Exception {
+        Path folder = pluginsFolder.toPath();
+        Assumptions.assumeTrue(Files.getFileStore(folder).supportsFileAttributeView("posix"),
+                "needs POSIX permissions to make the delete fail");
+        File jar = writeModuleJar(MODULE_NAME);
+
+        Set<PosixFilePermission> original = Files.getPosixFilePermissions(folder);
+        Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("r-x------"));
+        try {
+            Assumptions.assumeFalse(Files.isWritable(folder),
+                    "running as a user that can write a read-only directory (e.g. root); the delete cannot be made to fail");
+
+            Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+            assertThat(thrown)
+                    .as("a failed delete must not be reported as a successful uninstall (#501)")
+                    .isInstanceOf(FileSystemException.class);
+            assertThat(((FileSystemException) thrown).getFile()).isEqualTo(jar.getAbsolutePath());
+            assertThat(jar).exists();
+        } finally {
+            Files.setPosixFilePermissions(folder, original);
+        }
+    }
+
+    @Test
+    @DisplayName("#501 review WR-02: every jar carrying the module's name is deleted, not only the first one listed")
+    void twoJarsForOneModule_bothAreDeleted() throws Exception {
+        File first = writeModuleJar(MODULE_NAME, "1.0.0");
+        File second = writeModuleJar(MODULE_NAME, "2.0.0");
+
+        assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME)).isTrue();
+
+        assertThat(first)
+                .as("a second jar of the same module left on disk loads the module again on restart, "
+                        + "so success may only be reported once every matching jar is gone")
+                .doesNotExist();
+        assertThat(second).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("#501 review WR-02: when several matching jars cannot be deleted, the failure names every one of them")
+    void twoUndeletableJars_failureNamesEveryRemainingJar() throws Exception {
+        Path folder = pluginsFolder.toPath();
+        Assumptions.assumeTrue(Files.getFileStore(folder).supportsFileAttributeView("posix"),
+                "needs POSIX permissions to make the delete fail");
+        File first = writeModuleJar(MODULE_NAME, "1.0.0");
+        File second = writeModuleJar(MODULE_NAME, "2.0.0");
+
+        Set<PosixFilePermission> original = Files.getPosixFilePermissions(folder);
+        Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("r-x------"));
+        try {
+            Assumptions.assumeFalse(Files.isWritable(folder),
+                    "running as a user that can write a read-only directory (e.g. root); the delete cannot be made to fail");
+
+            Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+            assertThat(thrown).isInstanceOf(FileSystemException.class);
+            assertThat(namedFiles((FileSystemException) thrown))
+                    .as("the operator must be told every jar that will load again, via getFile() and "
+                            + "one suppressed FileSystemException per further jar")
+                    .containsExactlyInAnyOrder(first.getAbsolutePath(), second.getAbsolutePath());
+        } finally {
+            Files.setPosixFilePermissions(folder, original);
+        }
+    }
+
+    @Test
+    @DisplayName("#501 review WR-03: a loaded module with no jar on disk is unloaded and reported as NoSuchFileException naming the folder, not as a misspelling")
+    void loadedModuleWithoutJar_isUnloadedAndReportedAsNoJarFound() throws Exception {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+
+        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+        assertThat(thrown)
+                .as("returning false made the command say the name was misspelled, although the "
+                        + "module was found by exactly that name and unloaded")
+                .isInstanceOf(java.nio.file.NoSuchFileException.class);
+        assertThat(((FileSystemException) thrown).getFile()).isEqualTo(pluginsFolder.getAbsolutePath());
+        assertThat(pluginManager.getPluginList()).doesNotContain(plugin);
+    }
+
+    @Test
+    @DisplayName("#501 review WR-03 control: nothing loaded and no jar still returns false")
+    void nothingLoadedAndNoJar_returnsFalse() throws Exception {
+        assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME)).isFalse();
+    }
+
+    @Test
+    @DisplayName("#503 review WR-01: a module whose unload throws is still delisted and its jar deleted, and the failure is reported, not lost")
+    void unloadThrows_jarIsStillDeletedAndFailureIsReported() throws Exception {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        IllegalStateException unloadFailure = new IllegalStateException("module unload step boom");
+        // unregisterSelf() rethrows its first failed step; a command-cleanup failure stands in for
+        // a throwing onUnregister(), which is protected and not stubbable from this package.
+        org.mockito.Mockito.doThrow(unloadFailure).when(commandManager).unregisterAll(plugin);
+        File jar = writeModuleJar(MODULE_NAME);
+
+        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+        assertThat(jar)
+                .as("the module is already unloaded and closed when its unload throws; keeping the jar "
+                        + "would bring back on restart a module the operator asked to remove")
+                .doesNotExist();
+        assertThat(pluginManager.getPluginList()).doesNotContain(plugin);
+        assertThat(thrown)
+                .as("the unload failure must reach the command as uninstallPlugin's own "
+                        + "IllegalStateException, carrying the module's exception as its cause")
+                .isInstanceOf(IllegalStateException.class)
+                .hasCause(unloadFailure);
+        assertThat(thrown.getSuppressed()).as("every jar was deleted, so no jar failure is attached").isEmpty();
+    }
+
+    @Test
+    @DisplayName("#503 review r2 IN-01: an unload that throws AND a jar that cannot be deleted surfaces as IllegalStateException carrying the jar failure")
+    void unloadThrowsAndJarUndeletable_failureCarriesBothOutcomes() throws Exception {
+        Path folder = pluginsFolder.toPath();
+        Assumptions.assumeTrue(Files.getFileStore(folder).supportsFileAttributeView("posix"),
+                "needs POSIX permissions to make the delete fail");
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        IllegalStateException unloadFailure = new IllegalStateException("module unload step boom");
+        org.mockito.Mockito.doThrow(unloadFailure).when(commandManager).unregisterAll(plugin);
+        File jar = writeModuleJar(MODULE_NAME);
+
+        Set<PosixFilePermission> original = Files.getPosixFilePermissions(folder);
+        Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("r-x------"));
+        try {
+            Assumptions.assumeFalse(Files.isWritable(folder),
+                    "running as a user that can write a read-only directory (e.g. root); the delete cannot be made to fail");
+
+            Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+            assertThat(thrown).isInstanceOf(IllegalStateException.class).hasCause(unloadFailure);
+            assertThat(thrown.getSuppressed())
+                    .as("the command reports the jar outcome from this suppressed exception; losing it "
+                            + "would hide that the jar loads again on restart")
+                    .hasSize(1);
+            assertThat(thrown.getSuppressed()[0]).isInstanceOf(FileSystemException.class);
+            assertThat(((FileSystemException) thrown.getSuppressed()[0]).getFile()).isEqualTo(jar.getAbsolutePath());
+            assertThat(jar).exists();
+            assertThat(pluginManager.getPluginList()).doesNotContain(plugin);
+        } finally {
+            Files.setPosixFilePermissions(folder, original);
+        }
+    }
+
+    @Test
+    @DisplayName("review r4 WR-03: an update of a module whose uninstall is running is refused")
+    void updateDuringAnUninstallOfTheSameModule_isRefused() throws Exception {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        when(plugin.getIdentifyString()).thenReturn("Uninstall-Fixture");
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        File jar = writeModuleJar(MODULE_NAME);
+        // An unreachable catalogue: an update that is NOT refused fails its lookup instead.
+        PluginInstallUtils.setBaseUrlForTesting("http://127.0.0.1:9");
+        AtomicReference<PluginInstallUtils.UpdateOutcome> duringUninstall = new AtomicReference<>();
+        org.mockito.Mockito.doAnswer(invocation -> {
+            duringUninstall.set(PluginInstallUtils.updatePluginTransactionally("uninstall-fixture"));
+            return null;
+        }).when(commandManager).unregisterAll(plugin);
+        try {
+            assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME)).isTrue();
+        } finally {
+            PluginInstallUtils.resetBaseUrl();
+        }
+
+        assertThat(duringUninstall.get().getStatus())
+                .as("the uninstall holds the module's guard, keyed by the loaded module's identify-string")
+                .isEqualTo(PluginInstallUtils.UpdateOutcome.Status.ALREADY_IN_PROGRESS);
+        assertThat(jar).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("review r5 WR-02: a module can be updated again after a successful uninstall")
+    void afterASuccessfulUninstall_theModuleIsNotStillLocked() throws Exception {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        when(plugin.getIdentifyString()).thenReturn("uninstall-fixture");
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        writeModuleJar(MODULE_NAME);
+        PluginInstallUtils.setBaseUrlForTesting("http://127.0.0.1:9");
+        try {
+            assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME)).isTrue();
+
+            assertThat(PluginInstallUtils.updatePluginTransactionally("uninstall-fixture").getStatus())
+                    .as("an uninstall that keeps its keys leaves the module locked until the server restarts")
+                    .isNotEqualTo(PluginInstallUtils.UpdateOutcome.Status.ALREADY_IN_PROGRESS);
+            assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME)).isFalse();
+        } finally {
+            PluginInstallUtils.resetBaseUrl();
+        }
+    }
+
+    @Test
+    @DisplayName("review r5 WR-02: a module can be updated again after an uninstall that threw")
+    void afterAFailedUninstall_theModuleIsNotStillLocked() throws Exception {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        when(plugin.getIdentifyString()).thenReturn("uninstall-fixture");
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        PluginInstallUtils.setBaseUrlForTesting("http://127.0.0.1:9");
+        try {
+            // No jar on disk: the uninstall unloads the module and then throws NoSuchFileException.
+            assertThat(catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME)))
+                    .isInstanceOf(java.nio.file.NoSuchFileException.class);
+
+            assertThat(PluginInstallUtils.updatePluginTransactionally("uninstall-fixture").getStatus())
+                    .as("the keys must be released on the throwing path too")
+                    .isNotEqualTo(PluginInstallUtils.UpdateOutcome.Status.ALREADY_IN_PROGRESS);
+        } finally {
+            PluginInstallUtils.resetBaseUrl();
+        }
+    }
+
+    private static java.util.List<String> namedFiles(FileSystemException failure) {
+        java.util.List<String> files = new java.util.ArrayList<>();
+        files.add(failure.getFile());
+        for (Throwable suppressed : failure.getSuppressed()) {
+            if (suppressed instanceof FileSystemException) {
+                files.add(((FileSystemException) suppressed).getFile());
+            }
+        }
+        return files;
+    }
+
+    @Test
+    @DisplayName("codex r6 P2: an uninstall clears that module's leftover update journals, so nothing can restore it")
+    void uninstall_clearsTheModulesUpdateJournals() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        File jar = writeModuleJar(MODULE_NAME);
+        File staging = new File(dataFolder, ".upm-staging");
+        assertThat(staging.mkdirs()).isTrue();
+        String transaction = "8420a849-1c2d-4e5f-9a0b-1c2d3e4f5a6b";
+        File aside = new File(staging, MODULE_NAME + "-0.9.0.jar." + transaction + ".old");
+        Files.write(aside.toPath(), "old jar".getBytes(StandardCharsets.UTF_8));
+        File journal = new File(staging, transaction + ".txn");
+        Files.write(journal.toPath(), ("format=1\nprocess=4242@another-host\nmodule=uninstallfixture\n"
+                + "name=" + MODULE_NAME + "\ntarget=" + MODULE_NAME + "-1.0.0.jar\n"
+                + "aside.0.original=" + MODULE_NAME + "-0.9.0.jar\naside.0.aside=" + aside.getName() + "\n")
+                .getBytes(StandardCharsets.UTF_8));
+
+        assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME)).isTrue();
+
+        assertThat(jar).doesNotExist();
+        assertThat(journal)
+                .as("a journal left after the uninstall makes the next boot restore the module")
+                .doesNotExist();
+        assertThat(aside).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("codex r21 P2: a JAR whose name changed in an update is still this module's, by identify-string")
+    void uninstall_findsAJarWhoseRuntimeNameChanged() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        when(plugin.getIdentifyString()).thenReturn("uninstall-fixture");
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        // The installed JAR is the module's, but an update gave it a different plugin.yml name;
+        // until the restart the loaded instance still answers to the old one.
+        File renamed = new File(pluginsFolder, MODULE_NAME + "-2.0.0.jar");
+        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(renamed))) {
+            out.putNextEntry(new JarEntry("plugin.yml"));
+            out.write(("name: RenamedFixture\nversion: 2.0.0\nidentify-string: uninstall-fixture\n")
+                    .getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+
+        assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME)).isTrue();
+
+        assertThat(renamed)
+                .as("leaving it loads the module again under its new name at the next start")
+                .doesNotExist();
+    }
+
+    @Test
+    @DisplayName("codex r21 P2: a JAR that cannot be read is reported when no JAR of the module could be identified")
+    void uninstall_reportsAnUnreadableJarWhenNothingMatched() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        // The module's own JAR is there but temporarily unreadable, so its metadata says nothing.
+        File unreadable = new File(pluginsFolder, MODULE_NAME + "-1.0.0.jar");
+        Files.write(unreadable.toPath(), "not readable as a jar".getBytes(StandardCharsets.UTF_8));
+
+        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+        assertThat(thrown)
+                .as("silently reporting no JAR lets this one load the module again once it is readable")
+                .isInstanceOf(FileSystemException.class);
+        assertThat(namedFiles((FileSystemException) thrown)).contains(unreadable.getAbsolutePath());
+        assertThat(unreadable).exists();
+    }
+
+    @Test
+    @DisplayName("codex r23 P2: a JAR that cannot be read is reported even when another JAR matched")
+    void uninstall_reportsAnUnreadableJarBesideAMatchingOne() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        File matching = writeModuleJar(MODULE_NAME);
+        // A second copy of the module, briefly unreadable: its metadata cannot rule it out.
+        File unreadable = new File(pluginsFolder, MODULE_NAME + "-0.9.0.jar");
+        Files.write(unreadable.toPath(), "not readable as a jar".getBytes(StandardCharsets.UTF_8));
+
+        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+        assertThat(matching).as("the JAR that could be identified still goes").doesNotExist();
+        assertThat(thrown)
+                .as("reporting success leaves a JAR that can load the module again once it is readable")
+                .isInstanceOf(FileSystemException.class);
+        assertThat(namedFiles((FileSystemException) thrown)).contains(unreadable.getAbsolutePath());
+    }
+
+    @Test
+    @DisplayName("sweep ruling: a suspect JAR is reported whether or not a live instance was unloaded")
+    void uninstall_reportsASuspectJarEvenWhenNothingWasUnloaded() throws IOException {
+        // The module failed to load this boot, so there is no instance to unload -- its JARs are here.
+        File matching = writeModuleJar(MODULE_NAME);
+        File unreadable = new File(pluginsFolder, MODULE_NAME + "-0.9.0.jar");
+        Files.write(unreadable.toPath(), "not readable as a jar".getBytes(StandardCharsets.UTF_8));
+
+        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+        assertThat(matching).doesNotExist();
+        assertThat(thrown)
+                .as("reporting must not depend on whether an instance happened to be loaded")
+                .isInstanceOf(FileSystemException.class);
+        assertThat(namedFiles((FileSystemException) thrown)).contains(unreadable.getAbsolutePath());
+    }
+
+    @Test
+    @DisplayName("sweep A17: the update state in staging is cleared before the module's JARs are deleted")
+    void uninstall_clearsStagingBeforeDeletingTheModulesJars() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        File jar = writeModuleJar(MODULE_NAME);
+        File staging = new File(dataFolder, ".upm-staging");
+        assertThat(staging.mkdirs()).isTrue();
+        String transaction = "8420a849-1c2d-4e5f-9a0b-1c2d3e4f5a6b";
+        File aside = new File(staging, MODULE_NAME + "-0.9.0.jar." + transaction + ".old");
+        Files.write(aside.toPath(), "older".getBytes(StandardCharsets.UTF_8));
+        File journal = new File(staging, transaction + ".txn");
+        Files.write(journal.toPath(), ("format=1\nprocess=4242@another-host#1\nmodule=uninstallfixture\n"
+                + "name=" + MODULE_NAME + "\ntarget=" + MODULE_NAME + "-1.0.0.jar\n"
+                + "aside.0.original=" + MODULE_NAME + "-0.9.0.jar\naside.0.aside=" + aside.getName() + "\n")
+                .getBytes(StandardCharsets.UTF_8));
+
+        assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME)).isTrue();
+
+        int stagingCleared = indexOfMessage(aside.getAbsolutePath());
+        int jarDeleted = indexOfMessage(jar.getAbsolutePath());
+        assertThat(stagingCleared).as("the staging state must be logged as cleared").isNotNegative();
+        assertThat(jarDeleted).as("the JAR deletion must be logged").isNotNegative();
+        assertThat(stagingCleared)
+                .as("a crash between the two must not leave a journal that restores the module just removed")
+                .isLessThan(jarDeleted);
+    }
+
+    /** The position of the first captured log message naming {@code fragment}, or -1. */
+    private int indexOfMessage(String fragment) {
+        for (int i = 0; i < logs.size(); i++) {
+            String message = logs.get(i).getMessage();
+            if (message != null && message.contains(fragment)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    @Test
+    @DisplayName("codex r19 P2: an uninstall clears every JAR a damaged journal names, gap or not")
+    void uninstall_clearsEveryPairOfAGappedJournal() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        writeModuleJar(MODULE_NAME);
+        File staging = new File(dataFolder, ".upm-staging");
+        assertThat(staging.mkdirs()).isTrue();
+        String transaction = "8420a849-1c2d-4e5f-9a0b-1c2d3e4f5a6b";
+        File first = new File(staging, MODULE_NAME + "-0.9.0.jar." + transaction + ".old");
+        Files.write(first.toPath(), "first".getBytes(StandardCharsets.UTF_8));
+        File afterTheGap = new File(staging, MODULE_NAME + "-0.8.0.jar." + transaction + ".old");
+        Files.write(afterTheGap.toPath(), "second".getBytes(StandardCharsets.UTF_8));
+        File journal = new File(staging, transaction + ".txn");
+        Files.write(journal.toPath(), ("format=1\nprocess=4242@another-host\nmodule=uninstallfixture\n"
+                + "name=" + MODULE_NAME + "\ntarget=" + MODULE_NAME + "-1.0.0.jar\n"
+                + "aside.0.original=" + MODULE_NAME + "-0.9.0.jar\naside.0.aside=" + first.getName() + "\n"
+                + "aside.2.original=" + MODULE_NAME + "-0.8.0.jar\naside.2.aside=" + afterTheGap.getName() + "\n")
+                .getBytes(StandardCharsets.UTF_8));
+
+        assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME)).isTrue();
+
+        assertThat(first).doesNotExist();
+        assertThat(afterTheGap)
+                .as("a JAR the journal names past a gap would still be there to restore the module")
+                .doesNotExist();
+        assertThat(journal).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("codex r17 P2: a JAR that cannot be deleted does not stop the staging cleanup")
+    void uninstall_clearsStagingEvenWhenAJarCannotBeDeleted() throws IOException {
+        Assumptions.assumeFalse("root".equals(System.getProperty("user.name")),
+                "root ignores directory permissions, so the delete would succeed");
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        File jar = writeModuleJar(MODULE_NAME);
+        File staging = new File(dataFolder, ".upm-staging");
+        assertThat(staging.mkdirs()).isTrue();
+        String transaction = "8420a849-1c2d-4e5f-9a0b-1c2d3e4f5a6b";
+        File aside = new File(staging, MODULE_NAME + "-0.9.0.jar." + transaction + ".old");
+        Files.write(aside.toPath(), "old jar".getBytes(StandardCharsets.UTF_8));
+        File journal = new File(staging, transaction + ".txn");
+        Files.write(journal.toPath(), ("format=1\nprocess=4242@another-host\nmodule=uninstallfixture\n"
+                + "name=" + MODULE_NAME + "\ntarget=" + MODULE_NAME + "-1.0.0.jar\n"
+                + "aside.0.original=" + MODULE_NAME + "-0.9.0.jar\naside.0.aside=" + aside.getName() + "\n")
+                .getBytes(StandardCharsets.UTF_8));
+        Set<PosixFilePermission> original = Files.getPosixFilePermissions(pluginsFolder.toPath());
+        Files.setPosixFilePermissions(pluginsFolder.toPath(), PosixFilePermissions.fromString("r-x------"));
+        try {
+            Assumptions.assumeTrue(!Files.isWritable(pluginsFolder.toPath()), "the permissions must bind this process");
+
+            Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+            assertThat(thrown).isInstanceOf(FileSystemException.class);
+            assertThat(namedFiles((FileSystemException) thrown))
+                    .as("the JAR that is still on disk is what the operator must remove")
+                    .contains(jar.getAbsolutePath());
+            assertThat(journal)
+                    .as("the cleanup still ran: deleting that JAR by hand must not leave a journal "
+                            + "that restores the module on the next start")
+                    .doesNotExist();
+            assertThat(aside).doesNotExist();
+        } finally {
+            Files.setPosixFilePermissions(pluginsFolder.toPath(), original);
+        }
+    }
+
+    @Test
+    @DisplayName("codex r9 P2: an update journal that cannot be read fails the uninstall rather than passing silently")
+    void uninstall_reportsAJournalItCouldNotRead() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        writeModuleJar(MODULE_NAME);
+        File staging = new File(dataFolder, ".upm-staging");
+        assertThat(staging.mkdirs()).isTrue();
+        // A journal that cannot be read may be this module's; nothing can prove it is not.
+        File unreadable = new File(staging, "8420a849-1c2d-4e5f-9a0b-1c2d3e4f5a6b.txn");
+        assertThat(unreadable.mkdir()).isTrue();
+
+        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+        assertThat(thrown)
+                .as("once the read error clears, the next start can follow that journal")
+                .isInstanceOf(FileSystemException.class);
+        assertThat(((FileSystemException) thrown).getFile()).isEqualTo(unreadable.getAbsolutePath());
+    }
+
+    @Test
+    @DisplayName("codex r8 P2: an uninstall with no JAR on disk still clears the module's staging state")
+    void uninstallWithNoJar_stillClearsTheModulesUpdateJournals() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        // The module's only copy is in staging: an earlier update moved it aside and could not
+        // move it back, so the modules folder has no JAR of it at all.
+        File staging = new File(dataFolder, ".upm-staging");
+        assertThat(staging.mkdirs()).isTrue();
+        String transaction = "8420a849-1c2d-4e5f-9a0b-1c2d3e4f5a6b";
+        File aside = new File(staging, MODULE_NAME + "-1.0.0.jar." + transaction + ".old");
+        Files.write(aside.toPath(), "old jar".getBytes(StandardCharsets.UTF_8));
+        File journal = new File(staging, transaction + ".txn");
+        Files.write(journal.toPath(), ("format=1\nprocess=4242@another-host\nmodule=uninstallfixture\n"
+                + "name=" + MODULE_NAME + "\ntarget=" + MODULE_NAME + "-2.0.0.jar\n"
+                + "aside.0.original=" + MODULE_NAME + "-1.0.0.jar\naside.0.aside=" + aside.getName() + "\n")
+                .getBytes(StandardCharsets.UTF_8));
+
+        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+        assertThat(thrown)
+                .as("the module was unloaded but no JAR was found, which is still reported")
+                .isInstanceOf(java.nio.file.NoSuchFileException.class);
+        assertThat(journal)
+                .as("the next start would follow this journal and bring the module back")
+                .doesNotExist();
+        assertThat(aside).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("codex r8 P2: a module with no identify-string is still guarded, by its name")
+    void uninstallOfAModuleWithoutAnIdentifyString_isSerialised() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        when(plugin.getIdentifyString()).thenReturn(null);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        writeModuleJar(MODULE_NAME);
+        AtomicReference<Throwable> reentrant = new AtomicReference<>();
+        // The second uninstall runs while the first holds the guard, from inside the unload.
+        org.mockito.Mockito.doAnswer(invocation -> {
+            reentrant.set(catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME)));
+            return null;
+        }).when(commandManager).unregisterAll(plugin);
+
+        PluginInstallUtils.uninstallPlugin(MODULE_NAME);
+
+        assertThat(reentrant.get())
+                .as("without a key, both callers unload the same instance and race to delete its JAR")
+                .isInstanceOf(com.ultikits.ultitools.exceptions.PluginModuleException.class);
+    }
+
+    @Test
+    @DisplayName("codex r7 P2: an uninstall that cannot clear the module's journal does not report success")
+    void uninstall_reportsAJournalItCouldNotClear() throws IOException {
+        Assumptions.assumeFalse("root".equals(System.getProperty("user.name")),
+                "root ignores directory permissions, so the cleanup would succeed");
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        writeModuleJar(MODULE_NAME);
+        File staging = new File(dataFolder, ".upm-staging");
+        assertThat(staging.mkdirs()).isTrue();
+        String transaction = "8420a849-1c2d-4e5f-9a0b-1c2d3e4f5a6b";
+        File journal = new File(staging, transaction + ".txn");
+        Files.write(journal.toPath(), ("format=1\nprocess=4242@another-host\nmodule=uninstallfixture\n"
+                + "name=" + MODULE_NAME + "\ntarget=" + MODULE_NAME + "-1.0.0.jar\n")
+                .getBytes(StandardCharsets.UTF_8));
+        Set<PosixFilePermission> original = Files.getPosixFilePermissions(staging.toPath());
+        Files.setPosixFilePermissions(staging.toPath(), PosixFilePermissions.fromString("r-x------"));
+        try {
+            Assumptions.assumeTrue(!Files.isWritable(staging.toPath()), "the permissions must bind this process");
+
+            Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+            assertThat(thrown)
+                    .as("a surviving journal can move the module's old JAR back at the next start")
+                    .isInstanceOf(FileSystemException.class);
+            assertThat(((FileSystemException) thrown).getFile()).isEqualTo(journal.getAbsolutePath());
+        } finally {
+            Files.setPosixFilePermissions(staging.toPath(), original);
+        }
+    }
+
+    @Test
+    @DisplayName("codex r6 P2: an unrelated entry in the modules folder does not stop the uninstall")
+    void unreadableEntriesInTheModulesFolder_areSkipped() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        File jar = writeModuleJar(MODULE_NAME);
+        // Entries that are not readable module JARs, both before and after the match in a sorted
+        // listing: a stray file, a directory, and a JAR-named file that is not a JAR.
+        File note = new File(pluginsFolder, "0-readme.txt");
+        Files.write(note.toPath(), "not a JAR".getBytes(StandardCharsets.UTF_8));
+        File directory = new File(pluginsFolder, "zz-subfolder");
+        assertThat(directory.mkdirs()).isTrue();
+        File corrupt = new File(pluginsFolder, "zz-corrupt.jar");
+        Files.write(corrupt.toPath(), "not a JAR either".getBytes(StandardCharsets.UTF_8));
+
+        assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME))
+                .as("the module's own JAR is what the uninstall must act on")
+                .isTrue();
+
+        assertThat(jar).doesNotExist();
+        assertThat(note).exists();
+        assertThat(directory).exists();
+        assertThat(corrupt).exists();
+    }
+
+    private File writeModuleJar(String moduleName) throws IOException {
+        return writeModuleJar(moduleName, "1.0.0");
+    }
+
+    private File writeModuleJar(String moduleName, String version) throws IOException {
+        File jar = new File(pluginsFolder, moduleName + "-" + version + ".jar");
+        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(jar))) {
+            out.putNextEntry(new JarEntry("plugin.yml"));
+            out.write(("name: " + moduleName + "\nversion: " + version + "\n").getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+        return jar;
+    }
+}

@@ -365,6 +365,101 @@ This section governs the third kind.
   before, with only the individual keys whose placeholder count moved resolved from the jar
   instead (see `ultitools.language.file-refresh`/`ultitools.language.file-preserve` in
   `FEATURES.md`). No operator who customised a file is affected either way.
+- `PluginInstallUtils.uninstallPlugin(String)` reporting the outcome it documents (#501, #503). Its
+  javadoc promised `whether the uninstall succeeded`, yet before 6.3.0 it returned `true` even when
+  the module's JAR could not be deleted, deleted only the first of several JARs carrying the
+  module's name, and returned `false` for a module it had just unloaded but whose JAR was not on
+  disk. As of 6.3.0 it unloads through `PluginManager#unregister` and returns `true` only once every
+  matching JAR is deleted. Its declared `throws IOException` now carries two specific outcomes: a
+  `java.nio.file.FileSystemException` whose `getFile()` names a JAR that could not be deleted (each
+  further one attached as a suppressed `FileSystemException`), and a
+  `java.nio.file.NoSuchFileException` naming the plugins folder when a loaded module was unloaded
+  but no JAR carries its name. It also throws `IllegalStateException` when the module's own unload
+  threw; the module is still removed from the loaded modules and deletion of its JARs is still
+  attempted, the module's exception is the cause, and the JAR outcome above is attached as
+  suppressed. A caller that only checked the boolean now sees these as exceptions instead of a
+  success it did not get. A `java.nio.file.FileSystemException` is also thrown when a file an
+  update of this module left in `plugins/UltiTools/.upm-staging/` could not be deleted: while it is
+  there, the next start can move the module's old JAR back, so the uninstall is not complete.
+  It also selects a JAR by the identify-string of the module instance it
+  unloaded, not only by the `plugin.yml` `name`, so a JAR an update renamed is still recognised as
+  that module's; and a JAR in the folder that could not be read at all is reported rather than
+  passed over, because it may be a copy of the module that loads it again once it is readable --
+  every unreadable JAR when none could be identified, and the ones named like this module when its
+  JAR was found and deleted, the file name being the only evidence left when the metadata cannot be
+  read.
+  It also throws `com.ultikits.ultitools.exceptions.PluginModuleException`
+  with error code `ErrorCode.PLUGIN_OPERATION_IN_PROGRESS` (new in 6.3.0), with nothing changed,
+  while an update or another uninstall of the same module is running: one per-module guard covers
+  both operations, keyed by the module's identify-string, which the uninstall resolves from its
+  runtime name, from the JARs in the modules folder, and from the journals of updates that are
+  moving JARs right now — in the window between an update's move-aside and its move-in the module
+  has no JAR in the modules folder, and the journal is the only thing that still names it.
+- `PluginInstallUtils.updatePlugin(String)` reporting the outcome it documents (#505). Its javadoc
+  promised `true if update succeeded`, yet before 6.3.0 it wrote the new JAR straight into the
+  modules folder and returned `true` even when an old JAR could not be deleted, leaving two versions
+  to load on restart. As of 6.3.0 an update is a staged transaction: the new version is downloaded
+  into `plugins/UltiTools/.upm-staging/`, validated as a JAR of that module at the catalogue's
+  latest version, the transaction is recorded in a journal file in that same directory, the
+  module's older JARs are moved aside, and the new JAR is moved in; the set-aside JARs and then the
+  journal are deleted afterwards. Every move is an atomic rename and never a copy, so the update is
+  refused before anything is downloaded or moved when the staging directory and the modules folder
+  are not on the same file system; by default both are directly under `plugins/UltiTools/`, so this
+  happens only when one of them is a mount or a link to another file system. The method returns
+  `false`, with nothing changed, when the download fails, when the staging directory cannot be
+  prepared, when the downloaded file is not a JAR of that module at that version, when a JAR of the
+  module newer than the catalogue version is already in the modules folder, when the file systems
+  differ, and when an update or uninstall of the same module is already running (a concurrent
+  operation is refused). It throws `java.io.UncheckedIOException` wrapping a
+  `java.nio.file.FileSystemException` when a move fails, and whenever a set-aside JAR could not be
+  moved back: `getFile()` names the old JAR that could not be moved aside or the path the new JAR
+  could not be moved to, the move's exception is the cause, and each JAR left in the staging
+  directory is attached as a suppressed `FileSystemException`. The throw is new for a method shipped
+  in 6.2.5, which previously threw only unchecked download errors (`SecurityException`,
+  `IllegalArgumentException`, `ClassCastException`): a caller that saw only `true` or `false` now
+  also sees this exception. It is an exception rather than `false` because `false` now means that
+  nothing was changed, and a failed move can leave the modules folder changed when a set-aside JAR
+  cannot be moved back. The exception is unchecked because the method declares no checked exception
+  and its signature is unchanged; a caller that loops over modules expecting only a boolean should
+  catch it per module. Measured before this change: a case-insensitive search for `updatePlugin(`
+  across this repository's `Modules/` and `Tooling/` trees finds no caller of this method (its only
+  hit is an unrelated private method of the same name in `ultitools-maven-plugin`'s
+  `UltiToolsDeployMojo`), and `PluginInstallUtils` is referenced nowhere in either tree; the same
+  search over the framework finds it in `PluginInstallUtils` and `PluginInstallCommands`, so the
+  search does read Java sources. **An update is completed by the next start, not by the command.** `updatePlugin` installs the
+  new version and stops: the JARs it replaced stay in `plugins/UltiTools/.upm-staging/` and the
+  transaction's journal stays with them, marked as awaiting boot confirmation. After the modules
+  load, the framework checks whether the module is among them. If it is, the replaced JARs and the
+  journal are deleted. If it is not, the installed JAR is deleted, the replaced JAR is moved back,
+  and a SEVERE line states which module, which version it was rolled back to, that the module is
+  not available in this session, and that a restart loads it again. This replaced a pre-flight check
+  that tried to predict whether a module would load from a download; what an update validates now is
+  the `plugin.yml` contract alone — identify-string, name, version. **A module whose update is waiting for that
+  restart cannot be updated again** — `updatePlugin` returns `false` and changes nothing, the same
+  refusal it gives while another update or uninstall of the module is running, because two updates
+  awaiting one restart cannot both be resolved. At the next start, before
+  modules load, the framework reads
+  every journal left in the staging directory by an update that never finished and moves each JAR
+  that journal named back to the path it came from, unless that path is occupied again; it then
+  deletes the journal. A journal whose new version is already installed is left to the confirmation
+  step instead, whether or not the marker naming that state was written before the process died, and
+  a journal recording a rollback that has not finished is finished at the next start rather than
+  read as an update to confirm. A
+  journal whose JARs could not all be moved back is kept, and the next start tries again. It also
+  deletes stale partial downloads. A set-aside JAR that **no surviving journal refers to** belongs
+  to a transaction that finished and is never moved back: it is reported once, by absolute path, as
+  a leftover the operator can delete. A set-aside JAR whose journal is still there — kept because it
+  could not be read or parsed, or because it belongs to an update running right now — is reported as
+  belonging to that journal, and must not be deleted while it does: both names carry the same
+  transaction id, which is how the two are told apart even when the journal's contents cannot be
+  read at all. On Windows a loaded module's JAR
+  cannot be moved, so an update of a loaded module rolls back and says so; stop the server or unload
+  the module to update it there. A new method,
+  `PluginInstallUtils.updatePluginTransactionally(String)`, returns an `UpdateOutcome` that reports
+  each of these outcomes without exceptions, including set-aside JARs that could not be deleted:
+  those are left in the staging directory, outside the modules folder, never load, and are reported
+  as a note rather than as a failure. Both are `@ApiStatus.Internal` — the `/upm update` command's
+  outcome channel, not module API — and may change without notice.
 
 ### Behavioral changes that do need one
 
