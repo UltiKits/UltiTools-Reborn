@@ -319,6 +319,34 @@ class ModuleUpdateRecoveryTest {
         assertThat(warnings()).noneMatch(m -> m.contains("leftover") && m.contains(aside.getAbsolutePath()));
     }
 
+    @Test
+    @DisplayName("codex r6 P2: a journal marked committed never restores, even once the new JAR is gone again")
+    void committedJournal_restoresNothingAfterTheNewVersionWasRemoved() throws IOException {
+        File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        // The transaction installed its new version and then failed to delete its own files; the
+        // operator uninstalled the module afterwards, so the target is gone again.
+        File journal = writeCommittedJournal(UUID_A, OTHER_PROCESS, ID, ID + "-2.0.0.jar",
+                ID + "-1.0.0.jar", aside.getName());
+
+        UltiTools.collectModuleJarUrls(pluginsFolder);
+
+        assertThat(new File(pluginsFolder, ID + "-1.0.0.jar"))
+                .as("restoring here brings back a module the operator uninstalled")
+                .doesNotExist();
+        assertThat(aside).exists();
+        assertThat(journal).doesNotExist();
+        assertThat(warnings()).anyMatch(m -> m.contains(aside.getAbsolutePath()) && m.contains("leftover"));
+    }
+
+    /** A journal of a transaction that had already installed its new version. */
+    private File writeCommittedJournal(String transaction, String process, String module, String target,
+                                       String... originalAndAsideNames) throws IOException {
+        File journal = writeJournal(transaction, process, module, target, originalAndAsideNames);
+        String text = new String(Files.readAllBytes(journal.toPath()), StandardCharsets.UTF_8) + "phase=committed\n";
+        Files.write(journal.toPath(), text.getBytes(StandardCharsets.UTF_8));
+        return journal;
+    }
+
     /** The identity the framework writes into a journal, read from the class that writes it. */
     @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     private static String currentProcessIdentity() throws Exception {

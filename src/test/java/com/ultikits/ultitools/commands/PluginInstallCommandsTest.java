@@ -902,7 +902,25 @@ class PluginInstallCommandsTest {
     }
 
     @Test
-    @DisplayName("review r5 IN-01: a reply that lists jars left in staging never also says nothing was changed")
+    @DisplayName("codex r6 P2: a move that cannot be atomic is not reported as two file systems")
+    void updateAtomicMoveUnsupported_doesNotBlameTheFileSystemLayout() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        stubModuleUpdates("TestPlugin", "test-plugin");
+        stubUpdateOutcome("test-plugin", outcome(PluginInstallUtils.UpdateOutcome.Status.ATOMIC_MOVE_UNSUPPORTED,
+                Arrays.asList("/srv/minecraft/plugins/UltiTools/.upm-staging",
+                        "/srv/minecraft/plugins/UltiTools/plugins"),
+                Collections.<String>emptyList(), Collections.<String>emptyList()));
+
+        String reply = updateReply("TestPlugin");
+
+        assertThat(reply)
+                .as("the folders are on one file system; what it cannot do is rename atomically")
+                .doesNotContain("不在同一文件系统上")
+                .contains("原子");
+    }
+
+    @Test
+    @DisplayName("review r5 IN-01: a cross-file-system refusal that left a jar in staging does not say nothing changed")
     void updateFileSystemsDifferWithUnrestoredJar_doesNotClaimNothingChanged() {
         assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
         stubModuleUpdates("TestPlugin", "test-plugin");

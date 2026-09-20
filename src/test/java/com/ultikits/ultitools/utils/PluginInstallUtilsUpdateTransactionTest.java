@@ -281,7 +281,7 @@ class PluginInstallUtilsUpdateTransactionTest {
     }
 
     @Test
-    @DisplayName("review r4 WR-01: a move that cannot be atomic is refused with nothing changed, never copied")
+    @DisplayName("review r4 WR-01 / codex r6: a move that cannot be atomic is refused as such, with nothing changed")
     void atomicMoveNotSupported_isRefusedAndNothingChanges() throws IOException {
         File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
         byte[] oldBytes = Files.readAllBytes(oldJar.toPath());
@@ -289,7 +289,10 @@ class PluginInstallUtilsUpdateTransactionTest {
 
         UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
 
-        assertThat(outcome.getStatus()).isEqualTo(Status.FILE_SYSTEMS_DIFFER);
+        assertThat(outcome.getStatus())
+                .as("both folders passed the same-file-store check, so this is not a split file system")
+                .isEqualTo(Status.ATOMIC_MOVE_UNSUPPORTED);
+        assertThat(outcome.getFiles()).containsExactly(stagingFolder.getAbsolutePath(), pluginsFolder.getAbsolutePath());
         assertThat(oldJar).hasBinaryContent(oldBytes);
         assertThat(jarEntries()).containsExactly(oldJar.getName());
         assertThat(stagingEntries()).isEmpty();

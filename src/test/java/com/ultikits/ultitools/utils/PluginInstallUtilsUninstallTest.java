@@ -382,6 +382,33 @@ class PluginInstallUtilsUninstallTest {
         return files;
     }
 
+    @Test
+    @DisplayName("codex r6 P2: an unrelated entry in the modules folder does not stop the uninstall")
+    void unreadableEntriesInTheModulesFolder_areSkipped() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        File jar = writeModuleJar(MODULE_NAME);
+        // Entries that are not readable module JARs, both before and after the match in a sorted
+        // listing: a stray file, a directory, and a JAR-named file that is not a JAR.
+        File note = new File(pluginsFolder, "0-readme.txt");
+        Files.write(note.toPath(), "not a JAR".getBytes(StandardCharsets.UTF_8));
+        File directory = new File(pluginsFolder, "zz-subfolder");
+        assertThat(directory.mkdirs()).isTrue();
+        File corrupt = new File(pluginsFolder, "zz-corrupt.jar");
+        Files.write(corrupt.toPath(), "not a JAR either".getBytes(StandardCharsets.UTF_8));
+
+        assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME))
+                .as("the module's own JAR is what the uninstall must act on")
+                .isTrue();
+
+        assertThat(jar).doesNotExist();
+        assertThat(note).exists();
+        assertThat(directory).exists();
+        assertThat(corrupt).exists();
+    }
+
     private File writeModuleJar(String moduleName) throws IOException {
         return writeModuleJar(moduleName, "1.0.0");
     }
