@@ -864,7 +864,7 @@ public class PluginInstallUtils {
         List<Path[]> planned = plannedMoves(olderJars, stagingFolder, unique);
         Path journal = stagingFolder.toPath().resolve(unique + JOURNAL_SUFFIX);
         UpdateOutcome journalFailed = openJournal(journal, moduleKey, readModuleName(staged.toFile()), fileName,
-                planned, stagingFolder, identifyString);
+                planned, identifyString);
         if (journalFailed != null) {
             deleteQuietly(operations, staged);
             return journalFailed;
@@ -975,7 +975,7 @@ public class PluginInstallUtils {
      * @return the outcome to report, or {@code null} when the journal is on disk
      */
     private static UpdateOutcome openJournal(Path journal, String moduleKey, String moduleName, String targetName,
-                                             List<Path[]> planned, File stagingFolder, String identifyString) {
+                                             List<Path[]> planned, String identifyString) {
         try {
             writeTransactionJournal(journal, moduleKey, moduleName, targetName, planned);
             return null;
@@ -1186,6 +1186,12 @@ public class PluginInstallUtils {
         } catch (IOException | SecurityException e) {
             LOGGER.log(Level.WARNING, "Could not record that the update of " + identifyString
                     + " is committed in " + journal + "; the update itself is complete", e);
+            deleteJournal(journal);
+            if (Files.exists(journal, LinkOption.NOFOLLOW_LINKS)) {
+                LOGGER.severe("The update of " + identifyString + " is complete, but its journal " + journal
+                        + " could neither be marked committed nor deleted. Delete that file: while it is there, a"
+                        + " restart after this module is uninstalled can move its old JAR back.");
+            }
         }
     }
 
@@ -1345,12 +1351,13 @@ public class PluginInstallUtils {
                     + " belongs to an update running in this server process and was left in place");
             return;
         }
-        List<String[]> pairs = journalPairs(entries, journalFile);
+        java.util.concurrent.atomic.AtomicBoolean skippedAPair = new java.util.concurrent.atomic.AtomicBoolean();
+        List<String[]> pairs = journalPairs(entries, journalFile, skippedAPair);
         File stagingFolder = journalFile.getParentFile();
         Path targetPath = pluginsFolder.toPath().resolve(target);
         boolean alreadyInstalled = JOURNAL_PHASE_COMMITTED.equals(entries.getProperty(JOURNAL_PHASE_KEY))
                 || newVersionWasInstalled(targetPath, module, journalFile);
-        boolean settled = true;
+        boolean settled = !skippedAPair.get();
         for (String[] pair : pairs) {
             File setAside = new File(stagingFolder, pair[1]);
             reported.add(pair[1]);
@@ -1398,7 +1405,8 @@ public class PluginInstallUtils {
      * with a warning rather than abandoning the transaction's other JARs (review r6 IN-02): those
      * are ordinary names and moving them back is what keeps their module loadable.
      */
-    private static List<String[]> journalPairs(java.util.Properties entries, File journalFile) {
+    private static List<String[]> journalPairs(java.util.Properties entries, File journalFile,
+                                               java.util.concurrent.atomic.AtomicBoolean skippedAPair) {
         List<String[]> pairs = new ArrayList<>();
         for (int i = 0; ; i++) {
             String original = entries.getProperty("aside." + i + ".original");
@@ -1409,6 +1417,9 @@ public class PluginInstallUtils {
             if (isPlainFileName(original) && isPlainFileName(aside)) {
                 pairs.add(new String[]{original, aside});
             } else {
+                // The journal is kept: its JAR is unresolved, and a journal on disk is what stops
+                // recovery from advertising that JAR as deletable (Codex review r6).
+                skippedAPair.set(true);
                 LOGGER.warning("Module update journal " + journalFile.getAbsolutePath()
                         + " names an unusable file, which was skipped: " + original + " <- " + aside);
             }
@@ -1518,7 +1529,11 @@ public class PluginInstallUtils {
             }
             Map<String, String> pluginYml = readPluginYmlScalars(jarFile);
             String version = pluginYml.get("version");
+            // The loader refuses a module JAR with no name: (UltiToolsPlugin's constructor, D-16),
+            // so a download without one would replace a working module with something that cannot
+            // load (Codex review r6). Refuse it here, while nothing has moved.
             return moduleKey.equals(normalizeIdentifyString(pluginYml.get("identify-string")))
+                    && declaresAName(pluginYml, file)
                     && version != null && expectedVersion != null
                     && VersionComparatorUtil.compare(version.trim(), expectedVersion.trim()) == 0;
         } catch (IOException | SecurityException e) {
@@ -1526,6 +1541,16 @@ public class PluginInstallUtils {
             LOGGER.log(Level.FINE, "Downloaded file is not a readable JAR: " + file, e);
             return false;
         }
+    }
+
+    /** Whether a {@code plugin.yml} carries the {@code name:} the module loader requires. */
+    private static boolean declaresAName(Map<String, String> pluginYml, File file) {
+        String name = pluginYml.get("name");
+        if (name == null || name.trim().isEmpty()) {
+            LOGGER.warning("JAR " + file + " declares no plugin.yml name:, which the module loader requires");
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -1537,7 +1562,9 @@ public class PluginInstallUtils {
             if (!SecurityPolicy.isSafeFileStructure(file.length(), jarFile.size())) {
                 return false;
             }
-            return moduleKey.equals(normalizeIdentifyString(readPluginYmlScalars(jarFile).get("identify-string")));
+            Map<String, String> pluginYml = readPluginYmlScalars(jarFile);
+            return moduleKey.equals(normalizeIdentifyString(pluginYml.get("identify-string")))
+                    && declaresAName(pluginYml, file);
         } catch (IOException | SecurityException e) {
             LOGGER.log(Level.FINE, "File is not a readable JAR of module " + moduleKey + ": " + file, e);
             return false;
@@ -1844,7 +1871,57 @@ public class PluginInstallUtils {
         // the same module loads it again on restart. Report the real outcome (#501): every jar
         // that stays on disk is named, so success is reported only once all of them are gone.
         deleteAllOrThrow(matchingJars);
+        // Nothing in the staging directory may bring this module back after an uninstall (Codex
+        // review r6): boot recovery moves back whatever a surviving journal names, so a journal of
+        // this module from an interrupted or half-cleaned update goes with it.
+        clearStagingOf(name);
         return true;
+    }
+
+    /**
+     * Deletes every update journal of the module named {@code name}, and the set-aside JARs those
+     * journals record. Best effort: what cannot be deleted is logged, because the uninstall's own
+     * outcome is about the module's JARs in the modules folder.
+     */
+    private static void clearStagingOf(String name) {
+        File stagingFolder = new File(UltiTools.getInstance().getDataFolder(), STAGING_DIRECTORY_NAME);
+        File[] journals = stagingFolder.listFiles((f) -> f.getName().endsWith(JOURNAL_SUFFIX));
+        if (journals == null) {
+            return;
+        }
+        for (File journalFile : journals) {
+            try {
+                java.util.Properties entries = new java.util.Properties();
+                try (java.io.Reader reader = Files.newBufferedReader(journalFile.toPath(),
+                        java.nio.charset.StandardCharsets.UTF_8)) {
+                    entries.load(reader);
+                }
+                if (!name.equals(entries.getProperty("name"))
+                        && !journalNamesModule(entries, stagingFolder, name)) {
+                    continue;
+                }
+                for (String[] pair : journalPairs(entries, journalFile, new java.util.concurrent.atomic.AtomicBoolean())) {
+                    deleteStagedFile(new File(stagingFolder, pair[1]));
+                }
+                deleteStagedFile(journalFile);
+            } catch (IOException | RuntimeException e) {
+                LOGGER.log(Level.WARNING, "Could not clear the update journal " + journalFile
+                        + " while uninstalling " + name + "; delete it by hand, or the next start may"
+                        + " move that module's old JAR back", e);
+            }
+        }
+    }
+
+    /** Deletes one file of the staging directory, logging rather than failing the uninstall. */
+    private static void deleteStagedFile(File file) {
+        try {
+            if (Files.deleteIfExists(file.toPath())) {
+                LOGGER.info("Deleted " + file.getAbsolutePath() + ", left by an update of a module being uninstalled");
+            }
+        } catch (IOException | SecurityException e) {
+            LOGGER.log(Level.WARNING, "Could not delete " + file + " while uninstalling its module; "
+                    + "delete it by hand, or the next start may move that module's old JAR back", e);
+        }
     }
 
     /**
