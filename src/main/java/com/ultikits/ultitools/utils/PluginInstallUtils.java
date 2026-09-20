@@ -1214,16 +1214,15 @@ public class PluginInstallUtils {
         for (UltiToolsPlugin plugin : identity.loaded) {
             try {
                 pluginManager.unregister(plugin);
+            } catch (VirtualMachineError fatal) {
+                // Its own clause, before the one below: collecting an OutOfMemoryError and going on
+                // to delete files is not a recovery, so it leaves untouched.
+                throw fatal;
             } catch (Exception | Error e) {
-                // The line sits at the VM's own fatal errors, not at a type name. unregisterSelf()
-                // collects and rethrows whatever its steps throw -- a NoClassDefFoundError from
-                // half-loaded classes, an AssertionError from a module's own check -- and all of
-                // those are failures of that module which this uninstall reports and carries on
-                // from. A VirtualMachineError is not: collecting one and going on to delete files
-                // is not a recovery, so it leaves untouched (gate 1, IN-07 and its correction).
-                if (e instanceof VirtualMachineError) {
-                    throw e;
-                }
+                // Everything else a module's unload throws is that module's failure, which this
+                // uninstall reports and carries on from -- unregisterSelf() collects and rethrows
+                // whatever its steps throw, a NoClassDefFoundError from half-loaded classes and an
+                // AssertionError from a module's own check alike (gate 1, IN-07 and its correction).
                 LOGGER.log(Level.SEVERE, "Module " + identity.requested + " threw while unloading for uninstall; "
                         + "it has been removed from the loaded modules", e);
                 unloadFailure = firstOf(unloadFailure, e);
