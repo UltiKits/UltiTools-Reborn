@@ -605,8 +605,7 @@ public class PluginManager {
             return false;
         }
         try {
-            try (CandidateClassLoader loader = CandidateClassLoader.over(candidateJar,
-                    postUpdateClassLoader(replacedJars))) {
+            try (CandidateClassLoader loader = CandidateClassLoader.over(candidateJar, replacedJars)) {
                 // The names come from the candidate JAR's own entries, and the classes are resolved
                 // without initialising them, which is what the loader does with a module JAR at
                 // startup; nothing here acts on a name from outside the artifact being examined.
@@ -624,40 +623,13 @@ public class PluginManager {
     }
 
     /**
-     * The class path a candidate would load in after the update: every installed module JAR except
-     * the ones it replaces, over the framework's own class loader.
+     * The class loader a candidate module JAR would load in after the update: the candidate plus
+     * every installed module JAR it does not replace, over the framework's own class loader.
      * <p>
-     * Delegating to the live module loader instead would let a candidate borrow a class from the
-     * very JAR it is about to delete -- an omitted internal superclass resolves, the update is
-     * accepted, and the module fails to load after the restart (Codex review r11).
-     *
-     * @param replacedJars the installed JARs the candidate would replace
-     * @return the loader to use as the candidate's parent
-     * @throws IOException when a modules-folder entry cannot be turned into a URL
-     */
-    private static ClassLoader postUpdateClassLoader(Collection<File> replacedJars) throws IOException {
-        ClassLoader frameworkOnly = PluginManager.class.getClassLoader();
-        File modulesFolder = new File(UltiTools.getInstance().getDataFolder(), "plugins");
-        File[] installed = modulesFolder.listFiles((file) -> file.getName().endsWith(".jar"));
-        if (installed == null) {
-            return frameworkOnly;
-        }
-        Set<String> replaced = new HashSet<>();
-        for (File jar : replacedJars) {
-            replaced.add(jar.getAbsolutePath());
-        }
-        List<URL> urls = new ArrayList<>();
-        for (File jar : installed) {
-            if (!replaced.contains(jar.getAbsolutePath())) {
-                urls.add(jar.toURI().toURL());
-            }
-        }
-        return urls.isEmpty() ? frameworkOnly
-                : new URLClassLoader(urls.toArray(new URL[0]), frameworkOnly);
-    }
-
-    /**
-     * A class loader over one candidate module JAR whose own classes come from that JAR.
+     * It is one loader, like the one the server builds for the modules folder at boot, so classes
+     * split across module JARs -- a sealed package, most visibly -- behave here as they will there
+     * (Codex review r12). It is also the only loader opened, so closing it releases every JAR
+     * handle taken while validating.
      * <p>
      * A plain parent-first loader would answer a name the installed module already provides from
      * the installed JAR, so a candidate carrying different bytes under the same entry name would
@@ -684,22 +656,51 @@ public class PluginManager {
 
         /**
          * @param candidateJar the JAR to load from
-         * @param parent       the loader providing the framework and the other modules
-         * @return a loader whose own classes come from {@code candidateJar}
-         * @throws IOException when the JAR cannot be read
+         * @param replacedJars the installed JARs the candidate replaces, which are left out because
+         *                     they will not exist after the update
+         * @return a loader over the candidate and the surviving module JARs
+         * @throws IOException when a JAR cannot be read
          */
-        static CandidateClassLoader over(File candidateJar, ClassLoader parent) throws IOException {
-            Set<String> ownClassNames = new HashSet<>();
-            try (JarFile jarFile = new JarFile(candidateJar)) {
-                Enumeration<JarEntry> entries = jarFile.entries();
-                while (entries.hasMoreElements()) {
-                    String entryName = entries.nextElement().getName();
-                    if (entryName.endsWith(".class") && !entryName.contains("META-INF")) {
-                        ownClassNames.add(entryName.replace('/', '.').replace(".class", ""));
+        static CandidateClassLoader over(File candidateJar, Collection<File> replacedJars) throws IOException {
+            Set<String> replaced = new HashSet<>();
+            for (File jar : replacedJars) {
+                replaced.add(jar.getAbsolutePath());
+            }
+            // The candidate first, so its own classes win over a namesake in another module, as they
+            // do at boot where only one JAR of a module is present.
+            List<File> jars = new ArrayList<>();
+            jars.add(candidateJar);
+            File modulesFolder = new File(UltiTools.getInstance().getDataFolder(), "plugins");
+            File[] installed = modulesFolder.listFiles((file) -> file.getName().endsWith(".jar"));
+            if (installed != null) {
+                for (File jar : installed) {
+                    if (!replaced.contains(jar.getAbsolutePath())) {
+                        jars.add(jar);
                     }
                 }
             }
-            return new CandidateClassLoader(new URL[]{candidateJar.toURI().toURL()}, parent, ownClassNames);
+            Set<String> ownClassNames = new HashSet<>();
+            List<URL> urls = new ArrayList<>();
+            for (File jar : jars) {
+                try (JarFile jarFile = new JarFile(jar)) {
+                    Enumeration<JarEntry> entries = jarFile.entries();
+                    while (entries.hasMoreElements()) {
+                        String entryName = entries.nextElement().getName();
+                        if (entryName.endsWith(".class") && !entryName.contains("META-INF")) {
+                            ownClassNames.add(entryName.replace('/', '.').replace(".class", ""));
+                        }
+                    }
+                } catch (IOException unreadable) {
+                    // A file in the modules folder that is not a readable archive provides no class
+                    // at boot either; it is left off this class path rather than failing the check.
+                    Bukkit.getLogger().log(Level.FINE,
+                        "[UltiTools-API] Not a readable archive, left off the validation class path: " + jar);
+                    continue;
+                }
+                urls.add(jar.toURI().toURL());
+            }
+            return new CandidateClassLoader(urls.toArray(new URL[0]),
+                    PluginManager.class.getClassLoader(), ownClassNames);
         }
 
         @Override

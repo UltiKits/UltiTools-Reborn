@@ -456,6 +456,34 @@ class PluginInstallUtilsUpdateTransactionTest {
     }
 
     @Test
+    @DisplayName("codex r12: a class another installed module provides is still available to the candidate")
+    void downloadUsingAClassFromAnotherInstalledModule_isAccepted() throws Exception {
+        javax.tools.JavaCompiler compiler = javax.tools.ToolProvider.getSystemJavaCompiler();
+        org.junit.jupiter.api.Assumptions.assumeTrue(compiler != null, "a JDK compiler is required");
+        File classes = compileModuleFixture(compiler);
+        byte[] base = Files.readAllBytes(new File(classes, "fixture/Base.class").toPath());
+        byte[] child = Files.readAllBytes(new File(classes, "fixture/Child.class").toPath());
+        // A different module, which this update does not touch, provides the superclass.
+        File otherModule = new File(pluginsFolder, "other-module-1.0.0.jar");
+        try (FileOutputStream out = new FileOutputStream(otherModule)) {
+            out.write(jarWith("other-module", "1.0.0", new String[]{"fixture/Base.class"}, new byte[][]{base}));
+        }
+        File oldJar = new File(pluginsFolder, IDENTIFY_STRING + "-1.0.0.jar");
+        try (FileOutputStream out = new FileOutputStream(oldJar)) {
+            out.write(moduleJarWith("1.0.0", new String[]{"fixture/Child.class"}, new byte[][]{child}));
+        }
+        operations.downloadBytes = moduleJarWith("2.0.0", new String[]{"fixture/Child.class"}, new byte[][]{child});
+
+        UpdateOutcome outcome = withModuleLoaderOver(oldJar,
+                () -> PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING));
+
+        assertThat(outcome.getStatus())
+                .as("the other module survives the update, so its classes are part of the candidate's class path")
+                .isEqualTo(Status.UPDATED);
+        assertThat(jarEntries()).containsExactlyInAnyOrder(NEW_JAR_NAME, otherModule.getName());
+    }
+
+    @Test
     @DisplayName("codex r11 control: a candidate carrying all of its own classes is still accepted")
     void downloadCarryingItsOwnSuperclass_isAccepted() throws Exception {
         javax.tools.JavaCompiler compiler = javax.tools.ToolProvider.getSystemJavaCompiler();
@@ -521,10 +549,16 @@ class PluginInstallUtilsUpdateTransactionTest {
 
     /** A module JAR with the fixture plugin.yml and the given class entries. */
     private byte[] moduleJarWith(String version, String[] entryNames, byte[][] classBytes) throws IOException {
+        return jarWith(IDENTIFY_STRING, version, entryNames, classBytes);
+    }
+
+    /** A module JAR of {@code identifyString} with the given class entries. */
+    private byte[] jarWith(String identifyString, String version, String[] entryNames, byte[][] classBytes)
+            throws IOException {
         java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
         try (JarOutputStream out = new JarOutputStream(bytes)) {
             out.putNextEntry(new JarEntry("plugin.yml"));
-            out.write(("name: Fixture\nversion: " + version + "\nidentify-string: " + IDENTIFY_STRING + "\n")
+            out.write(("name: Fixture\nversion: " + version + "\nidentify-string: " + identifyString + "\n")
                     .getBytes(StandardCharsets.UTF_8));
             out.closeEntry();
             for (int i = 0; i < entryNames.length; i++) {
