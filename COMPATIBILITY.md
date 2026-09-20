@@ -382,14 +382,17 @@ This section governs the third kind.
   with error code `ErrorCode.PLUGIN_OPERATION_IN_PROGRESS` (new in 6.3.0), with nothing changed,
   while an update or another uninstall of the same module is running: one per-module guard covers
   both operations, keyed by the module's identify-string, which the uninstall resolves from its
-  runtime name.
+  runtime name, from the JARs in the modules folder, and from the journals of updates that are
+  moving JARs right now — in the window between an update's move-aside and its move-in the module
+  has no JAR in the modules folder, and the journal is the only thing that still names it.
 - `PluginInstallUtils.updatePlugin(String)` reporting the outcome it documents (#505). Its javadoc
   promised `true if update succeeded`, yet before 6.3.0 it wrote the new JAR straight into the
   modules folder and returned `true` even when an old JAR could not be deleted, leaving two versions
   to load on restart. As of 6.3.0 an update is a staged transaction: the new version is downloaded
   into `plugins/UltiTools/.upm-staging/`, validated as a JAR of that module at the catalogue's
-  latest version, the module's older JARs are moved aside, and the new JAR is moved in; set-aside
-  JARs are deleted afterwards. Every move is an atomic rename and never a copy, so the update is
+  latest version, the transaction is recorded in a journal file in that same directory, the
+  module's older JARs are moved aside, and the new JAR is moved in; the set-aside JARs and then the
+  journal are deleted afterwards. Every move is an atomic rename and never a copy, so the update is
   refused before anything is downloaded or moved when the staging directory and the modules folder
   are not on the same file system; by default both are directly under `plugins/UltiTools/`, so this
   happens only when one of them is a mount or a link to another file system. The method returns
@@ -413,9 +416,12 @@ This section governs the third kind.
   hit is an unrelated private method of the same name in `ultitools-maven-plugin`'s
   `UltiToolsDeployMojo`), and `PluginInstallUtils` is referenced nowhere in either tree; the same
   search over the framework finds it in `PluginInstallUtils` and `PluginInstallCommands`, so the
-  search does read Java sources. At the next start, before modules load, the framework restores a
-  set-aside JAR that an interrupted update left in the staging directory when its module has no JAR
-  in the modules folder, and deletes stale partial downloads. On Windows a loaded module's JAR
+  search does read Java sources. At the next start, before modules load, the framework reads
+  every journal left in the staging directory by an update that never finished and moves each JAR
+  that journal named back to the path it came from, unless that path is occupied again or the new
+  version had already been installed; it then deletes the journal. It also deletes stale partial
+  downloads. A set-aside JAR that no journal names belongs to a transaction that finished and is
+  never moved back: it is reported once, by absolute path, as a leftover the operator can delete. On Windows a loaded module's JAR
   cannot be moved, so an update of a loaded module rolls back and says so; stop the server or unload
   the module to update it there. A new method,
   `PluginInstallUtils.updatePluginTransactionally(String)`, returns an `UpdateOutcome` that reports
