@@ -15,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Set;
@@ -61,6 +62,9 @@ import com.ultikits.ultitools.manager.TaskManager;
 class PluginInstallUtilsUninstallTest {
 
     private static final String MODULE_NAME = "UninstallFixture";
+    /** The class this test writes into a fixture JAR: its own, which is a real class file. */
+    private static final String FIXTURE_CLASS =
+            PluginInstallUtilsUninstallTest.class.getName().replace('.', '/');
 
     @TempDir
     File dataFolder;
@@ -399,14 +403,35 @@ class PluginInstallUtilsUninstallTest {
 
     @Test
     @DisplayName("the code source of a class loaded from a JAR is that JAR, and of one loaded from a directory is nothing")
-    void codeSourceOf_readsWhatTheClassWasLoadedFrom() {
-        // Real reflection, no seam: JUnit's own class comes from a jar, this test class does not.
-        File fromJar = PluginInstallUtils.codeSourceJarOf(Test.class);
-        assertThat(fromJar).isNotNull();
-        assertThat(fromJar.getName()).endsWith(".jar");
+    void codeSourceOf_readsWhatTheClassWasLoadedFrom() throws Exception {
+        // Hermetic: a class written into a JAR here and loaded through a throwaway loader, rather
+        // than a library that happens to ship as one on this classpath.
+        File jar = new File(dataFolder, "code-source-fixture.jar");
+        byte[] classFile = Files.readAllBytes(Paths.get(compiledFixture()));
+        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(jar))) {
+            out.putNextEntry(new JarEntry(FIXTURE_CLASS + ".class"));
+            out.write(classFile);
+            out.closeEntry();
+        }
+        try (java.net.URLClassLoader loader =
+                     new java.net.URLClassLoader(new java.net.URL[]{jar.toURI().toURL()}, null)) {
+            Class<?> fromJar = loader.loadClass(FIXTURE_CLASS.replace('/', '.'));
+
+            assertThat(PluginInstallUtils.codeSourceJarOf(fromJar))
+                    .as("a class loaded from a JAR names that JAR")
+                    .isEqualTo(jar);
+        }
         assertThat(PluginInstallUtils.codeSourceJarOf(PluginInstallUtilsUninstallTest.class))
                 .as("an exploded class directory names no JAR, and must not be mistaken for one")
                 .isNull();
+    }
+
+    /** This test class's own compiled form, which is a real class file to put in a fixture JAR. */
+    private static String compiledFixture() throws Exception {
+        java.net.URL resource = PluginInstallUtilsUninstallTest.class.getResource(
+                "/" + PluginInstallUtilsUninstallTest.class.getName().replace('.', '/') + ".class");
+        assertThat(resource).as("the test's own class file must be readable from the class path").isNotNull();
+        return Paths.get(resource.toURI()).toString();
     }
 
     @Test
@@ -547,8 +572,8 @@ class PluginInstallUtilsUninstallTest {
     }
 
     @Test
-    @DisplayName("states A-D: an entry is never classified by its file name")
-    void fileNameNeverDecidesWhatAnEntryIs() throws IOException {
+    @DisplayName("states A-D: what an entry declares decides it, not what it is called")
+    void whatAnEntryDeclaresDecidesIt_notWhatItIsCalled() throws IOException {
         File jar = writeModuleJar(MODULE_NAME);
         // Named exactly like a copy of the module, and positively not one: it declares another.
         File impostor = writeModuleJar("SomethingElse", "9.9.9");
