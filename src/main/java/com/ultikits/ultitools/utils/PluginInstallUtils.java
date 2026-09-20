@@ -42,6 +42,13 @@ import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
  */
 public class PluginInstallUtils {
     private static final Logger LOGGER = Logger.getLogger(PluginInstallUtils.class.getName());
+
+    /** {@link #codeSourceJarOf(Class)} for a loaded module, and the seam a test replaces. */
+    static final java.util.function.Function<UltiToolsPlugin, File> DEFAULT_MODULE_CODE_SOURCE =
+            module -> codeSourceJarOf(module.getClass());
+
+    /** How the uninstall asks a loaded module which JAR it came from. */
+    static java.util.function.Function<UltiToolsPlugin, File> moduleCodeSource = DEFAULT_MODULE_CODE_SOURCE;
     private static final Gson GSON = new GsonBuilder()
             .setDateFormat("yyyy-MM-dd HH:mm:ss")
             .create();
@@ -500,15 +507,8 @@ public class PluginInstallUtils {
         }
     }
 
-    /** {@link #codeSourceJarOf(Class)} for a loaded module, and the seam a test replaces. */
-    static final java.util.function.Function<UltiToolsPlugin, File> DEFAULT_MODULE_CODE_SOURCE =
-            module -> codeSourceJarOf(module.getClass());
-
-    /** How the uninstall asks a loaded module which JAR it came from. */
-    static java.util.function.Function<UltiToolsPlugin, File> moduleCodeSource = DEFAULT_MODULE_CODE_SOURCE;
-
     /** A code source URL as a file, whatever escaping it carries. */
-    private static File resolveCodeSourceFile(java.net.URL location) {
+    private static File resolveCodeSourceFile(URL location) {
         try {
             return new File(location.toURI());
         } catch (java.net.URISyntaxException e) {

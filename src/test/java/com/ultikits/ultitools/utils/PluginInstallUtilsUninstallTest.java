@@ -409,7 +409,7 @@ class PluginInstallUtilsUninstallTest {
     @DisplayName("the code source of a class loaded from a JAR is that JAR, and of one loaded from a directory is nothing")
     void codeSourceOf_readsWhatTheClassWasLoadedFrom() {
         // Real reflection, no seam: JUnit's own class comes from a jar, this test class does not.
-        File fromJar = PluginInstallUtils.codeSourceJarOf(org.junit.jupiter.api.Test.class);
+        File fromJar = PluginInstallUtils.codeSourceJarOf(Test.class);
         assertThat(fromJar).isNotNull();
         assertThat(fromJar.getName()).endsWith(".jar");
         assertThat(PluginInstallUtils.codeSourceJarOf(PluginInstallUtilsUninstallTest.class))
