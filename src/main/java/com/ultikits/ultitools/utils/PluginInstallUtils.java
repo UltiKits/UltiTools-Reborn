@@ -1486,6 +1486,14 @@ public class PluginInstallUtils {
             String original = entries.getProperty("aside." + i + ".original");
             String aside = entries.getProperty("aside." + i + ".aside");
             if (original == null && aside == null) {
+                // A later pair means the journal is damaged and this reading is incomplete: the
+                // JARs it never named must stay protected, so the caller keeps the journal
+                // (Codex review r18).
+                if (recordsAFurtherPair(entries, i)) {
+                    LOGGER.warning("Module update journal " + journalFile.getAbsolutePath()
+                            + " skips index " + i + " and was kept: it records a pair this start did not read");
+                    skippedAPair.set(true);
+                }
                 return pairs;
             }
             if (isPlainFileName(original) && isPlainFileName(aside)) {
@@ -1498,6 +1506,30 @@ public class PluginInstallUtils {
                         + " names an unusable file, which was skipped: " + original + " <- " + aside);
             }
         }
+    }
+
+    /**
+     * Whether {@code entries} still records a pair at an index beyond the one reading stopped at.
+     *
+     * @param entries   the journal's properties
+     * @param stoppedAt the index with no pair
+     * @return whether a later index carries one
+     */
+    private static boolean recordsAFurtherPair(java.util.Properties entries, int stoppedAt) {
+        for (String key : entries.stringPropertyNames()) {
+            if (!key.startsWith("aside.") || !key.endsWith(".aside")) {
+                continue;
+            }
+            try {
+                if (Integer.parseInt(key.substring("aside.".length(), key.length() - ".aside".length())) > stoppedAt) {
+                    return true;
+                }
+            } catch (NumberFormatException notAnIndex) {
+                // A key that is not aside.<number>.aside says the journal is damaged as well.
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
