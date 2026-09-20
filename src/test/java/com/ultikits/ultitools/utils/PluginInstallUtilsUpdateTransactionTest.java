@@ -456,6 +456,35 @@ class PluginInstallUtilsUpdateTransactionTest {
     }
 
     @Test
+    @DisplayName("codex r14 P1: a module class the boot path could not instantiate is an invalid download")
+    void downloadWhoseModuleClassHasNoNoArgConstructor_isAnInvalidDownload() throws Exception {
+        javax.tools.JavaCompiler compiler = javax.tools.ToolProvider.getSystemJavaCompiler();
+        org.junit.jupiter.api.Assumptions.assumeTrue(compiler != null, "a JDK compiler is required");
+        File sources = new File(dataFolder, "ctor-src/fixture");
+        assertThat(sources.mkdirs()).isTrue();
+        File classes = new File(dataFolder, "ctor-classes");
+        assertThat(classes.mkdirs()).isTrue();
+        Files.write(new File(sources, "NeedsArguments.java").toPath(), ("package fixture;\n"
+                + "public class NeedsArguments extends com.ultikits.ultitools.abstracts.UltiToolsPlugin {\n"
+                + "  public NeedsArguments(String required) { }\n"
+                + "  @Override public boolean registerSelf() { return true; }\n}\n")
+                .getBytes(StandardCharsets.UTF_8));
+        assertThat(compiler.run(null, null, null, "-nowarn", "-classpath", System.getProperty("java.class.path"),
+                "-d", classes.getAbsolutePath(), new File(sources, "NeedsArguments.java").getAbsolutePath()))
+                .as("the fixture must compile").isZero();
+        File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        operations.downloadBytes = moduleJarWith("2.0.0", new String[]{"fixture/NeedsArguments.class"},
+                new byte[][]{compiledClass(classes, "fixture/NeedsArguments.class")});
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus())
+                .as("boot creates the module with its no-argument constructor, and this JAR has none")
+                .isEqualTo(Status.INVALID_DOWNLOAD);
+        assertThat(jarEntries()).containsExactly(oldJar.getName());
+    }
+
+    @Test
     @DisplayName("codex r13 P2: a framework class shaded by another module does not decide the candidate")
     void frameworkClassShadedByASurvivingModule_doesNotRejectTheCandidate() throws Exception {
         writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
