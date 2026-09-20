@@ -373,7 +373,9 @@ public final class UltiTools extends JavaPlugin implements Localized {
         try {
             List<String> loaded = new ArrayList<>();
             for (UltiToolsPlugin plugin : pluginManager.getPluginList()) {
-                loaded.add(plugin.getPluginName());
+                // The identify-string, not the runtime name: a journal is confirmed by the module
+                // it identifies, and two modules can answer to the same name (Codex review r23).
+                loaded.add(plugin.getIdentifyString());
             }
             PluginInstallUtils.confirmUpdatesAfterBoot(getDataFolder(), loaded);
         } catch (RuntimeException | LinkageError e) {

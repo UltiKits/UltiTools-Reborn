@@ -1287,7 +1287,10 @@ public class PluginInstallUtils {
      * to say whether a module loads from it.
      * <p>
      * This runs after the modules have loaded, and asks one question of each waiting journal: is
-     * the module it names among the loaded ones? If it is, the update is confirmed -- the old JARs
+     * the module it identifies among the loaded ones? The question is asked of the identify-string,
+     * which is what names a module uniquely; two modules can carry the same runtime name, and
+     * confirming on that would delete the set-aside JARs of an update that never loaded (Codex
+     * review r23). If it is, the update is confirmed -- the old JARs
      * and the journal go. If it is not, the installed JAR is deleted, the old one is moved back to
      * the path it came from, and the operator is told: the module is absent for this session and
      * back at the next restart.
@@ -1299,12 +1302,12 @@ public class PluginInstallUtils {
      * exception and swallows what it cannot handle, exactly as {@link #recoverInterruptedUpdates}
      * does at the other end of the boot.
      *
-     * @param dataFolder    the framework's data folder, parent of the staging directory
-     * @param loadedModules the runtime names of the modules that loaded in this boot
+     * @param dataFolder             the framework's data folder, parent of the staging directory
+     * @param loadedIdentifyStrings  the identify-strings of the modules that loaded in this boot
      */
     @ApiStatus.Internal
     @SuppressWarnings("PMD.AvoidCatchingGenericException") // deliberate barrier: this must never break boot
-    public static void confirmUpdatesAfterBoot(File dataFolder, java.util.Collection<String> loadedModules) {
+    public static void confirmUpdatesAfterBoot(File dataFolder, java.util.Collection<String> loadedIdentifyStrings) {
         if (dataFolder == null) {
             return;
         }
@@ -1315,8 +1318,13 @@ public class PluginInstallUtils {
         }
         Arrays.sort(journals);
         Set<String> loaded = new java.util.HashSet<>();
-        if (loadedModules != null) {
-            loaded.addAll(loadedModules);
+        if (loadedIdentifyStrings != null) {
+            for (String identifyString : loadedIdentifyStrings) {
+                String normalized = normalizeIdentifyString(identifyString);
+                if (normalized != null) {
+                    loaded.add(normalized);
+                }
+            }
         }
         File pluginsFolder = new File(dataFolder, "plugins");
         for (File journalFile : journals) {
@@ -1335,7 +1343,7 @@ public class PluginInstallUtils {
      * @param journalFile   the journal in the staging directory
      * @param pluginsFolder the modules folder
      * @param stagingFolder the staging directory
-     * @param loaded        the runtime names of the modules that loaded in this boot
+     * @param loaded        the normalized identify-strings of the modules that loaded in this boot
      * @throws IOException when the journal cannot be read
      */
     private static void confirmOneUpdate(File journalFile, File pluginsFolder, File stagingFolder,
@@ -1352,13 +1360,14 @@ public class PluginInstallUtils {
         }
         String name = entries.getProperty("name");
         String target = entries.getProperty("target");
-        if (name == null || !isPlainFileName(target)) {
+        String module = normalizeIdentifyString(entries.getProperty("module"));
+        if (name == null || module == null || !isPlainFileName(target)) {
             LOGGER.warning("Module update journal " + journalFile.getAbsolutePath()
                     + " names no module or no installed file and was left in place");
             return;
         }
         List<String[]> pairs = journalPairs(entries, journalFile, new java.util.concurrent.atomic.AtomicBoolean());
-        if (loaded.contains(name)) {
+        if (loaded.contains(module)) {
             confirmUpdate(journalFile, stagingFolder, name, pairs);
         } else {
             rollBackUnloadableUpdate(journalFile, pluginsFolder, stagingFolder, name, target, pairs);
@@ -1395,14 +1404,25 @@ public class PluginInstallUtils {
             return;
         }
         String restoredVersion = null;
+        boolean settled = true;
         for (String[] pair : pairs) {
             File setAside = new File(stagingFolder, pair[1]);
             Path original = pluginsFolder.toPath().resolve(pair[0]);
             if (restoreSetAsideJar(setAside, original, pluginsFolder, name)) {
-                rolledBack = true;
                 String version = readModuleVersion(original.toFile());
                 restoredVersion = version == null ? restoredVersion : version;
+                rolledBack |= version != null || Files.exists(original, LinkOption.NOFOLLOW_LINKS);
+            } else {
+                // This JAR is still in staging and still needs a decision. The journal is the only
+                // record a later start could retry it from, so it stays (Codex review r23).
+                settled = false;
             }
+        }
+        if (!settled) {
+            LOGGER.severe("Module " + name + " did not load from its update, and not every previous version"
+                    + " could be put back; its journal " + journalFile.getAbsolutePath() + " was kept so the"
+                    + " next start can finish the rollback. The module is NOT available in this session.");
+            return;
         }
         if (!rolledBack) {
             LOGGER.severe("Module " + name + " did not load from its update, and no previous version could be"
@@ -2148,6 +2168,20 @@ public class PluginInstallUtils {
             }
             jarFailure.addSuppressed(stagingFailure);
         }
+        // Deleting the JAR that could be identified says nothing about one that could not be read:
+        // a second copy of this module loads it again once the file is readable, and the uninstall
+        // would have reported success (Codex review r23). Only the ones named like a copy of this
+        // module, since an unrelated unreadable file must not stop the uninstall (review r6) and
+        // the file name is the only evidence left once the metadata cannot be read.
+        List<File> suspects = namedLikeThisModule(unreadableJars, name, identifyStrings);
+        if (moduleUnloaded && !suspects.isEmpty()) {
+            FileSystemException unreadable = unreadableJarsMayBeThisModules(name, suspects);
+            if (jarFailure != null) {
+                jarFailure.addSuppressed(unreadable);
+            } else {
+                throw unreadable;
+            }
+        }
         if (jarFailure != null) {
             throw jarFailure;
         }
@@ -2319,6 +2353,37 @@ public class PluginInstallUtils {
     }
 
     /** The failure reported when a module was unloaded and only unreadable JARs could be its own. */
+    /**
+     * The JARs among {@code candidates} whose file name reads like a copy of this module: the
+     * framework installs a module as {@code <identify-string>-<version>.jar}, and an operator's own
+     * copy is normally named after the module too.
+     *
+     * @param candidates      JARs whose metadata could not be read
+     * @param name            the module's runtime name
+     * @param identifyStrings the identify-strings of the instances being uninstalled
+     * @return the subset that cannot be ruled out on its name
+     */
+    private static List<File> namedLikeThisModule(List<File> candidates, String name, Set<String> identifyStrings) {
+        List<String> prefixes = new ArrayList<>();
+        if (name != null) {
+            prefixes.add(name.toLowerCase(Locale.ROOT));
+        }
+        for (String identifyString : identifyStrings) {
+            prefixes.add(identifyString.toLowerCase(Locale.ROOT));
+        }
+        List<File> named = new ArrayList<>();
+        for (File candidate : candidates) {
+            String fileName = candidate.getName().toLowerCase(Locale.ROOT);
+            for (String prefix : prefixes) {
+                if (fileName.startsWith(prefix + "-") || fileName.equals(prefix + ".jar")) {
+                    named.add(candidate);
+                    break;
+                }
+            }
+        }
+        return named;
+    }
+
     private static FileSystemException unreadableJarsMayBeThisModules(String name, List<File> unreadable) {
         FileSystemException failure = null;
         for (File jar : unreadable) {
