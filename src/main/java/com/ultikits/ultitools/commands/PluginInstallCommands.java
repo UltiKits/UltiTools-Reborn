@@ -217,7 +217,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             if (report.jarsDeleted()) {
                 // uninstallPlugin returns true only after every JAR identified as the module's is
                 // deleted (#501), so there is nothing left for the operator to remove by hand.
-                sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("卸载成功！模块的 JAR 文件已全部删除。"));
+                sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("卸载完成：已删除识别为该模块的 JAR 文件。"));
             } else {
                 sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("卸载失败！请检查是否拼写正确！"));
             }
@@ -233,7 +233,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         } catch (NoSuchFileException e) {
             // The module was found by this exact name and unloaded, but no jar carries it -- a
             // spelling hint would be false here (#501).
-            sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n("模块已卸载，但在 %s 中没有找到它的 JAR 文件。"), e.getFile()));
+            sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n("模块已卸载，但在 %s 中没有识别出属于它的 JAR 文件。"), e.getFile()));
             sendUnreadableEntriesOf(sender, e);
         } catch (FileSystemException e) {
             sendUndeletedJars(sender, e);
@@ -301,7 +301,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             if (jarFailure instanceof NoSuchFileException) {
                 // The undetermined entries this failure carries were reported once above, by the
                 // walk over the whole chain.
-                sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n("模块已卸载，但在 %s 中没有找到它的 JAR 文件。"), ((NoSuchFileException) jarFailure).getFile()));
+                sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n("模块已卸载，但在 %s 中没有识别出属于它的 JAR 文件。"), ((NoSuchFileException) jarFailure).getFile()));
                 return;
             }
             if (jarFailure instanceof FileSystemException) {
@@ -314,7 +314,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
                 return;
             }
         }
-        sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("模块的 JAR 文件已全部删除。"));
+        sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("识别为该模块的 JAR 文件均已删除。"));
     }
 
     /** The undetermined entries a failure carries. */

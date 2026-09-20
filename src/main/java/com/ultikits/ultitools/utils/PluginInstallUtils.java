@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -518,6 +519,70 @@ public class PluginInstallUtils {
     }
 
     /**
+     * The name other entries are matched against.
+     *
+     * <p>Not the name the operator typed: a module's runtime name need not be what its JAR
+     * declares, because {@code UltiToolsPlugin(String pluginName, ...)} takes the name as an
+     * argument and consults no {@code plugin.yml} at all. A second copy of such a module declares
+     * whatever its JAR declares, which is what the loaded copy's JAR declares too -- so that is
+     * what finds it. With nothing loaded to ask, the requested name is the only key there is.
+     *
+     * @param codeSourceJars the JARs the loaded instances were loaded from
+     * @param requested      the module's runtime name, as the operator typed it
+     * @return the name to match other entries against
+     */
+    private static String declaredNameOf(Set<String> codeSourceJars, String requested) {
+        for (String jar : codeSourceJars) {
+            Map<String, String> pluginYml = readPluginYmlOf(new File(jar));
+            String declared = pluginYml == null ? null : pluginYml.get("name");
+            if (declared != null && !declared.equals(requested)) {
+                LOGGER.info("Module " + requested + " was loaded from a JAR whose plugin.yml declares "
+                        + declared + "; other entries are matched against that");
+                return declared;
+            }
+        }
+        return requested;
+    }
+
+    /**
+     * The {@code plugin.yml} scalars a JAR declares, or {@code null} when nothing could be read.
+     *
+     * @param file the JAR
+     * @return its {@code plugin.yml} as a map, or {@code null}
+     */
+    private static Map<String, String> readPluginYmlOf(File file) {
+        try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(file)) {
+            java.util.jar.JarEntry entry = jarFile.getJarEntry("plugin.yml");
+            // The documented limit of this classifier: a second copy whose plugin.yml declares a
+            // different module than the loaded copy's JAR is not detected, because deciding it
+            // would require loading classes out of the JAR, which this work deliberately does not
+            // do. The reply says what was removed and what could not be determined, and never that
+            // no copy remains (#516).
+            if (entry == null) {
+                return null;
+            }
+            try (InputStream is = jarFile.getInputStream(entry);
+                 BufferedReader reader = new BufferedReader(new InputStreamReader(is))) {
+                YamlConfiguration config = new YamlConfiguration();
+                config.load(reader);
+                Map<String, String> scalars = new java.util.HashMap<>();
+                for (String key : config.getKeys(false)) {
+                    if (config.isString(key)) {
+                        scalars.put(key, config.getString(key));
+                    }
+                }
+                return scalars;
+            } catch (org.bukkit.configuration.InvalidConfigurationException malformed) {
+                LOGGER.log(Level.FINE, "plugin.yml is not valid YAML in " + file, malformed);
+                return null;
+            }
+        } catch (IOException | SecurityException e) {
+            LOGGER.log(Level.FINE, "Could not read the plugin.yml of " + file, e);
+            return null;
+        }
+    }
+
+    /**
      * The JARs the loaded instances of this module were loaded from, read before they are unloaded
      * -- afterwards the instance and its class loader may be gone, and with them the answer.
      *
@@ -670,7 +735,9 @@ public class PluginInstallUtils {
      * on restart. Now every entry the modules folder holds is placed in exactly one
      * {@link EntryState}, and what the method returns or throws says which of those it met.
      *
-     * @param name the module's runtime name, as its {@code plugin.yml} declares it
+     * @param name the module's runtime name -- which need not be what its JAR's {@code plugin.yml}
+     *     declares, since {@code UltiToolsPlugin(String pluginName, ...)} takes it as an argument
+     *     and reads no metadata
      * @return {@code true} when every entry identified as this module's was deleted; {@code false}
      *     when none was and no loaded module of that name was unloaded either -- the "check the
      *     spelling" case
@@ -711,10 +778,16 @@ public class PluginInstallUtils {
         // Before the unload: afterwards the instance and its class loader may be gone, and with
         // them the only authoritative answer to "which JAR is this module's".
         Set<String> codeSourceJars = codeSourceJarsOf(matches);
+        // And what those JARs declare, which is what other entries are matched against. A module's
+        // runtime name need not be what its JAR declares -- `UltiToolsPlugin(String, ...)` takes
+        // the name as an argument and reads no plugin.yml - so matching a second copy against the
+        // requested name would miss a copy of a module built that way, while matching against what
+        // the loaded copy's own JAR declares finds it.
+        String declaredName = declaredNameOf(codeSourceJars, name);
         Throwable unloadFailure = unloadEvery(name, matches, pluginManager);
         UninstallReport report;
         try {
-            report = deleteModuleJars(name, !matches.isEmpty(), codeSourceJars);
+            report = deleteModuleJars(name, declaredName, !matches.isEmpty(), codeSourceJars);
         } catch (IOException jarFailure) {
             // The JAR failure already carries the undetermined entries; see deleteModuleJars.
             if (unloadFailure != null) {
@@ -767,13 +840,15 @@ public class PluginInstallUtils {
      * module's -- not only the first one listed, since a second JAR loads the module again on
      * restart -- and reports the entries nothing could be read from.
      *
-     * @param name           the module's runtime name
+     * @param name           the module's runtime name, as the operator typed it
+     * @param declaredName   the name other entries are matched against: what the loaded copy's own
+     *                       JAR declares, or {@code name} when nothing was loaded to ask
      * @param moduleUnloaded whether a loaded module of that name was unloaded first
      * @param codeSourceJars the JARs the loaded instances were loaded from, read before the unload
      * @return what was deleted and what could not be determined
      * @throws IOException as documented on {@link #uninstallPlugin(String)}
      */
-    private static UninstallReport deleteModuleJars(String name, boolean moduleUnloaded,
+    private static UninstallReport deleteModuleJars(String name, String declaredName, boolean moduleUnloaded,
                                                    Set<String> codeSourceJars) throws IOException {
         File folder = new File(UltiTools.getInstance().getDataFolder() + "/plugins");
         File[] listFiles;
@@ -806,7 +881,7 @@ public class PluginInstallUtils {
         List<File> matchingJars = new ArrayList<>();
         List<File> undetermined = new ArrayList<>();
         for (File file : listFiles) {
-            EntryState state = classify(file, name, codeSourceJars);
+            EntryState state = classify(file, declaredName, codeSourceJars);
             if (state == EntryState.THIS_MODULES) {
                 matchingJars.add(file);
             } else if (state == EntryState.UNDETERMINED) {

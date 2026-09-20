@@ -1,10 +1,10 @@
 {
   "模块目录 %s 无法读取，因此无法确认其中是否还有该模块的 JAR 文件。": "The modules folder %s could not be read, so it cannot be confirmed whether it still holds a JAR of this module.",
   "模块目录中有 %d 个文件无法读取，无法判断其中是否有该模块的副本；如果有，重启后该模块会再次加载：%s": "%d file(s) in the modules folder could not be read, so whether any of them is a copy of this module is unknown; if one is, the module will load again after a restart: %s",
-  "卸载成功！模块的 JAR 文件已全部删除。": "Uninstalled! Every JAR file of the module has been deleted.",
+  "卸载完成：已删除识别为该模块的 JAR 文件。": "Uninstall done: the JAR files identified as this module's have been deleted.",
   "卸载出错！模块已从已加载列表移除，但其卸载过程抛出了异常，详见控制台。": "Uninstall error! The module was removed from the loaded modules, but its own unload threw; see the console.",
-  "模块已卸载，但在 %s 中没有找到它的 JAR 文件。": "The module was unloaded, but no JAR file of it was found in %s.",
-  "模块的 JAR 文件已全部删除。": "Every JAR file of the module has been deleted.",
+  "模块已卸载，但在 %s 中没有识别出属于它的 JAR 文件。": "The module was unloaded, but no JAR file in %s could be identified as its own.",
+  "识别为该模块的 JAR 文件均已删除。": "The JAR files identified as this module's have been deleted.",
   "卸载失败！以下模块 JAR 文件无法删除，重启后模块会再次加载，请手动删除：%s": "Uninstall failed! These module JAR files could not be deleted and will load the module again after a restart; delete them by hand: %s",
   "传送中...": "Teleporting...",
   "传送成功！": "Teleport Succeed!",
