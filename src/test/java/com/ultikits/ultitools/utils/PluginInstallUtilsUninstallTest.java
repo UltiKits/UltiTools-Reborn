@@ -411,6 +411,51 @@ class PluginInstallUtilsUninstallTest {
     }
 
     @Test
+    @DisplayName("codex r21 P2: a JAR whose name changed in an update is still this module's, by identify-string")
+    void uninstall_findsAJarWhoseRuntimeNameChanged() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        when(plugin.getIdentifyString()).thenReturn("uninstall-fixture");
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        // The installed JAR is the module's, but an update gave it a different plugin.yml name;
+        // until the restart the loaded instance still answers to the old one.
+        File renamed = new File(pluginsFolder, MODULE_NAME + "-2.0.0.jar");
+        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(renamed))) {
+            out.putNextEntry(new JarEntry("plugin.yml"));
+            out.write(("name: RenamedFixture\nversion: 2.0.0\nidentify-string: uninstall-fixture\n")
+                    .getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+
+        assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME)).isTrue();
+
+        assertThat(renamed)
+                .as("leaving it loads the module again under its new name at the next start")
+                .doesNotExist();
+    }
+
+    @Test
+    @DisplayName("codex r21 P2: a JAR that cannot be read is reported when no JAR of the module could be identified")
+    void uninstall_reportsAnUnreadableJarWhenNothingMatched() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        // The module's own JAR is there but temporarily unreadable, so its metadata says nothing.
+        File unreadable = new File(pluginsFolder, MODULE_NAME + "-1.0.0.jar");
+        Files.write(unreadable.toPath(), "not readable as a jar".getBytes(StandardCharsets.UTF_8));
+
+        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+        assertThat(thrown)
+                .as("silently reporting no JAR lets this one load the module again once it is readable")
+                .isInstanceOf(FileSystemException.class);
+        assertThat(namedFiles((FileSystemException) thrown)).contains(unreadable.getAbsolutePath());
+        assertThat(unreadable).exists();
+    }
+
+    @Test
     @DisplayName("codex r19 P2: an uninstall clears every JAR a damaged journal names, gap or not")
     void uninstall_clearsEveryPairOfAGappedJournal() throws IOException {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
