@@ -418,10 +418,16 @@ This section governs the third kind.
   search over the framework finds it in `PluginInstallUtils` and `PluginInstallCommands`, so the
   search does read Java sources. At the next start, before modules load, the framework reads
   every journal left in the staging directory by an update that never finished and moves each JAR
-  that journal named back to the path it came from, unless that path is occupied again or the new
-  version had already been installed; it then deletes the journal. It also deletes stale partial
-  downloads. A set-aside JAR that no journal names belongs to a transaction that finished and is
-  never moved back: it is reported once, by absolute path, as a leftover the operator can delete. On Windows a loaded module's JAR
+  that journal named back to the path it came from, unless that path is occupied again or the
+  journal records that the new version was already installed; it then deletes the journal. A
+  journal whose JARs could not all be moved back is kept, and the next start tries again. It also
+  deletes stale partial downloads. A set-aside JAR that **no surviving journal refers to** belongs
+  to a transaction that finished and is never moved back: it is reported once, by absolute path, as
+  a leftover the operator can delete. A set-aside JAR whose journal is still there — kept because it
+  could not be read or parsed, or because it belongs to an update running right now — is reported as
+  belonging to that journal, and must not be deleted while it does: both names carry the same
+  transaction id, which is how the two are told apart even when the journal's contents cannot be
+  read at all. On Windows a loaded module's JAR
   cannot be moved, so an update of a loaded module rolls back and says so; stop the server or unload
   the module to update it there. A new method,
   `PluginInstallUtils.updatePluginTransactionally(String)`, returns an `UpdateOutcome` that reports
