@@ -2045,6 +2045,9 @@ public class PluginInstallUtils {
                 matches.add(plugin);
             }
         }
+        // Read before unloading: after the modules are gone their identify-strings are too, and
+        // they are how a JAR whose plugin.yml name an update changed is still recognised as this
+        // module's (Codex review r21).
         Throwable unloadFailure = null;
         for (UltiToolsPlugin plugin : matches) {
             // Unload through PluginManager#unregister, the framework's one full unload path
@@ -2075,7 +2078,7 @@ public class PluginInstallUtils {
         }
         boolean jarsDeleted;
         try {
-            jarsDeleted = deleteModuleJars(name, !matches.isEmpty());
+            jarsDeleted = deleteModuleJars(name, !matches.isEmpty(), identifyStringsOf(matches));
         } catch (IOException jarFailure) {
             if (unloadFailure != null) {
                 throw unloadFailed(name, unloadFailure, jarFailure);
@@ -2098,7 +2101,8 @@ public class PluginInstallUtils {
      *     no module was unloaded
      * @throws IOException as documented on {@link #uninstallPlugin(String)}
      */
-    private static boolean deleteModuleJars(String name, boolean moduleUnloaded) throws IOException {
+    private static boolean deleteModuleJars(String name, boolean moduleUnloaded, Set<String> identifyStrings)
+            throws IOException {
         File folder = new File(UltiTools.getInstance().getDataFolder() + "/plugins");
         File[] listFiles = folder.listFiles();
         if (listFiles == null) {
@@ -2106,12 +2110,24 @@ public class PluginInstallUtils {
             return noJarFound(folder, name, moduleUnloaded);
         }
         List<File> matchingJars = new ArrayList<>();
+        List<File> unreadableJars = new ArrayList<>();
         for (File file : listFiles) {
             // Anything that is not a readable module JAR is skipped, not fatal (#504, Codex review
             // r6): the folder holds directories, notes and half-written downloads, and since this
             // loop looks at every entry rather than stopping at the first match, one of them used
             // to abort the uninstall after the module had already been unloaded.
-            if (name.equals(moduleNameOf(file))) {
+            Map<String, String> pluginYml = pluginYmlOf(file);
+            if (pluginYml == null) {
+                if (file.isFile() && file.getName().endsWith(".jar")) {
+                    unreadableJars.add(file);
+                }
+                continue;
+            }
+            // By runtime name, and by the identify-strings the loaded instances carry: an update
+            // may have changed the name in the JAR while the loaded module still answers to the
+            // old one (Codex review r21).
+            if (name.equals(pluginYml.get("name"))
+                    || identifyStrings.contains(normalizeIdentifyString(pluginYml.get("identify-string")))) {
                 matchingJars.add(file);
             }
         }
@@ -2120,6 +2136,12 @@ public class PluginInstallUtils {
             // could not move the module's JAR back: the only copies are in staging, and a journal
             // there would restore one (Codex review r8).
             clearStagingOf(name);
+            if (moduleUnloaded && !unreadableJars.isEmpty()) {
+                // The module was loaded from somewhere, and a JAR here cannot say whether it is the
+                // one. Reporting it beats reporting that the module has no JAR: once the file is
+                // readable again it loads the module back (Codex review r21).
+                throw unreadableJarsMayBeThisModules(name, unreadableJars);
+            }
             return noJarFound(folder, name, moduleUnloaded);
         }
         // Delete every matching jar, not only the first one listed (review WR-02): a second jar of
@@ -2254,20 +2276,48 @@ public class PluginInstallUtils {
     }
 
     /**
-     * The {@code plugin.yml} {@code name} declared by the JAR at {@code file}.
+     * The {@code plugin.yml} scalars of the JAR at {@code file}.
      *
-     * @return the name, or {@code null} when the file is not a readable JAR with a {@code plugin.yml}
+     * @return the scalars, or {@code null} when the file is not a readable JAR with a
+     *         {@code plugin.yml} -- which is not the same as an empty map, because a JAR that
+     *         cannot be read may still be a module's
      */
-    private static String moduleNameOf(File file) {
+    private static Map<String, String> pluginYmlOf(File file) {
         if (!file.isFile() || !file.getName().endsWith(".jar")) {
             return null;
         }
         try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(file)) {
-            return readPluginYmlScalars(jarFile).get("name");
+            return readPluginYmlScalars(jarFile);
         } catch (IOException | SecurityException e) {
-            LOGGER.log(Level.FINE, "Skipping unreadable JAR while looking for a module's JARs: " + file, e);
+            LOGGER.log(Level.FINE, "Could not read the plugin.yml of " + file, e);
             return null;
         }
+    }
+
+    /** The normalised identify-strings of the loaded modules an uninstall is removing. */
+    private static Set<String> identifyStringsOf(List<UltiToolsPlugin> modules) {
+        Set<String> keys = new java.util.HashSet<>();
+        for (UltiToolsPlugin module : modules) {
+            String key = normalizeIdentifyString(module.getIdentifyString());
+            if (key != null) {
+                keys.add(key);
+            }
+        }
+        return keys;
+    }
+
+    /** The failure reported when a module was unloaded and only unreadable JARs could be its own. */
+    private static FileSystemException unreadableJarsMayBeThisModules(String name, List<File> unreadable) {
+        FileSystemException failure = null;
+        for (File jar : unreadable) {
+            FileSystemException next = new FileSystemException(jar.getAbsolutePath(), null,
+                    "could not be read, so it cannot be ruled out as a JAR of module " + name
+                            + "; it loads the module again once it is readable");
+            failure = firstOrSuppressed(failure, next);
+        }
+        LOGGER.severe("Module " + name + " was unloaded, but no JAR here could be identified as its own and "
+                + unreadable.size() + " JAR(s) could not be read; they are reported rather than deleted");
+        return failure;
     }
 
     /**
