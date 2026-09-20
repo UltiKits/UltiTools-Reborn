@@ -671,6 +671,54 @@ class PluginInstallUtilsUninstallTest {
     }
 
     @Test
+    @DisplayName("a symbolic link to a real module JAR is followed, as the module loader follows it")
+    void resolvableJarSymlink_isReadAndDeleted() throws Exception {
+        Assumptions.assumeTrue(Files.getFileStore(pluginsFolder.toPath()).supportsFileAttributeView("posix"),
+                "needs a file system that supports symbolic links");
+        File target = new File(dataFolder, "elsewhere-" + MODULE_NAME + "-1.0.0.jar");
+        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(target))) {
+            out.putNextEntry(new JarEntry("plugin.yml"));
+            out.write(("name: " + MODULE_NAME + "\nversion: 1.0.0\n").getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+        Path link = new File(pluginsFolder, MODULE_NAME + "-1.0.0.jar").toPath();
+        Files.createSymbolicLink(link, target.toPath());
+
+        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+
+        assertThat(link.toFile())
+                .as("PluginManager#init opens this through new JarFile, so an uninstall that will not "
+                        + "read it leaves a JAR that loads the module again")
+                .doesNotExist();
+        assertThat(report.deletedFiles()).containsExactly(link.toFile().getAbsolutePath());
+        assertThat(report.undeterminedEntries()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("two loaded modules from one JAR: the uninstall refuses before it unloads anything")
+    void twoModulesSharingOneJar_refuseBeforeUnloading() throws IOException {
+        UltiToolsPlugin target = mock(UltiToolsPlugin.class);
+        when(target.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(target).unregisterSelf();
+        UltiToolsPlugin other = mock(UltiToolsPlugin.class);
+        when(other.getPluginName()).thenReturn("SecondModule");
+        doCallRealMethod().when(other).unregisterSelf();
+        pluginManager.getPluginList().add(target);
+        pluginManager.getPluginList().add(other);
+        // Both module classes packaged in one JAR, which PluginManager.register makes possible.
+        File shared = writeModuleJar(MODULE_NAME);
+
+        Throwable thrown = catchThrowable(() -> uninstallReporting(MODULE_NAME, module -> shared));
+
+        assertThat(thrown).isInstanceOf(PluginInstallUtils.UninstallRefusedException.class);
+        assertThat(thrown).hasMessageContaining(MODULE_NAME).hasMessageContaining("SecondModule");
+        assertThat(pluginManager.getPluginList())
+                .as("refusing after the unload would change the loaded state and report no JAR outcome")
+                .containsExactly(target, other);
+        assertThat(shared).exists();
+    }
+
+    @Test
     @DisplayName("states A-D: what an entry declares decides it, not what it is called")
     void whatAnEntryDeclaresDecidesIt_notWhatItIsCalled() throws IOException {
         File jar = writeModuleJar(MODULE_NAME);
