@@ -649,9 +649,11 @@ public class PluginInstallUtils {
             // file that says nothing into one that says no.
             config.load(reader);
             String declared = config.getString("name");
-            if (declared == null) {
-                // A plugin.yml with no name: key carries exactly as much about which module this
-                // is as no plugin.yml at all, which is nothing (gate 1, WR-01).
+            if (declared == null || declared.trim().isEmpty()) {
+                // A plugin.yml with no name: key -- or one whose name is blank -- carries exactly as
+                // much about which module this is as no plugin.yml at all, which is nothing (gate 1,
+                // WR-01, and its completion). A blank name must never become a key either: every
+                // other blank-named archive would then match it.
                 return new ArchiveIdentity(EntryState.UNDETERMINED, null);
             }
             return new ArchiveIdentity(EntryState.NOT_THIS_MODULES, declared);
@@ -695,6 +697,23 @@ public class PluginInstallUtils {
          * file declares no {@code name:}. Unknown is not "no".
          */
         UNDETERMINED
+    }
+
+    /**
+     * Raised when the name the operator typed could be more than one loaded module's, so the
+     * uninstall changed nothing.
+     *
+     * <p>Only reachable when no loaded module answers to the name by its runtime name and several
+     * modules' JARs declare it. Choosing one of them would delete a module the operator did not
+     * name; a destructive command with two possible targets stops instead.
+     */
+    @ApiStatus.Internal
+    public static final class AmbiguousModuleNameException extends IllegalStateException {
+        private static final long serialVersionUID = 1L;
+
+        private AmbiguousModuleNameException(String message) {
+            super(message);
+        }
     }
 
     /**
@@ -925,6 +944,62 @@ public class PluginInstallUtils {
     }
 
     /**
+     * Moves the instances the argument names from {@code others} into {@code loaded}.
+     *
+     * <p>The two namespaces are asked in order, never together. A runtime-name match answers the
+     * question outright: if any loaded module answers to the name that was typed, that is the
+     * answer and no declared-name lookup runs beside it -- asking both at once made one module's
+     * runtime name and another's declared name equally good, and unloaded both.
+     *
+     * <p>Only when nothing answers by runtime name is the other namespace consulted, because
+     * naming a module by what its JAR declares must still work (gate 1, BL-01). If more than one
+     * module answers that way, the uninstall refuses and names the candidates rather than choosing:
+     * this deletes files, and a destructive command with two possible targets must stop.
+     *
+     * @param requested the operator's argument
+     * @param loaded    collects the instances it names
+     * @param others    every loaded instance; the chosen ones are moved out of it
+     * @param declared  what each instance's JAR declares
+     */
+    private static void chooseTargets(String requested, List<UltiToolsPlugin> loaded,
+                                      List<UltiToolsPlugin> others, Map<UltiToolsPlugin, String> declared) {
+        List<UltiToolsPlugin> byRuntimeName = new ArrayList<>();
+        List<UltiToolsPlugin> byDeclaredName = new ArrayList<>();
+        for (UltiToolsPlugin plugin : others) {
+            if (requested.equals(plugin.getPluginName())) {
+                byRuntimeName.add(plugin);
+            } else if (requested.equals(declared.get(plugin))) {
+                byDeclaredName.add(plugin);
+            }
+        }
+        List<UltiToolsPlugin> chosen = byRuntimeName.isEmpty() ? byDeclaredName : byRuntimeName;
+        if (byRuntimeName.isEmpty()) {
+            refuseIfAmbiguous(requested, byDeclaredName);
+        }
+        loaded.addAll(chosen);
+        others.removeAll(chosen);
+    }
+
+    /**
+     * Refuses when more than one module answers to a declared name.
+     *
+     * @param requested the operator's argument
+     * @param candidates the loaded modules whose JARs declare it
+     */
+    private static void refuseIfAmbiguous(String requested, List<UltiToolsPlugin> candidates) {
+        Set<String> names = new java.util.LinkedHashSet<>();
+        for (UltiToolsPlugin candidate : candidates) {
+            names.add(candidate.getPluginName());
+        }
+        if (names.size() > 1) {
+            throw new AmbiguousModuleNameException("Refusing to uninstall " + requested
+                    + ": it is not the runtime name of any loaded module, and the JARs of "
+                    + String.join(", ", names) + " all declare it. Name one of those instead;"
+                    + " nothing was changed.");
+        }
+    }
+
+    /**
      * Everything later decisions need about which module this is, resolved once.
      *
      * <p>Two identity namespaces meet here and are reconciled in this one place: a module's runtime
@@ -983,7 +1058,8 @@ public class PluginInstallUtils {
         List<UltiToolsPlugin> others = new ArrayList<>();
         Map<UltiToolsPlugin, File> jars = new java.util.LinkedHashMap<>();
         Map<UltiToolsPlugin, String> declared = new java.util.LinkedHashMap<>();
-        readLoadedModules(requested, pluginManager, codeSource, loaded, others, jars, declared);
+        readLoadedModules(pluginManager, codeSource, others, jars, declared);
+        chooseTargets(requested, loaded, others, declared);
         Set<String> ownJars = new java.util.HashSet<>();
         Set<String> keys = new java.util.LinkedHashSet<>();
         keys.add(requested);
@@ -1009,45 +1085,36 @@ public class PluginInstallUtils {
             keys.remove(plugin.getPluginName());
             keys.remove(declared.get(plugin));
         }
-        if (keys.isEmpty()) {
-            // Everything the argument could have meant belongs to a module that is not the target.
-            keys.add(requested);
-        }
+        // No re-adding what the loop above dropped: a key another loaded module owns stays dropped
+        // even when it was the argument itself. The target's own JAR is still found through its
+        // code source, and matching other entries on a name a running module answers to would take
+        // that module's JAR (gate 1, BL-02).
         return new ModuleIdentity(requested, loaded, ownJars, keys, bystanderJars, bystanderOf, !loaded.isEmpty());
     }
 
     /**
-     * Reads every loaded module once -- which JAR it came from and what that JAR declares -- and
-     * sorts the instances into the ones the argument names and the ones it does not.
+     * Reads every loaded module once: which JAR it came from, and what that JAR declares.
      *
      * <p>Read before anything is unloaded: afterwards the instance and its class loader may be
-     * gone, and with them the only authoritative answer to "which JAR is this module's".
+     * gone, and with them the only authoritative answer to "which JAR is this module's". Which of
+     * them the argument names is decided afterwards, by {@link #chooseTargets}.
      *
-     * @param requested     the operator's argument
      * @param pluginManager the manager that owns the plugin list
      * @param codeSource    how to ask a loaded module which JAR it came from
-     * @param loaded        collects the instances the argument names
-     * @param others        collects every other loaded instance
+     * @param others        collects every loaded instance, before any is chosen as a target
      * @param jars          collects each instance's code-source JAR
      * @param declared      collects what each instance's JAR declares
      */
-    @SuppressWarnings("PMD.ExcessiveParameterList") // one pass over the plugin list, filling four views of it
-    private static void readLoadedModules(String requested, PluginManager pluginManager,
+    private static void readLoadedModules(PluginManager pluginManager,
                                           java.util.function.Function<UltiToolsPlugin, File> codeSource,
-                                          List<UltiToolsPlugin> loaded, List<UltiToolsPlugin> others,
+                                          List<UltiToolsPlugin> others,
                                           Map<UltiToolsPlugin, File> jars, Map<UltiToolsPlugin, String> declared) {
         for (UltiToolsPlugin plugin : pluginManager.getPluginList()) {
             File jar = codeSource.apply(plugin);
             jars.put(plugin, jar);
             String name = jar == null ? null : readArchive(jar).declaredName;
             declared.put(plugin, name);
-            // Either namespace names the module: its runtime name, or what the JAR it was loaded
-            // from declares (gate 1, BL-01).
-            if (requested.equals(plugin.getPluginName()) || requested.equals(name)) {
-                loaded.add(plugin);
-            } else {
-                others.add(plugin);
-            }
+            others.add(plugin);
         }
     }
 

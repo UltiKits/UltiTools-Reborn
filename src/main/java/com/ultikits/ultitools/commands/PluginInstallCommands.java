@@ -210,6 +210,10 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         sender.sendMessage(stringBuilder.toString());
     }
 
+    // Deliberately not @RunAsync, though it opens one archive per entry of the modules folder:
+    // PluginManager#unregister must run on the main thread, and the synchronous path is what carries
+    // the entries that could not be identified out of every exit, including the failing ones. With
+    // a handful of modules the scan costs a fraction of a tick (gate 1, IN-12).
     @CmdMapping(format = "uninstall <plugin>")
     public void uninstallPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin) {
         try {
@@ -230,6 +234,10 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             sendUndeterminedEntries(sender, report);
         } catch (java.nio.file.AccessDeniedException e) {
             sendUnlistableFolder(sender, e.getFile());
+        } catch (PluginInstallUtils.AmbiguousModuleNameException e) {
+            // Two loaded modules could be meant. A destructive command with two possible targets
+            // stops and says which, rather than choosing one of them.
+            sender.sendMessage(ChatColor.RED + e.getMessage());
         } catch (PluginInstallUtils.ModuleUnloadFailedException e) {
             // The module's own unload threw. It has still been removed from the loaded modules and
             // its jars still deleted where possible: report both, so the operator knows whether it
