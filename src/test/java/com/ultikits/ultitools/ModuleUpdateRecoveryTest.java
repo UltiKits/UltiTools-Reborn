@@ -422,7 +422,7 @@ class ModuleUpdateRecoveryTest {
 
     @Test
     @DisplayName("codex r6 P2: a journal marked committed never restores, even once the new JAR is gone again")
-    void committedJournal_restoresNothingAfterTheNewVersionWasRemoved() throws IOException {
+    void journalAwaitingConfirmation_restoresNothingAfterTheNewVersionWasRemoved() throws IOException {
         File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
         // The transaction installed its new version and then failed to delete its own files; the
         // operator uninstalled the module afterwards, so the target is gone again.
@@ -443,7 +443,7 @@ class ModuleUpdateRecoveryTest {
     private File writeCommittedJournal(String transaction, String process, String module, String target,
                                        String... originalAndAsideNames) throws IOException {
         File journal = writeJournal(transaction, process, module, target, originalAndAsideNames);
-        String text = new String(Files.readAllBytes(journal.toPath()), StandardCharsets.UTF_8) + "phase=committed\n";
+        String text = new String(Files.readAllBytes(journal.toPath()), StandardCharsets.UTF_8) + "phase=awaiting-boot-confirmation\n";
         Files.write(journal.toPath(), text.getBytes(StandardCharsets.UTF_8));
         return journal;
     }
@@ -479,7 +479,7 @@ class ModuleUpdateRecoveryTest {
                 .exists();
         assertThat(aside).doesNotExist();
         assertThat(journal).doesNotExist();
-        assertThat(warnings())
+        assertThat(messagesAtLeastWarning())
                 .as("the operator must be told the module is absent now and back at the next restart")
                 .anyMatch(m -> m.contains("Fixture") && m.contains("1.0.0") && m.contains("restart"));
     }
@@ -550,6 +550,12 @@ class ModuleUpdateRecoveryTest {
                 .getDeclaredMethod("currentProcessIdentity");
         method.setAccessible(true);
         return (String) method.invoke(null);
+    }
+
+    /** Every message at WARNING or above: a rollback is reported at SEVERE. */
+    private List<String> messagesAtLeastWarning() {
+        return logs.stream().filter(r -> r.getLevel().intValue() >= Level.WARNING.intValue())
+                .map(LogRecord::getMessage).collect(Collectors.toList());
     }
 
     private List<String> warnings() {

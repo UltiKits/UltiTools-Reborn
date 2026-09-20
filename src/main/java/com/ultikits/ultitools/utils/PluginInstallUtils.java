@@ -98,8 +98,12 @@ public class PluginInstallUtils {
     /** Journal key saying how far the transaction got; absent means it was still moving JARs. */
     private static final String JOURNAL_PHASE_KEY = "phase";
 
-    /** Journal phase written once the new version is in the modules folder: never restore after this. */
-    private static final String JOURNAL_PHASE_COMMITTED = "committed";
+    /**
+     * Journal phase written once the new version is in the modules folder. The transaction stops
+     * there: the old JAR and this journal stay until a boot has seen whether the module loads, and
+     * {@link #confirmUpdatesAfterBoot} then commits or rolls back.
+     */
+    private static final String JOURNAL_PHASE_AWAITING_BOOT = "awaiting-boot-confirmation";
 
     /**
      * Normalised identify strings of the modules an update or an uninstall is changing right now.
@@ -933,19 +937,13 @@ public class PluginInstallUtils {
             return rollBack(operations, moveInFailed, movedAside, staged, journal, stagingFolder, pluginsFolder);
         }
 
-        // Step 5b: the new version is in the modules folder, so the transaction is committed. A
-        // journal that survives from here on must never move an old JAR back, whatever the modules
-        // folder looks like later -- an uninstall may have removed the new version since (Codex
-        // review r6). Recording that is what tells the two apart.
-        markJournalCommitted(journal, identifyString);
-
-        // Step 6: delete the set-aside JARs; any that remain are outside the modules folder and inert.
-        List<String> leftovers = deleteSetAsideJars(operations, movedAside, identifyString);
-        // The transaction has reached its final state: the journal must go, so the next boot treats
-        // any set-aside JAR still here as a leftover rather than restoring it (review r5 WR-01).
-        deleteJournal(journal);
-        return new UpdateOutcome(UpdateOutcome.Status.UPDATED, Collections.<String>emptyList(),
-                Collections.<String>emptyList(), leftovers);
+        // Step 6: the new version is in the modules folder, and that is as far as an update can
+        // tell. Whether a module loads from it is not predicted here -- the next boot observes it.
+        // So the old JARs stay where they are and the journal stays with them, marked as awaiting
+        // that boot: confirmUpdatesAfterBoot deletes them once the module has loaded, or puts the
+        // old version back if it has not.
+        markJournalAwaitingBoot(journal, identifyString);
+        return UpdateOutcome.of(UpdateOutcome.Status.UPDATED);
     }
 
     /**
@@ -1226,22 +1224,21 @@ public class PluginInstallUtils {
     }
 
     /**
-     * Appends the committed marker to a journal whose new version is installed. A failure to write
-     * it is not a failed update -- the transaction is complete, and recovery still has the target
-     * check -- but it is logged, because the marker is what keeps a later uninstall of the module
-     * from being undone by recovery.
+     * Marks a journal as waiting for the next boot to confirm the update it installed. A failure
+     * to write the marker is not a failed update -- the new version is in place -- but it is
+     * logged, and the journal is then deleted so the next boot reads no half-marked record.
      */
-    private static void markJournalCommitted(Path journal, String identifyString) {
+    private static void markJournalAwaitingBoot(Path journal, String identifyString) {
         try {
             java.util.Properties entries = new java.util.Properties();
             try (java.io.Reader reader = Files.newBufferedReader(journal, java.nio.charset.StandardCharsets.UTF_8)) {
                 entries.load(reader);
             }
-            entries.setProperty(JOURNAL_PHASE_KEY, JOURNAL_PHASE_COMMITTED);
+            entries.setProperty(JOURNAL_PHASE_KEY, JOURNAL_PHASE_AWAITING_BOOT);
             writeProperties(journal, entries);
         } catch (IOException | SecurityException e) {
             LOGGER.log(Level.WARNING, "Could not record that the update of " + identifyString
-                    + " is committed in " + journal + "; the update itself is complete", e);
+                    + " is waiting for the next boot in " + journal + "; the update itself is complete", e);
             deleteJournal(journal);
             if (Files.exists(journal, LinkOption.NOFOLLOW_LINKS)) {
                 LOGGER.severe("The update of " + identifyString + " is complete, but its journal " + journal
@@ -1288,6 +1285,145 @@ public class PluginInstallUtils {
                 Arrays.asList(stagingFolder.getAbsolutePath(), pluginsFolder.getAbsolutePath()),
                 Collections.<String>emptyList(), Collections.<String>emptyList());
         return cause == null ? outcome : outcome.withFailure(cause);
+    }
+
+    /** Whether a journal records an update whose new version is installed and awaiting a boot. */
+    private static boolean awaitingBootConfirmation(java.util.Properties entries) {
+        return JOURNAL_PHASE_AWAITING_BOOT.equals(entries.getProperty(JOURNAL_PHASE_KEY));
+    }
+
+    /**
+     * Confirms or rolls back the updates that installed a new version and were waiting for a boot
+     * to say whether a module loads from it.
+     * <p>
+     * This runs after the modules have loaded, and asks one question of each waiting journal: is
+     * the module it names among the loaded ones? If it is, the update is confirmed -- the old JARs
+     * and the journal go. If it is not, the installed JAR is deleted, the old one is moved back to
+     * the path it came from, and the operator is told: the module is absent for this session and
+     * back at the next restart.
+     * <p>
+     * The restored module is deliberately not loaded in flight. Registering a module after the load
+     * phase has its own hazards, and the restart boundary is the honest one to state.
+     * <p>
+     * Nothing here may break boot: every journal is isolated, and the method declares no checked
+     * exception and swallows what it cannot handle, exactly as {@link #recoverInterruptedUpdates}
+     * does at the other end of the boot.
+     *
+     * @param dataFolder    the framework's data folder, parent of the staging directory
+     * @param loadedModules the runtime names of the modules that loaded in this boot
+     */
+    @ApiStatus.Internal
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // deliberate barrier: this must never break boot
+    public static void confirmUpdatesAfterBoot(File dataFolder, java.util.Collection<String> loadedModules) {
+        if (dataFolder == null) {
+            return;
+        }
+        File stagingFolder = new File(dataFolder, STAGING_DIRECTORY_NAME);
+        File[] journals = stagingFolder.listFiles((f) -> f.getName().endsWith(JOURNAL_SUFFIX));
+        if (journals == null) {
+            return;
+        }
+        Arrays.sort(journals);
+        Set<String> loaded = new java.util.HashSet<>();
+        if (loadedModules != null) {
+            loaded.addAll(loadedModules);
+        }
+        File pluginsFolder = new File(dataFolder, "plugins");
+        for (File journalFile : journals) {
+            try {
+                confirmOneUpdate(journalFile, pluginsFolder, stagingFolder, loaded);
+            } catch (IOException | RuntimeException e) {
+                LOGGER.log(Level.WARNING, "Could not confirm the module update recorded in "
+                        + journalFile.getAbsolutePath() + "; it was left in place", e);
+            }
+        }
+    }
+
+    /**
+     * Confirms or rolls back one waiting journal.
+     *
+     * @param journalFile   the journal in the staging directory
+     * @param pluginsFolder the modules folder
+     * @param stagingFolder the staging directory
+     * @param loaded        the runtime names of the modules that loaded in this boot
+     * @throws IOException when the journal cannot be read
+     */
+    private static void confirmOneUpdate(File journalFile, File pluginsFolder, File stagingFolder,
+                                         Set<String> loaded) throws IOException {
+        java.util.Properties entries = new java.util.Properties();
+        try (java.io.Reader reader = Files.newBufferedReader(journalFile.toPath(),
+                java.nio.charset.StandardCharsets.UTF_8)) {
+            entries.load(reader);
+        }
+        if (!JOURNAL_FORMAT.equals(entries.getProperty("format")) || !awaitingBootConfirmation(entries)) {
+            // Either not this hook's business (a transaction still moving JARs) or unreadable as a
+            // journal; recoverInterruptedUpdates owns the first case and reports the second.
+            return;
+        }
+        String name = entries.getProperty("name");
+        String target = entries.getProperty("target");
+        if (name == null || !isPlainFileName(target)) {
+            LOGGER.warning("Module update journal " + journalFile.getAbsolutePath()
+                    + " names no module or no installed file and was left in place");
+            return;
+        }
+        List<String[]> pairs = journalPairs(entries, journalFile, new java.util.concurrent.atomic.AtomicBoolean());
+        if (loaded.contains(name)) {
+            confirmUpdate(journalFile, stagingFolder, name, pairs);
+        } else {
+            rollBackUnloadableUpdate(journalFile, pluginsFolder, stagingFolder, name, target, pairs);
+        }
+    }
+
+    /** The module loaded from its new version: the old JARs and the journal are no longer needed. */
+    private static void confirmUpdate(File journalFile, File stagingFolder, String name, List<String[]> pairs) {
+        for (String[] pair : pairs) {
+            File setAside = new File(stagingFolder, pair[1]);
+            FileSystemException failure = deleteStagedFile(setAside);
+            if (failure != null) {
+                LOGGER.warning("Module " + name + " loaded from its update, but " + setAside.getAbsolutePath()
+                        + " could not be deleted; it is outside the modules folder and never loads");
+            }
+        }
+        deleteJournal(journalFile.toPath());
+        LOGGER.info("Update of module " + name + " confirmed: it loaded from its new version");
+    }
+
+    /**
+     * The module did not load from its new version: the version that did load is put back, and the
+     * operator is told what happened and when the module returns.
+     */
+    private static void rollBackUnloadableUpdate(File journalFile, File pluginsFolder, File stagingFolder,
+                                                 String name, String target, List<String[]> pairs) {
+        Path installed = pluginsFolder.toPath().resolve(target);
+        boolean rolledBack = false;
+        try {
+            Files.deleteIfExists(installed);
+        } catch (IOException | SecurityException e) {
+            LOGGER.log(Level.SEVERE, "Module " + name + " did not load from " + installed.toAbsolutePath()
+                    + ", which could not be deleted either; delete it by hand", e);
+            return;
+        }
+        String restoredVersion = null;
+        for (String[] pair : pairs) {
+            File setAside = new File(stagingFolder, pair[1]);
+            Path original = pluginsFolder.toPath().resolve(pair[0]);
+            if (restoreSetAsideJar(setAside, original, pluginsFolder, name)) {
+                rolledBack = true;
+                String version = readModuleVersion(original.toFile());
+                restoredVersion = version == null ? restoredVersion : version;
+            }
+        }
+        if (!rolledBack) {
+            LOGGER.severe("Module " + name + " did not load from its update, and no previous version could be"
+                    + " restored; the module is not installed. Its journal " + journalFile.getAbsolutePath()
+                    + " was kept.");
+            return;
+        }
+        deleteJournal(journalFile.toPath());
+        LOGGER.severe("Module " + name + " did not load from its update and has been rolled back to version "
+                + (restoredVersion == null ? "its previous release" : restoredVersion)
+                + ". The module is NOT available in this session; restart the server to load it again.");
     }
 
     /**
@@ -1411,7 +1547,7 @@ public class PluginInstallUtils {
         List<String[]> pairs = journalPairs(entries, journalFile, skippedAPair);
         File stagingFolder = journalFile.getParentFile();
         Path targetPath = pluginsFolder.toPath().resolve(target);
-        boolean alreadyInstalled = JOURNAL_PHASE_COMMITTED.equals(entries.getProperty(JOURNAL_PHASE_KEY))
+        boolean alreadyInstalled = awaitingBootConfirmation(entries)
                 || newVersionWasInstalled(targetPath, module, journalFile);
         boolean settled = !skippedAPair.get();
         for (String[] pair : pairs) {

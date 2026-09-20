@@ -394,15 +394,13 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         UltiTools ultiTools = UltiTools.getInstance();
         switch (outcome.getStatus()) {
             case UPDATED:
-                // Inside /upm update all the restart instruction waits for the summary: restarting on a
+                // The update installs the new version and stops; the next start decides whether it
+                // stays, because that is where a module either loads or does not. Inside
+                // /upm update all the restart instruction waits for the summary: restarting on a
                 // per-module line kills the loop inside a later module's update (review r4 WR-01).
                 sender.sendMessage(ChatColor.GREEN + (partOfUpdateAll
-                        ? ultiTools.i18n("更新成功。")
-                        : ultiTools.i18n("更新成功！请重启服务器以应用更新。")));
-                if (!outcome.getLeftoverFiles().isEmpty()) {
-                    sender.sendMessage(ChatColor.YELLOW + String.format(ultiTools.i18n("以下已移出模块目录的旧版本 JAR 未能删除，它们不会被加载，可手动删除：%s"),
-                            String.join(", ", outcome.getLeftoverFiles())));
-                }
+                        ? ultiTools.i18n("更新已安装。")
+                        : ultiTools.i18n("更新已安装！请重启服务器：重启时会确认该模块能否加载，加载失败会自动回滚到原版本。")));
                 return;
             case ALREADY_IN_PROGRESS:
                 sender.sendMessage(ChatColor.RED + ultiTools.i18n("更新失败！该模块正在进行另一项更新或卸载，本次未做任何更改。"));

@@ -353,6 +353,31 @@ public final class UltiTools extends JavaPlugin implements Localized {
             throw new PluginModuleException(ErrorCode.PLUGIN_LOAD_FAILED,
                     "Failed to initialize plugin module loading", e);
         }
+        confirmModuleUpdates();
+    }
+
+    /**
+     * Resolves the updates that were waiting for this boot, now that the modules have loaded.
+     * <p>
+     * An update installs its new version and stops; whether a module loads from it is not
+     * predicted, it is observed here. A module that loaded confirms its update, and the version it
+     * replaced is deleted; one that did not is rolled back to the version that did load, and the
+     * operator is told it returns at the next restart.
+     * <p>
+     * Isolated like the recovery hook at the other end of the boot: a failure here is logged and
+     * the server continues.
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // a failure confirming an update must not stop the server
+    private void confirmModuleUpdates() {
+        try {
+            List<String> loaded = new ArrayList<>();
+            for (com.ultikits.ultitools.abstracts.UltiToolsPlugin plugin : pluginManager.getPluginList()) {
+                loaded.add(plugin.getPluginName());
+            }
+            PluginInstallUtils.confirmUpdatesAfterBoot(getDataFolder(), loaded);
+        } catch (RuntimeException | LinkageError e) {
+            MODULE_SCAN_LOGGER.log(Level.WARNING, "[UltiTools-API] Could not confirm module updates", e);
+        }
     }
 
     /**

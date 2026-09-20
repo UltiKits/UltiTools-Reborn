@@ -133,7 +133,9 @@ class PluginInstallUtilsUpdateTransactionTest {
                         + "so no name or file-identity comparison can mistake it for an old jar")
                 .containsExactly(IDENTIFY_STRING + "-1.0.0.jar");
         assertThat(jarEntries()).containsExactly(NEW_JAR_NAME);
-        assertThat(stagingEntries()).as("nothing is left in staging").isEmpty();
+        assertThat(stagingEntries())
+                .as("the staged download is gone; the journal and the old JAR wait for the next boot")
+                .noneMatch(name -> name.endsWith(".part"));
     }
 
     @Test
@@ -197,22 +199,6 @@ class PluginInstallUtilsUpdateTransactionTest {
                 .as("review r4 WR-02: the original path, with its original file name, must be reported; "
                         + "moving the .old file back under its staging name leaves it unloadable")
                 .containsExactly(new File(pluginsFolder, IDENTIFY_STRING + "-1.0.0.jar").getAbsolutePath());
-    }
-
-    @Test
-    @DisplayName("a set-aside jar that cannot be deleted after a successful update is a leftover outside the modules folder, not a failure")
-    void setAsideJarCannotBeDeleted_isReportedAsLeftoverOfASuccessfulUpdate() throws IOException {
-        File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
-        operations.failDeleteOfSetAside = true;
-
-        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
-
-        assertThat(outcome.getStatus()).isEqualTo(Status.UPDATED);
-        assertThat(outcome.getLeftoverFiles()).hasSize(1);
-        assertThat(new File(outcome.getLeftoverFiles().get(0)).getParentFile()).isEqualTo(stagingFolder);
-        assertThat(oldJar).as("the old jar is out of the modules folder, so it never loads").doesNotExist();
-        assertThat(new File(pluginsFolder, NEW_JAR_NAME)).hasBinaryContent(newJarBytes);
-        assertThat(jarEntries()).containsExactly(NEW_JAR_NAME);
     }
 
     @Test

@@ -652,21 +652,9 @@ class PluginInstallCommandsTest {
 
         String reply = updateReply("TestPlugin");
 
-        assertThat(reply).contains("更新成功").doesNotContain("失败");
-    }
-
-    @Test
-    @DisplayName("review r3: a successful update with set-aside jars left in staging adds a note naming them, not a failure")
-    void updateUpdatedWithLeftovers_repliesSuccessAndNamesTheLeftover() {
-        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
-        stubModuleUpdates("TestPlugin", "test-plugin");
-        String leftover = "/srv/minecraft/plugins/UltiTools/.upm-staging/test-plugin-1.0.0.jar.x.old";
-        stubUpdateOutcome("test-plugin", outcome(PluginInstallUtils.UpdateOutcome.Status.UPDATED,
-                Collections.<String>emptyList(), Collections.<String>emptyList(), Collections.singletonList(leftover)));
-
-        String reply = updateReply("TestPlugin");
-
-        assertThat(reply).contains("更新成功").contains(leftover).doesNotContain("失败");
+        // The success line mentions what happens if the module fails to load at the restart, so the
+        // check is that no failure is *reported*, not that the word never appears.
+        assertThat(reply).contains("更新已安装").doesNotContain("更新失败");
     }
 
     @Test
@@ -904,6 +892,23 @@ class PluginInstallCommandsTest {
 
         List<String> messages = drainMessages();
         assertThat(messages.get(messages.size() - 1)).contains("0个成功，1个失败，1个跳过");
+    }
+
+    @Test
+    @DisplayName("redesign: a successful update says the restart confirms it, and that a failed load rolls back")
+    void updateSuccess_saysTheRestartConfirmsIt() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        stubModuleUpdates("TestPlugin", "test-plugin");
+        stubUpdateOutcome("test-plugin", outcome(PluginInstallUtils.UpdateOutcome.Status.UPDATED,
+                Collections.<String>emptyList(), Collections.<String>emptyList(), Collections.<String>emptyList()));
+
+        String reply = updateReply("TestPlugin");
+
+        assertThat(reply)
+                .as("the operator must know the restart decides it, and what happens if the module does not load")
+                .contains("重启")
+                .contains("确认")
+                .contains("回滚");
     }
 
     @Test

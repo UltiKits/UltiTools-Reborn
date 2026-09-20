@@ -122,6 +122,8 @@
   "配置编辑Websocket服务初始化失败！": "Config-editor WebSocket service failed to initialise!",
   "Module '%s' reloaded.": "Module '%s' reloaded.",
   "更新成功。": "Update successful.",
+  "更新已安装。": "Update installed.",
+  "更新已安装！请重启服务器：重启时会确认该模块能否加载，加载失败会自动回滚到原版本。": "Update installed! Please restart the server: the restart confirms whether the module loads, and rolls back to the previous version if it does not.",
   "更新失败！该模块正在进行另一项更新或卸载，本次未做任何更改。": "Update failed! Another update or uninstall of this module is running; nothing was changed.",
   "更新失败！模块目录中已有比最新目录版本 %s 更新的 JAR：%s（版本 %s），本次未做任何更改。": "Update failed! The modules folder already holds a JAR newer than the catalogue's latest version %s: %s (version %s); nothing was changed.",
   "更新失败！无法准备暂存目录 %s，本次未做任何更改。": "Update failed! Could not prepare the staging folder %s; nothing was changed.",
