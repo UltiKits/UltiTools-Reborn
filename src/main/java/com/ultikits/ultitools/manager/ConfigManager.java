@@ -337,6 +337,10 @@ public class ConfigManager {
      * operator's edit to its file made while the server was running survives the restart. Before
      * 6.3.0 every file was rewritten from memory and such edits were silently discarded.
      * <p>
+     * A configuration whose file failed to parse the last time it was read is never written: the
+     * framework does not know what that file holds, so overwriting it would destroy an operator's
+     * broken file. One WARNING per such file says so, and any in-memory change to it is not written.
+     * <p>
      * If an entity was changed in memory and its file was also changed on disk since that snapshot,
      * the in-memory state still wins and is written, and a WARNING names the file whose edits were
      * overwritten. The only caller is {@code UltiTools#onDisable()}; an explicit {@link
@@ -353,6 +357,10 @@ public class ConfigManager {
             for (AbstractConfigEntity config : configMap.values()) {
                 try {
                     synchronized (config) {
+                        if (config.isLastLoadUnparseable()) {
+                            warnUnparseableFileLeftAlone(config);
+                            continue;
+                        }
                         if (!config.isModifiedSinceSnapshot()) {
                             continue;
                         }
@@ -370,6 +378,22 @@ public class ConfigManager {
                 }
             }
         }
+    }
+
+    /**
+     * Logs that the shutdown save left a configuration file alone because the framework could not
+     * parse it the last time it read it (#510), and that any in-memory change to that configuration
+     * was therefore not written.
+     *
+     * @param config the entity that was skipped
+     */
+    private void warnUnparseableFileLeftAlone(AbstractConfigEntity config) {
+        UltiToolsPlugin owner = config.getUltiToolsPlugin();
+        File file = new File(owner.getResourceFolderPath(), config.getConfigFilePath());
+        UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration file "
+                + file.getAbsolutePath() + " could not be parsed the last time it was read, so it was left"
+                + " untouched and module " + owner.getPluginName() + "'s in-memory changes to this"
+                + " configuration were not saved. Fix the file, then reload or restart.");
     }
 
     /**

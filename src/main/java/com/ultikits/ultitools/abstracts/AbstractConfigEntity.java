@@ -40,27 +40,38 @@ import lombok.Getter;
 /**
  * Abstract class representing a configuration entity.
  * <p>
- * Precondition for subclasses (#363): the constructor must be cheap and free of side effects.
- * For any class declaring at least one {@code @ConfigEntry} field, every {@link
- * #validateFields()} call - reached from {@link #init(UltiToolsPlugin)}, {@link #reload()},
- * {@link #updateProperties(com.google.gson.JsonObject)}, and {@link
- * #validateProposedProperties(com.google.gson.JsonObject)} - constructs and discards a second,
- * throwaway instance of this class via {@link #ensureConstructable()} to prove the class still
- * supports one of the framework's two documented construction idioms (a class with zero {@code
- * @ConfigEntry} fields never reaches this call at all - {@link #validateFields()} returns before
- * it). That means every configuration load, every reload, and every panel write ATTEMPT -
- * accepted or refused - constructs this class one extra time; the construction happens before
- * the accept/refuse decision is made, not only when the write is ultimately accepted. A
- * constructor that opens a file, registers a listener, or otherwise does real work pays that
- * cost again on every one of those events, purely to be thrown away. The documented {@code
- * super(configFilePath)}-only idiom is unaffected - it is a single, trivial reflective call.
+ * Precondition for subclasses (#363, counts re-measured for #510): the constructor must be cheap
+ * and free of side effects. For any class declaring at least one {@code @ConfigEntry} field, the
+ * framework constructs and discards throwaway instances of this class on the paths below, and a
+ * constructor that opens a file, registers a listener, or otherwise does real work pays that cost
+ * again on every one of those events, purely to be thrown away:
+ * <ul>
+ * <li>{@link #validateFields()} - reached from {@link #init(UltiToolsPlugin)}, {@link #reload()},
+ * {@link #updateProperties(com.google.gson.JsonObject)} and {@link
+ * #validateProposedProperties(com.google.gson.JsonObject)} - constructs ONE instance via {@link
+ * #ensureConstructable()} to prove the class still supports one of the framework's two documented
+ * construction idioms. The construction happens before the accept/refuse decision, not only when a
+ * panel write is ultimately accepted.</li>
+ * <li>{@link #canonicalize(String)} constructs ONE instance, which it uses to read the text being
+ * canonicalized (see that method). It runs once in {@code takeSnapshot()} - that is, on every
+ * {@link #init(UltiToolsPlugin)}, {@link #reload()}, successful {@link #save()} and successful
+ * {@link #updateProperties(JsonObject)} - and once in {@link #isModifiedSinceSnapshot()}, the
+ * shutdown check.</li>
+ * </ul>
+ * Measured totals per operation: {@code init()} 2, {@code reload()} 2, a panel write 2, {@link
+ * #save()} 1, and the shutdown check 1 per configuration (2 when it goes on to save). {@link
+ * #save()} and the shutdown check construct nothing before 6.3.0 and are the two paths a module
+ * author is most likely to consider exempt. A class with zero {@code @ConfigEntry} fields
+ * constructs nothing on any of them. The documented {@code super(configFilePath)}-only idiom is
+ * unaffected - each construction is a single, trivial reflective call.
  * <p>
  * Saved-state snapshot (#510, since 6.3.0): every entity remembers what its file on disk holds as
  * of the last time the framework read or wrote it - after {@link #init(UltiToolsPlugin)} (including
  * a first-boot defaults write), after {@link #reload()}, after every successful {@link #save()},
  * and after every successful {@link #updateProperties(JsonObject)} - together with a SHA-256
- * fingerprint of the file at that same point. The snapshot is derived from the file's text only,
- * never from the fields, so no unwritten in-memory change can ever be recorded as saved. The
+ * fingerprint of the file at that same point. The snapshot is derived from the file's text, plus
+ * this class's declared defaults for keys the text does not contain, and never from this instance's
+ * fields, so no unwritten in-memory change can ever be recorded as saved. The
  * shutdown save ({@code ConfigManager#saveAll()}) writes only the entities for which {@link
  * #isModifiedSinceSnapshot()} is {@code true}, so an operator's edit to a file whose configuration
  * no module code changed survives a restart. An explicit {@link #save()} call still writes
@@ -73,6 +84,11 @@ import lombok.Getter;
  * holds across its check-then-save of this entity. A panel write arriving on the WebSocket thread
  * and the shutdown save therefore each see the other's whole effect or none of it. Field setters in
  * module code are not synchronized by the framework.
+ * <p>
+ * That monitor is held across file I/O and across the constructions listed above, so it is also a
+ * new direction of blocking: a panel write on the WebSocket thread holds it across validation, the
+ * write and the snapshot, and a module calling {@link #save()} on the server thread waits for that
+ * span. Both are bounded by small configuration files and by the cheap-constructor precondition.
  */
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Config binder writes/reads private @ConfigEntry fields -- see 08-GATE05-TRIAGE.md
 @Getter
@@ -99,6 +115,14 @@ public abstract class AbstractConfigEntity {
      */
     @Getter(AccessLevel.NONE)
     private volatile String savedFileFingerprint;
+    /**
+     * Whether the last attempt to read this configuration's file failed to parse (#510). While set,
+     * the framework does not know what the file holds, so {@link #isModifiedSinceSnapshot()} reports
+     * {@code false} and the shutdown save leaves the file alone rather than overwriting an operator's
+     * broken file with the in-memory state. Cleared by the next successful load or save.
+     */
+    @Getter(AccessLevel.NONE)
+    private volatile boolean lastLoadUnparseable;
 
     /**
      * Constructor for AbstractConfigEntity.
@@ -124,6 +148,9 @@ public abstract class AbstractConfigEntity {
         synchronized (this) {
             applyFieldsTo(config);
             config.save(new File(ultiToolsPlugin.getConfigFolder() + File.separator + configFilePath));
+            // #510: an explicit save is a caller's deliberate act and always writes, so the file now
+            // holds what the framework just wrote - whatever state it was in before.
+            lastLoadUnparseable = false;
             takeSnapshot();
         }
     }
@@ -131,7 +158,7 @@ public abstract class AbstractConfigEntity {
     /**
      * Copies every non-null {@code @ConfigEntry} field, serialized through its declared parser, onto
      * {@code target}. The one serialization path shared by {@link #save()}, {@link
-     * #renderSaveText()} and {@link #canonicalizeOnce(String)}, so the shutdown comparison renders
+     * #renderSaveText()} and {@link #canonicalizeOnce(String, AbstractConfigEntity)}, so the shutdown comparison renders
      * exactly what {@code save()} would write (#510).
      *
      * @param target the configuration to write the serialized field values into
@@ -181,8 +208,9 @@ public abstract class AbstractConfigEntity {
 
     /**
      * Brings a configuration text to the form this entity would give it after reading it and saving
-     * it again (#510): the text is parsed, a throwaway instance of this class loads every present
-     * {@code @ConfigEntry} key through its parser exactly as {@link #init(UltiToolsPlugin)} does
+     * it again (#510): the text is parsed, a throwaway instance of this class (one per call, see the
+     * construction counts in this class's own javadoc) loads every present {@code @ConfigEntry} key
+     * through its parser exactly as {@link #init(UltiToolsPlugin)} does
      * (absent keys keep that instance's declared defaults), and the instance's fields are applied back
      * onto the parsed text through {@link #applyFieldsTo(YamlConfiguration)}. Two passes make the
      * result stable, because a default filled in for an absent key by the first pass is re-read
@@ -199,16 +227,25 @@ public abstract class AbstractConfigEntity {
      * @return the canonical text, or {@code null} if {@code text} is {@code null} or cannot be parsed
      */
     private String canonicalize(String text) {
-        return canonicalizeOnce(canonicalizeOnce(text));
+        if (text == null) {
+            return null;
+        }
+        // One throwaway instance for both passes, not one each: pass one writes a value for every
+        // @ConfigEntry key, so pass two overwrites every field it reads and cannot see anything pass
+        // one left behind. Reusing it ACROSS calls would not be safe - the declared defaults it
+        // carries for absent keys are exactly what the comparison relies on.
+        AbstractConfigEntity probe = constructSibling();
+        return canonicalizeOnce(canonicalizeOnce(text, probe), probe);
     }
 
     /**
      * One pass of {@link #canonicalize(String)}.
      *
-     * @param text a YAML text, possibly {@code null}
+     * @param text  a YAML text, possibly {@code null}
+     * @param probe the throwaway instance this pass reads {@code text} into
      * @return the text after one read-and-render pass, or {@code null} if it cannot be parsed
      */
-    private String canonicalizeOnce(String text) {
+    private String canonicalizeOnce(String text, AbstractConfigEntity probe) {
         if (text == null) {
             return null;
         }
@@ -228,9 +265,7 @@ public abstract class AbstractConfigEntity {
         if (configFields.isEmpty()) {
             return parsed.saveToString();
         }
-        AbstractConfigEntity probe = constructSibling();
         for (Field field : configFields) {
-            field.setAccessible(true);
             ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
             String path = annotation.path();
             if (path.isEmpty()) {
@@ -293,6 +328,13 @@ public abstract class AbstractConfigEntity {
      * computed) reports {@code true}, preserving the pre-#510 behaviour of saving it at shutdown. A
      * map field whose entries were only reordered also reports {@code true}, because serialization
      * follows the map's iteration order; saving it is harmless and matches the pre-#510 behaviour.
+     * <p>
+     * Two cases deliberately report {@code false}. An entity whose file failed to parse the last
+     * time it was read ({@link #isLastLoadUnparseable()}) is never written by the shutdown save: the
+     * framework does not know what that file holds, so overwriting it with the in-memory state would
+     * destroy an operator's broken-but-recoverable file. And a key the file does not contain whose
+     * in-memory value equals this class's declared default is indistinguishable from the file's own
+     * implied state; it is not written at shutdown, and the next load produces the same value anyway.
      *
      * @return {@code true} if the shutdown save should write this configuration
      * @since 6.3.0
@@ -300,7 +342,7 @@ public abstract class AbstractConfigEntity {
     @ApiStatus.Internal
     public final boolean isModifiedSinceSnapshot() {
         synchronized (this) {
-            if (config == null || ultiToolsPlugin == null) {
+            if (config == null || ultiToolsPlugin == null || lastLoadUnparseable) {
                 return false;
             }
             String snapshot = savedSnapshot;
@@ -330,6 +372,26 @@ public abstract class AbstractConfigEntity {
      *         if it did not, or if no snapshot has been taken yet
      * @since 6.3.0
      */
+    /**
+     * Whether the last attempt to read this configuration's file failed to parse (#510) - in
+     * practice, whether the file on disk holds invalid YAML. The shutdown save skips such a
+     * configuration and says so, instead of overwriting a file the framework could not read.
+     * <p>
+     * Framework-internal: this method is called only by {@code ConfigManager#saveAll()} and is
+     * {@code public} solely because {@code ConfigManager} lives in another package. Module code
+     * should not call it.
+     *
+     * @return {@code true} if the last load of this configuration's file failed to parse, and no
+     *         successful load or save has happened since
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public final boolean isLastLoadUnparseable() {
+        synchronized (this) {
+            return lastLoadUnparseable;
+        }
+    }
+
     @ApiStatus.Internal
     public final boolean isFileModifiedSinceSnapshot() {
         synchronized (this) {
@@ -392,6 +454,7 @@ public abstract class AbstractConfigEntity {
             // then write them out of their own file - the exact D-01 violation this lane exists to
             // prevent. Explicit, not inherited from the system-property default.
             config.options().parseComments(true);
+            lastLoadUnparseable = false;
             try {
                 config.load(file);
             } catch (FileNotFoundException ignored) {
@@ -399,6 +462,9 @@ public abstract class AbstractConfigEntity {
                 // file is the normal "first run" case, not an error - config stays empty and every
                 // field below takes the missing-key branch.
             } catch (InvalidConfigurationException e) {
+                // #510: the framework does not know what this file holds, so the shutdown save must
+                // not write over it. Cleared by the next successful load or save.
+                lastLoadUnparseable = true;
                 LOGGER.log(Level.SEVERE, "Cannot load " + file, e);
             }
             boolean upToDate = true;
@@ -524,6 +590,7 @@ public abstract class AbstractConfigEntity {
                 config.set(path, ReflectionUtil.getFieldValue(this, field));
             }
             config.save(ultiToolsPlugin.getConfigFile(configFilePath));
+            lastLoadUnparseable = false;
             // #510: config holds exactly what was written. Fields this payload did not touch are not in
             // it; the snapshot comes from this text, so an unsaved code change to them stays modified.
             takeSnapshot();
@@ -709,7 +776,7 @@ public abstract class AbstractConfigEntity {
      * Constructs a fresh instance of this config class through the {@code (String)} constructor, or
      * failing that the no-arg constructor - the two idioms {@link #ensureConstructable()} proves -
      * for {@link #ensureConstructable()} and for the throwaway reader {@link
-     * #canonicalizeOnce(String)} uses (#510).
+     * #canonicalizeOnce(String, AbstractConfigEntity)} uses (#510).
      *
      * @return a new, uninitialized instance of this entity's class
      * @throws ConfigurationException if neither constructor resolves
@@ -889,12 +956,15 @@ public abstract class AbstractConfigEntity {
             File file = ultiToolsPlugin.getConfigFile(configFilePath);
             config = new YamlConfiguration();
             config.options().parseComments(true);
+            lastLoadUnparseable = false;
             try {
                 config.load(file);
             } catch (FileNotFoundException ignored) {
                 // Mirrors init()'s own handling above: a missing file is the normal case, not an
                 // error - config stays empty and every field below simply keeps its current value.
             } catch (InvalidConfigurationException e) {
+                // #510: same as init() - never write over a file the framework could not read.
+                lastLoadUnparseable = true;
                 LOGGER.log(Level.SEVERE, "Cannot load " + file, e);
             }
 
