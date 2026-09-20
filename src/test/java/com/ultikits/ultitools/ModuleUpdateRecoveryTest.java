@@ -168,7 +168,9 @@ class ModuleUpdateRecoveryTest {
 
         assertThat(occupant).hasContent("not a module");
         assertThat(aside).exists();
-        assertThat(journal).doesNotExist();
+        assertThat(journal)
+                .as("codex r8: the set-aside JAR is unresolved, so its record stays for the next start")
+                .exists();
         assertThat(warnings()).anyMatch(m -> m.contains(aside.getAbsolutePath()) && m.contains(occupant.getAbsolutePath()));
     }
 

@@ -88,6 +88,13 @@ public class PluginInstallUtils {
     /** Journal format marker, so a future format can be recognised rather than misread. */
     private static final String JOURNAL_FORMAT = "1";
 
+    /**
+     * Prefix of the guard key an uninstall always holds, derived from the module's runtime name.
+     * The prefix keeps it out of the identify-string namespace an update keys on, so it serialises
+     * uninstalls of one name without ever refusing an unrelated update.
+     */
+    private static final String UNINSTALL_NAME_KEY_PREFIX = "name:";
+
     /** Journal key saying how far the transaction got; absent means it was still moving JARs. */
     private static final String JOURNAL_PHASE_KEY = "phase";
 
@@ -1367,12 +1374,19 @@ public class PluginInstallUtils {
         boolean settled = !skippedAPair.get();
         for (String[] pair : pairs) {
             File setAside = new File(stagingFolder, pair[1]);
-            reported.add(pair[1]);
+            boolean handled = true;
             if (alreadyInstalled) {
                 reportAsLeftoverOfAnInstalledUpdate(setAside, module, targetPath);
             } else {
-                settled &= restoreSetAsideJar(setAside, pluginsFolder.toPath().resolve(pair[0]), pluginsFolder, module);
+                handled = restoreSetAsideJar(setAside, pluginsFolder.toPath().resolve(pair[0]), pluginsFolder, module);
             }
+            // Only a JAR this recovery finished with is "reported": one still waiting is left to
+            // the leftover pass, which names it as belonging to the journal that was kept rather
+            // than saying nothing about it at all (Codex review r8).
+            if (handled) {
+                reported.add(pair[1]);
+            }
+            settled &= handled;
         }
         // Deleting the journal turns every JAR it names into a leftover nothing will ever move back,
         // so it goes only once none of them still needs moving (Codex review r6).
@@ -1460,10 +1474,13 @@ public class PluginInstallUtils {
                 return true;
             }
             if (Files.exists(original, LinkOption.NOFOLLOW_LINKS)) {
+                // Not settled (Codex review r8): the set-aside JAR is still the module's copy and
+                // still needs a decision. Keeping the journal is what stops the next start from
+                // calling that JAR disposable, and lets recovery retry once the path is free.
                 LOGGER.warning("Set-aside module JAR " + setAside.getAbsolutePath()
                         + " from an interrupted update of module " + module + " was not restored: "
                         + original.toAbsolutePath() + " already exists");
-                return true;
+                return false;
             }
             Files.createDirectories(pluginsFolder.toPath());
             Files.move(setAside.toPath(), original, StandardCopyOption.ATOMIC_MOVE);
@@ -1729,6 +1746,11 @@ public class PluginInstallUtils {
             }
         }
         keys.addAll(keysFromUpdateJournals(name));
+        // A module may omit the optional identify-string, and then nothing above produces a key --
+        // two callers of this public API would both enter the guard, unload the same instance
+        // twice and race to delete its JAR (Codex review r8). The runtime name always serialises
+        // the uninstall; it cannot collide with an update's key, which is an identify-string.
+        keys.add(UNINSTALL_NAME_KEY_PREFIX + name.toLowerCase(Locale.ROOT));
         return keys;
     }
 
