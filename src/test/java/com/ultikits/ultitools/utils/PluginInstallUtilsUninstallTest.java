@@ -327,6 +327,50 @@ class PluginInstallUtilsUninstallTest {
         assertThat(jar).doesNotExist();
     }
 
+    @Test
+    @DisplayName("review r5 WR-02: a module can be updated again after a successful uninstall")
+    void afterASuccessfulUninstall_theModuleIsNotStillLocked() throws Exception {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        when(plugin.getIdentifyString()).thenReturn("uninstall-fixture");
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        writeModuleJar(MODULE_NAME);
+        PluginInstallUtils.setBaseUrlForTesting("http://127.0.0.1:9");
+        try {
+            assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME)).isTrue();
+
+            assertThat(PluginInstallUtils.updatePluginTransactionally("uninstall-fixture").getStatus())
+                    .as("an uninstall that keeps its keys leaves the module locked until the server restarts")
+                    .isNotEqualTo(PluginInstallUtils.UpdateOutcome.Status.ALREADY_IN_PROGRESS);
+            assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME)).isFalse();
+        } finally {
+            PluginInstallUtils.resetBaseUrl();
+        }
+    }
+
+    @Test
+    @DisplayName("review r5 WR-02: a module can be updated again after an uninstall that threw")
+    void afterAFailedUninstall_theModuleIsNotStillLocked() throws Exception {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        when(plugin.getIdentifyString()).thenReturn("uninstall-fixture");
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        PluginInstallUtils.setBaseUrlForTesting("http://127.0.0.1:9");
+        try {
+            // No jar on disk: the uninstall unloads the module and then throws NoSuchFileException.
+            assertThat(catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME)))
+                    .isInstanceOf(java.nio.file.NoSuchFileException.class);
+
+            assertThat(PluginInstallUtils.updatePluginTransactionally("uninstall-fixture").getStatus())
+                    .as("the keys must be released on the throwing path too")
+                    .isNotEqualTo(PluginInstallUtils.UpdateOutcome.Status.ALREADY_IN_PROGRESS);
+        } finally {
+            PluginInstallUtils.resetBaseUrl();
+        }
+    }
+
     private static java.util.List<String> namedFiles(FileSystemException failure) {
         java.util.List<String> files = new java.util.ArrayList<>();
         files.add(failure.getFile());

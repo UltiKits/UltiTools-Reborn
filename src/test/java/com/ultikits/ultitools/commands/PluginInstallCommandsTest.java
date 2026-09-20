@@ -737,6 +737,9 @@ class PluginInstallCommandsTest {
         List<String> messages = drainMessages();
         String summary = messages.get(messages.size() - 1);
         assertThat(summary).contains("1个成功，1个失败，1个");
+        assertThat(summary)
+                .as("review r5 IN-06: an update can also be skipped because an uninstall is running")
+                .contains("正在进行另一项更新或卸载");
         assertThat(String.join("\n", messages)).contains("正在进行另一项更新或卸载").contains("不是该模块");
     }
 
@@ -896,6 +899,28 @@ class PluginInstallCommandsTest {
 
         List<String> messages = drainMessages();
         assertThat(messages.get(messages.size() - 1)).contains("0个成功，1个失败，1个跳过");
+    }
+
+    @Test
+    @DisplayName("review r5 IN-01: a reply that lists jars left in staging never also says nothing was changed")
+    void updateFileSystemsDifferWithUnrestoredJar_doesNotClaimNothingChanged() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        stubModuleUpdates("TestPlugin", "test-plugin");
+        String aside = "/srv/minecraft/plugins/UltiTools/.upm-staging/test-plugin-1.0.0.jar.8420a849.old";
+        String original = "/srv/minecraft/plugins/UltiTools/plugins/test-plugin-1.0.0.jar";
+        PluginInstallUtils.UpdateOutcome result = outcome(PluginInstallUtils.UpdateOutcome.Status.FILE_SYSTEMS_DIFFER,
+                java.util.Arrays.asList("/srv/minecraft/plugins/UltiTools/.upm-staging",
+                        "/srv/minecraft/plugins/UltiTools/plugins"),
+                Collections.singletonList(aside), Collections.<String>emptyList());
+        when(result.getUnrestoredTargets()).thenReturn(Collections.singletonList(original));
+        stubUpdateOutcome("test-plugin", result);
+
+        String reply = updateReply("TestPlugin");
+
+        assertThat(reply)
+                .contains(aside + " -> " + original)
+                .as("a jar left in the staging folder IS a change")
+                .doesNotContain("未做任何更改");
     }
 
     private List<String> drainMessages() {

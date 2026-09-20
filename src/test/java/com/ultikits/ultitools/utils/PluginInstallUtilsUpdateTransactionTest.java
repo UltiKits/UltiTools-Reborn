@@ -360,6 +360,86 @@ class PluginInstallUtilsUpdateTransactionTest {
     }
 
     @Test
+    @DisplayName("review r5 WR-01: a journal records the transaction while it runs and is gone once it finishes")
+    void transactionJournal_existsWhileMovingAndIsDeletedAfterwards() throws IOException {
+        writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        List<String> journalWhileMoving = new ArrayList<>();
+        operations.duringMoveIn = () -> {
+            for (String name : stagingEntries()) {
+                if (name.endsWith(".txn")) {
+                    try {
+                        journalWhileMoving.add(name + "\n"
+                                + new String(Files.readAllBytes(new File(stagingFolder, name).toPath()), StandardCharsets.UTF_8));
+                    } catch (IOException e) {
+                        throw new java.io.UncheckedIOException(e);
+                    }
+                }
+            }
+        };
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus()).isEqualTo(Status.UPDATED);
+        assertThat(journalWhileMoving)
+                .as("without a journal, boot recovery cannot tell this transaction's set-aside jars from leftovers")
+                .hasSize(1);
+        String journal = journalWhileMoving.get(0);
+        assertThat(journal)
+                .contains("module=" + IDENTIFY_STRING)
+                .contains("target=" + NEW_JAR_NAME)
+                .contains("process=" + java.lang.management.ManagementFactory.getRuntimeMXBean().getName())
+                .contains("aside.0.original=" + IDENTIFY_STRING + "-1.0.0.jar")
+                .contains("aside.0.aside=" + IDENTIFY_STRING + "-1.0.0.jar.");
+        assertThat(stagingEntries()).as("a finished transaction leaves no journal behind").isEmpty();
+    }
+
+    @Test
+    @DisplayName("review r5 IN-03: an uninstall started while a module has no jar on disk, between the moves, is still refused")
+    void uninstallBetweenTheMoves_isRefused() throws IOException {
+        writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        AtomicReference<Throwable> uninstallResult = new AtomicReference<>();
+        operations.duringMoveIn = () -> uninstallResult.set(org.assertj.core.api.Assertions.catchThrowable(
+                () -> PluginInstallUtils.uninstallPlugin("Fixture")));
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(uninstallResult.get())
+                .as("in this window the module has no jar in the modules folder, so the running transaction's "
+                        + "journal is the only thing that names it")
+                .isInstanceOf(com.ultikits.ultitools.exceptions.PluginModuleException.class);
+        assertThat(((com.ultikits.ultitools.exceptions.PluginModuleException) uninstallResult.get()).getErrorCode().name())
+                .isEqualTo("PLUGIN_OPERATION_IN_PROGRESS");
+        assertThat(outcome.getStatus()).isEqualTo(Status.UPDATED);
+        assertThat(jarEntries()).containsExactly(NEW_JAR_NAME);
+    }
+
+    @Test
+    @DisplayName("review r5 WR-02: an uninstall refused on one of its keys leaves none of them held")
+    void uninstallRefusedOnOneKey_holdsNoOtherKeyAfterwards() throws IOException {
+        writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        // A second jar with the same runtime name but another identify-string: the uninstall must
+        // take both keys, and the update of this module already holds one of them.
+        File otherModule = new File(pluginsFolder, "aaa-module-1.0.0.jar");
+        try (FileOutputStream out = new FileOutputStream(otherModule)) {
+            out.write(jarBytesWithRawYaml("name: Fixture\nversion: 1.0.0\nidentify-string: aaa-module\n"));
+        }
+        AtomicReference<Throwable> uninstallResult = new AtomicReference<>();
+        AtomicReference<UpdateOutcome> otherUpdate = new AtomicReference<>();
+        operations.duringDownload = () -> {
+            uninstallResult.set(org.assertj.core.api.Assertions.catchThrowable(
+                    () -> PluginInstallUtils.uninstallPlugin("Fixture")));
+            otherUpdate.set(PluginInstallUtils.updatePluginTransactionally("aaa-module"));
+        };
+
+        PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(uninstallResult.get()).isInstanceOf(com.ultikits.ultitools.exceptions.PluginModuleException.class);
+        assertThat(otherUpdate.get().getStatus())
+                .as("the refused uninstall must not leave the other module locked until restart")
+                .isNotEqualTo(Status.ALREADY_IN_PROGRESS);
+    }
+
+    @Test
     @DisplayName("review r4 WR-07 (M1): an existing file at the new version's name is never replaced")
     void existingFileAtTheNewVersionName_isNotReplaced() throws IOException {
         File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
@@ -465,6 +545,7 @@ class PluginInstallUtilsUpdateTransactionTest {
         private volatile List<String> moduleFolderEntriesAtSelection = Collections.emptyList();
         private volatile byte[] downloadBytes;
         private volatile Runnable duringDownload;
+        private volatile Runnable duringMoveIn;
         private volatile int failMoveAsideAtCall;
         private volatile boolean failMoveIn;
         private volatile boolean failMoveBack;
@@ -520,6 +601,11 @@ class PluginInstallUtilsUpdateTransactionTest {
             boolean moveBack = target.getParent().toFile().equals(pluginsFolder) && !moveIn;
             if (moveIn) {
                 events.add("move-in");
+                Runnable hook = duringMoveIn;
+                if (hook != null) {
+                    duringMoveIn = null;
+                    hook.run();
+                }
                 if (failMoveIn) {
                     throw new IOException("injected: cannot move the new version in");
                 }

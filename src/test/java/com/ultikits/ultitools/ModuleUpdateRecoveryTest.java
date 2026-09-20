@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -28,19 +29,25 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Review r4 WR-01: a crash or kill between moving a module's old jars into
- * {@code plugins/UltiTools/.upm-staging} and moving the new jar in left the module with no jar in
- * the modules folder, and nothing ever looked at the staging directory again. The boot-time
- * recovery runs where the module class path is assembled, {@link UltiTools#collectModuleJarUrls},
- * before any module jar is opened, so the outcome is observed as the class path the server boots
+ * Review r4 WR-01 and review r5 WR-01: an update that a crash interrupted must be recovered at the
+ * next boot, and a set-aside JAR of an update that FINISHED must never come back.
+ * <p>
+ * The two cases are told apart by the transaction's journal, {@code <uuid>.txn} in the staging
+ * directory: it exists only while a transaction is running. Recovery restores only what a surviving
+ * journal records, and a {@code .old} file with no journal is a leftover that is only ever logged.
+ * <p>
+ * Recovery runs where the module class path is assembled, {@link UltiTools#collectModuleJarUrls},
+ * before any module JAR is opened, so its outcome is observed as the class path the server boots
  * with.
  */
-@DisplayName("Boot-time recovery of interrupted module updates (review r4 WR-01)")
+@DisplayName("Boot-time recovery of interrupted module updates (reviews r4/r5 WR-01)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class ModuleUpdateRecoveryTest {
 
     private static final String ID = "fixture-module";
-    private static final String UUID_TEXT = "8420a849-1c2d-4e5f-9a0b-1c2d3e4f5a6b";
+    private static final String UUID_A = "8420a849-1c2d-4e5f-9a0b-1c2d3e4f5a6b";
+    private static final String UUID_B = "aaaaaaaa-1c2d-4e5f-9a0b-1c2d3e4f5a6b";
+    private static final String OTHER_PROCESS = "4242@another-host";
 
     @TempDir
     File dataFolder;
@@ -83,38 +90,136 @@ class ModuleUpdateRecoveryTest {
     }
 
     @Test
-    @DisplayName("a set-aside jar whose module has no jar in the modules folder is moved back under its original name and loaded")
-    void orphanedSetAsideJar_isRestoredBeforeTheClassPathIsBuilt() throws IOException {
-        File aside = writeJar(new File(stagingFolder, ID + "-1.0.0.jar." + UUID_TEXT + ".old"), ID, "1.0.0");
-        byte[] bytes = Files.readAllBytes(aside.toPath());
+    @DisplayName("an interrupted update, its journal still present and its new version absent, restores every jar it set aside")
+    void interruptedUpdate_restoresEveryAsideJarOfThatJournal() throws IOException {
+        File asideOne = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        File asideTwo = setAsideJar(ID + "-1.5.0.jar", UUID_A, "1.5.0");
+        byte[] oneBytes = Files.readAllBytes(asideOne.toPath());
+        byte[] twoBytes = Files.readAllBytes(asideTwo.toPath());
+        File journal = writeJournal(UUID_A, OTHER_PROCESS, ID, ID + "-2.0.0.jar",
+                ID + "-1.0.0.jar", asideOne.getName(), ID + "-1.5.0.jar", asideTwo.getName());
 
         List<URL> urls = UltiTools.collectModuleJarUrls(pluginsFolder);
 
-        File restored = new File(pluginsFolder, ID + "-1.0.0.jar");
-        assertThat(restored).as("moved back under its original name").hasBinaryContent(bytes);
-        assertThat(aside).doesNotExist();
-        assertThat(urls).as("the restored jar is on the class path of this boot").contains(restored.toURI().toURL());
-        assertThat(warnings()).anyMatch(m -> m.contains(restored.getAbsolutePath()));
+        File restoredOne = new File(pluginsFolder, ID + "-1.0.0.jar");
+        File restoredTwo = new File(pluginsFolder, ID + "-1.5.0.jar");
+        assertThat(restoredOne).hasBinaryContent(oneBytes);
+        assertThat(restoredTwo)
+                .as("every jar the interrupted transaction set aside is restored, not only the first one listed")
+                .hasBinaryContent(twoBytes);
+        assertThat(urls).contains(restoredOne.toURI().toURL(), restoredTwo.toURI().toURL());
+        assertThat(journal).as("a finished recovery removes the journal").doesNotExist();
+        assertThat(stagingFolder.list()).isEmpty();
+        assertThat(warnings()).anyMatch(m -> m.contains(restoredOne.getAbsolutePath()));
     }
 
     @Test
-    @DisplayName("a set-aside jar whose module already has a jar in the modules folder is left and reported as a deletable leftover")
-    void setAsideJarOfAModuleThatHasAJar_isLeftAsLeftover() throws IOException {
-        File current = writeJar(new File(pluginsFolder, ID + "-2.0.0.jar"), ID, "2.0.0");
-        File aside = writeJar(new File(stagingFolder, ID + "-1.0.0.jar." + UUID_TEXT + ".old"), ID, "1.0.0");
+    @DisplayName("review r5 WR-01: a set-aside jar with no journal is never restored, so an uninstalled module stays uninstalled")
+    void leftoverWithoutJournal_isNeverRestored() throws IOException {
+        File leftover = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
 
         UltiTools.collectModuleJarUrls(pluginsFolder);
 
-        assertThat(aside).as("never moved back beside the module's current jar").exists();
+        assertThat(new File(pluginsFolder, ID + "-1.0.0.jar"))
+                .as("a leftover of a finished update must not resurrect a module the operator uninstalled")
+                .doesNotExist();
+        assertThat(leftover).exists();
+        assertThat(warnings()).anyMatch(m -> m.contains(leftover.getAbsolutePath()) && m.contains("leftover"));
+    }
+
+    @Test
+    @DisplayName("review r5 WR-01: two leftovers of different transactions restore nothing, so no module is silently downgraded")
+    void twoLeftoversWithoutJournal_restoreNothing() throws IOException {
+        File older = setAsideJar(ID + "-1.0.0.jar", UUID_B, "1.0.0");
+        File newer = setAsideJar(ID + "-1.5.0.jar", UUID_A, "1.5.0");
+
+        UltiTools.collectModuleJarUrls(pluginsFolder);
+
+        assertThat(pluginsFolder.list()).isEmpty();
+        assertThat(older).exists();
+        assertThat(newer).exists();
+    }
+
+    @Test
+    @DisplayName("an interrupted update whose new version is already in place restores nothing and drops its journal")
+    void journalWhoseTargetIsInstalled_restoresNothing() throws IOException {
+        File installed = writeJar(new File(pluginsFolder, ID + "-2.0.0.jar"), ID, "2.0.0");
+        File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        File journal = writeJournal(UUID_A, OTHER_PROCESS, ID, ID + "-2.0.0.jar", ID + "-1.0.0.jar", aside.getName());
+
+        UltiTools.collectModuleJarUrls(pluginsFolder);
+
         assertThat(new File(pluginsFolder, ID + "-1.0.0.jar")).doesNotExist();
-        assertThat(current).exists();
+        assertThat(installed).exists();
+        assertThat(aside).as("the set-aside jar becomes a deletable leftover").exists();
+        assertThat(journal).doesNotExist();
         assertThat(warnings()).anyMatch(m -> m.contains(aside.getAbsolutePath()) && m.contains("leftover"));
+    }
+
+    @Test
+    @DisplayName("a recorded original path taken by another file is skipped, with a warning naming both files")
+    void originalPathOccupied_isSkippedAndNamed() throws IOException {
+        File occupant = new File(pluginsFolder, ID + "-1.0.0.jar");
+        Files.write(occupant.toPath(), "not a module".getBytes(StandardCharsets.UTF_8));
+        File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        File journal = writeJournal(UUID_A, OTHER_PROCESS, ID, ID + "-2.0.0.jar", ID + "-1.0.0.jar", aside.getName());
+
+        UltiTools.collectModuleJarUrls(pluginsFolder);
+
+        assertThat(occupant).hasContent("not a module");
+        assertThat(aside).exists();
+        assertThat(journal).doesNotExist();
+        assertThat(warnings()).anyMatch(m -> m.contains(aside.getAbsolutePath()) && m.contains(occupant.getAbsolutePath()));
+    }
+
+    @Test
+    @DisplayName("a malformed journal is named in a warning and does not stop the next journal's restore")
+    void malformedJournal_isIsolated() throws IOException {
+        File malformed = new File(stagingFolder, UUID_B + ".txn");
+        Files.write(malformed.toPath(), "this is not a journal".getBytes(StandardCharsets.UTF_8));
+        File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        writeJournal(UUID_A, OTHER_PROCESS, ID, ID + "-2.0.0.jar", ID + "-1.0.0.jar", aside.getName());
+
+        UltiTools.collectModuleJarUrls(pluginsFolder);
+
+        assertThat(new File(pluginsFolder, ID + "-1.0.0.jar")).exists();
+        assertThat(warnings()).anyMatch(m -> m.contains(malformed.getAbsolutePath()));
+    }
+
+    @Test
+    @DisplayName("a journal that cannot be read at all is named in a warning and does not stop the next journal's restore")
+    void unreadableJournal_isIsolated() throws IOException {
+        File unreadable = new File(stagingFolder, UUID_B + ".txn");
+        assertThat(unreadable.mkdir()).as("a directory in the journal's place cannot be read as one").isTrue();
+        File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        writeJournal(UUID_A, OTHER_PROCESS, ID, ID + "-2.0.0.jar", ID + "-1.0.0.jar", aside.getName());
+
+        UltiTools.collectModuleJarUrls(pluginsFolder);
+
+        assertThat(new File(pluginsFolder, ID + "-1.0.0.jar")).exists();
+        assertThat(warnings()).anyMatch(m -> m.contains(unreadable.getAbsolutePath()));
+    }
+
+    @Test
+    @DisplayName("review r5 IN-04: a journal written by this JVM belongs to a running update and is left alone")
+    void journalOfTheCurrentProcess_isSkipped() throws IOException {
+        File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        File journal = writeJournal(UUID_A, ManagementFactory.getRuntimeMXBean().getName(), ID,
+                ID + "-2.0.0.jar", ID + "-1.0.0.jar", aside.getName());
+
+        UltiTools.collectModuleJarUrls(pluginsFolder);
+
+        assertThat(new File(pluginsFolder, ID + "-1.0.0.jar"))
+                .as("restoring beside a running update of the same module would install two versions")
+                .doesNotExist();
+        assertThat(aside).exists();
+        assertThat(journal).exists();
     }
 
     @Test
     @DisplayName("a stale partial download is deleted")
     void stalePartialDownload_isDeleted() throws IOException {
-        File part = new File(stagingFolder, ID + "-2.0.0-" + UUID_TEXT + ".part");
+        File part = new File(stagingFolder, ID + "-2.0.0-" + UUID_A + ".part");
         Files.write(part.toPath(), "partial".getBytes(StandardCharsets.UTF_8));
 
         UltiTools.collectModuleJarUrls(pluginsFolder);
@@ -124,32 +229,19 @@ class ModuleUpdateRecoveryTest {
     }
 
     @Test
-    @DisplayName("names that do not match <original>.jar.<uuid>.old exactly are left untouched")
-    void malformedSetAsideNames_areLeftUntouched() throws IOException {
+    @DisplayName("files that are neither a journal, a set-aside jar nor a partial download are left untouched")
+    void unrelatedStagingFiles_areLeftUntouched() throws IOException {
         File noUuid = writeJar(new File(stagingFolder, ID + "-1.0.0.jar.old"), ID, "1.0.0");
         File badUuid = writeJar(new File(stagingFolder, ID + "-1.0.0.jar.not-a-uuid.old"), ID, "1.0.0");
-        File noJar = writeJar(new File(stagingFolder, ID + "-1.0.0." + UUID_TEXT + ".old"), ID, "1.0.0");
+        File notes = new File(stagingFolder, "notes.txt");
+        Files.write(notes.toPath(), "keep me".getBytes(StandardCharsets.UTF_8));
 
         UltiTools.collectModuleJarUrls(pluginsFolder);
 
         assertThat(noUuid).exists();
         assertThat(badUuid).exists();
-        assertThat(noJar).exists();
+        assertThat(notes).exists();
         assertThat(pluginsFolder.list()).isEmpty();
-    }
-
-    @Test
-    @DisplayName("a set-aside jar whose original name is taken by another file is left, and the occupant is untouched")
-    void originalNameOccupied_setAsideJarIsLeft() throws IOException {
-        File occupant = new File(pluginsFolder, ID + "-1.0.0.jar");
-        Files.write(occupant.toPath(), "not a module".getBytes(StandardCharsets.UTF_8));
-        File aside = writeJar(new File(stagingFolder, ID + "-1.0.0.jar." + UUID_TEXT + ".old"), ID, "1.0.0");
-
-        UltiTools.collectModuleJarUrls(pluginsFolder);
-
-        assertThat(aside).exists();
-        assertThat(occupant).hasContent("not a module");
-        assertThat(warnings()).anyMatch(m -> m.contains(aside.getAbsolutePath()));
     }
 
     @Test
@@ -166,6 +258,30 @@ class ModuleUpdateRecoveryTest {
     private List<String> warnings() {
         return logs.stream().filter(r -> r.getLevel() == Level.WARNING).map(LogRecord::getMessage)
                 .collect(Collectors.toList());
+    }
+
+    /** Writes a set-aside JAR named as an update's move-aside step names it. */
+    private File setAsideJar(String originalName, String transaction, String version) throws IOException {
+        return writeJar(new File(stagingFolder, originalName + "." + transaction + ".old"), ID, version);
+    }
+
+    /**
+     * Writes a transaction journal in the format the update writes: a properties file naming the
+     * module, the new version's file name, the writing JVM and each original/set-aside pair.
+     */
+    private File writeJournal(String transaction, String process, String module, String target,
+                              String... originalAndAsideNames) throws IOException {
+        StringBuilder text = new StringBuilder(256);
+        text.append("format=1\n").append("process=").append(process).append('\n')
+                .append("module=").append(module).append('\n')
+                .append("target=").append(target).append('\n');
+        for (int i = 0; i < originalAndAsideNames.length; i += 2) {
+            text.append("aside.").append(i / 2).append(".original=").append(originalAndAsideNames[i]).append('\n');
+            text.append("aside.").append(i / 2).append(".aside=").append(originalAndAsideNames[i + 1]).append('\n');
+        }
+        File journal = new File(stagingFolder, transaction + ".txn");
+        Files.write(journal.toPath(), text.toString().getBytes(StandardCharsets.UTF_8));
+        return journal;
     }
 
     private static File writeJar(File file, String identifyString, String version) throws IOException {
