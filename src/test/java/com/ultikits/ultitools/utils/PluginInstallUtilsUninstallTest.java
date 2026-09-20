@@ -174,8 +174,7 @@ class PluginInstallUtilsUninstallTest {
         try (JarOutputStream out = new JarOutputStream(new FileOutputStream(malformed))) {
             out.putNextEntry(new JarEntry("plugin.yml"));
             // Valid as a file, not as YAML: an unclosed flow mapping.
-            out.write("name: {unclosed
-	broken: [".getBytes(StandardCharsets.UTF_8));
+            out.write("name: {unclosed\n\tbroken: [".getBytes(StandardCharsets.UTF_8));
             out.closeEntry();
         }
 

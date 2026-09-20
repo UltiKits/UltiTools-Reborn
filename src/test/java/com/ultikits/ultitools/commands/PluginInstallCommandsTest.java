@@ -92,8 +92,8 @@ class PluginInstallCommandsTest {
                     .thenReturn(true);
             mockedUtils.when(() -> PluginInstallUtils.getPluginVersions(anyString()))
                     .thenReturn(Arrays.asList("1.0.0", "1.0.1"));
-            mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin(anyString()))
-                    .thenReturn(true);
+            mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(anyString()))
+                    .thenReturn(PluginInstallUtils.UninstallReport.of(true, java.util.Collections.emptyList()));
             
             executor = new PluginInstallCommands();
         } catch (Exception e) {
@@ -400,8 +400,8 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin"))
-                .thenReturn(true);
+            mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
+                .thenReturn(PluginInstallUtils.UninstallReport.of(true, java.util.Collections.emptyList()));
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -422,8 +422,8 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin"))
-                .thenReturn(false);
+            mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
+                .thenReturn(PluginInstallUtils.UninstallReport.of(false, java.util.Collections.emptyList()));
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -444,7 +444,7 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin"))
+            mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
                 .thenThrow(new IOException("File access error"));
         } catch (Exception e) {
             // Skip if mocking not available
@@ -464,7 +464,8 @@ class PluginInstallCommandsTest {
     @DisplayName("#501: a successful uninstall has already deleted the jar, so the reply never asks for a manual delete")
     void uninstallSuccess_replyDoesNotAskForManualDelete() {
         assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin")).thenReturn(true);
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
+                .thenReturn(PluginInstallUtils.UninstallReport.of(true, java.util.Collections.emptyList()));
 
         executor.onCommand(player, mockCommand, "upm", new String[]{"uninstall", "test-plugin"});
         server.getScheduler().performOneTick();
@@ -484,7 +485,7 @@ class PluginInstallCommandsTest {
     void uninstallDeleteFailure_replyNamesTheJarStillOnDisk() {
         assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
         String jarPath = "/srv/minecraft/plugins/UltiTools/plugins/Fixture-1.0.0.jar";
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin"))
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
                 .thenThrow(new java.nio.file.FileSystemException(jarPath, null, "Permission denied"));
 
         executor.onCommand(player, mockCommand, "upm", new String[]{"uninstall", "test-plugin"});
@@ -508,7 +509,7 @@ class PluginInstallCommandsTest {
         java.nio.file.FileSystemException failure =
                 new java.nio.file.FileSystemException(first, null, "Permission denied");
         failure.addSuppressed(new java.nio.file.FileSystemException(second, null, "Permission denied"));
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin")).thenThrow(failure);
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin")).thenThrow(failure);
 
         executor.uninstallPlugin(player, "test-plugin");
 
@@ -521,7 +522,7 @@ class PluginInstallCommandsTest {
     void uninstallLoadedModuleWithoutJar_replySaysUnloadedAndNoJarFound() {
         assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
         String folder = "/srv/minecraft/plugins/UltiTools/plugins";
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin"))
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
                 .thenThrow(new java.nio.file.NoSuchFileException(folder, null, "no module JAR named test-plugin"));
 
         executor.uninstallPlugin(player, "test-plugin");
@@ -539,7 +540,7 @@ class PluginInstallCommandsTest {
     @DisplayName("#503 review WR-01: an unload that throws is reported, together with the jars having been deleted")
     void uninstallUnloadThrew_jarsDeleted_replyReportsBoth() {
         assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin")).thenThrow(unloadThrew(null));
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin")).thenThrow(unloadThrew(null));
 
         Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
                 () -> executor.uninstallPlugin(player, "test-plugin"));
@@ -554,7 +555,7 @@ class PluginInstallCommandsTest {
     void uninstallUnloadThrew_jarNotDeleted_replyNamesTheJar() {
         assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
         String jar = "/srv/minecraft/plugins/UltiTools/plugins/Fixture-1.0.0.jar";
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin"))
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
                 .thenThrow(unloadThrew(new java.nio.file.FileSystemException(jar, null, "Permission denied")));
 
         Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
@@ -570,7 +571,7 @@ class PluginInstallCommandsTest {
     void uninstallUnloadThrew_noJar_replySaysNoJarFound() {
         assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
         String folder = "/srv/minecraft/plugins/UltiTools/plugins";
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin"))
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
                 .thenThrow(unloadThrew(new java.nio.file.NoSuchFileException(folder, null, "no module JAR")));
 
         Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
@@ -598,8 +599,9 @@ class PluginInstallCommandsTest {
                 .contains("1")
                 .contains("重启");
         assertThat(all)
-                .as("nothing here says those files are copies of this module")
-                .doesNotContain("副本");
+                .as("the reply states the uncertainty rather than resolving it")
+                .contains("无法判断")
+                .doesNotContain("卸载失败");
     }
 
     @Test
