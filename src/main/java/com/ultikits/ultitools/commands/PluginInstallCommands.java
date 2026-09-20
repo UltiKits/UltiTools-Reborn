@@ -216,15 +216,21 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(plugin);
             if (report.jarsDeleted()) {
                 // uninstallPlugin returns true only after every JAR identified as the module's is
-                // deleted (#501), so there is nothing left for the operator to remove by hand.
-                sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("卸载完成：已删除识别为该模块的 JAR 文件。"));
+                // deleted (#501), so there is nothing left for the operator to remove by hand. The
+                // files are named: every other outcome names paths, and a success that named none
+                // is what made a deletion outside the operator's request invisible (gate 1, IN-12).
+                sender.sendMessage(ChatColor.GREEN + String.format(
+                        UltiTools.getInstance().i18n("卸载完成：已删除识别为该模块的 JAR 文件：%s"),
+                        report.deletedFiles().isEmpty()
+                                ? UltiTools.getInstance().i18n("（没有需要删除的文件）")
+                                : String.join(", ", report.deletedFiles())));
             } else {
                 sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("卸载失败！请检查是否拼写正确！"));
             }
             sendUndeterminedEntries(sender, report);
         } catch (java.nio.file.AccessDeniedException e) {
             sendUnlistableFolder(sender, e.getFile());
-        } catch (IllegalStateException e) {
+        } catch (PluginInstallUtils.ModuleUnloadFailedException e) {
             // The module's own unload threw. It has still been removed from the loaded modules and
             // its jars still deleted where possible: report both, so the operator knows whether it
             // will come back on restart.
@@ -263,7 +269,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             return;
         }
         sender.sendMessage(ChatColor.YELLOW + String.format(
-                UltiTools.getInstance().i18n("模块目录中有 %d 个文件无法读取，无法判断其中是否有该模块的副本；如果有，重启后该模块会再次加载：%s"),
+                UltiTools.getInstance().i18n("模块目录中有 %d 个文件无法确认身份，无法判断其中是否有该模块的副本；如果有，重启后该模块会再次加载：%s"),
                 files.size(), String.join(", ", files)));
     }
 
@@ -277,7 +283,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             return;
         }
         sender.sendMessage(ChatColor.YELLOW + String.format(
-                UltiTools.getInstance().i18n("模块目录中有 %d 个文件无法读取，无法判断其中是否有该模块的副本；如果有，重启后该模块会再次加载：%s"),
+                UltiTools.getInstance().i18n("模块目录中有 %d 个文件无法确认身份，无法判断其中是否有该模块的副本；如果有，重启后该模块会再次加载：%s"),
                 report.undeterminedEntries().size(), String.join(", ", report.undeterminedEntries())));
     }
 
@@ -285,7 +291,8 @@ public class PluginInstallCommands extends BaseCommandExecutor {
      * Reports the jar outcome {@link PluginInstallUtils#uninstallPlugin} attached to its
      * unload-error exception: none attached means every matching jar was deleted.
      */
-    private static void sendJarOutcomeAfterUnloadError(CommandSender sender, IllegalStateException unloadError) {
+    private static void sendJarOutcomeAfterUnloadError(CommandSender sender,
+                                                       PluginInstallUtils.ModuleUnloadFailedException unloadError) {
         sendUnreadableEntriesOf(sender, unloadError);
         for (Throwable jarFailure : unloadError.getSuppressed()) {
             if (jarFailure instanceof PluginInstallUtils.UndeterminedEntriesException) {
