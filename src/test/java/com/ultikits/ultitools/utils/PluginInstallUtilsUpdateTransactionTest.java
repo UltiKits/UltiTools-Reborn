@@ -6,6 +6,7 @@ import static org.mockito.Mockito.when;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -421,6 +422,28 @@ class PluginInstallUtilsUpdateTransactionTest {
     }
 
     @Test
+    @DisplayName("codex r7 P1: a download carrying no class the loader could load is invalid, before any JAR moves")
+    void downloadWithoutAModuleClass_isAnInvalidDownload() throws IOException {
+        File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        try (JarOutputStream out = new JarOutputStream(bytes)) {
+            out.putNextEntry(new JarEntry("plugin.yml"));
+            out.write(("name: Fixture\nversion: 2.0.0\nidentify-string: " + IDENTIFY_STRING + "\n")
+                    .getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+        operations.downloadBytes = bytes.toByteArray();
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus())
+                .as("a JAR with a plugin.yml and nothing else produces no module, so installing it loses this one")
+                .isEqualTo(Status.INVALID_DOWNLOAD);
+        assertThat(jarEntries()).containsExactly(oldJar.getName());
+        assertThat(stagingEntries()).isEmpty();
+    }
+
+    @Test
     @DisplayName("codex r6 P1: a download missing the name the loader requires is invalid, before any JAR moves")
     void downloadWithoutTheNameKey_isAnInvalidDownload() throws IOException {
         File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
@@ -614,6 +637,7 @@ class PluginInstallUtilsUpdateTransactionTest {
             out.write(("name: Fixture\nversion: 2.0.0\nidentify-string: " + IDENTIFY_STRING + "\n")
                     .getBytes(StandardCharsets.UTF_8));
             out.closeEntry();
+            writeModuleClassEntry(out);
             for (int i = 0; i < 10_001; i++) {
                 out.putNextEntry(new JarEntry("filler/" + i));
                 out.closeEntry();
@@ -848,6 +872,7 @@ class PluginInstallUtilsUpdateTransactionTest {
             out.putNextEntry(new JarEntry("plugin.yml"));
             out.write(jarBytesPluginYml("2.0.0"));
             out.closeEntry();
+            writeModuleClassEntry(out);
         }
         File keystore = new File(work, "keystore.jks");
         run(work, keytool.getAbsolutePath(), "-genkeypair", "-alias", "t", "-keyalg", "RSA", "-keysize", "2048",
@@ -923,6 +948,7 @@ class PluginInstallUtilsUpdateTransactionTest {
             out.putNextEntry(new JarEntry("plugin.yml"));
             out.write(pluginYml.getBytes(StandardCharsets.UTF_8));
             out.closeEntry();
+            writeModuleClassEntry(out);
         }
         return bytes.toByteArray();
     }
@@ -934,6 +960,7 @@ class PluginInstallUtilsUpdateTransactionTest {
             out.write(("name: Fixture\nversion: " + version + "\nidentify-string: " + IDENTIFY_STRING + "\n")
                     .getBytes(StandardCharsets.UTF_8));
             out.closeEntry();
+            writeModuleClassEntry(out);
         }
         return bytes.toByteArray();
     }
@@ -944,4 +971,22 @@ class PluginInstallUtilsUpdateTransactionTest {
         exchange.getResponseBody().write(bytes);
         exchange.close();
     }
+
+    /** The class path entry of a compiled fixture module, so a fixture JAR is one a module could load from. */
+    private static final String MODULE_CLASS_ENTRY = "com/ultikits/testfixtures/pluginloadafter/JarModuleTarget.class";
+
+    /** Writes a compiled class that extends {@code UltiToolsPlugin} into a fixture JAR. */
+    private static void writeModuleClassEntry(JarOutputStream out) throws IOException {
+        try (InputStream in = PluginInstallUtilsUpdateTransactionTest.class.getClassLoader()
+                .getResourceAsStream(MODULE_CLASS_ENTRY)) {
+            assertThat(in).as("the compiled fixture module class must be on the test class path").isNotNull();
+            out.putNextEntry(new JarEntry(MODULE_CLASS_ENTRY));
+            byte[] buffer = new byte[4096];
+            for (int read = in.read(buffer); read > 0; read = in.read(buffer)) {
+                out.write(buffer, 0, read);
+            }
+            out.closeEntry();
+        }
+    }
+
 }

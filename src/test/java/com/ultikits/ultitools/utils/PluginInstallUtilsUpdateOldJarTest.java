@@ -7,6 +7,7 @@ import static org.mockito.Mockito.when;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -412,6 +413,7 @@ class PluginInstallUtilsUpdateOldJarTest {
             out.write(("name: Fixture\nversion: " + version + "\nidentify-string: " + identifyString + "\n")
                     .getBytes(StandardCharsets.UTF_8));
             out.closeEntry();
+            writeModuleClassEntry(out);
         }
         return bytes.toByteArray();
     }
@@ -438,4 +440,22 @@ class PluginInstallUtilsUpdateOldJarTest {
         exchange.getResponseBody().write(bytes);
         exchange.close();
     }
+
+    /** The class path entry of a compiled fixture module, so a fixture JAR is one a module could load from. */
+    private static final String MODULE_CLASS_ENTRY = "com/ultikits/testfixtures/pluginloadafter/JarModuleTarget.class";
+
+    /** Writes a compiled class that extends {@code UltiToolsPlugin} into a fixture JAR. */
+    private static void writeModuleClassEntry(JarOutputStream out) throws IOException {
+        try (InputStream in = PluginInstallUtilsUpdateOldJarTest.class.getClassLoader()
+                .getResourceAsStream(MODULE_CLASS_ENTRY)) {
+            assertThat(in).as("the compiled fixture module class must be on the test class path").isNotNull();
+            out.putNextEntry(new JarEntry(MODULE_CLASS_ENTRY));
+            byte[] buffer = new byte[4096];
+            for (int read = in.read(buffer); read > 0; read = in.read(buffer)) {
+                out.write(buffer, 0, read);
+            }
+            out.closeEntry();
+        }
+    }
+
 }
