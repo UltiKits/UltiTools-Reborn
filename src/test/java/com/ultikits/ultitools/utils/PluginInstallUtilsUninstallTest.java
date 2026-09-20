@@ -411,6 +411,39 @@ class PluginInstallUtilsUninstallTest {
     }
 
     @Test
+    @DisplayName("codex r7 P2: an uninstall that cannot clear the module's journal does not report success")
+    void uninstall_reportsAJournalItCouldNotClear() throws IOException {
+        Assumptions.assumeFalse("root".equals(System.getProperty("user.name")),
+                "root ignores directory permissions, so the cleanup would succeed");
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        writeModuleJar(MODULE_NAME);
+        File staging = new File(dataFolder, ".upm-staging");
+        assertThat(staging.mkdirs()).isTrue();
+        String transaction = "8420a849-1c2d-4e5f-9a0b-1c2d3e4f5a6b";
+        File journal = new File(staging, transaction + ".txn");
+        Files.write(journal.toPath(), ("format=1\nprocess=4242@another-host\nmodule=uninstallfixture\n"
+                + "name=" + MODULE_NAME + "\ntarget=" + MODULE_NAME + "-1.0.0.jar\n")
+                .getBytes(StandardCharsets.UTF_8));
+        Set<PosixFilePermission> original = Files.getPosixFilePermissions(staging.toPath());
+        Files.setPosixFilePermissions(staging.toPath(), PosixFilePermissions.fromString("r-x------"));
+        try {
+            Assumptions.assumeTrue(!Files.isWritable(staging.toPath()), "the permissions must bind this process");
+
+            Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+            assertThat(thrown)
+                    .as("a surviving journal can move the module's old JAR back at the next start")
+                    .isInstanceOf(FileSystemException.class);
+            assertThat(((FileSystemException) thrown).getFile()).isEqualTo(journal.getAbsolutePath());
+        } finally {
+            Files.setPosixFilePermissions(staging.toPath(), original);
+        }
+    }
+
+    @Test
     @DisplayName("codex r6 P2: an unrelated entry in the modules folder does not stop the uninstall")
     void unreadableEntriesInTheModulesFolder_areSkipped() throws IOException {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
