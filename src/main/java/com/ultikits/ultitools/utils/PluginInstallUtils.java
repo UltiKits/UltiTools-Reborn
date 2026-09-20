@@ -462,7 +462,9 @@ public class PluginInstallUtils {
                         matches.add(jar);
                     }
                 }
-            } catch (IOException e) {
+            } catch (IOException | SecurityException e) {
+                // A signed JAR whose entries changed after signing throws SecurityException here
+                // (review r5 IN-02); skipping it is the same answer as an unreadable JAR.
                 LOGGER.log(Level.FINE, "Skipping unreadable plugin JAR: " + jar.getName(), e);
             }
         }
@@ -1014,16 +1016,15 @@ public class PluginInstallUtils {
             "^(.+\\.jar)\\.([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\\.old$");
 
     /**
-     * Recovers module updates a crash or kill interrupted (review r4 WR-01). Must run before the
-     * modules folder is scanned. Never throws for a file it cannot handle; each such file is logged
-     * and left in place.
-     * <ul>
-     *   <li>A set-aside JAR named {@code <original name>.jar.<UUID>.old} whose module has no JAR in
-     *       the modules folder is moved back under its original name, with a WARNING naming it.</li>
-     *   <li>A set-aside JAR whose module already has a JAR in the modules folder is left, with a
-     *       WARNING that it is a leftover that can be deleted.</li>
-     *   <li>A {@code .part} file, a partial download, is deleted, with an INFO line.</li>
-     * </ul>
+     * Recovers module updates a crash or kill interrupted (reviews r4/r5 WR-01). Must run before the
+     * modules folder is scanned.
+     * <p>
+     * Only a surviving transaction journal moves anything back, and only what that journal records.
+     * A journal exists exactly while its transaction is running, so a set-aside JAR without one
+     * belongs to a transaction that finished: it is a leftover, never restored, and only reported
+     * once. A journal written by this JVM belongs to an update running right now and is left alone.
+     * Every journal and every file is handled in isolation: a malformed or unreadable journal, or a
+     * JAR that cannot be moved, is logged by name and recovery continues with the next one.
      * <p>
      * <b>Framework-internal.</b> Called by the framework at boot; not part of the module API.
      *
@@ -1031,18 +1032,22 @@ public class PluginInstallUtils {
      * @since 6.3.0
      */
     @ApiStatus.Internal
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // deliberate barrier: one bad journal must not stop the others
     public static void recoverInterruptedUpdates(File dataFolder) {
         if (dataFolder == null) {
             return;
         }
-        File[] entries = new File(dataFolder, STAGING_DIRECTORY_NAME).listFiles();
+        File stagingFolder = new File(dataFolder, STAGING_DIRECTORY_NAME);
+        File[] entries = stagingFolder.listFiles();
         if (entries == null) {
             return;
         }
         Arrays.sort(entries);
         File pluginsFolder = new File(dataFolder, "plugins");
+        Set<String> reported = new java.util.HashSet<>();
         for (File entry : entries) {
-            if (entry.getName().endsWith(".part")) {
+            String name = entry.getName();
+            if (name.endsWith(".part") || name.endsWith(JOURNAL_SUFFIX + ".tmp")) {
                 try {
                     Files.deleteIfExists(entry.toPath());
                     LOGGER.info("Deleted a stale partial module update download: " + entry.getAbsolutePath());
@@ -1052,47 +1057,110 @@ public class PluginInstallUtils {
                 }
                 continue;
             }
-            java.util.regex.Matcher name = SET_ASIDE_NAME.matcher(entry.getName());
-            if (name.matches()) {
-                recoverSetAsideJar(entry, name.group(1), pluginsFolder);
+            if (!name.endsWith(JOURNAL_SUFFIX)) {
+                continue;
+            }
+            try {
+                recoverJournal(entry, pluginsFolder, reported);
+            } catch (IOException | RuntimeException e) {
+                LOGGER.log(Level.WARNING, "Module update journal " + entry.getAbsolutePath()
+                        + " could not be read and was left in place", e);
+            }
+        }
+        for (File entry : entries) {
+            if (SET_ASIDE_NAME.matcher(entry.getName()).matches() && !reported.contains(entry.getName())
+                    && Files.exists(entry.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                LOGGER.warning("Update leftover " + entry.getAbsolutePath()
+                        + ": no interrupted update refers to it, so it is never restored and can be deleted");
             }
         }
     }
 
-    private static void recoverSetAsideJar(File setAside, String originalName, File pluginsFolder) {
-        String moduleKey;
-        try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(setAside)) {
-            moduleKey = normalizeIdentifyString(readPluginYmlScalars(jarFile).get("identify-string"));
-        } catch (IOException e) {
-            LOGGER.log(Level.WARNING, "Set-aside module JAR from an interrupted update cannot be read and was left in place: "
-                    + setAside.getAbsolutePath(), e);
+    /**
+     * Recovers one transaction from its journal.
+     *
+     * @param journalFile   the journal in the staging directory
+     * @param pluginsFolder the modules folder
+     * @param reported      set-aside file names this recovery has already restored or reported
+     */
+    private static void recoverJournal(File journalFile, File pluginsFolder, Set<String> reported) throws IOException {
+        java.util.Properties entries = new java.util.Properties();
+        try (java.io.Reader reader = Files.newBufferedReader(journalFile.toPath(), java.nio.charset.StandardCharsets.UTF_8)) {
+            entries.load(reader);
+        }
+        String module = entries.getProperty("module");
+        String target = entries.getProperty("target");
+        String process = entries.getProperty("process");
+        if (!JOURNAL_FORMAT.equals(entries.getProperty("format")) || process == null
+                || module == null || !isPlainFileName(target)) {
+            LOGGER.warning("Module update journal " + journalFile.getAbsolutePath()
+                    + " is malformed and was left in place");
             return;
         }
-        if (moduleKey == null) {
-            LOGGER.warning("Set-aside module JAR from an interrupted update declares no identify-string and was left in place: "
-                    + setAside.getAbsolutePath());
+        if (process.equals(currentProcessIdentity())) {
+            LOGGER.info("Module update journal " + journalFile.getAbsolutePath()
+                    + " belongs to an update running in this server process and was left in place");
             return;
         }
-        if (!findPluginJars(pluginsFolder, moduleKey).isEmpty()) {
-            LOGGER.warning("Update leftover " + setAside.getAbsolutePath() + ": the modules folder already holds a JAR of module "
-                    + moduleKey + ", so this leftover was not restored and can be deleted");
+        List<String[]> pairs = new ArrayList<>();
+        for (int i = 0; ; i++) {
+            String original = entries.getProperty("aside." + i + ".original");
+            String aside = entries.getProperty("aside." + i + ".aside");
+            if (original == null && aside == null) {
+                break;
+            }
+            if (!isPlainFileName(original) || !isPlainFileName(aside)) {
+                LOGGER.warning("Module update journal " + journalFile.getAbsolutePath()
+                        + " names an unusable file and was left in place");
+                return;
+            }
+            pairs.add(new String[]{original, aside});
+        }
+        File stagingFolder = journalFile.getParentFile();
+        Path targetPath = pluginsFolder.toPath().resolve(target);
+        if (Files.exists(targetPath, LinkOption.NOFOLLOW_LINKS)) {
+            for (String[] pair : pairs) {
+                File setAside = new File(stagingFolder, pair[1]);
+                reported.add(pair[1]);
+                if (Files.exists(setAside.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                    LOGGER.warning("Update leftover " + setAside.getAbsolutePath() + ": the interrupted update of module "
+                            + module + " had already installed " + targetPath.toAbsolutePath()
+                            + ", so it is never restored and can be deleted");
+                }
+            }
+            deleteJournal(journalFile.toPath());
             return;
         }
-        Path target = pluginsFolder.toPath().resolve(originalName);
-        if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
-            LOGGER.warning("Set-aside module JAR " + setAside.getAbsolutePath() + " from an interrupted update was not restored: "
-                    + target.toAbsolutePath() + " already exists and is not a JAR of module " + moduleKey);
-            return;
+        for (String[] pair : pairs) {
+            File setAside = new File(stagingFolder, pair[1]);
+            reported.add(pair[1]);
+            Path original = pluginsFolder.toPath().resolve(pair[0]);
+            try {
+                if (!Files.exists(setAside.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                    continue;
+                }
+                if (Files.exists(original, LinkOption.NOFOLLOW_LINKS)) {
+                    LOGGER.warning("Set-aside module JAR " + setAside.getAbsolutePath()
+                            + " from an interrupted update of module " + module + " was not restored: "
+                            + original.toAbsolutePath() + " already exists");
+                    continue;
+                }
+                Files.createDirectories(pluginsFolder.toPath());
+                Files.move(setAside.toPath(), original, StandardCopyOption.ATOMIC_MOVE);
+                LOGGER.warning("Restored " + original.toAbsolutePath() + " from an interrupted module update (it was "
+                        + setAside.getAbsolutePath() + ")");
+            } catch (IOException | SecurityException e) {
+                LOGGER.log(Level.WARNING, "Could not restore the set-aside module JAR " + setAside.getAbsolutePath()
+                        + " to " + original.toAbsolutePath(), e);
+            }
         }
-        try {
-            Files.createDirectories(pluginsFolder.toPath());
-            Files.move(setAside.toPath(), target, StandardCopyOption.ATOMIC_MOVE);
-            LOGGER.warning("Restored " + target.toAbsolutePath() + " from an interrupted module update (it was "
-                    + setAside.getAbsolutePath() + ")");
-        } catch (IOException e) {
-            LOGGER.log(Level.WARNING, "Could not restore the set-aside module JAR " + setAside.getAbsolutePath()
-                    + " to " + target.toAbsolutePath(), e);
-        }
+        deleteJournal(journalFile.toPath());
+    }
+
+    /** Whether {@code name} is a plain file name: not empty, no path separator, not a directory hop. */
+    private static boolean isPlainFileName(String name) {
+        return name != null && !name.isEmpty() && name.indexOf('/') < 0 && name.indexOf('\\') < 0
+                && !".".equals(name) && !"..".equals(name);
     }
 
     /**
@@ -1276,7 +1344,7 @@ public class PluginInstallUtils {
                     if (name.equals(pluginYml.get("name")) && key != null) {
                         keys.add(key);
                     }
-                } catch (IOException e) {
+                } catch (IOException | SecurityException e) {
                     LOGGER.log(Level.FINE, "Skipping unreadable JAR while resolving module " + name + ": " + jar, e);
                 }
             }
