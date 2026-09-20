@@ -299,8 +299,9 @@ public class PluginInstallCommands extends BaseCommandExecutor {
                 return;
             }
             if (jarFailure instanceof NoSuchFileException) {
+                // The undetermined entries this failure carries were reported once above, by the
+                // walk over the whole chain.
                 sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n("模块已卸载，但在 %s 中没有找到它的 JAR 文件。"), ((NoSuchFileException) jarFailure).getFile()));
-                sendUnreadableEntriesOf(sender, (FileSystemException) jarFailure);
                 return;
             }
             if (jarFailure instanceof FileSystemException) {

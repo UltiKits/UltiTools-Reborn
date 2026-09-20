@@ -510,6 +510,14 @@ public class PluginInstallUtils {
             this.entries = Collections.unmodifiableList(new ArrayList<>(entries));
         }
 
+        /**
+         * @param entries the absolute paths of the entries whose identity could not be determined
+         * @return the carrier for them
+         */
+        public static UndeterminedEntriesException of(List<String> entries) {
+            return new UndeterminedEntriesException(entries);
+        }
+
         /** @return the absolute paths of the entries whose identity could not be determined */
         public List<String> entries() {
             return entries;
@@ -745,8 +753,16 @@ public class PluginInstallUtils {
      * @return the state it is in
      */
     private static EntryState classify(File file, String name) {
-        if (!file.isFile() || !file.getName().endsWith(".jar")) {
+        if (!file.getName().endsWith(".jar") || file.isDirectory()) {
+            // Not an archive this module could ever load from: a file of another kind, or a
+            // directory. Both are answers, not the absence of one.
             return EntryState.NOT_THIS_MODULES;
+        }
+        if (!file.isFile()) {
+            // Named like a JAR and not resolvable right now -- a link whose target is away, for
+            // instance. Nothing can be read from it, and it loads whatever it points at once that
+            // returns, so it is undetermined rather than unrelated.
+            return EntryState.UNDETERMINED;
         }
         try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(file)) {
             java.util.jar.JarEntry entry = jarFile.getJarEntry("plugin.yml");
