@@ -11,6 +11,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -467,7 +468,7 @@ class ModuleUpdateRecoveryTest {
         File journal = writeAwaitingConfirmation(UUID_A, ID, "Fixture", ID + "-2.0.0.jar",
                 ID + "-1.0.0.jar", aside.getName());
 
-        PluginInstallUtils.confirmUpdatesAfterBoot(dataFolder, Collections.singletonList("Fixture"));
+        PluginInstallUtils.confirmUpdatesAfterBoot(dataFolder, Collections.singletonList(ID));
 
         assertThat(installed).as("the module loaded, so the new version stays").exists();
         assertThat(aside).as("nothing needs the old version once the new one has loaded").doesNotExist();
@@ -522,6 +523,48 @@ class ModuleUpdateRecoveryTest {
         assertThat(installed).as("only a journal awaiting confirmation is this hook's business").exists();
         assertThat(aside).exists();
         assertThat(journal).exists();
+    }
+
+    @Test
+    @DisplayName("codex r23 P1: another module answering to the same name does not confirm this update")
+    void updateOfAModuleThatDidNotLoad_isNotConfirmedByASharedName() throws IOException {
+        File installed = writeJar(new File(pluginsFolder, ID + "-2.0.0.jar"), ID, "2.0.0");
+        File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        File journal = writeAwaitingConfirmation(UUID_A, ID, "Fixture", ID + "-2.0.0.jar",
+                ID + "-1.0.0.jar", aside.getName());
+
+        // What loaded is a different module whose plugin.yml happens to carry the same name.
+        PluginInstallUtils.confirmUpdatesAfterBoot(dataFolder, Arrays.asList("Fixture", "other-module"));
+
+        assertThat(installed)
+                .as("confirming on the name alone deletes the only copy that is known to load")
+                .doesNotExist();
+        assertThat(new File(pluginsFolder, ID + "-1.0.0.jar")).exists();
+        assertThat(aside).doesNotExist();
+        assertThat(journal).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("codex r23 P2: a rollback that could not restore every old JAR keeps its journal")
+    void rollbackThatCouldNotRestoreEveryJar_keepsTheJournal() throws IOException {
+        writeJar(new File(pluginsFolder, ID + "-2.0.0.jar"), ID, "2.0.0");
+        File first = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        File second = setAsideJar(ID + "-0.9.0.jar", UUID_A, "0.9.0");
+        // One of the two paths the rollback has to write to is taken by something else.
+        File occupant = new File(pluginsFolder, ID + "-0.9.0.jar");
+        Files.write(occupant.toPath(), "in the way".getBytes(StandardCharsets.UTF_8));
+        File journal = writeAwaitingConfirmation(UUID_A, ID, "Fixture", ID + "-2.0.0.jar",
+                ID + "-1.0.0.jar", first.getName(), ID + "-0.9.0.jar", second.getName());
+
+        PluginInstallUtils.confirmUpdatesAfterBoot(dataFolder, Collections.singletonList("other-module"));
+
+        assertThat(new File(pluginsFolder, ID + "-1.0.0.jar")).as("what could be restored is restored").exists();
+        assertThat(second).as("nothing may drop a JAR the rollback has not placed yet").exists();
+        assertThat(journal)
+                .as("deleting it strands that JAR in staging with no record to retry it from")
+                .exists();
+        assertThat(messagesAtLeastWarning())
+                .anyMatch(m -> m.contains(journal.getAbsolutePath()));
     }
 
     /** A journal of an update that installed its new version and is waiting for the next boot. */

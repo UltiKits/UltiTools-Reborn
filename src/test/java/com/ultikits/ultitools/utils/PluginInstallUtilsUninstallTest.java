@@ -456,6 +456,27 @@ class PluginInstallUtilsUninstallTest {
     }
 
     @Test
+    @DisplayName("codex r23 P2: a JAR that cannot be read is reported even when another JAR matched")
+    void uninstall_reportsAnUnreadableJarBesideAMatchingOne() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        File matching = writeModuleJar(MODULE_NAME);
+        // A second copy of the module, briefly unreadable: its metadata cannot rule it out.
+        File unreadable = new File(pluginsFolder, MODULE_NAME + "-0.9.0.jar");
+        Files.write(unreadable.toPath(), "not readable as a jar".getBytes(StandardCharsets.UTF_8));
+
+        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+        assertThat(matching).as("the JAR that could be identified still goes").doesNotExist();
+        assertThat(thrown)
+                .as("reporting success leaves a JAR that can load the module again once it is readable")
+                .isInstanceOf(FileSystemException.class);
+        assertThat(namedFiles((FileSystemException) thrown)).contains(unreadable.getAbsolutePath());
+    }
+
+    @Test
     @DisplayName("codex r19 P2: an uninstall clears every JAR a damaged journal names, gap or not")
     void uninstall_clearsEveryPairOfAGappedJournal() throws IOException {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
