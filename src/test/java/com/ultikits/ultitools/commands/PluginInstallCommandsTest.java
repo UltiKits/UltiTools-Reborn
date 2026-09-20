@@ -605,6 +605,26 @@ class PluginInstallCommandsTest {
     }
 
     @Test
+    @DisplayName("state C is reported once, however many branches of a failure carry it")
+    void uninstallUnloadThrew_noJarWithUndetermined_reportsThemOnce() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String folder = "/srv/minecraft/plugins/UltiTools/plugins";
+        String unreadable = folder + "/zz-corrupt.jar";
+        java.nio.file.NoSuchFileException noJar = new java.nio.file.NoSuchFileException(folder, null, "no module JAR");
+        noJar.addSuppressed(PluginInstallUtils.UndeterminedEntriesException.of(Collections.singletonList(unreadable)));
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
+                .thenThrow(unloadThrew(noJar));
+
+        executor.uninstallPlugin(player, "test-plugin");
+
+        List<String> messages = drainMessages();
+        assertThat(messages.stream().filter(m -> m.contains("无法读取")).count())
+                .as("it must be reported, and reported once: twice is the operator reading the same files twice")
+                .isEqualTo(1L);
+        assertThat(String.join("\n", messages)).contains(unreadable);
+    }
+
+    @Test
     @DisplayName("state D reached through a failed unload is still reported as a folder, not as a JAR")
     void uninstallUnloadThrew_folderUnlistable_replySaysNothingCanBeConcluded() {
         assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();

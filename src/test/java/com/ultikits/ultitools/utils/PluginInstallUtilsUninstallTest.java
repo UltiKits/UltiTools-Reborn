@@ -301,6 +301,25 @@ class PluginInstallUtilsUninstallTest {
     }
 
     @Test
+    @DisplayName("state C: a .jar entry that cannot be resolved at all is undetermined, not ignored")
+    void stateC_jarEntryThatCannotBeResolved_isUndetermined() throws Exception {
+        Assumptions.assumeTrue(Files.getFileStore(pluginsFolder.toPath()).supportsFileAttributeView("posix"),
+                "needs a file system that supports symbolic links");
+        File jar = writeModuleJar(MODULE_NAME);
+        // A module loaded through a link whose target is away right now: it opens as nothing, and
+        // it loads the module again if the target comes back before the restart.
+        Path link = new File(pluginsFolder, "zz-linked.jar").toPath();
+        Files.createSymbolicLink(link, pluginsFolder.toPath().resolve("elsewhere/Fixture-1.0.0.jar"));
+
+        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+
+        assertThat(jar).doesNotExist();
+        assertThat(report.undeterminedEntries())
+                .as("nothing could be read from it, which is not the same as knowing it is unrelated")
+                .containsExactly(link.toFile().getAbsolutePath());
+    }
+
+    @Test
     @DisplayName("states A-D: an entry is never classified by its file name")
     void fileNameNeverDecidesWhatAnEntryIs() throws IOException {
         File jar = writeModuleJar(MODULE_NAME);
