@@ -51,6 +51,9 @@ import com.sun.net.httpserver.HttpServer;
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class PluginInstallUtilsUpdateOldJarTest {
 
+    /** The class path entry of a compiled fixture module, so a fixture JAR is one a module could load from. */
+    private static final String MODULE_CLASS_ENTRY = "com/ultikits/testfixtures/pluginloadafter/JarModuleTarget.class";
+
     private static final String IDENTIFY_STRING = "fixture-module";
     private static final String NEW_JAR_NAME = IDENTIFY_STRING + "-2.0.0.jar";
 
@@ -440,9 +443,6 @@ class PluginInstallUtilsUpdateOldJarTest {
         exchange.getResponseBody().write(bytes);
         exchange.close();
     }
-
-    /** The class path entry of a compiled fixture module, so a fixture JAR is one a module could load from. */
-    private static final String MODULE_CLASS_ENTRY = "com/ultikits/testfixtures/pluginloadafter/JarModuleTarget.class";
 
     /** Writes a compiled class that extends {@code UltiToolsPlugin} into a fixture JAR. */
     private static void writeModuleClassEntry(JarOutputStream out) throws IOException {

@@ -88,6 +88,9 @@ public class PluginInstallUtils {
     /** Journal format marker, so a future format can be recognised rather than misread. */
     private static final String JOURNAL_FORMAT = "1";
 
+    /** Internal name of the class every module's main class descends from. */
+    private static final String MODULE_BASE_CLASS = "com/ultikits/ultitools/abstracts/UltiToolsPlugin";
+
     /** Journal key saying how far the transaction got; absent means it was still moving JARs. */
     private static final String JOURNAL_PHASE_KEY = "phase";
 
@@ -1550,9 +1553,6 @@ public class PluginInstallUtils {
             return false;
         }
     }
-
-    /** Internal name of the class every module's main class descends from. */
-    private static final String MODULE_BASE_CLASS = "com/ultikits/ultitools/abstracts/UltiToolsPlugin";
 
     /**
      * Whether {@code jarFile} could contain the module class the loader looks for, decided from the

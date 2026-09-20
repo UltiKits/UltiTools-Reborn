@@ -46,6 +46,9 @@ import com.ultikits.ultitools.utils.PluginInstallUtils.UpdateOutcome.Status;
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class PluginInstallUtilsUpdateTransactionTest {
 
+    /** The class path entry of a compiled fixture module, so a fixture JAR is one a module could load from. */
+    private static final String MODULE_CLASS_ENTRY = "com/ultikits/testfixtures/pluginloadafter/JarModuleTarget.class";
+
     private static final String IDENTIFY_STRING = "fixture-module";
     private static final String NEW_JAR_NAME = IDENTIFY_STRING + "-2.0.0.jar";
 
@@ -890,7 +893,7 @@ class PluginInstallUtilsUpdateTransactionTest {
                 if ("plugin.yml".equals(entry.getName())) {
                     out.write(jarBytesPluginYml("9.9.9"));
                 } else {
-                    try (java.io.InputStream in = signed.getInputStream(entry)) {
+                    try (InputStream in = signed.getInputStream(entry)) {
                         byte[] buffer = new byte[4096];
                         for (int read = in.read(buffer); read > 0; read = in.read(buffer)) {
                             out.write(buffer, 0, read);
@@ -971,9 +974,6 @@ class PluginInstallUtilsUpdateTransactionTest {
         exchange.getResponseBody().write(bytes);
         exchange.close();
     }
-
-    /** The class path entry of a compiled fixture module, so a fixture JAR is one a module could load from. */
-    private static final String MODULE_CLASS_ENTRY = "com/ultikits/testfixtures/pluginloadafter/JarModuleTarget.class";
 
     /** Writes a compiled class that extends {@code UltiToolsPlugin} into a fixture JAR. */
     private static void writeModuleClassEntry(JarOutputStream out) throws IOException {
