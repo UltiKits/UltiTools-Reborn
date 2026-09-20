@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.commands;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.FileSystemException;
 import java.nio.file.NoSuchFileException;
@@ -281,8 +282,13 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         collectNamedFiles(failure, all);
         List<String> leftovers = new ArrayList<>();
         List<String> moduleJars = new ArrayList<>();
+        // Compared by parent directory, not by searching the path for the directory's name: a JAR
+        // may legitimately be called something.upm-staging.jar, and calling that an inert leftover
+        // would understate what it does at the next start (Codex review r20).
+        File staging = new File(UltiTools.getInstance().getDataFolder(), ".upm-staging");
         for (String file : all) {
-            if (file.contains(".upm-staging")) {
+            File parent = new File(file).getParentFile();
+            if (parent != null && parent.getAbsolutePath().equals(staging.getAbsolutePath())) {
                 leftovers.add(file);
             } else {
                 moduleJars.add(file);

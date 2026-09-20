@@ -631,6 +631,11 @@ class PluginInstallCommandsTest {
         mockedUtils.when(() -> PluginInstallUtils.updatePluginTransactionally(identifyString)).thenReturn(result);
     }
 
+    /** A path inside the staging directory of the data folder these tests mock. */
+    private static String stagingPath(String fileName) {
+        return new File(new File(UltiTools.getInstance().getDataFolder(), ".upm-staging"), fileName).getAbsolutePath();
+    }
+
     private String updateReply(String pluginName) {
         Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
                 () -> executor.updatePlugin(player, pluginName));
@@ -905,7 +910,7 @@ class PluginInstallCommandsTest {
     @DisplayName("codex r19 P2: a mixed failure keeps the module-JAR warning as well as the leftover one")
     void uninstallMixedFailure_reportsBothCategories() {
         String jar = "/srv/minecraft/plugins/UltiTools/plugins/Fixture-1.0.0.jar";
-        String leftover = "/srv/minecraft/plugins/UltiTools/.upm-staging/8420a849.txn";
+        String leftover = stagingPath("8420a849.txn");
         java.nio.file.FileSystemException failure =
                 new java.nio.file.FileSystemException(jar, null, "Permission denied");
         failure.addSuppressed(new java.nio.file.FileSystemException(leftover, null, "Permission denied"));
@@ -927,8 +932,8 @@ class PluginInstallCommandsTest {
     @DisplayName("codex r18 P2: every file an uninstall could not delete is named, however deeply attached")
     void uninstallFailure_namesNestedSuppressedFiles() {
         String jar = "/srv/minecraft/plugins/UltiTools/plugins/Fixture-1.0.0.jar";
-        String firstLeftover = "/srv/minecraft/plugins/UltiTools/.upm-staging/8420a849.txn";
-        String secondLeftover = "/srv/minecraft/plugins/UltiTools/.upm-staging/Fixture-1.0.0.jar.8420a849.old";
+        String firstLeftover = stagingPath("8420a849.txn");
+        String secondLeftover = stagingPath("Fixture-1.0.0.jar.8420a849.old");
         java.nio.file.FileSystemException jarFailure =
                 new java.nio.file.FileSystemException(jar, null, "Permission denied");
         java.nio.file.FileSystemException stagingFailure =
@@ -951,7 +956,7 @@ class PluginInstallCommandsTest {
     @Test
     @DisplayName("codex r10 P2: a staging file that could not be deleted is not reported as a module JAR")
     void uninstallStagingFailure_isNotReportedAsAModuleJar() {
-        String journal = "/srv/minecraft/plugins/UltiTools/.upm-staging/8420a849-1c2d-4e5f-9a0b-1c2d3e4f5a6b.txn";
+        String journal = stagingPath("8420a849-1c2d-4e5f-9a0b-1c2d3e4f5a6b.txn");
         mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin"))
                 .thenThrow(new java.nio.file.FileSystemException(journal, null, "could not be read"));
 
