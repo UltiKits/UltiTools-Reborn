@@ -384,7 +384,10 @@ This section governs the third kind.
   and nothing was unloaded either". A caller that checked the boolean alone now sees these as
   exceptions rather than a success it did not get. The method also no longer builds a `jar:file:`
   URL for every entry of the modules folder, so a stray file or a subdirectory there no longer
-  fails the uninstall (#504).
+  fails the uninstall (#504). A `.jar` whose `plugin.yml` cannot be read is not treated as
+  unrelated: every such JAR is reported when none could be identified as the module's and a module
+  was unloaded, and the ones named like the module are reported once its JARs have been deleted —
+  each of them loads the module again as soon as it becomes readable.
 
 ### Behavioral changes that do need one
 
