@@ -215,6 +215,15 @@ class PluginInstallUtilsUpdateTransactionTest {
                 .as("the refused update must not start a second download")
                 .isEqualTo(1);
         assertThat(outcome.getStatus()).isEqualTo(Status.UPDATED);
+        // The in-memory guard is released when the transaction ends; what holds the module after
+        // that is its journal, until a restart confirms the update (sweep row B1). Resolving the
+        // journal, which is what the restart does, is what lets the next update start.
+        for (String name : stagingEntries()) {
+            if (name.endsWith(".txn")) {
+                // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
+                assertThat(new File(stagingFolder, name).delete()).isTrue();
+            }
+        }
         assertThat(PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING).getStatus())
                 .as("the guard is released once the running update finishes")
                 .isEqualTo(Status.UPDATED);

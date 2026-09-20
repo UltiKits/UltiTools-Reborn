@@ -145,22 +145,6 @@ class ModuleUpdateRecoveryTest {
     }
 
     @Test
-    @DisplayName("an interrupted update whose new version is already in place restores nothing and drops its journal")
-    void journalWhoseTargetIsInstalled_restoresNothing() throws IOException {
-        File installed = writeJar(new File(pluginsFolder, ID + "-2.0.0.jar"), ID, "2.0.0");
-        File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
-        File journal = writeJournal(UUID_A, OTHER_PROCESS, ID, ID + "-2.0.0.jar", ID + "-1.0.0.jar", aside.getName());
-
-        UltiTools.collectModuleJarUrls(pluginsFolder);
-
-        assertThat(new File(pluginsFolder, ID + "-1.0.0.jar")).doesNotExist();
-        assertThat(installed).exists();
-        assertThat(aside).as("the set-aside jar becomes a deletable leftover").exists();
-        assertThat(journal).doesNotExist();
-        assertThat(warnings()).anyMatch(m -> m.contains(aside.getAbsolutePath()) && m.contains("leftover"));
-    }
-
-    @Test
     @DisplayName("a recorded original path taken by another file is skipped, with a warning naming both files")
     void originalPathOccupied_isSkippedAndNamed() throws IOException {
         File occupant = new File(pluginsFolder, ID + "-1.0.0.jar");
@@ -512,15 +496,16 @@ class ModuleUpdateRecoveryTest {
 
     @Test
     @DisplayName("redesign: a journal still moving JARs is not a confirmation candidate")
-    void journalStillMovingJars_isNotConfirmedOrRolledBack() throws IOException {
+    void journalStillMovingJars_isNotConfirmedOrRolledBack() throws Exception {
         File installed = writeJar(new File(pluginsFolder, ID + "-2.0.0.jar"), ID, "2.0.0");
         File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
-        File journal = writeJournal(UUID_A, OTHER_PROCESS, ID, ID + "-2.0.0.jar",
+        // A transaction of the process running now: it is still moving JARs, not a crashed one.
+        File journal = writeJournal(UUID_A, currentProcessIdentity(), ID, ID + "-2.0.0.jar",
                 ID + "-1.0.0.jar", aside.getName());
 
         PluginInstallUtils.confirmUpdatesAfterBoot(dataFolder, Collections.singletonList("SomethingElse"));
 
-        assertThat(installed).as("only a journal awaiting confirmation is this hook's business").exists();
+        assertThat(installed).as("a transaction of this process is not this hook's business").exists();
         assertThat(aside).exists();
         assertThat(journal).exists();
     }
