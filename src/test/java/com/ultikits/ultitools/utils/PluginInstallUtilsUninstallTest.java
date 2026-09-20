@@ -320,6 +320,28 @@ class PluginInstallUtilsUninstallTest {
     }
 
     @Test
+    @DisplayName("state D: a modules folder that is a link to nowhere is a scan failure, not an absent JAR")
+    void stateD_modulesFolderThatIsAnUnresolvableLink_isReportedAsAScanFailure() throws Exception {
+        Assumptions.assumeTrue(Files.getFileStore(dataFolder.toPath()).supportsFileAttributeView("posix"),
+                "needs a file system that supports symbolic links");
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        // The folder is a link whose target is away: its contents are unknown, and the module's
+        // JAR comes back with the target.
+        Files.delete(pluginsFolder.toPath());
+        Files.createSymbolicLink(pluginsFolder.toPath(), dataFolder.toPath().resolve("elsewhere"));
+
+        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+        assertThat(thrown)
+                .as("its contents are unknown, so 'no JAR of this module is here' is not something to claim")
+                .isInstanceOf(java.nio.file.AccessDeniedException.class);
+        assertThat(((FileSystemException) thrown).getFile()).isEqualTo(pluginsFolder.getAbsolutePath());
+    }
+
+    @Test
     @DisplayName("states A-D: an entry is never classified by its file name")
     void fileNameNeverDecidesWhatAnEntryIs() throws IOException {
         File jar = writeModuleJar(MODULE_NAME);
