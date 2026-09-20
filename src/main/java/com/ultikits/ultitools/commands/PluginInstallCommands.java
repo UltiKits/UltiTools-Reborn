@@ -223,9 +223,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             }
             sendUndeterminedEntries(sender, report);
         } catch (java.nio.file.AccessDeniedException e) {
-            // The modules folder is there and its contents are unknown, so nothing may be claimed
-            // about what it still holds.
-            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("模块目录 %s 无法读取，因此无法确认其中是否还有该模块的 JAR 文件。"), e.getFile()));
+            sendUnlistableFolder(sender, e.getFile());
         } catch (IllegalStateException e) {
             // The module's own unload threw. It has still been removed from the loaded modules and
             // its jars still deleted where possible: report both, so the operator knows whether it
@@ -236,12 +234,40 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             // The module was found by this exact name and unloaded, but no jar carries it -- a
             // spelling hint would be false here (#501).
             sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n("模块已卸载，但在 %s 中没有找到它的 JAR 文件。"), e.getFile()));
+            sendUnreadableEntriesOf(sender, e);
         } catch (FileSystemException e) {
             sendUndeletedJars(sender, e);
         } catch (IOException e) {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("删除失败！文件访问错误！请手动删除！"));
             sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"));
         }
+    }
+
+    /**
+     * The modules folder is there and its contents are unknown, so nothing may be claimed about
+     * what it still holds -- including whether a JAR of this module is among it.
+     */
+    private static void sendUnlistableFolder(CommandSender sender, String folder) {
+        sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("模块目录 %s 无法读取，因此无法确认其中是否还有该模块的 JAR 文件。"), folder));
+    }
+
+    /**
+     * Names the entries a no-JAR-found failure carries with it: state C survives that answer, and
+     * one of those entries may be the module's own JAR.
+     */
+    private static void sendUnreadableEntriesOf(CommandSender sender, FileSystemException failure) {
+        List<String> files = new ArrayList<>();
+        for (Throwable suppressed : failure.getSuppressed()) {
+            if (suppressed instanceof FileSystemException && ((FileSystemException) suppressed).getFile() != null) {
+                files.add(((FileSystemException) suppressed).getFile());
+            }
+        }
+        if (files.isEmpty()) {
+            return;
+        }
+        sender.sendMessage(ChatColor.YELLOW + String.format(
+                UltiTools.getInstance().i18n("模块目录中有 %d 个文件无法读取，无法判断其中是否有该模块的副本；如果有，重启后该模块会再次加载：%s"),
+                files.size(), String.join(", ", files)));
     }
 
     /**
@@ -264,8 +290,15 @@ public class PluginInstallCommands extends BaseCommandExecutor {
      */
     private static void sendJarOutcomeAfterUnloadError(CommandSender sender, IllegalStateException unloadError) {
         for (Throwable jarFailure : unloadError.getSuppressed()) {
+            if (jarFailure instanceof java.nio.file.AccessDeniedException) {
+                // State D reached through a failed unload: a directory is not a JAR, and saying it
+                // will load the module again would be nonsense.
+                sendUnlistableFolder(sender, ((FileSystemException) jarFailure).getFile());
+                return;
+            }
             if (jarFailure instanceof NoSuchFileException) {
                 sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n("模块已卸载，但在 %s 中没有找到它的 JAR 文件。"), ((NoSuchFileException) jarFailure).getFile()));
+                sendUnreadableEntriesOf(sender, (FileSystemException) jarFailure);
                 return;
             }
             if (jarFailure instanceof FileSystemException) {

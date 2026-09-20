@@ -655,7 +655,8 @@ public class PluginInstallUtils {
                         "the modules folder exists but could not be listed, so nothing can be concluded"
                                 + " about the JARs it holds");
             }
-            return new UninstallReport(noJarFound(folder, name, moduleUnloaded), Collections.emptyList());
+            return new UninstallReport(noJarFound(folder, name, moduleUnloaded, Collections.<File>emptyList()),
+                    Collections.emptyList());
         }
         List<File> matchingJars = new ArrayList<>();
         List<File> undetermined = new ArrayList<>();
@@ -674,7 +675,10 @@ public class PluginInstallUtils {
                     + " module is unknown: " + String.join(", ", undeterminedPaths));
         }
         if (matchingJars.isEmpty()) {
-            return new UninstallReport(noJarFound(folder, name, moduleUnloaded), undeterminedPaths);
+            // State C outlives this answer: "nothing here could be identified as this module's" is
+            // true, and so is "these entries said nothing", and one of them may be the module's own
+            // JAR. Both facts travel together rather than the first discarding the second.
+            return new UninstallReport(noJarFound(folder, name, moduleUnloaded, undetermined), undeterminedPaths);
         }
         deleteAllOrThrow(matchingJars);
         return new UninstallReport(true, undeterminedPaths);
@@ -768,16 +772,23 @@ public class PluginInstallUtils {
      * @param folder         the modules folder
      * @param name           the module's runtime name
      * @param moduleUnloaded whether a loaded module of that name was unloaded first
+     * @param undetermined   the entries nothing could be read from, attached to the failure
      * @return {@code false}, the "no such module" answer, when nothing was unloaded either
-     * @throws java.nio.file.NoSuchFileException when a module was unloaded and its JAR is missing
+     * @throws java.nio.file.NoSuchFileException when a module was unloaded and its JAR is missing,
+     *     with one suppressed entry per undetermined file
      */
-    private static boolean noJarFound(File folder, String name, boolean moduleUnloaded)
-            throws java.nio.file.NoSuchFileException {
+    private static boolean noJarFound(File folder, String name, boolean moduleUnloaded,
+                                      List<File> undetermined) throws java.nio.file.NoSuchFileException {
         if (moduleUnloaded) {
             // The module was loaded from somewhere, so "check the spelling" is the wrong answer:
             // the operator needs to know the module is unloaded and its JAR was not found (#501).
-            throw new java.nio.file.NoSuchFileException(folder.getAbsolutePath(), null,
-                    "no module JAR named " + name);
+            java.nio.file.NoSuchFileException failure = new java.nio.file.NoSuchFileException(
+                    folder.getAbsolutePath(), null, "no module JAR named " + name);
+            for (File entry : undetermined) {
+                failure.addSuppressed(new java.nio.file.FileSystemException(entry.getAbsolutePath(), null,
+                        "could not be read, so whether it is a JAR of module " + name + " is unknown"));
+            }
+            throw failure;
         }
         return false;
     }
