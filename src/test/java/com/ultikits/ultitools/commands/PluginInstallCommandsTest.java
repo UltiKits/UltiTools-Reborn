@@ -618,7 +618,7 @@ class PluginInstallCommandsTest {
         executor.uninstallPlugin(player, "test-plugin");
 
         List<String> messages = drainMessages();
-        assertThat(messages.stream().filter(m -> m.contains("无法读取")).count())
+        assertThat(messages.stream().filter(m -> m.contains("无法确认身份")).count())
                 .as("it must be reported, and reported once: twice is the operator reading the same files twice")
                 .isEqualTo(1L);
         assertThat(String.join("\n", messages)).contains(unreadable);
@@ -659,8 +659,8 @@ class PluginInstallCommandsTest {
                 .doesNotContain("拼写");
     }
 
-    private static IllegalStateException unloadThrew(Exception jarOutcome) {
-        IllegalStateException failure = new IllegalStateException(
+    private static PluginInstallUtils.ModuleUnloadFailedException unloadThrew(Exception jarOutcome) {
+        PluginInstallUtils.ModuleUnloadFailedException failure = PluginInstallUtils.ModuleUnloadFailedException.of(
                 "Module test-plugin was removed from the loaded modules, but its unload threw",
                 new IllegalStateException("module unload step boom"));
         if (jarOutcome != null) {

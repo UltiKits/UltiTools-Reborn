@@ -486,12 +486,13 @@ class PluginInstallUtilsUninstallTest {
         doCallRealMethod().when(bystander).unregisterSelf();
         pluginManager.getPluginList().add(target);
         pluginManager.getPluginList().add(bystander);
-        // A JAR that declares the target and is also the bystander's code source: whatever decided
-        // to get here, destroying a running module's JAR is not an outcome to let through.
-        File shared = writeModuleJar(MODULE_NAME);
+        // One JAR both modules were loaded from, declaring neither: the target is matched by its
+        // runtime name and the JAR is its code source, so classification reaches a delete that
+        // would also take a running module's JAR. Whatever decided to get here, that is not an
+        // outcome to let through.
+        File shared = writeJarWithoutPluginYml("zz-shared.jar");
 
-        Throwable thrown = catchThrowable(() -> uninstallReporting(MODULE_NAME,
-                module -> module == bystander ? shared : null));
+        Throwable thrown = catchThrowable(() -> uninstallReporting(MODULE_NAME, module -> shared));
 
         assertThat(thrown)
                 .as("the guard must fire at the point of destruction, not silently upstream")
