@@ -411,6 +411,29 @@ class PluginInstallUtilsUninstallTest {
     }
 
     @Test
+    @DisplayName("codex r8 P2: a module with no identify-string is still guarded, by its name")
+    void uninstallOfAModuleWithoutAnIdentifyString_isSerialised() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        when(plugin.getIdentifyString()).thenReturn(null);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        writeModuleJar(MODULE_NAME);
+        AtomicReference<Throwable> reentrant = new AtomicReference<>();
+        // The second uninstall runs while the first holds the guard, from inside the unload.
+        org.mockito.Mockito.doAnswer(invocation -> {
+            reentrant.set(catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME)));
+            return null;
+        }).when(commandManager).unregisterAll(plugin);
+
+        PluginInstallUtils.uninstallPlugin(MODULE_NAME);
+
+        assertThat(reentrant.get())
+                .as("without a key, both callers unload the same instance and race to delete its JAR")
+                .isInstanceOf(com.ultikits.ultitools.exceptions.PluginModuleException.class);
+    }
+
+    @Test
     @DisplayName("codex r7 P2: an uninstall that cannot clear the module's journal does not report success")
     void uninstall_reportsAJournalItCouldNotClear() throws IOException {
         Assumptions.assumeFalse("root".equals(System.getProperty("user.name")),

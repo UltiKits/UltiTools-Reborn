@@ -222,6 +222,25 @@ class ModuleUpdateRecoveryTest {
     }
 
     @Test
+    @DisplayName("codex r8 P2: an occupied original path keeps the journal, so its JAR is never called disposable")
+    void originalPathOccupied_keepsTheJournal() throws IOException {
+        File occupant = new File(pluginsFolder, ID + "-1.0.0.jar");
+        Files.write(occupant.toPath(), "not the module".getBytes(StandardCharsets.UTF_8));
+        File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        File journal = writeJournal(UUID_A, OTHER_PROCESS, ID, ID + "-2.0.0.jar",
+                ID + "-1.0.0.jar", aside.getName());
+
+        UltiTools.collectModuleJarUrls(pluginsFolder);
+
+        assertThat(occupant).hasContent("not the module");
+        assertThat(aside).exists();
+        assertThat(journal)
+                .as("the set-aside JAR is still unresolved, so the record of it must stay")
+                .exists();
+        assertNotAdvertisedAsDeletable(aside);
+    }
+
+    @Test
     @DisplayName("review r6 IN-02: one unusable name in a journal does not abandon that journal's other JARs")
     void oneUnusableNameInAJournal_skipsOnlyThatPair() throws IOException {
         File good = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
