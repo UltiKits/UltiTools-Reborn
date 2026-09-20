@@ -6,15 +6,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.lang.reflect.Type;
-import java.net.JarURLConnection;
-import java.net.URI;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -29,6 +26,7 @@ import com.google.gson.reflect.TypeToken;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.entities.PluginEntity;
+import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
 
 /**
@@ -470,38 +468,214 @@ public class PluginInstallUtils {
     }
 
     /**
-     * Uninstall plugin.
+     * Uninstalls a module: unloads every loaded instance of it and deletes its JARs.
      *
-     * @param name the plugin name
-     * @return whether the uninstall succeeded
-     * @throws IOException if an I/O error occurs
+     * <p>Unloading goes through {@link PluginManager#unregister(UltiToolsPlugin)}, the framework's
+     * one full unload path (#503). Calling {@code plugin.unregisterSelf()} directly, as this method
+     * used to, skipped everything {@code unregister} does first -- cancelling the module's
+     * {@code @Scheduled} tasks, releasing its {@code @PlayerCache} beans, its tab-completion
+     * completers, its EventBus handlers and its conditional-bean records, then closing its context.
+     * A module "uninstalled" that way kept running its repeating tasks until the next restart.
+     *
+     * <p>What it reports is what happened on disk (#501). The old implementation ignored
+     * {@link File#delete()}'s result and returned {@code true} whether or not the JAR was removed,
+     * and it stopped at the first matching JAR, so a second JAR of the same module loaded it again
+     * on restart. Now every JAR whose {@code plugin.yml} {@code name} matches is deleted, and what the
+     * method returns or throws says which of those things happened.
+     *
+     * @param name the module's runtime name, as its {@code plugin.yml} declares it
+     * @return {@code true} when every matching JAR was deleted; {@code false} when no JAR matched
+     *     and no loaded module of that name was unloaded either -- the "check the spelling" case
+     * @throws java.nio.file.FileSystemException when a matching JAR could not be deleted, naming
+     *     every JAR still on disk
+     * @throws java.nio.file.NoSuchFileException when a loaded module was unloaded but no JAR of it
+     *     could be found, which is not a spelling mistake and must not be reported as one
+     * @throws IllegalStateException when the module's own unload threw. The module is still removed
+     *     from the loaded modules and its JARs are still deleted: {@code unregister} has closed its
+     *     context by then, and keeping the JAR would bring back on restart a module the operator
+     *     asked to remove. A JAR failure is attached as suppressed.
+     * @throws IOException if the modules folder cannot be read
      */
     public static boolean uninstallPlugin(String name) throws IOException {
-        AtomicReference<UltiToolsPlugin> ultiToolsPluginAtomicReference = new AtomicReference<>();
-        UltiTools.getInstance().getPluginManager().getPluginList().stream().filter(plugin -> plugin.getPluginName().equals(name)).forEach(plugin -> {
-            ultiToolsPluginAtomicReference.set(plugin);
-            plugin.unregisterSelf();
-        });
-        UltiTools.getInstance().getPluginManager().getPluginList().remove(ultiToolsPluginAtomicReference.get());
+        PluginManager pluginManager = UltiTools.getInstance().getPluginManager();
+        List<UltiToolsPlugin> matches = new ArrayList<>();
+        for (UltiToolsPlugin plugin : pluginManager.getPluginList()) {
+            if (plugin.getPluginName().equals(name)) {
+                matches.add(plugin);
+            }
+        }
+        Throwable unloadFailure = unloadEvery(name, matches, pluginManager);
+        boolean jarsDeleted;
+        try {
+            jarsDeleted = deleteModuleJars(name, !matches.isEmpty());
+        } catch (IOException jarFailure) {
+            if (unloadFailure != null) {
+                throw unloadFailed(name, unloadFailure, jarFailure);
+            }
+            throw jarFailure;
+        }
+        if (unloadFailure != null) {
+            throw unloadFailed(name, unloadFailure, null);
+        }
+        return jarsDeleted;
+    }
+
+    /**
+     * Unloads every matching module through the framework's full unload path and delists it.
+     *
+     * <p>A module that throws while unloading is collected rather than propagated: it is already
+     * unloaded and its context already closed, so the rest of the uninstall goes ahead and the
+     * failure is reported together with the JAR outcome. It leaves the plugin list either way,
+     * because a listed module whose context is closed would be reported as still loaded.
+     *
+     * @param name          the module's runtime name, for the log line
+     * @param matches       the loaded instances of it
+     * @param pluginManager the manager that owns the plugin list
+     * @return the first unload failure with any later one attached, or {@code null}
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // one module's failure must not stop the uninstall
+    private static Throwable unloadEvery(String name, List<UltiToolsPlugin> matches, PluginManager pluginManager) {
+        Throwable unloadFailure = null;
+        for (UltiToolsPlugin plugin : matches) {
+            try {
+                pluginManager.unregister(plugin);
+            } catch (Exception | Error e) {
+                LOGGER.log(Level.SEVERE, "Module " + name + " threw while unloading for uninstall; "
+                        + "it has been removed from the loaded modules", e);
+                if (unloadFailure == null) {
+                    unloadFailure = e;
+                } else {
+                    unloadFailure.addSuppressed(e);
+                }
+            } finally {
+                pluginManager.getPluginList().remove(plugin);
+            }
+        }
+        return unloadFailure;
+    }
+
+    /**
+     * The JAR half of {@link #uninstallPlugin(String)}: deletes every JAR whose {@code plugin.yml}
+     * {@code name} matches, not only the first one listed -- a second JAR of the same module loads
+     * it again on restart.
+     *
+     * @param name           the module's runtime name
+     * @param moduleUnloaded whether a loaded module of that name was unloaded first
+     * @return {@code true} if every matching JAR was deleted
+     * @throws IOException as documented on {@link #uninstallPlugin(String)}
+     */
+    private static boolean deleteModuleJars(String name, boolean moduleUnloaded) throws IOException {
         File folder = new File(UltiTools.getInstance().getDataFolder() + "/plugins");
         File[] listFiles = folder.listFiles();
         if (listFiles == null) {
-            return false;
+            return noJarFound(folder, name, moduleUnloaded);
         }
+        List<File> matchingJars = new ArrayList<>();
         for (File file : listFiles) {
-            URL url = URI.create("jar:file:" + file.getAbsolutePath() + "!/plugin.yml").toURL();
-            JarURLConnection jarConnection = (JarURLConnection) url.openConnection();
-            InputStream inputStream = jarConnection.getInputStream();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
-            YamlConfiguration pluginConfig = YamlConfiguration.loadConfiguration(reader);
-            String pluginName = pluginConfig.getString("name");
-            if (name.equals(pluginName)) {
-                inputStream.close();
-                reader.close();
-                file.delete();
-                return true;
+            // Anything that is not a readable module JAR is skipped rather than fatal: the old
+            // implementation built a `jar:file:` URL for every entry in the folder, so a stray
+            // file or a subdirectory failed the whole uninstall (#504).
+            if (name.equals(moduleNameOf(file))) {
+                matchingJars.add(file);
             }
+        }
+        if (matchingJars.isEmpty()) {
+            return noJarFound(folder, name, moduleUnloaded);
+        }
+        deleteAllOrThrow(matchingJars);
+        return true;
+    }
+
+    /**
+     * The {@code plugin.yml} {@code name} a JAR declares.
+     *
+     * @param file an entry of the modules folder
+     * @return the name, or {@code null} when this is not a JAR that declares one
+     */
+    private static String moduleNameOf(File file) {
+        if (!file.isFile() || !file.getName().endsWith(".jar")) {
+            return null;
+        }
+        try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(file)) {
+            java.util.jar.JarEntry entry = jarFile.getJarEntry("plugin.yml");
+            if (entry == null) {
+                return null;
+            }
+            try (InputStream is = jarFile.getInputStream(entry);
+                 BufferedReader reader = new BufferedReader(new InputStreamReader(is))) {
+                return YamlConfiguration.loadConfiguration(reader).getString("name");
+            }
+        } catch (IOException | SecurityException e) {
+            LOGGER.log(Level.FINE, "Skipping unreadable plugin JAR: " + file.getName(), e);
+            return null;
+        }
+    }
+
+    /**
+     * Deletes every file, and reports the ones that are still there.
+     *
+     * @param files the JARs to delete
+     * @throws java.nio.file.FileSystemException naming the first JAR that survived, with any other
+     *     attached as suppressed -- each one of them loads the module again on restart
+     */
+    private static void deleteAllOrThrow(List<File> files) throws java.nio.file.FileSystemException {
+        java.nio.file.FileSystemException failure = null;
+        for (File file : files) {
+            try {
+                // A file already gone is the outcome asked for, not a failure: reporting it would
+                // name a JAR that is no longer on disk.
+                java.nio.file.Files.deleteIfExists(file.toPath());
+            } catch (IOException e) {
+                java.nio.file.FileSystemException fileFailure =
+                        new java.nio.file.FileSystemException(file.getAbsolutePath(), null, e.getMessage());
+                fileFailure.initCause(e);
+                if (failure == null) {
+                    failure = fileFailure;
+                } else {
+                    failure.addSuppressed(fileFailure);
+                }
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    /**
+     * The failure raised when a module's own unload threw, after the uninstall went ahead anyway.
+     *
+     * @param name          the module's runtime name
+     * @param unloadFailure what its unload threw
+     * @param jarFailure    the JAR outcome to attach, or {@code null} when the JARs were deleted
+     * @return the exception to throw
+     */
+    private static IllegalStateException unloadFailed(String name, Throwable unloadFailure, IOException jarFailure) {
+        IllegalStateException failure = new IllegalStateException(
+                "Module " + name + " was removed from the loaded modules, but its unload threw", unloadFailure);
+        if (jarFailure != null) {
+            failure.addSuppressed(jarFailure);
+        }
+        return failure;
+    }
+
+    /**
+     * What "no JAR of this module is here" means, which depends on whether one was loaded.
+     *
+     * @param folder         the modules folder
+     * @param name           the module's runtime name
+     * @param moduleUnloaded whether a loaded module of that name was unloaded first
+     * @return {@code false}, the "no such module" answer, when nothing was unloaded either
+     * @throws java.nio.file.NoSuchFileException when a module was unloaded and its JAR is missing
+     */
+    private static boolean noJarFound(File folder, String name, boolean moduleUnloaded)
+            throws java.nio.file.NoSuchFileException {
+        if (moduleUnloaded) {
+            // The module was loaded from somewhere, so "check the spelling" is the wrong answer:
+            // the operator needs to know the module is unloaded and its JAR was not found (#501).
+            throw new java.nio.file.NoSuchFileException(folder.getAbsolutePath(), null,
+                    "no module JAR named " + name);
         }
         return false;
     }
+
 }
