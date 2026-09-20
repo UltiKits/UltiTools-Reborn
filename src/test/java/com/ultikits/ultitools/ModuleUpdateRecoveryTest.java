@@ -11,6 +11,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.jar.JarEntry;
@@ -27,6 +28,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+
+import com.ultikits.ultitools.utils.PluginInstallUtils;
 
 /**
  * Review r4 WR-01 and review r5 WR-01: an update that a crash interrupted must be recovered at the
@@ -441,6 +444,81 @@ class ModuleUpdateRecoveryTest {
                                        String... originalAndAsideNames) throws IOException {
         File journal = writeJournal(transaction, process, module, target, originalAndAsideNames);
         String text = new String(Files.readAllBytes(journal.toPath()), StandardCharsets.UTF_8) + "phase=committed\n";
+        Files.write(journal.toPath(), text.getBytes(StandardCharsets.UTF_8));
+        return journal;
+    }
+
+    @Test
+    @DisplayName("redesign: a module that loaded after its update confirms the update, and the old JAR goes")
+    void updateConfirmedByTheNextBoot_deletesTheOldJarAndTheJournal() throws IOException {
+        File installed = writeJar(new File(pluginsFolder, ID + "-2.0.0.jar"), ID, "2.0.0");
+        File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        File journal = writeAwaitingConfirmation(UUID_A, ID, "Fixture", ID + "-2.0.0.jar",
+                ID + "-1.0.0.jar", aside.getName());
+
+        PluginInstallUtils.confirmUpdatesAfterBoot(dataFolder, Collections.singletonList("Fixture"));
+
+        assertThat(installed).as("the module loaded, so the new version stays").exists();
+        assertThat(aside).as("nothing needs the old version once the new one has loaded").doesNotExist();
+        assertThat(journal).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("redesign: a module that did not load after its update is rolled back to the version that did")
+    void updateNotConfirmedByTheNextBoot_isRolledBack() throws IOException {
+        File installed = writeJar(new File(pluginsFolder, ID + "-2.0.0.jar"), ID, "2.0.0");
+        File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        File journal = writeAwaitingConfirmation(UUID_A, ID, "Fixture", ID + "-2.0.0.jar",
+                ID + "-1.0.0.jar", aside.getName());
+
+        PluginInstallUtils.confirmUpdatesAfterBoot(dataFolder, Collections.singletonList("SomethingElse"));
+
+        assertThat(installed).as("the version that did not load must not be there at the next start").doesNotExist();
+        assertThat(new File(pluginsFolder, ID + "-1.0.0.jar"))
+                .as("the version that did load is put back where it was")
+                .exists();
+        assertThat(aside).doesNotExist();
+        assertThat(journal).doesNotExist();
+        assertThat(warnings())
+                .as("the operator must be told the module is absent now and back at the next restart")
+                .anyMatch(m -> m.contains("Fixture") && m.contains("1.0.0") && m.contains("restart"));
+    }
+
+    @Test
+    @DisplayName("redesign: a failure while confirming an update never breaks boot")
+    void confirmationFailure_neverBreaksBoot() throws IOException {
+        File staging = new File(dataFolder, ".upm-staging");
+        File unreadable = new File(staging, UUID_A + ".txn");
+        assertThat(unreadable.mkdir()).as("a directory in a journal's place cannot be read as one").isTrue();
+
+        assertThatCode(() -> PluginInstallUtils.confirmUpdatesAfterBoot(dataFolder, Collections.singletonList("Fixture")))
+                .as("boot must continue whatever this hook meets")
+                .doesNotThrowAnyException();
+        assertThatCode(() -> PluginInstallUtils.confirmUpdatesAfterBoot(null, null))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("redesign: a journal still moving JARs is not a confirmation candidate")
+    void journalStillMovingJars_isNotConfirmedOrRolledBack() throws IOException {
+        File installed = writeJar(new File(pluginsFolder, ID + "-2.0.0.jar"), ID, "2.0.0");
+        File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        File journal = writeJournal(UUID_A, OTHER_PROCESS, ID, ID + "-2.0.0.jar",
+                ID + "-1.0.0.jar", aside.getName());
+
+        PluginInstallUtils.confirmUpdatesAfterBoot(dataFolder, Collections.singletonList("SomethingElse"));
+
+        assertThat(installed).as("only a journal awaiting confirmation is this hook's business").exists();
+        assertThat(aside).exists();
+        assertThat(journal).exists();
+    }
+
+    /** A journal of an update that installed its new version and is waiting for the next boot. */
+    private File writeAwaitingConfirmation(String transaction, String module, String name, String target,
+                                           String... originalAndAsideNames) throws IOException {
+        File journal = writeJournal(transaction, OTHER_PROCESS, module, target, originalAndAsideNames);
+        String text = new String(Files.readAllBytes(journal.toPath()), StandardCharsets.UTF_8)
+                + "name=" + name + "\nphase=awaiting-boot-confirmation\n";
         Files.write(journal.toPath(), text.getBytes(StandardCharsets.UTF_8));
         return journal;
     }

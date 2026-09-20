@@ -412,7 +412,37 @@ class PluginInstallUtilsUpdateTransactionTest {
                 .contains("process=" + java.lang.management.ManagementFactory.getRuntimeMXBean().getName())
                 .contains("aside.0.original=" + IDENTIFY_STRING + "-1.0.0.jar")
                 .contains("aside.0.aside=" + IDENTIFY_STRING + "-1.0.0.jar.");
-        assertThat(stagingEntries()).as("a finished transaction leaves no journal behind").isEmpty();
+        assertThat(stagingEntries())
+                .as("the journal stays until the next boot confirms the module loaded")
+                .anyMatch(name -> name.endsWith(".txn"));
+    }
+
+    @Test
+    @DisplayName("redesign: an update waits for the next boot to confirm it, keeping the old JAR and the journal")
+    void updateLeavesItsOldJarAndJournalForTheNextBoot() throws IOException {
+        File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        byte[] oldBytes = Files.readAllBytes(oldJar.toPath());
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus()).isEqualTo(Status.UPDATED);
+        assertThat(jarEntries()).containsExactly(NEW_JAR_NAME);
+        List<String> staging = stagingEntries();
+        assertThat(staging)
+                .as("the old JAR is what a failed boot rolls back to, so it stays until the boot confirms")
+                .anyMatch(name -> name.endsWith(".old"));
+        assertThat(staging)
+                .as("the journal is what tells the next boot there is something to confirm")
+                .anyMatch(name -> name.endsWith(".txn"));
+        String journal = new String(Files.readAllBytes(
+                new File(stagingFolder, staging.stream().filter(n -> n.endsWith(".txn")).findFirst().get()).toPath()),
+                StandardCharsets.UTF_8);
+        assertThat(journal)
+                .contains("phase=awaiting-boot-confirmation")
+                .contains("name=Fixture")
+                .contains("target=" + NEW_JAR_NAME);
+        File keptOldJar = new File(stagingFolder, staging.stream().filter(n -> n.endsWith(".old")).findFirst().get());
+        assertThat(keptOldJar).hasBinaryContent(oldBytes);
     }
 
     @Test
