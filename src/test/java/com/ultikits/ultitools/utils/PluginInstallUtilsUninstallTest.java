@@ -719,6 +719,48 @@ class PluginInstallUtilsUninstallTest {
     }
 
     @Test
+    @DisplayName("an AssertionError from a module's unload is reported, not left to escape")
+    void unloadThrowsAnAssertionError_isReportedAndTheJarIsStillDeleted() throws Exception {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        // unregisterSelf() collects and rethrows what its steps throw, Errors included.
+        AssertionError unloadFailure = new AssertionError("module unload step asserted");
+        doThrow(unloadFailure).when(commandManager).unregisterAll(plugin);
+        File jar = writeModuleJar(MODULE_NAME);
+
+        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+        assertThat(thrown)
+                .as("escaping here delists the module, skips the JAR half and reaches the operator as "
+                        + "a generic command error")
+                .isInstanceOf(PluginInstallUtils.ModuleUnloadFailedException.class)
+                .hasCause(unloadFailure);
+        assertThat(jar).doesNotExist();
+        assertThat(pluginManager.getPluginList()).doesNotContain(plugin);
+    }
+
+    @Test
+    @DisplayName("a fatal VM error from a module's unload is never swallowed")
+    void unloadThrowsAVirtualMachineError_propagates() throws Exception {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        OutOfMemoryError fatal = new OutOfMemoryError("pretend heap exhaustion");
+        doThrow(fatal).when(commandManager).unregisterAll(plugin);
+        File jar = writeModuleJar(MODULE_NAME);
+
+        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+        assertThat(thrown)
+                .as("collecting this and going on to delete files is not a recovery")
+                .isSameAs(fatal);
+        assertThat(jar).as("nothing further was attempted").exists();
+    }
+
+    @Test
     @DisplayName("states A-D: what an entry declares decides it, not what it is called")
     void whatAnEntryDeclaresDecidesIt_notWhatItIsCalled() throws IOException {
         File jar = writeModuleJar(MODULE_NAME);
