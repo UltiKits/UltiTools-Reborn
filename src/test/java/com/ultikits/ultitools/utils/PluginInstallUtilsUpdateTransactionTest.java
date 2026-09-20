@@ -884,6 +884,9 @@ class PluginInstallUtilsUpdateTransactionTest {
     }
 
     private static void run(File directory, String... command) throws Exception {
+        // The command is this JDK's own keytool or jarsigner plus literals and paths under @TempDir;
+        // nothing here comes from outside the test.
+        // nosemgrep: java.lang.security.audit.command-injection-process-builder.command-injection-process-builder
         Process process = new ProcessBuilder(command).directory(directory).redirectErrorStream(true).start();
         StringBuilder output = new StringBuilder(256);
         try (java.io.BufferedReader reader = new java.io.BufferedReader(
