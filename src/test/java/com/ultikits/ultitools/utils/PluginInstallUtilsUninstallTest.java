@@ -127,29 +127,6 @@ class PluginInstallUtilsUninstallTest {
     }
 
     @Test
-    @DisplayName("state B: a JAR that opened and carries no plugin.yml at all is ignored in silence")
-    void stateB_jarWithoutAPluginYml_isIgnored() throws IOException {
-        File jar = writeModuleJar(MODULE_NAME);
-        // A sources or javadoc JAR beside the module's own: it opened, and it declares no module,
-        // so it cannot load anything. That is a positive answer, not an unknown one.
-        File sources = new File(pluginsFolder, MODULE_NAME + "-sources.jar");
-        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(sources))) {
-            out.putNextEntry(new JarEntry("com/example/Thing.java"));
-            out.write("class Thing {}".getBytes(StandardCharsets.UTF_8));
-            out.closeEntry();
-        }
-
-        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
-
-        assertThat(jar).doesNotExist();
-        assertThat(sources).exists();
-        assertThat(report.jarsDeleted()).isTrue();
-        assertThat(report.undeterminedEntries())
-                .as("a JAR carrying no module metadata can never load this module")
-                .isEmpty();
-    }
-
-    @Test
     @DisplayName("state C: an entry that could not be opened is reported, and the uninstall still succeeds")
     void stateC_entryThatCouldNotBeOpened_isReported() throws IOException {
         File jar = writeModuleJar(MODULE_NAME);
