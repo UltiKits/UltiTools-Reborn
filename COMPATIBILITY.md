@@ -434,11 +434,17 @@ This section governs the third kind.
   and a SEVERE line states which module, which version it was rolled back to, that the module is
   not available in this session, and that a restart loads it again. This replaced a pre-flight check
   that tried to predict whether a module would load from a download; what an update validates now is
-  the `plugin.yml` contract alone — identify-string, name, version. At the next start, before
+  the `plugin.yml` contract alone — identify-string, name, version. **A module whose update is waiting for that
+  restart cannot be updated again** — `updatePlugin` returns `false` and changes nothing, the same
+  refusal it gives while another update or uninstall of the module is running, because two updates
+  awaiting one restart cannot both be resolved. At the next start, before
   modules load, the framework reads
   every journal left in the staging directory by an update that never finished and moves each JAR
-  that journal named back to the path it came from, unless that path is occupied again or the
-  journal records that the new version was already installed; it then deletes the journal. A
+  that journal named back to the path it came from, unless that path is occupied again; it then
+  deletes the journal. A journal whose new version is already installed is left to the confirmation
+  step instead, whether or not the marker naming that state was written before the process died, and
+  a journal recording a rollback that has not finished is finished at the next start rather than
+  read as an update to confirm. A
   journal whose JARs could not all be moved back is kept, and the next start tries again. It also
   deletes stale partial downloads. A set-aside JAR that **no surviving journal refers to** belongs
   to a transaction that finished and is never moved back: it is reported once, by absolute path, as

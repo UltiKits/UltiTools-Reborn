@@ -403,7 +403,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
                         : ultiTools.i18n("更新已安装！请重启服务器：重启时会确认该模块能否加载，加载失败会自动回滚到原版本。")));
                 return;
             case ALREADY_IN_PROGRESS:
-                sender.sendMessage(ChatColor.RED + ultiTools.i18n("更新失败！该模块正在进行另一项更新或卸载，本次未做任何更改。"));
+                sender.sendMessage(ChatColor.RED + ultiTools.i18n("更新失败！该模块正在进行另一项更新或卸载，或有一次更新正在等待重启确认，本次未做任何更改。"));
                 return;
             case INVALID_DOWNLOAD:
                 sender.sendMessage(ChatColor.RED + ultiTools.i18n("更新失败！下载的文件不是该模块对应版本的有效 JAR，未做任何更改。"));
