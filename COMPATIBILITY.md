@@ -372,13 +372,21 @@ This section governs the third kind.
   only that a value set from code without calling `save()` is saved on disable, and that contract
   is unchanged. As of 6.3.0 each configuration entity keeps a snapshot of what its file held when
   the framework last read or wrote it (taken after `init()`, after every reload, and after every
-  successful `save()` or panel write, and derived from the file's text, never from the fields), and
+  successful `save()` or panel write, and derived from the file's text plus the configuration
+  class's declared defaults for keys the file does not contain, never from the live fields), and
   the shutdown save writes only the entities whose current state differs from it. A value the file
   does not hold therefore stays unsaved until it is written: a panel write that changes only some
   keys, or a reload of a file from which a key was removed, does not hide an unsaved in-memory change
   to another key. What an operator sees:
   - an edit made to a file while the server runs survives a restart, provided no module code
     changed that configuration in memory;
+  - a file the YAML parser rejects is never written at shutdown, whether or not module code changed
+    that configuration, because the framework does not know what the file holds; one WARNING names
+    the file and says the in-memory changes were not saved. (A file that fails to parse while the
+    module is *loading* is still overwritten with defaults at that moment, by `init()` itself —
+    a separate, pre-existing defect tracked as
+    [#511](https://github.com/UltiKits/UltiTools-Reborn/issues/511).) An explicit `save()` call
+    still writes, since that is the caller's deliberate act;
   - an unchanged file is no longer rewritten at shutdown at all, so its cosmetic rewrites — values
     re-quoted (a list of integers such as UltiCleaner's `item.warn-times` coming back as `'60'`),
     comments re-emitted in the serializer's own layout — no longer happen then;
@@ -389,7 +397,9 @@ This section governs the third kind.
     file names the file and says the changes made while the server ran were overwritten;
   - if that shutdown write fails (for example, the file was replaced by a directory, or is not
     writable), the existing `Configuration save failed` WARNING is logged and no overwrite WARNING
-    is; a failure in one configuration does not stop the others from being saved.
+    is; an I/O error or an unchecked exception in one configuration does not stop the others from
+    being saved. A JVM `Error` is deliberately not caught: at that point the JVM itself is failing,
+    and isolating it would hide that.
 
   Panel writes arrive on the WebSocket thread, not the server thread. `UltiTools#onDisable()` calls
   `stopWebsocket()` before `saveAll()`, but that only starts the close handshake
