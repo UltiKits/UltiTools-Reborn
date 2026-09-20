@@ -384,10 +384,19 @@ This section governs the third kind.
   and nothing was unloaded either". A caller that checked the boolean alone now sees these as
   exceptions rather than a success it did not get. The method also no longer builds a `jar:file:`
   URL for every entry of the modules folder, so a stray file or a subdirectory there no longer
-  fails the uninstall (#504). A `.jar` whose `plugin.yml` cannot be read is not treated as
-  unrelated: every such JAR is reported when none could be identified as the module's and a module
-  was unloaded, and the ones named like the module are reported once its JARs have been deleted —
-  each of them loads the module again as soon as it becomes readable.
+  fails the uninstall (#504). Every entry of the modules folder is now placed in exactly one
+  of four states, each decided by reading the archive rather than by its file name: it declares
+  this module (deleted); it opened and declares another module, or carries no `plugin.yml` at all
+  and so can load nothing (ignored); nothing could be read from it, because the archive would not
+  open or its `plugin.yml` is not valid YAML (reported as undetermined — the uninstall still
+  succeeds, and the operator is told how many entries could not be read and that one of them, if it
+  is a copy of this module, will load it again after a restart); or the modules folder exists but
+  could not be listed, which is reported as `java.nio.file.AccessDeniedException` naming the folder
+  rather than as "no JAR of this module is here", a claim nothing supports when the folder's
+  contents are unknown. A second entry point,
+  `PluginInstallUtils.uninstallPluginReporting(String)` (`@ApiStatus.Internal`), returns both what
+  was deleted and the entries whose identity could not be determined; `uninstallPlugin(String)`
+  keeps its signature and returns the first half.
 
 ### Behavioral changes that do need one
 
