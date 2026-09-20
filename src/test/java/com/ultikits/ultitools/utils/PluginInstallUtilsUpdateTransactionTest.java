@@ -456,6 +456,62 @@ class PluginInstallUtilsUpdateTransactionTest {
     }
 
     @Test
+    @DisplayName("codex r13 P2: a framework class shaded by another module does not decide the candidate")
+    void frameworkClassShadedByASurvivingModule_doesNotRejectTheCandidate() throws Exception {
+        writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        File shading = new File(pluginsFolder, "shading-module-1.0.0.jar");
+        try (FileOutputStream out = new FileOutputStream(shading)) {
+            out.write(jarWith("shading-module", "1.0.0",
+                    new String[]{"com/ultikits/ultitools/abstracts/UltiToolsPlugin.class"},
+                    new byte[][]{"not a class file".getBytes(StandardCharsets.UTF_8)}));
+        }
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus())
+                .as("at boot the framework's own copy wins, so this module must not decide the candidate's fate")
+                .isEqualTo(Status.UPDATED);
+    }
+
+    @Test
+    @DisplayName("codex r13 P2: a surviving JAR the boot class path would skip is not used to validate")
+    void survivingJarTheBootClassPathSkips_isNotUsedToValidate() throws Exception {
+        javax.tools.JavaCompiler compiler = javax.tools.ToolProvider.getSystemJavaCompiler();
+        org.junit.jupiter.api.Assumptions.assumeTrue(compiler != null, "a JDK compiler is required");
+        File classes = compileModuleFixture(compiler);
+        byte[] base = Files.readAllBytes(new File(classes, "fixture/Base.class").toPath());
+        byte[] child = Files.readAllBytes(new File(classes, "fixture/Child.class").toPath());
+        // A module JAR over the entry-count limit: boot's own filter leaves it off the class path.
+        File oversized = new File(pluginsFolder, "oversized-module-1.0.0.jar");
+        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(oversized))) {
+            out.putNextEntry(new JarEntry("plugin.yml"));
+            out.write("name: Oversized\nversion: 1.0.0\nidentify-string: oversized-module\n"
+                    .getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+            out.putNextEntry(new JarEntry("fixture/Base.class"));
+            out.write(base);
+            out.closeEntry();
+            for (int i = 0; i < 10_001; i++) {
+                out.putNextEntry(new JarEntry("filler/" + i + ".txt"));
+                out.write('x');
+                out.closeEntry();
+            }
+        }
+        File oldJar = new File(pluginsFolder, IDENTIFY_STRING + "-1.0.0.jar");
+        try (FileOutputStream out = new FileOutputStream(oldJar)) {
+            out.write(moduleJarWith("1.0.0", new String[]{"fixture/Child.class"}, new byte[][]{child}));
+        }
+        operations.downloadBytes = moduleJarWith("2.0.0", new String[]{"fixture/Child.class"}, new byte[][]{child});
+
+        UpdateOutcome outcome = withModuleLoaderOver(oldJar,
+                () -> PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING));
+
+        assertThat(outcome.getStatus())
+                .as("the server will skip that JAR at boot, so the superclass will not be there")
+                .isEqualTo(Status.INVALID_DOWNLOAD);
+    }
+
+    @Test
     @DisplayName("codex r12: a class another installed module provides is still available to the candidate")
     void downloadUsingAClassFromAnotherInstalledModule_isAccepted() throws Exception {
         javax.tools.JavaCompiler compiler = javax.tools.ToolProvider.getSystemJavaCompiler();
