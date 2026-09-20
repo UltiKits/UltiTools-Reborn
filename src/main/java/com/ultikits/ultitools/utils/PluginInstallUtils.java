@@ -10,6 +10,7 @@ import java.net.URL;
 import java.net.URLEncoder;
 import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.logging.Level;
@@ -503,7 +504,7 @@ public class PluginInstallUtils {
 
         private UninstallReport(boolean jarsDeleted, List<String> undetermined) {
             this.jarsDeleted = jarsDeleted;
-            this.undetermined = java.util.Collections.unmodifiableList(new ArrayList<>(undetermined));
+            this.undetermined = Collections.unmodifiableList(new ArrayList<>(undetermined));
         }
 
         /**
@@ -654,7 +655,7 @@ public class PluginInstallUtils {
                         "the modules folder exists but could not be listed, so nothing can be concluded"
                                 + " about the JARs it holds");
             }
-            return new UninstallReport(noJarFound(folder, name, moduleUnloaded), java.util.Collections.emptyList());
+            return new UninstallReport(noJarFound(folder, name, moduleUnloaded), Collections.emptyList());
         }
         List<File> matchingJars = new ArrayList<>();
         List<File> undetermined = new ArrayList<>();

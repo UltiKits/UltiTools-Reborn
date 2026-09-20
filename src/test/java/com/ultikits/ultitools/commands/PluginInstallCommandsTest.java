@@ -93,7 +93,7 @@ class PluginInstallCommandsTest {
             mockedUtils.when(() -> PluginInstallUtils.getPluginVersions(anyString()))
                     .thenReturn(Arrays.asList("1.0.0", "1.0.1"));
             mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(anyString()))
-                    .thenReturn(PluginInstallUtils.UninstallReport.of(true, java.util.Collections.emptyList()));
+                    .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
             
             executor = new PluginInstallCommands();
         } catch (Exception e) {
@@ -401,7 +401,7 @@ class PluginInstallCommandsTest {
         
         try {
             mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
-                .thenReturn(PluginInstallUtils.UninstallReport.of(true, java.util.Collections.emptyList()));
+                .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -423,7 +423,7 @@ class PluginInstallCommandsTest {
         
         try {
             mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
-                .thenReturn(PluginInstallUtils.UninstallReport.of(false, java.util.Collections.emptyList()));
+                .thenReturn(PluginInstallUtils.UninstallReport.of(false, Collections.emptyList()));
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -465,7 +465,7 @@ class PluginInstallCommandsTest {
     void uninstallSuccess_replyDoesNotAskForManualDelete() {
         assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
         mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
-                .thenReturn(PluginInstallUtils.UninstallReport.of(true, java.util.Collections.emptyList()));
+                .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
 
         executor.onCommand(player, mockCommand, "upm", new String[]{"uninstall", "test-plugin"});
         server.getScheduler().performOneTick();
@@ -588,7 +588,7 @@ class PluginInstallCommandsTest {
         assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
         String unreadable = "/srv/minecraft/plugins/UltiTools/plugins/zz-corrupt.jar";
         mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
-                .thenReturn(PluginInstallUtils.UninstallReport.of(true, java.util.Collections.singletonList(unreadable)));
+                .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.singletonList(unreadable)));
 
         executor.uninstallPlugin(player, "test-plugin");
 

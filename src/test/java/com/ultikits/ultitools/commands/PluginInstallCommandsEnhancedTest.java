@@ -129,7 +129,7 @@ class PluginInstallCommandsEnhancedTest {
             mockedUtils.when(() -> PluginInstallUtils.getPluginVersions(anyString()))
                     .thenReturn(Arrays.asList("1.0.0", "1.0.1", "1.1.0"));
             mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(anyString()))
-                    .thenReturn(PluginInstallUtils.UninstallReport.of(true, java.util.Collections.emptyList()));
+                    .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
             
             executor = new PluginInstallCommands();
         } catch (Exception e) {
@@ -569,7 +569,7 @@ class PluginInstallCommandsEnhancedTest {
         if (!mockingAvailable) return;
         
         mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("remove-plugin"))
-                .thenReturn(PluginInstallUtils.UninstallReport.of(true, java.util.Collections.emptyList()));
+                .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
         
         executor.onCommand(player, mockCommand, "upm", 
                 new String[]{"uninstall", "remove-plugin"});
@@ -592,7 +592,7 @@ class PluginInstallCommandsEnhancedTest {
         if (!mockingAvailable) return;
         
         mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("missing-plugin"))
-                .thenReturn(PluginInstallUtils.UninstallReport.of(false, java.util.Collections.emptyList()));
+                .thenReturn(PluginInstallUtils.UninstallReport.of(false, Collections.emptyList()));
         
         executor.onCommand(player, mockCommand, "upm", 
                 new String[]{"uninstall", "missing-plugin"});
@@ -628,7 +628,7 @@ class PluginInstallCommandsEnhancedTest {
         if (!mockingAvailable) return;
         
         mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("console-uninstall"))
-                .thenReturn(PluginInstallUtils.UninstallReport.of(true, java.util.Collections.emptyList()));
+                .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
         
         boolean result = executor.onCommand(console, mockCommand, "upm", 
                 new String[]{"uninstall", "console-uninstall"});
