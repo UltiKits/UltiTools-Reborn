@@ -388,15 +388,17 @@ This section governs the third kind.
   `getProtectionDomain().getCodeSource()`, read before it is unloaded — and that JAR is deleted
   whatever its metadata says, since an UltiTools module is identified by `@UltiToolsModule` and
   needs no `plugin.yml` at all. Every other entry of the modules folder is placed in exactly one of
-  four states, each decided by reading the archive rather than by its file name: its `plugin.yml`
-  declares this module (deleted); it opened and its `plugin.yml` declares another module, or it is
-  a directory or a file of another kind (ignored); nothing could be read from it, because the
-  archive would not open, its `plugin.yml` is not valid YAML, **it carries no `plugin.yml` at all**
-  — which says nothing about whether it is a module — or the entry is named like a JAR and cannot
-  be resolved at all, a link whose target is away (reported
-  as undetermined — the uninstall still
-  succeeds, and the operator is told how many entries could not be read and that one of them, if it
-  is a copy of this module, will load it again after a restart); or the modules folder exists but
+  four states, each decided by reading the archive — with one exception, an entry the module loader
+  itself would never load, judged by the same `.jar` test `PluginManager#init` applies to this
+  folder, which is state B without being opened. The states: its `plugin.yml` declares this module,
+  or it is a loaded instance's own code-source JAR (deleted); it opened and its `plugin.yml`
+  declares another module, or it is a directory (ignored); nothing about it identifies a module,
+  because the archive would not open, its `plugin.yml` is not valid YAML, **it carries no
+  `plugin.yml` at all or one with no `name:` key** — which say nothing about whether it is a
+  module — or the entry is named like a JAR and cannot be resolved at all, a link whose target is
+  away (reported as undetermined — the uninstall still succeeds, and the operator is told how many
+  entries could not be identified and that one of them, if it is a copy of this module, will load
+  it again after a restart); or the modules folder exists but
   could not be listed, which is reported as `java.nio.file.AccessDeniedException` naming the folder
   rather than as "no JAR of this module is here", a claim nothing supports when the folder's
   contents are unknown. A second entry point,
