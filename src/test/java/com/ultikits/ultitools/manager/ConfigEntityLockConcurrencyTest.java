@@ -47,13 +47,19 @@ import com.ultikits.ultitools.exceptions.ConfigurationException;
 @Timeout(value = 30, unit = TimeUnit.SECONDS, threadMode = ThreadMode.SEPARATE_THREAD)
 class ConfigEntityLockConcurrencyTest {
 
+    static final AtomicReference<Gate> NEXT_CONSTRUCTION = new AtomicReference<>();
+
+    @TempDir
+    File tempDir;
+
+    private ConfigManager configManager;
+    private UltiToolsPlugin plugin;
+
     /** One-shot gate: the next constructor call parks until released. */
     static final class Gate {
         final CountDownLatch entered = new CountDownLatch(1);
         final CountDownLatch release = new CountDownLatch(1);
     }
-
-    static final AtomicReference<Gate> NEXT_CONSTRUCTION = new AtomicReference<>();
 
     @ConfigEntity("config/limit.yml")
     public static class LimitConfig extends AbstractConfigEntity {
@@ -78,12 +84,6 @@ class ConfigEntityLockConcurrencyTest {
             this.limit = limit;
         }
     }
-
-    @TempDir
-    File tempDir;
-
-    private ConfigManager configManager;
-    private UltiToolsPlugin plugin;
 
     @BeforeEach
     void setUp() {

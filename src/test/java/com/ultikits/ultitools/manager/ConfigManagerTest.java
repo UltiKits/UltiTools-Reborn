@@ -5,7 +5,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -18,6 +21,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import org.junit.jupiter.api.AfterEach;
@@ -857,7 +861,7 @@ class ConfigManagerTest {
             configManager.saveAll();
 
             verify(mockConfig).isModifiedSinceSnapshot();
-            org.mockito.Mockito.verify(mockConfig, org.mockito.Mockito.never()).save();
+            verify(mockConfig, never()).save();
         }
 
         @Test
@@ -880,7 +884,7 @@ class ConfigManagerTest {
             when(mockConfig.getUltiToolsPlugin()).thenReturn(mockPlugin);
             // Changed in memory; saveAll() has no directory check, so it attempts the save (#510).
             when(mockConfig.isModifiedSinceSnapshot()).thenReturn(true);
-            org.mockito.Mockito.doThrow(new IOException("Is a directory")).when(mockConfig).save();
+            doThrow(new IOException("Is a directory")).when(mockConfig).save();
 
             Map<String, AbstractConfigEntity> configMap = new HashMap<>();
             configMap.put("configdir", mockConfig);
@@ -890,7 +894,7 @@ class ConfigManagerTest {
             configManager.saveAll();
 
             verify(mockConfig).save();
-            verify(mockLogger).log(java.util.logging.Level.WARNING, "Configuration save failed！File path：configdir");
+            verify(mockLogger).log(Level.WARNING, "Configuration save failed！File path：configdir");
             assertThat(configDir.isDirectory()).as("Config dir should exist").isTrue();
         }
 
@@ -906,7 +910,7 @@ class ConfigManagerTest {
             AbstractConfigEntity failing = mock(AbstractConfigEntity.class);
             when(failing.getConfigFilePath()).thenReturn("config/failing.yml");
             when(failing.isModifiedSinceSnapshot()).thenReturn(true);
-            org.mockito.Mockito.doThrow(new IllegalStateException("parser blew up")).when(failing).save();
+            doThrow(new IllegalStateException("parser blew up")).when(failing).save();
             AbstractConfigEntity healthy = mock(AbstractConfigEntity.class);
             when(healthy.getConfigFilePath()).thenReturn("config/healthy.yml");
             when(healthy.isModifiedSinceSnapshot()).thenReturn(true);
@@ -919,9 +923,9 @@ class ConfigManagerTest {
             configManager.saveAll();
 
             verify(healthy).save();
-            verify(mockLogger).log(org.mockito.ArgumentMatchers.eq(java.util.logging.Level.WARNING),
-                org.mockito.ArgumentMatchers.eq("Configuration save failed！File path：config/failing.yml"),
-                org.mockito.ArgumentMatchers.any(IllegalStateException.class));
+            verify(mockLogger).log(eq(Level.WARNING),
+                eq("Configuration save failed！File path：config/failing.yml"),
+                any(IllegalStateException.class));
         }
     }
 
@@ -1012,7 +1016,7 @@ class ConfigManagerTest {
             configManager.loadFromJson(json);
 
             // Assert - verify is an assertion
-            org.mockito.Mockito.verify(mockConfig).updateProperties(any(com.google.gson.JsonObject.class));
+            verify(mockConfig).updateProperties(any(com.google.gson.JsonObject.class));
             assertThat(json).as("JSON should be valid").isNotEmpty();
         }
 
@@ -1038,7 +1042,7 @@ class ConfigManagerTest {
             configManager.loadFromJson(json);
 
             // Assert - updateProperties 不应该被调用
-            org.mockito.Mockito.verify(mockConfig, org.mockito.Mockito.never()).updateProperties(any(com.google.gson.JsonObject.class));
+            verify(mockConfig, never()).updateProperties(any(com.google.gson.JsonObject.class));
             assertThat(json).as("JSON should contain non-matching path").contains("other.yml");
         }
     }
@@ -1209,7 +1213,7 @@ class ConfigManagerTest {
             assertThatThrownBy(() -> configManager.loadFromJson("config/lang.yml", "not json"))
                     .isInstanceOf(IOException.class);
 
-            verify(entity, org.mockito.Mockito.never()).updateProperties(any());
+            verify(entity, never()).updateProperties(any());
         }
     }
 }
