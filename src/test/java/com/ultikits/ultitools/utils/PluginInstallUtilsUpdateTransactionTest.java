@@ -552,6 +552,7 @@ class PluginInstallUtilsUpdateTransactionTest {
         private volatile byte[] downloadBytes;
         private volatile Runnable duringDownload;
         private volatile Runnable duringMoveIn;
+        private volatile Runnable duringMoveAside;
         private volatile int failMoveAsideAtCall;
         private volatile boolean failMoveIn;
         private volatile boolean failMoveBack;
@@ -622,6 +623,11 @@ class PluginInstallUtilsUpdateTransactionTest {
                 }
             } else {
                 events.add("move-aside");
+                Runnable asideHook = duringMoveAside;
+                if (asideHook != null) {
+                    duringMoveAside = null;
+                    asideHook.run();
+                }
                 if (moveAsideNotAtomic || moveAsideCalls + 1 == moveAsideNotAtomicAtCall) {
                     throw new java.nio.file.AtomicMoveNotSupportedException(source.toString(), target.toString(),
                             "injected: different file stores");
@@ -656,6 +662,44 @@ class PluginInstallUtilsUpdateTransactionTest {
         long count(String event) {
             return events.stream().filter(event::equals).count();
         }
+    }
+
+    @Test
+    @DisplayName("review r6 WR-02: the journal is on disk, naming every planned move, before the first JAR moves")
+    void transactionJournal_namesEveryPlannedMoveBeforeTheFirstMoveAside() throws IOException {
+        writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        writeJar(IDENTIFY_STRING + "-1.5.0.jar", "1.5.0");
+        List<String> journalAtFirstMove = new ArrayList<>();
+        operations.duringMoveAside = () -> journalAtFirstMove.addAll(journalContents());
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus()).isEqualTo(Status.UPDATED);
+        assertThat(journalAtFirstMove)
+                .as("a kill during the first move must leave a journal that already names both JARs")
+                .hasSize(1);
+        assertThat(journalAtFirstMove.get(0))
+                .contains(IDENTIFY_STRING + "-1.0.0.jar")
+                .contains(IDENTIFY_STRING + "-1.5.0.jar")
+                .contains("aside.0.aside")
+                .contains("aside.1.aside");
+    }
+
+    /** The contents of every journal in the staging directory, read at the moment of the call. */
+    private List<String> journalContents() {
+        List<String> contents = new ArrayList<>();
+        for (String name : stagingEntries()) {
+            if (name.endsWith(".txn")) {
+                try {
+                    // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
+                    File journal = new File(stagingFolder, name);
+                    contents.add(new String(Files.readAllBytes(journal.toPath()), StandardCharsets.UTF_8));
+                } catch (IOException e) {
+                    throw new java.io.UncheckedIOException(e);
+                }
+            }
+        }
+        return contents;
     }
 
     @Test

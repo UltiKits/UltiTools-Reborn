@@ -177,6 +177,7 @@ class ModuleUpdateRecoveryTest {
     void malformedJournal_isIsolated() throws IOException {
         File malformed = new File(stagingFolder, UUID_B + ".txn");
         Files.write(malformed.toPath(), "this is not a journal".getBytes(StandardCharsets.UTF_8));
+        File strandedAside = setAsideJar(ID + "-9.0.0.jar", UUID_B, "9.0.0");
         File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
         writeJournal(UUID_A, OTHER_PROCESS, ID, ID + "-2.0.0.jar", ID + "-1.0.0.jar", aside.getName());
 
@@ -184,6 +185,7 @@ class ModuleUpdateRecoveryTest {
 
         assertThat(new File(pluginsFolder, ID + "-1.0.0.jar")).exists();
         assertThat(warnings()).anyMatch(m -> m.contains(malformed.getAbsolutePath()));
+        assertNotAdvertisedAsDeletable(strandedAside);
     }
 
     @Test
@@ -191,6 +193,7 @@ class ModuleUpdateRecoveryTest {
     void unreadableJournal_isIsolated() throws IOException {
         File unreadable = new File(stagingFolder, UUID_B + ".txn");
         assertThat(unreadable.mkdir()).as("a directory in the journal's place cannot be read as one").isTrue();
+        File strandedAside = setAsideJar(ID + "-9.0.0.jar", UUID_B, "9.0.0");
         File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
         writeJournal(UUID_A, OTHER_PROCESS, ID, ID + "-2.0.0.jar", ID + "-1.0.0.jar", aside.getName());
 
@@ -198,6 +201,7 @@ class ModuleUpdateRecoveryTest {
 
         assertThat(new File(pluginsFolder, ID + "-1.0.0.jar")).exists();
         assertThat(warnings()).anyMatch(m -> m.contains(unreadable.getAbsolutePath()));
+        assertNotAdvertisedAsDeletable(strandedAside);
     }
 
     @Test
@@ -214,6 +218,26 @@ class ModuleUpdateRecoveryTest {
                 .doesNotExist();
         assertThat(aside).exists();
         assertThat(journal).exists();
+        assertNotAdvertisedAsDeletable(aside);
+    }
+
+    @Test
+    @DisplayName("review r6 IN-02: one unusable name in a journal does not abandon that journal's other JARs")
+    void oneUnusableNameInAJournal_skipsOnlyThatPair() throws IOException {
+        File good = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        File journal = new File(stagingFolder, UUID_A + ".txn");
+        String text = "format=1\nprocess=" + OTHER_PROCESS + "\nmodule=" + ID + "\ntarget=" + ID + "-2.0.0.jar\n"
+                + "aside.0.original=../escape.jar\naside.0.aside=../escape.jar." + UUID_A + ".old\n"
+                + "aside.1.original=" + ID + "-1.0.0.jar\naside.1.aside=" + good.getName() + "\n";
+        Files.write(journal.toPath(), text.getBytes(StandardCharsets.UTF_8));
+
+        UltiTools.collectModuleJarUrls(pluginsFolder);
+
+        assertThat(new File(pluginsFolder, ID + "-1.0.0.jar"))
+                .as("the pair that can be used is restored; only the unusable one is skipped")
+                .exists();
+        assertThat(new File(dataFolder, "escape.jar")).doesNotExist();
+        assertThat(warnings()).anyMatch(m -> m.contains(journal.getAbsolutePath()));
     }
 
     @Test
@@ -253,6 +277,33 @@ class ModuleUpdateRecoveryTest {
 
         assertThatCode(() -> assertThat(UltiTools.collectModuleJarUrls(pluginsFolder))
                 .contains(module.toURI().toURL())).doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("review r6 BL-01: of two journals differing only in start time, this run's is skipped and the earlier run's is recovered")
+    void journalOfAnEarlierStartOfTheSameJvmName_isRecovered() throws Exception {
+        String mine = currentProcessIdentity();
+        String earlier = earlierStartOf(mine);
+        assertThat(earlier).as("the two identities must differ only in the start time").isNotEqualTo(mine);
+        File runningAside = setAsideJar(ID + "-3.0.0.jar", UUID_B, "3.0.0");
+        File runningJournal = writeJournal(UUID_B, mine, ID, ID + "-4.0.0.jar",
+                ID + "-3.0.0.jar", runningAside.getName());
+        File crashedAside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        File crashedJournal = writeJournal(UUID_A, earlier, ID, ID + "-2.0.0.jar",
+                ID + "-1.0.0.jar", crashedAside.getName());
+
+        UltiTools.collectModuleJarUrls(pluginsFolder);
+
+        assertThat(new File(pluginsFolder, ID + "-1.0.0.jar"))
+                .as("a container restart repeats the JVM name, so only the start time tells the runs apart")
+                .exists();
+        assertThat(crashedAside).doesNotExist();
+        assertThat(crashedJournal).doesNotExist();
+        assertThat(new File(pluginsFolder, ID + "-3.0.0.jar"))
+                .as("this run's own transaction must not be undone beneath it")
+                .doesNotExist();
+        assertThat(runningAside).exists();
+        assertThat(runningJournal).exists();
     }
 
     @Test
@@ -345,6 +396,26 @@ class ModuleUpdateRecoveryTest {
         String text = new String(Files.readAllBytes(journal.toPath()), StandardCharsets.UTF_8) + "phase=committed\n";
         Files.write(journal.toPath(), text.getBytes(StandardCharsets.UTF_8));
         return journal;
+    }
+
+    /**
+     * Review r6 WR-03: a set-aside JAR that a surviving journal still refers to must never be called
+     * deletable, and must be named as belonging to a journal that was kept.
+     */
+    private void assertNotAdvertisedAsDeletable(File aside) {
+        assertThat(warnings())
+                .as("a JAR a retained journal refers to must not be advertised as deletable")
+                .noneMatch(m -> m.contains(aside.getAbsolutePath()) && m.contains("no interrupted update refers to it"));
+        assertThat(warnings())
+                .as("the operator must be told that this JAR belongs to a journal that was kept")
+                .anyMatch(m -> m.contains(aside.getAbsolutePath()) && m.contains("do not delete"));
+    }
+
+    /** The same identity with an earlier start time: what the previous run of this JVM name wrote. */
+    private static String earlierStartOf(String identity) {
+        int marker = identity.lastIndexOf('#');
+        assertThat(marker).as("the identity must carry a start-time component: %s", identity).isPositive();
+        return identity.substring(0, marker + 1) + (Long.parseLong(identity.substring(marker + 1)) - 1L);
     }
 
     /** The identity the framework writes into a journal, read from the class that writes it. */
