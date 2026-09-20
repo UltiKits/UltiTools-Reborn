@@ -88,6 +88,12 @@ public class PluginInstallUtils {
     /** Journal format marker, so a future format can be recognised rather than misread. */
     private static final String JOURNAL_FORMAT = "1";
 
+    /** Journal key saying how far the transaction got; absent means it was still moving JARs. */
+    private static final String JOURNAL_PHASE_KEY = "phase";
+
+    /** Journal phase written once the new version is in the modules folder: never restore after this. */
+    private static final String JOURNAL_PHASE_COMMITTED = "committed";
+
     /** Identifies this run, and only this run: a new JVM gets a new token (see currentProcessIdentity). */
     private static final String PROCESS_TOKEN = UUID.randomUUID().toString();
 
@@ -875,6 +881,12 @@ public class PluginInstallUtils {
             return rollBack(operations, moveInFailed, movedAside, staged, journal, stagingFolder, pluginsFolder);
         }
 
+        // Step 5b: the new version is in the modules folder, so the transaction is committed. A
+        // journal that survives from here on must never move an old JAR back, whatever the modules
+        // folder looks like later -- an uninstall may have removed the new version since (Codex
+        // review r6). Recording that is what tells the two apart.
+        markJournalCommitted(journal, identifyString);
+
         // Step 6: delete the set-aside JARs; any that remain are outside the modules folder and inert.
         List<String> leftovers = deleteSetAsideJars(operations, movedAside, identifyString);
         // The transaction has reached its final state: the journal must go, so the next boot treats
@@ -1119,11 +1131,36 @@ public class PluginInstallUtils {
             entries.setProperty("aside." + i + ".original", planned.get(i)[0].getFileName().toString());
             entries.setProperty("aside." + i + ".aside", planned.get(i)[1].getFileName().toString());
         }
+        writeProperties(journal, entries);
+    }
+
+    /** Writes {@code entries} to {@code journal} through a temporary file and an atomic rename. */
+    private static void writeProperties(Path journal, java.util.Properties entries) throws IOException {
         Path temporary = journal.resolveSibling(journal.getFileName() + ".tmp");
         try (java.io.Writer writer = Files.newBufferedWriter(temporary, java.nio.charset.StandardCharsets.UTF_8)) {
             entries.store(writer, "UltiTools module update journal");
         }
         Files.move(temporary, journal, StandardCopyOption.ATOMIC_MOVE);
+    }
+
+    /**
+     * Appends the committed marker to a journal whose new version is installed. A failure to write
+     * it is not a failed update -- the transaction is complete, and recovery still has the target
+     * check -- but it is logged, because the marker is what keeps a later uninstall of the module
+     * from being undone by recovery.
+     */
+    private static void markJournalCommitted(Path journal, String identifyString) {
+        try {
+            java.util.Properties entries = new java.util.Properties();
+            try (java.io.Reader reader = Files.newBufferedReader(journal, java.nio.charset.StandardCharsets.UTF_8)) {
+                entries.load(reader);
+            }
+            entries.setProperty(JOURNAL_PHASE_KEY, JOURNAL_PHASE_COMMITTED);
+            writeProperties(journal, entries);
+        } catch (IOException | SecurityException e) {
+            LOGGER.log(Level.WARNING, "Could not record that the update of " + identifyString
+                    + " is committed in " + journal + "; the update itself is complete", e);
+        }
     }
 
     /**
@@ -1269,7 +1306,8 @@ public class PluginInstallUtils {
         }
         File stagingFolder = journalFile.getParentFile();
         Path targetPath = pluginsFolder.toPath().resolve(target);
-        boolean alreadyInstalled = newVersionWasInstalled(targetPath, module, journalFile);
+        boolean alreadyInstalled = JOURNAL_PHASE_COMMITTED.equals(entries.getProperty(JOURNAL_PHASE_KEY))
+                || newVersionWasInstalled(targetPath, module, journalFile);
         boolean settled = true;
         for (String[] pair : pairs) {
             File setAside = new File(stagingFolder, pair[1]);
