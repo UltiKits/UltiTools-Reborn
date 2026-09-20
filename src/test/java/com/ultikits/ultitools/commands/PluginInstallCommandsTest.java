@@ -902,6 +902,31 @@ class PluginInstallCommandsTest {
     }
 
     @Test
+    @DisplayName("codex r18 P2: every file an uninstall could not delete is named, however deeply attached")
+    void uninstallFailure_namesNestedSuppressedFiles() {
+        String jar = "/srv/minecraft/plugins/UltiTools/plugins/Fixture-1.0.0.jar";
+        String firstLeftover = "/srv/minecraft/plugins/UltiTools/.upm-staging/8420a849.txn";
+        String secondLeftover = "/srv/minecraft/plugins/UltiTools/.upm-staging/Fixture-1.0.0.jar.8420a849.old";
+        java.nio.file.FileSystemException jarFailure =
+                new java.nio.file.FileSystemException(jar, null, "Permission denied");
+        java.nio.file.FileSystemException stagingFailure =
+                new java.nio.file.FileSystemException(firstLeftover, null, "Permission denied");
+        stagingFailure.addSuppressed(new java.nio.file.FileSystemException(secondLeftover, null, "Permission denied"));
+        jarFailure.addSuppressed(stagingFailure);
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin")).thenThrow(jarFailure);
+
+        executor.onCommand(player, mockCommand, "upm", new String[]{"uninstall", "test-plugin"});
+        server.getScheduler().performOneTick();
+
+        String reply = String.join("\n", drainMessages());
+        assertThat(reply)
+                .as("a file left unnamed is one the operator leaves behind, and it can restore the module")
+                .contains(jar)
+                .contains(firstLeftover)
+                .contains(secondLeftover);
+    }
+
+    @Test
     @DisplayName("codex r10 P2: a staging file that could not be deleted is not reported as a module JAR")
     void uninstallStagingFailure_isNotReportedAsAModuleJar() {
         String journal = "/srv/minecraft/plugins/UltiTools/.upm-staging/8420a849-1c2d-4e5f-9a0b-1c2d3e4f5a6b.txn";
