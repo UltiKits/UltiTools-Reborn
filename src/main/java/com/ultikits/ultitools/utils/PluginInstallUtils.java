@@ -1262,6 +1262,10 @@ public class PluginInstallUtils {
      * @param next  the failure to attach
      * @return the failure to carry on with
      */
+    // Reference comparison is the point, not a mistake: addSuppressed rejects the same object,
+    // and two distinct failures that happen to be equal must both be attached, so equals() here
+    // would discard the second one.
+    @SuppressWarnings("PMD.CompareObjectsWithEquals")
     private static Throwable firstOf(Throwable first, Throwable next) {
         if (next == null) {
             return first;
@@ -1277,6 +1281,9 @@ public class PluginInstallUtils {
     }
 
     /** Whether {@code candidate} is already among {@code failure}'s suppressed throwables. */
+    // Reference comparison for the same reason as in firstOf: the question is whether this very
+    // object is already attached, not whether an equal one is.
+    @SuppressWarnings("PMD.CompareObjectsWithEquals")
     private static boolean alreadyAttached(Throwable failure, Throwable candidate) {
         for (Throwable suppressed : failure.getSuppressed()) {
             if (suppressed == candidate) {
