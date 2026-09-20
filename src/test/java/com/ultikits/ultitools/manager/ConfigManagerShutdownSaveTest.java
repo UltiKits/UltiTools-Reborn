@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -152,7 +153,7 @@ class ConfigManagerShutdownSaveTest {
     @ConfigEntity("config/list.yml")
     public static class ListConfig extends AbstractConfigEntity {
         @ConfigEntry(path = "ids", comment = "Some ids")
-        private List<Integer> ids = new ArrayList<>();
+        private List<Integer> ids = new ArrayList<>(Arrays.asList(60, 70));
 
         public ListConfig(String configFilePath) {
             super(configFilePath);
@@ -183,6 +184,16 @@ class ConfigManagerShutdownSaveTest {
         for (int i = 0; i < levels.getAllValues().size(); i++) {
             if (levels.getAllValues().get(i) == level) {
                 result.add(messages.getAllValues().get(i));
+            }
+        }
+        return result;
+    }
+
+    private List<String> unparseableWarnings() {
+        List<String> result = new ArrayList<>();
+        for (String message : loggedMessages(Level.WARNING)) {
+            if (message.contains("could not be parsed")) {
+                result.add(message);
             }
         }
         return result;
@@ -565,5 +576,131 @@ class ConfigManagerShutdownSaveTest {
         configManager.saveAll();
 
         assertThat(read(scalarFile)).contains("value: set-by-listener");
+    }
+
+    // ==================== 14. a file the parser rejects is never overwritten (round-2 WR2-01) ====================
+
+    @Test
+    @DisplayName("14. After a reload of an unparseable file, shutdown leaves the file alone and says so")
+    void saveAll_leavesUnparseableFileAloneAfterReload() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "value: on-disk\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        configManager.register(plugin, config);
+        // Guard: the in-memory value differs from the declared default, so an unguarded shutdown
+        // save would rewrite the file.
+        assertThat(config.getValue()).isEqualTo("on-disk").isNotEqualTo("default");
+
+        String broken = "value: [unclosed\n  bad: : :\n";
+        write(scalarFile, broken);
+        config.reload();
+
+        configManager.saveAll();
+
+        assertThat(read(scalarFile)).isEqualTo(broken);
+        assertThat(unparseableWarnings()).hasSize(1);
+        assertThat(unparseableWarnings().get(0)).contains(scalarFile.getAbsolutePath());
+        assertThat(overwriteWarnings()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("14b. After reloadConfigs() over an unparseable file, shutdown writes nothing further")
+    void saveAll_writesNothingFurtherAfterReloadConfigsOverUnparseableFile() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "value: on-disk\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        configManager.register(plugin, config);
+
+        write(scalarFile, "value: [unclosed\n  bad: : :\n");
+        configManager.reloadConfigs(plugin);
+        // init() rewrites the file with defaults for every key it could not read - the pre-existing
+        // defect tracked as #511, unchanged here. What must not happen is a second, later write.
+        String afterReload = read(scalarFile);
+
+        configManager.saveAll();
+
+        assertThat(read(scalarFile)).isEqualTo(afterReload);
+        assertThat(unparseableWarnings()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("14c. A successful load clears the unparseable state, so a later code change is saved")
+    void saveAll_savesCodeChangeAfterTheFileIsFixed() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "value: on-disk\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        configManager.register(plugin, config);
+
+        write(scalarFile, "value: [unclosed\n  bad: : :\n");
+        config.reload();
+        write(scalarFile, "value: repaired\n");
+        config.reload();
+        assertThat(config.getValue()).isEqualTo("repaired");
+        config.setValue("set-by-code");
+
+        configManager.saveAll();
+
+        assertThat(read(scalarFile)).contains("value: set-by-code");
+        assertThat(unparseableWarnings()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("14d. An explicit save() still writes while the file is unparseable")
+    void save_explicitCallStillWritesOverAnUnparseableFile() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "value: on-disk\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        configManager.register(plugin, config);
+
+        write(scalarFile, "value: [unclosed\n  bad: : :\n");
+        config.reload();
+        config.setValue("set-by-code");
+        config.save();
+
+        assertThat(read(scalarFile)).contains("value: set-by-code");
+        // And the successful write cleared the unparseable state, so shutdown behaves normally.
+        configManager.saveAll();
+        assertThat(unparseableWarnings()).isEmpty();
+    }
+
+    // ==================== 15. canonicalization needs both passes (round-2 IN2-01) ====================
+
+    @Test
+    @DisplayName("15. A list-of-integers key removed from the file does not make an untouched entity look changed")
+    void saveAll_doesNotRewriteWhenIntegerListKeyIsAbsentFromFile() throws IOException {
+        File listFile = file("config/list.yml");
+        write(listFile, "ids:\n- 60\n- 70\n");
+        ListConfig config = new ListConfig("config/list.yml");
+        configManager.register(plugin, config);
+
+        String withoutKey = "other: kept\n";
+        write(listFile, withoutKey);
+        config.reload();
+        // Guard: the entity holds the class default for ids, which renders as integers before the
+        // parser has seen them - the asymmetry a single canonicalization pass would leave behind.
+        assertThat(config.isModifiedSinceSnapshot()).isFalse();
+
+        configManager.saveAll();
+
+        assertThat(read(listFile)).isEqualTo(withoutKey);
+    }
+
+    // ==================== 16. a panel write refreshes the fingerprint too (round-2 IN2-02) ====================
+
+    @Test
+    @DisplayName("16. A later code change after a panel write does not claim the file was changed on disk")
+    void saveAll_afterPanelWriteDoesNotClaimAnOverwrite() throws IOException {
+        File twoFile = file("config/two.yml");
+        write(twoFile, "a: a1\nb: b1\n");
+        TwoKeyConfig config = new TwoKeyConfig("config/two.yml");
+        configManager.register(plugin, config);
+
+        configManager.loadFromJson("config/two.yml", "{\"b\":\"b-by-panel\"}");
+        config.setA("a-by-code");
+
+        configManager.saveAll();
+
+        assertThat(read(twoFile)).contains("a: a-by-code").contains("b: b-by-panel");
+        assertThat(overwriteWarnings()).isEmpty();
     }
 }

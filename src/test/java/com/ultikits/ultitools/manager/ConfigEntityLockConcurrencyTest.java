@@ -19,6 +19,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.Timeout.ThreadMode;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockbukkit.mockbukkit.MockBukkit;
 
@@ -43,7 +44,7 @@ import com.ultikits.ultitools.exceptions.ConfigurationException;
  * write is released only once the shutdown thread is either blocked on the entity or finished.
  */
 @DisplayName("ConfigManager.saveAll and a concurrent panel write never lose a change (#510)")
-@Timeout(value = 30, unit = TimeUnit.SECONDS)
+@Timeout(value = 30, unit = TimeUnit.SECONDS, threadMode = ThreadMode.SEPARATE_THREAD)
 class ConfigEntityLockConcurrencyTest {
 
     /** One-shot gate: the next constructor call parks until released. */
@@ -135,9 +136,16 @@ class ConfigEntityLockConcurrencyTest {
 
         Thread shutdown = new Thread(configManager::saveAll, "ultitools-reborn-510-shutdown");
         shutdown.start();
-        while (shutdown.getState() != Thread.State.BLOCKED && shutdown.getState() != Thread.State.TERMINATED) {
+        Thread.State exitState = shutdown.getState();
+        while (exitState != Thread.State.BLOCKED && exitState != Thread.State.TERMINATED) {
             Thread.yield();
+            exitState = shutdown.getState();
         }
+        // The overlap must be real: the panel write is still parked inside the monitor, and the
+        // shutdown thread is blocked on it. A TERMINATED shutdown thread here would mean the two
+        // never overlapped, which would make the assertions below prove nothing.
+        assertThat(exitState).isEqualTo(Thread.State.BLOCKED);
+        assertThat(panel.isAlive()).isTrue();
 
         gate.release.countDown();
         panel.join();
