@@ -96,6 +96,66 @@ class PluginInstallUtilsUninstallTest {
         MockBukkitHelper.safeUnmock();
     }
 
+    @Test
+    @DisplayName("codex #514: a JAR of this module that cannot be read is reported, not counted as deleted")
+    void unreadableJarNamedLikeTheModule_isReported() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        File matching = writeModuleJar(MODULE_NAME);
+        // A second copy of the module whose metadata cannot be read right now: nothing here can
+        // say it is not this module's, and it loads the module again once it is readable.
+        File unreadable = new File(pluginsFolder, MODULE_NAME + "-0.9.0.jar");
+        Files.write(unreadable.toPath(), "not readable as a jar".getBytes(StandardCharsets.UTF_8));
+
+        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+        assertThat(matching).as("the JAR that could be identified still goes").doesNotExist();
+        assertThat(thrown)
+                .as("reporting success leaves a JAR that loads the module again once it is readable")
+                .isInstanceOf(FileSystemException.class);
+        assertThat(namedFiles((FileSystemException) thrown)).contains(unreadable.getAbsolutePath());
+        assertThat(unreadable).exists();
+    }
+
+    @Test
+    @DisplayName("codex #514: the same holds when no instance was loaded to unload")
+    void unreadableJarNamedLikeTheModule_isReportedWithNothingUnloaded() throws IOException {
+        // The module failed to load this boot, so there is no instance to unload.
+        File matching = writeModuleJar(MODULE_NAME);
+        File unreadable = new File(pluginsFolder, MODULE_NAME + "-0.9.0.jar");
+        Files.write(unreadable.toPath(), "not readable as a jar".getBytes(StandardCharsets.UTF_8));
+
+        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+        assertThat(matching).doesNotExist();
+        assertThat(thrown)
+                .as("whether an instance happened to be loaded says nothing about the second copy")
+                .isInstanceOf(FileSystemException.class);
+        assertThat(namedFiles((FileSystemException) thrown)).contains(unreadable.getAbsolutePath());
+    }
+
+    @Test
+    @DisplayName("codex #514: an unreadable JAR is reported when no JAR of the module could be identified")
+    void unreadableJar_isReportedWhenNothingMatched() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        // The module was loaded from somewhere, and the only JAR here cannot say whether it is it.
+        File unreadable = new File(pluginsFolder, MODULE_NAME + "-1.0.0.jar");
+        Files.write(unreadable.toPath(), "not readable as a jar".getBytes(StandardCharsets.UTF_8));
+
+        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+        assertThat(thrown)
+                .as("saying no JAR is here lets this one load the module again once it is readable")
+                .isInstanceOf(FileSystemException.class);
+        assertThat(namedFiles((FileSystemException) thrown)).contains(unreadable.getAbsolutePath());
+        assertThat(unreadable).exists();
+    }
+
     /** A module bean carrying one repeating {@code @Scheduled} task that counts its own runs. */
     public static class TickingBean {
         private final AtomicInteger runs = new AtomicInteger();
