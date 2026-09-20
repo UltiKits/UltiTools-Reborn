@@ -854,7 +854,7 @@ public class PluginInstallUtils {
         List<File> olderJars = operations.findModuleJars(pluginsFolder, identifyString);
 
         UpdateOutcome unusableDownload = downloadAndValidate(operations, downloadLink, stagedName, stagingFolder,
-                staged, moduleKey, latestVersion, identifyString, olderJars);
+                staged, moduleKey, latestVersion, identifyString);
         if (unusableDownload != null) {
             return unusableDownload;
         }
@@ -989,8 +989,7 @@ public class PluginInstallUtils {
      */
     private static UpdateOutcome downloadAndValidate(UpdateFileOperations operations, String downloadLink,
                                                      String stagedName, File stagingFolder, Path staged,
-                                                     String moduleKey, String latestVersion, String identifyString,
-                                                     List<File> replacedJars) {
+                                                     String moduleKey, String latestVersion, String identifyString) {
         try {
             operations.download(downloadLink, stagedName, stagingFolder);
         } catch (IOException | SecurityException | IllegalArgumentException e) {
@@ -998,7 +997,7 @@ public class PluginInstallUtils {
             deleteQuietly(operations, staged);
             return UpdateOutcome.of(UpdateOutcome.Status.DOWNLOAD_FAILED);
         }
-        if (!isJarOfModule(staged.toFile(), moduleKey, latestVersion, replacedJars)) {
+        if (!isJarOfModule(staged.toFile(), moduleKey, latestVersion)) {
             LOGGER.severe("Downloaded update for " + identifyString
                     + " is not a loadable JAR of that module at version " + latestVersion
                     + "; nothing was changed");
@@ -1632,33 +1631,18 @@ public class PluginInstallUtils {
      * module {@code moduleKey} at {@code expectedVersion}.
      */
     static boolean isJarOfModule(File file, String moduleKey, String expectedVersion) {
-        return isJarOfModule(file, moduleKey, expectedVersion, Collections.<File>emptyList());
-    }
-
-    /**
-     * As {@link #isJarOfModule(File, String, String)}, for a download that would replace
-     * {@code replacedJars}: those JARs are gone after the update, so they must not answer for a
-     * class the candidate omits (Codex review r11).
-     *
-     * @param file           the candidate JAR
-     * @param moduleKey      the module's normalised identify-string
-     * @param expectedVersion the version the catalogue offers
-     * @param replacedJars   the installed JARs this candidate would replace
-     * @return whether the file is a loadable JAR of that module at that version
-     */
-    static boolean isJarOfModule(File file, String moduleKey, String expectedVersion, List<File> replacedJars) {
         try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(file)) {
             if (!SecurityPolicy.isSafeFileStructure(file.length(), jarFile.size())) {
                 return false;
             }
             Map<String, String> pluginYml = readPluginYmlScalars(jarFile);
             String version = pluginYml.get("version");
-            // The loader refuses a module JAR with no name: (UltiToolsPlugin's constructor, D-16),
-            // so a download without one would replace a working module with something that cannot
-            // load (Codex review r6). Refuse it here, while nothing has moved.
+            // The plugin.yml contract the loader states: an identify-string that matches, the
+            // name UltiToolsPlugin's constructor requires (D-16), and the expected version. This
+            // is the whole of what an update checks before it moves anything -- whether a module
+            // actually loads is answered by the next boot, not predicted here.
             return moduleKey.equals(normalizeIdentifyString(pluginYml.get("identify-string")))
                     && declaresAName(pluginYml, file)
-                    && PluginManager.carriesLoadableModuleMainClass(file, replacedJars)
                     && version != null && expectedVersion != null
                     && VersionComparatorUtil.compare(version.trim(), expectedVersion.trim()) == 0;
         } catch (IOException | SecurityException e) {

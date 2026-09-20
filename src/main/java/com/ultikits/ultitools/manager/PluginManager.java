@@ -552,221 +552,16 @@ public class PluginManager {
      * @param pluginJar   Plugin jar file
      * @return Plugin main class
      */
+    /**
+     * Load module main class.
+     *
+     * @param classLoader Class loader
+     * @param pluginJar   Plugin jar file
+     * @return Plugin main class
+     */
     private Class<? extends UltiToolsPlugin> loadPluginMainClass(ClassLoader classLoader, File pluginJar) { // NOPMD - classLoader used implicitly by Class.forName
-        try {
-            return findModuleMainClass(pluginJar, ClassLoaderUtils::loadClass);
-        } finally {
-            // D-19: fires whether the scan returned early (main class found), fell through
-            // (class-count cap reached / jar exhausted), or the jar itself could not be read --
-            // exactly once per call, after the scan, naming pluginJar as the module.
-            ModuleScanDiagnostics.emitSummary(pluginJar.getName());
-            // GEN-07 (D-14): the audit summary lands at the same point, so the two diagnostics
-            // read as one pattern rather than two.
-            ClassLoaderUtils.emitClassloadFilterAuditSummary(pluginJar.getName());
-        }
-    }
-
-    /** Resolves a class by binary name, so the same scan can run against different class loaders. */
-    @FunctionalInterface
-    interface ModuleClassResolver {
-        /**
-         * @param className the binary name taken from the JAR entry
-         * @return the class
-         * @throws ClassNotFoundException when the name cannot be resolved
-         * @throws SecurityException when the class is refused
-         */
-        Class<?> resolve(String className) throws ClassNotFoundException, SecurityException;
-    }
-
-    /**
-     * Whether {@code candidateJar} yields a module main class -- the same question, answered by the
-     * same scan, that {@link #loadPluginMainClass} answers at startup.
-     * <p>
-     * This exists so an update can ask before it replaces a module's installed JAR. It used to be
-     * asked by a second, approximate implementation in {@code PluginInstallUtils} that read class
-     * headers; every review round found one more way that copy and this scan disagreed (abstract
-     * classes, entry names that are not binary names, the class cap, ancestry leaving the JAR), so
-     * the copy was deleted and both callers now run this method.
-     * <p>
-     * The candidate is examined with the live module class loader as parent, so a module whose
-     * superclass lives in another module's JAR resolves exactly as it will after a restart.
-     * Classes are resolved without initialising them, so a downloaded artifact's static
-     * initialisers never run here, and the loader over the candidate is closed before returning, so
-     * no handle is left on a file the update is about to move.
-     *
-     * @param candidateJar the JAR to examine; it need not be in the modules folder
-     * @param replacedJars the installed JARs this candidate would replace, which are therefore not
-     *                     available to it after the update and must not answer for it here
-     * @return whether a module would load from it
-     */
-    @ApiStatus.Internal
-    public static boolean carriesLoadableModuleMainClass(File candidateJar, Collection<File> replacedJars) {
-        if (candidateJar == null || !candidateJar.isFile()) {
-            return false;
-        }
-        try {
-            try (CandidateClassLoader loader = CandidateClassLoader.over(candidateJar, replacedJars)) {
-                ModuleClassResolver resolver = (className) -> {
-                    if (!ClassLoaderUtils.isResolvableClassName(className)) {
-                        // The boot scan refuses this name, so a class of it cannot produce a module
-                        // after the restart either (Codex review r17).
-                        throw new SecurityException("Not a class name the module scan resolves: " + className);
-                    }
-                    // The name comes from this JAR's own entries and is checked above; the class is
-                    // resolved without initialising it, exactly as the boot scan does.
-                    // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
-                    return Class.forName(className, false, loader);
-                };
-                Class<? extends UltiToolsPlugin> mainClass = findModuleMainClass(candidateJar, resolver);
-                return mainClass != null && canBeInstantiatedAtBoot(mainClass, candidateJar);
-            }
-        } catch (IOException | RuntimeException | LinkageError e) {
-            Bukkit.getLogger().log(Level.WARNING,
-                "[UltiTools-API] Could not examine " + candidateJar + " for a module main class", e);
-            return false;
-        } finally {
-            ModuleScanDiagnostics.emitSummary(candidateJar.getName());
-            ClassLoaderUtils.emitClassloadFilterAuditSummary(candidateJar.getName());
-        }
-    }
-
-    /**
-     * Whether {@code mainClass} has the constructor the boot path calls. {@link #initializePlugin}
-     * creates a module with {@code getDeclaredConstructor().newInstance()} and does not make it
-     * accessible first, so the constructor and its class must both be public for that call to
-     * succeed from here: a class without a no-argument constructor, or one that hides it, loads and
-     * then fails to register (Codex reviews r14, r15). The constructor is only looked up, never
-     * invoked: instantiating a downloaded artifact here would run its code before the operator has
-     * installed it.
-     *
-     * @param mainClass    the module main class the scan found
-     * @param candidateJar the JAR it came from, for the log line
-     * @return whether boot could create it
-     */
-    private static boolean canBeInstantiatedAtBoot(Class<? extends UltiToolsPlugin> mainClass, File candidateJar) {
-        try {
-            Constructor<? extends UltiToolsPlugin> constructor = mainClass.getDeclaredConstructor();
-            if (!Modifier.isPublic(constructor.getModifiers()) || !Modifier.isPublic(mainClass.getModifiers())) {
-                Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + candidateJar + " carries "
-                    + mainClass.getName() + ", whose no-argument constructor the loader cannot reach");
-                return false;
-            }
-            return true;
-        } catch (NoSuchMethodException | RuntimeException e) {
-            Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + candidateJar
-                + " carries " + mainClass.getName() + ", which has no constructor the loader could call", e);
-            return false;
-        }
-    }
-
-    /**
-     * The class loader a candidate module JAR would load in after the update: the candidate plus
-     * every installed module JAR it does not replace, over the framework's own class loader.
-     * <p>
-     * It is one loader, like the one the server builds for the modules folder at boot, so classes
-     * split across module JARs -- a sealed package, most visibly -- behave here as they will there
-     * (Codex review r12). It is also the only loader opened, so closing it releases every JAR
-     * handle taken while validating.
-     * <p>
-     * A plain parent-first loader would answer a name the installed module already provides from
-     * the installed JAR, so a candidate carrying different bytes under the same entry name would
-     * be judged on the old module's classes and never read (Codex review r9). Names the candidate
-     * declares are therefore resolved from it first, with no exemption: a package-name exemption
-     * would cover module classes too, since a module may live under {@code com.ultikits.ultitools.*},
-     * and asking a loader "does the framework supply this name" answers "yes" wherever the
-     * framework and the modules share one loader (Codex review r10).
-     * <p>
-     * One divergence from the boot environment is accepted knowingly: a candidate that packages
-     * its own copy of a framework class is judged on that copy, while at boot the framework's copy
-     * wins because the framework's loader is the parent of the module loader. A module is not
-     * meant to package the API -- it is a {@code provided} dependency -- and the consequence here
-     * is a refusal, which changes nothing on disk, rather than an acceptance that would.
-     */
-    private static final class CandidateClassLoader extends URLClassLoader {
-
-        private final Set<String> ownClassNames;
-
-        private CandidateClassLoader(URL[] urls, ClassLoader parent, Set<String> ownClassNames) {
-            super(urls, parent);
-            this.ownClassNames = ownClassNames;
-        }
-
-        /**
-         * @param candidateJar the JAR to load from
-         * @param replacedJars the installed JARs the candidate replaces, which are left out because
-         *                     they will not exist after the update
-         * @return a loader over the candidate and the surviving module JARs
-         * @throws IOException when a JAR cannot be read
-         */
-        static CandidateClassLoader over(File candidateJar, Collection<File> replacedJars) throws IOException {
-            Set<String> replaced = new HashSet<>();
-            for (File jar : replacedJars) {
-                replaced.add(jar.getAbsolutePath());
-            }
-            // The candidate first, so its own classes win over a namesake in another module, as they
-            // do at boot where only one JAR of a module is present.
-            List<URL> urls = new ArrayList<>();
-            urls.add(candidateJar.toURI().toURL());
-            File modulesFolder = new File(UltiTools.getInstance().getDataFolder(), "plugins");
-            File[] installed = modulesFolder.listFiles((file) -> file.getName().endsWith(".jar"));
-            if (installed != null) {
-                for (File jar : installed) {
-                    // The same filter the boot class path applies (UltiTools#collectModuleJarUrls):
-                    // a JAR the server will skip provides nothing after the restart, so a candidate
-                    // must not be validated against it (Codex review r13).
-                    if (!replaced.contains(jar.getAbsolutePath()) && SecurityPolicy.isValidModuleJar(jar)) {
-                        urls.add(jar.toURI().toURL());
-                    }
-                }
-            }
-            // Only the candidate's own names are resolved ahead of the parent. A surviving module
-            // that shades a framework class must not decide this candidate's fate: at boot the
-            // framework's copy wins, because the module loader is parent-first (Codex review r13).
-            Set<String> ownClassNames = new HashSet<>();
-            try (JarFile jarFile = new JarFile(candidateJar)) {
-                Enumeration<JarEntry> entries = jarFile.entries();
-                while (entries.hasMoreElements()) {
-                    String entryName = entries.nextElement().getName();
-                    if (entryName.endsWith(".class") && !entryName.contains("META-INF")) {
-                        ownClassNames.add(entryName.replace('/', '.').replace(".class", ""));
-                    }
-                }
-            }
-            return new CandidateClassLoader(urls.toArray(new URL[0]),
-                    PluginManager.class.getClassLoader(), ownClassNames);
-        }
-
-        @Override
-        protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
-            synchronized (getClassLoadingLock(name)) {
-                Class<?> loaded = findLoadedClass(name);
-                if (loaded == null && ownClassNames.contains(name)) {
-                    loaded = findClass(name);
-                }
-                if (loaded == null) {
-                    return super.loadClass(name, resolve);
-                }
-                if (resolve) {
-                    resolveClass(loaded);
-                }
-                return loaded;
-            }
-        }
-    }
-
-    /**
-     * The scan itself: the first concrete, non-interface {@link UltiToolsPlugin} subclass in the
-     * JAR, resolved through {@code resolver}.
-     *
-     * @param pluginJar the JAR to scan
-     * @param resolver  how to resolve a binary name to a class
-     * @return the module main class, or {@code null} when the JAR yields none
-     */
-    private static Class<? extends UltiToolsPlugin> findModuleMainClass(File pluginJar, ModuleClassResolver resolver) {
-        // Validate archive security: size and entry-count limits. The .jar extension rule belongs
-        // to the modules folder (PluginManager lists only .jar there); an update validates its
-        // download in the staging directory, where the file is deliberately not named .jar yet.
-        if (!SecurityPolicy.isValidModuleArchive(pluginJar)) {
+        // Validate jar file security
+        if (!SecurityPolicy.isValidModuleJar(pluginJar)) {
             Bukkit.getLogger().log(Level.SEVERE, 
                 "[UltiTools-API] Security validation failed for jar: " + pluginJar.getName());
             return null;
@@ -806,9 +601,9 @@ public class PluginManager {
                     // throws ClassNotFoundException, or throws SecurityException -- classify() is
                     // a pure function of the name alone. Purely observational; never refuses.
                     ClassLoaderUtils.recordClassloadFilterAudit(pluginJar.getName(), className);
-                    // Resolve through the caller's class loader: the framework's at startup, one
-                    // over the candidate when an update asks the question before installing it.
-                    Class<?> aClass = resolver.resolve(className);
+                    // Use security-validated class loading (checks dangerous classes/packages)
+                    // but NOT loadPluginClass() which rejects non-UltiToolsPlugin classes
+                    Class<?> aClass = ClassLoaderUtils.loadClass(className);
                     if (UltiToolsPlugin.class.isAssignableFrom(aClass)
                             && !aClass.isInterface()
                             && !Modifier.isAbstract(aClass.getModifiers())) {
@@ -830,6 +625,14 @@ public class PluginManager {
         } catch (IOException | LinkageError | RuntimeException e) {
             Bukkit.getLogger().log(Level.SEVERE,
                 "[UltiTools-API] Failed to read jar file: " + pluginJar.getName(), e);
+        } finally {
+            // D-19: fires whether the method returned early (main class found), fell through
+            // (class-count cap reached / jar exhausted), or the jar itself could not be read --
+            // exactly once per call, after the scan loop, naming pluginJar as the module.
+            ModuleScanDiagnostics.emitSummary(pluginJar.getName());
+            // GEN-07 (D-14): the audit summary lands at the same point, so the two diagnostics
+            // read as one pattern rather than two.
+            ClassLoaderUtils.emitClassloadFilterAuditSummary(pluginJar.getName());
         }
         return null;
     }
