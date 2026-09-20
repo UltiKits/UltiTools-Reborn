@@ -202,9 +202,9 @@ class ModuleUpdateRecoveryTest {
 
     @Test
     @DisplayName("review r5 IN-04: a journal written by this JVM belongs to a running update and is left alone")
-    void journalOfTheCurrentProcess_isSkipped() throws IOException {
+    void journalOfTheCurrentProcess_isSkipped() throws Exception {
         File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
-        File journal = writeJournal(UUID_A, ManagementFactory.getRuntimeMXBean().getName(), ID,
+        File journal = writeJournal(UUID_A, currentProcessIdentity(), ID,
                 ID + "-2.0.0.jar", ID + "-1.0.0.jar", aside.getName());
 
         UltiTools.collectModuleJarUrls(pluginsFolder);
@@ -253,6 +253,79 @@ class ModuleUpdateRecoveryTest {
 
         assertThatCode(() -> assertThat(UltiTools.collectModuleJarUrls(pluginsFolder))
                 .contains(module.toURI().toURL())).doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("codex r6 P1: a journal of an earlier run that reused this PID and host is recovered, not skipped")
+    void journalOfAnEarlierRunOnTheSamePidAndHost_isRecovered() throws IOException {
+        File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        // A container that runs Java as PID 1 under a fixed hostname produces the same
+        // RuntimeMXBean name on every start, so that name alone cannot say "this run".
+        File journal = writeJournal(UUID_A, ManagementFactory.getRuntimeMXBean().getName(), ID,
+                ID + "-2.0.0.jar", ID + "-1.0.0.jar", aside.getName());
+
+        UltiTools.collectModuleJarUrls(pluginsFolder);
+
+        assertThat(new File(pluginsFolder, ID + "-1.0.0.jar"))
+                .as("the crashed run's journal must not be mistaken for this run's")
+                .exists();
+        assertThat(aside).doesNotExist();
+        assertThat(journal).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("codex r6 P2: a restore that fails keeps the journal, and the next boot restores the JAR")
+    void aFailedRestoreKeepsTheJournalForTheNextBoot() throws IOException {
+        File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        File journal = writeJournal(UUID_A, OTHER_PROCESS, ID, ID + "-2.0.0.jar",
+                ID + "-1.0.0.jar", aside.getName());
+        // A modules folder that cannot be written to: the restore fails for a reason that can pass.
+        assertThat(pluginsFolder.delete()).isTrue();
+        Files.write(pluginsFolder.toPath(), "not a folder".getBytes(StandardCharsets.UTF_8));
+
+        UltiTools.collectModuleJarUrls(pluginsFolder);
+
+        assertThat(aside).exists();
+        assertThat(journal)
+                .as("without the journal the set-aside JAR becomes a leftover nothing ever restores")
+                .exists();
+        assertThat(warnings()).anyMatch(m -> m.contains(aside.getAbsolutePath()));
+
+        assertThat(pluginsFolder.delete()).isTrue();
+        assertThat(pluginsFolder.mkdirs()).isTrue();
+        UltiTools.collectModuleJarUrls(pluginsFolder);
+
+        assertThat(new File(pluginsFolder, ID + "-1.0.0.jar")).exists();
+        assertThat(aside).doesNotExist();
+        assertThat(journal).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("codex r6 P2: a target path held by an unrelated file does not count as an installed update")
+    void journalWhoseTargetIsAnUnrelatedFile_restoresTheOldJars() throws IOException {
+        File occupant = new File(pluginsFolder, ID + "-2.0.0.jar");
+        Files.write(occupant.toPath(), "not a module JAR".getBytes(StandardCharsets.UTF_8));
+        File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        File journal = writeJournal(UUID_A, OTHER_PROCESS, ID, ID + "-2.0.0.jar",
+                ID + "-1.0.0.jar", aside.getName());
+
+        UltiTools.collectModuleJarUrls(pluginsFolder);
+
+        assertThat(new File(pluginsFolder, ID + "-1.0.0.jar"))
+                .as("the update never installed its new version, so the module's own JAR must come back")
+                .exists();
+        assertThat(aside).doesNotExist();
+        assertThat(journal).doesNotExist();
+        assertThat(warnings()).noneMatch(m -> m.contains("leftover") && m.contains(aside.getAbsolutePath()));
+    }
+
+    /** The identity the framework writes into a journal, read from the class that writes it. */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+    private static String currentProcessIdentity() throws Exception {
+        java.lang.reflect.Method method = Class.forName("com.ultikits.ultitools.utils.PluginInstallUtils")
+                .getDeclaredMethod("currentProcessIdentity");
+        method.setAccessible(true);
+        return (String) method.invoke(null);
     }
 
     private List<String> warnings() {

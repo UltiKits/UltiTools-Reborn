@@ -655,6 +655,96 @@ class PluginInstallUtilsUpdateTransactionTest {
         }
     }
 
+    @Test
+    @DisplayName("codex r6 P2: a signed JAR whose plugin.yml was changed after signing is an invalid download")
+    void tamperedSignedJar_isAnInvalidDownloadAndLeavesNothingBehind() throws Exception {
+        File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        operations.downloadBytes = tamperedSignedJarBytes();
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus())
+                .as("reading a tampered signed JAR throws SecurityException, which is still an unusable download")
+                .isEqualTo(Status.INVALID_DOWNLOAD);
+        assertThat(jarEntries()).containsExactly(oldJar.getName());
+        assertThat(stagingEntries()).as("the staged download is deleted like any other invalid one").isEmpty();
+    }
+
+    @Test
+    @DisplayName("codex r6 P2: every plugin.yml read survives a JAR whose signature does not verify")
+    void tamperedSignedJar_isReadAsNeitherAModuleJarNorAVersion() throws Exception {
+        File tampered = new File(dataFolder, "tampered.jar");
+        Files.write(tampered.toPath(), tamperedSignedJarBytes());
+
+        assertThat(PluginInstallUtils.isJarOfModule(tampered, IDENTIFY_STRING, "2.0.0")).isFalse();
+        assertThat(PluginInstallUtils.readModuleVersion(tampered)).isNull();
+    }
+
+    /**
+     * A JAR signed with a throwaway key whose {@code plugin.yml} bytes were replaced afterwards, so
+     * reading that entry throws {@code java.lang.SecurityException: SHA-... digest error}.
+     */
+    private byte[] tamperedSignedJarBytes() throws Exception {
+        File tools = new File(System.getProperty("java.home"), "bin");
+        File keytool = new File(tools, "keytool");
+        File jarsigner = new File(tools, "jarsigner");
+        org.junit.jupiter.api.Assumptions.assumeTrue(keytool.canExecute() && jarsigner.canExecute(),
+                "a JDK with keytool and jarsigner is required to build a signed JAR");
+        File work = new File(dataFolder, "signing");
+        assertThat(work.mkdirs()).isTrue();
+        File jar = new File(work, "signed.jar");
+        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(jar))) {
+            out.putNextEntry(new JarEntry("plugin.yml"));
+            out.write(jarBytesPluginYml("2.0.0"));
+            out.closeEntry();
+        }
+        File keystore = new File(work, "keystore.jks");
+        run(work, keytool.getAbsolutePath(), "-genkeypair", "-alias", "t", "-keyalg", "RSA", "-keysize", "2048",
+                "-dname", "CN=ultitools-test", "-keystore", keystore.getAbsolutePath(),
+                "-storepass", "changeit", "-keypass", "changeit", "-validity", "3650");
+        run(work, jarsigner.getAbsolutePath(), "-keystore", keystore.getAbsolutePath(),
+                "-storepass", "changeit", "-keypass", "changeit", jar.getAbsolutePath(), "t");
+        java.io.ByteArrayOutputStream tampered = new java.io.ByteArrayOutputStream();
+        try (java.util.zip.ZipFile signed = new java.util.zip.ZipFile(jar);
+             java.util.zip.ZipOutputStream out = new java.util.zip.ZipOutputStream(tampered)) {
+            java.util.Enumeration<? extends java.util.zip.ZipEntry> it = signed.entries();
+            while (it.hasMoreElements()) {
+                java.util.zip.ZipEntry entry = it.nextElement();
+                out.putNextEntry(new java.util.zip.ZipEntry(entry.getName()));
+                if ("plugin.yml".equals(entry.getName())) {
+                    out.write(jarBytesPluginYml("9.9.9"));
+                } else {
+                    try (java.io.InputStream in = signed.getInputStream(entry)) {
+                        byte[] buffer = new byte[4096];
+                        for (int read = in.read(buffer); read > 0; read = in.read(buffer)) {
+                            out.write(buffer, 0, read);
+                        }
+                    }
+                }
+                out.closeEntry();
+            }
+        }
+        return tampered.toByteArray();
+    }
+
+    private static byte[] jarBytesPluginYml(String version) {
+        return ("name: Fixture\nversion: " + version + "\nidentify-string: " + IDENTIFY_STRING + "\n")
+                .getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static void run(File directory, String... command) throws Exception {
+        Process process = new ProcessBuilder(command).directory(directory).redirectErrorStream(true).start();
+        StringBuilder output = new StringBuilder(256);
+        try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                new java.io.InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+            for (String line = reader.readLine(); line != null; line = reader.readLine()) {
+                output.append(line).append('\n');
+            }
+        }
+        assertThat(process.waitFor(60, TimeUnit.SECONDS)).as("command timed out: %s", Arrays.toString(command)).isTrue();
+        assertThat(process.exitValue()).as("command failed: %s%n%s", Arrays.toString(command), output).isZero();
+    }
+
     private List<String> jarEntries() {
         String[] names = pluginsFolder.list((dir, name) -> name.endsWith(".jar"));
         return names == null ? Collections.emptyList() : Arrays.asList(names);
