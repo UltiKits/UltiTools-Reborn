@@ -1257,7 +1257,7 @@ public class PluginInstallUtils {
         }
         File stagingFolder = journalFile.getParentFile();
         Path targetPath = pluginsFolder.toPath().resolve(target);
-        boolean alreadyInstalled = Files.exists(targetPath, LinkOption.NOFOLLOW_LINKS);
+        boolean alreadyInstalled = newVersionWasInstalled(targetPath, module, journalFile);
         boolean settled = true;
         for (String[] pair : pairs) {
             File setAside = new File(stagingFolder, pair[1]);
@@ -1277,6 +1277,26 @@ public class PluginInstallUtils {
                     + " was kept: a set-aside JAR of module " + module
                     + " could not be restored, and the next start will try again");
         }
+    }
+
+    /**
+     * Whether the interrupted update had already moved its new version in. The path existing is not
+     * enough (Codex review r6): the update refuses to overwrite an occupied target, so a file there
+     * can be an unrelated one that was in the way -- and treating it as the new version would leave
+     * every old JAR in the staging directory and delete the journal, losing the module. The file
+     * counts only when it really is a JAR of the module the journal names.
+     */
+    private static boolean newVersionWasInstalled(Path targetPath, String module, File journalFile) {
+        if (!Files.exists(targetPath, LinkOption.NOFOLLOW_LINKS)) {
+            return false;
+        }
+        if (isJarOfModule(targetPath.toFile(), module)) {
+            return true;
+        }
+        LOGGER.warning("The interrupted update recorded in " + journalFile.getAbsolutePath() + " never installed "
+                + targetPath.toAbsolutePath() + ": that file is not a JAR of module " + module
+                + ", so the module's own JARs are moved back");
+        return false;
     }
 
     /**
@@ -1410,6 +1430,22 @@ public class PluginInstallUtils {
                     && VersionComparatorUtil.compare(version.trim(), expectedVersion.trim()) == 0;
         } catch (IOException e) {
             LOGGER.log(Level.FINE, "Downloaded file is not a readable JAR: " + file, e);
+            return false;
+        }
+    }
+
+    /**
+     * Whether {@code file} is a loadable JAR of the module {@code moduleKey}, at any version. Used
+     * where the version is not known, such as recovery asking whether a file is the module's JAR.
+     */
+    static boolean isJarOfModule(File file, String moduleKey) {
+        try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(file)) {
+            if (!SecurityPolicy.isSafeFileStructure(file.length(), jarFile.size())) {
+                return false;
+            }
+            return moduleKey.equals(normalizeIdentifyString(readPluginYmlScalars(jarFile).get("identify-string")));
+        } catch (IOException e) {
+            LOGGER.log(Level.FINE, "File is not a readable JAR of module " + moduleKey + ": " + file, e);
             return false;
         }
     }
