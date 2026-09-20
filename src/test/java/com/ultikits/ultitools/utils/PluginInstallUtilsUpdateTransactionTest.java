@@ -499,6 +499,36 @@ class PluginInstallUtilsUpdateTransactionTest {
     }
 
     @Test
+    @DisplayName("codex r17 P1: a module class whose name the boot scan refuses is an invalid download")
+    void downloadWhoseModuleClassNameBootRefuses_isAnInvalidDownload() throws Exception {
+        javax.tools.JavaCompiler compiler = javax.tools.ToolProvider.getSystemJavaCompiler();
+        org.junit.jupiter.api.Assumptions.assumeTrue(compiler != null, "a JDK compiler is required");
+        File sources = new File(dataFolder, "unicode-src/m\u00f3dulo");
+        assertThat(sources.mkdirs()).isTrue();
+        File classes = new File(dataFolder, "unicode-classes");
+        assertThat(classes.mkdirs()).isTrue();
+        File file = new File(sources, "Main.java");
+        Files.write(file.toPath(), ("package m\u00f3dulo;\n"
+                + "public class Main extends com.ultikits.ultitools.abstracts.UltiToolsPlugin {\n"
+                + "  @Override public boolean registerSelf() { return true; }\n}\n")
+                .getBytes(StandardCharsets.UTF_8));
+        assertThat(compiler.run(null, null, null, "-nowarn", "-encoding", "UTF-8",
+                "-classpath", System.getProperty("java.class.path"),
+                "-d", classes.getAbsolutePath(), file.getAbsolutePath()))
+                .as("the fixture must compile").isZero();
+        File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        operations.downloadBytes = moduleJarWith("2.0.0", new String[]{"m\u00f3dulo/Main.class"},
+                new byte[][]{compiledClass(classes, "m\u00f3dulo/Main.class")});
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus())
+                .as("the boot scan refuses this class name, so no module would load after the restart")
+                .isEqualTo(Status.INVALID_DOWNLOAD);
+        assertThat(jarEntries()).containsExactly(oldJar.getName());
+    }
+
+    @Test
     @DisplayName("codex r15 P1: a module class whose no-argument constructor the loader cannot reach is invalid")
     void downloadWhoseModuleClassHidesItsConstructor_isAnInvalidDownload() throws Exception {
         javax.tools.JavaCompiler compiler = javax.tools.ToolProvider.getSystemJavaCompiler();

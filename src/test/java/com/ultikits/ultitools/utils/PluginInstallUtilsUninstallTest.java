@@ -411,6 +411,46 @@ class PluginInstallUtilsUninstallTest {
     }
 
     @Test
+    @DisplayName("codex r17 P2: a JAR that cannot be deleted does not stop the staging cleanup")
+    void uninstall_clearsStagingEvenWhenAJarCannotBeDeleted() throws IOException {
+        Assumptions.assumeFalse("root".equals(System.getProperty("user.name")),
+                "root ignores directory permissions, so the delete would succeed");
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        File jar = writeModuleJar(MODULE_NAME);
+        File staging = new File(dataFolder, ".upm-staging");
+        assertThat(staging.mkdirs()).isTrue();
+        String transaction = "8420a849-1c2d-4e5f-9a0b-1c2d3e4f5a6b";
+        File aside = new File(staging, MODULE_NAME + "-0.9.0.jar." + transaction + ".old");
+        Files.write(aside.toPath(), "old jar".getBytes(StandardCharsets.UTF_8));
+        File journal = new File(staging, transaction + ".txn");
+        Files.write(journal.toPath(), ("format=1\nprocess=4242@another-host\nmodule=uninstallfixture\n"
+                + "name=" + MODULE_NAME + "\ntarget=" + MODULE_NAME + "-1.0.0.jar\n"
+                + "aside.0.original=" + MODULE_NAME + "-0.9.0.jar\naside.0.aside=" + aside.getName() + "\n")
+                .getBytes(StandardCharsets.UTF_8));
+        Set<PosixFilePermission> original = Files.getPosixFilePermissions(pluginsFolder.toPath());
+        Files.setPosixFilePermissions(pluginsFolder.toPath(), PosixFilePermissions.fromString("r-x------"));
+        try {
+            Assumptions.assumeTrue(!Files.isWritable(pluginsFolder.toPath()), "the permissions must bind this process");
+
+            Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+            assertThat(thrown).isInstanceOf(FileSystemException.class);
+            assertThat(namedFiles((FileSystemException) thrown))
+                    .as("the operator must be told about both the JAR and the journal")
+                    .contains(jar.getAbsolutePath())
+                    .contains(journal.getAbsolutePath());
+            assertThat(journal)
+                    .as("a JAR that could not be deleted must not leave the journal behind as well")
+                    .doesNotExist();
+        } finally {
+            Files.setPosixFilePermissions(pluginsFolder.toPath(), original);
+        }
+    }
+
+    @Test
     @DisplayName("codex r9 P2: an update journal that cannot be read fails the uninstall rather than passing silently")
     void uninstall_reportsAJournalItCouldNotRead() throws IOException {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
