@@ -91,7 +91,13 @@ class PluginInstallUtilsUpdateTransactionTest {
     }
 
     @AfterEach
-    void tearDown() {
+    void tearDown() throws IOException {
+        java.nio.file.attribute.PosixFileAttributeView view = Files.getFileAttributeView(
+                stagingFolder.toPath(), java.nio.file.attribute.PosixFileAttributeView.class);
+        if (view != null && stagingFolder.exists()) {
+            // A test may have made the staging directory unwritable; @TempDir cleanup needs it back.
+            view.setPermissions(java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"));
+        }
         PluginInstallUtils.updateFileOperations = PluginInstallUtils.UpdateFileOperations.DEFAULT;
         PluginInstallUtils.resetBaseUrl();
         server.stop(0);
@@ -400,6 +406,60 @@ class PluginInstallUtilsUpdateTransactionTest {
     }
 
     @Test
+    @DisplayName("review r6 IN-05: an uninstall during an update that had no old JAR to move aside is still refused")
+    void uninstallDuringAnUpdateWithNoOlderJar_isRefused() throws IOException {
+        AtomicReference<Throwable> uninstallResult = new AtomicReference<>();
+        operations.duringMoveIn = () -> uninstallResult.set(org.assertj.core.api.Assertions.catchThrowable(
+                () -> PluginInstallUtils.uninstallPlugin("Fixture")));
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(uninstallResult.get())
+                .as("with no old JAR the journal records no pair, so it must name the module itself")
+                .isInstanceOf(com.ultikits.ultitools.exceptions.PluginModuleException.class);
+        assertThat(outcome.getStatus()).isEqualTo(Status.UPDATED);
+    }
+
+    @Test
+    @DisplayName("review r6 IN-04: a journal that cannot be written is reported as itself and leaves no temporary file")
+    void journalThatCannotBeWritten_isReportedAsSuchAndCleansUp() throws IOException {
+        File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        org.junit.jupiter.api.Assumptions.assumeTrue(makeStagingReadOnlyAfterDownload(),
+                "a POSIX file system whose permissions bind this process is required");
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus()).isEqualTo(Status.JOURNAL_NOT_WRITTEN);
+        assertThat(outcome.getFiles()).hasSize(1);
+        assertThat(outcome.getFiles().get(0)).endsWith(".txn");
+        assertThat(outcome.getFailureReason()).isNotNull();
+        assertThat(jarEntries()).containsExactly(oldJar.getName());
+        assertThat(stagingEntries()).as("no half-written journal is left behind").noneMatch(n -> n.endsWith(".tmp"));
+    }
+
+    /**
+     * Makes the staging directory unwritable once the download has been written into it, so the
+     * journal write is the first operation that fails.
+     *
+     * @return whether the permissions actually bind this process
+     */
+    private boolean makeStagingReadOnlyAfterDownload() {
+        operations.duringDownloadCompleted = () -> {
+            try {
+                java.nio.file.attribute.PosixFileAttributeView view = Files.getFileAttributeView(
+                        stagingFolder.toPath(), java.nio.file.attribute.PosixFileAttributeView.class);
+                if (view != null) {
+                    view.setPermissions(java.nio.file.attribute.PosixFilePermissions.fromString("r-x------"));
+                }
+            } catch (IOException | UnsupportedOperationException e) {
+                throw new java.io.UncheckedIOException(new IOException(e));
+            }
+        };
+        return stagingFolder.toPath().getFileSystem().supportedFileAttributeViews().contains("posix")
+                && !"root".equals(System.getProperty("user.name"));
+    }
+
+    @Test
     @DisplayName("review r5 IN-03: an uninstall started while a module has no jar on disk, between the moves, is still refused")
     void uninstallBetweenTheMoves_isRefused() throws IOException {
         writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
@@ -553,6 +613,7 @@ class PluginInstallUtilsUpdateTransactionTest {
         private volatile Runnable duringDownload;
         private volatile Runnable duringMoveIn;
         private volatile Runnable duringMoveAside;
+        private volatile Runnable duringDownloadCompleted;
         private volatile int failMoveAsideAtCall;
         private volatile boolean failMoveIn;
         private volatile boolean failMoveBack;
@@ -587,6 +648,11 @@ class PluginInstallUtilsUpdateTransactionTest {
             if (afterWriting != null) {
                 downloadThrowsAfterWriting = null;
                 throw afterWriting;
+            }
+            Runnable completed = duringDownloadCompleted;
+            if (completed != null) {
+                duringDownloadCompleted = null;
+                completed.run();
             }
         }
 
