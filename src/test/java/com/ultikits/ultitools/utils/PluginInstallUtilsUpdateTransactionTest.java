@@ -431,6 +431,87 @@ class PluginInstallUtilsUpdateTransactionTest {
     }
 
     @Test
+    @DisplayName("sweep B1: a second update is refused while one of the same module waits for a restart")
+    void secondUpdateWhileOneAwaitsTheRestart_isRefused() throws IOException {
+        File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        UpdateOutcome first = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+        assertThat(first.getStatus()).isEqualTo(Status.UPDATED);
+        List<String> stagedAfterFirst = stagingEntries();
+        operations.clearEvents();
+
+        UpdateOutcome second = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(second.getStatus())
+                .as("a second transaction would set the first candidate aside and leave two journals to resolve")
+                .isEqualTo(Status.ALREADY_IN_PROGRESS);
+        assertThat(operations.events()).as("nothing is downloaded either").doesNotContain("download");
+        assertThat(stagingEntries()).containsExactlyInAnyOrderElementsOf(stagedAfterFirst);
+        assertThat(jarEntries()).containsExactly(NEW_JAR_NAME);
+        assertThat(oldJar).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("sweep A-marker: the rollback removes the candidate before restoring a JAR of the same name")
+    void markerFailureRollback_whenTheOldJarCarriesTheCandidateName() throws IOException {
+        // A same-version retry: what is installed and what is set aside share one file name.
+        catalogueVersion = "1.0.0";
+        operations.downloadBytes = jarBytes("1.0.0");
+        File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        byte[] oldBytes = Files.readAllBytes(oldJar.toPath());
+        operations.duringMoveIn = () -> {
+            for (String name : stagingEntries()) {
+                if (name.endsWith(".txn")) {
+                    // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
+                    File blocker = new File(stagingFolder, name + ".tmp");
+                    assertThat(blocker.mkdir()).as("a directory cannot be written as a file").isTrue();
+                }
+            }
+        };
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus()).isEqualTo(Status.NEW_JAR_NOT_INSTALLED);
+        assertThat(jarEntries()).containsExactly(IDENTIFY_STRING + "-1.0.0.jar");
+        assertThat(new File(pluginsFolder, IDENTIFY_STRING + "-1.0.0.jar"))
+                .as("restoring onto an occupied path leaves the candidate installed under the old name")
+                .hasBinaryContent(oldBytes);
+        assertThat(stagingEntries())
+                .as("nothing may be stranded in staging once the journal is gone")
+                .noneMatch(name -> name.endsWith(".old"));
+    }
+
+    @Test
+    @DisplayName("sweep: a file system that refuses an atomic replace still records the awaiting phase")
+    void journalRewriteOnAProviderThatRefusesAnAtomicReplace_stillMarksTheUpdate() throws IOException {
+        writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
+        operations.refuseAtomicReplace = true;
+
+        UpdateOutcome outcome = PluginInstallUtils.updatePluginTransactionally(IDENTIFY_STRING);
+
+        assertThat(outcome.getStatus())
+                .as("Files.move leaves replace-on-ATOMIC_MOVE implementation-specific, so it cannot be relied on")
+                .isEqualTo(Status.UPDATED);
+        assertThat(journalPhase()).isEqualTo("awaiting-boot-confirmation");
+        assertThat(stagingEntries()).noneMatch(name -> name.endsWith(".tmp"));
+    }
+
+    /** The phase recorded in the one journal the staging directory holds. */
+    private String journalPhase() throws IOException {
+        for (String name : stagingEntries()) {
+            if (name.endsWith(".txn")) {
+                java.util.Properties entries = new java.util.Properties();
+                // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
+                try (java.io.Reader reader = Files.newBufferedReader(new File(stagingFolder, name).toPath(),
+                        StandardCharsets.UTF_8)) {
+                    entries.load(reader);
+                }
+                return entries.getProperty("phase");
+            }
+        }
+        return null;
+    }
+
+    @Test
     @DisplayName("redesign: an update waits for the next boot to confirm it, keeping the old JAR and the journal")
     void updateLeavesItsOldJarAndJournalForTheNextBoot() throws IOException {
         File oldJar = writeJar(IDENTIFY_STRING + "-1.0.0.jar", "1.0.0");
@@ -737,9 +818,27 @@ class PluginInstallUtilsUpdateTransactionTest {
         private volatile IOException downloadThrowsAfterWriting;
         private volatile File extraFoundJar;
         private volatile boolean sameFileStore = true;
+        private volatile boolean refuseAtomicReplace;
         private volatile boolean moveAsideNotAtomic;
         private volatile int moveAsideNotAtomicAtCall;
         private int moveAsideCalls;
+
+        @Override
+        public void replaceAtomically(Path source, Path target) throws IOException {
+            if (refuseAtomicReplace) {
+                throw new java.nio.file.AtomicMoveNotSupportedException(source.toString(), target.toString(),
+                        "this provider refuses to replace an existing file atomically");
+            }
+            PluginInstallUtils.UpdateFileOperations.DEFAULT.replaceAtomically(source, target);
+        }
+
+        List<String> events() {
+            return new ArrayList<>(events);
+        }
+
+        void clearEvents() {
+            events.clear();
+        }
 
         @Override
         public void download(String url, String fileName, File directory) throws IOException {

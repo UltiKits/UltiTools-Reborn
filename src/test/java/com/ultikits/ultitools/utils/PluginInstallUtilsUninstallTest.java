@@ -68,6 +68,10 @@ class PluginInstallUtilsUninstallTest {
     private PluginManager pluginManager;
     private File pluginsFolder;
     private CommandManager commandManager;
+    private final java.util.List<java.util.logging.LogRecord> logs =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+    private java.util.logging.Logger utilsLogger;
+    private java.util.logging.Handler capture;
 
     @BeforeEach
     void setUp() {
@@ -89,10 +93,32 @@ class PluginInstallUtilsUninstallTest {
         });
         pluginManager = new PluginManager();
         pluginManagerRef.set(pluginManager);
+
+        utilsLogger = java.util.logging.Logger.getLogger(PluginInstallUtils.class.getName());
+        capture = new java.util.logging.Handler() {
+            @Override
+            public void publish(java.util.logging.LogRecord record) {
+                logs.add(record);
+            }
+
+            @Override
+            public void flush() {
+                // nothing buffered
+            }
+
+            @Override
+            public void close() {
+                // nothing to release
+            }
+        };
+        utilsLogger.addHandler(capture);
+        utilsLogger.setLevel(java.util.logging.Level.ALL);
     }
 
     @AfterEach
     void tearDown() {
+        utilsLogger.removeHandler(capture);
+        logs.clear();
         MockBukkitHelper.safeUnmock();
     }
 
@@ -474,6 +500,64 @@ class PluginInstallUtilsUninstallTest {
                 .as("reporting success leaves a JAR that can load the module again once it is readable")
                 .isInstanceOf(FileSystemException.class);
         assertThat(namedFiles((FileSystemException) thrown)).contains(unreadable.getAbsolutePath());
+    }
+
+    @Test
+    @DisplayName("sweep ruling: a suspect JAR is reported whether or not a live instance was unloaded")
+    void uninstall_reportsASuspectJarEvenWhenNothingWasUnloaded() throws IOException {
+        // The module failed to load this boot, so there is no instance to unload -- its JARs are here.
+        File matching = writeModuleJar(MODULE_NAME);
+        File unreadable = new File(pluginsFolder, MODULE_NAME + "-0.9.0.jar");
+        Files.write(unreadable.toPath(), "not readable as a jar".getBytes(StandardCharsets.UTF_8));
+
+        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
+
+        assertThat(matching).doesNotExist();
+        assertThat(thrown)
+                .as("reporting must not depend on whether an instance happened to be loaded")
+                .isInstanceOf(FileSystemException.class);
+        assertThat(namedFiles((FileSystemException) thrown)).contains(unreadable.getAbsolutePath());
+    }
+
+    @Test
+    @DisplayName("sweep A17: the update state in staging is cleared before the module's JARs are deleted")
+    void uninstall_clearsStagingBeforeDeletingTheModulesJars() throws IOException {
+        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
+        when(plugin.getPluginName()).thenReturn(MODULE_NAME);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        pluginManager.getPluginList().add(plugin);
+        File jar = writeModuleJar(MODULE_NAME);
+        File staging = new File(dataFolder, ".upm-staging");
+        assertThat(staging.mkdirs()).isTrue();
+        String transaction = "8420a849-1c2d-4e5f-9a0b-1c2d3e4f5a6b";
+        File aside = new File(staging, MODULE_NAME + "-0.9.0.jar." + transaction + ".old");
+        Files.write(aside.toPath(), "older".getBytes(StandardCharsets.UTF_8));
+        File journal = new File(staging, transaction + ".txn");
+        Files.write(journal.toPath(), ("format=1\nprocess=4242@another-host#1\nmodule=uninstallfixture\n"
+                + "name=" + MODULE_NAME + "\ntarget=" + MODULE_NAME + "-1.0.0.jar\n"
+                + "aside.0.original=" + MODULE_NAME + "-0.9.0.jar\naside.0.aside=" + aside.getName() + "\n")
+                .getBytes(StandardCharsets.UTF_8));
+
+        assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME)).isTrue();
+
+        int stagingCleared = indexOfMessage(aside.getAbsolutePath());
+        int jarDeleted = indexOfMessage(jar.getAbsolutePath());
+        assertThat(stagingCleared).as("the staging state must be logged as cleared").isNotNegative();
+        assertThat(jarDeleted).as("the JAR deletion must be logged").isNotNegative();
+        assertThat(stagingCleared)
+                .as("a crash between the two must not leave a journal that restores the module just removed")
+                .isLessThan(jarDeleted);
+    }
+
+    /** The position of the first captured log message naming {@code fragment}, or -1. */
+    private int indexOfMessage(String fragment) {
+        for (int i = 0; i < logs.size(); i++) {
+            String message = logs.get(i).getMessage();
+            if (message != null && message.contains(fragment)) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     @Test

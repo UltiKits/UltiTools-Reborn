@@ -567,6 +567,96 @@ class ModuleUpdateRecoveryTest {
                 .anyMatch(m -> m.contains(journal.getAbsolutePath()));
     }
 
+    @Test
+    @DisplayName("sweep A8: a crash between installing the new version and marking the journal leaves it for confirmation")
+    void installedButUnmarkedJournal_isLeftForBootConfirmation() throws IOException {
+        File installed = writeJar(new File(pluginsFolder, ID + "-2.0.0.jar"), ID, "2.0.0");
+        File aside = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        // The journal an update writes before it moves anything: no phase recorded yet.
+        File journal = writeJournal(UUID_A, OTHER_PROCESS, ID, ID + "-2.0.0.jar",
+                ID + "-1.0.0.jar", aside.getName());
+
+        UltiTools.collectModuleJarUrls(pluginsFolder);
+
+        assertThat(journal)
+                .as("the new version is installed, so only the next boot can say whether it loads")
+                .exists();
+        assertThat(aside).as("the version that did load is the rollback's only material").exists();
+
+        PluginInstallUtils.confirmUpdatesAfterBoot(dataFolder, Collections.singletonList("other-module"));
+
+        assertThat(installed).as("it did not load, so it is rolled back").doesNotExist();
+        assertThat(new File(pluginsFolder, ID + "-1.0.0.jar")).exists();
+        assertThat(journal).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("sweep A13: a rollback that was interrupted is finished at the next boot, not confirmed")
+    void interruptedRollback_isFinishedAtTheNextBoot() throws IOException {
+        writeJar(new File(pluginsFolder, ID + "-2.0.0.jar"), ID, "2.0.0");
+        File first = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        File second = setAsideJar(ID + "-0.9.0.jar", UUID_A, "0.9.0");
+        File occupant = new File(pluginsFolder, ID + "-0.9.0.jar");
+        Files.write(occupant.toPath(), "in the way".getBytes(StandardCharsets.UTF_8));
+        File journal = writeAwaitingConfirmation(UUID_A, ID, "Fixture", ID + "-2.0.0.jar",
+                ID + "-1.0.0.jar", first.getName(), ID + "-0.9.0.jar", second.getName());
+
+        // First boot: the module did not load, one JAR goes back, the other cannot, journal kept.
+        PluginInstallUtils.confirmUpdatesAfterBoot(dataFolder, Collections.singletonList("other-module"));
+        assertThat(journal).exists();
+        assertThat(second).exists();
+
+        // Second boot: the restored JAR loads the module. The journal records unfinished rollback
+        // work, so this must not be read as an update to confirm.
+        assertThat(occupant.delete()).isTrue();
+        PluginInstallUtils.confirmUpdatesAfterBoot(dataFolder, Collections.singletonList(ID));
+
+        assertThat(new File(pluginsFolder, ID + "-0.9.0.jar"))
+                .as("confirming here would delete the JAR the rollback still owes")
+                .exists();
+        assertThat(second).doesNotExist();
+        assertThat(journal).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("sweep A-rollback: an update with no previous version to restore does not repeat every boot")
+    void rollbackWithNoPreviousVersion_deletesItsJournal() throws IOException {
+        File installed = writeJar(new File(pluginsFolder, ID + "-2.0.0.jar"), ID, "2.0.0");
+        // A first-time install or a module whose own JAR was removed: the update set nothing aside.
+        File journal = writeAwaitingConfirmation(UUID_A, ID, "Fixture", ID + "-2.0.0.jar");
+
+        PluginInstallUtils.confirmUpdatesAfterBoot(dataFolder, Collections.singletonList("other-module"));
+
+        assertThat(installed).doesNotExist();
+        assertThat(journal)
+                .as("keeping it repeats the same failure at every start with nothing left to do")
+                .doesNotExist();
+        assertThat(messagesAtLeastWarning())
+                .anyMatch(m -> m.contains("Fixture") && m.contains("not installed"));
+    }
+
+    @Test
+    @DisplayName("sweep C1: confirmation keeps a journal whose pair list could not be read in full")
+    void confirmationOfAJournalWithAGap_keepsIt() throws IOException {
+        File installed = writeJar(new File(pluginsFolder, ID + "-2.0.0.jar"), ID, "2.0.0");
+        File first = setAsideJar(ID + "-1.0.0.jar", UUID_A, "1.0.0");
+        File afterTheGap = setAsideJar(ID + "-0.9.0.jar", UUID_A, "0.9.0");
+        File journal = new File(new File(dataFolder, ".upm-staging"), UUID_A + ".txn");
+        Files.write(journal.toPath(), ("format=1\nprocess=" + OTHER_PROCESS + "\nmodule=" + ID + "\n"
+                + "name=Fixture\ntarget=" + ID + "-2.0.0.jar\nphase=awaiting-boot-confirmation\n"
+                + "aside.0.original=" + ID + "-1.0.0.jar\naside.0.aside=" + first.getName() + "\n"
+                + "aside.2.original=" + ID + "-0.9.0.jar\naside.2.aside=" + afterTheGap.getName() + "\n")
+                .getBytes(StandardCharsets.UTF_8));
+
+        PluginInstallUtils.confirmUpdatesAfterBoot(dataFolder, Collections.singletonList(ID));
+
+        assertThat(installed).as("the module loaded, so its new version stays").exists();
+        assertThat(afterTheGap)
+                .as("a JAR past the gap was never read, and deleting its journal strands it")
+                .exists();
+        assertThat(journal).exists();
+    }
+
     /** A journal of an update that installed its new version and is waiting for the next boot. */
     private File writeAwaitingConfirmation(String transaction, String module, String name, String target,
                                            String... originalAndAsideNames) throws IOException {
