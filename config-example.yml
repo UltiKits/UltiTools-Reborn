@@ -93,8 +93,8 @@ ultipanel:
     # "server is alive" heartbeat.
     # 服务器实时监控数据（TPS、内存、世界/玩家快照）。关闭后面板会失去"服务器在线"的心跳信号。
     monitoring: true
-    # Streaming and controlling the live console log. Off stops the panel's live log view.
-    # 实时控制台日志流与控制。关闭后面板无法查看实时日志。
+    # Whether the panel receives the live console log stream. Off stops the panel's live log view.
+    # 面板是否可以接收实时控制台日志流。关闭后面板无法查看实时日志。
     logs: true
     # Live player join/quit/chat events. Off stops the panel's live player activity feed.
     # 玩家上线/下线/聊天等实时事件。关闭后面板失去实时玩家活动信息。

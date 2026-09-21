@@ -26,8 +26,8 @@ public enum Capability {
             "这是面板判断「服务器是否在线」的唯一依据——关闭它会让升级后的服务器在面板上显示为离线。"
     )),
     LOGS("logs", true, Arrays.asList(
-            "Whether the panel may stream and control the live console log.",
-            "面板是否可以接收并控制实时控制台日志流。"
+            "Whether the panel receives the live console log stream.",
+            "面板是否可以接收实时控制台日志流。"
     )),
     PLAYER_EVENTS("player-events", true, Arrays.asList(
             "Whether the panel may receive live player join/quit/chat events.",

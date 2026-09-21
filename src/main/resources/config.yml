@@ -95,18 +95,30 @@ ultipanel:
       # 触发提前发送的已排队日志条数，会早于下面的时间间隔触发发送。
       # 小于 1 的值会在启动时被拒绝，保留内置默认值，与面板自身实时 config 动作的行为一致。
       size: 10
-      # Milliseconds between scheduled batch sends. This key itself is read once, at server start
-      # (there is no config-reload path for it -- a new value here needs a restart to take
-      # effect). Once the server is running, sending this same interval through the panel's own
-      # live config action reschedules the already-running sender immediately (#432) -- it is not
-      # read once and then fixed regardless of how it is changed. A value below 1000ms is
-      # rejected (including zero or negative) and the previous interval stays in effect -- both
-      # this boot-time path and the panel's own live path share the same 1000ms floor (WR-01).
-      # 定时批量发送的间隔（毫秒）。这个键本身只在服务器启动时读取一次（没有针对它的配置重载路径——
-      # 改了这里的值需要重启才能生效）。服务器运行起来之后，通过面板自身的实时 config 动作下发同一个
-      # 间隔值，会让正在运行的发送任务立即改用新值（#432）——无论用哪种方式修改，都不再是只读一次就
-      # 固定下来。低于 1000 毫秒的值（含 0 和负数）都会被拒绝，此前生效的间隔保持不变——启动时读取的
-      # 这条路径与面板自身的实时路径共用同一个 1000 毫秒下限（WR-01）。
+      # Milliseconds between scheduled batch sends. This key's value comes from the framework's
+      # currently loaded configuration each time a panel connection opens
+      # (LogStreamManager#initialize calls loadBatchConfiguration() on every connect and
+      # reconnect) -- not fixed once at server start. That is the in-memory configuration, not a
+      # direct disk read: an on-disk edit only takes effect on the next connection after
+      # `ul reload` has refreshed the in-memory configuration from disk (`ul reload` itself does
+      # not reopen the panel connection, so an edit alone changes nothing for an already-open
+      # session, and neither does a reconnect that happens before running it). Restarting the
+      # server reloads from disk and reconnects in one step, so it remains the single dependable
+      # way to apply a changed value here. Once a connection is already open, sending this same
+      # interval through the panel's own live config action reschedules the already-running
+      # sender immediately (#432), with no reconnect needed. A value below 1000ms is rejected
+      # (including zero or negative) and the previous interval stays in effect -- both this
+      # connection-open path and the panel's own live path share the same 1000ms floor (WR-01).
+      # 定时批量发送的间隔（毫秒）。这个键实际生效的值来自框架当前已加载的配置，会在每次面板连接
+      # 建立时被取用（LogStreamManager#initialize 调用 loadBatchConfiguration()，每次连接和重连都
+      # 会触发）——而不是在服务器启动时固定下来、此后不再变化。这里读取的是内存中的配置对象，不是
+      # 直接读磁盘文件：磁盘上的修改只有在执行过 `ul reload`（把内存配置从磁盘刷新一遍）之后的下一次
+      # 连接才会生效——`ul reload` 本身不会重新建立面板连接，所以仅仅编辑文件不会改变已经建立的连接，
+      # 在执行它之前发生的重连同样不会生效。重启服务器会把一切从磁盘重新加载并重新建立连接，因此
+      # 依然是让改动生效最可靠的单一方式。如果连接已经建立，通过面板自身的实时 config 动作下发
+      # 同一个间隔值，会让正在运行的发送任务立即改用新值（#432），完全不需要重连。低于 1000 毫秒的
+      # 值（含 0 和负数）都会被拒绝，此前生效的间隔保持不变——连接建立时读取的这条路径与面板自身的
+      # 实时路径共用同一个 1000 毫秒下限（WR-01）。
       interval: 5000
   # 远程能力开关：这些开关限定了面板能做什么；关闭某项能力时，相应请求会被拒绝，
   # 拒绝信息会指向本文件。
@@ -116,8 +128,8 @@ ultipanel:
     # Whether the panel may receive live server monitoring data (TPS, memory, world/player snapshots).
     # 面板是否可以接收服务器实时监控数据（TPS、内存、世界/玩家快照）。
     monitoring: true
-    # Whether the panel may stream and control the live console log.
-    # 面板是否可以接收并控制实时控制台日志流。
+    # Whether the panel receives the live console log stream.
+    # 面板是否可以接收实时控制台日志流。
     logs: true
     # Whether the panel may receive live player join/quit/chat events.
     # 面板是否可以接收玩家上线/下线/聊天等实时事件。
