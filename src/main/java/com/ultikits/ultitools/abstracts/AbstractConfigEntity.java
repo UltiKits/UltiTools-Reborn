@@ -5,8 +5,12 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
+import java.nio.file.Files;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
@@ -17,6 +21,7 @@ import java.util.logging.Logger;
 
 import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.jetbrains.annotations.ApiStatus;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
@@ -29,25 +34,61 @@ import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.interfaces.ConfigChangeListener;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
+import lombok.AccessLevel;
 import lombok.Getter;
 
 /**
  * Abstract class representing a configuration entity.
  * <p>
- * Precondition for subclasses (#363): the constructor must be cheap and free of side effects.
- * For any class declaring at least one {@code @ConfigEntry} field, every {@link
- * #validateFields()} call - reached from {@link #init(UltiToolsPlugin)}, {@link #reload()},
- * {@link #updateProperties(com.google.gson.JsonObject)}, and {@link
- * #validateProposedProperties(com.google.gson.JsonObject)} - constructs and discards a second,
- * throwaway instance of this class via {@link #ensureConstructable()} to prove the class still
- * supports one of the framework's two documented construction idioms (a class with zero {@code
- * @ConfigEntry} fields never reaches this call at all - {@link #validateFields()} returns before
- * it). That means every configuration load, every reload, and every panel write ATTEMPT -
- * accepted or refused - constructs this class one extra time; the construction happens before
- * the accept/refuse decision is made, not only when the write is ultimately accepted. A
- * constructor that opens a file, registers a listener, or otherwise does real work pays that
- * cost again on every one of those events, purely to be thrown away. The documented {@code
- * super(configFilePath)}-only idiom is unaffected - it is a single, trivial reflective call.
+ * Precondition for subclasses (#363, counts re-measured for #510): the constructor must be cheap
+ * and free of side effects. For any class declaring at least one {@code @ConfigEntry} field, the
+ * framework constructs and discards throwaway instances of this class on the paths below, and a
+ * constructor that opens a file, registers a listener, or otherwise does real work pays that cost
+ * again on every one of those events, purely to be thrown away:
+ * <ul>
+ * <li>{@link #validateFields()} - reached from {@link #init(UltiToolsPlugin)}, {@link #reload()},
+ * {@link #updateProperties(com.google.gson.JsonObject)} and {@link
+ * #validateProposedProperties(com.google.gson.JsonObject)} - constructs ONE instance via {@link
+ * #ensureConstructable()} to prove the class still supports one of the framework's two documented
+ * construction idioms. The construction happens before the accept/refuse decision, not only when a
+ * panel write is ultimately accepted.</li>
+ * <li>{@link #canonicalize(String)} constructs ONE instance, which it uses to read the text being
+ * canonicalized (see that method). It runs once in {@code takeSnapshot()} - that is, on every
+ * {@link #init(UltiToolsPlugin)}, {@link #reload()}, successful {@link #save()} and successful
+ * {@link #updateProperties(JsonObject)} - and once in {@link #isModifiedSinceSnapshot()}, the
+ * shutdown check.</li>
+ * </ul>
+ * Measured totals per operation: {@code init()} 2, {@code reload()} 2, a panel write 2, {@link
+ * #save()} 1, and the shutdown check 1 per configuration (2 when it goes on to save). {@link
+ * #save()} and the shutdown check construct nothing before 6.3.0 and are the two paths a module
+ * author is most likely to consider exempt. A class with zero {@code @ConfigEntry} fields
+ * constructs nothing on any of them. The documented {@code super(configFilePath)}-only idiom is
+ * unaffected - each construction is a single, trivial reflective call.
+ * <p>
+ * Saved-state snapshot (#510, since 6.3.0): every entity remembers what its file on disk holds as
+ * of the last time the framework read or wrote it - after {@link #init(UltiToolsPlugin)} (including
+ * a first-boot defaults write), after {@link #reload()}, after every successful {@link #save()},
+ * and after every successful {@link #updateProperties(JsonObject)} - together with a SHA-256
+ * fingerprint of the file at that same point. The snapshot is derived from the file's text, plus
+ * this class's declared defaults for keys the text does not contain, and never from this instance's
+ * fields, so no unwritten in-memory change can ever be recorded as saved. The
+ * shutdown save ({@code ConfigManager#saveAll()}) writes only the entities for which {@link
+ * #isModifiedSinceSnapshot()} is {@code true}, so an operator's edit to a file whose configuration
+ * no module code changed survives a restart. An explicit {@link #save()} call still writes
+ * unconditionally.
+ * <p>
+ * Thread safety (#510): the framework's own read, write, snapshot and comparison paths - {@link
+ * #init(UltiToolsPlugin)}'s and {@link #reload()}'s load, {@link #save()}, {@link
+ * #updateProperties(JsonObject)}, {@link #validateProposedProperties(JsonObject)} and the two
+ * snapshot checks - run under this entity's own monitor, which {@code ConfigManager#saveAll()} also
+ * holds across its check-then-save of this entity. A panel write arriving on the WebSocket thread
+ * and the shutdown save therefore each see the other's whole effect or none of it. Field setters in
+ * module code are not synchronized by the framework.
+ * <p>
+ * That monitor is held across file I/O and across the constructions listed above, so it is also a
+ * new direction of blocking: a panel write on the WebSocket thread holds it across validation, the
+ * write and the snapshot, and a module calling {@link #save()} on the server thread waits for that
+ * span. Both are bounded by small configuration files and by the cheap-constructor precondition.
  */
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Config binder writes/reads private @ConfigEntry fields -- see 08-GATE05-TRIAGE.md
 @Getter
@@ -58,6 +99,30 @@ public abstract class AbstractConfigEntity {
     private final List<ConfigChangeListener> changeListeners = new CopyOnWriteArrayList<>();
     private UltiToolsPlugin ultiToolsPlugin;
     private YamlConfiguration config;
+    /**
+     * The canonical form (see {@link #canonicalize(String)}) of the text on disk as of the last
+     * snapshot point (#510), or {@code null} before the first successful snapshot - which {@link
+     * #isModifiedSinceSnapshot()} treats as modified, so shutdown keeps the pre-#510 "save it"
+     * behaviour for an entity that was never in sync with its file. A serialized string, never a
+     * reference to or shallow copy of the field values: a module that mutates a collection field in
+     * place (UltiChat's auto-reply {@code rules} map) must still be detected as changed.
+     */
+    @Getter(AccessLevel.NONE)
+    private volatile String savedSnapshot;
+    /**
+     * Fingerprint of the file on disk as of the last snapshot point (#510), see {@link
+     * #fingerprintOf(File)}; {@code null} before the first snapshot.
+     */
+    @Getter(AccessLevel.NONE)
+    private volatile String savedFileFingerprint;
+    /**
+     * Whether the last attempt to read this configuration's file failed to parse (#510). While set,
+     * the framework does not know what the file holds, so {@link #isModifiedSinceSnapshot()} reports
+     * {@code false} and the shutdown save leaves the file alone rather than overwriting an operator's
+     * broken file with the in-memory state. Cleared by the next successful load or save.
+     */
+    @Getter(AccessLevel.NONE)
+    private volatile boolean lastLoadUnparseable;
 
     /**
      * Constructor for AbstractConfigEntity.
@@ -70,11 +135,36 @@ public abstract class AbstractConfigEntity {
 
     /**
      * Saves the configuration to the file.
+     * <p>
+     * An explicit call always writes, whether or not anything changed since the last snapshot. Only
+     * the shutdown save ({@code ConfigManager#saveAll()}) is conditional on {@link
+     * #isModifiedSinceSnapshot()} (#510). A successful write refreshes the snapshot; a failed write
+     * leaves the previous snapshot in place, so the entity stays modified and the shutdown save
+     * retries it.
      *
      * @throws IOException if an I/O error occurs
      */
-    @SuppressWarnings("unchecked")
     public void save() throws IOException {
+        synchronized (this) {
+            applyFieldsTo(config);
+            config.save(new File(ultiToolsPlugin.getConfigFolder() + File.separator + configFilePath));
+            // #510: an explicit save is a caller's deliberate act and always writes, so the file now
+            // holds what the framework just wrote - whatever state it was in before.
+            lastLoadUnparseable = false;
+            takeSnapshot();
+        }
+    }
+
+    /**
+     * Copies every non-null {@code @ConfigEntry} field, serialized through its declared parser, onto
+     * {@code target}. The one serialization path shared by {@link #save()}, {@link
+     * #renderSaveText()} and {@link #canonicalizeOnce(String, AbstractConfigEntity, java.util.List)}, so the shutdown comparison renders
+     * exactly what {@code save()} would write (#510).
+     *
+     * @param target the configuration to write the serialized field values into
+     */
+    @SuppressWarnings("unchecked")
+    private void applyFieldsTo(YamlConfiguration target) {
         for (Field field : ReflectionUtil.getFields(this.getClass())) {
             if (!field.isAnnotationPresent(ConfigEntry.class)) {
                 continue;
@@ -90,9 +180,293 @@ public abstract class AbstractConfigEntity {
                 continue;
             }
             Object serialized = ReflectionUtil.newInstance(annotation.parser()).serialize(fieldValue);
-            config.set(path, serialized);
+            target.set(path, serialized);
         }
-        config.save(new File(ultiToolsPlugin.getConfigFolder() + File.separator + configFilePath));
+    }
+
+    /**
+     * Renders the exact text {@link #save()} would write right now, without writing it and without
+     * touching the live {@link #config} (which {@link #toJsonObject()} still reports to the panel).
+     * The live configuration is copied through its own YAML text - comments included - and the
+     * fields are applied to the copy through {@link #applyFieldsTo(YamlConfiguration)}, the same
+     * path {@code save()} uses.
+     *
+     * @return the rendered text, or {@code null} if the live configuration's own text cannot be
+     *         parsed back
+     */
+    private String renderSaveText() {
+        YamlConfiguration copy = new YamlConfiguration();
+        copy.options().parseComments(true);
+        try {
+            copy.loadFromString(config.saveToString());
+        } catch (InvalidConfigurationException e) {
+            return null;
+        }
+        applyFieldsTo(copy);
+        return copy.saveToString();
+    }
+
+    /**
+     * Brings a configuration text to the form this entity would give it after reading it and saving
+     * it again (#510): the text is parsed, a throwaway instance of this class (one per call, see the
+     * construction counts in this class's own javadoc) loads every present {@code @ConfigEntry} key
+     * through its parser exactly as {@link #init(UltiToolsPlugin)} does
+     * (absent keys keep that instance's declared defaults), and the instance's fields are applied back
+     * onto the parsed text through {@link #applyFieldsTo(YamlConfiguration)}. Two passes make the
+     * result stable, because a default filled in for an absent key by the first pass is re-read
+     * through the parser by the second.
+     * <p>
+     * Both sides of the shutdown comparison go through this: the snapshot canonicalizes the text on
+     * disk, {@link #isModifiedSinceSnapshot()} canonicalizes what {@link #save()} would write now.
+     * Parser quirks therefore cancel out (for example {@code DefaultConfigParser} reading the
+     * integers of a YAML list back as strings), while any in-memory value the file does not hold -
+     * a field a partial panel write did not touch, a key missing from a reloaded file - still
+     * differs.
+     *
+     * @param text a YAML text, possibly {@code null}
+     * @return the canonical text, or {@code null} if {@code text} is {@code null} or cannot be parsed
+     */
+    private String canonicalize(String text) {
+        if (text == null) {
+            return null;
+        }
+        List<Field> configFields = configEntryFields();
+        if (configFields.isEmpty()) {
+            // Nothing to read into an instance, so do not construct one. A class with no
+            // @ConfigEntry field never reaches validateFields()' constructability check either, so
+            // it may legitimately have no constructor this class can resolve; constructing one here
+            // would fail, clear the snapshot, and make the shutdown save rewrite an untouched file.
+            return renderParsed(text);
+        }
+        // One throwaway instance for both passes, not one each: pass one writes a value for every
+        // @ConfigEntry key, so pass two overwrites every field it reads and cannot see anything pass
+        // one left behind. Reusing it ACROSS calls would not be safe - the declared defaults it
+        // carries for absent keys are exactly what the comparison relies on.
+        AbstractConfigEntity probe = constructSibling();
+        return canonicalizeOnce(canonicalizeOnce(text, probe, configFields), probe, configFields);
+    }
+
+    /**
+     * Every {@code @ConfigEntry} field this class declares or inherits, in {@link
+     * ReflectionUtil#getFields(Class)} order.
+     *
+     * @return the annotated fields, possibly empty
+     */
+    private List<Field> configEntryFields() {
+        List<Field> configFields = new ArrayList<>();
+        for (Field field : ReflectionUtil.getFields(this.getClass())) {
+            if (field.isAnnotationPresent(ConfigEntry.class)) {
+                configFields.add(field);
+            }
+        }
+        return configFields;
+    }
+
+    /**
+     * Parses {@code text} and renders it back, with no field applied - the whole of {@link
+     * #canonicalize(String)} for a class that declares no {@code @ConfigEntry} field.
+     *
+     * @param text a YAML text
+     * @return the re-rendered text, or {@code null} if it cannot be parsed
+     */
+    private String renderParsed(String text) {
+        YamlConfiguration parsed = new YamlConfiguration();
+        parsed.options().parseComments(true);
+        try {
+            parsed.loadFromString(text);
+        } catch (InvalidConfigurationException e) {
+            return null;
+        }
+        return parsed.saveToString();
+    }
+
+    /**
+     * One pass of {@link #canonicalize(String)}.
+     *
+     * @param text         a YAML text, possibly {@code null}
+     * @param probe        the throwaway instance this pass reads {@code text} into
+     * @param configFields this class's {@code @ConfigEntry} fields, never empty
+     * @return the text after one read-and-render pass, or {@code null} if it cannot be parsed
+     */
+    private String canonicalizeOnce(String text, AbstractConfigEntity probe, List<Field> configFields) {
+        if (text == null) {
+            return null;
+        }
+        YamlConfiguration parsed = new YamlConfiguration();
+        parsed.options().parseComments(true);
+        try {
+            parsed.loadFromString(text);
+        } catch (InvalidConfigurationException e) {
+            return null;
+        }
+        for (Field field : configFields) {
+            ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
+            String path = annotation.path();
+            if (path.isEmpty()) {
+                path = field.getName();
+            }
+            Object configValue = parsed.get(path);
+            if (configValue != null) {
+                ReflectionUtil.setFieldValue(probe, field, ReflectionUtil.newInstance(annotation.parser()).parse(configValue));
+            }
+        }
+        probe.applyFieldsTo(parsed);
+        return parsed.saveToString();
+    }
+
+    /**
+     * Records the snapshot and the on-disk file fingerprint (#510). Called, under this entity's
+     * monitor, right after {@link #init(UltiToolsPlugin)} or {@link #reload()} has read the file and
+     * right after {@link #save()} or {@link #updateProperties(JsonObject)} has written it - at each of
+     * those points the live {@link #config} holds exactly the file's content, and the snapshot is
+     * derived from that text alone.
+     * <p>
+     * Never throws. If the snapshot cannot be computed, it is cleared rather than left stale, so the
+     * entity counts as modified and shutdown saves it exactly as it did before #510, and a WARNING
+     * says so; a fingerprint that cannot be computed is recorded as {@code "unreadable"}.
+     */
+    private void takeSnapshot() {
+        synchronized (this) {
+            try {
+                savedFileFingerprint = fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath));
+            } catch (RuntimeException e) {
+                savedFileFingerprint = "unreadable";
+            }
+            String snapshot = null;
+            RuntimeException failure = null;
+            try {
+                snapshot = canonicalize(config.saveToString());
+            } catch (RuntimeException e) {
+                failure = e;
+            }
+            savedSnapshot = snapshot;
+            if (snapshot == null) {
+                LOGGER.log(Level.WARNING, "Cannot snapshot the saved state of " + configFilePath
+                        + "; it will be saved at shutdown whether or not it changed", failure);
+            }
+        }
+    }
+
+    /**
+     * Whether this entity's current state differs from what its file held when the framework last
+     * read or wrote it (#510): the canonical form of the text {@link #save()} would write now is
+     * compared with the snapshot. This is what the shutdown save uses to decide whether to write this
+     * configuration at all.
+     * <p>
+     * Framework-internal: this method is called only by {@code ConfigManager#saveAll()} and is
+     * {@code public} solely because {@code ConfigManager} lives in another package. Module code
+     * should not call it.
+     * <p>
+     * An entity that was never initialized has nothing to save and reports {@code false}. An entity
+     * with no snapshot yet (its first-boot defaults write failed, or its snapshot could not be
+     * computed) reports {@code true}, preserving the pre-#510 behaviour of saving it at shutdown. A
+     * map field whose entries were only reordered also reports {@code true}, because serialization
+     * follows the map's iteration order; saving it is harmless and matches the pre-#510 behaviour.
+     * <p>
+     * Two cases deliberately report {@code false}. An entity whose file failed to parse the last
+     * time it was read ({@link #isLastLoadUnparseable()}) is never written by the shutdown save: the
+     * framework does not know what that file holds, so overwriting it with the in-memory state would
+     * destroy an operator's broken-but-recoverable file. And a key the file does not contain whose
+     * in-memory value equals this class's declared default is indistinguishable from the file's own
+     * implied state; it is not written at shutdown, and the next load produces the same value anyway.
+     *
+     * @return {@code true} if the shutdown save should write this configuration
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public final boolean isModifiedSinceSnapshot() {
+        synchronized (this) {
+            if (config == null || ultiToolsPlugin == null || lastLoadUnparseable) {
+                return false;
+            }
+            String snapshot = savedSnapshot;
+            if (snapshot == null) {
+                return true;
+            }
+            try {
+                return !snapshot.equals(canonicalize(renderSaveText()));
+            } catch (RuntimeException e) {
+                LOGGER.log(Level.WARNING, "Cannot compare the state of " + configFilePath
+                        + " with its snapshot; treating it as changed", e);
+                return true;
+            }
+        }
+    }
+
+    /**
+     * Whether the file on disk differs from the file as it was at the last snapshot point (#510) -
+     * in practice, whether someone edited, replaced or removed it while the server was running. Used
+     * by the shutdown save to warn that an in-memory change overwrote that file.
+     * <p>
+     * Framework-internal: this method is called only by {@code ConfigManager#saveAll()} and is
+     * {@code public} solely because {@code ConfigManager} lives in another package. Module code
+     * should not call it.
+     *
+     * @return {@code true} if the file's fingerprint changed since the last snapshot; {@code false}
+     *         if it did not, or if no snapshot has been taken yet
+     * @since 6.3.0
+     */
+    /**
+     * Whether the last attempt to read this configuration's file failed to parse (#510) - in
+     * practice, whether the file on disk holds invalid YAML. The shutdown save skips such a
+     * configuration and says so, instead of overwriting a file the framework could not read.
+     * <p>
+     * Framework-internal: this method is called only by {@code ConfigManager#saveAll()} and is
+     * {@code public} solely because {@code ConfigManager} lives in another package. Module code
+     * should not call it.
+     *
+     * @return {@code true} if the last load of this configuration's file failed to parse, and no
+     *         successful load or save has happened since
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public final boolean isLastLoadUnparseable() {
+        synchronized (this) {
+            return lastLoadUnparseable;
+        }
+    }
+
+    @ApiStatus.Internal
+    public final boolean isFileModifiedSinceSnapshot() {
+        synchronized (this) {
+            String fingerprint = savedFileFingerprint;
+            if (fingerprint == null || ultiToolsPlugin == null) {
+                return false;
+            }
+            String current;
+            try {
+                current = fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath));
+            } catch (RuntimeException e) {
+                current = "unreadable";
+            }
+            return !fingerprint.equals(current);
+        }
+    }
+
+    /**
+     * Fingerprints a configuration file by the SHA-256 digest of its bytes (#510). A content hash
+     * rather than size plus modification time: a typical operator edit changes one value to another
+     * of the same length ({@code 60} to {@code 90}, {@code true} to {@code TRUE}), which size alone
+     * cannot see, and modification time is coarse or preserved on common paths (two-second
+     * resolution on FAT and many network shares, {@code cp -p}, {@code rsync -t}, editors that
+     * restore it). Configuration files are small and this runs only at load, save and shutdown.
+     *
+     * @param file the configuration file, possibly {@code null} or missing
+     * @return {@code "absent"} for a missing file, {@code "unreadable"} if it cannot be read, or the
+     *         Base64 SHA-256 digest of its contents
+     */
+    private static String fingerprintOf(File file) {
+        if (file == null || !file.isFile()) {
+            return "absent";
+        }
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(file.toPath()));
+            return Base64.getEncoder().encodeToString(digest);
+        } catch (IOException e) {
+            return "unreadable";
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is required on every Java platform", e);
+        }
     }
 
     /**
@@ -102,57 +476,67 @@ public abstract class AbstractConfigEntity {
      * @throws IOException if an I/O error occurs
      */
     public final void init(UltiToolsPlugin ultiToolsPlugin) throws IOException {
-        this.ultiToolsPlugin = ultiToolsPlugin;
-        File file = ultiToolsPlugin.getConfigFile(configFilePath);
-        config = new YamlConfiguration();
-        // D-08: options().parseComments(true) must be set on THIS instance before load() runs -
-        // load() reads the option itself (verified via javap against paper-api), so setting it
-        // afterward only affects a later save(), not this read. Under
-        // -DPaper.parseYamlCommentsByDefault=false an operator's existing comments would
-        // otherwise be dropped right here at parse time, and the missing-key branch below would
-        // then write them out of their own file - the exact D-01 violation this lane exists to
-        // prevent. Explicit, not inherited from the system-property default.
-        config.options().parseComments(true);
-        try {
-            config.load(file);
-        } catch (FileNotFoundException ignored) {
-            // Mirrors the bare static factory's own behaviour for a missing file: a missing
-            // file is the normal "first run" case, not an error - config stays empty and every
-            // field below takes the missing-key branch.
-        } catch (InvalidConfigurationException e) {
-            LOGGER.log(Level.SEVERE, "Cannot load " + file, e);
-        }
-        boolean upToDate = true;
-        for (Field field : ReflectionUtil.getFields(this.getClass())) {
-            if (field.isAnnotationPresent(ConfigEntry.class)) {
-                field.setAccessible(true);
-                ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
-                String path = annotation.path();
-                if (path.isEmpty()) {
-                    path = field.getName();
-                }
-                Object configValue = config.get(path);
-                if (configValue != null) {
-                    Object parse = ReflectionUtil.newInstance(annotation.parser()).parse(configValue);
-                    ReflectionUtil.setFieldValue(this, field, parse);
-                } else {
-                    upToDate = false;
-                    config.set(path, ReflectionUtil.getFieldValue(this, field));
-                    // D-07/D-09: the key never existed in the operator's file, so writing its
-                    // @ConfigEntry comment alongside the value discloses nothing of theirs - this
-                    // is D-01's sole sanctioned exception, widened from "silently add a value" to
-                    // "silently add a value and its explanation". Never reached on the
-                    // already-has-the-key path above, and this is the only comment write in the
-                    // whole class.
-                    List<String> commentLines = splitComment(annotation.comment());
-                    if (!commentLines.isEmpty()) {
-                        config.setComments(path, commentLines);
+        synchronized (this) {
+            this.ultiToolsPlugin = ultiToolsPlugin;
+            File file = ultiToolsPlugin.getConfigFile(configFilePath);
+            config = new YamlConfiguration();
+            // D-08: options().parseComments(true) must be set on THIS instance before load() runs -
+            // load() reads the option itself (verified via javap against paper-api), so setting it
+            // afterward only affects a later save(), not this read. Under
+            // -DPaper.parseYamlCommentsByDefault=false an operator's existing comments would
+            // otherwise be dropped right here at parse time, and the missing-key branch below would
+            // then write them out of their own file - the exact D-01 violation this lane exists to
+            // prevent. Explicit, not inherited from the system-property default.
+            config.options().parseComments(true);
+            lastLoadUnparseable = false;
+            try {
+                config.load(file);
+            } catch (FileNotFoundException ignored) {
+                // Mirrors the bare static factory's own behaviour for a missing file: a missing
+                // file is the normal "first run" case, not an error - config stays empty and every
+                // field below takes the missing-key branch.
+            } catch (InvalidConfigurationException e) {
+                // #510: the framework does not know what this file holds, so the shutdown save must
+                // not write over it. Cleared by the next successful load or save.
+                lastLoadUnparseable = true;
+                LOGGER.log(Level.SEVERE, "Cannot load " + file, e);
+            }
+            boolean upToDate = true;
+            for (Field field : ReflectionUtil.getFields(this.getClass())) {
+                if (field.isAnnotationPresent(ConfigEntry.class)) {
+                    field.setAccessible(true);
+                    ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
+                    String path = annotation.path();
+                    if (path.isEmpty()) {
+                        path = field.getName();
+                    }
+                    Object configValue = config.get(path);
+                    if (configValue != null) {
+                        Object parse = ReflectionUtil.newInstance(annotation.parser()).parse(configValue);
+                        ReflectionUtil.setFieldValue(this, field, parse);
+                    } else {
+                        upToDate = false;
+                        config.set(path, ReflectionUtil.getFieldValue(this, field));
+                        // D-07/D-09: the key never existed in the operator's file, so writing its
+                        // @ConfigEntry comment alongside the value discloses nothing of theirs - this
+                        // is D-01's sole sanctioned exception, widened from "silently add a value" to
+                        // "silently add a value and its explanation". Never reached on the
+                        // already-has-the-key path above, and this is the only comment write in the
+                        // whole class.
+                        List<String> commentLines = splitComment(annotation.comment());
+                        if (!commentLines.isEmpty()) {
+                            config.setComments(path, commentLines);
+                        }
                     }
                 }
             }
-        }
-        if (!upToDate) {
-            config.save(file);
+            if (!upToDate) {
+                config.save(file);
+            }
+            // #510: config now holds exactly the file's content, including any first-boot defaults
+            // write. The snapshot is taken from that text, so a change listener below that changes a
+            // value in memory is still seen as a code change by the shutdown save.
+            takeSnapshot();
         }
 
         // Validate fields and reset invalid values to defaults
@@ -211,34 +595,40 @@ public abstract class AbstractConfigEntity {
      *                                 - the file is not written and touched fields are restored
      */
     public void updateProperties(JsonObject jsonObject) throws IOException {
-        // Phase one/two: apply touched fields then validate the full post-update state -
-        // extracted into applyAndValidate() so #358 Part 2's validateProposedProperties(JsonObject)
-        // can share the exact same apply-then-validate contract without persisting.
-        List<Field> touchedFields = new ArrayList<>();
-        List<Object> previousValues = new ArrayList<>();
-        try {
-            applyAndValidate(jsonObject, touchedFields, previousValues);
-        } catch (RuntimeException e) {
-            // The original exception is rethrown unchanged - never wrapped, never converted to
-            // IOException, never swallowed.
-            for (int i = 0; i < touchedFields.size(); i++) {
-                ReflectionUtil.setFieldValue(this, touchedFields.get(i), previousValues.get(i));
+        synchronized (this) {
+            // Phase one/two: apply touched fields then validate the full post-update state -
+            // extracted into applyAndValidate() so #358 Part 2's validateProposedProperties(JsonObject)
+            // can share the exact same apply-then-validate contract without persisting.
+            List<Field> touchedFields = new ArrayList<>();
+            List<Object> previousValues = new ArrayList<>();
+            try {
+                applyAndValidate(jsonObject, touchedFields, previousValues);
+            } catch (RuntimeException e) {
+                // The original exception is rethrown unchanged - never wrapped, never converted to
+                // IOException, never swallowed.
+                for (int i = 0; i < touchedFields.size(); i++) {
+                    ReflectionUtil.setFieldValue(this, touchedFields.get(i), previousValues.get(i));
+                }
+                throw e;
             }
-            throw e;
-        }
 
-        // Phase three: persist. Only reached once validation has passed. Writes the same
-        // Gson-deserialized value the method has always written - not the @ConfigEntry.parser()
-        // serialized form save() uses; that asymmetry is pre-existing and out of scope here.
-        for (Field field : touchedFields) {
-            ConfigEntry annotation = field.getAnnotation(ConfigEntry.class);
-            String path = annotation.path();
-            if (path.isEmpty()) {
-                path = field.getName();
+            // Phase three: persist. Only reached once validation has passed. Writes the same
+            // Gson-deserialized value the method has always written - not the @ConfigEntry.parser()
+            // serialized form save() uses; that asymmetry is pre-existing and out of scope here.
+            for (Field field : touchedFields) {
+                ConfigEntry annotation = field.getAnnotation(ConfigEntry.class);
+                String path = annotation.path();
+                if (path.isEmpty()) {
+                    path = field.getName();
+                }
+                config.set(path, ReflectionUtil.getFieldValue(this, field));
             }
-            config.set(path, ReflectionUtil.getFieldValue(this, field));
+            config.save(ultiToolsPlugin.getConfigFile(configFilePath));
+            lastLoadUnparseable = false;
+            // #510: config holds exactly what was written. Fields this payload did not touch are not in
+            // it; the snapshot comes from this text, so an unsaved code change to them stays modified.
+            takeSnapshot();
         }
-        config.save(ultiToolsPlugin.getConfigFile(configFilePath));
     }
 
     /**
@@ -259,13 +649,17 @@ public abstract class AbstractConfigEntity {
      *                                 validation constraint
      */
     public void validateProposedProperties(JsonObject jsonObject) {
-        List<Field> touchedFields = new ArrayList<>();
-        List<Object> previousValues = new ArrayList<>();
-        try {
-            applyAndValidate(jsonObject, touchedFields, previousValues);
-        } finally {
-            for (int i = 0; i < touchedFields.size(); i++) {
-                ReflectionUtil.setFieldValue(this, touchedFields.get(i), previousValues.get(i));
+        // #510: under the entity monitor, so a concurrent shutdown save never writes a proposed
+        // value that this call is about to restore.
+        synchronized (this) {
+            List<Field> touchedFields = new ArrayList<>();
+            List<Object> previousValues = new ArrayList<>();
+            try {
+                applyAndValidate(jsonObject, touchedFields, previousValues);
+            } finally {
+                for (int i = 0; i < touchedFields.size(); i++) {
+                    ReflectionUtil.setFieldValue(this, touchedFields.get(i), previousValues.get(i));
+                }
             }
         }
     }
@@ -365,12 +759,7 @@ public abstract class AbstractConfigEntity {
      *                                 two framework-supported idioms (D-03)
      */
     protected void validateFields() {
-        List<Field> configFields = new ArrayList<>();
-        for (Field field : ReflectionUtil.getFields(this.getClass())) {
-            if (field.isAnnotationPresent(ConfigEntry.class)) {
-                configFields.add(field);
-            }
-        }
+        List<Field> configFields = configEntryFields();
         if (configFields.isEmpty()) {
             return;
         }
@@ -409,12 +798,25 @@ public abstract class AbstractConfigEntity {
      * @throws ConfigurationException if neither constructor resolves
      */
     private void ensureConstructable() {
+        constructSibling();
+    }
+
+    /**
+     * Constructs a fresh instance of this config class through the {@code (String)} constructor, or
+     * failing that the no-arg constructor - the two idioms {@link #ensureConstructable()} proves -
+     * for {@link #ensureConstructable()} and for the throwaway reader {@link
+     * #canonicalizeOnce(String, AbstractConfigEntity, java.util.List)} uses (#510).
+     *
+     * @return a new, uninitialized instance of this entity's class
+     * @throws ConfigurationException if neither constructor resolves
+     */
+    private AbstractConfigEntity constructSibling() {
         try {
             try {
-                this.getClass().getDeclaredConstructor(String.class).newInstance(configFilePath);
+                return this.getClass().getDeclaredConstructor(String.class).newInstance(configFilePath);
             } catch (NoSuchMethodException e) {
                 // Try no-arg constructor (class may hardcode path via super() call)
-                this.getClass().getDeclaredConstructor().newInstance();
+                return this.getClass().getDeclaredConstructor().newInstance();
             }
         } catch (InstantiationException | InvocationTargetException | IllegalAccessException | NoSuchMethodException e) {
             throw ConfigurationException.unconstructable(this.getClass().getName(), e);
@@ -573,39 +975,48 @@ public abstract class AbstractConfigEntity {
             throw new IllegalStateException("Config not initialized. Call init() first.");
         }
 
-        // #357: build the parser and enable comment parsing before load() runs, in the same
-        // construct -> parseComments(true) -> load order init() uses above. The bare static
-        // factory this used to call parses the file inside itself before returning, so
-        // parseComments(true) could never reach that read - a save() or updateProperties() call
-        // right after this reload() would then write back a comment-stripped view over the
-        // operator's file (D-01).
-        File file = ultiToolsPlugin.getConfigFile(configFilePath);
-        config = new YamlConfiguration();
-        config.options().parseComments(true);
-        try {
-            config.load(file);
-        } catch (FileNotFoundException ignored) {
-            // Mirrors init()'s own handling above: a missing file is the normal case, not an
-            // error - config stays empty and every field below simply keeps its current value.
-        } catch (InvalidConfigurationException e) {
-            LOGGER.log(Level.SEVERE, "Cannot load " + file, e);
-        }
+        synchronized (this) {
+            // #357: build the parser and enable comment parsing before load() runs, in the same
+            // construct -> parseComments(true) -> load order init() uses above. The bare static
+            // factory this used to call parses the file inside itself before returning, so
+            // parseComments(true) could never reach that read - a save() or updateProperties() call
+            // right after this reload() would then write back a comment-stripped view over the
+            // operator's file (D-01).
+            File file = ultiToolsPlugin.getConfigFile(configFilePath);
+            config = new YamlConfiguration();
+            config.options().parseComments(true);
+            lastLoadUnparseable = false;
+            try {
+                config.load(file);
+            } catch (FileNotFoundException ignored) {
+                // Mirrors init()'s own handling above: a missing file is the normal case, not an
+                // error - config stays empty and every field below simply keeps its current value.
+            } catch (InvalidConfigurationException e) {
+                // #510: same as init() - never write over a file the framework could not read.
+                lastLoadUnparseable = true;
+                LOGGER.log(Level.SEVERE, "Cannot load " + file, e);
+            }
 
-        // Update field values
-        for (Field field : ReflectionUtil.getFields(this.getClass())) {
-            if (field.isAnnotationPresent(ConfigEntry.class)) {
-                field.setAccessible(true);
-                ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
-                String path = annotation.path();
-                if (path.isEmpty()) {
-                    path = field.getName();
-                }
-                Object configValue = config.get(path);
-                if (configValue != null) {
-                    Object parse = ReflectionUtil.newInstance(annotation.parser()).parse(configValue);
-                    ReflectionUtil.setFieldValue(this, field, parse);
+            // Update field values
+            for (Field field : ReflectionUtil.getFields(this.getClass())) {
+                if (field.isAnnotationPresent(ConfigEntry.class)) {
+                    field.setAccessible(true);
+                    ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
+                    String path = annotation.path();
+                    if (path.isEmpty()) {
+                        path = field.getName();
+                    }
+                    Object configValue = config.get(path);
+                    if (configValue != null) {
+                        Object parse = ReflectionUtil.newInstance(annotation.parser()).parse(configValue);
+                        ReflectionUtil.setFieldValue(this, field, parse);
+                    }
                 }
             }
+            // #510: same snapshot point as init(). A field whose key is absent from the file keeps its
+            // in-memory value above, but the snapshot is taken from the file's text, so that value is
+            // still seen as unsaved if it differs from what the file implies.
+            takeSnapshot();
         }
 
         // Validate fields and reset invalid values to defaults

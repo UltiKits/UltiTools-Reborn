@@ -224,6 +224,27 @@ way every row in that section's own reconciliation note accounts for — both ar
 | ultitools.storage.backend-select | Choose the ORM storage backend (`json`, `sqlite`, or `mysql`) via `config.yml`; falls back to `json` if the configured backend is unavailable | persistence | `datasource.type` in `plugins/UltiTools/config.yml`, applied only on a full server restart — `/ul reload` (`UltiTools#reloadPlugins`) reloads config, language, and modules but never re-runs `initDataStore`, so the active data store is unchanged until restart | n/a | n/a | admin | brief | UltiTools#initDataStore |
 | ultitools.storage.restart-survival | Data written through a `DataOperator` survives a full server restart, in whichever backend is active | persistence | write data via any module command backed by `@Table`, then restart the server | n/a | n/a | admin | none | DataStoreManager#getDatastore |
 
+## Module configuration persistence
+
+What happens to a module's `@ConfigEntity` file (`plugins/UltiTools/pluginConfig/<module>/...`)
+when the server stops (#510, 6.3.0). `UltiTools#onDisable` calls `ConfigManager#saveAll`, which
+writes only the entities whose in-memory state differs from the snapshot taken when they were last
+loaded, reloaded or saved. These rows use the three-segment `ultitools.config.<action>` form with
+Kind `persistence`; they are not `config`-Kind key rows, which always have four or more segments
+(`ultitools.config.<file-stem>.<key path>`). One of them has no UAT row: `ultitools.config.shutdown-keeps-unparseable-file` is not reachable
+through any command this repository or the fifteen modules ship (see its own How-to-reach column),
+so no checklist row could be executed for it. Before this section, no row in this document covered
+`@ConfigEntity` file persistence (a search for `ConfigManager`, `AbstractConfigEntity`, `saveAll`
+and `pluginConfig/` found only the `lang/` file rows under Language), so none was amended. The
+framework's own `plugins/UltiTools/config.yml` is not a `@ConfigEntity` (see Configuration) and is
+not written at shutdown by either the old or the new code.
+
+| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
+|---|---|---|---|---|---|---|---|---|
+| ultitools.config.shutdown-keeps-operator-edit | An edit an operator makes to a module's configuration file while the server runs survives a clean stop and takes effect on the next start, provided no module code changed that configuration in memory: the shutdown save leaves the file byte-for-byte untouched, including its quoting and comments (before 6.3.0 every such file was rewritten from memory at shutdown and the edit was silently lost) | persistence | edit any loaded module's `plugins/UltiTools/pluginConfig/<module>/<config path>` while the server runs, then stop the server cleanly and start it | n/a | n/a | admin | brief | ConfigManager#saveAll, AbstractConfigEntity#isModifiedSinceSnapshot |
+| ultitools.config.shutdown-keeps-unparseable-file | A configuration file the YAML parser rejected the last time the framework read it is never written at shutdown, whether or not module code changed that configuration, and one WARNING names the file and says the in-memory changes were not saved. Not reachable through any command this repository or the fifteen modules ship: `/ul reload` goes through `ConfigManager#reloadConfigs` to `init()`, which overwrites an unparseable file with defaults at reload time (pre-existing, #511); only a module calling `AbstractConfigEntity#reload()` itself reaches the state this row describes | persistence | a module calls `AbstractConfigEntity#reload()` on a configuration whose file holds invalid YAML, then the server is stopped cleanly | n/a | n/a | admin | none | ConfigManager#saveAll, AbstractConfigEntity#isLastLoadUnparseable |
+| ultitools.config.shutdown-saves-code-change | A configuration that module code changed in memory without calling `save()` is written to its file at a clean stop, including a change made by mutating a collection field in place; a value the file does not hold stays unsaved until written, so a panel write of other keys or a reload of a file missing that key does not hide it; if that file was also changed or removed on disk since the framework last read or wrote it, the in-memory state still wins and one WARNING per file names the file and says the changes made while the server ran were overwritten | persistence | a module command that changes its configuration in memory only, for example UltiChat's `/uchat autoreply add <name> <response>`, then a clean stop | n/a | n/a | admin | brief | ConfigManager#saveAll, ConfigManager#warnOperatorEditOverwritten |
+
 ## Language
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |

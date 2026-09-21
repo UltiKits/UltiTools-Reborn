@@ -329,21 +329,87 @@ public class ConfigManager {
     }
 
     /**
-     * Save all configs.
+     * Saves, at shutdown, every registered configuration that module code changed in memory.
+     * <p>
+     * Since 6.3.0 (#510) this writes only the entities whose {@link
+     * AbstractConfigEntity#isModifiedSinceSnapshot()} is {@code true} - whose current state differs
+     * from the state they last loaded or saved. A configuration no code changed is left alone, so an
+     * operator's edit to its file made while the server was running survives the restart. Before
+     * 6.3.0 every file was rewritten from memory and such edits were silently discarded.
+     * <p>
+     * A configuration whose file failed to parse the last time it was read is never written: the
+     * framework does not know what that file holds, so overwriting it would destroy an operator's
+     * broken file. One WARNING per such file says so, and any in-memory change to it is not written.
+     * <p>
+     * If an entity was changed in memory and its file was also changed on disk since that snapshot,
+     * the in-memory state still wins and is written, and a WARNING names the file whose edits were
+     * overwritten. The only caller is {@code UltiTools#onDisable()}; an explicit {@link
+     * AbstractConfigEntity#save()} is unaffected and always writes.
+     * <p>
+     * Each entity's check-then-save runs under that entity's own monitor, the lock its read, write
+     * and snapshot paths also hold, so a panel write still in flight on the WebSocket thread is
+     * applied either wholly before or wholly after this entity's shutdown save. A save failure, or
+     * any unchecked exception from one entity, is logged and does not stop the remaining entities
+     * from being saved.
      */
     public void saveAll() {
         for (Map<String, AbstractConfigEntity> configMap : pluginConfigMap.values()) {
             for (AbstractConfigEntity config : configMap.values()) {
-                if (new File(config.getConfigFilePath()).isDirectory()) {
-                    continue;
-                }
                 try {
-                    config.save();
+                    synchronized (config) {
+                        if (config.isLastLoadUnparseable()) {
+                            warnUnparseableFileLeftAlone(config);
+                            continue;
+                        }
+                        if (!config.isModifiedSinceSnapshot()) {
+                            continue;
+                        }
+                        // Read before save(): a successful save refreshes the file fingerprint.
+                        boolean overwritesOperatorEdit = config.isFileModifiedSinceSnapshot();
+                        config.save();
+                        if (overwritesOperatorEdit) {
+                            warnOperatorEditOverwritten(config);
+                        }
+                    }
                 } catch (IOException e) {
                     UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration save failed！File path：" + config.getConfigFilePath());
+                } catch (RuntimeException e) {
+                    UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration save failed！File path：" + config.getConfigFilePath(), e);
                 }
             }
         }
+    }
+
+    /**
+     * Logs that the shutdown save left a configuration file alone because the framework could not
+     * parse it the last time it read it (#510), and that any in-memory change to that configuration
+     * was therefore not written.
+     *
+     * @param config the entity that was skipped
+     */
+    private void warnUnparseableFileLeftAlone(AbstractConfigEntity config) {
+        UltiToolsPlugin owner = config.getUltiToolsPlugin();
+        File file = new File(owner.getResourceFolderPath(), config.getConfigFilePath());
+        UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration file "
+                + file.getAbsolutePath() + " could not be parsed the last time it was read, so it was left"
+                + " untouched and module " + owner.getPluginName() + "'s in-memory changes to this"
+                + " configuration were not saved. Fix the file, then reload or restart.");
+    }
+
+    /**
+     * Logs that the shutdown save wrote an in-memory change over a file that was changed or removed
+     * on disk while the server was running (#510). The overwrite itself is the documented contract -
+     * a value set from code is saved on disable - but it must not be silent.
+     *
+     * @param config the entity that was just saved
+     */
+    private void warnOperatorEditOverwritten(AbstractConfigEntity config) {
+        UltiToolsPlugin owner = config.getUltiToolsPlugin();
+        File file = new File(owner.getResourceFolderPath(), config.getConfigFilePath());
+        UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration file "
+                + file.getAbsolutePath() + " was changed or removed on disk while the server was running, but module "
+                + owner.getPluginName() + " also changed this configuration in memory. The in-memory"
+                + " configuration was saved, so the changes made to the file while the server ran were overwritten.");
     }
 
     /**
