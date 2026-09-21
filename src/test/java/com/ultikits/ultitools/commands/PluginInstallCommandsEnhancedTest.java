@@ -128,8 +128,8 @@ class PluginInstallCommandsEnhancedTest {
                     .thenReturn(true);
             mockedUtils.when(() -> PluginInstallUtils.getPluginVersions(anyString()))
                     .thenReturn(Arrays.asList("1.0.0", "1.0.1", "1.1.0"));
-            mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin(anyString()))
-                    .thenReturn(true);
+            mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(anyString()))
+                    .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
             
             executor = new PluginInstallCommands();
         } catch (Exception e) {
@@ -568,8 +568,8 @@ class PluginInstallCommandsEnhancedTest {
     void testUninstallPluginSuccess() throws IOException {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("remove-plugin"))
-                .thenReturn(true);
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("remove-plugin"))
+                .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
         
         executor.onCommand(player, mockCommand, "upm", 
                 new String[]{"uninstall", "remove-plugin"});
@@ -578,9 +578,12 @@ class PluginInstallCommandsEnhancedTest {
         List<String> messages = collectAllMessages(player);
         String fullMessage = String.join("\n", messages);
         
+        // #501: uninstallPlugin returns true only after deleting the jar, so the success reply
+        // no longer points the operator at the plugins folder to delete it by hand.
         assertThat(fullMessage)
-            .contains("卸载成功")
-            .contains("文件位置");
+            .contains("卸载完成")
+            .doesNotContain("文件位置")
+            .doesNotContain("手动删除");
     }
 
     @Test
@@ -588,8 +591,8 @@ class PluginInstallCommandsEnhancedTest {
     void testUninstallPluginNotFound() throws IOException {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("missing-plugin"))
-                .thenReturn(false);
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("missing-plugin"))
+                .thenReturn(PluginInstallUtils.UninstallReport.of(false, Collections.emptyList()));
         
         executor.onCommand(player, mockCommand, "upm", 
                 new String[]{"uninstall", "missing-plugin"});
@@ -604,7 +607,7 @@ class PluginInstallCommandsEnhancedTest {
     void testUninstallPluginIOException() throws IOException {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("io-error-plugin"))
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("io-error-plugin"))
                 .thenThrow(new IOException("File access error"));
         
         executor.onCommand(player, mockCommand, "upm", 
@@ -624,8 +627,8 @@ class PluginInstallCommandsEnhancedTest {
     void testUninstallFromConsole() throws IOException {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("console-uninstall"))
-                .thenReturn(true);
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("console-uninstall"))
+                .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
         
         boolean result = executor.onCommand(console, mockCommand, "upm", 
                 new String[]{"uninstall", "console-uninstall"});

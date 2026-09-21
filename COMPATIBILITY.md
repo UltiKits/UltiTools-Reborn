@@ -366,6 +366,50 @@ This section governs the third kind.
   instead (see `ultitools.language.file-refresh`/`ultitools.language.file-preserve` in
   `FEATURES.md`). No operator who customised a file is affected either way.
 
+- `PluginInstallUtils.uninstallPlugin(String)` unloading through the framework's one full unload
+  path, and reporting the outcome it documents (#503, #501). It used to call
+  `plugin.unregisterSelf()` directly, skipping everything `PluginManager#unregister` does first —
+  cancelling the module's `@Scheduled` tasks, releasing its `@PlayerCache` beans, its
+  tab-completion completers, its EventBus handlers and its conditional-bean records, then closing
+  its context — so an "uninstalled" module kept running its repeating tasks until the next restart.
+  It also ignored `File#delete()`'s result and stopped at the first matching jar, and returned
+  `true` either way. As of 6.3.0 it deletes every jar whose `plugin.yml` `name` matches and
+  **throws** where it used to report success: `java.nio.file.FileSystemException` naming every jar
+  still on disk when one could not be deleted, `java.nio.file.NoSuchFileException` when a loaded
+  module was unloaded but no jar of it was found (which is not a misspelling and must not be
+  reported as one), and `IllegalStateException` when the module's own unload threw — the module is
+  still removed from the loaded modules and its jars are still deleted in that case, with the jar
+  outcome attached as suppressed, because `unregister` has closed its context by then and keeping
+  the jar would bring the module back on the next restart. `false` now means only "no jar matched
+  and nothing was unloaded either". A caller that checked the boolean alone now sees these as
+  exceptions rather than a success it did not get. The method also no longer builds a `jar:file:`
+  URL for every entry of the modules folder, so a stray file or a subdirectory there no longer
+  fails the uninstall (#504). A loaded module is asked which JAR it came from — its own
+  `getProtectionDomain().getCodeSource()`, read before it is unloaded — and that JAR is deleted
+  whatever its metadata says, since an UltiTools module is identified by `@UltiToolsModule` and
+  needs no `plugin.yml` at all. Every other entry of the modules folder is placed in exactly one of
+  four states, each decided by reading the archive — with one exception, an entry the module loader
+  itself would never load, judged by the same `.jar` test `PluginManager#init` applies to this
+  folder, which is state B without being opened. The states: its `plugin.yml` declares this module,
+  or it is a loaded instance's own code-source JAR (deleted); it opened and its `plugin.yml`
+  declares another module, or it is a directory (ignored); nothing about it identifies a module,
+  because the archive would not open, its `plugin.yml` is not valid YAML, **it carries no
+  `plugin.yml` at all or one with no `name:` key** — which say nothing about whether it is a
+  module — or the entry is named like a JAR and cannot be resolved at all, a link whose target is
+  away (reported as undetermined — the uninstall still succeeds, and the operator is told how many
+  entries could not be identified and that one of them, if it is a copy of this module, will load
+  it again after a restart); or the modules folder exists but
+  could not be listed, which is reported as `java.nio.file.AccessDeniedException` naming the folder
+  rather than as "no JAR of this module is here", a claim nothing supports when the folder's
+  contents are unknown. A second entry point,
+  `PluginInstallUtils.uninstallPluginReporting(String)` (`@ApiStatus.Internal`), returns both what
+  was deleted and the entries whose identity could not be determined; `uninstallPlugin(String)`
+  keeps its signature and returns the first half. When the uninstall leaves by a failure instead —
+  a module whose unload threw, a JAR that could not be deleted, or nothing identifiable found —
+  those entries travel with it as a suppressed
+  `PluginInstallUtils.UndeterminedEntriesException` (`@ApiStatus.Internal`), so no outcome
+  discards what another established.
+
 ### Behavioral changes that do need one
 
 - A documented default value flipping.

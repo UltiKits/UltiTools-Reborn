@@ -92,8 +92,8 @@ class PluginInstallCommandsTest {
                     .thenReturn(true);
             mockedUtils.when(() -> PluginInstallUtils.getPluginVersions(anyString()))
                     .thenReturn(Arrays.asList("1.0.0", "1.0.1"));
-            mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin(anyString()))
-                    .thenReturn(true);
+            mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(anyString()))
+                    .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
             
             executor = new PluginInstallCommands();
         } catch (Exception e) {
@@ -400,8 +400,8 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin"))
-                .thenReturn(true);
+            mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
+                .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -413,7 +413,7 @@ class PluginInstallCommandsTest {
         
         assertThat(result).isTrue();
         String message = player.nextMessage();
-        assertThat(message).contains("卸载成功");
+        assertThat(message).contains("卸载完成");
     }
 
     @Test
@@ -422,8 +422,8 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin"))
-                .thenReturn(false);
+            mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
+                .thenReturn(PluginInstallUtils.UninstallReport.of(false, Collections.emptyList()));
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -444,7 +444,7 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.uninstallPlugin("test-plugin"))
+            mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
                 .thenThrow(new IOException("File access error"));
         } catch (Exception e) {
             // Skip if mocking not available
@@ -458,6 +458,224 @@ class PluginInstallCommandsTest {
         assertThat(result).isTrue();
         String message = player.nextMessage();
         assertThat(message).contains("删除失败");
+    }
+
+    @Test
+    @DisplayName("#501: a successful uninstall has already deleted the jar, so the reply never asks for a manual delete")
+    void uninstallSuccess_replyDoesNotAskForManualDelete() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
+                .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
+
+        executor.onCommand(player, mockCommand, "upm", new String[]{"uninstall", "test-plugin"});
+        server.getScheduler().performOneTick();
+
+        List<String> messages = drainMessages();
+        assertThat(messages).as("the command must reply at all").isNotEmpty();
+        assertThat(messages.get(0)).contains("卸载完成");
+        assertThat(messages)
+                .as("uninstallPlugin returns true only after deleting the jar (#501) -- telling the "
+                        + "operator to delete it manually describes work that is not needed")
+                .noneMatch(m -> m.contains("手动删除"))
+                .noneMatch(m -> m.contains("文件位置"));
+    }
+
+    @Test
+    @DisplayName("#501: a failed jar delete is reported as a failure naming the jar that is still on disk")
+    void uninstallDeleteFailure_replyNamesTheJarStillOnDisk() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String jarPath = "/srv/minecraft/plugins/UltiTools/plugins/Fixture-1.0.0.jar";
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
+                .thenThrow(new java.nio.file.FileSystemException(jarPath, null, "Permission denied"));
+
+        executor.onCommand(player, mockCommand, "upm", new String[]{"uninstall", "test-plugin"});
+        server.getScheduler().performOneTick();
+
+        List<String> messages = drainMessages();
+        assertThat(messages).as("the command must reply at all").isNotEmpty();
+        assertThat(messages).noneMatch(m -> m.contains("卸载完成"));
+        assertThat(messages.get(0)).contains("失败");
+        assertThat(String.join("\n", messages))
+                .as("the operator must be told which file will load again on restart")
+                .contains(jarPath);
+    }
+
+    @Test
+    @DisplayName("#501 review WR-02: a failed uninstall names every module jar still on disk")
+    void uninstallSeveralUndeletableJars_replyNamesEveryJar() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String first = "/srv/minecraft/plugins/UltiTools/plugins/Fixture-1.0.0.jar";
+        String second = "/srv/minecraft/plugins/UltiTools/plugins/Fixture-2.0.0.jar";
+        java.nio.file.FileSystemException failure =
+                new java.nio.file.FileSystemException(first, null, "Permission denied");
+        failure.addSuppressed(new java.nio.file.FileSystemException(second, null, "Permission denied"));
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin")).thenThrow(failure);
+
+        executor.uninstallPlugin(player, "test-plugin");
+
+        String all = String.join("\n", drainMessages());
+        assertThat(all).contains("失败").contains(first).contains(second).doesNotContain("卸载完成");
+    }
+
+    @Test
+    @DisplayName("#501 review WR-03: a module unloaded without a jar on disk is reported as such, not as a misspelling")
+    void uninstallLoadedModuleWithoutJar_replySaysUnloadedAndNoJarFound() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String folder = "/srv/minecraft/plugins/UltiTools/plugins";
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
+                .thenThrow(new java.nio.file.NoSuchFileException(folder, null, "no module JAR named test-plugin"));
+
+        executor.uninstallPlugin(player, "test-plugin");
+
+        String all = String.join("\n", drainMessages());
+        assertThat(all)
+                .contains("模块已卸载")
+                .contains(folder)
+                .doesNotContain("拼写")
+                .doesNotContain("卸载完成")
+                .doesNotContain("文件访问错误");
+    }
+
+    @Test
+    @DisplayName("#503 review WR-01: an unload that throws is reported, together with the jars having been deleted")
+    void uninstallUnloadThrew_jarsDeleted_replyReportsBoth() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin")).thenThrow(unloadThrew(null));
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> executor.uninstallPlugin(player, "test-plugin"));
+
+        assertThat(thrown).as("the operator must get a reply, not a generic command error").isNull();
+        String all = String.join("\n", drainMessages());
+        assertThat(all).contains("卸载出错").contains("均已删除").doesNotContain("卸载完成");
+    }
+
+    @Test
+    @DisplayName("#503 review WR-01: an unload that throws and a jar that cannot be deleted are both reported, naming the jar")
+    void uninstallUnloadThrew_jarNotDeleted_replyNamesTheJar() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String jar = "/srv/minecraft/plugins/UltiTools/plugins/Fixture-1.0.0.jar";
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
+                .thenThrow(unloadThrew(new java.nio.file.FileSystemException(jar, null, "Permission denied")));
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> executor.uninstallPlugin(player, "test-plugin"));
+
+        assertThat(thrown).isNull();
+        String all = String.join("\n", drainMessages());
+        assertThat(all).contains("卸载出错").contains(jar).doesNotContain("均已删除");
+    }
+
+    @Test
+    @DisplayName("#503 review WR-01: an unload that throws with no jar on disk says so")
+    void uninstallUnloadThrew_noJar_replySaysNoJarFound() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String folder = "/srv/minecraft/plugins/UltiTools/plugins";
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
+                .thenThrow(unloadThrew(new java.nio.file.NoSuchFileException(folder, null, "no module JAR")));
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> executor.uninstallPlugin(player, "test-plugin"));
+
+        assertThat(thrown).isNull();
+        String all = String.join("\n", drainMessages());
+        assertThat(all).contains("卸载出错").contains(folder).doesNotContain("均已删除");
+    }
+
+    @Test
+    @DisplayName("state C: the reply says how many JARs could not be read, and what that means")
+    void uninstallWithUndeterminedEntries_replySaysWhatIsUnknown() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String unreadable = "/srv/minecraft/plugins/UltiTools/plugins/zz-corrupt.jar";
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
+                .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.singletonList(unreadable)));
+
+        executor.uninstallPlugin(player, "test-plugin");
+
+        String all = String.join("\n", drainMessages());
+        assertThat(all).as("the uninstall succeeded and must say so").contains("卸载完成");
+        assertThat(all)
+                .as("the operator must be told what is unknown, and what follows from it")
+                .contains("1")
+                .contains("重启");
+        assertThat(all)
+                .as("the reply states the uncertainty rather than resolving it")
+                .contains("无法判断")
+                .doesNotContain("卸载失败");
+    }
+
+    @Test
+    @DisplayName("state C is reported once, however many branches of a failure carry it")
+    void uninstallUnloadThrew_noJarWithUndetermined_reportsThemOnce() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String folder = "/srv/minecraft/plugins/UltiTools/plugins";
+        String unreadable = folder + "/zz-corrupt.jar";
+        java.nio.file.NoSuchFileException noJar = new java.nio.file.NoSuchFileException(folder, null, "no module JAR");
+        noJar.addSuppressed(PluginInstallUtils.UndeterminedEntriesException.of(Collections.singletonList(unreadable)));
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
+                .thenThrow(unloadThrew(noJar));
+
+        executor.uninstallPlugin(player, "test-plugin");
+
+        List<String> messages = drainMessages();
+        assertThat(messages.stream().filter(m -> m.contains("无法确认身份")).count())
+                .as("it must be reported, and reported once: twice is the operator reading the same files twice")
+                .isEqualTo(1L);
+        assertThat(String.join("\n", messages)).contains(unreadable);
+    }
+
+    @Test
+    @DisplayName("state D reached through a failed unload is still reported as a folder, not as a JAR")
+    void uninstallUnloadThrew_folderUnlistable_replySaysNothingCanBeConcluded() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String folder = "/srv/minecraft/plugins/UltiTools/plugins";
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
+                .thenThrow(unloadThrew(new java.nio.file.AccessDeniedException(folder, null, "could not be listed")));
+
+        executor.uninstallPlugin(player, "test-plugin");
+
+        String all = String.join("\n", drainMessages());
+        assertThat(all).contains("卸载出错").contains("模块目录").contains(folder);
+        assertThat(all)
+                .as("the folder is not a JAR that failed to delete, and must not be named as one")
+                .doesNotContain("JAR 文件无法删除");
+    }
+
+    @Test
+    @DisplayName("state D: a modules folder that could not be listed is reported as that")
+    void uninstallWithUnlistableFolder_replySaysNothingCanBeConcluded() {
+        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
+        String folder = "/srv/minecraft/plugins/UltiTools/plugins";
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("test-plugin"))
+                .thenThrow(new java.nio.file.AccessDeniedException(folder, null, "could not be listed"));
+
+        executor.uninstallPlugin(player, "test-plugin");
+
+        String all = String.join("\n", drainMessages());
+        assertThat(all)
+                .contains("模块目录")
+                .contains(folder)
+                .doesNotContain("卸载完成")
+                .doesNotContain("拼写");
+    }
+
+    private static PluginInstallUtils.ModuleUnloadFailedException unloadThrew(Exception jarOutcome) {
+        PluginInstallUtils.ModuleUnloadFailedException failure = PluginInstallUtils.ModuleUnloadFailedException.of(
+                "Module test-plugin was removed from the loaded modules, but its unload threw",
+                new IllegalStateException("module unload step boom"));
+        if (jarOutcome != null) {
+            failure.addSuppressed(jarOutcome);
+        }
+        return failure;
+    }
+
+    private List<String> drainMessages() {
+        List<String> messages = new ArrayList<>();
+        String msg;
+        while ((msg = player.nextMessage()) != null) {
+            messages.add(msg);
+        }
+        return messages;
     }
 
     @Test

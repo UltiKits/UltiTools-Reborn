@@ -1,6 +1,9 @@
 package com.ultikits.ultitools.commands;
 
 import java.io.IOException;
+import java.nio.file.FileSystemException;
+import java.nio.file.NoSuchFileException;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.bukkit.ChatColor;
@@ -207,18 +210,210 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         sender.sendMessage(stringBuilder.toString());
     }
 
+    // Deliberately not @RunAsync, though it opens one archive per entry of the modules folder:
+    // PluginManager#unregister must run on the main thread, and the synchronous path is what carries
+    // the entries that could not be identified out of every exit, including the failing ones. With
+    // a handful of modules the scan costs a fraction of a tick (gate 1, IN-12).
     @CmdMapping(format = "uninstall <plugin>")
     public void uninstallPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin) {
         try {
-            if (PluginInstallUtils.uninstallPlugin(plugin)) {
-                sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("卸载成功！请手动删除本地文件，否则重启之后还会启用！"));
-                sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"));
+            PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(plugin);
+            if (report.jarsDeleted()) {
+                // uninstallPlugin returns true only after every JAR identified as the module's is
+                // deleted (#501), so there is nothing left for the operator to remove by hand. The
+                // files are named: every other outcome names paths, and a success that named none
+                // is what made a deletion outside the operator's request invisible (gate 1, IN-12).
+                sender.sendMessage(ChatColor.GREEN + String.format(
+                        UltiTools.getInstance().i18n("卸载完成：已删除识别为该模块的 JAR 文件：%s"),
+                        report.deletedFiles().isEmpty()
+                                ? UltiTools.getInstance().i18n("（没有需要删除的文件）")
+                                : String.join(", ", report.deletedFiles())));
             } else {
                 sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("卸载失败！请检查是否拼写正确！"));
             }
+            sendUndeterminedEntries(sender, report);
+        } catch (java.nio.file.AccessDeniedException e) {
+            sendUnlistableFolder(sender, e.getFile());
+        } catch (PluginInstallUtils.UninstallRefusedException e) {
+            // The uninstall refused because its outcome would be undefined - two possible targets,
+            // or a JAR another running module shares. It changed nothing, and says which.
+            sender.sendMessage(ChatColor.RED + e.getMessage());
+        } catch (PluginInstallUtils.ModuleUnloadFailedException e) {
+            // The module's own unload threw. It has still been removed from the loaded modules and
+            // its jars still deleted where possible: report both, so the operator knows whether it
+            // will come back on restart.
+            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("卸载出错！模块已从已加载列表移除，但其卸载过程抛出了异常，详见控制台。"));
+            sendJarOutcomeAfterUnloadError(sender, e);
+        } catch (NoSuchFileException e) {
+            // The module was found by this exact name and unloaded, but no jar carries it -- a
+            // spelling hint would be false here (#501).
+            sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n("模块已卸载，但在 %s 中没有识别出属于它的 JAR 文件。"), e.getFile()));
+            sendUnreadableEntriesOf(sender, e);
+        } catch (FileSystemException e) {
+            sendUndeletedJars(sender, e);
+            sendUnreadableEntriesOf(sender, e);
         } catch (IOException e) {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("删除失败！文件访问错误！请手动删除！"));
             sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"));
+        }
+    }
+
+    /**
+     * The modules folder is there and its contents are unknown, so nothing may be claimed about
+     * what it still holds -- including whether a JAR of this module is among it.
+     */
+    private static void sendUnlistableFolder(CommandSender sender, String folder) {
+        sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("模块目录 %s 无法读取，因此无法确认其中是否还有该模块的 JAR 文件。"), folder));
+    }
+
+    /**
+     * Names the entries a no-JAR-found failure carries with it: state C survives that answer, and
+     * one of those entries may be the module's own JAR.
+     */
+    private static void sendUnreadableEntriesOf(CommandSender sender, Throwable failure) {
+        List<String> files = new ArrayList<>();
+        collectUndetermined(failure, files);
+        if (files.isEmpty()) {
+            return;
+        }
+        sender.sendMessage(ChatColor.YELLOW + String.format(
+                UltiTools.getInstance().i18n("模块目录中有 %d 个文件无法确认身份，无法判断其中是否有该模块的副本；如果有，重启后该模块会再次加载：%s"),
+                files.size(), String.join(", ", files)));
+    }
+
+    /**
+     * Says what the uninstall could not determine: entries it could not read at all. They are not
+     * called copies of the module, because nothing established that they are -- what the operator
+     * needs is the count and what follows from it if one of them turns out to be one.
+     */
+    private static void sendUndeterminedEntries(CommandSender sender, PluginInstallUtils.UninstallReport report) {
+        if (report.undeterminedEntries().isEmpty()) {
+            return;
+        }
+        sender.sendMessage(ChatColor.YELLOW + String.format(
+                UltiTools.getInstance().i18n("模块目录中有 %d 个文件无法确认身份，无法判断其中是否有该模块的副本；如果有，重启后该模块会再次加载：%s"),
+                report.undeterminedEntries().size(), String.join(", ", report.undeterminedEntries())));
+    }
+
+    /**
+     * Reports the jar outcome {@link PluginInstallUtils#uninstallPlugin} attached to its
+     * unload-error exception: none attached means every matching jar was deleted.
+     */
+    private static void sendJarOutcomeAfterUnloadError(CommandSender sender,
+                                                       PluginInstallUtils.ModuleUnloadFailedException unloadError) {
+        sendUnreadableEntriesOf(sender, unloadError);
+        for (Throwable jarFailure : unloadError.getSuppressed()) {
+            if (jarFailure instanceof PluginInstallUtils.UndeterminedEntriesException) {
+                // Already reported above, and it is not a JAR outcome.
+                continue;
+            }
+            if (jarFailure instanceof java.nio.file.AccessDeniedException) {
+                // State D reached through a failed unload: a directory is not a JAR, and saying it
+                // will load the module again would be nonsense.
+                sendUnlistableFolder(sender, ((FileSystemException) jarFailure).getFile());
+                return;
+            }
+            if (jarFailure instanceof NoSuchFileException) {
+                // The undetermined entries this failure carries were reported once above, by the
+                // walk over the whole chain.
+                sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n("模块已卸载，但在 %s 中没有识别出属于它的 JAR 文件。"), ((NoSuchFileException) jarFailure).getFile()));
+                return;
+            }
+            if (jarFailure instanceof FileSystemException) {
+                sendUndeletedJars(sender, (FileSystemException) jarFailure);
+                return;
+            }
+            if (jarFailure instanceof IOException) {
+                sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("删除失败！文件访问错误！请手动删除！"));
+                sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"));
+                return;
+            }
+        }
+        sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("识别为该模块的 JAR 文件均已删除。"));
+    }
+
+    /** The undetermined entries a failure carries. */
+    private static List<String> undeterminedOf(Throwable failure) {
+        List<String> files = new ArrayList<>();
+        collectUndetermined(failure, files);
+        return files;
+    }
+
+    /** Collects the undetermined entries a failure carries, wherever in its suppressed chain they sit. */
+    private static void collectUndetermined(Throwable failure, List<String> files) {
+        collectUndetermined(failure, files, java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()));
+    }
+
+    /**
+     * {@link #collectUndetermined(Throwable, List)}, remembering what it has already walked.
+     *
+     * <p>`addSuppressed` refuses a throwable suppressing itself but not a longer loop, and a walk
+     * that meets one never returns. Nothing here builds such a chain today; the uninstall's replies
+     * are not the place to find out that something else did.
+     *
+     * @param failure the failure to walk
+     * @param files   the paths collected so far
+     * @param seen    the throwables already visited, by identity
+     */
+    private static void collectUndetermined(Throwable failure, List<String> files, java.util.Set<Throwable> seen) {
+        if (!seen.add(failure)) {
+            return;
+        }
+        if (failure instanceof PluginInstallUtils.UndeterminedEntriesException) {
+            files.addAll(((PluginInstallUtils.UndeterminedEntriesException) failure).entries());
+        }
+        for (Throwable suppressed : failure.getSuppressed()) {
+            collectUndetermined(suppressed, files, seen);
+        }
+    }
+
+    /**
+     * Names every jar the uninstall could not delete. Each one loads the module again at the next
+     * start, so an instruction that names only the first is one the operator cannot act on (#501).
+     */
+    private static void sendUndeletedJars(CommandSender sender, FileSystemException failure) {
+        List<String> files = new ArrayList<>();
+        collectNamedFiles(failure, files);
+        // The undetermined entries travel on the same failure and are reported separately: they
+        // are not JARs this uninstall failed to delete.
+        files.removeAll(undeterminedOf(failure));
+        sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("卸载失败！以下模块 JAR 文件无法删除，重启后模块会再次加载，请手动删除：%s"),
+                files.isEmpty()
+                        ? UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"
+                        : String.join(", ", files)));
+    }
+
+    /**
+     * Collects the file named by {@code failure} and by every {@code FileSystemException} attached
+     * to it, at any depth -- a file the operator is not told about is one they leave behind.
+     *
+     * @param failure the failure to walk
+     * @param files   the names collected so far, in the order they were found
+     */
+    private static void collectNamedFiles(FileSystemException failure, List<String> files) {
+        collectNamedFiles(failure, files, java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()));
+    }
+
+    /**
+     * {@link #collectNamedFiles(FileSystemException, List)}, remembering what it has already walked,
+     * for the same reason {@link #collectUndetermined(Throwable, List, java.util.Set)} does.
+     *
+     * @param failure the failure to walk
+     * @param files   the paths collected so far
+     * @param seen    the throwables already visited, by identity
+     */
+    private static void collectNamedFiles(FileSystemException failure, List<String> files,
+                                          java.util.Set<Throwable> seen) {
+        if (!seen.add(failure) || failure instanceof PluginInstallUtils.UndeterminedEntriesException) {
+            return;
+        }
+        if (failure.getFile() != null && !files.contains(failure.getFile())) {
+            files.add(failure.getFile());
+        }
+        for (Throwable suppressed : failure.getSuppressed()) {
+            if (suppressed instanceof FileSystemException) {
+                collectNamedFiles((FileSystemException) suppressed, files, seen);
+            }
         }
     }
 
