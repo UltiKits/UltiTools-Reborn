@@ -101,12 +101,26 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     /**
      * Matches a {@code java.util.Formatter} conversion specifier, e.g. {@code %s} in {@code
      * "Hello, %s!"}, or {@code %1$s} for an explicit argument index. Used only by {@link
-     * #placeholderArity(String)} for the D-05 per-key comparison; not a change to how
-     * placeholders are substituted anywhere -- every parameterised {@code i18n(...)} value in
-     * this framework is formatted with {@code String.format}, never {@code MessageFormat}
-     * (measured: 0 {@code {n}}-style placeholders anywhere in {@code src/main/resources/lang}
-     * or across any {@code i18n(...)} call site; the shipped catalogues use {@code %s}/{@code
-     * %d} exclusively).
+     * #placeholderArity(String)}, one of the two placeholder-loss detectors {@link
+     * #applyPlaceholderArityOverride} combines (see that method's own javadoc) for the D-05
+     * per-key comparison; not a change to how placeholders are substituted anywhere -- every
+     * parameterised {@code i18n(...)} value in THIS FRAMEWORK's own two catalogues ({@code
+     * src/main/resources/lang/en.json}/{@code zh.json}) is formatted with {@code String.format},
+     * never {@code MessageFormat} (measured: 0 {@code {n}}-style placeholders in either file, and
+     * 0 across any {@code i18n(...)} call site in this repository).
+     * <p>
+     * That measurement is scoped to THIS repository's own two catalogues -- it says nothing
+     * about the module catalogues this same mechanism actually protects. Corrected 2026-09-22:
+     * an earlier revision of this javadoc reported the same 0-count without that scoping
+     * qualifier, which read as "no {@code {n}}-style placeholder exists anywhere this mechanism
+     * looks" and was wrong for the broader population the mechanism serves. An install-wide sweep
+     * of all 15 module jars' {@code lang/*.json}/{@code lang/*.yml} catalogues against their
+     * on-disk copies (34 file pairs) found the opposite: 0 {@code %s}/{@code %d}-arity mismatches
+     * anywhere, and every brace-delimited span in that corpus is a {@code {0}}/{@code {1}}-style
+     * positional or {@code {PLAYER}}/{@code {WORLD}}-style named token -- the modules use {@code
+     * String#replace}-driven substitution exclusively, never {@code String.format}. {@link
+     * #BRACE_TOKEN_PATTERN} and {@link #missingBracePlaceholder} exist to cover that population;
+     * this pattern and {@link #placeholderArity} continue to cover only the framework's own.
      * <p>
      * Codex round 6, P2: deliberately narrower than the full {@code Formatter} grammar --
      * {@code %s}/{@code %d} (optionally explicit-indexed) or a literal {@code %%}, with NO flags,
@@ -122,6 +136,28 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      */
     private static final Pattern PLACEHOLDER_PATTERN =
             Pattern.compile("%(?:(\\d+)\\$)?([sd%])");
+
+    /**
+     * Matches a brace-style placeholder token as used by the MODULE {@code lang} catalogues this
+     * mechanism protects -- {@code {0}}/{@code {1}} positional or {@code {PLAYER}}/{@code
+     * {WORLD}} named, substituted with plain {@code String#replace}, never {@code
+     * java.util.Formatter}. See {@link #PLACEHOLDER_PATTERN}'s javadoc for the install-wide
+     * measurement establishing this is the modules' actual dialect, and #524 for the real-machine
+     * report this pattern and {@link #missingBracePlaceholder} exist to fix.
+     * <p>
+     * The captured group requires the braces to contain ONLY a bare decimal integer or a bare
+     * identifier (a letter/underscore followed by letters, digits or underscores) -- no
+     * whitespace or other punctuation. This is deliberately strict, for the same reason {@link
+     * #PLACEHOLDER_PATTERN} was narrowed in Codex round 6: an operator's own decorative or
+     * explanatory text that happens to contain a brace must never be mistaken for a placeholder
+     * token, and this pattern alone cannot make that guarantee -- {@link #missingBracePlaceholder}'s
+     * one-directional comparison is what actually protects a decorative brace the disk value adds
+     * on its own (see that method's javadoc). Measured against the install-wide sweep above: every
+     * brace-delimited span across all 34 module file pairs matches this pattern with nothing left
+     * over, so this shape is not hand-picked -- it is what the corpus actually contains.
+     */
+    private static final Pattern BRACE_TOKEN_PATTERN =
+            Pattern.compile("\\{([A-Za-z_][A-Za-z0-9_]*|\\d+)\\}");
 
     /**
      * A private, independent JSON reader for the D-05 placeholder-arity comparison only -- not a
@@ -632,12 +668,38 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     /**
      * Builds the disk language for the "operator customisation" branches (2 and 4 in {@link
      * #resolveLanguageWithProvenance}): the disk dictionary stays authoritative for every key,
-     * except a key whose {@link #placeholderArity(String)} differs from the jar's value for the
-     * same key -- that key is overridden to the jar's value and warned about once, naming the
-     * module, the file and the key but never either value (T-16-04-02). A key present only in the
-     * jar is deliberately left out of the returned dictionary: {@link Language#withFallback}
-     * (unchanged) already resolves a key the disk dictionary lacks entirely, and duplicating that
-     * here would just be a second, redundant path to the same answer.
+     * except a key the jar's value proves has LOST a placeholder relative to the disk value --
+     * that key is overridden to the jar's value and warned about once, naming the module, the
+     * file and the key but never either value (T-16-04-02). A key present only in the jar is
+     * deliberately left out of the returned dictionary: {@link Language#withFallback} (unchanged)
+     * already resolves a key the disk dictionary lacks entirely, and duplicating that here would
+     * just be a second, redundant path to the same answer.
+     * <p>
+     * Two independent detectors decide "lost a placeholder", evaluated SEPARATELY rather than
+     * through one shared code path (#524):
+     * <ul>
+     * <li>{@link #placeholderArity} for {@code %s}/{@code %d} -- SYMMETRIC equality of the
+     * highest required {@code String.format} argument position. Either side moving, in either
+     * direction, is a mismatch: both sides use the same dialect, so any count change at all means
+     * the parameter shape changed.</li>
+     * <li>{@link #missingBracePlaceholder} for {@code {0}}/{@code {PLAYER}}-style tokens --
+     * ONE-DIRECTIONAL presence, not a count. It fires only when a token the JAR value contains is
+     * ABSENT from the disk value; a disk value that keeps every bundled token but adds a token of
+     * its own, or rewords everything around them, never fires.</li>
+     * </ul>
+     * The two cannot share one code path: collapsing them into a single "count differs" rule would
+     * make the brace detector symmetric too, and a symmetric brace rule fires on an operator's own
+     * customisation the moment its OWN brace count doesn't happen to match the jar's -- exactly the
+     * false-positive class {@link #PLACEHOLDER_PATTERN}'s own javadoc already documents Codex
+     * round 6 eliminating for the {@code %} dialect (a permissive pattern reading ordinary text as
+     * a placeholder). One-directional token presence is the brace dialect's equivalent fix: it
+     * flags a slot that disappeared under the operator and nothing else -- never an operator who
+     * added something of their own.
+     * <p>
+     * What an operator loses in the one case this DOES fire: nothing structural -- their file is
+     * never touched, never rewritten. That one message renders with the bundled wording (not
+     * their customised wording) until they notice the warning and re-add the missing token
+     * themselves.
      */
     private Language applyPlaceholderArityOverride(File file, byte[] jarBytes, String extension,
                                                      String resourcePath) {
@@ -652,9 +714,9 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                 continue;
             }
             String jarValue = jarEntry.getValue();
-            boolean mismatch;
+            boolean arityMismatch;
             try {
-                mismatch = placeholderArity(diskValue) != placeholderArity(jarValue);
+                arityMismatch = placeholderArity(diskValue) != placeholderArity(jarValue);
             } catch (NumberFormatException e) {
                 // Codex round 3, P2: an explicit format-argument index too large for int (e.g.
                 // "%999999999999999999$s") overflows Integer.parseInt inside placeholderArity.
@@ -671,11 +733,19 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                         + "not be compared; using the current bundled version's value for this key.");
                 continue;
             }
-            if (mismatch) {
+            // #524: the %s/%d check above never sees this module population's actual dialect --
+            // see PLACEHOLDER_PATTERN's javadoc for the install-wide measurement. Only evaluated
+            // when the symmetric %-check above found no mismatch: either detector firing is
+            // sufficient reason to prefer the bundled value, so there is nothing more to learn by
+            // also running the brace check once arityMismatch is already true.
+            boolean braceTokenLost = !arityMismatch && missingBracePlaceholder(diskValue, jarValue);
+            if (arityMismatch || braceTokenLost) {
                 resolved.put(key, jarValue);
                 getLogger().warn("Language key '" + key + "' in '" + resourcePath + "' for module '"
-                        + getPluginName() + "' has a different placeholder count than the current "
-                        + "bundled version; using the current version's value for this key.");
+                        + getPluginName() + "' " + (arityMismatch
+                                ? "has a different placeholder count than the current bundled version"
+                                : "is missing a placeholder that the current bundled version has")
+                        + "; using the current bundled version's value for this key.");
             }
         }
         return new Language(resolved);
@@ -738,6 +808,54 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             }
         }
         return highestPosition;
+    }
+
+    /**
+     * Reports whether {@code jarValue} contains a brace-style placeholder token (see {@link
+     * #BRACE_TOKEN_PATTERN}) that {@code diskValue} does not -- ONE-DIRECTIONALLY, and by TOKEN
+     * PRESENCE, not by count (#524). See {@link #applyPlaceholderArityOverride}'s own javadoc for
+     * why this is deliberately asymmetric, unlike {@link #placeholderArity}'s symmetric check: an
+     * operator's value that keeps every bundled token -- however reworded, recoloured, or however
+     * many of its OWN extra tokens it adds -- must never be flagged. Only a token that existed in
+     * the bundled value and is genuinely gone from the operator's value counts as a loss.
+     * <p>
+     * A jar value with no brace tokens at all can never report a loss (there is nothing to lose),
+     * independent of whatever the disk value happens to contain -- this is what keeps a module's
+     * {@code %s}/{@code %d}-only keys, and any decorative brace an operator adds on their own,
+     * outside this check entirely.
+     *
+     * @param diskValue the operator's on-disk value for this key
+     * @param jarValue  the current bundled value for the same key
+     * @return {@code true} if {@code jarValue} has at least one brace token absent from {@code
+     *         diskValue}
+     */
+    private static boolean missingBracePlaceholder(String diskValue, String jarValue) {
+        Set<String> jarTokens = bracePlaceholderTokens(jarValue);
+        if (jarTokens.isEmpty()) {
+            return false;
+        }
+        return !bracePlaceholderTokens(diskValue).containsAll(jarTokens);
+    }
+
+    /**
+     * Returns the distinct brace-style placeholder tokens (see {@link #BRACE_TOKEN_PATTERN}) found
+     * in {@code value} -- e.g. {@code {"0", "PLAYER"}} for {@code "Hi {PLAYER}, you are #{0}"}.
+     * Iteration order is insertion order and otherwise unused: the only caller ({@link
+     * #missingBracePlaceholder}) only ever calls {@code containsAll} on the result.
+     *
+     * @param value a language value, or {@code null}
+     * @return the distinct token names found, or an empty set for {@code null} or a value with none
+     */
+    private static Set<String> bracePlaceholderTokens(String value) {
+        if (value == null) {
+            return Collections.emptySet();
+        }
+        Set<String> tokens = new LinkedHashSet<>();
+        Matcher matcher = BRACE_TOKEN_PATTERN.matcher(value);
+        while (matcher.find()) {
+            tokens.add(matcher.group(1));
+        }
+        return tokens;
     }
 
     /**
