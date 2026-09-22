@@ -1156,4 +1156,122 @@ class UltiToolsPluginLanguageFallbackTest {
                         + "this classification is permanently stuck")
                 .contains("Hi %s (%s)");
     }
+
+    // ------------------------------------------------------------------------------------------
+    // #524: applyPlaceholderArityOverride's brace-token detector ({0}/{1} positional,
+    // {PLAYER}/{WORLD} named -- see BRACE_TOKEN_PATTERN / missingBracePlaceholder in
+    // UltiToolsPlugin.java). One-directional and per-TOKEN, not per-count: fires only when a
+    // token present in the bundled (jar) value is absent from the disk value.
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("brace dialect: an operator's value keeps every bundled token but rewrites the "
+            + "wording and colour codes -- must not fire (#524)")
+    void braceTokensKeptOperatorRewordingWithColourCodesDoesNotFire() throws Throwable {
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"known\":\"&7Hi {PLAYER}, you have &f{COUNT} items\"}",
+                "{\"known\":\"&aHey {PLAYER}, you've got &b{COUNT} things now!\"}");
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
+
+        Language language = resolveProvenanceLanguage(fixture);
+
+        assertThat(language.getLocalizedText("known"))
+                .isEqualTo("&aHey {PLAYER}, you've got &b{COUNT} things now!");
+        verify(fixture.mockLogger, never()).warning(anyString());
+    }
+
+    @Test
+    @DisplayName("brace dialect: an operator's value contains a decorative brace the bundled "
+            + "value does not have -- the one-directional rule means an operator's OWN extra "
+            + "token never fires (#524)")
+    void braceTokensOperatorAddedDecorativeBraceNeverFires() throws Throwable {
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"known\":\"Hello {PLAYER}\"}",
+                "{\"known\":\"Hello {PLAYER} (see {NOTE} below)\"}");
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
+
+        Language language = resolveProvenanceLanguage(fixture);
+
+        assertThat(language.getLocalizedText("known")).isEqualTo("Hello {PLAYER} (see {NOTE} below)");
+        verify(fixture.mockLogger, never()).warning(anyString());
+    }
+
+    @Test
+    @DisplayName("brace dialect: a decorative brace span with spaces/punctuation in the BUNDLED "
+            + "value -- the brace analogue of 'Progress: 90% done' (CR-01, Codex round 6) -- is "
+            + "never mistaken for a placeholder token; a naive \\{[^}]*\\} pattern would misread "
+            + "it and overwrite the operator's own wording, the strict identifier-only pattern "
+            + "must not (#524)")
+    void braceTokensDecorativeSpanInBundledValueNeverMistakenForToken() throws Throwable {
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"known\":\"Rules: {be respectful, no spam} - thanks!\"}",
+                "{\"known\":\"Rules: (please be nice, avoid spam) - thanks!\"}");
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
+
+        Language language = resolveProvenanceLanguage(fixture);
+
+        // Under a naive `\{[^}]*\}` pattern, "be respectful, no spam" would be read whole as a
+        // bundled token; the disk value's rewritten wording does not contain that literal text,
+        // so a naive implementation would misfire here and silently overwrite the operator's own
+        // wording with the bundled sentence.
+        assertThat(language.getLocalizedText("known"))
+                .isEqualTo("Rules: (please be nice, avoid spam) - thanks!");
+        verify(fixture.mockLogger, never()).warning(anyString());
+    }
+
+    @Test
+    @DisplayName("brace dialect: the bundled value gained a positional {0}/{1}-style token the "
+            + "disk value lacks -- must fire, one WARN naming the key, bundled value used (#524)")
+    void braceTokensBundledValueGainedPositionalTokenFires() throws Throwable {
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"known\":\"{0} -> {1} [{2}] => {3}\",\"other\":\"stable\"}",
+                "{\"known\":\"{0} -> {1} [{2}]\",\"other\":\"stable-customised\"}");
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
+
+        Language language = resolveProvenanceLanguage(fixture);
+
+        assertThat(language.getLocalizedText("known")).isEqualTo("{0} -> {1} [{2}] => {3}");
+        assertThat(language.getLocalizedText("other")).isEqualTo("stable-customised");
+        verify(fixture.mockLogger, times(1)).warning(argThat((String msg) ->
+                msg.contains("known") && msg.contains("lang/en.json") && msg.contains("TestModule")
+                        && msg.contains("missing a placeholder")));
+    }
+
+    @Test
+    @DisplayName("brace dialect: the bundled value gained a named {WORLD}-style token the disk "
+            + "value lacks -- must fire, one WARN naming the key, bundled value used (#524)")
+    void braceTokensBundledValueGainedNamedTokenFires() throws Throwable {
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"known\":\"Teleporting {PLAYER} to {WORLD}\",\"other\":\"stable\"}",
+                "{\"known\":\"Teleporting {PLAYER}\",\"other\":\"stable-customised\"}");
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
+
+        Language language = resolveProvenanceLanguage(fixture);
+
+        assertThat(language.getLocalizedText("known")).isEqualTo("Teleporting {PLAYER} to {WORLD}");
+        assertThat(language.getLocalizedText("other")).isEqualTo("stable-customised");
+        verify(fixture.mockLogger, times(1)).warning(argThat((String msg) ->
+                msg.contains("known") && msg.contains("missing a placeholder")));
+    }
+
+    @Test
+    @DisplayName("warning wording distinguishes a Formatter arity mismatch from a lost brace "
+            + "token, and the existing %s/%d detector keeps firing unchanged through the combined "
+            + "check (#524)")
+    void warningWordingDistinguishesFormatterArityFromMissingBraceToken() throws Throwable {
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"formatterKey\":\"Hi %s, %d items\",\"braceKey\":\"Hi {PLAYER}, {COUNT} items\"}",
+                "{\"formatterKey\":\"Hi %s\",\"braceKey\":\"Hi {PLAYER}\"}");
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
+
+        Language language = resolveProvenanceLanguage(fixture);
+
+        assertThat(language.getLocalizedText("formatterKey")).isEqualTo("Hi %s, %d items");
+        assertThat(language.getLocalizedText("braceKey")).isEqualTo("Hi {PLAYER}, {COUNT} items");
+        verify(fixture.mockLogger, times(1)).warning(argThat((String msg) ->
+                msg.contains("formatterKey") && msg.contains("different placeholder count")));
+        verify(fixture.mockLogger, times(1)).warning(argThat((String msg) ->
+                msg.contains("braceKey") && msg.contains("missing a placeholder")));
+    }
+
 }
