@@ -72,20 +72,22 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
     private final int defaultCooldownSeconds;
 
     /**
-     * Resolved seconds for every config-bound {@code @CmdCD} this validator can meet, per concrete
-     * executor class, then keyed by {@link #bindingKey(CmdCD)} (#531). Written on the main thread --
-     * once when the module loads, then only by the {@code /ul reload} step after a successful
-     * configuration reload -- and read on dispatch threads, so it is replaced as a whole immutable
-     * map behind a {@code volatile} reference rather than mutated.
+     * Resolved seconds for every config-bound {@code @CmdCD} this validator can meet, per executor
+     * <b>instance</b> (identity), then keyed by {@link #bindingKey(CmdCD)} (#531). One executor
+     * instance is one registered command of one module, so it is the exact owner of a binding;
+     * neither the binding key nor the executor class is, when a validator is shared (Codex rounds
+     * 1-2 on #536). Written on the main thread -- once when the module loads, then only by the
+     * {@code /ul reload} step after a successful configuration reload -- and read on dispatch
+     * threads, so it is replaced as a whole immutable map behind a {@code volatile} reference.
      */
-    private volatile Map<Class<?>, Map<String, Integer>> boundCooldownSeconds = Collections.emptyMap();
+    private volatile Map<Object, Map<String, Integer>> boundCooldownSeconds = Collections.emptyMap();
 
     /**
      * Load-time value sources of the bindings in {@link #boundCooldownSeconds}, per owning module and
-     * executor class, so a reload of one module re-reads only that module's config even when two
+     * executor instance, so a reload of one module re-reads only that module's config even when two
      * modules' executors share this validator (#531 gate-1 round 2, IN-01). Main thread only.
      */
-    private volatile Map<UltiToolsPlugin, Map<Class<?>, Map<String, Supplier<Long>>>> boundCooldownSources =
+    private volatile Map<UltiToolsPlugin, Map<Object, Map<String, Supplier<Long>>>> boundCooldownSources =
             Collections.emptyMap();
     
     /**
@@ -119,7 +121,7 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
             return ValidationResult.success();
         }
 
-        Integer resolvedSeconds = getCooldownSeconds(method, context.getExecutorClass());
+        Integer resolvedSeconds = getCooldownSeconds(method, context);
         if (resolvedSeconds == null) {
             return unresolvedBinding(context, method);
         }
@@ -167,7 +169,7 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
             return;
         }
 
-        Integer cooldownSeconds = getCooldownSeconds(method, context.getExecutorClass());
+        Integer cooldownSeconds = getCooldownSeconds(method, context);
         if (cooldownSeconds == null || cooldownSeconds <= 0) {
             return;
         }
@@ -319,26 +321,28 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
      * does not declare its own.
      * <p>
      * A config-bound {@code @CmdCD} (#531) returns the seconds cached by
-     * {@link #mergeBoundCooldownSeconds(Class, Map)} for {@code executorClass} instead of its literal -- never the live config field,
+     * {@link #mergeExecutorCooldownSeconds(Object, Map)} for the dispatching executor instance
+     * ({@code CommandContext.getExecutor()}) instead of its literal -- never the live config field,
      * because a refused {@code /ul reload} leaves the refused value in that field. A bound
      * annotation with no cached value returns {@code null}: it was never resolved by a module
      * load, and the caller refuses the command rather than treat it as "no cooldown".
      *
-     * @param method        the matched command mapping method
-     * @param executorClass the concrete executor class dispatching this command (WR-02,
-     *                      05-REVIEW.md), or {@code null} when unavailable -- falls back to the
-     *                      pre-WR-02, declaring-class-only resolution in that case
+     * @param method  the matched command mapping method
+     * @param context the dispatch context; its executor class resolves a class-level
+     *                {@code @CmdCD} (WR-02, 05-REVIEW.md -- {@code null} falls back to the
+     *                declaring class), its executor instance selects a bound value
      * @return the resolved cooldown in seconds, or {@code null} for an unresolved binding
      * @since 6.3.0
      */
-    private Integer getCooldownSeconds(Method method, Class<?> executorClass) {
-        CmdCD cmdCD = ReflectionUtil.resolveMethodOrClassAnnotation(method, executorClass, CmdCD.class);
+    private Integer getCooldownSeconds(Method method, CommandContext context) {
+        CmdCD cmdCD = ReflectionUtil.resolveMethodOrClassAnnotation(method, context.getExecutorClass(), CmdCD.class);
         if (cmdCD != null) {
             String bindingKey = bindingKey(cmdCD);
             if (bindingKey == null) {
                 return cmdCD.value();
             }
-            return getBoundCooldownSeconds(executorClass).get(bindingKey);
+            Object executor = context.getExecutor();
+            return executor == null ? null : getExecutorCooldownSeconds(executor).get(bindingKey);
         }
         return defaultCooldownSeconds;
     }
@@ -380,69 +384,32 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
     }
 
     /**
-     * Adds resolved seconds for the config-bound {@code @CmdCD} annotations of {@code executorClass}
-     * to this validator's cache, keeping every other entry. Values are kept <b>per executor
-     * class</b>: two executors sharing this validator -- even from two modules that bind the same
-     * config class and key to two different config instances -- each keep their own value (Codex
-     * round 1 on #536), and merging rather than replacing keeps every executor's bindings (gate-1
-     * WR-02).
+     * Adds resolved seconds for the config-bound {@code @CmdCD} annotations of {@code executor} to
+     * this validator's cache, keeping every other entry. Values are kept <b>per executor
+     * instance</b>, the exact owner of a binding: executors sharing this validator -- even two
+     * instances of one class in two modules that bind the same config class and key to two
+     * different config instances -- each keep their own value (Codex rounds 1-2 on #536), and
+     * merging rather than replacing keeps every executor's bindings (gate-1 WR-02).
      *
-     * @param executorClass       the concrete executor class the bindings were declared on (the
-     *                            class {@code BaseCommandExecutor} puts in its {@code CommandContext})
-     * @param secondsByBindingKey resolved seconds keyed by {@link #bindingKey(CmdCD)}
-     * @since 6.3.0
-     */
-    @ApiStatus.Internal
-    public void mergeBoundCooldownSeconds(Class<?> executorClass, Map<String, Integer> secondsByBindingKey) {
-        Map<Class<?>, Map<String, Integer>> next = new HashMap<>(boundCooldownSeconds);
-        Map<String, Integer> forExecutor = new HashMap<>(next.getOrDefault(executorClass, Collections.emptyMap()));
-        forExecutor.putAll(secondsByBindingKey);
-        next.put(executorClass, Collections.unmodifiableMap(forExecutor));
-        this.boundCooldownSeconds = Collections.unmodifiableMap(next);
-    }
-
-    /**
-     * Replaces the resolved seconds of {@code executorClass}'s config-bound {@code @CmdCD}
-     * annotations. The framework itself uses {@link #mergeBoundCooldownSeconds(Class, Map)}; module
-     * code has no reason to call either. A cooldown that is already running keeps the end time it
-     * was stamped with.
-     *
-     * @param executorClass       the concrete executor class
-     * @param secondsByBindingKey resolved seconds keyed by {@link #bindingKey(CmdCD)}
-     * @since 6.3.0
-     */
-    @ApiStatus.Internal
-    public void setBoundCooldownSeconds(Class<?> executorClass, Map<String, Integer> secondsByBindingKey) {
-        Map<Class<?>, Map<String, Integer>> next = new HashMap<>(boundCooldownSeconds);
-        next.put(executorClass, Collections.unmodifiableMap(new HashMap<>(secondsByBindingKey)));
-        this.boundCooldownSeconds = Collections.unmodifiableMap(next);
-    }
-
-    /**
-     * @param executorClass the concrete executor class
-     * @return resolved seconds of its config-bound {@code @CmdCD} annotations, keyed by
-     *         {@link #bindingKey(CmdCD)}; never {@code null}
-     * @since 6.3.0
-     */
-    @ApiStatus.Internal
-    public Map<String, Integer> getBoundCooldownSeconds(Class<?> executorClass) {
-        return boundCooldownSeconds.getOrDefault(executorClass, Collections.emptyMap());
-    }
-
-    /**
-     * Instance-keyed form of {@link #mergeBoundCooldownSeconds(Class, Map)}.
-     *
-     * @param executor            the executor instance the bindings were declared on
+     * @param executor            the executor instance the bindings were declared on (the instance
+     *                            {@code BaseCommandExecutor} puts in its {@code CommandContext})
      * @param secondsByBindingKey resolved seconds keyed by {@link #bindingKey(CmdCD)}
      * @since 6.3.0
      */
     @ApiStatus.Internal
     public void mergeExecutorCooldownSeconds(Object executor, Map<String, Integer> secondsByBindingKey) {
-        mergeBoundCooldownSeconds(executor.getClass(), secondsByBindingKey);
+        Map<Object, Map<String, Integer>> next = new IdentityHashMap<>(boundCooldownSeconds);
+        Map<String, Integer> forExecutor = new HashMap<>(next.getOrDefault(executor, Collections.emptyMap()));
+        forExecutor.putAll(secondsByBindingKey);
+        next.put(executor, Collections.unmodifiableMap(forExecutor));
+        this.boundCooldownSeconds = Collections.unmodifiableMap(next);
     }
 
     /**
-     * Instance-keyed form of {@link #setBoundCooldownSeconds(Class, Map)}.
+     * Replaces the resolved seconds of {@code executor}'s config-bound {@code @CmdCD} annotations.
+     * The framework itself uses {@link #mergeExecutorCooldownSeconds(Object, Map)}; module code has
+     * no reason to call either. A cooldown that is already running keeps the end time it was
+     * stamped with.
      *
      * @param executor            the executor instance
      * @param secondsByBindingKey resolved seconds keyed by {@link #bindingKey(CmdCD)}
@@ -450,34 +417,36 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
      */
     @ApiStatus.Internal
     public void setExecutorCooldownSeconds(Object executor, Map<String, Integer> secondsByBindingKey) {
-        setBoundCooldownSeconds(executor.getClass(), secondsByBindingKey);
+        Map<Object, Map<String, Integer>> next = new IdentityHashMap<>(boundCooldownSeconds);
+        next.put(executor, Collections.unmodifiableMap(new HashMap<>(secondsByBindingKey)));
+        this.boundCooldownSeconds = Collections.unmodifiableMap(next);
     }
 
     /**
-     * Instance-keyed form of {@link #getBoundCooldownSeconds(Class)}.
-     *
-     * @param executor the executor instance
+     * @param executor an executor instance
      * @return its resolved seconds keyed by {@link #bindingKey(CmdCD)}; never {@code null}
      * @since 6.3.0
      */
     @ApiStatus.Internal
     public Map<String, Integer> getExecutorCooldownSeconds(Object executor) {
-        return getBoundCooldownSeconds(executor.getClass());
+        return boundCooldownSeconds.getOrDefault(executor, Collections.emptyMap());
     }
 
     /**
      * Diagnostic view of the whole cache.
      *
-     * @return every executor's resolved seconds, keyed by {@code executorClassName|bindingKey};
-     *         never {@code null}
+     * @return every executor's resolved seconds, keyed by
+     *         {@code executorClassName@identityHash|bindingKey}; never {@code null}
      * @since 6.3.0
      */
     @ApiStatus.Internal
     public Map<String, Integer> getBoundCooldownSeconds() {
         Map<String, Integer> all = new HashMap<>();
-        for (Map.Entry<Class<?>, Map<String, Integer>> executor : boundCooldownSeconds.entrySet()) {
+        for (Map.Entry<Object, Map<String, Integer>> executor : boundCooldownSeconds.entrySet()) {
+            String owner = executor.getKey().getClass().getName() + "@"
+                    + Integer.toHexString(System.identityHashCode(executor.getKey()));
             for (Map.Entry<String, Integer> binding : executor.getValue().entrySet()) {
-                all.put(executor.getKey().getName() + "|" + binding.getKey(), binding.getValue());
+                all.put(owner + "|" + binding.getKey(), binding.getValue());
             }
         }
         return Collections.unmodifiableMap(all);
@@ -485,39 +454,39 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
 
     /**
      * Adds the load-time sources of the config-bound {@code @CmdCD} values that {@code owner}'s
-     * {@code executorClass} declared on this validator, keyed by {@link #bindingKey(CmdCD)}. Each
-     * source reads the module's config field it was resolved to at load, so a reload re-reads that
-     * same instance instead of resolving the binding again (gate-1 IN-01), and only the reloading
+     * {@code executor} declared on this validator, keyed by {@link #bindingKey(CmdCD)}. Each source
+     * reads the module's config field it was resolved to at load, so a reload re-reads that same
+     * instance instead of resolving the binding again (gate-1 IN-01), and only the reloading
      * module's own sources are ever read (round 2).
      *
      * @param owner               the module whose executor declared the bindings
-     * @param executorClass       that executor's concrete class
+     * @param executor            that executor instance
      * @param sourcesByBindingKey value sources keyed by {@link #bindingKey(CmdCD)}
      * @since 6.3.0
      */
     @ApiStatus.Internal
-    public void mergeBoundCooldownSources(UltiToolsPlugin owner, Class<?> executorClass,
-                                          Map<String, Supplier<Long>> sourcesByBindingKey) {
-        Map<UltiToolsPlugin, Map<Class<?>, Map<String, Supplier<Long>>>> next = new IdentityHashMap<>(boundCooldownSources);
-        Map<Class<?>, Map<String, Supplier<Long>>> owned = new HashMap<>(next.getOrDefault(owner, Collections.emptyMap()));
-        Map<String, Supplier<Long>> forExecutor = new HashMap<>(owned.getOrDefault(executorClass, Collections.emptyMap()));
+    public void mergeExecutorCooldownSources(UltiToolsPlugin owner, Object executor,
+                                             Map<String, Supplier<Long>> sourcesByBindingKey) {
+        Map<UltiToolsPlugin, Map<Object, Map<String, Supplier<Long>>>> next = new IdentityHashMap<>(boundCooldownSources);
+        Map<Object, Map<String, Supplier<Long>>> owned = new IdentityHashMap<>(next.getOrDefault(owner, Collections.emptyMap()));
+        Map<String, Supplier<Long>> forExecutor = new HashMap<>(owned.getOrDefault(executor, Collections.emptyMap()));
         forExecutor.putAll(sourcesByBindingKey);
-        owned.put(executorClass, Collections.unmodifiableMap(forExecutor));
+        owned.put(executor, Collections.unmodifiableMap(forExecutor));
         next.put(owner, Collections.unmodifiableMap(owned));
         this.boundCooldownSources = Collections.unmodifiableMap(next);
     }
 
     /**
-     * @param owner         a module
-     * @param executorClass one of its executors' concrete class
+     * @param owner    a module
+     * @param executor one of its executor instances
      * @return the load-time sources of that executor's config-bound {@code @CmdCD} values on this
      *         validator, keyed by {@link #bindingKey(CmdCD)}; never {@code null}
      * @since 6.3.0
      */
     @ApiStatus.Internal
-    public Map<String, Supplier<Long>> getBoundCooldownSources(UltiToolsPlugin owner, Class<?> executorClass) {
+    public Map<String, Supplier<Long>> getExecutorCooldownSources(UltiToolsPlugin owner, Object executor) {
         return boundCooldownSources.getOrDefault(owner, Collections.emptyMap())
-                .getOrDefault(executorClass, Collections.emptyMap());
+                .getOrDefault(executor, Collections.emptyMap());
     }
 
     /**

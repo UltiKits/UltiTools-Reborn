@@ -227,6 +227,8 @@ final class ConfigBindings {
      * @return the resolved source
      * @throws PluginModuleException when the class is not registered exactly once, the key names
      *                               no {@code @ConfigEntry} field, or the field is not integral
+     * @throws ConfigurationException when the entity's load failed with an {@code IOException} that
+     *                                {@code ConfigManager} caught, so its values were never validated
      */
     static Source resolve(UltiToolsPlugin plugin, String owner,
                           Class<? extends AbstractConfigEntity> configClass, String key) {
@@ -242,6 +244,13 @@ final class ConfigBindings {
                     + "' (a directory @ConfigEntity?); a binding needs exactly one instance");
         }
         AbstractConfigEntity entity = entities.get(0);
+        if (UltiTools.getInstance().getConfigManager().lastInitFailed(entity)) {
+            throw new ConfigurationException(ErrorCode.CONFIG_LOAD_FAILED, String.format(
+                    "Module '%s' refused to load: %s binds key '%s' of %s, but loading %s failed (its write-back "
+                            + "threw an IOException), so its values were not validated. Make the file writable "
+                            + "and restart.", plugin.getPluginName(), owner, key, configClass.getSimpleName(),
+                    entity.getConfigFilePath()));
+        }
         Field field = findEntryField(entity.getClass(), key);
         if (field == null) {
             throw shapeError(owner, "binds key '" + key + "', which matches no @ConfigEntry path on "

@@ -590,21 +590,21 @@ public class PluginManager {
         }
         Set<String> reported = new HashSet<>();
         for (BaseCommandExecutor executor : baseCommandExecutors(context)) {
-            Class<?> executorClass = executor.getClass();
             for (CooldownValidator validator : cooldownValidatorsOf(executor)) {
                 // Only this module's own executor's sources: a validator shared with another
                 // module's executor must not re-read that module's config, whose own reload may
-                // have been refused, and each executor keeps its own values (Codex round 1, #536).
-                Map<String, Supplier<Long>> owned = validator.getBoundCooldownSources(plugin, executorClass);
+                // have been refused, and each executor instance keeps its own values (Codex
+                // rounds 1-2, #536).
+                Map<String, Supplier<Long>> owned = validator.getExecutorCooldownSources(plugin, executor);
                 if (owned.isEmpty()) {
                     continue;
                 }
-                Map<String, Integer> running = validator.getBoundCooldownSeconds(executorClass);
+                Map<String, Integer> running = validator.getExecutorCooldownSeconds(executor);
                 Map<String, Integer> next = new HashMap<>();
                 for (Map.Entry<String, Supplier<Long>> source : owned.entrySet()) {
                     refreshOne(plugin, source.getKey(), source.getValue(), running.get(source.getKey()), next, reported);
                 }
-                validator.mergeBoundCooldownSeconds(executorClass, next);
+                validator.mergeExecutorCooldownSeconds(executor, next);
             }
         }
     }
@@ -666,7 +666,8 @@ public class PluginManager {
      * {@code int}, {@code long}, {@code Integer} or {@code Long}, a key without a config class or a
      * config class without a key, or sets the annotation literal as well as the key; when a bound
      * value is out of range (a period or delay below 1 second or above the ceiling, a cooldown
-     * below 0 or above {@link Integer#MAX_VALUE}, or {@code null}); and when, after resolution, any
+     * below 0 or above {@link Integer#MAX_VALUE}, or {@code null}); when the bound config's own load
+     * failed with an {@code IOException}, so its values were never validated; and when, after resolution, any
      * bound {@code @CmdCD} declaration is missing from any {@code CooldownValidator} of its
      * executor. Resolves every bound {@code @CmdCD} once, and merges its value and its load-time
      * source into each of its executor's validators.
@@ -691,8 +692,8 @@ public class PluginManager {
             Map<String, Supplier<Long>> sources = new HashMap<>();
             resolveCooldownBindings(plugin, executor, resolved, sources);
             for (CooldownValidator validator : cooldownValidatorsOf(executor)) {
-                validator.mergeBoundCooldownSeconds(executor.getClass(), resolved);
-                validator.mergeBoundCooldownSources(plugin, executor.getClass(), sources);
+                validator.mergeExecutorCooldownSeconds(executor, resolved);
+                validator.mergeExecutorCooldownSources(plugin, executor, sources);
             }
         }
         for (BaseCommandExecutor executor : executors) {
@@ -702,7 +703,7 @@ public class PluginManager {
                     continue;
                 }
                 for (CooldownValidator validator : cooldownValidatorsOf(executor)) {
-                    if (!validator.getBoundCooldownSeconds(executor.getClass()).containsKey(bindingKey)) {
+                    if (!validator.getExecutorCooldownSeconds(executor).containsKey(bindingKey)) {
                         throw new PluginModuleException(ErrorCode.CONFIG_ERROR, "Invalid config binding on "
                                 + declared.getKey() + ": the @CmdCD bound to " + describeBindingKey(bindingKey)
                                 + " was not resolved into its CooldownValidator ("
@@ -794,10 +795,22 @@ public class PluginManager {
             }
             CmdCD resolved = ReflectionUtil.resolveMethodOrClassAnnotation(method, executorClass, CmdCD.class);
             if (resolved != null) {
-                declarations.put(executorName + "." + method.getName(), resolved);
+                // Keyed by the full signature: overloaded mappings share a name, and keying by the
+                // name alone let a later overload replace an earlier one's binding (Codex round 2).
+                declarations.put(executorName + "." + method.getName() + parameterList(method), resolved);
             }
         }
         return declarations;
+    }
+
+    /** {@code (Player, String)} -- simple parameter type names, for an overload-safe display key. */
+    private static String parameterList(Method method) {
+        StringBuilder list = new StringBuilder("(");
+        Class<?>[] types = method.getParameterTypes();
+        for (int i = 0; i < types.length; i++) {
+            list.append(i == 0 ? "" : ", ").append(types[i].getSimpleName());
+        }
+        return list.append(')').toString();
     }
 
     /**
