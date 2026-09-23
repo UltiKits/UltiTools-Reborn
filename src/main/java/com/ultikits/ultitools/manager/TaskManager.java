@@ -416,8 +416,9 @@ public class TaskManager {
         if (source.lastReloadFailed()) {
             if (warnedKeys.add(source.key)) {
                 Bukkit.getLogger().log(Level.WARNING, String.format(
-                        "[UltiTools-API] %s: %s is bound to %s key '%s', but the reload of %s failed (its write-back "
-                                + "threw an IOException), so its values were not validated; keeping %ds",
+                        "[UltiTools-API] %s: %s is bound to %s key '%s', but the reload of %s did not complete (for "
+                                + "example, its write-back threw an IOException), so its values were not validated; "
+                                + "keeping %ds",
                         plugin.getPluginName(), handle.owner, source.configName(), source.key,
                         source.entity.getConfigFilePath(), currentTicks / ConfigBindings.TICKS_PER_SECOND));
             }

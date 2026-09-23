@@ -176,15 +176,15 @@ final class ConfigBindings {
         }
 
         /**
-         * Whether this entity's last load or reload failed with an {@code IOException} that
-         * {@link ConfigManager} caught (Codex round 1 on #536). Its fields then hold the file's
-         * values without their validation having run, so the reload step keeps the running value.
+         * Whether this entity's last load or reload did not complete its validation -- for example a
+         * write-back {@code IOException} that {@link ConfigManager} caught (Codex round 1 on #536). Its
+         * fields may then hold values their validation never checked, so the reload step keeps the
+         * running value.
          *
          * @return {@code true} if the value must not be applied
          */
         boolean lastReloadFailed() {
-            ConfigManager configManager = UltiTools.getInstance().getConfigManager();
-            return configManager != null && configManager.lastInitFailed(entity);
+            return entity.isLastInitIncomplete();
         }
 
         /**
@@ -211,8 +211,8 @@ final class ConfigBindings {
         private static final long serialVersionUID = 1L;
 
         ReloadFailedException(String configFilePath) {
-            super("the reload of " + configFilePath + " failed (its write-back threw an IOException), so its "
-                    + "values were not validated");
+            super("the reload of " + configFilePath + " did not complete (for example, its write-back threw an "
+                    + "IOException), so its values were not validated");
         }
     }
 
@@ -244,11 +244,11 @@ final class ConfigBindings {
                     + "' (a directory @ConfigEntity?); a binding needs exactly one instance");
         }
         AbstractConfigEntity entity = entities.get(0);
-        if (UltiTools.getInstance().getConfigManager().lastInitFailed(entity)) {
+        if (entity.isLastInitIncomplete()) {
             throw new ConfigurationException(ErrorCode.CONFIG_LOAD_FAILED, String.format(
-                    "Module '%s' refused to load: %s binds key '%s' of %s, but loading %s failed (its write-back "
-                            + "threw an IOException), so its values were not validated. Make the file writable "
-                            + "and restart.", plugin.getPluginName(), owner, key, configClass.getSimpleName(),
+                    "Module '%s' refused to load: %s binds key '%s' of %s, but loading %s did not complete "
+                            + "(for example, its write-back threw an IOException), so its values were not validated. "
+                            + "Fix the cause logged above (such as the file's permissions) and restart.", plugin.getPluginName(), owner, key, configClass.getSimpleName(),
                     entity.getConfigFilePath()));
         }
         Field field = findEntryField(entity.getClass(), key);

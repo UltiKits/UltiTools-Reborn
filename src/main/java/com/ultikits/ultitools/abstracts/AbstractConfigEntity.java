@@ -137,6 +137,16 @@ public abstract class AbstractConfigEntity {
      */
     @Getter(AccessLevel.NONE)
     private volatile boolean lastLoadUnparseable;
+    /**
+     * Whether the last {@link #init} did not run to the end of its validation -- set when it starts,
+     * cleared only after {@link #validateFields()} succeeds. A caller that catches the
+     * {@code IOException} of a failed write-back (as {@code ConfigManager} does) is otherwise left
+     * with an entity whose fields hold the file's new values unvalidated (#533). Kept on the entity
+     * so that it lives and dies with it; nothing else has to remember to clear it (Codex round 3 on
+     * #536).
+     */
+    @Getter(AccessLevel.NONE)
+    private volatile boolean lastInitIncomplete;
 
     /**
      * Constructor for AbstractConfigEntity.
@@ -440,6 +450,25 @@ public abstract class AbstractConfigEntity {
         }
     }
 
+    /**
+     * Whether the last {@link #init} failed before its field validation completed -- for example
+     * because writing back a missing key threw an {@code IOException}, which {@code ConfigManager}
+     * logs and continues past. The fields may then hold values that their validation annotations
+     * never checked. The config-bound {@code @Scheduled}/{@code @CmdCD} step (#531) does not apply
+     * values from such an entity: it refuses the module at load and keeps the running value on
+     * reload.
+     * <p>
+     * Framework-internal: {@code public} solely because the binding step lives in another package.
+     * Module code should not call it.
+     *
+     * @return {@code true} if the last {@code init} did not complete its validation
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public final boolean isLastInitIncomplete() {
+        return lastInitIncomplete;
+    }
+
     @ApiStatus.Internal
     public final boolean isFileModifiedSinceSnapshot() {
         synchronized (this) {
@@ -490,6 +519,7 @@ public abstract class AbstractConfigEntity {
      * @throws IOException if an I/O error occurs
      */
     public final void init(UltiToolsPlugin ultiToolsPlugin) throws IOException {
+        lastInitIncomplete = true;
         synchronized (this) {
             this.ultiToolsPlugin = ultiToolsPlugin;
             File file = ultiToolsPlugin.getConfigFile(configFilePath);
@@ -554,6 +584,7 @@ public abstract class AbstractConfigEntity {
 
         // Validate fields and reset invalid values to defaults
         validateFields();
+        lastInitIncomplete = false;
 
         // Notify listeners after initialization
         notifyChangeListeners();
