@@ -36,6 +36,7 @@ import org.mockito.MockedStatic;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
+import com.ultikits.ultitools.abstracts.command.ConfigBoundCooldownState;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.annotations.command.CmdCD;
@@ -57,6 +58,8 @@ class CooldownValidatorConfigBindingTest {
     private Player player;
     private Command command;
     private CooldownValidator validator;
+    /** The executor instance that owns the bound-cooldown state in these contexts. */
+    private UnresolvedBoundExecutor holder;
 
     @CmdCD(config = BindingTimingConfig.class, key = "cooldown.wild")
     public void boundMapping() {
@@ -78,6 +81,7 @@ class CooldownValidatorConfigBindingTest {
         lenient().when(player.getUniqueId()).thenReturn(UUID.randomUUID());
         command = mock(Command.class);
         validator = new CooldownValidator();
+        holder = new UnresolvedBoundExecutor();
     }
 
     @AfterEach
@@ -93,7 +97,7 @@ class CooldownValidatorConfigBindingTest {
                 .rawArgs(new String[]{})
                 .matchedMethod(method)
                 .executorClass(getClass())
-                .executor(this)
+                .executor(holder)
                 .build();
     }
 
@@ -103,6 +107,28 @@ class CooldownValidatorConfigBindingTest {
 
     private String boundKey() throws NoSuchMethodException {
         return CooldownValidator.bindingKey(mapping("boundMapping").getAnnotation(CmdCD.class));
+    }
+
+    /**
+     * Codex round 6 on #536, answered by changing route: a {@code CooldownValidator} can be shared by
+     * several executors -- even of several modules -- so it must hold no module state at all. Every
+     * lifecycle finding of rounds 1, 2, 5 and 6 came from bound-cooldown state kept in the validator
+     * (keyed by binding, then class, then instance; released on unload, then on failed load). The
+     * state now lives on the owning executor. This pins the validator's instance fields to its own
+     * per-player cooldown bookkeeping; adding a field here means re-reading that history first.
+     */
+    @Test
+    @DisplayName("a CooldownValidator holds no module-owned state: only its own per-player cooldown bookkeeping")
+    void aCooldownValidatorHoldsNoModuleState() {
+        java.util.Set<String> instanceFields = new java.util.TreeSet<>();
+        for (java.lang.reflect.Field field : CooldownValidator.class.getDeclaredFields()) {
+            if (!java.lang.reflect.Modifier.isStatic(field.getModifiers()) && !field.isSynthetic()) {
+                instanceFields.add(field.getName());
+            }
+        }
+        assertEquals(new java.util.TreeSet<>(java.util.Arrays.asList(
+                        "cooldowns", "playerCacheRegistered", "defaultCooldownSeconds")),
+                instanceFields);
     }
 
     @Test
@@ -118,7 +144,7 @@ class CooldownValidatorConfigBindingTest {
     @Test
     @DisplayName("a bound cooldown enforces the resolved seconds, not the annotation literal")
     void aBoundCooldownEnforcesTheResolvedSeconds() throws NoSuchMethodException {
-        validator.setExecutorCooldownSeconds(this, Collections.singletonMap(boundKey(), 7));
+        ConfigBoundCooldownState.setSeconds(holder, Collections.singletonMap(boundKey(), 7));
         Method method = mapping("boundMapping");
 
         validator.onComplete(contextFor(method), true);
@@ -199,7 +225,7 @@ class CooldownValidatorConfigBindingTest {
     @Test
     @DisplayName("an unbound cooldown still reads the annotation value, whatever the bound cache holds")
     void anUnboundCooldownStillReadsTheAnnotationValue() throws NoSuchMethodException {
-        validator.setExecutorCooldownSeconds(this, Collections.singletonMap(boundKey(), 99));
+        ConfigBoundCooldownState.setSeconds(holder, Collections.singletonMap(boundKey(), 99));
         Method method = mapping("literalMapping");
 
         validator.onComplete(contextFor(method), true);
@@ -211,11 +237,11 @@ class CooldownValidatorConfigBindingTest {
     @Test
     @DisplayName("a refreshed value does not shorten a cooldown that is already running")
     void aRefreshedValueDoesNotShortenARunningCooldown() throws NoSuchMethodException {
-        validator.setExecutorCooldownSeconds(this, Collections.singletonMap(boundKey(), 60));
+        ConfigBoundCooldownState.setSeconds(holder, Collections.singletonMap(boundKey(), 60));
         Method method = mapping("boundMapping");
         validator.onComplete(contextFor(method), true);
 
-        validator.setExecutorCooldownSeconds(this, Collections.singletonMap(boundKey(), 5));
+        ConfigBoundCooldownState.setSeconds(holder, Collections.singletonMap(boundKey(), 5));
 
         long remaining = validator.getRemainingCooldown(player.getUniqueId(), method.toString());
         assertTrue(remaining > 50, "the running cooldown keeps the end time it was stamped with, was " + remaining);

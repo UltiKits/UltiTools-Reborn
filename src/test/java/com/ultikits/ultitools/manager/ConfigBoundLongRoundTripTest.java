@@ -42,6 +42,7 @@ import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.ConfigFileStubs;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
+import com.ultikits.ultitools.abstracts.command.ConfigBoundCooldownState;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.abstracts.command.validation.validators.CooldownValidator;
 import com.ultikits.ultitools.annotations.ConfigEntity;
@@ -209,7 +210,7 @@ class ConfigBoundLongRoundTripTest {
         taskManager.registerScheduledMethods(module, service);
         String cooldownKey = CooldownValidator.bindingKey(
                 InterestCommand.class.getMethod("claim", Player.class).getAnnotation(CmdCD.class));
-        assertEquals(Integer.valueOf(60), cooldownValidatorOf(command).getExecutorCooldownSeconds(command).get(cooldownKey));
+        assertEquals(Integer.valueOf(60), ConfigBoundCooldownState.seconds(command).get(cooldownKey));
 
         advanceTo(150);
         assertEquals(Arrays.asList(100), service.fireTicks, "delay = period = 5 s");
@@ -222,7 +223,7 @@ class ConfigBoundLongRoundTripTest {
         assertEquals(1, liveTasks(), "one live task after the reload");
         assertEquals(false, secondBoot.getConfigEntity(module, InterestConfig.class).isModifiedSinceSnapshot(),
                 "the #510 snapshot must hold for the Long fields, or the shutdown save overwrites operator edits");
-        assertEquals(Integer.valueOf(30), cooldownValidatorOf(command).getExecutorCooldownSeconds(command).get(cooldownKey));
+        assertEquals(Integer.valueOf(30), ConfigBoundCooldownState.seconds(command).get(cooldownKey));
         advanceTo(300);
         assertEquals(Arrays.asList(100, 300), service.fireTicks, "last run 100 + 10 s");
     }
@@ -293,7 +294,7 @@ class ConfigBoundLongRoundTripTest {
             String cooldownKey = CooldownValidator.bindingKey(
                     InterestCommand.class.getMethod("claim", Player.class).getAnnotation(CmdCD.class));
             assertEquals(Integer.valueOf(60),
-                    cooldownValidatorOf(command).getExecutorCooldownSeconds(command).get(cooldownKey),
+                    ConfigBoundCooldownState.seconds(command).get(cooldownKey),
                     "the running 60 s cooldown is kept; the unvalidated 30 s is not applied");
             assertTrue(warnings.stream().anyMatch(w -> w.contains("InterestModule") && w.contains(PATH)),
                     "a WARNING names the module and the config whose reload failed: " + warnings);

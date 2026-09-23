@@ -40,6 +40,7 @@ import org.mockbukkit.mockbukkit.MockBukkit;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
+import com.ultikits.ultitools.abstracts.command.ConfigBoundCooldownState;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.abstracts.command.validation.ValidatorChain;
@@ -523,7 +524,7 @@ class ConfigBindingValidationTest {
 
             PluginManager.validateConfigBindings(module, containerWith(executor));
 
-            assertEquals(Collections.singletonMap(wildKey(), 45), cooldownValidatorOf(executor).getExecutorCooldownSeconds(executor));
+            assertEquals(Collections.singletonMap(wildKey(), 45), ConfigBoundCooldownState.seconds(executor));
         }
 
         @Test
@@ -534,7 +535,7 @@ class ConfigBindingValidationTest {
 
             PluginManager.validateConfigBindings(module, containerWith(executor));
 
-            assertEquals(Collections.singletonMap(wildKey(), 12), cooldownValidatorOf(executor).getExecutorCooldownSeconds(executor));
+            assertEquals(Collections.singletonMap(wildKey(), 12), ConfigBoundCooldownState.seconds(executor));
         }
 
         @Test
@@ -545,7 +546,7 @@ class ConfigBindingValidationTest {
             PluginManager.validateConfigBindings(module, containerWith(new LiteralOnlyBean(), executor));
 
             verifyNoInteractions(configManager);
-            assertTrue(cooldownValidatorOf(executor).getExecutorCooldownSeconds(executor).isEmpty());
+            assertTrue(ConfigBoundCooldownState.seconds(executor).isEmpty());
         }
     }
 
@@ -728,7 +729,7 @@ class ConfigBindingValidationTest {
 
             assertDoesNotThrow(() -> PluginManager.validateConfigBindings(module, containerWith(executor)));
 
-            assertEquals(Integer.valueOf(0), cooldownValidatorOf(executor).getExecutorCooldownSeconds(executor).get(wildKey()));
+            assertEquals(Integer.valueOf(0), ConfigBoundCooldownState.seconds(executor).get(wildKey()));
         }
 
         @Test
@@ -743,7 +744,7 @@ class ConfigBindingValidationTest {
             config.setWildCooldown(0);
             new PluginManager().applyReloadedConfigBindings(module);
 
-            assertEquals(Integer.valueOf(0), cooldownValidatorOf(executor).getExecutorCooldownSeconds(executor).get(wildKey()));
+            assertEquals(Integer.valueOf(0), ConfigBoundCooldownState.seconds(executor).get(wildKey()));
             assertTrue(warnings().isEmpty(), warnings().toString());
         }
     }
@@ -802,35 +803,15 @@ class ConfigBindingValidationTest {
 
             PluginManager.validateConfigBindings(module, container);
 
-            assertEquals(Integer.valueOf(60), shared.getExecutorCooldownSeconds(wild).get(wildKey()));
-            assertEquals(Integer.valueOf(15), shared.getExecutorCooldownSeconds(boxed).get(boxedKey()));
+            assertEquals(Integer.valueOf(60), ConfigBoundCooldownState.seconds(wild).get(wildKey()));
+            assertEquals(Integer.valueOf(15), ConfigBoundCooldownState.seconds(boxed).get(boxedKey()));
 
             config.setWildCooldown(30);
             config.setBoxedSeconds(20);
             new PluginManager().applyReloadedConfigBindings(module);
 
-            assertEquals(Integer.valueOf(30), shared.getExecutorCooldownSeconds(wild).get(wildKey()));
-            assertEquals(Integer.valueOf(20), shared.getExecutorCooldownSeconds(boxed).get(boxedKey()));
-        }
-
-        @Test
-        @DisplayName("a bound declaration its validator does not hold after load refuses the module, naming the key")
-        void anUnresolvedDeclarationAfterLoadRefusesTheModule() {
-            CooldownValidator forgetful = new CooldownValidator() {
-                @Override
-                public Map<String, Integer> getBoundCooldownSeconds() {
-                    return Collections.emptyMap();
-                }
-
-                @Override
-                public Map<String, Integer> getExecutorCooldownSeconds(Object executor) {
-                    return Collections.emptyMap();
-                }
-            };
-            SharedChainWildExecutor executor = new SharedChainWildExecutor(
-                    ValidatorChain.builder().add(forgetful).build());
-
-            assertMentions(refusalOf(executor), "SharedChainWildExecutor", "cooldown.wild");
+            assertEquals(Integer.valueOf(30), ConfigBoundCooldownState.seconds(wild).get(wildKey()));
+            assertEquals(Integer.valueOf(20), ConfigBoundCooldownState.seconds(boxed).get(boxedKey()));
         }
     }
 
@@ -869,8 +850,8 @@ class ConfigBindingValidationTest {
             config.setWildCooldown(30);
             new PluginManager().applyReloadedConfigBindings(module);
 
-            assertEquals(Integer.valueOf(30), shared.getExecutorCooldownSeconds(executorA).get(wildKey()), "A's own value applies");
-            assertEquals(Integer.valueOf(15), shared.getExecutorCooldownSeconds(executorB).get(boxedKey()),
+            assertEquals(Integer.valueOf(30), ConfigBoundCooldownState.seconds(executorA).get(wildKey()), "A's own value applies");
+            assertEquals(Integer.valueOf(15), ConfigBoundCooldownState.seconds(executorB).get(boxedKey()),
                     "B's refused value must not be applied by A's reload");
         }
     }
@@ -937,7 +918,7 @@ class ConfigBindingValidationTest {
 
             PluginManager.validateConfigBindings(module, containerWith(executor));
 
-            Map<String, Integer> resolved = cooldownValidatorOf(executor).getExecutorCooldownSeconds(executor);
+            Map<String, Integer> resolved = ConfigBoundCooldownState.seconds(executor);
             assertEquals(Integer.valueOf(60), resolved.get(wildKey()), "the no-argument overload's binding");
             assertEquals(Integer.valueOf(15), resolved.get(boxedKey()), "the one-argument overload's binding");
         }
@@ -951,7 +932,7 @@ class ConfigBindingValidationTest {
 
             PluginManager.validateConfigBindings(module, containerWith(executor));
 
-            Map<String, Integer> resolved = cooldownValidatorOf(executor).getExecutorCooldownSeconds(executor);
+            Map<String, Integer> resolved = ConfigBoundCooldownState.seconds(executor);
             assertEquals(Integer.valueOf(60), resolved.get(wildKey()), "run(a.Target)'s binding");
             assertEquals(Integer.valueOf(15), resolved.get(boxedKey()), "run(b.Target)'s binding");
         }
@@ -990,49 +971,6 @@ class ConfigBindingValidationTest {
         }
     }
 
-    // === Codex round 5 on #536: unloading a module releases its entries in a shared validator ===
-
-    @Nested
-    @DisplayName("unloading a module releases its bound-cooldown entries from a shared validator")
-    class ReleasedOnUnload {
-
-        @Test
-        @DisplayName("unregister drops the unloaded module's values and sources and keeps the other module's")
-        void unregisterReleasesOnlyTheUnloadedModulesEntries() throws Exception {
-            UltiToolsPlugin moduleB = mock(ModuleFixture.class);
-            lenient().when(moduleB.getPluginName()).thenReturn("OtherModule");
-            lenient().when(moduleB.getMinUltiToolsVersion()).thenReturn(630);
-            BindingTimingConfig configB = new BindingTimingConfig();
-            configB.setBoxedSeconds(15);
-            lenient().when(configManager.getConfigEntities(moduleB, BindingTimingConfig.class))
-                    .thenReturn(Collections.singletonList(configB));
-            config.setWildCooldown(60);
-
-            CooldownValidator shared = new CooldownValidator();
-            ValidatorChain chain = ValidatorChain.builder().add(shared).build();
-            SharedChainWildExecutor executorA = new SharedChainWildExecutor(chain);
-            SharedChainBoxedExecutor executorB = new SharedChainBoxedExecutor(chain);
-            SimpleContainer containerA = containerWith(executorA);
-            SimpleContainer containerB = containerWith(executorB);
-            lenient().when(module.getContext()).thenReturn(containerA);
-            lenient().when(moduleB.getContext()).thenReturn(containerB);
-            PluginManager.validateConfigBindings(module, containerA);
-            PluginManager.validateConfigBindings(moduleB, containerB);
-            assertEquals(Integer.valueOf(60), shared.getExecutorCooldownSeconds(executorA).get(wildKey()));
-
-            new PluginManager().unregister(module);
-
-            assertTrue(shared.getExecutorCooldownSeconds(executorA).isEmpty(),
-                    "the unloaded module's executor must no longer be held by the shared validator");
-            assertTrue(shared.getExecutorCooldownSources(module, executorA).isEmpty(),
-                    "nor its config sources");
-            assertEquals(Integer.valueOf(15), shared.getExecutorCooldownSeconds(executorB).get(boxedKey()),
-                    "the other module keeps its value");
-            assertEquals(1, shared.getExecutorCooldownSources(moduleB, executorB).size(),
-                    "and its source");
-        }
-    }
-
     // === IN-01 / IN-02: reload-step robustness ===
 
     @Nested
@@ -1058,7 +996,7 @@ class ConfigBindingValidationTest {
             config.setWildCooldown(30);
             assertDoesNotThrow(() -> pluginManager.applyReloadedConfigBindings(module));
 
-            assertEquals(Integer.valueOf(30), cooldownValidatorOf(executor).getExecutorCooldownSeconds(executor).get(wildKey()));
+            assertEquals(Integer.valueOf(30), ConfigBoundCooldownState.seconds(executor).get(wildKey()));
             assertTrue(warnings().stream().anyMatch(w -> w.contains("TimingModule") && w.contains("simulated reschedule failure")),
                     warnings().toString());
         }
@@ -1077,7 +1015,7 @@ class ConfigBindingValidationTest {
             config.setWildCooldown(45);
             assertDoesNotThrow(() -> new PluginManager().applyReloadedConfigBindings(module));
 
-            assertEquals(Integer.valueOf(45), cooldownValidatorOf(executor).getExecutorCooldownSeconds(executor).get(wildKey()));
+            assertEquals(Integer.valueOf(45), ConfigBoundCooldownState.seconds(executor).get(wildKey()));
             assertTrue(warnings().isEmpty(), warnings().toString());
         }
 
@@ -1100,7 +1038,7 @@ class ConfigBindingValidationTest {
             worker.start();
             worker.join(10_000L);
 
-            assertEquals(Integer.valueOf(60), cooldownValidatorOf(executor).getExecutorCooldownSeconds(executor).get(wildKey()));
+            assertEquals(Integer.valueOf(60), ConfigBoundCooldownState.seconds(executor).get(wildKey()));
             verifyNoInteractions(taskManager);
             assertTrue(warnings().stream().anyMatch(w -> w.contains("TimingModule") && w.contains("main thread")),
                     warnings().toString());
@@ -1194,12 +1132,12 @@ class ConfigBindingValidationTest {
             CooldownValidator validator = cooldownValidatorOf(executor);
 
             config.setWildCooldown(30);
-            assertEquals(Integer.valueOf(60), validator.getExecutorCooldownSeconds(executor).get(wildKey()),
+            assertEquals(Integer.valueOf(60), ConfigBoundCooldownState.seconds(executor).get(wildKey()),
                     "the validator must not read the field per call -- a refused reload leaves the refused value in it");
 
             new PluginManager().applyReloadedConfigBindings(module);
 
-            assertEquals(Integer.valueOf(30), validator.getExecutorCooldownSeconds(executor).get(wildKey()));
+            assertEquals(Integer.valueOf(30), ConfigBoundCooldownState.seconds(executor).get(wildKey()));
         }
 
         @Test
@@ -1210,7 +1148,7 @@ class ConfigBindingValidationTest {
             config.setWildCooldown(-1);
             new PluginManager().applyReloadedConfigBindings(module);
 
-            assertEquals(Integer.valueOf(60), cooldownValidatorOf(executor).getExecutorCooldownSeconds(executor).get(wildKey()));
+            assertEquals(Integer.valueOf(60), ConfigBoundCooldownState.seconds(executor).get(wildKey()));
             List<String> warnings = warnings();
             assertEquals(1, warnings.size(), warnings.toString());
             assertMentions(warnings.get(0), "TimingModule", "cooldown.wild", "value -1", "keeping 60s");
@@ -1239,11 +1177,11 @@ class ConfigBindingValidationTest {
             SimpleContainer container = containerWith(executor);
             lenient().when(module.getContext()).thenReturn(container);
             PluginManager.validateConfigBindings(module, container);
-            Map<String, Integer> before = cooldownValidatorOf(executor).getExecutorCooldownSeconds(executor);
+            Map<String, Integer> before = ConfigBoundCooldownState.seconds(executor);
 
             new PluginManager().applyReloadedConfigBindings(module);
 
-            assertEquals(before, cooldownValidatorOf(executor).getExecutorCooldownSeconds(executor));
+            assertEquals(before, ConfigBoundCooldownState.seconds(executor));
             verifyNoInteractions(configManager);
         }
     }
