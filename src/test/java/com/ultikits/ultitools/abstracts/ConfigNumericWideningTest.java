@@ -82,6 +82,36 @@ class ConfigNumericWideningTest {
         }
     }
 
+    /** Blocks inside validateFields() -- outside init()'s monitor -- when armed. */
+    static class BlockingConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "limits.first")
+        Long first = 1L;
+
+        @ConfigEntry(path = "limits.second")
+        Long second = 2L;
+
+        volatile java.util.concurrent.CountDownLatch entered;
+        volatile java.util.concurrent.CountDownLatch release;
+
+        public BlockingConfig(String configFilePath) {
+            super(configFilePath);
+        }
+
+        @Override
+        protected void validateFields() {
+            java.util.concurrent.CountDownLatch armed = entered;
+            if (armed != null) {
+                armed.countDown();
+                try {
+                    release.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            super.validateFields();
+        }
+    }
+
     @BeforeEach
     void setUp() {
         plugin = Mockito.mock(UltiToolsPlugin.class);
@@ -215,6 +245,46 @@ class ConfigNumericWideningTest {
 
         config.init(plugin);
         assertThat(config.isLastInitIncomplete()).as("after the next complete init").isFalse();
+    }
+
+    /**
+     * Codex round 12 on #536: two overlapping init() calls on one entity. The earlier one is still
+     * in validateFields() -- outside init()'s monitor -- when a later one fails its write-back and
+     * sets the marker. When the earlier one finishes it must not clear the later one's failure.
+     */
+    @Test
+    @DisplayName("an earlier, overlapping init that completes does not clear a later init's failure marker")
+    void anEarlierInitDoesNotClearALaterInitsFailure() throws Exception {
+        BlockingConfig config = new BlockingConfig(PATH);
+        config.init(plugin);
+        config.entered = new java.util.concurrent.CountDownLatch(1);
+        config.release = new java.util.concurrent.CountDownLatch(1);
+        Thread earlier = new Thread(() -> {
+            try {
+                config.init(plugin);
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+        }, "fw531-earlier-init");
+        earlier.start();
+        assertThat(config.entered.await(10, java.util.concurrent.TimeUnit.SECONDS)).as("earlier init reached validation").isTrue();
+        config.entered = null;
+
+        writeFile("limits:\n  first: 30\n");
+        assertThat(file().toFile().setWritable(false)).isTrue();
+        try {
+            assumeFalse(Files.isWritable(file()), "needs a non-root user so the write-back really fails");
+            assertThatThrownBy(() -> config.init(plugin)).isInstanceOf(IOException.class);
+            assertThat(config.isLastInitIncomplete()).as("the later init failed").isTrue();
+        } finally {
+            config.release.countDown();
+            earlier.join(10_000L);
+            assertThat(file().toFile().setWritable(true)).isTrue();
+        }
+
+        assertThat(config.isLastInitIncomplete())
+                .as("the earlier init finishing afterwards must not clear the later init's failure")
+                .isTrue();
     }
 
     @Test
