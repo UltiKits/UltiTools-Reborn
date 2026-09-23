@@ -292,8 +292,6 @@ public class TaskManager {
         BoundTask handle = BoundTask.resolveAtLoad(module, bean, targetClass, method, scheduled);
         method.setAccessible(true);
         handle.armTick = Bukkit.getCurrentTick();
-        handle.currentArmTick = handle.armTick;
-        handle.currentFirstDelay = handle.delayTicks;
         handle.task = arm(handle, handle.delayTicks);
         boundTasks.computeIfAbsent(module, k -> new ArrayList<>()).add(handle);
 
@@ -316,7 +314,9 @@ public class TaskManager {
     /**
      * Schedules {@code handle}'s method with its current timing, first running after
      * {@code firstDelay} ticks. Each call builds a new runnable -- a {@link BukkitRunnable} can be
-     * scheduled only once.
+     * scheduled only once. Always on the main thread: a bound task cannot be {@code async}
+     * ({@link ConfigBindings#checkShape(String, Scheduled)}), so its run is observed exactly where
+     * the reload step also runs.
      */
     private BukkitTask arm(BoundTask handle, long firstDelay) {
         BukkitRunnable runnable = new BukkitRunnable() {
@@ -331,15 +331,10 @@ public class TaskManager {
                 }
             }
         };
-        boolean async = handle.scheduled.async();
         if (handle.periodTicks <= 0) {
-            return async
-                    ? runnable.runTaskLaterAsynchronously(hostPlugin, firstDelay)
-                    : runnable.runTaskLater(hostPlugin, firstDelay);
+            return runnable.runTaskLater(hostPlugin, firstDelay);
         }
-        return async
-                ? runnable.runTaskTimerAsynchronously(hostPlugin, firstDelay, handle.periodTicks)
-                : runnable.runTaskTimer(hostPlugin, firstDelay, handle.periodTicks);
+        return runnable.runTaskTimer(hostPlugin, firstDelay, handle.periodTicks);
     }
 
     /**
@@ -361,12 +356,11 @@ public class TaskManager {
      * ({@code < 1} second, {@code null}, or too large) is not applied: the running value is kept
      * and one WARNING names the module, the key, the rejected value and the value kept.
      * <p>
-     * <b>Where "the last run" comes from (gate-1 WR-01).</b> A sync task runs on the main thread,
-     * so its last run is observed exactly when it starts. An async task is handed to a worker by
-     * the scheduler heartbeat and may already be dispatched without having recorded itself yet, so
-     * its last run is computed from the schedule this manager created: a run whose due tick has
-     * been reached counts as run. That is what keeps a reload landing on an async task's due tick
-     * from running it a second time a tick later.
+     * <b>Where "the last run" comes from.</b> A bound task is always sync, so it runs on the main
+     * thread, and its last run is observed at the moment it starts -- the same thread this step
+     * runs on, so the two cannot race. An {@code async} binding is refused at load instead of
+     * predicting when the server dispatches async work: that prediction was wrong for tasks armed
+     * at boot (#531 gate-1 round 2, WR-01).
      * <p>
      * Must run on the main thread, where {@link TaskManager}'s collections live; from any other
      * thread it throws before reading them ({@code PluginManager} checks first and logs instead).
@@ -395,11 +389,10 @@ public class TaskManager {
         if (newPeriodTicks == handle.periodTicks && newDelayTicks == handle.delayTicks) {
             return;
         }
-        int now = Bukkit.getCurrentTick();
-        long lastRun = lastRunTick(handle, now);
         handle.periodTicks = newPeriodTicks;
         handle.delayTicks = newDelayTicks;
 
+        int lastRun = handle.lastFireTick;
         boolean hasRun = lastRun != BoundTask.NOT_RUN;
         if (hasRun && newPeriodTicks <= 0) {
             Bukkit.getLogger().log(Level.INFO, String.format(
@@ -407,40 +400,17 @@ public class TaskManager {
                             + "has nothing to reschedule", plugin.getPluginName(), handle.owner, newDelayTicks));
             return;
         }
-        long due = hasRun ? lastRun + newPeriodTicks : (long) handle.armTick + newDelayTicks;
+        int now = Bukkit.getCurrentTick();
+        long due = hasRun ? (long) lastRun + newPeriodTicks : (long) handle.armTick + newDelayTicks;
         long firstDelay = Math.max(1L, due - now);
 
         handle.task.cancel();
-        handle.lastRunBeforeArm = lastRun;
-        handle.currentArmTick = now;
-        handle.currentFirstDelay = firstDelay;
         handle.task = arm(handle, firstDelay);
         Bukkit.getLogger().log(Level.INFO, String.format(
                 "[UltiTools-API] %s: rescheduled config-bound @Scheduled task %s after reload "
                         + "(delay=%d, period=%d, async=%s); next run in %d ticks",
                 plugin.getPluginName(), handle.owner, newDelayTicks, newPeriodTicks,
                 handle.scheduled.async(), firstDelay));
-    }
-
-    /**
-     * The tick of {@code handle}'s last run, or {@link BoundTask#NOT_RUN}, under the timing it is
-     * currently armed with. Sync: observed. Async: derived from the current arm -- its first run is
-     * due at {@code currentArmTick + max(1, currentFirstDelay)} (Bukkit runs a delay of 0 on the
-     * next tick) and then every {@code periodTicks}; any due tick already reached counts as run.
-     */
-    static long lastRunTick(BoundTask handle, int now) {
-        if (!handle.scheduled.async()) {
-            int observed = handle.lastFireTick;
-            return observed == BoundTask.NOT_RUN ? BoundTask.NOT_RUN : observed;
-        }
-        long firstDue = (long) handle.currentArmTick + Math.max(1L, handle.currentFirstDelay);
-        if (now < firstDue) {
-            return handle.lastRunBeforeArm;
-        }
-        if (handle.periodTicks <= 0) {
-            return firstDue;
-        }
-        return firstDue + ((now - firstDue) / handle.periodTicks) * handle.periodTicks;
     }
 
     /**
@@ -538,8 +508,7 @@ public class TaskManager {
     /**
      * Per-method record of one config-bound {@link Scheduled} task: what to invoke, where its
      * bound values come from, its current timing in ticks, when it was armed and last ran, and
-     * its current Bukkit task. Mutated only on the main thread, except {@link #lastFireTick},
-     * which an async task writes.
+     * its current Bukkit task. Mutated only on the main thread: a bound task is never async.
      */
     static final class BoundTask {
         static final int NOT_RUN = Integer.MIN_VALUE;
@@ -554,13 +523,8 @@ public class TaskManager {
         long delayTicks;
         /** Tick the task was first armed at load; the anchor for "arm tick + new delay". */
         int armTick;
-        /** Tick the current Bukkit task was armed at, and the first delay it was armed with. */
-        int currentArmTick;
-        long currentFirstDelay;
-        /** Last run before the current arm, or {@link #NOT_RUN}; used for async tasks. */
-        long lastRunBeforeArm = NOT_RUN;
-        /** Observed start of the last run; authoritative for sync tasks only. */
-        volatile int lastFireTick = NOT_RUN;
+        /** Observed start of the last run, stamped on the main thread, or {@link #NOT_RUN}. */
+        int lastFireTick = NOT_RUN;
         BukkitTask task;
 
         private BoundTask(Object bean, Method method, Scheduled scheduled, String owner,

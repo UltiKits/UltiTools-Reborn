@@ -592,12 +592,15 @@ public class PluginManager {
         Set<CooldownValidator> seen = Collections.newSetFromMap(new IdentityHashMap<>());
         for (BaseCommandExecutor executor : baseCommandExecutors(context)) {
             for (CooldownValidator validator : cooldownValidatorsOf(executor)) {
-                if (!seen.add(validator) || validator.getBoundCooldownSources().isEmpty()) {
+                // Only this module's own sources: a validator shared with another module's executor
+                // must not re-read that module's config, whose own reload may have been refused.
+                Map<String, Supplier<Long>> owned = validator.getBoundCooldownSources(plugin);
+                if (!seen.add(validator) || owned.isEmpty()) {
                     continue;
                 }
                 Map<String, Integer> running = validator.getBoundCooldownSeconds();
                 Map<String, Integer> next = new HashMap<>();
-                for (Map.Entry<String, Supplier<Long>> source : validator.getBoundCooldownSources().entrySet()) {
+                for (Map.Entry<String, Supplier<Long>> source : owned.entrySet()) {
                     String bindingKey = source.getKey();
                     Long seconds = source.getValue().get();
                     Integer before = running.get(bindingKey);
@@ -666,7 +669,7 @@ public class PluginManager {
             resolveCooldownBindings(plugin, executor, resolved, sources);
             for (CooldownValidator validator : cooldownValidatorsOf(executor)) {
                 validator.mergeBoundCooldownSeconds(resolved);
-                validator.mergeBoundCooldownSources(sources);
+                validator.mergeBoundCooldownSources(plugin, sources);
             }
         }
         for (BaseCommandExecutor executor : executors) {

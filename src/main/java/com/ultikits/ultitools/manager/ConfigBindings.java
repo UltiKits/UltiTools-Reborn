@@ -87,8 +87,9 @@ final class ConfigBindings {
 
     /**
      * Refuses a {@link Scheduled} binding whose elements contradict each other: a key without a
-     * config class, a config class without any key, or a literal set alongside the key that
-     * replaces it.
+     * config class, a config class without any key, {@code async = true} (a bound task must be
+     * sync, so that its runs are observed on the main thread where a reload reschedules it -- #531
+     * gate-1 round 2), or a literal set alongside the key that replaces it.
      *
      * @param owner     {@code Class.method}, for the message
      * @param scheduled the bound annotation
@@ -102,6 +103,10 @@ final class ConfigBindings {
         if (scheduled.periodKey().isEmpty() && scheduled.delayKey().isEmpty()) {
             throw shapeError(owner, "@Scheduled names config class " + scheduled.config().getSimpleName()
                     + " but neither periodKey nor delayKey");
+        }
+        if (scheduled.async()) {
+            throw shapeError(owner, "a config-bound @Scheduled cannot be async = true; bind a sync task and hand "
+                    + "the heavy work to Bukkit.getScheduler().runTaskAsynchronously(...) from its body");
         }
         if (!scheduled.periodKey().isEmpty() && scheduled.period() != -1) {
             throw shapeError(owner, "@Scheduled sets both period=" + scheduled.period() + " and periodKey '"

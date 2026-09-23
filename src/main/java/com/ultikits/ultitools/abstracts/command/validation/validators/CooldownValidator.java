@@ -2,6 +2,7 @@ package com.ultikits.ultitools.abstracts.command.validation.validators;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.annotations.PlayerCache;
@@ -18,6 +19,7 @@ import org.jetbrains.annotations.ApiStatus;
 import java.lang.reflect.Method;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -78,8 +80,12 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
      */
     private volatile Map<String, Integer> boundCooldownSeconds = Collections.emptyMap();
 
-    /** Load-time value sources of the bindings in {@link #boundCooldownSeconds}; main thread only. */
-    private volatile Map<String, Supplier<Long>> boundCooldownSources = Collections.emptyMap();
+    /**
+     * Load-time value sources of the bindings in {@link #boundCooldownSeconds}, per owning module,
+     * so a reload of one module re-reads only that module's config even when two modules' executors
+     * share this validator (#531 gate-1 round 2, IN-01). Main thread only.
+     */
+    private volatile Map<UltiToolsPlugin, Map<String, Supplier<Long>>> boundCooldownSources = Collections.emptyMap();
     
     /**
      * Creates a cooldown validator with no default cooldown.
@@ -389,29 +395,33 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
     }
 
     /**
-     * Adds the load-time sources of this validator's config-bound {@code @CmdCD} values, keyed by
-     * {@link #bindingKey(CmdCD)}. Each source reads the module's config field it was resolved to at
-     * load, so a reload re-reads that same instance instead of resolving the binding again
-     * (#531 gate-1 IN-01).
+     * Adds the load-time sources of {@code owner}'s config-bound {@code @CmdCD} values on this
+     * validator, keyed by {@link #bindingKey(CmdCD)}. Each source reads the module's config field it
+     * was resolved to at load, so a reload re-reads that same instance instead of resolving the
+     * binding again (#531 gate-1 IN-01), and only for the module being reloaded (round 2).
      *
+     * @param owner               the module whose executor declared the bindings
      * @param sourcesByBindingKey value sources keyed by {@link #bindingKey(CmdCD)}
      * @since 6.3.0
      */
     @ApiStatus.Internal
-    public void mergeBoundCooldownSources(Map<String, Supplier<Long>> sourcesByBindingKey) {
-        Map<String, Supplier<Long>> next = new HashMap<>(boundCooldownSources);
-        next.putAll(sourcesByBindingKey);
+    public void mergeBoundCooldownSources(UltiToolsPlugin owner, Map<String, Supplier<Long>> sourcesByBindingKey) {
+        Map<UltiToolsPlugin, Map<String, Supplier<Long>>> next = new IdentityHashMap<>(boundCooldownSources);
+        Map<String, Supplier<Long>> owned = new HashMap<>(next.getOrDefault(owner, Collections.emptyMap()));
+        owned.putAll(sourcesByBindingKey);
+        next.put(owner, Collections.unmodifiableMap(owned));
         this.boundCooldownSources = Collections.unmodifiableMap(next);
     }
 
     /**
-     * @return the load-time sources of this validator's config-bound {@code @CmdCD} values, keyed
-     *         by {@link #bindingKey(CmdCD)}; never {@code null}
+     * @param owner a module
+     * @return the load-time sources of {@code owner}'s config-bound {@code @CmdCD} values on this
+     *         validator, keyed by {@link #bindingKey(CmdCD)}; never {@code null}
      * @since 6.3.0
      */
     @ApiStatus.Internal
-    public Map<String, Supplier<Long>> getBoundCooldownSources() {
-        return boundCooldownSources;
+    public Map<String, Supplier<Long>> getBoundCooldownSources(UltiToolsPlugin owner) {
+        return boundCooldownSources.getOrDefault(owner, Collections.emptyMap());
     }
 
     /**
