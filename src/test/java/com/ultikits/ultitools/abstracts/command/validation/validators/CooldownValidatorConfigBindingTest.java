@@ -107,7 +107,8 @@ class CooldownValidatorConfigBindingTest {
         validator.onComplete(contextFor(method), true);
 
         long remaining = validator.getRemainingCooldown(player.getUniqueId(), method.toString());
-        assertTrue(remaining >= 6 && remaining <= 7, "expected about 7 s, was " + remaining);
+        // getRemainingCooldown rounds up and adds one second, so a fresh 7 s cooldown reads 7 or 8.
+        assertTrue(remaining >= 7 && remaining <= 8, "expected about 7 s, was " + remaining);
         assertTrue(!validator.validate(contextFor(method)).isValid(), "a second use within 7 s is refused");
     }
 
@@ -131,7 +132,7 @@ class CooldownValidatorConfigBindingTest {
         validator.onComplete(contextFor(method), true);
 
         long remaining = validator.getRemainingCooldown(player.getUniqueId(), method.toString());
-        assertTrue(remaining >= 4 && remaining <= 5, "expected about 5 s, was " + remaining);
+        assertTrue(remaining >= 5 && remaining <= 6, "expected about 5 s (rounded up, plus one), was " + remaining);
     }
 
     @Test

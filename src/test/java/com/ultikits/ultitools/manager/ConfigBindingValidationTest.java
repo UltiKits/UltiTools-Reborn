@@ -40,6 +40,7 @@ import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.abstracts.command.validation.validators.CooldownValidator;
 import com.ultikits.ultitools.annotations.Scheduled;
+import com.ultikits.ultitools.annotations.UltiToolsModule;
 import com.ultikits.ultitools.annotations.command.CmdCD;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
@@ -237,6 +238,12 @@ class ConfigBindingValidationTest {
         }
     }
 
+    /**
+     * Points the component scan at a package with no classes, so assembling this fixture sees only
+     * the beans a test registers -- the default (this class's own package) would pick up every
+     * other test's executor fixture in {@code manager}.
+     */
+    @UltiToolsModule(scanBasePackages = {"com.ultikits.testfixtures.configbinding531.empty"})
     abstract static class ModuleFixture extends UltiToolsPlugin {
     }
 
