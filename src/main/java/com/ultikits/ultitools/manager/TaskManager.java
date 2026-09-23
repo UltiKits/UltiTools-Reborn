@@ -31,7 +31,7 @@ import org.jetbrains.annotations.ApiStatus;
  * <p>
  * <b>Thread-confinement assumption (IN-02, gate-1 review, 16-REVIEW-residue.md):</b>
  * {@link #pluginTasks}/{@link #externalTasks}/{@link #coreTasks} are plain, non-concurrent
- * collections ({@code HashMap}/{@code ArrayList}). {@link #scanAndSchedule(Object, Consumer)}
+ * collections ({@code HashMap}/{@code ArrayList}). {@link #scanAndSchedule(UltiToolsPlugin, Object, Consumer)}
  * mutates them synchronously, once per successfully-scheduled task, inside its own scan loop
  * (#410) - every current call site ({@code PluginManager.onPluginRegistered},
  * {@link #registerScheduledMethodsCore(Object)}, {@link #registerScheduledMethodsExternal(String,
