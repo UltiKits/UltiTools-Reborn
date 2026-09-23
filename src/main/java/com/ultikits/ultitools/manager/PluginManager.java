@@ -7,13 +7,13 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Parameter;
+import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -697,7 +697,7 @@ public class PluginManager {
             }
         }
         for (BaseCommandExecutor executor : executors) {
-            for (Map.Entry<String, CmdCD> declared : cooldownDeclarations(executor).entrySet()) {
+            for (Map.Entry<String, CmdCD> declared : cooldownDeclarations(executor)) {
                 String bindingKey = CooldownValidator.bindingKey(declared.getValue());
                 if (bindingKey == null) {
                     continue;
@@ -723,7 +723,7 @@ public class PluginManager {
             }
         }
         for (BaseCommandExecutor executor : executors) {
-            for (Map.Entry<String, CmdCD> declared : cooldownDeclarations(executor).entrySet()) {
+            for (Map.Entry<String, CmdCD> declared : cooldownDeclarations(executor)) {
                 if (ConfigBindings.isBound(declared.getValue())) {
                     return declared.getKey();
                 }
@@ -745,7 +745,7 @@ public class PluginManager {
             TaskManager.refuseConfigBindings(bean);
         }
         for (BaseCommandExecutor executor : baseCommandExecutors(context)) {
-            for (Map.Entry<String, CmdCD> declared : cooldownDeclarations(executor).entrySet()) {
+            for (Map.Entry<String, CmdCD> declared : cooldownDeclarations(executor)) {
                 if (ConfigBindings.isBound(declared.getValue())) {
                     throw new PluginModuleException(ErrorCode.CONFIG_ERROR, "Invalid config binding on "
                             + declared.getKey() + ": a config-bound @CmdCD is supported only in an UltiTools "
@@ -777,17 +777,23 @@ public class PluginManager {
     }
 
     /**
-     * Every {@code @CmdCD} the executor's validator can meet, keyed by a display owner: the
-     * class-level annotation, and for each {@code @CmdMapping} method the annotation
+     * Every {@code @CmdCD} the executor's validator can meet, each paired with a display owner for
+     * messages: the class-level annotation, and for each {@code @CmdMapping} method the annotation
      * {@code CooldownValidator} itself resolves (most-derived-wins), in the same way.
+     * <p>
+     * A list, not a map keyed by the owner: an owner string is for messages only, and keying by it
+     * let one declaration replace another whenever two owners rendered alike -- overloads sharing a
+     * name (Codex round 2 on #536), then overloads whose parameter types share a simple name (round
+     * 4). With no key there is nothing to collide; a binding key declared twice is resolved once by
+     * the callers.
      */
-    private static Map<String, CmdCD> cooldownDeclarations(BaseCommandExecutor executor) {
+    private static List<Map.Entry<String, CmdCD>> cooldownDeclarations(BaseCommandExecutor executor) {
         Class<?> executorClass = executor.getClass();
         String executorName = ProxyFactory.unwrap(executorClass).getSimpleName();
-        Map<String, CmdCD> declarations = new LinkedHashMap<>();
+        List<Map.Entry<String, CmdCD>> declarations = new ArrayList<>();
         CmdCD classLevel = ProxyFactory.unwrap(executorClass).getAnnotation(CmdCD.class);
         if (classLevel != null) {
-            declarations.put(executorName, classLevel);
+            declarations.add(new AbstractMap.SimpleImmutableEntry<>(executorName, classLevel));
         }
         for (Method method : ReflectionUtil.getAllMethods(executorClass)) {
             if (!method.isAnnotationPresent(CmdMapping.class)) {
@@ -795,15 +801,14 @@ public class PluginManager {
             }
             CmdCD resolved = ReflectionUtil.resolveMethodOrClassAnnotation(method, executorClass, CmdCD.class);
             if (resolved != null) {
-                // Keyed by the full signature: overloaded mappings share a name, and keying by the
-                // name alone let a later overload replace an earlier one's binding (Codex round 2).
-                declarations.put(executorName + "." + method.getName() + parameterList(method), resolved);
+                declarations.add(new AbstractMap.SimpleImmutableEntry<>(
+                        executorName + "." + method.getName() + parameterList(method), resolved));
             }
         }
         return declarations;
     }
 
-    /** {@code (Player, String)} -- simple parameter type names, for an overload-safe display key. */
+    /** {@code (Player, String)} -- simple parameter type names, for a readable message owner. */
     private static String parameterList(Method method) {
         StringBuilder list = new StringBuilder("(");
         Class<?>[] types = method.getParameterTypes();
@@ -822,7 +827,7 @@ public class PluginManager {
      */
     private static void resolveCooldownBindings(UltiToolsPlugin plugin, BaseCommandExecutor executor,
                                                 Map<String, Integer> resolved, Map<String, Supplier<Long>> sources) {
-        for (Map.Entry<String, CmdCD> declared : cooldownDeclarations(executor).entrySet()) {
+        for (Map.Entry<String, CmdCD> declared : cooldownDeclarations(executor)) {
             CmdCD cmdCD = declared.getValue();
             if (!ConfigBindings.isBound(cmdCD)) {
                 continue;
