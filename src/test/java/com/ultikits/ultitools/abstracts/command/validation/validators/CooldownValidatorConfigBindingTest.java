@@ -93,6 +93,7 @@ class CooldownValidatorConfigBindingTest {
                 .rawArgs(new String[]{})
                 .matchedMethod(method)
                 .executorClass(getClass())
+                .executor(this)
                 .build();
     }
 
@@ -117,7 +118,7 @@ class CooldownValidatorConfigBindingTest {
     @Test
     @DisplayName("a bound cooldown enforces the resolved seconds, not the annotation literal")
     void aBoundCooldownEnforcesTheResolvedSeconds() throws NoSuchMethodException {
-        validator.setBoundCooldownSeconds(getClass(), Collections.singletonMap(boundKey(), 7));
+        validator.setExecutorCooldownSeconds(this, Collections.singletonMap(boundKey(), 7));
         Method method = mapping("boundMapping");
 
         validator.onComplete(contextFor(method), true);
@@ -198,7 +199,7 @@ class CooldownValidatorConfigBindingTest {
     @Test
     @DisplayName("an unbound cooldown still reads the annotation value, whatever the bound cache holds")
     void anUnboundCooldownStillReadsTheAnnotationValue() throws NoSuchMethodException {
-        validator.setBoundCooldownSeconds(getClass(), Collections.singletonMap(boundKey(), 99));
+        validator.setExecutorCooldownSeconds(this, Collections.singletonMap(boundKey(), 99));
         Method method = mapping("literalMapping");
 
         validator.onComplete(contextFor(method), true);
@@ -210,11 +211,11 @@ class CooldownValidatorConfigBindingTest {
     @Test
     @DisplayName("a refreshed value does not shorten a cooldown that is already running")
     void aRefreshedValueDoesNotShortenARunningCooldown() throws NoSuchMethodException {
-        validator.setBoundCooldownSeconds(getClass(), Collections.singletonMap(boundKey(), 60));
+        validator.setExecutorCooldownSeconds(this, Collections.singletonMap(boundKey(), 60));
         Method method = mapping("boundMapping");
         validator.onComplete(contextFor(method), true);
 
-        validator.setBoundCooldownSeconds(getClass(), Collections.singletonMap(boundKey(), 5));
+        validator.setExecutorCooldownSeconds(this, Collections.singletonMap(boundKey(), 5));
 
         long remaining = validator.getRemainingCooldown(player.getUniqueId(), method.toString());
         assertTrue(remaining > 50, "the running cooldown keeps the end time it was stamped with, was " + remaining);

@@ -2,6 +2,7 @@ package com.ultikits.ultitools.manager;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import static org.mockito.Mockito.doCallRealMethod;
@@ -51,6 +52,7 @@ import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.exceptions.UltiToolsException;
 import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.TestHelper;
@@ -207,7 +209,7 @@ class ConfigBoundLongRoundTripTest {
         taskManager.registerScheduledMethods(module, service);
         String cooldownKey = CooldownValidator.bindingKey(
                 InterestCommand.class.getMethod("claim", Player.class).getAnnotation(CmdCD.class));
-        assertEquals(Integer.valueOf(60), cooldownValidatorOf(command).getBoundCooldownSeconds(command.getClass()).get(cooldownKey));
+        assertEquals(Integer.valueOf(60), cooldownValidatorOf(command).getExecutorCooldownSeconds(command).get(cooldownKey));
 
         advanceTo(150);
         assertEquals(Arrays.asList(100), service.fireTicks, "delay = period = 5 s");
@@ -220,7 +222,7 @@ class ConfigBoundLongRoundTripTest {
         assertEquals(1, liveTasks(), "one live task after the reload");
         assertEquals(false, secondBoot.getConfigEntity(module, InterestConfig.class).isModifiedSinceSnapshot(),
                 "the #510 snapshot must hold for the Long fields, or the shutdown save overwrites operator edits");
-        assertEquals(Integer.valueOf(30), cooldownValidatorOf(command).getBoundCooldownSeconds(command.getClass()).get(cooldownKey));
+        assertEquals(Integer.valueOf(30), cooldownValidatorOf(command).getExecutorCooldownSeconds(command).get(cooldownKey));
         advanceTo(300);
         assertEquals(Arrays.asList(100, 300), service.fireTicks, "last run 100 + 10 s");
     }
@@ -291,12 +293,49 @@ class ConfigBoundLongRoundTripTest {
             String cooldownKey = CooldownValidator.bindingKey(
                     InterestCommand.class.getMethod("claim", Player.class).getAnnotation(CmdCD.class));
             assertEquals(Integer.valueOf(60),
-                    cooldownValidatorOf(command).getBoundCooldownSeconds(command.getClass()).get(cooldownKey),
+                    cooldownValidatorOf(command).getExecutorCooldownSeconds(command).get(cooldownKey),
                     "the running 60 s cooldown is kept; the unvalidated 30 s is not applied");
             assertTrue(warnings.stream().anyMatch(w -> w.contains("InterestModule") && w.contains(PATH)),
                     "a WARNING names the module and the config whose reload failed: " + warnings);
         } finally {
             Bukkit.getLogger().removeHandler(capture);
+            assertTrue(file.toFile().setWritable(true));
+        }
+    }
+
+    /**
+     * Codex round 2 on #536: the same failed write-back at the module's FIRST load. {@code
+     * ConfigManager.register} catches the {@code IOException} and continues, and the binding would
+     * then be resolved from fields whose validation never ran. At load there is no running value to
+     * keep, so the module is refused, as for any other binding that cannot be trusted.
+     */
+    @Test
+    @DisplayName("a binding to a config whose first load failed to write back refuses the module")
+    void aBindingToAConfigWhoseFirstLoadFailedRefusesTheModule() throws Exception {
+        boot().register(module, new InterestConfig(PATH));
+        Path file = tempDir.resolve(PATH);
+        StringBuilder edited = new StringBuilder();
+        for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+            if (!line.contains("note:")) {
+                edited.append(line).append('\n');
+            }
+        }
+        Files.write(file, edited.toString().getBytes(StandardCharsets.UTF_8));
+        assertTrue(file.toFile().setWritable(false));
+        try {
+            assumeFalse(Files.isWritable(file), "needs a non-root user so the write-back really fails");
+            ConfigManager secondBoot = boot();
+            assertDoesNotThrow(() -> secondBoot.register(module, new InterestConfig(PATH)),
+                    "ConfigManager itself logs the failed write-back and continues, as before");
+            SimpleContainer container = new SimpleContainer();
+            container.registerSingleton("interestService", new InterestService());
+
+            UltiToolsException refused = assertThrows(UltiToolsException.class,
+                    () -> PluginManager.validateConfigBindings(module, container));
+
+            assertTrue(refused.getMessage().contains(PATH), refused.getMessage());
+            assertTrue(refused.getMessage().contains("interest.interval"), refused.getMessage());
+        } finally {
             assertTrue(file.toFile().setWritable(true));
         }
     }
