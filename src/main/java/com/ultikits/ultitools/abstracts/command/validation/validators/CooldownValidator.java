@@ -430,6 +430,42 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
     }
 
     /**
+     * Instance-keyed form of {@link #mergeBoundCooldownSeconds(Class, Map)}.
+     *
+     * @param executor            the executor instance the bindings were declared on
+     * @param secondsByBindingKey resolved seconds keyed by {@link #bindingKey(CmdCD)}
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public void mergeExecutorCooldownSeconds(Object executor, Map<String, Integer> secondsByBindingKey) {
+        mergeBoundCooldownSeconds(executor.getClass(), secondsByBindingKey);
+    }
+
+    /**
+     * Instance-keyed form of {@link #setBoundCooldownSeconds(Class, Map)}.
+     *
+     * @param executor            the executor instance
+     * @param secondsByBindingKey resolved seconds keyed by {@link #bindingKey(CmdCD)}
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public void setExecutorCooldownSeconds(Object executor, Map<String, Integer> secondsByBindingKey) {
+        setBoundCooldownSeconds(executor.getClass(), secondsByBindingKey);
+    }
+
+    /**
+     * Instance-keyed form of {@link #getBoundCooldownSeconds(Class)}.
+     *
+     * @param executor the executor instance
+     * @return its resolved seconds keyed by {@link #bindingKey(CmdCD)}; never {@code null}
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public Map<String, Integer> getExecutorCooldownSeconds(Object executor) {
+        return getBoundCooldownSeconds(executor.getClass());
+    }
+
+    /**
      * Diagnostic view of the whole cache.
      *
      * @return every executor's resolved seconds, keyed by {@code executorClassName|bindingKey};

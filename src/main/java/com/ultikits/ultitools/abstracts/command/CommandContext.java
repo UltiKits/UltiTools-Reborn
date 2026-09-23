@@ -85,6 +85,18 @@ public final class CommandContext {
     private final Class<?> executorClass;
 
     /**
+     * The executor instance dispatching this command -- {@code this} captured in
+     * {@code BaseCommandExecutor#onCommand}. The config-bound {@code @CmdCD} cache is kept per
+     * executor instance, because neither the binding key nor the executor class identifies the
+     * owning module when a {@code CooldownValidator} is shared (#531). {@code null} for a context
+     * built without it.
+     *
+     * @since 6.3.0
+     */
+    @Nullable
+    private final Object executor;
+
+    /**
      * Timestamp when the command was received.
      */
     @Builder.Default

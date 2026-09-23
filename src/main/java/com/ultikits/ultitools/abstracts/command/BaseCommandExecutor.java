@@ -232,6 +232,7 @@ public abstract class BaseCommandExecutor implements TabExecutor {
                 .alias(alias)
                 .rawArgs(args)
                 .executorClass(this.getClass())
+                .executor(this)
                 .build();
 
         // Handle help command. Gated on who the sender is, which it was not before #381: this
