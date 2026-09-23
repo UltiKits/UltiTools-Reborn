@@ -27,6 +27,9 @@ import java.lang.annotation.Target;
  *     }
  * }
  * }</pre>
+ * {@code async = true} is for literal timings only: a {@code @Scheduled} bound to a config key
+ * (below) must be sync, and {@code async = true} together with a binding refuses the module at load
+ * (#535 tracks async bindings).
  *
  * <h2>Binding the timing to a config key (6.3.0)</h2>
  * Instead of a literal, {@link #periodKey()} and {@link #delayKey()} can name a
