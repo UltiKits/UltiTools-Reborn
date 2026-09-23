@@ -36,16 +36,18 @@ import java.lang.annotation.Target;
  *   <li><b>Checked at load</b>, refusing the module alone and naming the key and the value, when
  *       the config class is not registered exactly once for the module, the key matches no
  *       {@code @ConfigEntry} path, the field is not an {@code int}, {@code long}, {@code Integer}
- *       or {@code Long}, or the value is below 1 second, {@code null} or above
- *       {@link Integer#MAX_VALUE}. {@code 0} does not mean "no cooldown" for a bound value.</li>
+ *       or {@code Long}, or the value is negative, {@code null} or above
+ *       {@link Integer#MAX_VALUE}. A bound value of {@code 0} means "no cooldown", the same as
+ *       {@code value = 0}.</li>
  *   <li><b>Applied at {@code /ul reload}.</b> The resolved seconds are cached per executor and
  *       refreshed only after a successful configuration reload, so a panel edit takes effect at
  *       the next {@code /ul reload} and a refused reload never takes effect. An invalid value on
  *       reload keeps the running one and logs a WARNING. A cooldown already running keeps the end
- *       time it was stamped with.</li>
+ *       time it was stamped with. Executors sharing one validator chain keep all their bindings.</li>
  *   <li><b>Modules only.</b> A binding in an External Plugin API executor is refused.</li>
  *   <li><b>Declare {@code api-version: 630}</b> in the module's {@code plugin.yml}: an older
- *       framework silently ignores these elements and would enforce no cooldown at all.</li>
+ *       framework silently ignores these elements and would enforce no cooldown at all. 6.3.0
+ *       refuses a module that uses a binding while declaring a lower {@code api-version}.</li>
  * </ul>
  *
  * @see <a href="https://dev.ultikits.com/en/guide/essentials/cmd-executor.html#command-cooldown">Command cooldown</a>
@@ -70,7 +72,7 @@ public @interface CmdCD {
     Class<? extends AbstractConfigEntity> config() default AbstractConfigEntity.class;
 
     /**
-     * {@code @ConfigEntry} path whose value, in seconds (at least 1), is the cooldown. Matched as
+     * {@code @ConfigEntry} path whose value, in seconds (0 for no cooldown), is the cooldown. Matched as
      * {@code @ConfigEntry(path = ...)} declares it, or the field name when the path is empty.
      * Requires {@link #config()}; excludes {@link #value()}. Default: unbound.
      *

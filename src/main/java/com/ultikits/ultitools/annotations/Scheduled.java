@@ -45,18 +45,27 @@ import java.lang.annotation.Target;
  *       config class is not registered exactly once for the module (a directory
  *       {@code @ConfigEntity} cannot be bound), the key matches no {@code @ConfigEntry} path, the
  *       field is not an {@code int}, {@code long}, {@code Integer} or {@code Long}, or the value is
- *       below 1 second, {@code null} or too large. {@code 0} does not mean "off".</li>
+ *       below 1 second, {@code null} or above {@code Integer.MAX_VALUE / 20} seconds (about 3.4
+ *       years). {@code 0} does not mean "off".</li>
+ *   <li><b>Declared methods only.</b> The binding is found on the bean class's own declared
+ *       methods (after unwrapping an AOP proxy), exactly like an unbound {@code @Scheduled}; a
+ *       method inherited from a superclass is neither scheduled nor checked. Declare the bound
+ *       method on the bean class itself (see issue #532).</li>
  *   <li><b>Applied at {@code /ul reload}</b>, keeping the task's place in its cycle: the next run
  *       is the last run plus the new period (before the first run: the arm time plus the new
  *       delay), or the next tick if that moment has already passed. A reload never runs the task
  *       early and never postpones it by restarting its clock; a task whose value did not change is
  *       not touched. An invalid value on reload is not applied -- the running value is kept and a
- *       WARNING names the key. A panel edit takes effect at the next {@code /ul reload}.</li>
+ *       WARNING names the key. A panel edit takes effect at the next {@code /ul reload}. The
+ *       reload step runs on the main thread only; for an {@code async} task, a run whose due tick
+ *       has been reached counts as run even if its worker has not started yet, so a reload landing
+ *       on that tick never runs it twice.</li>
  *   <li><b>Modules only.</b> A binding on an External Plugin API bean is refused.</li>
  *   <li><b>Declare {@code api-version: 630}</b> in the module's {@code plugin.yml}. An older
  *       framework does not know these elements and silently ignores them -- the method would then
  *       run once at load instead of on the configured interval -- so the floor is what makes it
- *       refuse the module instead.</li>
+ *       refuse the module instead. 6.3.0 itself refuses a module that uses a binding while
+ *       declaring a lower {@code api-version}, so the mistake shows up where it is made.</li>
  * </ul>
  * A method with no binding behaves exactly as before 6.3.0.
  *

@@ -791,7 +791,9 @@ and a bound `@CmdCD` enforces **no** cooldown.
 
 So **a module that uses either binding must declare `api-version: 630`** in its `plugin.yml`. That
 floor makes an older framework refuse the module at load, rather than run it with the wrong timing.
-Raising the `pom.xml` pin alone does not do this, for the reason given above. The binding is
+Raising the `pom.xml` pin alone does not do this, for the reason given above. So that the mistake
+surfaces on the version you develop against, 6.3.0 itself refuses a module that uses a binding while
+declaring a lower `api-version`, naming the module, the binding and the required floor. The binding is
 additive: existing literal usages (`@Scheduled(period = 6000)`, `@CmdCD(60)`) behave as before
 and need no change.
 
