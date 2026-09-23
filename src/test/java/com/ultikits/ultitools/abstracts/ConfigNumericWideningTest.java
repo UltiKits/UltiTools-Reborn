@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import static org.mockito.Mockito.lenient;
 
 import java.io.File;
@@ -188,6 +189,32 @@ class ConfigNumericWideningTest {
         } finally {
             logger.removeHandler(capture);
         }
+    }
+
+    /**
+     * Codex round 3 on #536: the "last init did not complete" marker the config binding reads is kept
+     * on the entity (so nothing outside it can retain a discarded entity). It is set by an init whose
+     * write-back fails and cleared by the next init that completes.
+     */
+    @Test
+    @DisplayName("isLastInitIncomplete: set by an init whose write-back failed, cleared by the next complete init")
+    void lastInitIncompleteTracksTheLastInit() throws IOException {
+        NumbersConfig config = new NumbersConfig(PATH);
+        config.init(plugin);
+        assertThat(config.isLastInitIncomplete()).as("a completed first boot").isFalse();
+
+        writeFile("limits:\n  boxed-long: 30\n");
+        assertThat(file().toFile().setWritable(false)).isTrue();
+        try {
+            assumeFalse(Files.isWritable(file()), "needs a non-root user so the write-back really fails");
+            assertThatThrownBy(() -> config.init(plugin)).isInstanceOf(IOException.class);
+            assertThat(config.isLastInitIncomplete()).as("after a failed write-back").isTrue();
+        } finally {
+            assertThat(file().toFile().setWritable(true)).isTrue();
+        }
+
+        config.init(plugin);
+        assertThat(config.isLastInitIncomplete()).as("after the next complete init").isFalse();
     }
 
     @Test
