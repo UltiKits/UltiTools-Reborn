@@ -103,11 +103,16 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
         if (resolvedSeconds == null) {
             return unresolvedBinding(context, method);
         }
-        // A stored, unexpired end time is honoured whatever the current value is. A bound value can
-        // change at run time (#531): a refresh to 0 means that no NEW cooldown is stamped (see
-        // applyCooldown), not that running ones are lifted -- they expire on their own. Checking the
-        // value first would free every player at once and bring the old stamps back on a later
-        // non-zero value.
+        // A literal (or absent) @CmdCD cannot change at run time, so a value of 0 there never stamped
+        // anything and the unbound path stays exactly as before.
+        if (resolvedSeconds <= 0 && !isBoundMapping(method, context)) {
+            return ValidationResult.success();
+        }
+        // A bound value can change at run time (#531), so for a bound mapping a stored, unexpired end
+        // time is honoured whatever the current value is: a refresh to 0 means that no NEW cooldown
+        // is stamped (see applyCooldown), not that running ones are lifted -- they expire on their
+        // own. Checking the value first would free every player at once and bring the old stamps
+        // back on a later non-zero value.
         UUID playerId = player.getUniqueId();
         String methodKey = method.toString();
         
@@ -312,6 +317,14 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
      * @return the resolved cooldown in seconds, or {@code null} for an unresolved binding
      * @since 6.3.0
      */
+    /**
+     * @return whether the {@code @CmdCD} that governs {@code method} is bound to a config key
+     */
+    private static boolean isBoundMapping(Method method, CommandContext context) {
+        CmdCD cmdCD = ReflectionUtil.resolveMethodOrClassAnnotation(method, context.getExecutorClass(), CmdCD.class);
+        return cmdCD != null && bindingKey(cmdCD) != null;
+    }
+
     private Integer getCooldownSeconds(Method method, CommandContext context) {
         CmdCD cmdCD = ReflectionUtil.resolveMethodOrClassAnnotation(method, context.getExecutorClass(), CmdCD.class);
         if (cmdCD != null) {
