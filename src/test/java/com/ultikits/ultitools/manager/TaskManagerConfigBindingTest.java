@@ -603,6 +603,40 @@ class TaskManagerConfigBindingTest {
             }
         }
 
+        /**
+         * Codex round 8 on #536: {@code Integer.MIN_VALUE} was the "never ran" sentinel, but it is
+         * also the real tick right after the counter wraps. A one-shot that ran exactly then must
+         * still count as having run, so a later reload does not schedule it a second time.
+         */
+        @Test
+        @DisplayName("a one-shot that ran at tick Integer.MIN_VALUE counts as run, so a reload does not run it again")
+        void aOneShotThatRanAtTheMinimumTickIsNotRescheduled() {
+            config.setPeriodSeconds(5);
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                BukkitScheduler scheduler = mock(BukkitScheduler.class);
+                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+                bukkit.when(Bukkit::getLogger).thenReturn(Logger.getLogger("TaskManagerConfigBindingTest.minTick"));
+                bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+                bukkit.when(Bukkit::getCurrentTick).thenReturn(Integer.MAX_VALUE - 99);
+                when(scheduler.runTaskLater(any(Plugin.class), any(Runnable.class), anyLong()))
+                        .thenReturn(mock(BukkitTask.class), mock(BukkitTask.class));
+                BoundDelayOnlyBean bean = new BoundDelayOnlyBean();
+                taskManager.registerScheduledMethods(module, bean);
+                org.mockito.ArgumentCaptor<Runnable> armed = org.mockito.ArgumentCaptor.forClass(Runnable.class);
+                verify(scheduler).runTaskLater(eq(host), armed.capture(), eq(100L));
+
+                bukkit.when(Bukkit::getCurrentTick).thenReturn(Integer.MIN_VALUE); // 100 ticks later, wrapped
+                armed.getValue().run();
+                assertEquals(ticks(Integer.MIN_VALUE), bean.fireTicks);
+
+                config.setPeriodSeconds(10);
+                taskManager.rescheduleBound(module);
+
+                verify(scheduler, org.mockito.Mockito.times(1)).runTaskLater(any(Plugin.class), any(Runnable.class),
+                        anyLong());
+            }
+        }
+
         @Test
         @DisplayName("a value above the ceiling on reload keeps the running period and warns")
         void aValueAboveTheCeilingOnReloadKeepsTheRunningPeriod() {
