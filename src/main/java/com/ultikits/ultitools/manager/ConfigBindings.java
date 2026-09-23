@@ -108,6 +108,13 @@ final class ConfigBindings {
      * @throws PluginModuleException naming the owner and the contradicting elements
      */
     static void checkShape(String owner, Scheduled scheduled) {
+        checkNamesABinding(owner, scheduled);
+        checkNoLiteralBesideItsKey(owner, scheduled);
+        checkLiteralHalfWithinCeiling(owner, scheduled);
+    }
+
+    /** A key without a config class, a config class without a key, or {@code async = true}. */
+    private static void checkNamesABinding(String owner, Scheduled scheduled) {
         if (scheduled.config() == AbstractConfigEntity.class) {
             throw shapeError(owner, "@Scheduled names periodKey/delayKey but no config class; "
                     + "set config = <YourConfig>.class");
@@ -120,6 +127,10 @@ final class ConfigBindings {
             throw shapeError(owner, "a config-bound @Scheduled cannot be async = true; bind a sync task and hand "
                     + "the heavy work to Bukkit.getScheduler().runTaskAsynchronously(...) from its body");
         }
+    }
+
+    /** A literal set alongside the key that replaces it: the default lives only in the config field. */
+    private static void checkNoLiteralBesideItsKey(String owner, Scheduled scheduled) {
         if (!scheduled.periodKey().isEmpty() && scheduled.period() != -1) {
             throw shapeError(owner, "@Scheduled sets both period=" + scheduled.period() + " and periodKey '"
                     + scheduled.periodKey() + "'; the default lives only in the config field, so leave period unset");
@@ -128,9 +139,14 @@ final class ConfigBindings {
             throw shapeError(owner, "@Scheduled sets both delay=" + scheduled.delay() + " and delayKey '"
                     + scheduled.delayKey() + "'; the default lives only in the config field, so leave delay unset");
         }
-        // The literal half of a partially bound task is held to the same tick ceiling as the bound
-        // half, so every interval of a bound task fits in Bukkit's int tick window and the
-        // reschedule arithmetic stays exact across its wraparound (Codex round 10 on #536).
+    }
+
+    /**
+     * The literal half of a partially bound task is held to the same tick ceiling as the bound
+     * half, so every interval of a bound task fits in Bukkit's int tick window and the reschedule
+     * arithmetic stays exact across its wraparound (Codex round 10 on #536).
+     */
+    private static void checkLiteralHalfWithinCeiling(String owner, Scheduled scheduled) {
         if (scheduled.delayKey().isEmpty() && (scheduled.delay() < 0 || scheduled.delay() > MAX_TICKS)) {
             throw shapeError(owner, "@Scheduled binds periodKey '" + scheduled.periodKey() + "' with a literal delay="
                     + scheduled.delay() + " ticks; next to a binding a literal delay must be 0 to " + MAX_TICKS + " ticks");
