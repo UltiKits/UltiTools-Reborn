@@ -513,7 +513,7 @@ public abstract class AbstractConfigEntity {
                     Object configValue = config.get(path);
                     if (configValue != null) {
                         Object parse = ReflectionUtil.newInstance(annotation.parser()).parse(configValue);
-                        ReflectionUtil.setFieldValue(this, field, parse);
+                        ReflectionUtil.setFieldValue(this, field, widenToFieldType(field.getType(), parse));
                     } else {
                         upToDate = false;
                         config.set(path, ReflectionUtil.getFieldValue(this, field));
@@ -544,6 +544,53 @@ public abstract class AbstractConfigEntity {
 
         // Notify listeners after initialization
         notifyChangeListeners();
+    }
+
+    /**
+     * Gives a boxed numeric field exactly the widening conversions its primitive already gets.
+     * <p>
+     * SnakeYAML hands back an {@code Integer} for a whole number such as {@code 1800}.
+     * {@code Field.set} widens that into a {@code long} or {@code double} field, but it refuses the
+     * same value for a {@code Long}, {@code Double} or {@code Float} field (measured:
+     * {@code IllegalArgumentException: Can not set java.lang.Long field ... to java.lang.Integer}).
+     * A boxed field therefore loaded on the first boot, when the key was missing and the field
+     * default was written, and threw on every later boot and on every reload (#531, gate-1 CR-01).
+     * <p>
+     * Only the JLS 5.1.2 widening primitive conversions are applied, so a boxed field accepts
+     * exactly what its primitive accepts: {@code Short} from {@code Byte}; {@code Integer} from
+     * {@code Byte}/{@code Short}; {@code Long} from {@code Byte}/{@code Short}/{@code Integer};
+     * {@code Float} from any integral value; {@code Double} from any integral value or a
+     * {@code Float}. Anything else -- a narrowing conversion, a non-numeric value, a field that
+     * is not a numeric wrapper -- is returned unchanged, so {@code Field.set} refuses it exactly as
+     * before.
+     *
+     * @param fieldType the declared type of the target field
+     * @param value     the parsed value
+     * @return {@code value} widened to {@code fieldType}, or {@code value} itself
+     */
+    static Object widenToFieldType(Class<?> fieldType, Object value) {
+        if (!(value instanceof Number) || fieldType.isInstance(value)) {
+            return value;
+        }
+        Number number = (Number) value;
+        boolean byteOrShort = value instanceof Byte || value instanceof Short;
+        boolean integral = byteOrShort || value instanceof Integer || value instanceof Long;
+        if (fieldType == Short.class && value instanceof Byte) {
+            return number.shortValue();
+        }
+        if (fieldType == Integer.class && byteOrShort) {
+            return number.intValue();
+        }
+        if (fieldType == Long.class && (byteOrShort || value instanceof Integer)) {
+            return number.longValue();
+        }
+        if (fieldType == Float.class && integral) {
+            return number.floatValue();
+        }
+        if (fieldType == Double.class && (integral || value instanceof Float)) {
+            return number.doubleValue();
+        }
+        return value;
     }
 
     /**
@@ -1009,7 +1056,7 @@ public abstract class AbstractConfigEntity {
                     Object configValue = config.get(path);
                     if (configValue != null) {
                         Object parse = ReflectionUtil.newInstance(annotation.parser()).parse(configValue);
-                        ReflectionUtil.setFieldValue(this, field, parse);
+                        ReflectionUtil.setFieldValue(this, field, widenToFieldType(field.getType(), parse));
                     }
                 }
             }
