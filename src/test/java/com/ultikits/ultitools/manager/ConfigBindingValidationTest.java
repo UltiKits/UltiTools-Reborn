@@ -173,6 +173,30 @@ class ConfigBindingValidationTest {
         }
     }
 
+    /** Bound period with a literal delay beyond the tick ceiling (Codex round 10 on #536). */
+    public static class HugeLiteralDelayBean {
+        @Scheduled(config = BindingTimingConfig.class, periodKey = "timer.period", delay = 2147483648L)
+        public void tick() {
+            // Validation is what is asserted.
+        }
+    }
+
+    /** Bound delay with a literal period beyond the tick ceiling. */
+    public static class HugeLiteralPeriodBean {
+        @Scheduled(config = BindingTimingConfig.class, delayKey = "timer.delay", period = 2147483648L)
+        public void tick() {
+            // Validation is what is asserted.
+        }
+    }
+
+    /** Bound period with a literal delay exactly at the ceiling (Integer.MAX_VALUE / 20 * 20 ticks). */
+    public static class CeilingLiteralDelayBean {
+        @Scheduled(config = BindingTimingConfig.class, periodKey = "timer.period", delay = 2147483640L)
+        public void tick() {
+            // Validation is what is asserted.
+        }
+    }
+
     public static class LiteralOnlyBean {
         @Scheduled(period = 20)
         public void tick() {
@@ -623,6 +647,14 @@ class ConfigBindingValidationTest {
         @DisplayName("a literal async @Scheduled still loads")
         void literalAsyncScheduledLoads() {
             assertDoesNotThrow(() -> PluginManager.validateConfigBindings(module, containerWith(new LiteralAsyncBean())));
+        }
+
+        @Test
+        @DisplayName("the literal half of a partially bound @Scheduled is held to the same tick ceiling")
+        void theLiteralHalfOfAPartiallyBoundTaskIsHeldToTheCeiling() {
+            assertMentions(refusalOf(new HugeLiteralDelayBean()), "HugeLiteralDelayBean.tick", "delay=2147483648");
+            assertMentions(refusalOf(new HugeLiteralPeriodBean()), "HugeLiteralPeriodBean.tick", "period=2147483648");
+            assertDoesNotThrow(() -> PluginManager.validateConfigBindings(module, containerWith(new CeilingLiteralDelayBean())));
         }
 
         @Test
