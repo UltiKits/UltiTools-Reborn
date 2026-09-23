@@ -34,7 +34,7 @@ import com.ultikits.ultitools.annotations.ConfigEntry;
  * The fix is JLS widening only, the conversions the matching primitive field already accepts. A
  * narrowing value is still refused exactly as before. ({@code float}/{@code Float} fields are not
  * covered: YAML hands back a {@code Double} for a decimal, and {@code double} to {@code float} is
- * narrowing, so they cannot load a decimal before or after this change -- tracked separately.)
+ * narrowing, so they cannot load a decimal before or after this change -- #534.)
  */
 @DisplayName("AbstractConfigEntity numeric widening from YAML (#531 CR-01)")
 class ConfigNumericWideningTest {
