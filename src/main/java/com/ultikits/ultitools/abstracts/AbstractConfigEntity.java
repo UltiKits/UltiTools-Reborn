@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -94,6 +95,19 @@ import lombok.Getter;
 @Getter
 public abstract class AbstractConfigEntity {
     private static final Logger LOGGER = Logger.getLogger(AbstractConfigEntity.class.getName());
+
+    /**
+     * The numeric wrappers in JLS 5.1.2 widening order: every conversion from an earlier entry to a
+     * later one is a widening primitive conversion, and no other conversion between them is.
+     */
+    private static final List<Class<?>> WIDENING_ORDER = Collections.unmodifiableList(Arrays.<Class<?>>asList(
+            Byte.class, Short.class, Integer.class, Long.class, Float.class, Double.class));
+
+    /** Converts a {@link Number} to the wrapper at the same index of {@link #WIDENING_ORDER}. */
+    private static final List<Function<Number, Object>> WIDENERS =
+            Collections.unmodifiableList(Arrays.<Function<Number, Object>>asList(
+                    Number::byteValue, Number::shortValue, Number::intValue, Number::longValue,
+                    Number::floatValue, Number::doubleValue));
     
     private final String configFilePath;
     private final List<ConfigChangeListener> changeListeners = new CopyOnWriteArrayList<>();
@@ -589,26 +603,15 @@ public abstract class AbstractConfigEntity {
         if (!(value instanceof Number) || fieldType.isInstance(value)) {
             return value;
         }
-        Number number = (Number) value;
-        boolean byteOrShort = value instanceof Byte || value instanceof Short;
-        boolean integral = byteOrShort || value instanceof Integer || value instanceof Long;
-        if (fieldType == Short.class && value instanceof Byte) {
-            return number.shortValue();
+        int from = WIDENING_ORDER.indexOf(value.getClass());
+        int to = WIDENING_ORDER.indexOf(fieldType);
+        // Not a numeric wrapper pair, or a narrowing conversion: unchanged, so Field.set refuses it.
+        if (from < 0 || to <= from) {
+            return value;
         }
-        if (fieldType == Integer.class && byteOrShort) {
-            return number.intValue();
-        }
-        if (fieldType == Long.class && (byteOrShort || value instanceof Integer)) {
-            return number.longValue();
-        }
-        if (fieldType == Float.class && integral) {
-            return number.floatValue();
-        }
-        if (fieldType == Double.class && (integral || value instanceof Float)) {
-            return number.doubleValue();
-        }
-        return value;
+        return WIDENERS.get(to).apply((Number) value);
     }
+
 
     /**
      * Splits a {@code @ConfigEntry.comment()} value into one {@link List} element per line, in

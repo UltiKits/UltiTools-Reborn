@@ -180,16 +180,7 @@ public class TaskManager {
                 continue;
             }
 
-            if (method.getParameterCount() != 0) {
-                Bukkit.getLogger().log(Level.WARNING,
-                        String.format("[UltiTools-API] @Scheduled method '%s.%s' must have no parameters. Skipping.",
-                                targetClass.getSimpleName(), method.getName()));
-                continue;
-            }
-            if (method.getReturnType() != void.class && method.getReturnType() != Void.class) {
-                Bukkit.getLogger().log(Level.WARNING,
-                        String.format("[UltiTools-API] @Scheduled method '%s.%s' must return void. Skipping.",
-                                targetClass.getSimpleName(), method.getName()));
+            if (!checkSignatureOrWarn(targetClass, method)) {
                 continue;
             }
 
@@ -500,6 +491,28 @@ public class TaskManager {
                 throw bindingOutsideModule(targetClass, method);
             }
         }
+    }
+
+    /**
+     * The two signature rules {@link #scanAndSchedule} skips a method for, each logging the same
+     * WARNING it always has.
+     *
+     * @return {@code true} if {@code method} takes no parameters and returns void
+     */
+    private static boolean checkSignatureOrWarn(Class<?> targetClass, Method method) {
+        if (method.getParameterCount() != 0) {
+            Bukkit.getLogger().log(Level.WARNING,
+                    String.format("[UltiTools-API] @Scheduled method '%s.%s' must have no parameters. Skipping.",
+                            targetClass.getSimpleName(), method.getName()));
+            return false;
+        }
+        if (method.getReturnType() != void.class && method.getReturnType() != Void.class) {
+            Bukkit.getLogger().log(Level.WARNING,
+                    String.format("[UltiTools-API] @Scheduled method '%s.%s' must return void. Skipping.",
+                            targetClass.getSimpleName(), method.getName()));
+            return false;
+        }
+        return true;
     }
 
     /** The two signature rules {@link #scanAndSchedule} skips a method for, without its logging. */

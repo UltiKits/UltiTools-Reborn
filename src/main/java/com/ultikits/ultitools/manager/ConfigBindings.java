@@ -1,7 +1,12 @@
 package com.ultikits.ultitools.manager;
 
 import java.lang.reflect.Field;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.function.Supplier;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
@@ -62,6 +67,10 @@ final class ConfigBindings {
     /** The rule text for a bound cooldown. */
     static final String COOLDOWN_RULE = "a bound @CmdCD cooldown must be a whole number of seconds "
             + "from 0 (no cooldown) to " + Integer.MAX_VALUE;
+
+    /** The field types a binding may read. */
+    private static final Set<Class<?>> INTEGRAL_FIELD_TYPES = Collections.unmodifiableSet(
+            new HashSet<>(Arrays.<Class<?>>asList(int.class, long.class, Integer.class, Long.class)));
 
     private ConfigBindings() {
         // Static rules only.
@@ -184,7 +193,7 @@ final class ConfigBindings {
          *
          * @return the source
          */
-        java.util.function.Supplier<Long> reloadSource() {
+        Supplier<Long> reloadSource() {
             return () -> {
                 if (lastReloadFailed()) {
                     throw new ReloadFailedException(entity.getConfigFilePath());
@@ -233,25 +242,32 @@ final class ConfigBindings {
                     + "' (a directory @ConfigEntity?); a binding needs exactly one instance");
         }
         AbstractConfigEntity entity = entities.get(0);
-        for (Field field : ReflectionUtil.getFields(entity.getClass())) {
-            ConfigEntry entry = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
-            if (entry == null) {
-                continue;
-            }
-            String path = entry.path().isEmpty() ? field.getName() : entry.path();
-            if (!path.equals(key)) {
-                continue;
-            }
-            Class<?> type = field.getType();
-            if (type != int.class && type != long.class && type != Integer.class && type != Long.class) {
-                throw shapeError(owner, "binds key '" + key + "' of " + configClass.getSimpleName()
-                        + ", whose field '" + field.getName() + "' is " + type.getSimpleName()
-                        + "; a bound value must be an int, long, Integer or Long number of seconds");
-            }
-            return new Source(entity, field, key);
+        Field field = findEntryField(entity.getClass(), key);
+        if (field == null) {
+            throw shapeError(owner, "binds key '" + key + "', which matches no @ConfigEntry path on "
+                    + configClass.getSimpleName());
         }
-        throw shapeError(owner, "binds key '" + key + "', which matches no @ConfigEntry path on "
-                + configClass.getSimpleName());
+        if (!INTEGRAL_FIELD_TYPES.contains(field.getType())) {
+            throw shapeError(owner, "binds key '" + key + "' of " + configClass.getSimpleName()
+                    + ", whose field '" + field.getName() + "' is " + field.getType().getSimpleName()
+                    + "; a bound value must be an int, long, Integer or Long number of seconds");
+        }
+        return new Source(entity, field, key);
+    }
+
+
+    /**
+     * @return the {@code @ConfigEntry} field of {@code entityClass} (declared or inherited) whose
+     *         path -- or field name, when the path is empty -- equals {@code key}, or {@code null}
+     */
+    private static Field findEntryField(Class<?> entityClass, String key) {
+        for (Field field : ReflectionUtil.getFields(entityClass)) {
+            ConfigEntry entry = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
+            if (entry != null && key.equals(entry.path().isEmpty() ? field.getName() : entry.path())) {
+                return field;
+            }
+        }
+        return null;
     }
 
     /**
