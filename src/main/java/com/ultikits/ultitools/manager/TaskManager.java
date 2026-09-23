@@ -595,6 +595,7 @@ public class TaskManager {
             if (!ConfigBindings.isValidTimerSeconds(seconds)) {
                 throw ConfigBindings.invalidValueAtLoad(module, owner, source, seconds, ConfigBindings.TIMER_RULE);
             }
+            source.enforceOnPanelWrites(ConfigBindings.TIMER_RULE, ConfigBindings::isValidTimerSeconds);
             return seconds * ConfigBindings.TICKS_PER_SECOND;
         }
     }

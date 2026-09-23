@@ -822,6 +822,7 @@ public class PluginManager {
             if (!ConfigBindings.isValidCooldownSeconds(seconds)) {
                 throw ConfigBindings.invalidValueAtLoad(plugin, owner, source, seconds, ConfigBindings.COOLDOWN_RULE);
             }
+            source.enforceOnPanelWrites(ConfigBindings.COOLDOWN_RULE, ConfigBindings::isValidCooldownSeconds);
             resolved.put(bindingKey, seconds.intValue());
             sources.put(bindingKey, source.reloadSource());
         }

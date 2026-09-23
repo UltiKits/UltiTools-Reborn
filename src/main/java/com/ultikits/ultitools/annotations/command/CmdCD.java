@@ -46,6 +46,13 @@ import java.lang.annotation.Target;
  *       time it was stamped with, whatever the new value is: a reload to {@code 0} stamps no new
  *       cooldown, and the running ones expire on their own. Executors sharing one validator chain
  *       keep all their bindings.</li>
+ *   <li><b>Panel edits are range-checked.</b> A panel write that sets a bound key outside this
+ *       range (a negative value, for example) is refused like a {@code @Range} violation, and
+ *       nothing is written.</li>
+ *   <li><b>No {@code @Range} on a bound field.</b> The binding's range above is the field's range.
+ *       A module {@code @Range} on the same field would make an out-of-range reload throw from the
+ *       config reload itself, which aborts the rest of that module's reload (issue #509) instead
+ *       of keeping the running value.</li>
  *   <li><b>Modules only.</b> A binding in an External Plugin API executor is refused.</li>
  *   <li><b>Declare {@code api-version: 630}</b> in the module's {@code plugin.yml}: an older
  *       framework silently ignores these elements and would enforce no cooldown at all. 6.3.0

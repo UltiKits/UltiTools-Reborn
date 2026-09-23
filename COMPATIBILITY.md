@@ -800,6 +800,14 @@ dispatches async work (#535 tracks a design that observes it instead). The bindi
 additive: existing literal usages (`@Scheduled(period = 6000)`, `@CmdCD(60)`) behave as before
 and need no change.
 
+**A bound field must not also carry a module `@Range`.** The binding's own range is the field's
+range: 1 to `Integer.MAX_VALUE / 20` seconds for a period or delay, and 0 (no cooldown) to
+`Integer.MAX_VALUE` for a cooldown. A panel write outside it is refused like a `@Range` violation.
+An out-of-range value on `/ul reload` keeps the running value and logs a WARNING. A `@Range` on the
+same field would instead throw from the config reload itself, and that aborts the rest of the
+module's reload. That behaviour is tracked separately in #509 and is unchanged by 6.3.0. A module
+that already had a `@Range` on a field it now binds should drop it; the binding's range takes over.
+
 ### What this means for us
 
 A human process cannot catch this class of change: it would require an author changing a field type to

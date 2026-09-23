@@ -61,6 +61,13 @@ import java.lang.annotation.Target;
  *       not touched. An invalid value on reload is not applied -- the running value is kept and a
  *       WARNING names the key. A panel edit takes effect at the next {@code /ul reload}. The
  *       reload step runs on the main thread only.</li>
+ *   <li><b>Panel edits are range-checked.</b> A panel write that sets a bound key outside this
+ *       range (for example {@code 0}) is refused like a {@code @Range} violation, and nothing is
+ *       written.</li>
+ *   <li><b>No {@code @Range} on a bound field.</b> The binding's range above is the field's range.
+ *       A module {@code @Range} on the same field would make an out-of-range reload throw from the
+ *       config reload itself, which aborts the rest of that module's reload (issue #509) instead of
+ *       keeping the running value.</li>
  *   <li><b>Sync only.</b> A bound method cannot be {@code async = true}; that combination is
  *       refused at load. Bind a sync task and hand the heavy work to
  *       {@code Bukkit.getScheduler().runTaskAsynchronously(...)} from its body. A sync task's runs

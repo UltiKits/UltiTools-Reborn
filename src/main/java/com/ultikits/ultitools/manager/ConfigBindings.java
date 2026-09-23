@@ -6,6 +6,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 import com.ultikits.ultitools.UltiTools;
@@ -199,6 +200,18 @@ final class ConfigBindings {
         Long readSeconds() {
             Object value = ReflectionUtil.getFieldValue(entity, field);
             return value == null ? null : ((Number) value).longValue();
+        }
+
+        /**
+         * Makes a panel write that sets this key outside {@code rule}'s range fail, in the shape of a
+         * {@code @Range} violation (module gate-1 review, UltiChat round 2 WR-06). Called once the
+         * value has passed the same range check at load.
+         *
+         * @param rule    {@link ConfigBindings#TIMER_RULE} or {@link ConfigBindings#COOLDOWN_RULE}
+         * @param isValid the matching range check
+         */
+        void enforceOnPanelWrites(String rule, Predicate<Long> isValid) {
+            entity.addBindingRange(key, rule, isValid);
         }
 
         /** @return the entity's simple class name, for messages */
