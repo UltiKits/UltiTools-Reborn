@@ -147,13 +147,6 @@ public abstract class AbstractConfigEntity {
      */
     @Getter(AccessLevel.NONE)
     private volatile boolean lastInitIncomplete;
-    /**
-     * Counts {@link #init} calls, under this entity's monitor. An {@code init} clears
-     * {@link #lastInitIncomplete} only if no later {@code init} has started since, so an earlier,
-     * overlapping call that completes cannot clear a later call's failure (Codex round 12 on #536).
-     */
-    @Getter(AccessLevel.NONE)
-    private long initGeneration;
 
     /**
      * Constructor for AbstractConfigEntity.
@@ -465,6 +458,11 @@ public abstract class AbstractConfigEntity {
      * values from such an entity: it refuses the module at load and keeps the running value on
      * reload.
      * <p>
+     * Thread contract: the marker is set by {@code init} and read by the binding step on the main
+     * server thread, where the framework and the first-party modules run both. An {@code init} or
+     * {@link #reload()} run off the main thread is not synchronized with the binding step; confining
+     * them to the main thread is tracked in UltiKits/UltiTools-Reborn#538.
+     * <p>
      * Framework-internal: {@code public} solely because the binding step lives in another package.
      * Module code should not call it.
      *
@@ -526,10 +524,8 @@ public abstract class AbstractConfigEntity {
      * @throws IOException if an I/O error occurs
      */
     public final void init(UltiToolsPlugin ultiToolsPlugin) throws IOException {
-        final long generation;
+        lastInitIncomplete = true;
         synchronized (this) {
-            generation = ++initGeneration;
-            lastInitIncomplete = true;
             this.ultiToolsPlugin = ultiToolsPlugin;
             File file = ultiToolsPlugin.getConfigFile(configFilePath);
             config = new YamlConfiguration();
@@ -593,11 +589,7 @@ public abstract class AbstractConfigEntity {
 
         // Validate fields and reset invalid values to defaults
         validateFields();
-        synchronized (this) {
-            if (initGeneration == generation) {
-                lastInitIncomplete = false;
-            }
-        }
+        lastInitIncomplete = false;
 
         // Notify listeners after initialization
         notifyChangeListeners();
