@@ -307,7 +307,7 @@ public abstract class AbstractConfigEntity {
             }
             Object configValue = parsed.get(path);
             if (configValue != null) {
-                ReflectionUtil.setFieldValue(probe, field, ReflectionUtil.newInstance(annotation.parser()).parse(configValue));
+                ReflectionUtil.setFieldValue(probe, field, readConfigValue(field, annotation, configValue));
             }
         }
         probe.applyFieldsTo(parsed);
@@ -512,8 +512,7 @@ public abstract class AbstractConfigEntity {
                     }
                     Object configValue = config.get(path);
                     if (configValue != null) {
-                        Object parse = ReflectionUtil.newInstance(annotation.parser()).parse(configValue);
-                        ReflectionUtil.setFieldValue(this, field, widenToFieldType(field.getType(), parse));
+                        ReflectionUtil.setFieldValue(this, field, readConfigValue(field, annotation, configValue));
                     } else {
                         upToDate = false;
                         config.set(path, ReflectionUtil.getFieldValue(this, field));
@@ -544,6 +543,24 @@ public abstract class AbstractConfigEntity {
 
         // Notify listeners after initialization
         notifyChangeListeners();
+    }
+
+    /**
+     * The one conversion from a raw YAML value to the value stored in a {@code @ConfigEntry} field:
+     * the entry's parser, then {@link #widenToFieldType}. Every place that reads the file into a
+     * field goes through here -- {@link #init}, {@link #reload()} and the #510 snapshot probe in
+     * {@code canonicalizeOnce} -- so the three cannot drift apart again. Round 2 of #531 gate-1 CR-01
+     * found the snapshot probe still unwidened: a {@code Long} field made every snapshot fail, and
+     * the shutdown save then overwrote operator edits (the #510 defect, reinstated).
+     *
+     * @param field      the target {@code @ConfigEntry} field
+     * @param annotation its {@code @ConfigEntry}
+     * @param raw        the value SnakeYAML returned for the entry's path, never {@code null}
+     * @return the value to store in {@code field}
+     */
+    private static Object readConfigValue(Field field, ConfigEntry annotation, Object raw) {
+        Object parsed = ReflectionUtil.newInstance(annotation.parser()).parse(raw);
+        return widenToFieldType(field.getType(), parsed);
     }
 
     /**
@@ -1055,8 +1072,7 @@ public abstract class AbstractConfigEntity {
                     }
                     Object configValue = config.get(path);
                     if (configValue != null) {
-                        Object parse = ReflectionUtil.newInstance(annotation.parser()).parse(configValue);
-                        ReflectionUtil.setFieldValue(this, field, widenToFieldType(field.getType(), parse));
+                        ReflectionUtil.setFieldValue(this, field, readConfigValue(field, annotation, configValue));
                     }
                 }
             }
