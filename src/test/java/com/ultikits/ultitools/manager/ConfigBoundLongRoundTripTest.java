@@ -2,6 +2,8 @@ package com.ultikits.ultitools.manager;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -16,6 +18,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
@@ -83,6 +89,10 @@ class ConfigBoundLongRoundTripTest {
         @ConfigEntry(path = "interest.cooldown", comment = "seconds")
         private Long cooldown = 60L;
 
+        /** Unbound; removing it from the file forces the reload to write it back. */
+        @ConfigEntry(path = "interest.note", comment = "free text")
+        private String note = "unbound";
+
         public InterestConfig(String configFilePath) {
             super(configFilePath);
         }
@@ -146,6 +156,8 @@ class ConfigBoundLongRoundTripTest {
         TestHelper.mockUltiToolsInstance(ultiTools -> {
             when(ultiTools.getConfigManager()).thenReturn(configManager);
             when(ultiTools.getPluginManager()).thenReturn(pluginManager);
+            // ConfigManager logs an IOException from a config write-back through UltiTools' own logger.
+            when(ultiTools.getLogger()).thenReturn(Logger.getLogger("ConfigBoundLongRoundTripTest"));
         });
         return configManager;
     }
@@ -195,7 +207,7 @@ class ConfigBoundLongRoundTripTest {
         taskManager.registerScheduledMethods(module, service);
         String cooldownKey = CooldownValidator.bindingKey(
                 InterestCommand.class.getMethod("claim", Player.class).getAnnotation(CmdCD.class));
-        assertEquals(Integer.valueOf(60), cooldownValidatorOf(command).getBoundCooldownSeconds().get(cooldownKey));
+        assertEquals(Integer.valueOf(60), cooldownValidatorOf(command).getBoundCooldownSeconds(command.getClass()).get(cooldownKey));
 
         advanceTo(150);
         assertEquals(Arrays.asList(100), service.fireTicks, "delay = period = 5 s");
@@ -208,8 +220,84 @@ class ConfigBoundLongRoundTripTest {
         assertEquals(1, liveTasks(), "one live task after the reload");
         assertEquals(false, secondBoot.getConfigEntity(module, InterestConfig.class).isModifiedSinceSnapshot(),
                 "the #510 snapshot must hold for the Long fields, or the shutdown save overwrites operator edits");
-        assertEquals(Integer.valueOf(30), cooldownValidatorOf(command).getBoundCooldownSeconds().get(cooldownKey));
+        assertEquals(Integer.valueOf(30), cooldownValidatorOf(command).getBoundCooldownSeconds(command.getClass()).get(cooldownKey));
         advanceTo(300);
         assertEquals(Arrays.asList(100, 300), service.fireTicks, "last run 100 + 10 s");
+    }
+
+    /**
+     * Codex round 1 on #536: when a reload's write-back fails with an {@code IOException}, {@code
+     * ConfigManager.reloadConfigs} catches it and returns normally, having already put the file's new
+     * values into the fields without running the field's validation. The binding step must not apply
+     * values from that entity; the running timings stay and a WARNING says why.
+     */
+    @Test
+    @DisplayName("a reload whose config write-back failed keeps the running bound values and warns")
+    void aReloadWhoseWriteBackFailedKeepsTheRunningValues() throws Exception {
+        ConfigManager configManager = boot();
+        configManager.register(module, new InterestConfig(PATH));
+        InterestService service = new InterestService();
+        InterestCommand command = new InterestCommand();
+        SimpleContainer container = new SimpleContainer();
+        container.registerSingleton("interestService", service);
+        container.registerSingleton("interestCommand", command);
+        lenient().when(module.getContext()).thenReturn(container);
+        PluginManager.validateConfigBindings(module, container);
+        taskManager.registerScheduledMethods(module, service);
+        advanceTo(150);
+        assertEquals(Arrays.asList(100), service.fireTicks);
+
+        // The operator edits both bound values and removes an unbound key, so the reload must write
+        // the missing key back -- into a file it may not write.
+        Path file = tempDir.resolve(PATH);
+        StringBuilder edited = new StringBuilder();
+        for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+            if (!line.contains("note:")) {
+                edited.append(line.replace("interval: 5", "interval: 10").replace("cooldown: 60", "cooldown: 30"))
+                        .append('\n');
+            }
+        }
+        Files.write(file, edited.toString().getBytes(StandardCharsets.UTF_8));
+        List<String> warnings = new ArrayList<>();
+        Handler capture = new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                if (Level.WARNING.equals(record.getLevel())) {
+                    warnings.add(record.getMessage());
+                }
+            }
+
+            @Override
+            public void flush() {
+                // Records are appended straight to the in-memory list.
+            }
+
+            @Override
+            public void close() {
+                // Nothing to release.
+            }
+        };
+        Bukkit.getLogger().addHandler(capture);
+        assertTrue(file.toFile().setWritable(false));
+        try {
+            assumeFalse(Files.isWritable(file), "needs a non-root user so the write-back really fails");
+
+            assertDoesNotThrow(module::reloadSelf);
+
+            assertEquals(1, liveTasks());
+            advanceTo(300);
+            assertEquals(Arrays.asList(100, 200, 300), service.fireTicks,
+                    "the running 5 s period is kept; the unvalidated 10 s from the failed reload is not applied");
+            String cooldownKey = CooldownValidator.bindingKey(
+                    InterestCommand.class.getMethod("claim", Player.class).getAnnotation(CmdCD.class));
+            assertEquals(Integer.valueOf(60),
+                    cooldownValidatorOf(command).getBoundCooldownSeconds(command.getClass()).get(cooldownKey),
+                    "the running 60 s cooldown is kept; the unvalidated 30 s is not applied");
+            assertTrue(warnings.stream().anyMatch(w -> w.contains("InterestModule") && w.contains(PATH)),
+                    "a WARNING names the module and the config whose reload failed: " + warnings);
+        } finally {
+            Bukkit.getLogger().removeHandler(capture);
+            assertTrue(file.toFile().setWritable(true));
+        }
     }
 }
