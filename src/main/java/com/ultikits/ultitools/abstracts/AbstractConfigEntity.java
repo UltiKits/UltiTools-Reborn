@@ -147,6 +147,13 @@ public abstract class AbstractConfigEntity {
      */
     @Getter(AccessLevel.NONE)
     private volatile boolean lastInitIncomplete;
+    /**
+     * Counts {@link #init} calls, under this entity's monitor. An {@code init} clears
+     * {@link #lastInitIncomplete} only if no later {@code init} has started since, so an earlier,
+     * overlapping call that completes cannot clear a later call's failure (Codex round 12 on #536).
+     */
+    @Getter(AccessLevel.NONE)
+    private long initGeneration;
 
     /**
      * Constructor for AbstractConfigEntity.
@@ -519,8 +526,10 @@ public abstract class AbstractConfigEntity {
      * @throws IOException if an I/O error occurs
      */
     public final void init(UltiToolsPlugin ultiToolsPlugin) throws IOException {
-        lastInitIncomplete = true;
+        final long generation;
         synchronized (this) {
+            generation = ++initGeneration;
+            lastInitIncomplete = true;
             this.ultiToolsPlugin = ultiToolsPlugin;
             File file = ultiToolsPlugin.getConfigFile(configFilePath);
             config = new YamlConfiguration();
@@ -584,7 +593,11 @@ public abstract class AbstractConfigEntity {
 
         // Validate fields and reset invalid values to defaults
         validateFields();
-        lastInitIncomplete = false;
+        synchronized (this) {
+            if (initGeneration == generation) {
+                lastInitIncomplete = false;
+            }
+        }
 
         // Notify listeners after initialization
         notifyChangeListeners();
