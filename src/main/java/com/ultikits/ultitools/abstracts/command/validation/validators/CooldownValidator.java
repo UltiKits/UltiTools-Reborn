@@ -103,11 +103,11 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
         if (resolvedSeconds == null) {
             return unresolvedBinding(context, method);
         }
-        int cooldownSeconds = resolvedSeconds;
-        if (cooldownSeconds <= 0) {
-            return ValidationResult.success();
-        }
-        
+        // A stored, unexpired end time is honoured whatever the current value is. A bound value can
+        // change at run time (#531): a refresh to 0 means that no NEW cooldown is stamped (see
+        // applyCooldown), not that running ones are lifted -- they expire on their own. Checking the
+        // value first would free every player at once and bring the old stamps back on a later
+        // non-zero value.
         UUID playerId = player.getUniqueId();
         String methodKey = method.toString();
         

@@ -43,7 +43,9 @@ import java.lang.annotation.Target;
  *       refreshed only after a successful configuration reload, so a panel edit takes effect at
  *       the next {@code /ul reload} and a refused reload never takes effect. An invalid value on
  *       reload keeps the running one and logs a WARNING. A cooldown already running keeps the end
- *       time it was stamped with. Executors sharing one validator chain keep all their bindings.</li>
+ *       time it was stamped with, whatever the new value is: a reload to {@code 0} stamps no new
+ *       cooldown, and the running ones expire on their own. Executors sharing one validator chain
+ *       keep all their bindings.</li>
  *   <li><b>Modules only.</b> A binding in an External Plugin API executor is refused.</li>
  *   <li><b>Declare {@code api-version: 630}</b> in the module's {@code plugin.yml}: an older
  *       framework silently ignores these elements and would enforce no cooldown at all. 6.3.0
