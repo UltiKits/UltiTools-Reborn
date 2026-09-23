@@ -8,6 +8,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -71,6 +72,17 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     
     @Getter
     private final ValidatorChain validatorChain;
+
+    /**
+     * Resolved seconds of this executor's config-bound {@code @CmdCD} annotations, keyed by
+     * {@code CooldownValidator.bindingKey}, and their load-time value sources (#531). Kept on the
+     * executor -- the exact owner of a binding -- so the state lives and dies with it and nothing
+     * shared (such as a {@code CooldownValidator} several executors use) has to release it on any
+     * exit path. Replaced as whole immutable maps; written on the main thread, read on dispatch
+     * threads. Reached only through {@link ConfigBoundCooldownState}.
+     */
+    volatile Map<String, Integer> configBoundCooldownSeconds = Collections.emptyMap();
+    volatile Map<String, Supplier<Long>> configBoundCooldownSources = Collections.emptyMap();
     
     @Getter
     private final CooldownValidator cooldownValidator;
