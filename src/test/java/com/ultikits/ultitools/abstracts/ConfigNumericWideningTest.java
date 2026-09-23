@@ -11,6 +11,12 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -132,6 +138,56 @@ class ConfigNumericWideningTest {
         assertThatCode(config::reload).as("reload of an edited whole number").doesNotThrowAnyException();
 
         assertThat(config.boxedLong).isEqualTo(900L);
+    }
+
+    /**
+     * Round 2 of gate-1 CR-01: the #510 snapshot re-reads the file into a probe instance through a
+     * third read path. Unwidened, it threw for the {@code Long} field, the snapshot was dropped with a
+     * "Cannot snapshot" WARNING, and {@code isModifiedSinceSnapshot()} stayed {@code true} -- so the
+     * shutdown save would overwrite an operator's edit to the file.
+     */
+    @Test
+    @DisplayName("the #510 snapshot holds for boxed Long and Double fields after first boot, second boot and reload")
+    void snapshotHoldsForBoxedNumericFields() throws IOException {
+        List<LogRecord> warnings = new ArrayList<>();
+        Handler capture = new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                if (record.getLevel().intValue() >= Level.WARNING.intValue()) {
+                    warnings.add(record);
+                }
+            }
+
+            @Override
+            public void flush() {
+                // Records are appended straight to the in-memory list.
+            }
+
+            @Override
+            public void close() {
+                // Nothing to release.
+            }
+        };
+        Logger logger = Logger.getLogger(AbstractConfigEntity.class.getName());
+        logger.addHandler(capture);
+        try {
+            NumbersConfig firstBoot = new NumbersConfig(PATH);
+            firstBoot.init(plugin);
+            assertThat(firstBoot.isModifiedSinceSnapshot()).as("first boot").isFalse();
+
+            NumbersConfig secondBoot = new NumbersConfig(PATH);
+            assertThatCode(() -> secondBoot.init(plugin)).doesNotThrowAnyException();
+            assertThat(secondBoot.isModifiedSinceSnapshot()).as("second boot").isFalse();
+
+            writeFile("limits:\n  boxed-long: 900\n  plain-long: 60\n  boxed-double: 3\n  boxed-int: 5\n");
+            assertThatCode(secondBoot::reload).doesNotThrowAnyException();
+            assertThat(secondBoot.isModifiedSinceSnapshot()).as("after reload").isFalse();
+
+            assertThat(warnings).as("no 'Cannot snapshot' or other WARNING from the config layer")
+                    .extracting(LogRecord::getMessage).isEmpty();
+        } finally {
+            logger.removeHandler(capture);
+        }
     }
 
     @Test

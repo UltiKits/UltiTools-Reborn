@@ -283,25 +283,6 @@ class TaskManagerConfigBindingTest {
         }
 
         @Test
-        @DisplayName("an async binding goes through the asynchronous scheduler with the bound ticks")
-        void boundAsyncUsesTheAsynchronousSchedulerWithBoundTicks() {
-            config.setPeriodSeconds(3);
-            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
-                BukkitScheduler scheduler = mock(BukkitScheduler.class);
-                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
-                bukkit.when(Bukkit::getLogger).thenReturn(Logger.getLogger("TaskManagerConfigBindingTest.async"));
-                when(scheduler.runTaskTimerAsynchronously(any(Plugin.class), any(Runnable.class), anyLong(),
-                        anyLong())).thenReturn(mock(BukkitTask.class));
-
-                taskManager.registerScheduledMethods(module, new BoundAsyncBean());
-
-                verify(scheduler).runTaskTimerAsynchronously(eq(host), any(Runnable.class), eq(60L), eq(60L));
-                verify(scheduler, never()).runTaskTimer(any(Plugin.class), any(Runnable.class), anyLong(),
-                        anyLong());
-            }
-        }
-
-        @Test
         @DisplayName("a bound registration logs its own INFO line naming the key and the resolved seconds")
         void boundRegistrationLogsItsOwnInfoLineNamingKeyAndSeconds() {
             config.setPeriodSeconds(3);
@@ -566,92 +547,6 @@ class TaskManagerConfigBindingTest {
             }
         }
 
-        /**
-         * WR-01: an async run is handed to a worker thread by the scheduler heartbeat, so a run
-         * that is due this tick may already be dispatched but not yet observed. The anchor must
-         * come from the schedule the framework created, not from observing the run.
-         * <p>
-         * Period 60 s (1200 ticks), default delay: runs are due at ticks 1, 1201, 2401. At tick
-         * 2401 the run has been dispatched but the worker has not recorded it; the interval is
-         * lowered to 30 s. Counting that run as happened gives the next run at 2401 + 600. An
-         * observed anchor would see "never ran" and run again on the next tick -- a second payout
-         * one tick after the first.
-         */
-        @Test
-        @DisplayName("async: a run due at the reload tick counts as run, so the lowered interval does not run it twice")
-        void asyncRescheduleAtTheDueTickCountsTheDispatchedRun() {
-            config.setPeriodSeconds(60);
-            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
-                BukkitScheduler scheduler = mock(BukkitScheduler.class);
-                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
-                bukkit.when(Bukkit::getLogger).thenReturn(Logger.getLogger("TaskManagerConfigBindingTest.asyncDue"));
-                bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
-                bukkit.when(Bukkit::getCurrentTick).thenReturn(0);
-                BukkitTask first = mock(BukkitTask.class);
-                BukkitTask second = mock(BukkitTask.class);
-                when(scheduler.runTaskTimerAsynchronously(any(Plugin.class), any(Runnable.class), anyLong(),
-                        anyLong())).thenReturn(first, second);
-                taskManager.registerScheduledMethods(module, new BoundAsyncPeriodOnlyBean());
-                verify(scheduler).runTaskTimerAsynchronously(eq(host), any(Runnable.class), eq(0L), eq(1200L));
-
-                bukkit.when(Bukkit::getCurrentTick).thenReturn(2401);
-                config.setPeriodSeconds(30);
-                taskManager.rescheduleBound(module);
-
-                verify(first).cancel();
-                verify(scheduler).runTaskTimerAsynchronously(eq(host), any(Runnable.class), eq(600L), eq(600L));
-            }
-        }
-
-        @Test
-        @DisplayName("async: a reload landing on the arm's FIRST due tick counts that run as run, too")
-        void asyncRescheduleAtTheFirstDueTickCountsItAsRun() {
-            config.setPeriodSeconds(60);
-            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
-                BukkitScheduler scheduler = mock(BukkitScheduler.class);
-                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
-                bukkit.when(Bukkit::getLogger).thenReturn(Logger.getLogger("TaskManagerConfigBindingTest.asyncFirst"));
-                bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
-                bukkit.when(Bukkit::getCurrentTick).thenReturn(0);
-                BukkitTask first = mock(BukkitTask.class);
-                when(scheduler.runTaskTimerAsynchronously(any(Plugin.class), any(Runnable.class), anyLong(),
-                        anyLong())).thenReturn(first, mock(BukkitTask.class));
-                taskManager.registerScheduledMethods(module, new BoundAsyncPeriodOnlyBean());
-
-                // Armed at tick 0 with delay 0: the first run is due at tick 1, and is dispatched there.
-                bukkit.when(Bukkit::getCurrentTick).thenReturn(1);
-                config.setPeriodSeconds(30);
-                taskManager.rescheduleBound(module);
-
-                verify(first).cancel();
-                // 1 + 600 - 1 = 600, not "not run yet" (which would run it again on tick 2)
-                verify(scheduler).runTaskTimerAsynchronously(eq(host), any(Runnable.class), eq(600L), eq(600L));
-            }
-        }
-
-        @Test
-        @DisplayName("async: between runs, the next run is the last scheduled run plus the new interval")
-        void asyncRescheduleBetweenRunsAnchorsOnTheLastScheduledRun() {
-            config.setPeriodSeconds(60);
-            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
-                BukkitScheduler scheduler = mock(BukkitScheduler.class);
-                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
-                bukkit.when(Bukkit::getLogger).thenReturn(Logger.getLogger("TaskManagerConfigBindingTest.asyncMid"));
-                bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
-                bukkit.when(Bukkit::getCurrentTick).thenReturn(0);
-                when(scheduler.runTaskTimerAsynchronously(any(Plugin.class), any(Runnable.class), anyLong(),
-                        anyLong())).thenReturn(mock(BukkitTask.class), mock(BukkitTask.class));
-                taskManager.registerScheduledMethods(module, new BoundAsyncPeriodOnlyBean());
-
-                bukkit.when(Bukkit::getCurrentTick).thenReturn(1500);
-                config.setPeriodSeconds(90);
-                taskManager.rescheduleBound(module);
-
-                // last scheduled run 1201 + 1800 = 3001; 3001 - 1500 = 1501
-                verify(scheduler).runTaskTimerAsynchronously(eq(host), any(Runnable.class), eq(1501L), eq(1800L));
-            }
-        }
-
         @Test
         @DisplayName("a value above the ceiling on reload keeps the running period and warns")
         void aValueAboveTheCeilingOnReloadKeepsTheRunningPeriod() {
@@ -818,6 +713,43 @@ class TaskManagerConfigBindingTest {
     @Nested
     @DisplayName("a binding outside a module is refused")
     class OutsideModules {
+
+        /**
+         * Round 2 of gate-1 WR-01 (orchestrator ruling): a config-bound {@code @Scheduled} cannot be
+         * {@code async}. Keeping an async task's phase across a reload needs either a prediction of
+         * the server's scheduler clock (which proved wrong for tasks armed at boot) or a sync trigger
+         * that dispatches the work -- the capability is withdrawn instead, and the author binds a sync
+         * task and dispatches heavy work to the async scheduler themselves.
+         */
+        @Test
+        @DisplayName("a bound async @Scheduled is refused when scheduled, naming the method, and nothing is scheduled")
+        void aBoundAsyncMethodIsRefusedAndNothingIsScheduled() {
+            PluginModuleException refused = assertThrows(PluginModuleException.class,
+                    () -> taskManager.registerScheduledMethods(module, new BoundAsyncBean()));
+
+            assertTrue(refused.getMessage().contains("BoundAsyncBean.tick"), refused.getMessage());
+            assertTrue(refused.getMessage().contains("async"), refused.getMessage());
+            assertTrue(refused.getMessage().contains("runTaskAsynchronously"), refused.getMessage());
+            assertEquals(0, taskManager.getTaskCount(module));
+            assertTrue(pendingTaskIds().isEmpty());
+        }
+
+        @Test
+        @DisplayName("a bound async @Scheduled with only periodKey is refused too")
+        void aBoundAsyncPeriodOnlyMethodIsRefused() {
+            assertThrows(PluginModuleException.class,
+                    () -> taskManager.registerScheduledMethods(module, new BoundAsyncPeriodOnlyBean()));
+
+            assertEquals(0, taskManager.getTaskCount(module));
+        }
+
+        @Test
+        @DisplayName("a literal async @Scheduled is untouched")
+        void aLiteralAsyncMethodStillSchedules() {
+            taskManager.registerScheduledMethods(module, new LiteralAsyncBean());
+
+            assertEquals(1, taskManager.getTaskCount(module));
+        }
 
         @Test
         @DisplayName("a bound method on an external plugin's bean is refused and nothing is scheduled")

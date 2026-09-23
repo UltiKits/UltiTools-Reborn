@@ -206,6 +206,8 @@ class ConfigBoundLongRoundTripTest {
         assertDoesNotThrow(module::reloadSelf, "/ul reload must load the edited whole numbers into the Long fields");
 
         assertEquals(1, liveTasks(), "one live task after the reload");
+        assertEquals(false, secondBoot.getConfigEntity(module, InterestConfig.class).isModifiedSinceSnapshot(),
+                "the #510 snapshot must hold for the Long fields, or the shutdown save overwrites operator edits");
         assertEquals(Integer.valueOf(30), cooldownValidatorOf(command).getBoundCooldownSeconds().get(cooldownKey));
         advanceTo(300);
         assertEquals(Arrays.asList(100, 300), service.fireTicks, "last run 100 + 10 s");

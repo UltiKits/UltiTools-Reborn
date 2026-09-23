@@ -156,6 +156,20 @@ class ConfigBindingValidationTest {
         }
     }
 
+    public static class BoundAsyncBean {
+        @Scheduled(config = BindingTimingConfig.class, periodKey = "timer.period", async = true)
+        public void tick() {
+            // Validation is what is asserted.
+        }
+    }
+
+    public static class LiteralAsyncBean {
+        @Scheduled(period = 20, async = true)
+        public void tick() {
+            // Validation is what is asserted.
+        }
+    }
+
     public static class LiteralOnlyBean {
         @Scheduled(period = 20)
         public void tick() {
@@ -544,6 +558,19 @@ class ConfigBindingValidationTest {
         }
 
         @Test
+        @DisplayName("a bound async @Scheduled is refused at load, telling the author to bind a sync task")
+        void boundAsyncScheduledIsRefused() {
+            assertMentions(refusalOf(new BoundAsyncBean()), "BoundAsyncBean.tick", "async",
+                    "runTaskAsynchronously");
+        }
+
+        @Test
+        @DisplayName("a literal async @Scheduled still loads")
+        void literalAsyncScheduledLoads() {
+            assertDoesNotThrow(() -> PluginManager.validateConfigBindings(module, containerWith(new LiteralAsyncBean())));
+        }
+
+        @Test
         @DisplayName("a @CmdCD key that matches no @ConfigEntry path is refused")
         void cooldownUndeclaredKeyIsRefused() {
             assertMentions(refusalOf(new UndeclaredKeyCooldownExecutor()), "cooldown.nope");
@@ -735,6 +762,45 @@ class ConfigBindingValidationTest {
                     ValidatorChain.builder().add(forgetful).build());
 
             assertMentions(refusalOf(executor), "SharedChainWildExecutor", "cooldown.wild");
+        }
+    }
+
+    // === IN-01 round 2: sources are owned per module ===
+
+    @Nested
+    @DisplayName("a validator shared across modules re-reads only the reloading module's config")
+    class SourcesOwnedPerModule {
+
+        @Test
+        @DisplayName("reloading module A never re-reads module B's field, so B's refused value never takes effect")
+        void reloadingOneModuleDoesNotReadAnotherModulesConfig() throws Exception {
+            UltiToolsPlugin moduleB = mock(ModuleFixture.class);
+            lenient().when(moduleB.getPluginName()).thenReturn("OtherModule");
+            lenient().when(moduleB.getMinUltiToolsVersion()).thenReturn(630);
+            BindingTimingConfig configB = new BindingTimingConfig();
+            configB.setBoxedSeconds(15);
+            lenient().when(configManager.getConfigEntities(moduleB, BindingTimingConfig.class))
+                    .thenReturn(Collections.singletonList(configB));
+            config.setWildCooldown(60);
+
+            CooldownValidator shared = new CooldownValidator();
+            ValidatorChain chain = ValidatorChain.builder().add(shared).build();
+            SimpleContainer containerA = containerWith(new SharedChainWildExecutor(chain));
+            SimpleContainer containerB = containerWith(new SharedChainBoxedExecutor(chain));
+            lenient().when(module.getContext()).thenReturn(containerA);
+            lenient().when(moduleB.getContext()).thenReturn(containerB);
+            PluginManager.validateConfigBindings(module, containerA);
+            PluginManager.validateConfigBindings(moduleB, containerB);
+
+            // B's own reload was refused by validateFields(): the refused 5 is left in B's field and
+            // B's binding step never ran. A later reload of A must not pick it up.
+            configB.setBoxedSeconds(5);
+            config.setWildCooldown(30);
+            new PluginManager().applyReloadedConfigBindings(module);
+
+            assertEquals(Integer.valueOf(30), shared.getBoundCooldownSeconds().get(wildKey()), "A's own value applies");
+            assertEquals(Integer.valueOf(15), shared.getBoundCooldownSeconds().get(boxedKey()),
+                    "B's refused value must not be applied by A's reload");
         }
     }
 
