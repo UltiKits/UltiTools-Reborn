@@ -377,6 +377,11 @@ public class PluginManager {
         // PanelResponderRegistry releases immediately above.
         runUnregisterStep(plugin, "clear @ConditionalOnConfig scan-time decisions",
                 () -> ConditionalRegistrationEvaluator.clear(plugin));
+        // Release this module's config-bound @CmdCD values and sources from its validators
+        // (#531). A validator is normally its executor's own and goes with it, but one shared
+        // with another module's executor would otherwise keep this module's executor, config
+        // instances and plugin reachable after unload (Codex round 5 on #536).
+        runUnregisterStep(plugin, "release config-bound @CmdCD state", () -> releaseConfigBindings(plugin));
         try {
             // Listener unregistration happens inside unregisterSelf() itself, AFTER
             // onUnregister() (D-02) -- do not also unregister listeners here. Calling it
@@ -751,6 +756,25 @@ public class PluginManager {
                             + declared.getKey() + ": a config-bound @CmdCD is supported only in an UltiTools "
                             + "module; external plugins have no module config registry");
                 }
+            }
+        }
+    }
+
+    /**
+     * Drops {@code plugin}'s bound-cooldown values and sources from every validator of its
+     * executors. Part of {@link #unregister(UltiToolsPlugin)}; a module with no container is a
+     * no-op.
+     *
+     * @param plugin the module being unloaded
+     */
+    static void releaseConfigBindings(UltiToolsPlugin plugin) {
+        SimpleContainer context = plugin.getContext();
+        if (context == null) {
+            return;
+        }
+        for (BaseCommandExecutor executor : baseCommandExecutors(context)) {
+            for (CooldownValidator validator : cooldownValidatorsOf(executor)) {
+                validator.releaseExecutor(plugin, executor);
             }
         }
     }

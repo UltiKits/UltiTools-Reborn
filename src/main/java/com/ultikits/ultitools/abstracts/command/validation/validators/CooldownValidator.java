@@ -433,6 +433,33 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
     }
 
     /**
+     * Drops everything this validator holds for {@code executor} on behalf of {@code owner}: its
+     * resolved seconds and {@code owner}'s value sources for it. Called when {@code owner} unloads,
+     * so that a validator shared with another module's executor does not keep the unloaded
+     * module's executor, config instances and plugin reachable (Codex round 5 on #536). A running
+     * cooldown's end timestamp is not touched.
+     *
+     * @param owner    the module being unloaded
+     * @param executor one of its executor instances
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public void releaseExecutor(UltiToolsPlugin owner, Object executor) {
+        Map<Object, Map<String, Integer>> seconds = new IdentityHashMap<>(boundCooldownSeconds);
+        seconds.remove(executor);
+        this.boundCooldownSeconds = Collections.unmodifiableMap(seconds);
+        Map<UltiToolsPlugin, Map<Object, Map<String, Supplier<Long>>>> sources = new IdentityHashMap<>(boundCooldownSources);
+        Map<Object, Map<String, Supplier<Long>>> owned = new IdentityHashMap<>(sources.getOrDefault(owner, Collections.emptyMap()));
+        owned.remove(executor);
+        if (owned.isEmpty()) {
+            sources.remove(owner);
+        } else {
+            sources.put(owner, Collections.unmodifiableMap(owned));
+        }
+        this.boundCooldownSources = Collections.unmodifiableMap(sources);
+    }
+
+    /**
      * Diagnostic view of the whole cache.
      *
      * @return every executor's resolved seconds, keyed by
