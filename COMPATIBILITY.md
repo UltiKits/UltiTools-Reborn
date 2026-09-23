@@ -777,6 +777,24 @@ the answer is: re-verify whenever the framework version changes, including a PAT
   method by a machine. Only then does it become reasonable to worry about this only across MINOR
   releases.
 
+### A floor no linker enforces: config-bound `@Scheduled` and `@CmdCD` (6.3.0)
+
+Everything above is about descriptors, where a missing symbol at least fails loudly with
+`NoSuchMethodError`. New **annotation elements** fail silently instead. As of 6.3.0,
+`@Scheduled(config = ..., periodKey = ..., delayKey = ...)` and `@CmdCD(config = ..., key = ...)`
+read an interval or cooldown from a module config key (#531). A module compiled against 6.3.0 that
+uses them still loads on an older framework. The JVM drops annotation elements that the running
+annotation type does not declare. Measured: a class compiled with `@Sch(periodKey = "x")` and run
+against an older `Sch` without `periodKey` reads back as `@Sch(period=-1L)`. Nothing is logged.
+Against 6.2.x, a bound `@Scheduled` therefore runs **once** at load instead of on its interval,
+and a bound `@CmdCD` enforces **no** cooldown.
+
+So **a module that uses either binding must declare `api-version: 630`** in its `plugin.yml`. That
+floor makes an older framework refuse the module at load, rather than run it with the wrong timing.
+Raising the `pom.xml` pin alone does not do this, for the reason given above. The binding is
+additive: existing literal usages (`@Scheduled(period = 6000)`, `@CmdCD(60)`) behave as before
+and need no change.
+
 ### What this means for us
 
 A human process cannot catch this class of change: it would require an author changing a field type to
