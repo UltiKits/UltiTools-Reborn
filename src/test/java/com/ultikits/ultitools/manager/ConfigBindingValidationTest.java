@@ -990,6 +990,49 @@ class ConfigBindingValidationTest {
         }
     }
 
+    // === Codex round 5 on #536: unloading a module releases its entries in a shared validator ===
+
+    @Nested
+    @DisplayName("unloading a module releases its bound-cooldown entries from a shared validator")
+    class ReleasedOnUnload {
+
+        @Test
+        @DisplayName("unregister drops the unloaded module's values and sources and keeps the other module's")
+        void unregisterReleasesOnlyTheUnloadedModulesEntries() throws Exception {
+            UltiToolsPlugin moduleB = mock(ModuleFixture.class);
+            lenient().when(moduleB.getPluginName()).thenReturn("OtherModule");
+            lenient().when(moduleB.getMinUltiToolsVersion()).thenReturn(630);
+            BindingTimingConfig configB = new BindingTimingConfig();
+            configB.setBoxedSeconds(15);
+            lenient().when(configManager.getConfigEntities(moduleB, BindingTimingConfig.class))
+                    .thenReturn(Collections.singletonList(configB));
+            config.setWildCooldown(60);
+
+            CooldownValidator shared = new CooldownValidator();
+            ValidatorChain chain = ValidatorChain.builder().add(shared).build();
+            SharedChainWildExecutor executorA = new SharedChainWildExecutor(chain);
+            SharedChainBoxedExecutor executorB = new SharedChainBoxedExecutor(chain);
+            SimpleContainer containerA = containerWith(executorA);
+            SimpleContainer containerB = containerWith(executorB);
+            lenient().when(module.getContext()).thenReturn(containerA);
+            lenient().when(moduleB.getContext()).thenReturn(containerB);
+            PluginManager.validateConfigBindings(module, containerA);
+            PluginManager.validateConfigBindings(moduleB, containerB);
+            assertEquals(Integer.valueOf(60), shared.getExecutorCooldownSeconds(executorA).get(wildKey()));
+
+            new PluginManager().unregister(module);
+
+            assertTrue(shared.getExecutorCooldownSeconds(executorA).isEmpty(),
+                    "the unloaded module's executor must no longer be held by the shared validator");
+            assertTrue(shared.getExecutorCooldownSources(module, executorA).isEmpty(),
+                    "nor its config sources");
+            assertEquals(Integer.valueOf(15), shared.getExecutorCooldownSeconds(executorB).get(boxedKey()),
+                    "the other module keeps its value");
+            assertEquals(1, shared.getExecutorCooldownSources(moduleB, executorB).size(),
+                    "and its source");
+        }
+    }
+
     // === IN-01 / IN-02: reload-step robustness ===
 
     @Nested
