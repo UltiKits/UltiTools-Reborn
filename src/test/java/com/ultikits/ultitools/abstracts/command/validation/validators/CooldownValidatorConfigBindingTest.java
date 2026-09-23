@@ -222,6 +222,37 @@ class CooldownValidatorConfigBindingTest {
         verify(player, atLeastOnce()).sendMessage(anyString());
     }
 
+    /**
+     * The dispatch path for a RESOLVED binding: {@code BaseCommandExecutor#onCommand} must put
+     * itself into the context ({@code CommandContext.executor}), because the validator reads the
+     * bound seconds from the dispatching executor. With a bound cooldown already running, a real
+     * {@code onCommand} must be refused with the COOLDOWN message; without the executor in the
+     * context the binding would read as unresolved and fail closed with a different message.
+     * (Validation runs before the command body is deferred with {@code runTask}, so no server is
+     * needed.)
+     */
+    @Test
+    @DisplayName("through onCommand, a resolved bound cooldown that is running refuses with the cooldown message")
+    void aResolvedBindingThroughOnCommandRefusesWithTheCooldownMessage() throws NoSuchMethodException {
+        UnresolvedBoundExecutor executor = new UnresolvedBoundExecutor();
+        ConfigBoundCooldownState.setSeconds(executor, Collections.singletonMap(boundKey(), 30));
+        Method mapping = UnresolvedBoundExecutor.class.getMethod("doGo", Player.class);
+        CooldownValidator chainValidator = (CooldownValidator) executor.getValidatorChain().getValidators().stream()
+                .filter(v -> v instanceof CooldownValidator).findFirst()
+                .orElseThrow(() -> new AssertionError("the default chain carries a CooldownValidator"));
+        chainValidator.onComplete(CommandContext.builder()
+                .sender(player).command(command).alias("fw531unresolved").rawArgs(new String[]{"go"})
+                .matchedMethod(mapping).executorClass(UnresolvedBoundExecutor.class).executor(executor)
+                .build(), true);
+        when(command.getName()).thenReturn("fw531unresolved");
+
+        boolean handled = executor.onCommand(player, command, "fw531unresolved", new String[]{"go"});
+
+        assertTrue(handled);
+        assertEquals(0, executor.runs, "the running cooldown refuses the command");
+        verify(player).sendMessage(org.mockito.ArgumentMatchers.contains("操作频繁"));
+    }
+
     @Test
     @DisplayName("an unbound cooldown still reads the annotation value, whatever the bound cache holds")
     void anUnboundCooldownStillReadsTheAnnotationValue() throws NoSuchMethodException {
