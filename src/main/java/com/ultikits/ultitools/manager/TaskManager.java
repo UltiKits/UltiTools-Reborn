@@ -394,8 +394,10 @@ public class TaskManager {
         }
         int now = Bukkit.getCurrentTick();
         // Elapsed ticks are measured with int subtraction, which stays correct across the signed
-        // wraparound of Bukkit's tick counter (Codex round 7 on #536); a bound interval is at most
-        // Integer.MAX_VALUE ticks, so the difference always fits.
+        // wraparound of Bukkit's tick counter (Codex round 7 on #536). It is exact because every
+        // interval of a bound task -- bound or literal -- is at most ConfigBindings.MAX_TICKS, below
+        // Integer.MAX_VALUE, and the elapsed time never exceeds the interval it is measured against
+        // (checked at load: ConfigBindings.checkShape, Codex round 10).
         long elapsed = hasRun ? now - lastRun : now - handle.armTick;
         long firstDelay = Math.max(1L, (hasRun ? newPeriodTicks : newDelayTicks) - elapsed);
 

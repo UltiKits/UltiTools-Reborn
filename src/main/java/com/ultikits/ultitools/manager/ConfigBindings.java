@@ -53,6 +53,9 @@ final class ConfigBindings {
      */
     static final long MAX_TICK_SECONDS = Integer.MAX_VALUE / TICKS_PER_SECOND;
 
+    /** The same ceiling in ticks: every interval of a bound task, bound or literal, is at most this. */
+    static final long MAX_TICKS = MAX_TICK_SECONDS * TICKS_PER_SECOND;
+
     /**
      * The lowest {@code plugin.yml} {@code api-version} a module using a binding may declare. An
      * older framework silently drops the binding elements, so this floor is what makes it refuse the
@@ -124,6 +127,18 @@ final class ConfigBindings {
         if (!scheduled.delayKey().isEmpty() && scheduled.delay() != 0) {
             throw shapeError(owner, "@Scheduled sets both delay=" + scheduled.delay() + " and delayKey '"
                     + scheduled.delayKey() + "'; the default lives only in the config field, so leave delay unset");
+        }
+        // The literal half of a partially bound task is held to the same tick ceiling as the bound
+        // half, so every interval of a bound task fits in Bukkit's int tick window and the
+        // reschedule arithmetic stays exact across its wraparound (Codex round 10 on #536).
+        if (scheduled.delayKey().isEmpty() && (scheduled.delay() < 0 || scheduled.delay() > MAX_TICKS)) {
+            throw shapeError(owner, "@Scheduled binds periodKey '" + scheduled.periodKey() + "' with a literal delay="
+                    + scheduled.delay() + " ticks; next to a binding a literal delay must be 0 to " + MAX_TICKS + " ticks");
+        }
+        if (scheduled.periodKey().isEmpty() && scheduled.period() > MAX_TICKS) {
+            throw shapeError(owner, "@Scheduled binds delayKey '" + scheduled.delayKey() + "' with a literal period="
+                    + scheduled.period() + " ticks; next to a binding a literal period must be at most " + MAX_TICKS
+                    + " ticks (or -1 to run once)");
         }
     }
 
