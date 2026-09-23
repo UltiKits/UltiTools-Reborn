@@ -350,6 +350,27 @@ class ConfigBindingValidationTest {
         }
     }
 
+    /** Two overloads whose parameter types share a simple name (Codex round 4 on #536). */
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    static class SameSimpleNameOverloadExecutor extends BaseCommandExecutor {
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub - not exercised
+        }
+
+        @CmdMapping(format = "run a")
+        @CmdCD(config = BindingTimingConfig.class, key = "cooldown.wild")
+        public void run(Player player, com.ultikits.testfixtures.configbinding531.overload.a.Target target) {
+            // Test stub - not exercised
+        }
+
+        @CmdMapping(format = "run b")
+        @CmdCD(config = BindingTimingConfig.class, key = "timer.boxed")
+        public void run(Player player, com.ultikits.testfixtures.configbinding531.overload.b.Target target) {
+            // Test stub - not exercised
+        }
+    }
+
     /** The other executor sharing the validator chain (WR-02). */
     @CmdTarget(CmdTarget.CmdTargetType.BOTH)
     static class SharedChainBoxedExecutor extends BaseCommandExecutor {
@@ -919,6 +940,20 @@ class ConfigBindingValidationTest {
             Map<String, Integer> resolved = cooldownValidatorOf(executor).getExecutorCooldownSeconds(executor);
             assertEquals(Integer.valueOf(60), resolved.get(wildKey()), "the no-argument overload's binding");
             assertEquals(Integer.valueOf(15), resolved.get(boxedKey()), "the one-argument overload's binding");
+        }
+
+        @Test
+        @DisplayName("overloads whose parameter types share a simple name both resolve")
+        void overloadsWithSameSimpleNameParameterTypesBothResolve() throws Exception {
+            config.setWildCooldown(60);
+            config.setBoxedSeconds(15);
+            SameSimpleNameOverloadExecutor executor = new SameSimpleNameOverloadExecutor();
+
+            PluginManager.validateConfigBindings(module, containerWith(executor));
+
+            Map<String, Integer> resolved = cooldownValidatorOf(executor).getExecutorCooldownSeconds(executor);
+            assertEquals(Integer.valueOf(60), resolved.get(wildKey()), "run(a.Target)'s binding");
+            assertEquals(Integer.valueOf(15), resolved.get(boxedKey()), "run(b.Target)'s binding");
         }
 
         @Test
