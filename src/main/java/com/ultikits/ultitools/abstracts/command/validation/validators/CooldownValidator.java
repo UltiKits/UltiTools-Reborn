@@ -425,6 +425,44 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
     }
 
     /**
+     * Per-executor form of {@link #mergeBoundCooldownSeconds(Map)}: adds resolved seconds for the
+     * config-bound {@code @CmdCD} annotations of {@code executorClass}.
+     *
+     * @param executorClass       the concrete executor class the bindings were declared on
+     * @param secondsByBindingKey resolved seconds keyed by {@link #bindingKey(CmdCD)}
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public void mergeBoundCooldownSeconds(Class<?> executorClass, Map<String, Integer> secondsByBindingKey) {
+        mergeBoundCooldownSeconds(secondsByBindingKey);
+    }
+
+    /**
+     * Per-executor form of {@link #getBoundCooldownSeconds()}.
+     *
+     * @param executorClass the concrete executor class
+     * @return resolved seconds of its config-bound {@code @CmdCD} annotations, keyed by
+     *         {@link #bindingKey(CmdCD)}; never {@code null}
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public Map<String, Integer> getBoundCooldownSeconds(Class<?> executorClass) {
+        return getBoundCooldownSeconds();
+    }
+
+    /**
+     * Per-executor form of {@link #setBoundCooldownSeconds(Map)}.
+     *
+     * @param executorClass       the concrete executor class
+     * @param secondsByBindingKey resolved seconds keyed by {@link #bindingKey(CmdCD)}
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public void setBoundCooldownSeconds(Class<?> executorClass, Map<String, Integer> secondsByBindingKey) {
+        setBoundCooldownSeconds(secondsByBindingKey);
+    }
+
+    /**
      * Replaces the resolved seconds of this validator's config-bound {@code @CmdCD} annotations
      * wholesale. The framework itself uses {@link #mergeBoundCooldownSeconds(Map)}, which keeps
      * keys another executor sharing this validator resolved; module code has no reason to call
