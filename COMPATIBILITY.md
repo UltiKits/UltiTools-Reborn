@@ -793,7 +793,10 @@ So **a module that uses either binding must declare `api-version: 630`** in its 
 floor makes an older framework refuse the module at load, rather than run it with the wrong timing.
 Raising the `pom.xml` pin alone does not do this, for the reason given above. So that the mistake
 surfaces on the version you develop against, 6.3.0 itself refuses a module that uses a binding while
-declaring a lower `api-version`, naming the module, the binding and the required floor. The binding is
+declaring a lower `api-version`, naming the module, the binding and the required floor. A bound
+`@Scheduled` must also be synchronous: `async = true` together with a binding is refused at load,
+because a reload can keep an async task's place in its cycle only by predicting when the server
+dispatches async work (#535 tracks a design that observes it instead). The binding is
 additive: existing literal usages (`@Scheduled(period = 6000)`, `@CmdCD(60)`) behave as before
 and need no change.
 

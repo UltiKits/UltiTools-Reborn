@@ -57,9 +57,13 @@ import java.lang.annotation.Target;
  *       early and never postpones it by restarting its clock; a task whose value did not change is
  *       not touched. An invalid value on reload is not applied -- the running value is kept and a
  *       WARNING names the key. A panel edit takes effect at the next {@code /ul reload}. The
- *       reload step runs on the main thread only; for an {@code async} task, a run whose due tick
- *       has been reached counts as run even if its worker has not started yet, so a reload landing
- *       on that tick never runs it twice.</li>
+ *       reload step runs on the main thread only.</li>
+ *   <li><b>Sync only.</b> A bound method cannot be {@code async = true}; that combination is
+ *       refused at load. Bind a sync task and hand the heavy work to
+ *       {@code Bukkit.getScheduler().runTaskAsynchronously(...)} from its body. A sync task's runs
+ *       happen on the main thread, where the reload also runs, which is what lets a reload keep
+ *       the task's place in its cycle exactly. Literal (unbound) {@code async} tasks are
+ *       unaffected. Issue #535 tracks allowing async bindings.</li>
  *   <li><b>Modules only.</b> A binding on an External Plugin API bean is refused.</li>
  *   <li><b>Declare {@code api-version: 630}</b> in the module's {@code plugin.yml}. An older
  *       framework does not know these elements and silently ignores them -- the method would then
