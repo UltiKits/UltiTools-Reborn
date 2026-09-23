@@ -314,6 +314,7 @@ public class TaskManager {
             @Override
             public void run() {
                 handle.lastFireTick = Bukkit.getCurrentTick();
+                handle.hasRun = true;
                 try {
                     handle.method.invoke(handle.bean);
                 } catch (Exception e) {
@@ -384,7 +385,7 @@ public class TaskManager {
         handle.delayTicks = newDelayTicks;
 
         int lastRun = handle.lastFireTick;
-        boolean hasRun = lastRun != BoundTask.NOT_RUN;
+        boolean hasRun = handle.hasRun;
         if (hasRun && newPeriodTicks <= 0) {
             Bukkit.getLogger().log(Level.INFO, String.format(
                     "[UltiTools-API] %s: config-bound @Scheduled task %s already ran once; its new delay=%d "
@@ -538,8 +539,6 @@ public class TaskManager {
      * its current Bukkit task. Mutated only on the main thread: a bound task is never async.
      */
     static final class BoundTask {
-        static final int NOT_RUN = Integer.MIN_VALUE;
-
         final Object bean;
         final Method method;
         final Scheduled scheduled;
@@ -550,8 +549,14 @@ public class TaskManager {
         long delayTicks;
         /** Tick the task was first armed at load; the anchor for "arm tick + new delay". */
         int armTick;
-        /** Observed start of the last run, stamped on the main thread, or {@link #NOT_RUN}. */
-        int lastFireTick = NOT_RUN;
+        /**
+         * Whether the task has run at least once. Kept apart from {@link #lastFireTick} because
+         * every {@code int} is a real tick -- {@code Integer.MIN_VALUE} included, right after the
+         * counter wraps -- so no tick value can double as "never ran" (Codex round 8 on #536).
+         */
+        boolean hasRun;
+        /** Observed start of the last run, stamped on the main thread; meaningful only when {@link #hasRun}. */
+        int lastFireTick;
         BukkitTask task;
 
         private BoundTask(Object bean, Method method, Scheduled scheduled, String owner,
