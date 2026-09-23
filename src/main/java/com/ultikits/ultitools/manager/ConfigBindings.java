@@ -165,6 +165,46 @@ final class ConfigBindings {
         String configName() {
             return entity.getClass().getSimpleName();
         }
+
+        /**
+         * Whether this entity's last load or reload failed with an {@code IOException} that
+         * {@link ConfigManager} caught (Codex round 1 on #536). Its fields then hold the file's
+         * values without their validation having run, so the reload step keeps the running value.
+         *
+         * @return {@code true} if the value must not be applied
+         */
+        boolean lastReloadFailed() {
+            ConfigManager configManager = UltiTools.getInstance().getConfigManager();
+            return configManager != null && configManager.lastInitFailed(entity);
+        }
+
+        /**
+         * A value source for the {@code @CmdCD} reload step: reads the field, or throws
+         * {@link ReloadFailedException} when {@link #lastReloadFailed()}.
+         *
+         * @return the source
+         */
+        java.util.function.Supplier<Long> reloadSource() {
+            return () -> {
+                if (lastReloadFailed()) {
+                    throw new ReloadFailedException(entity.getConfigFilePath());
+                }
+                return readSeconds();
+            };
+        }
+    }
+
+    /**
+     * Thrown by {@link Source#reloadSource()} when the bound entity's last reload failed, so the
+     * {@code @CmdCD} reload step can keep the running value and say why.
+     */
+    static final class ReloadFailedException extends IllegalStateException {
+        private static final long serialVersionUID = 1L;
+
+        ReloadFailedException(String configFilePath) {
+            super("the reload of " + configFilePath + " failed (its write-back threw an IOException), so its "
+                    + "values were not validated");
+        }
     }
 
     /**

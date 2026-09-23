@@ -28,6 +28,16 @@ public class ConfigManager {
     private final Map<UltiToolsPlugin, Map<String, AbstractConfigEntity>> pluginConfigMap = new HashMap<>();
 
     /**
+     * Entities whose most recent {@code init()} -- at registration or at {@link #reloadConfigs} --
+     * threw an {@code IOException}, which this class logs and continues past. Such an entity already
+     * holds the file's new values, but its field validation never ran (#533), so the #531 binding
+     * step must not apply them. Identity-keyed; cleared for an entity by its next successful
+     * {@code init()}.
+     */
+    private final Set<AbstractConfigEntity> failedInits = Collections.synchronizedSet(
+            Collections.newSetFromMap(new IdentityHashMap<>()));
+
+    /**
      * Register config entity.
      *
      * @param ultiToolsPlugin UltiTools module
@@ -80,7 +90,9 @@ public class ConfigManager {
     private void addConfigEntity(UltiToolsPlugin ultiToolsPlugin, AbstractConfigEntity configEntity) {
         try {
             configEntity.init(ultiToolsPlugin);
+            failedInits.remove(configEntity);
         } catch (IOException e) {
+            failedInits.add(configEntity);
             UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration initialization failed！File path：" + configEntity.getConfigFilePath());
         }
         Map<String, AbstractConfigEntity> configMap = pluginConfigMap.computeIfAbsent(ultiToolsPlugin, k -> new HashMap<>());
@@ -310,6 +322,18 @@ public class ConfigManager {
     }
 
     /**
+     * Whether {@code entity}'s most recent {@code init()} failed with an {@code IOException} that
+     * this class caught -- its fields then hold the file's values unvalidated (#533). Used by the
+     * #531 binding step to keep the running values rather than apply those.
+     *
+     * @param entity a registered config entity
+     * @return {@code true} if its last load or reload did not complete
+     */
+    boolean lastInitFailed(AbstractConfigEntity entity) {
+        return failedInits.contains(entity);
+    }
+
+    /**
      * Reload all configs.
      *
      * @param plugin UltiTools module
@@ -322,7 +346,9 @@ public class ConfigManager {
         for (AbstractConfigEntity configEntity : configMap.values()) {
             try {
                 configEntity.init(plugin);
+                failedInits.remove(configEntity);
             } catch (IOException e) {
+                failedInits.add(configEntity);
                 UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration initialization failed！File path：" + configEntity.getConfigFilePath());
             }
         }
