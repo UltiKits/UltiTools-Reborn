@@ -21,21 +21,40 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
  * <p>
  * A bound value is always a whole number of <b>seconds</b>, read from the {@code @ConfigEntry}
  * field of the module's own registered config entity -- the same instance {@code /ul reload}
- * reloads in place, so there is one source of truth and the field's own validation annotations
- * still apply. The default lives only in that field's initializer; an annotation literal next to
- * a binding is refused rather than used as a fallback, because after {@code init()} a declared key
- * always has a value and a fallback would be a second, hand-synchronised copy of the default.
+ * reloads in place, resolved once at load and kept, so there is one source of truth. A reload
+ * that {@code validateFields()} refused never reaches the binding step; the one gap is a reload
+ * whose file write failed with an {@code IOException}, which {@code ConfigManager.reloadConfigs}
+ * logs and continues past without running the field's own validation annotations (tracked
+ * separately), so only the binding's own range rule is guaranteed. The default lives only in that
+ * field's initializer; an annotation literal next to a binding is refused rather than used as a
+ * fallback, because after {@code init()} a declared key always has a value and a fallback would be
+ * a second, hand-synchronised copy of the default.
  * <p>
- * A bound value must be at least 1 second. {@code 0} does not mean "off" and does not mean "run
- * once" -- an operator who types it is refused at load, and on reload the running value is kept.
+ * Ranges: a bound {@code @Scheduled} period or delay must be 1 to {@link #MAX_TICK_SECONDS}
+ * seconds -- {@code 0} does not mean "off" and does not mean "run once". A bound {@code @CmdCD}
+ * cooldown may be 0 to {@link Integer#MAX_VALUE} seconds, where {@code 0} means "no cooldown"
+ * (maintainer ruling, 2026-09-23). Out of range is refused at load; on reload the running value is
+ * kept. A module that uses any binding must declare {@code api-version: }{@value #MIN_API_VERSION}
+ * or higher.
  */
 final class ConfigBindings {
 
     /** Bukkit's nominal tick rate. A bound seconds value is multiplied by this. */
     static final long TICKS_PER_SECOND = 20L;
 
-    /** Largest seconds value that still fits in a {@code long} tick count. */
-    static final long MAX_TICK_SECONDS = Long.MAX_VALUE / TICKS_PER_SECOND;
+    /**
+     * Largest bound period or delay, in seconds: the tick count then fits in an {@code int}, so the
+     * reschedule arithmetic ({@code int} tick plus period, in {@code long}) cannot overflow. That is
+     * about 3.4 years (#531 gate-1 IN-03).
+     */
+    static final long MAX_TICK_SECONDS = Integer.MAX_VALUE / TICKS_PER_SECOND;
+
+    /**
+     * The lowest {@code plugin.yml} {@code api-version} a module using a binding may declare. An
+     * older framework silently drops the binding elements, so this floor is what makes it refuse the
+     * module instead (#531 gate-1 WR-03).
+     */
+    static final int MIN_API_VERSION = 630;
 
     /** The rule text for a bound period or delay. */
     static final String TIMER_RULE = "a bound @Scheduled period or delay must be a whole number of seconds "
@@ -43,7 +62,7 @@ final class ConfigBindings {
 
     /** The rule text for a bound cooldown. */
     static final String COOLDOWN_RULE = "a bound @CmdCD cooldown must be a whole number of seconds "
-            + "from 1 to " + Integer.MAX_VALUE + " (0 does not mean off)";
+            + "from 0 (no cooldown) to " + Integer.MAX_VALUE;
 
     private ConfigBindings() {
         // Static rules only.
@@ -201,10 +220,29 @@ final class ConfigBindings {
 
     /**
      * @param seconds a bound value
-     * @return {@code true} for a cooldown value in [1, {@link Integer#MAX_VALUE}]
+     * @return {@code true} for a cooldown value in [0, {@link Integer#MAX_VALUE}]; 0 means no cooldown
      */
     static boolean isValidCooldownSeconds(Long seconds) {
-        return seconds != null && seconds >= 1 && seconds <= Integer.MAX_VALUE;
+        return seconds != null && seconds >= 0 && seconds <= Integer.MAX_VALUE;
+    }
+
+    /**
+     * Refuses a module that uses a binding while declaring an {@code api-version} below
+     * {@link #MIN_API_VERSION}.
+     *
+     * @param plugin       the module
+     * @param firstBinding the first bound declaration found, for the message
+     * @throws PluginModuleException if the declared floor is too low
+     */
+    static void checkApiVersionFloor(UltiToolsPlugin plugin, String firstBinding) {
+        int declared = plugin.getMinUltiToolsVersion();
+        if (declared < MIN_API_VERSION) {
+            throw new PluginModuleException(ErrorCode.CONFIG_ERROR, String.format(
+                    "Module '%s' uses a config binding (%s) but declares api-version: %d in plugin.yml; a module "
+                            + "using a config-bound @Scheduled or @CmdCD must declare api-version: %d or higher, "
+                            + "because an older framework silently ignores the binding and runs the wrong timing",
+                    plugin.getPluginName(), firstBinding, declared, MIN_API_VERSION));
+        }
     }
 
     /**

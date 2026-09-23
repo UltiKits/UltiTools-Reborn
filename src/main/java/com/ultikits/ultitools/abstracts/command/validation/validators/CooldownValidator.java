@@ -7,7 +7,9 @@ import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.annotations.PlayerCache;
 import com.ultikits.ultitools.annotations.PlayerCacheSaver;
 import com.ultikits.ultitools.annotations.command.CmdCD;
+import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
+import com.ultikits.ultitools.manager.TriggerContext;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
@@ -20,6 +22,9 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Validates and manages command cooldowns for players.
@@ -33,6 +38,8 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
         PlayerCacheSaver {
 
     private static final int ORDER = 300;
+
+    private static final Logger LOGGER = Logger.getLogger(CooldownValidator.class.getName());
 
     /**
      * Map of player UUID -> (method name -> cooldown end timestamp)
@@ -70,6 +77,9 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
      * reference rather than mutated.
      */
     private volatile Map<String, Integer> boundCooldownSeconds = Collections.emptyMap();
+
+    /** Load-time value sources of the bindings in {@link #boundCooldownSeconds}; main thread only. */
+    private volatile Map<String, Supplier<Long>> boundCooldownSources = Collections.emptyMap();
     
     /**
      * Creates a cooldown validator with no default cooldown.
@@ -102,7 +112,11 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
             return ValidationResult.success();
         }
 
-        int cooldownSeconds = getCooldownSeconds(method, context.getExecutorClass());
+        Integer resolvedSeconds = getCooldownSeconds(method, context.getExecutorClass());
+        if (resolvedSeconds == null) {
+            return unresolvedBinding(context, method);
+        }
+        int cooldownSeconds = resolvedSeconds;
         if (cooldownSeconds <= 0) {
             return ValidationResult.success();
         }
@@ -146,8 +160,8 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
             return;
         }
 
-        int cooldownSeconds = getCooldownSeconds(method, context.getExecutorClass());
-        if (cooldownSeconds <= 0) {
+        Integer cooldownSeconds = getCooldownSeconds(method, context.getExecutorClass());
+        if (cooldownSeconds == null || cooldownSeconds <= 0) {
             return;
         }
         
@@ -298,41 +312,113 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
      * does not declare its own.
      * <p>
      * A config-bound {@code @CmdCD} (#531) returns the seconds cached by
-     * {@link #setBoundCooldownSeconds(Map)} instead of its literal -- never the live config field,
+     * {@link #mergeBoundCooldownSeconds(Map)} instead of its literal -- never the live config field,
      * because a refused {@code /ul reload} leaves the refused value in that field. A bound
-     * annotation with no cached value was never resolved by a module load and fails loudly.
+     * annotation with no cached value returns {@code null}: it was never resolved by a module
+     * load, and the caller refuses the command rather than treat it as "no cooldown".
      *
      * @param method        the matched command mapping method
      * @param executorClass the concrete executor class dispatching this command (WR-02,
      *                      05-REVIEW.md), or {@code null} when unavailable -- falls back to the
      *                      pre-WR-02, declaring-class-only resolution in that case
-     * @return the resolved cooldown in seconds
+     * @return the resolved cooldown in seconds, or {@code null} for an unresolved binding
      * @since 6.3.0
      */
-    private int getCooldownSeconds(Method method, Class<?> executorClass) {
+    private Integer getCooldownSeconds(Method method, Class<?> executorClass) {
         CmdCD cmdCD = ReflectionUtil.resolveMethodOrClassAnnotation(method, executorClass, CmdCD.class);
         if (cmdCD != null) {
             String bindingKey = bindingKey(cmdCD);
             if (bindingKey == null) {
                 return cmdCD.value();
             }
-            Integer bound = boundCooldownSeconds.get(bindingKey);
-            if (bound == null) {
-                throw new IllegalStateException("@CmdCD on " + method.getDeclaringClass().getSimpleName() + "."
-                        + method.getName() + " is bound to " + cmdCD.config().getSimpleName() + " key '"
-                        + cmdCD.key() + "', but the framework never resolved that binding for this validator; "
-                        + "bound cooldowns are resolved when an UltiTools module loads");
-            }
-            return bound;
+            return boundCooldownSeconds.get(bindingKey);
         }
         return defaultCooldownSeconds;
     }
     
     /**
-     * Replaces the resolved seconds of this validator's config-bound {@code @CmdCD} annotations.
-     * Called by the framework when a module loads and after a successful {@code /ul reload};
-     * module code has no reason to call it. A cooldown that is already running keeps the end time
-     * it was stamped with.
+     * Fails the command closed for a config-bound {@code @CmdCD} this validator never had resolved
+     * -- reachable only when a {@code CooldownValidator} is added after the module loaded, or an
+     * executor is registered outside the module loader. Treating it as "no cooldown" would be a
+     * silent no-op, and throwing would escape {@code onCommand} as Bukkit's generic internal
+     * error; instead the player gets the same message shape as a failed command, and the cause is
+     * logged at SEVERE and sent to the error report collector like any other command failure
+     * (#531 gate-1 WR-02).
+     */
+    private ValidationResult unresolvedBinding(CommandContext context, Method method) {
+        CmdCD cmdCD = ReflectionUtil.resolveMethodOrClassAnnotation(method, context.getExecutorClass(), CmdCD.class);
+        IllegalStateException cause = new IllegalStateException("@CmdCD on "
+                + method.getDeclaringClass().getSimpleName() + "." + method.getName() + " is bound to "
+                + cmdCD.config().getSimpleName() + " key '" + cmdCD.key() + "', but the framework never resolved "
+                + "that binding for this CooldownValidator; bound cooldowns are resolved when an UltiTools module "
+                + "loads, so a validator added later cannot enforce one");
+        LOGGER.log(Level.SEVERE, cause.getMessage(), cause);
+        reportUnresolvedBinding(context, cause);
+        return ValidationResult.failure(ChatColor.RED + "命令执行出错: " + cause.getMessage(),
+                "command.error.cooldown-unresolved");
+    }
+
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // never let error reporting break the command path
+    private static void reportUnresolvedBinding(CommandContext context, IllegalStateException cause) {
+        try {
+            UltiTools instance = UltiTools.getInstance();
+            ErrorReportCollector collector = instance == null ? null : instance.getErrorReportCollector();
+            if (collector != null) {
+                collector.reportError(cause, null,
+                        TriggerContext.command(context.getSender(), context.getCommand().getName()));
+            }
+        } catch (RuntimeException ignored) {
+            // Never re-enter logging from error reporting, matching BaseCommandExecutor's own path.
+        }
+    }
+
+    /**
+     * Adds resolved seconds for config-bound {@code @CmdCD} annotations to this validator's cache,
+     * keeping every key already there. A binding key names one config key, so its value is the same
+     * whichever executor resolved it; merging (not replacing) is what lets several executors that
+     * share one validator chain keep all of their bindings (#531 gate-1 WR-02).
+     *
+     * @param secondsByBindingKey resolved seconds keyed by {@link #bindingKey(CmdCD)}
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public void mergeBoundCooldownSeconds(Map<String, Integer> secondsByBindingKey) {
+        Map<String, Integer> next = new HashMap<>(boundCooldownSeconds);
+        next.putAll(secondsByBindingKey);
+        this.boundCooldownSeconds = Collections.unmodifiableMap(next);
+    }
+
+    /**
+     * Adds the load-time sources of this validator's config-bound {@code @CmdCD} values, keyed by
+     * {@link #bindingKey(CmdCD)}. Each source reads the module's config field it was resolved to at
+     * load, so a reload re-reads that same instance instead of resolving the binding again
+     * (#531 gate-1 IN-01).
+     *
+     * @param sourcesByBindingKey value sources keyed by {@link #bindingKey(CmdCD)}
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public void mergeBoundCooldownSources(Map<String, Supplier<Long>> sourcesByBindingKey) {
+        Map<String, Supplier<Long>> next = new HashMap<>(boundCooldownSources);
+        next.putAll(sourcesByBindingKey);
+        this.boundCooldownSources = Collections.unmodifiableMap(next);
+    }
+
+    /**
+     * @return the load-time sources of this validator's config-bound {@code @CmdCD} values, keyed
+     *         by {@link #bindingKey(CmdCD)}; never {@code null}
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public Map<String, Supplier<Long>> getBoundCooldownSources() {
+        return boundCooldownSources;
+    }
+
+    /**
+     * Replaces the resolved seconds of this validator's config-bound {@code @CmdCD} annotations
+     * wholesale. The framework itself uses {@link #mergeBoundCooldownSeconds(Map)}, which keeps
+     * keys another executor sharing this validator resolved; module code has no reason to call
+     * either. A cooldown that is already running keeps the end time it was stamped with.
      *
      * @param secondsByBindingKey resolved seconds keyed by {@link #bindingKey(CmdCD)}
      * @since 6.3.0
