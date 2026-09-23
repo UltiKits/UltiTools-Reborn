@@ -138,6 +138,14 @@ class TaskManagerConfigBindingTest {
         }
     }
 
+    /** Bound period, literal delay exactly at the tick ceiling (ConfigBindings.MAX_TICKS). */
+    public static class CeilingDelayBean {
+        @Scheduled(config = BindingTimingConfig.class, periodKey = "timer.period", delay = 2147483640L)
+        public void tick() {
+            // Scheduling is what is asserted; the body never runs under the mocked scheduler.
+        }
+    }
+
     /** Literal only -- today's shape, which must stay byte-identical. */
     public static class LiteralBean {
         @Scheduled(delay = 7, period = 20)
@@ -634,6 +642,67 @@ class TaskManagerConfigBindingTest {
 
                 verify(scheduler, org.mockito.Mockito.times(1)).runTaskLater(any(Plugin.class), any(Runnable.class),
                         anyLong());
+            }
+        }
+
+        /**
+         * The class-closing extremes (orchestrator ruling after Codex rounds 7, 8 and 10 on #536):
+         * the longest span the load-time ceiling allows before a first run -- a literal delay of
+         * exactly MAX_TICKS -- measured across the counter's wraparound, one tick before it is due.
+         */
+        @Test
+        @DisplayName("the longest allowed wait before a first run, across the wraparound, re-arms for the one tick left")
+        void theLongestAllowedWaitBeforeTheFirstRunAcrossTheWraparound() {
+            config.setPeriodSeconds(5);
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                BukkitScheduler scheduler = mock(BukkitScheduler.class);
+                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+                bukkit.when(Bukkit::getLogger).thenReturn(Logger.getLogger("TaskManagerConfigBindingTest.ceilArm"));
+                bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+                int armTick = Integer.MAX_VALUE - 10;
+                bukkit.when(Bukkit::getCurrentTick).thenReturn(armTick);
+                when(scheduler.runTaskTimer(any(Plugin.class), any(Runnable.class), anyLong(), anyLong()))
+                        .thenReturn(mock(BukkitTask.class), mock(BukkitTask.class));
+                taskManager.registerScheduledMethods(module, new CeilingDelayBean());
+                verify(scheduler).runTaskTimer(eq(host), any(Runnable.class), eq(2147483640L), eq(100L));
+
+                int oneTickBeforeDue = (int) ((long) armTick + 2147483640L - 1L); // wraps negative
+                assertTrue(oneTickBeforeDue < 0, "the reload tick must be past the wraparound");
+                bukkit.when(Bukkit::getCurrentTick).thenReturn(oneTickBeforeDue);
+                config.setPeriodSeconds(10);
+                taskManager.rescheduleBound(module);
+
+                verify(scheduler).runTaskTimer(eq(host), any(Runnable.class), eq(1L), eq(200L));
+            }
+        }
+
+        @Test
+        @DisplayName("a period at the ceiling, measured across the wraparound after a run, keeps its phase")
+        void aCeilingPeriodAfterARunAcrossTheWraparoundKeepsItsPhase() {
+            config.setPeriodSeconds(107374182); // Integer.MAX_VALUE / 20 seconds = 2147483640 ticks
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                BukkitScheduler scheduler = mock(BukkitScheduler.class);
+                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+                bukkit.when(Bukkit::getLogger).thenReturn(Logger.getLogger("TaskManagerConfigBindingTest.ceilRun"));
+                bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+                bukkit.when(Bukkit::getCurrentTick).thenReturn(Integer.MAX_VALUE - 100);
+                when(scheduler.runTaskTimer(any(Plugin.class), any(Runnable.class), anyLong(), anyLong()))
+                        .thenReturn(mock(BukkitTask.class), mock(BukkitTask.class));
+                taskManager.registerScheduledMethods(module, new BoundPeriodBean());
+                org.mockito.ArgumentCaptor<Runnable> armed = org.mockito.ArgumentCaptor.forClass(Runnable.class);
+                verify(scheduler).runTaskTimer(eq(host), armed.capture(), eq(0L), eq(2147483640L));
+
+                int lastRun = Integer.MAX_VALUE - 5;
+                bukkit.when(Bukkit::getCurrentTick).thenReturn(lastRun);
+                armed.getValue().run();
+
+                int now = (int) ((long) lastRun + 2147483640L - 30L); // 2147483610 ticks later, wrapped
+                bukkit.when(Bukkit::getCurrentTick).thenReturn(now);
+                config.setPeriodSeconds(107374181); // 2147483620 ticks
+                taskManager.rescheduleBound(module);
+
+                // last run + 2147483620 is 10 ticks after "now"
+                verify(scheduler).runTaskTimer(eq(host), any(Runnable.class), eq(10L), eq(2147483620L));
             }
         }
 
