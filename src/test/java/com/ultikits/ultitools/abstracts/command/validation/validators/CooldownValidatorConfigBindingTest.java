@@ -277,4 +277,36 @@ class CooldownValidatorConfigBindingTest {
         long remaining = validator.getRemainingCooldown(player.getUniqueId(), method.toString());
         assertTrue(remaining > 50, "the running cooldown keeps the end time it was stamped with, was " + remaining);
     }
+
+    /**
+     * Module gate-1 review (UltiEssentials round 2, WR-03): a bound value refreshed to {@code 0} must
+     * not lift a cooldown that is already running. {@code 0} means that no new cooldown is stamped; a
+     * stamp made earlier keeps its end time and expires on its own, whatever the current value is.
+     */
+    @Test
+    @DisplayName("a refresh to 0 keeps a running cooldown: a stored, unexpired end time is honoured at any value")
+    void aRefreshToZeroKeepsARunningCooldown() throws NoSuchMethodException {
+        ConfigBoundCooldownState.setSeconds(holder, Collections.singletonMap(boundKey(), 60));
+        Method method = mapping("boundMapping");
+        validator.onComplete(contextFor(method), true);
+
+        ConfigBoundCooldownState.setSeconds(holder, Collections.singletonMap(boundKey(), 0));
+
+        assertFalse(validator.validate(contextFor(method)).isValid(),
+                "the running 60 s cooldown still refuses the command after the value became 0");
+        long remaining = validator.getRemainingCooldown(player.getUniqueId(), method.toString());
+        assertTrue(remaining > 50 && remaining <= 61, "the end time is unchanged, was " + remaining);
+    }
+
+    @Test
+    @DisplayName("a bound value of 0 stamps no new cooldown")
+    void aZeroValueStampsNoNewCooldown() throws NoSuchMethodException {
+        ConfigBoundCooldownState.setSeconds(holder, Collections.singletonMap(boundKey(), 0));
+        Method method = mapping("boundMapping");
+
+        validator.onComplete(contextFor(method), true);
+
+        assertEquals(0L, validator.getRemainingCooldown(player.getUniqueId(), method.toString()));
+        assertTrue(validator.validate(contextFor(method)).isValid(), "no cooldown at 0");
+    }
 }
