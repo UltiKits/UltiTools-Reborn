@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.annotations.command;
 
+import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
+
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -35,4 +37,21 @@ public @interface CmdCD {
      *         mapping
      */
     int value() default 0;
+
+    /**
+     * Config entity class whose {@code @ConfigEntry} key {@link #key()} names. Default:
+     * {@link AbstractConfigEntity} itself, meaning unbound.
+     *
+     * @return the bound config entity class
+     * @since 6.3.0
+     */
+    Class<? extends AbstractConfigEntity> config() default AbstractConfigEntity.class;
+
+    /**
+     * {@code @ConfigEntry} path whose value, in seconds, is the cooldown. Default: unbound.
+     *
+     * @return the bound cooldown key
+     * @since 6.3.0
+     */
+    String key() default "";
 }

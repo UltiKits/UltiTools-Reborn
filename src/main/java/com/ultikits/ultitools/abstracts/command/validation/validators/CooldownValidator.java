@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.abstracts.command.validation.validators;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.annotations.PlayerCache;
@@ -10,8 +11,11 @@ import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
+import org.jetbrains.annotations.ApiStatus;
 
 import java.lang.reflect.Method;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -57,6 +61,12 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
     private volatile boolean playerCacheRegistered = false;
 
     private final int defaultCooldownSeconds;
+
+    /**
+     * Resolved seconds for every config-bound {@code @CmdCD} this validator can meet, keyed by
+     * {@link #bindingKey(CmdCD)}.
+     */
+    private volatile Map<String, Integer> boundCooldownSeconds = Collections.emptyMap();
     
     /**
      * Creates a cooldown validator with no default cooldown.
@@ -299,6 +309,42 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
         return defaultCooldownSeconds;
     }
     
+    /**
+     * Replaces the resolved seconds of this validator's config-bound {@code @CmdCD} annotations.
+     *
+     * @param secondsByBindingKey resolved seconds keyed by {@link #bindingKey(CmdCD)}
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public void setBoundCooldownSeconds(Map<String, Integer> secondsByBindingKey) {
+        this.boundCooldownSeconds = Collections.unmodifiableMap(new HashMap<>(secondsByBindingKey));
+    }
+
+    /**
+     * @return the resolved seconds of this validator's config-bound {@code @CmdCD} annotations,
+     *         keyed by {@link #bindingKey(CmdCD)}; never {@code null}
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public Map<String, Integer> getBoundCooldownSeconds() {
+        return boundCooldownSeconds;
+    }
+
+    /**
+     * The cache key of a config-bound {@code @CmdCD}: its config class and key.
+     *
+     * @param cmdCD the annotation
+     * @return {@code configClassName#key}, or {@code null} when {@code cmdCD} is unbound
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public static String bindingKey(CmdCD cmdCD) {
+        if (cmdCD.config() == AbstractConfigEntity.class && cmdCD.key().isEmpty()) {
+            return null;
+        }
+        return cmdCD.config().getName() + "#" + cmdCD.key();
+    }
+
     @Override
     public int getOrder() {
         return ORDER;

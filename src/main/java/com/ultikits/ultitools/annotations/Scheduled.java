@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.annotations;
 
+import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
+
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -51,4 +53,29 @@ public @interface Scheduled {
      * @return true if async
      */
     boolean async() default false;
+
+    /**
+     * Config entity class whose {@code @ConfigEntry} keys {@link #periodKey()} and
+     * {@link #delayKey()} name. Default: {@link AbstractConfigEntity} itself, meaning unbound.
+     *
+     * @return the bound config entity class
+     * @since 6.3.0
+     */
+    Class<? extends AbstractConfigEntity> config() default AbstractConfigEntity.class;
+
+    /**
+     * {@code @ConfigEntry} path whose value, in seconds, is the repeat interval. Default: unbound.
+     *
+     * @return the bound period key
+     * @since 6.3.0
+     */
+    String periodKey() default "";
+
+    /**
+     * {@code @ConfigEntry} path whose value, in seconds, is the initial delay. Default: unbound.
+     *
+     * @return the bound delay key
+     * @since 6.3.0
+     */
+    String delayKey() default "";
 }

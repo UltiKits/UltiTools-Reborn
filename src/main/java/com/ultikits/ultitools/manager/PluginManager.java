@@ -31,6 +31,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.server.PluginDisableEvent;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.jetbrains.annotations.ApiStatus;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
@@ -524,6 +525,39 @@ public class PluginManager {
                 }
             }
         }, Bukkit.getPluginManager().getPlugin("UltiTools"));
+    }
+
+    /**
+     * Applies a module's reloaded configuration to its config-bound {@code @Scheduled} tasks and
+     * {@code @CmdCD} cooldowns.
+     *
+     * @param plugin the module whose configuration was just reloaded
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public void applyReloadedConfigBindings(UltiToolsPlugin plugin) {
+        // Inert until the binding is implemented.
+    }
+
+    /**
+     * Load-time check of a module's config-bound {@code @Scheduled} and {@code @CmdCD}
+     * declarations.
+     *
+     * @param plugin        the module being assembled
+     * @param pluginContext its just-refreshed container
+     */
+    static void validateConfigBindings(UltiToolsPlugin plugin, SimpleContainer pluginContext) {
+        // Inert until the binding is implemented.
+    }
+
+    /**
+     * Refuses config-bound {@code @Scheduled}/{@code @CmdCD} declarations in a container that
+     * has no module config registry.
+     *
+     * @param context an external plugin's just-refreshed container
+     */
+    static void refuseConfigBindingsOutsideModules(SimpleContainer context) {
+        // Inert until the binding is implemented.
     }
 
     /**
