@@ -1646,7 +1646,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * Extension point for a module's own reload work.
      * <p>
      * Called by {@link #reloadSelf()} <em>after</em> the framework's own reload steps -- config
-     * reload, language-catalogue refresh, {@code @ConditionalOnConfig} drift report, and the
+     * reload, config-bound timing refresh (#531), language-catalogue refresh,
+     * {@code @ConditionalOnConfig} drift report, and the
      * framework-owned per-module reload log line (D-02, D-03) -- so a real-work override sees
      * the already-reloaded configuration rather than the stale one. {@link #reloadSelf()} is
      * {@code final} and always runs its own steps first; a module cannot skip them by
@@ -1667,7 +1668,10 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * Also reports (but does not act on) any {@code @ConditionalOnConfig} drift: the condition
      * is evaluated once, at component-scan time during startup, so a reload can only log that a
      * watched key has changed direction since then -- it never registers, unregisters, or
-     * rebuilds anything (issue #392, D-01). {@code final} and always runs its own three steps,
+     * rebuilds anything (issue #392, D-01). Right after the configuration reload, and only if it
+     * succeeded, the module's config-bound {@code @Scheduled} tasks and {@code @CmdCD} cooldowns
+     * pick up their reloaded values (#531; see {@code PluginManager#applyReloadedConfigBindings}).
+     * {@code final} and always runs its own steps,
      * then logs one framework-owned INFO line naming this module (D-03), then calls
      * {@link #onReload()} -- a module can no longer skip any of this by overriding
      * {@code reloadSelf()} itself, because that override point no longer exists (D-01).
@@ -1675,6 +1679,12 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     @Override
     public final void reloadSelf() {
         getConfigManager().reloadConfigs(this);
+        // #531: apply the reloaded values to config-bound @Scheduled/@CmdCD. Only reached when
+        // reloadConfigs did not throw, so a refused reload leaves the running timings alone.
+        PluginManager pluginManager = UltiTools.getInstance().getPluginManager();
+        if (pluginManager != null) {
+            pluginManager.applyReloadedConfigBindings(this);
+        }
         // Reinitialize language in case language setting changed
         language = createLanguageFromPath(resourceFolderPath);
         // @ConditionalOnConfig is evaluated once at component-scan time; a reload can only

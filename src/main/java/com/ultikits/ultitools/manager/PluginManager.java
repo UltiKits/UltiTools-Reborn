@@ -10,8 +10,10 @@ import java.lang.reflect.Parameter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -54,6 +56,7 @@ import com.ultikits.ultitools.aop.AnnotationLookupCache;
 import com.ultikits.ultitools.aop.AopAdvisor;
 import com.ultikits.ultitools.aop.AopProxyResolver;
 import com.ultikits.ultitools.aop.ExceptionInterceptor;
+import com.ultikits.ultitools.aop.ProxyFactory;
 import com.ultikits.ultitools.aop.TransactionInterceptor;
 import com.ultikits.ultitools.api.ExternalPluginAdapter;
 import com.ultikits.ultitools.api.UltiToolsAPI;
@@ -529,35 +532,193 @@ public class PluginManager {
 
     /**
      * Applies a module's reloaded configuration to its config-bound {@code @Scheduled} tasks and
-     * {@code @CmdCD} cooldowns.
+     * {@code @CmdCD} cooldowns (#531). Called by {@code UltiToolsPlugin.reloadSelf()} after its
+     * configuration reload succeeded and before the module's own {@code onReload()}; a refused
+     * configuration reload throws before this step, so the running timings stay.
+     * <p>
+     * Bound {@code @Scheduled} tasks are rescheduled by {@link TaskManager#rescheduleBound} (see
+     * there for the phase-preserving rule). Each bound {@code @CmdCD} value is re-read and pushed
+     * into the executor's {@code CooldownValidator} cache -- the only place the cache changes after
+     * load, so a panel save or a refused reload that left a new value in the config field is not
+     * enforced until a reload succeeds. An out-of-range value keeps the running one and logs one
+     * WARNING. A cooldown that is already running keeps the end time it was stamped with.
      *
      * @param plugin the module whose configuration was just reloaded
      * @since 6.3.0
      */
     @ApiStatus.Internal
     public void applyReloadedConfigBindings(UltiToolsPlugin plugin) {
-        // Inert until the binding is implemented.
+        if (taskManager != null) {
+            taskManager.rescheduleBound(plugin);
+        }
+        SimpleContainer context = plugin.getContext();
+        if (context == null) {
+            return;
+        }
+        Set<String> reported = new HashSet<>();
+        for (BaseCommandExecutor executor : baseCommandExecutors(context)) {
+            List<CooldownValidator> validators = cooldownValidatorsOf(executor);
+            if (validators.isEmpty() || validators.get(0).getBoundCooldownSeconds().isEmpty()) {
+                continue;
+            }
+            Map<String, Integer> previous = validators.get(0).getBoundCooldownSeconds();
+            Map<String, Integer> next = resolveCooldownBindings(plugin, executor, previous, reported);
+            for (CooldownValidator validator : validators) {
+                validator.setBoundCooldownSeconds(next);
+            }
+        }
     }
 
     /**
      * Load-time check of a module's config-bound {@code @Scheduled} and {@code @CmdCD}
-     * declarations.
+     * declarations (#531), run right after {@link #validateCommandExecutorContracts} and before
+     * any Bukkit side effect, so a refusal is module-granular in exactly the same way.
+     * <p>
+     * Refuses the module when a binding names a config class not registered exactly once for it,
+     * a key that matches no {@code @ConfigEntry} path, a field that is not an {@code int},
+     * {@code long}, {@code Integer} or {@code Long}, a key without a config class or a config
+     * class without a key, or sets the annotation literal as well as the key; and when a bound
+     * value is below 1 second, {@code null}, or too large. Resolves every bound {@code @CmdCD}
+     * into its executor's {@code CooldownValidator} cache.
      *
      * @param plugin        the module being assembled
      * @param pluginContext its just-refreshed container
+     * @throws PluginModuleException for a binding that cannot work
+     * @throws com.ultikits.ultitools.exceptions.ConfigurationException for an out-of-range value
      */
     static void validateConfigBindings(UltiToolsPlugin plugin, SimpleContainer pluginContext) {
-        // Inert until the binding is implemented.
+        for (Object bean : pluginContext.getSingletonValues()) {
+            TaskManager.validateConfigBindings(plugin, bean);
+        }
+        for (BaseCommandExecutor executor : baseCommandExecutors(pluginContext)) {
+            Map<String, Integer> resolved = resolveCooldownBindings(plugin, executor, null, null);
+            for (CooldownValidator validator : cooldownValidatorsOf(executor)) {
+                validator.setBoundCooldownSeconds(resolved);
+            }
+        }
     }
 
     /**
-     * Refuses config-bound {@code @Scheduled}/{@code @CmdCD} declarations in a container that
-     * has no module config registry.
+     * Refuses config-bound {@code @Scheduled}/{@code @CmdCD} declarations in an external plugin's
+     * container, which has no module config registry to bind against (#531). Run before any
+     * Bukkit side effect.
      *
      * @param context an external plugin's just-refreshed container
+     * @throws PluginModuleException naming the first bound declaration found
      */
     static void refuseConfigBindingsOutsideModules(SimpleContainer context) {
-        // Inert until the binding is implemented.
+        for (Object bean : context.getSingletonValues()) {
+            TaskManager.refuseConfigBindings(bean);
+        }
+        for (BaseCommandExecutor executor : baseCommandExecutors(context)) {
+            for (Map.Entry<String, CmdCD> declared : cooldownDeclarations(executor).entrySet()) {
+                if (ConfigBindings.isBound(declared.getValue())) {
+                    throw new PluginModuleException(ErrorCode.CONFIG_ERROR, "Invalid config binding on "
+                            + declared.getKey() + ": a config-bound @CmdCD is supported only in an UltiTools "
+                            + "module; external plugins have no module config registry");
+                }
+            }
+        }
+    }
+
+    private static List<BaseCommandExecutor> baseCommandExecutors(SimpleContainer context) {
+        List<BaseCommandExecutor> executors = new ArrayList<>();
+        for (String beanName : context.getBeanNamesForType(CommandExecutor.class)) {
+            CommandExecutor commandExecutor = context.getBean(beanName, CommandExecutor.class);
+            if (commandExecutor instanceof BaseCommandExecutor) {
+                executors.add((BaseCommandExecutor) commandExecutor);
+            }
+        }
+        return executors;
+    }
+
+    private static List<CooldownValidator> cooldownValidatorsOf(BaseCommandExecutor executor) {
+        List<CooldownValidator> validators = new ArrayList<>();
+        for (CommandValidator validator : executor.getValidatorChain().getValidators()) {
+            if (validator instanceof CooldownValidator) {
+                validators.add((CooldownValidator) validator);
+            }
+        }
+        return validators;
+    }
+
+    /**
+     * Every {@code @CmdCD} the executor's validator can meet, keyed by a display owner: the
+     * class-level annotation, and for each {@code @CmdMapping} method the annotation
+     * {@code CooldownValidator} itself resolves (most-derived-wins), in the same way.
+     */
+    private static Map<String, CmdCD> cooldownDeclarations(BaseCommandExecutor executor) {
+        Class<?> executorClass = executor.getClass();
+        String executorName = ProxyFactory.unwrap(executorClass).getSimpleName();
+        Map<String, CmdCD> declarations = new LinkedHashMap<>();
+        CmdCD classLevel = ProxyFactory.unwrap(executorClass).getAnnotation(CmdCD.class);
+        if (classLevel != null) {
+            declarations.put(executorName, classLevel);
+        }
+        for (Method method : ReflectionUtil.getAllMethods(executorClass)) {
+            if (!method.isAnnotationPresent(CmdMapping.class)) {
+                continue;
+            }
+            CmdCD resolved = ReflectionUtil.resolveMethodOrClassAnnotation(method, executorClass, CmdCD.class);
+            if (resolved != null) {
+                declarations.put(executorName + "." + method.getName(), resolved);
+            }
+        }
+        return declarations;
+    }
+
+    /**
+     * Resolves every bound {@code @CmdCD} of {@code executor} to seconds.
+     *
+     * @param previous {@code null} at load, where an out-of-range value refuses the module; the
+     *                 running values on reload, where an out-of-range value keeps its running one
+     * @param reported on reload, the keys already warned or logged in this reload pass
+     * @return seconds keyed by {@link CooldownValidator#bindingKey(CmdCD)}
+     */
+    private static Map<String, Integer> resolveCooldownBindings(UltiToolsPlugin plugin, BaseCommandExecutor executor,
+                                                                Map<String, Integer> previous, Set<String> reported) {
+        Map<String, Integer> resolved = new HashMap<>();
+        for (Map.Entry<String, CmdCD> declared : cooldownDeclarations(executor).entrySet()) {
+            CmdCD cmdCD = declared.getValue();
+            if (!ConfigBindings.isBound(cmdCD)) {
+                continue;
+            }
+            String owner = declared.getKey();
+            ConfigBindings.checkShape(owner, cmdCD);
+            String bindingKey = CooldownValidator.bindingKey(cmdCD);
+            if (resolved.containsKey(bindingKey)) {
+                continue;
+            }
+            ConfigBindings.Source source = ConfigBindings.resolve(plugin, owner, cmdCD.config(), cmdCD.key());
+            Long seconds = source.readSeconds();
+            if (ConfigBindings.isValidCooldownSeconds(seconds)) {
+                int value = seconds.intValue();
+                resolved.put(bindingKey, value);
+                Integer before = previous == null ? null : previous.get(bindingKey);
+                if (before != null && before != value && reported.add(bindingKey)) {
+                    Bukkit.getLogger().log(Level.INFO, String.format(
+                            "[UltiTools-API] %s: config-bound @CmdCD %s key '%s' is now %ds (was %ds); "
+                                    + "cooldowns already running keep their end time",
+                            plugin.getPluginName(), source.configName(), source.key, value, before));
+                }
+                continue;
+            }
+            if (previous == null) {
+                throw ConfigBindings.invalidValueAtLoad(plugin, owner, source, seconds, ConfigBindings.COOLDOWN_RULE);
+            }
+            Integer kept = previous.get(bindingKey);
+            if (kept != null) {
+                resolved.put(bindingKey, kept);
+            }
+            if (reported.add(bindingKey)) {
+                Bukkit.getLogger().log(Level.WARNING, String.format(
+                        "[UltiTools-API] %s: %s is bound to %s key '%s', which has value %s after the reload; %s; "
+                                + "keeping %ds",
+                        plugin.getPluginName(), owner, source.configName(), source.key, seconds,
+                        ConfigBindings.COOLDOWN_RULE, kept));
+            }
+        }
+        return resolved;
     }
 
     /**
@@ -1704,6 +1865,11 @@ public class PluginManager {
         // PluginModuleException through logPluginInitializationFailure, so this refusal is
         // module-granular for free -- no new try/catch is added here.
         validateCommandExecutorContracts(pluginContext);
+
+        // #531: config-bound @Scheduled/@CmdCD are checked at the same point and with the same
+        // module granularity, before onPluginRegistered() schedules anything or registerBukkit()
+        // hands a command to Bukkit. This also resolves each bound @CmdCD into its validator.
+        validateConfigBindings(plugin, pluginContext);
     }
 
     /**
@@ -2219,6 +2385,9 @@ public class PluginManager {
         // path's placement as the last step of container assembly, so a refusal leaves no partial
         // registration on either path (fail-closed, module-granularity isolation, D-01/D-04).
         validateCommandExecutorContracts(context);
+        // #531: an external plugin has no module config registry, so a config binding cannot
+        // resolve; refuse it here, before any side effect, rather than mid-scheduling.
+        refuseConfigBindingsOutsideModules(context);
 
         String pluginName = adapter.getPluginName();
 

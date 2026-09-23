@@ -64,7 +64,10 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
 
     /**
      * Resolved seconds for every config-bound {@code @CmdCD} this validator can meet, keyed by
-     * {@link #bindingKey(CmdCD)}.
+     * {@link #bindingKey(CmdCD)} (#531). Written on the main thread -- once when the module loads,
+     * then only by the {@code /ul reload} step after a successful configuration reload -- and read
+     * on dispatch threads, so it is replaced as a whole immutable map behind a {@code volatile}
+     * reference rather than mutated.
      */
     private volatile Map<String, Integer> boundCooldownSeconds = Collections.emptyMap();
     
@@ -293,6 +296,11 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
      * passes the load-time check -- whether declared on a shared abstract base or on the
      * concrete executor class itself -- now actually cools down every inherited mapping that
      * does not declare its own.
+     * <p>
+     * A config-bound {@code @CmdCD} (#531) returns the seconds cached by
+     * {@link #setBoundCooldownSeconds(Map)} instead of its literal -- never the live config field,
+     * because a refused {@code /ul reload} leaves the refused value in that field. A bound
+     * annotation with no cached value was never resolved by a module load and fails loudly.
      *
      * @param method        the matched command mapping method
      * @param executorClass the concrete executor class dispatching this command (WR-02,
@@ -304,13 +312,27 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
     private int getCooldownSeconds(Method method, Class<?> executorClass) {
         CmdCD cmdCD = ReflectionUtil.resolveMethodOrClassAnnotation(method, executorClass, CmdCD.class);
         if (cmdCD != null) {
-            return cmdCD.value();
+            String bindingKey = bindingKey(cmdCD);
+            if (bindingKey == null) {
+                return cmdCD.value();
+            }
+            Integer bound = boundCooldownSeconds.get(bindingKey);
+            if (bound == null) {
+                throw new IllegalStateException("@CmdCD on " + method.getDeclaringClass().getSimpleName() + "."
+                        + method.getName() + " is bound to " + cmdCD.config().getSimpleName() + " key '"
+                        + cmdCD.key() + "', but the framework never resolved that binding for this validator; "
+                        + "bound cooldowns are resolved when an UltiTools module loads");
+            }
+            return bound;
         }
         return defaultCooldownSeconds;
     }
     
     /**
      * Replaces the resolved seconds of this validator's config-bound {@code @CmdCD} annotations.
+     * Called by the framework when a module loads and after a successful {@code /ul reload};
+     * module code has no reason to call it. A cooldown that is already running keeps the end time
+     * it was stamped with.
      *
      * @param secondsByBindingKey resolved seconds keyed by {@link #bindingKey(CmdCD)}
      * @since 6.3.0
