@@ -39,6 +39,7 @@ import org.jetbrains.annotations.ApiStatus;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
+import com.ultikits.ultitools.abstracts.command.ConfigBoundCooldownState;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.abstracts.command.validation.validators.CooldownValidator;
 import com.ultikits.ultitools.abstracts.command.validation.validators.UsageLockValidator;
@@ -377,11 +378,6 @@ public class PluginManager {
         // PanelResponderRegistry releases immediately above.
         runUnregisterStep(plugin, "clear @ConditionalOnConfig scan-time decisions",
                 () -> ConditionalRegistrationEvaluator.clear(plugin));
-        // Release this module's config-bound @CmdCD values and sources from its validators
-        // (#531). A validator is normally its executor's own and goes with it, but one shared
-        // with another module's executor would otherwise keep this module's executor, config
-        // instances and plugin reachable after unload (Codex round 5 on #536).
-        runUnregisterStep(plugin, "release config-bound @CmdCD state", () -> releaseConfigBindings(plugin));
         try {
             // Listener unregistration happens inside unregisterSelf() itself, AFTER
             // onUnregister() (D-02) -- do not also unregister listeners here. Calling it
@@ -594,23 +590,20 @@ public class PluginManager {
             return;
         }
         Set<String> reported = new HashSet<>();
+        // Only this module's own executors, each refreshing the state it carries itself: a
+        // validator several executors (or modules) share holds none of it, so nothing another
+        // module owns is ever re-read here (#531; Codex rounds 1, 2, 5 and 6 on #536).
         for (BaseCommandExecutor executor : baseCommandExecutors(context)) {
-            for (CooldownValidator validator : cooldownValidatorsOf(executor)) {
-                // Only this module's own executor's sources: a validator shared with another
-                // module's executor must not re-read that module's config, whose own reload may
-                // have been refused, and each executor instance keeps its own values (Codex
-                // rounds 1-2, #536).
-                Map<String, Supplier<Long>> owned = validator.getExecutorCooldownSources(plugin, executor);
-                if (owned.isEmpty()) {
-                    continue;
-                }
-                Map<String, Integer> running = validator.getExecutorCooldownSeconds(executor);
-                Map<String, Integer> next = new HashMap<>();
-                for (Map.Entry<String, Supplier<Long>> source : owned.entrySet()) {
-                    refreshOne(plugin, source.getKey(), source.getValue(), running.get(source.getKey()), next, reported);
-                }
-                validator.mergeExecutorCooldownSeconds(executor, next);
+            Map<String, Supplier<Long>> owned = ConfigBoundCooldownState.sources(executor);
+            if (owned.isEmpty()) {
+                continue;
             }
+            Map<String, Integer> running = ConfigBoundCooldownState.seconds(executor);
+            Map<String, Integer> next = new HashMap<>();
+            for (Map.Entry<String, Supplier<Long>> source : owned.entrySet()) {
+                refreshOne(plugin, source.getKey(), source.getValue(), running.get(source.getKey()), next, reported);
+            }
+            ConfigBoundCooldownState.setSeconds(executor, next);
         }
     }
 
@@ -672,10 +665,10 @@ public class PluginManager {
      * config class without a key, or sets the annotation literal as well as the key; when a bound
      * value is out of range (a period or delay below 1 second or above the ceiling, a cooldown
      * below 0 or above {@link Integer#MAX_VALUE}, or {@code null}); when the bound config's own load
-     * failed with an {@code IOException}, so its values were never validated; and when, after resolution, any
-     * bound {@code @CmdCD} declaration is missing from any {@code CooldownValidator} of its
-     * executor. Resolves every bound {@code @CmdCD} once, and merges its value and its load-time
-     * source into each of its executor's validators.
+     * did not complete (for example, a failed write-back), so its values were never validated.
+     * Resolves every bound {@code @CmdCD} once and, only when every executor resolved, stores its
+     * value and load-time source on the executor itself -- its exact owner -- through
+     * {@link ConfigBoundCooldownState}; no {@code CooldownValidator} holds any of it.
      *
      * @param plugin        the module being assembled
      * @param pluginContext its just-refreshed container
@@ -692,30 +685,21 @@ public class PluginManager {
         for (Object bean : pluginContext.getSingletonValues()) {
             TaskManager.validateConfigBindings(plugin, bean);
         }
+        // Resolve every executor first and publish only when all of them resolved, so a module
+        // refused here leaves no state behind anywhere; the state is the executor's own in any
+        // case, so it never reaches a validator another executor or module shares.
+        Map<BaseCommandExecutor, Map<String, Integer>> resolvedByExecutor = new IdentityHashMap<>();
+        Map<BaseCommandExecutor, Map<String, Supplier<Long>>> sourcesByExecutor = new IdentityHashMap<>();
         for (BaseCommandExecutor executor : executors) {
             Map<String, Integer> resolved = new HashMap<>();
             Map<String, Supplier<Long>> sources = new HashMap<>();
             resolveCooldownBindings(plugin, executor, resolved, sources);
-            for (CooldownValidator validator : cooldownValidatorsOf(executor)) {
-                validator.mergeExecutorCooldownSeconds(executor, resolved);
-                validator.mergeExecutorCooldownSources(plugin, executor, sources);
-            }
+            resolvedByExecutor.put(executor, resolved);
+            sourcesByExecutor.put(executor, sources);
         }
         for (BaseCommandExecutor executor : executors) {
-            for (Map.Entry<String, CmdCD> declared : cooldownDeclarations(executor)) {
-                String bindingKey = CooldownValidator.bindingKey(declared.getValue());
-                if (bindingKey == null) {
-                    continue;
-                }
-                for (CooldownValidator validator : cooldownValidatorsOf(executor)) {
-                    if (!validator.getExecutorCooldownSeconds(executor).containsKey(bindingKey)) {
-                        throw new PluginModuleException(ErrorCode.CONFIG_ERROR, "Invalid config binding on "
-                                + declared.getKey() + ": the @CmdCD bound to " + describeBindingKey(bindingKey)
-                                + " was not resolved into its CooldownValidator ("
-                                + validator.getClass().getName() + "), so it could not be enforced");
-                    }
-                }
-            }
+            ConfigBoundCooldownState.setSeconds(executor, resolvedByExecutor.get(executor));
+            ConfigBoundCooldownState.setSources(executor, sourcesByExecutor.get(executor));
         }
     }
 
@@ -760,25 +744,6 @@ public class PluginManager {
         }
     }
 
-    /**
-     * Drops {@code plugin}'s bound-cooldown values and sources from every validator of its
-     * executors. Part of {@link #unregister(UltiToolsPlugin)}; a module with no container is a
-     * no-op.
-     *
-     * @param plugin the module being unloaded
-     */
-    static void releaseConfigBindings(UltiToolsPlugin plugin) {
-        SimpleContainer context = plugin.getContext();
-        if (context == null) {
-            return;
-        }
-        for (BaseCommandExecutor executor : baseCommandExecutors(context)) {
-            for (CooldownValidator validator : cooldownValidatorsOf(executor)) {
-                validator.releaseExecutor(plugin, executor);
-            }
-        }
-    }
-
     private static List<BaseCommandExecutor> baseCommandExecutors(SimpleContainer context) {
         List<BaseCommandExecutor> executors = new ArrayList<>();
         for (String beanName : context.getBeanNamesForType(CommandExecutor.class)) {
@@ -788,16 +753,6 @@ public class PluginManager {
             }
         }
         return executors;
-    }
-
-    private static List<CooldownValidator> cooldownValidatorsOf(BaseCommandExecutor executor) {
-        List<CooldownValidator> validators = new ArrayList<>();
-        for (CommandValidator validator : executor.getValidatorChain().getValidators()) {
-            if (validator instanceof CooldownValidator) {
-                validators.add((CooldownValidator) validator);
-            }
-        }
-        return validators;
     }
 
     /**
