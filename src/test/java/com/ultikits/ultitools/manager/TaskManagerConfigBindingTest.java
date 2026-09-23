@@ -604,6 +604,32 @@ class TaskManagerConfigBindingTest {
         }
 
         @Test
+        @DisplayName("async: a reload landing on the arm's FIRST due tick counts that run as run, too")
+        void asyncRescheduleAtTheFirstDueTickCountsItAsRun() {
+            config.setPeriodSeconds(60);
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                BukkitScheduler scheduler = mock(BukkitScheduler.class);
+                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+                bukkit.when(Bukkit::getLogger).thenReturn(Logger.getLogger("TaskManagerConfigBindingTest.asyncFirst"));
+                bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+                bukkit.when(Bukkit::getCurrentTick).thenReturn(0);
+                BukkitTask first = mock(BukkitTask.class);
+                when(scheduler.runTaskTimerAsynchronously(any(Plugin.class), any(Runnable.class), anyLong(),
+                        anyLong())).thenReturn(first, mock(BukkitTask.class));
+                taskManager.registerScheduledMethods(module, new BoundAsyncPeriodOnlyBean());
+
+                // Armed at tick 0 with delay 0: the first run is due at tick 1, and is dispatched there.
+                bukkit.when(Bukkit::getCurrentTick).thenReturn(1);
+                config.setPeriodSeconds(30);
+                taskManager.rescheduleBound(module);
+
+                verify(first).cancel();
+                // 1 + 600 - 1 = 600, not "not run yet" (which would run it again on tick 2)
+                verify(scheduler).runTaskTimerAsynchronously(eq(host), any(Runnable.class), eq(600L), eq(600L));
+            }
+        }
+
+        @Test
         @DisplayName("async: between runs, the next run is the last scheduled run plus the new interval")
         void asyncRescheduleBetweenRunsAnchorsOnTheLastScheduledRun() {
             config.setPeriodSeconds(60);
