@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -38,6 +39,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
+import com.ultikits.ultitools.abstracts.command.validation.ValidatorChain;
 import com.ultikits.ultitools.abstracts.command.validation.validators.CooldownValidator;
 import com.ultikits.ultitools.annotations.Scheduled;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
@@ -238,6 +240,78 @@ class ConfigBindingValidationTest {
         }
     }
 
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    @CmdExecutor(alias = {"boxedcd"})
+    static class BoxedCooldownExecutor extends BaseCommandExecutor {
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub - not exercised
+        }
+
+        @CmdMapping(format = "go")
+        @CmdCD(config = BindingTimingConfig.class, key = "timer.boxed")
+        public void doGo(Player player) {
+            // Test stub - not exercised
+        }
+    }
+
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    @CmdExecutor(alias = {"hugecd"})
+    static class HugeCooldownExecutor extends BaseCommandExecutor {
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub - not exercised
+        }
+
+        @CmdMapping(format = "go")
+        @CmdCD(config = BindingTimingConfig.class, key = "timer.huge")
+        public void doGo(Player player) {
+            // Test stub - not exercised
+        }
+    }
+
+    /**
+     * One of two executors sharing a validator chain (WR-02). No {@code @CmdExecutor}: the
+     * binding pass finds executors by type, and the annotation would pull this
+     * constructor-injected fixture into another test's component scan.
+     */
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    static class SharedChainWildExecutor extends BaseCommandExecutor {
+        SharedChainWildExecutor(ValidatorChain chain) {
+            super(chain);
+        }
+
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub - not exercised
+        }
+
+        @CmdMapping(format = "go")
+        @CmdCD(config = BindingTimingConfig.class, key = "cooldown.wild")
+        public void doGo(Player player) {
+            // Test stub - not exercised
+        }
+    }
+
+    /** The other executor sharing the validator chain (WR-02). */
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    static class SharedChainBoxedExecutor extends BaseCommandExecutor {
+        SharedChainBoxedExecutor(ValidatorChain chain) {
+            super(chain);
+        }
+
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub - not exercised
+        }
+
+        @CmdMapping(format = "go")
+        @CmdCD(config = BindingTimingConfig.class, key = "timer.boxed")
+        public void doGo(Player player) {
+            // Test stub - not exercised
+        }
+    }
+
     /**
      * Points the component scan at a package with no classes, so assembling this fixture sees only
      * the beans a test registers -- the default (this class's own package) would pick up every
@@ -255,6 +329,7 @@ class ConfigBindingValidationTest {
         configManager = mock(ConfigManager.class);
         module = mock(ModuleFixture.class);
         lenient().when(module.getPluginName()).thenReturn("TimingModule");
+        lenient().when(module.getMinUltiToolsVersion()).thenReturn(630);
         lenient().when(configManager.getConfigEntities(module, BindingTimingConfig.class))
                 .thenReturn(Collections.singletonList(config));
 
@@ -338,6 +413,11 @@ class ConfigBindingValidationTest {
             }
         }
         throw new AssertionError("the default chain carries a CooldownValidator");
+    }
+
+    private static String boxedKey() throws NoSuchMethodException {
+        return CooldownValidator.bindingKey(
+                BoxedCooldownExecutor.class.getMethod("doGo", Player.class).getAnnotation(CmdCD.class));
     }
 
     private static String wildKey() throws NoSuchMethodException {
@@ -509,11 +589,226 @@ class ConfigBindingValidationTest {
         }
 
         @Test
-        @DisplayName("a bound @CmdCD of 0 is refused -- 0 does not mean off")
-        void zeroCooldownIsRefused() {
-            config.setWildCooldown(0);
+        @DisplayName("a negative bound @CmdCD is refused")
+        void negativeCooldownIsRefused() {
+            config.setWildCooldown(-1);
 
-            assertMentions(refusalOf(new BoundCooldownExecutor()), "cooldown.wild", "value 0");
+            assertMentions(refusalOf(new BoundCooldownExecutor()), "cooldown.wild", "value -1");
+        }
+
+        @Test
+        @DisplayName("a null bound @CmdCD is refused")
+        void nullCooldownIsRefused() {
+            config.setBoxedSeconds(null);
+
+            assertMentions(refusalOf(new BoxedCooldownExecutor()), "timer.boxed", "value null");
+        }
+
+        @Test
+        @DisplayName("a bound @CmdCD above Integer.MAX_VALUE seconds is refused")
+        void overflowingCooldownIsRefused() {
+            config.setHugeSeconds(Integer.MAX_VALUE + 1L);
+
+            assertMentions(refusalOf(new HugeCooldownExecutor()), "timer.huge", "value " + (Integer.MAX_VALUE + 1L));
+        }
+
+        @Test
+        @DisplayName("a bound period at the ceiling is accepted; one second more is refused")
+        void boundPeriodCeiling() {
+            config.setHugeSeconds((long) (Integer.MAX_VALUE / 20));
+            assertDoesNotThrow(() -> PluginManager.validateConfigBindings(module, containerWith(new HugeBean())));
+
+            config.setHugeSeconds((long) (Integer.MAX_VALUE / 20) + 1L);
+            assertMentions(refusalOf(new HugeBean()), "timer.huge", "value " + ((long) (Integer.MAX_VALUE / 20) + 1L));
+        }
+    }
+
+    // === Maintainer ruling: a bound cooldown of 0 means no cooldown ===
+
+    @Nested
+    @DisplayName("a bound @CmdCD of 0 means no cooldown")
+    class ZeroCooldownMeansNoCooldown {
+
+        @Test
+        @DisplayName("0 loads, and the resolved cooldown is 0")
+        void zeroCooldownLoads() throws Exception {
+            config.setWildCooldown(0);
+            BoundCooldownExecutor executor = new BoundCooldownExecutor();
+
+            assertDoesNotThrow(() -> PluginManager.validateConfigBindings(module, containerWith(executor)));
+
+            assertEquals(Integer.valueOf(0), cooldownValidatorOf(executor).getBoundCooldownSeconds().get(wildKey()));
+        }
+
+        @Test
+        @DisplayName("0 on reload is applied, not kept out, and logs no WARNING")
+        void zeroCooldownOnReloadIsApplied() throws Exception {
+            config.setWildCooldown(60);
+            BoundCooldownExecutor executor = new BoundCooldownExecutor();
+            SimpleContainer container = containerWith(executor);
+            lenient().when(module.getContext()).thenReturn(container);
+            PluginManager.validateConfigBindings(module, container);
+
+            config.setWildCooldown(0);
+            new PluginManager().applyReloadedConfigBindings(module);
+
+            assertEquals(Integer.valueOf(0), cooldownValidatorOf(executor).getBoundCooldownSeconds().get(wildKey()));
+            assertTrue(warnings().isEmpty(), warnings().toString());
+        }
+    }
+
+    // === WR-03: the api-version floor ===
+
+    @Nested
+    @DisplayName("a module using a binding must declare api-version 630 or higher")
+    class ApiVersionFloor {
+
+        @Test
+        @DisplayName("a bound @Scheduled in a module declaring api-version 620 is refused, naming module, binding and floor")
+        void boundScheduledBelowTheFloorIsRefused() {
+            when(module.getMinUltiToolsVersion()).thenReturn(620);
+
+            assertMentions(refusalOf(new ValidScheduledBean()), "TimingModule", "ValidScheduledBean.tick",
+                    "api-version", "620", "630");
+        }
+
+        @Test
+        @DisplayName("a bound @CmdCD in a module declaring api-version 620 is refused")
+        void boundCooldownBelowTheFloorIsRefused() {
+            when(module.getMinUltiToolsVersion()).thenReturn(620);
+
+            assertMentions(refusalOf(new BoundCooldownExecutor()), "TimingModule", "BoundCooldownExecutor",
+                    "api-version", "630");
+        }
+
+        @Test
+        @DisplayName("a literal-only module declaring api-version 620 still loads")
+        void literalOnlyModuleBelowTheFloorLoads() {
+            when(module.getMinUltiToolsVersion()).thenReturn(620);
+
+            assertDoesNotThrow(() -> PluginManager.validateConfigBindings(module,
+                    containerWith(new LiteralOnlyBean(), new LiteralCooldownExecutor())));
+        }
+    }
+
+    // === WR-02: shared validators, completeness, dispatch-time miss ===
+
+    @Nested
+    @DisplayName("bound cooldowns in a shared validator chain")
+    class SharedChains {
+
+        @Test
+        @DisplayName("two executors sharing one chain keep both bindings, at load and after a reload")
+        void sharedChainKeepsBothBindings() throws Exception {
+            config.setWildCooldown(60);
+            config.setBoxedSeconds(15);
+            CooldownValidator shared = new CooldownValidator();
+            ValidatorChain chain = ValidatorChain.builder().add(shared).build();
+            SharedChainWildExecutor wild = new SharedChainWildExecutor(chain);
+            SharedChainBoxedExecutor boxed = new SharedChainBoxedExecutor(chain);
+            SimpleContainer container = containerWith(wild, boxed);
+            lenient().when(module.getContext()).thenReturn(container);
+
+            PluginManager.validateConfigBindings(module, container);
+
+            assertEquals(Integer.valueOf(60), shared.getBoundCooldownSeconds().get(wildKey()));
+            assertEquals(Integer.valueOf(15), shared.getBoundCooldownSeconds().get(boxedKey()));
+
+            config.setWildCooldown(30);
+            config.setBoxedSeconds(20);
+            new PluginManager().applyReloadedConfigBindings(module);
+
+            assertEquals(Integer.valueOf(30), shared.getBoundCooldownSeconds().get(wildKey()));
+            assertEquals(Integer.valueOf(20), shared.getBoundCooldownSeconds().get(boxedKey()));
+        }
+
+        @Test
+        @DisplayName("a bound declaration its validator does not hold after load refuses the module, naming the key")
+        void anUnresolvedDeclarationAfterLoadRefusesTheModule() {
+            CooldownValidator forgetful = new CooldownValidator() {
+                @Override
+                public Map<String, Integer> getBoundCooldownSeconds() {
+                    return Collections.emptyMap();
+                }
+            };
+            SharedChainWildExecutor executor = new SharedChainWildExecutor(
+                    ValidatorChain.builder().add(forgetful).build());
+
+            assertMentions(refusalOf(executor), "SharedChainWildExecutor", "cooldown.wild");
+        }
+    }
+
+    // === IN-01 / IN-02: reload-step robustness ===
+
+    @Nested
+    @DisplayName("the reload step is isolated per module and runs only on the main thread")
+    class ReloadStepRobustness {
+
+        @Test
+        @DisplayName("a failing timer half is logged against the module and the cooldown half still runs")
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes") // the injected failure IS the test
+        void aFailingTimerHalfIsIsolated() throws Exception {
+            config.setWildCooldown(60);
+            BoundCooldownExecutor executor = new BoundCooldownExecutor();
+            SimpleContainer container = containerWith(executor);
+            lenient().when(module.getContext()).thenReturn(container);
+            PluginManager.validateConfigBindings(module, container);
+            PluginManager pluginManager = new PluginManager();
+            TaskManager taskManager = mock(TaskManager.class);
+            doThrow(new RuntimeException("simulated reschedule failure")).when(taskManager).rescheduleBound(module);
+            Field field = PluginManager.class.getDeclaredField("taskManager");
+            field.setAccessible(true);
+            field.set(pluginManager, taskManager);
+
+            config.setWildCooldown(30);
+            assertDoesNotThrow(() -> pluginManager.applyReloadedConfigBindings(module));
+
+            assertEquals(Integer.valueOf(30), cooldownValidatorOf(executor).getBoundCooldownSeconds().get(wildKey()));
+            assertTrue(warnings().stream().anyMatch(w -> w.contains("TimingModule") && w.contains("simulated reschedule failure")),
+                    warnings().toString());
+        }
+
+        @Test
+        @DisplayName("a reload re-reads the load-time config instance, not the registry, so a registry change cannot break it")
+        void reloadUsesTheLoadTimeInstance() throws Exception {
+            config.setWildCooldown(60);
+            BoundCooldownExecutor executor = new BoundCooldownExecutor();
+            SimpleContainer container = containerWith(executor);
+            lenient().when(module.getContext()).thenReturn(container);
+            PluginManager.validateConfigBindings(module, container);
+            when(configManager.getConfigEntities(module, BindingTimingConfig.class))
+                    .thenReturn(Arrays.asList(config, new BindingTimingConfig()));
+
+            config.setWildCooldown(45);
+            assertDoesNotThrow(() -> new PluginManager().applyReloadedConfigBindings(module));
+
+            assertEquals(Integer.valueOf(45), cooldownValidatorOf(executor).getBoundCooldownSeconds().get(wildKey()));
+            assertTrue(warnings().isEmpty(), warnings().toString());
+        }
+
+        @Test
+        @DisplayName("a reload step called off the main thread touches nothing and logs a WARNING")
+        void offMainThreadTouchesNothing() throws Exception {
+            config.setWildCooldown(60);
+            BoundCooldownExecutor executor = new BoundCooldownExecutor();
+            SimpleContainer container = containerWith(executor);
+            lenient().when(module.getContext()).thenReturn(container);
+            PluginManager.validateConfigBindings(module, container);
+            PluginManager pluginManager = new PluginManager();
+            TaskManager taskManager = mock(TaskManager.class);
+            Field field = PluginManager.class.getDeclaredField("taskManager");
+            field.setAccessible(true);
+            field.set(pluginManager, taskManager);
+            config.setWildCooldown(30);
+
+            Thread worker = new Thread(() -> pluginManager.applyReloadedConfigBindings(module), "fw531-off-main");
+            worker.start();
+            worker.join(10_000L);
+
+            assertEquals(Integer.valueOf(60), cooldownValidatorOf(executor).getBoundCooldownSeconds().get(wildKey()));
+            verifyNoInteractions(taskManager);
+            assertTrue(warnings().stream().anyMatch(w -> w.contains("TimingModule") && w.contains("main thread")),
+                    warnings().toString());
         }
     }
 
@@ -617,13 +912,13 @@ class ConfigBindingValidationTest {
         void anInvalidCooldownOnReloadKeepsTheRunningValueAndWarns() throws Exception {
             BoundCooldownExecutor executor = loadedExecutor();
 
-            config.setWildCooldown(0);
+            config.setWildCooldown(-1);
             new PluginManager().applyReloadedConfigBindings(module);
 
             assertEquals(Integer.valueOf(60), cooldownValidatorOf(executor).getBoundCooldownSeconds().get(wildKey()));
             List<String> warnings = warnings();
             assertEquals(1, warnings.size(), warnings.toString());
-            assertMentions(warnings.get(0), "TimingModule", "cooldown.wild", "value 0", "keeping 60s");
+            assertMentions(warnings.get(0), "TimingModule", "cooldown.wild", "value -1", "keeping 60s");
         }
 
         @Test

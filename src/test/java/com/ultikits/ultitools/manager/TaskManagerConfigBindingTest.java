@@ -18,6 +18,7 @@ import static org.mockito.Mockito.when;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
@@ -38,7 +39,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
@@ -46,6 +46,7 @@ import org.mockbukkit.mockbukkit.ServerMock;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Scheduled;
+import com.ultikits.ultitools.aop.ProxyFactory;
 import com.ultikits.ultitools.exceptions.PluginModuleException;
 import com.ultikits.ultitools.testutil.BindingTimingConfig;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
@@ -116,6 +117,24 @@ class TaskManagerConfigBindingTest {
                 async = true)
         public void tick() {
             // Scheduling is what is asserted; the body never runs under the mocked scheduler.
+        }
+    }
+
+    /** Async, period only (default delay). */
+    public static class BoundAsyncPeriodOnlyBean {
+        @Scheduled(config = BindingTimingConfig.class, periodKey = "timer.period", async = true)
+        public void tick() {
+            // Scheduling is what is asserted; the body never runs under the mocked scheduler.
+        }
+    }
+
+    /** A one-shot whose delay is bound (period left at its run-once literal). */
+    public static class BoundDelayOnlyBean {
+        public final List<Integer> fireTicks = new ArrayList<>();
+
+        @Scheduled(config = BindingTimingConfig.class, delayKey = "timer.period")
+        public void once() {
+            fireTicks.add(Bukkit.getCurrentTick());
         }
     }
 
@@ -522,33 +541,166 @@ class TaskManagerConfigBindingTest {
         }
 
         @Test
-        @DisplayName("a reload requested off the main thread is marshalled onto it")
-        void aReloadOffTheMainThreadIsMarshalledOntoIt() {
+        @DisplayName("a reload requested off the main thread is refused before any task is touched")
+        void aReloadOffTheMainThreadIsRefusedBeforeAnyTaskIsTouched() {
             config.setPeriodSeconds(5);
             try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
                 BukkitScheduler scheduler = mock(BukkitScheduler.class);
                 bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
                 bukkit.when(Bukkit::getLogger).thenReturn(Logger.getLogger("TaskManagerConfigBindingTest.thread"));
                 BukkitTask first = mock(BukkitTask.class);
-                BukkitTask second = mock(BukkitTask.class);
                 when(scheduler.runTaskTimer(any(Plugin.class), any(Runnable.class), anyLong(), anyLong()))
-                        .thenReturn(first, second);
+                        .thenReturn(first);
                 taskManager.registerScheduledMethods(module, new BoundPeriodBean());
 
                 config.setPeriodSeconds(10);
                 bukkit.when(Bukkit::isPrimaryThread).thenReturn(false);
+
+                IllegalStateException refused = assertThrows(IllegalStateException.class,
+                        () -> taskManager.rescheduleBound(module));
+
+                assertTrue(refused.getMessage().contains("main thread"), refused.getMessage());
+                verify(first, never()).cancel();
+                verify(scheduler, never()).runTask(any(Plugin.class), any(Runnable.class));
+                verify(scheduler).runTaskTimer(any(Plugin.class), any(Runnable.class), anyLong(), anyLong());
+            }
+        }
+
+        /**
+         * WR-01: an async run is handed to a worker thread by the scheduler heartbeat, so a run
+         * that is due this tick may already be dispatched but not yet observed. The anchor must
+         * come from the schedule the framework created, not from observing the run.
+         * <p>
+         * Period 60 s (1200 ticks), default delay: runs are due at ticks 1, 1201, 2401. At tick
+         * 2401 the run has been dispatched but the worker has not recorded it; the interval is
+         * lowered to 30 s. Counting that run as happened gives the next run at 2401 + 600. An
+         * observed anchor would see "never ran" and run again on the next tick -- a second payout
+         * one tick after the first.
+         */
+        @Test
+        @DisplayName("async: a run due at the reload tick counts as run, so the lowered interval does not run it twice")
+        void asyncRescheduleAtTheDueTickCountsTheDispatchedRun() {
+            config.setPeriodSeconds(60);
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                BukkitScheduler scheduler = mock(BukkitScheduler.class);
+                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+                bukkit.when(Bukkit::getLogger).thenReturn(Logger.getLogger("TaskManagerConfigBindingTest.asyncDue"));
+                bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+                bukkit.when(Bukkit::getCurrentTick).thenReturn(0);
+                BukkitTask first = mock(BukkitTask.class);
+                BukkitTask second = mock(BukkitTask.class);
+                when(scheduler.runTaskTimerAsynchronously(any(Plugin.class), any(Runnable.class), anyLong(),
+                        anyLong())).thenReturn(first, second);
+                taskManager.registerScheduledMethods(module, new BoundAsyncPeriodOnlyBean());
+                verify(scheduler).runTaskTimerAsynchronously(eq(host), any(Runnable.class), eq(0L), eq(1200L));
+
+                bukkit.when(Bukkit::getCurrentTick).thenReturn(2401);
+                config.setPeriodSeconds(30);
                 taskManager.rescheduleBound(module);
 
-                ArgumentCaptor<Runnable> deferred = ArgumentCaptor.forClass(Runnable.class);
-                verify(scheduler).runTask(eq(host), deferred.capture());
-                verify(first, never()).cancel();
-
-                bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
-                deferred.getValue().run();
-
                 verify(first).cancel();
-                verify(scheduler).runTaskTimer(eq(host), any(Runnable.class), anyLong(), eq(200L));
+                verify(scheduler).runTaskTimerAsynchronously(eq(host), any(Runnable.class), eq(600L), eq(600L));
             }
+        }
+
+        @Test
+        @DisplayName("async: between runs, the next run is the last scheduled run plus the new interval")
+        void asyncRescheduleBetweenRunsAnchorsOnTheLastScheduledRun() {
+            config.setPeriodSeconds(60);
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                BukkitScheduler scheduler = mock(BukkitScheduler.class);
+                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+                bukkit.when(Bukkit::getLogger).thenReturn(Logger.getLogger("TaskManagerConfigBindingTest.asyncMid"));
+                bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+                bukkit.when(Bukkit::getCurrentTick).thenReturn(0);
+                when(scheduler.runTaskTimerAsynchronously(any(Plugin.class), any(Runnable.class), anyLong(),
+                        anyLong())).thenReturn(mock(BukkitTask.class), mock(BukkitTask.class));
+                taskManager.registerScheduledMethods(module, new BoundAsyncPeriodOnlyBean());
+
+                bukkit.when(Bukkit::getCurrentTick).thenReturn(1500);
+                config.setPeriodSeconds(90);
+                taskManager.rescheduleBound(module);
+
+                // last scheduled run 1201 + 1800 = 3001; 3001 - 1500 = 1501
+                verify(scheduler).runTaskTimerAsynchronously(eq(host), any(Runnable.class), eq(1501L), eq(1800L));
+            }
+        }
+
+        @Test
+        @DisplayName("a value above the ceiling on reload keeps the running period and warns")
+        void aValueAboveTheCeilingOnReloadKeepsTheRunningPeriod() {
+            config.setPeriodSeconds(5);
+            BoundPeriodBean bean = new BoundPeriodBean();
+            taskManager.registerScheduledMethods(module, bean);
+            advanceTo(50);
+            Set<Integer> before = pendingTaskIds();
+
+            config.setPeriodSeconds(Integer.MAX_VALUE / 20 + 1);
+            taskManager.rescheduleBound(module);
+
+            assertEquals(before, pendingTaskIds());
+            assertEquals(1, messagesAt(Level.WARNING).size());
+            advanceTo(201);
+            assertEquals(ticks(1, 101, 201), bean.fireTicks);
+        }
+    }
+
+    // === IN-07 gaps ===
+
+    @Nested
+    @DisplayName("proxied beans and delay-only one-shots")
+    class ProxiesAndOneShots {
+
+        @Test
+        @DisplayName("a bound method on a ByteBuddy-proxied bean is scheduled and runs through the proxy")
+        void boundMethodOnAProxiedBeanRuns() throws Exception {
+            config.setPeriodSeconds(2);
+            ProxyFactory proxyFactory = new ProxyFactory(Collections.emptyList());
+            Set<Method> intercepted = new LinkedHashSet<>(Collections.singletonList(
+                    BoundPeriodBean.class.getMethod("tick")));
+            BoundPeriodBean proxy = proxyFactory.createProxyClass(BoundPeriodBean.class, intercepted)
+                    .getDeclaredConstructor().newInstance();
+
+            taskManager.registerScheduledMethods(module, proxy);
+            advanceTo(45);
+
+            assertEquals(1, taskManager.getTaskCount(module));
+            assertEquals(ticks(1, 41), proxy.fireTicks);
+        }
+
+        @Test
+        @DisplayName("a delay-only bound one-shot moved by a reload before it ran runs once, at arm tick + new delay")
+        void delayOnlyOneShotReloadBeforeItRan() {
+            config.setPeriodSeconds(5);
+            BoundDelayOnlyBean bean = new BoundDelayOnlyBean();
+            taskManager.registerScheduledMethods(module, bean);
+            advanceTo(50);
+
+            config.setPeriodSeconds(10);
+            taskManager.rescheduleBound(module);
+
+            advanceTo(199);
+            assertTrue(bean.fireTicks.isEmpty(), "not at the old 100, not early");
+            advanceTo(400);
+            assertEquals(ticks(200), bean.fireTicks, "arm tick 0 + 10 s, exactly once");
+            assertTrue(pendingTaskIds().isEmpty());
+        }
+
+        @Test
+        @DisplayName("a delay-only bound one-shot that already ran is not re-armed by a reload")
+        void delayOnlyOneShotReloadAfterItRan() {
+            config.setPeriodSeconds(5);
+            BoundDelayOnlyBean bean = new BoundDelayOnlyBean();
+            taskManager.registerScheduledMethods(module, bean);
+            advanceTo(150);
+            assertEquals(ticks(100), bean.fireTicks);
+
+            config.setPeriodSeconds(10);
+            taskManager.rescheduleBound(module);
+
+            assertTrue(pendingTaskIds().isEmpty(), "a one-shot that ran must not be scheduled again");
+            advanceTo(600);
+            assertEquals(ticks(100), bean.fireTicks);
         }
     }
 

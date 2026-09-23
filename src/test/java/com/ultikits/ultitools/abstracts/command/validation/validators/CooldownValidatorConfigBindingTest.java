@@ -1,20 +1,31 @@
 package com.ultikits.ultitools.abstracts.command.validation.validators;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.UUID;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import org.bukkit.command.Command;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,8 +35,13 @@ import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
+import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
+import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.annotations.command.CmdCD;
+import com.ultikits.ultitools.annotations.command.CmdExecutor;
+import com.ultikits.ultitools.annotations.command.CmdMapping;
+import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.testutil.BindingTimingConfig;
 
 /**
@@ -113,14 +129,70 @@ class CooldownValidatorConfigBindingTest {
     }
 
     @Test
-    @DisplayName("a bound cooldown the framework never resolved fails loudly, naming the key")
-    void anUnresolvedBoundCooldownFailsLoudly() throws NoSuchMethodException {
+    @DisplayName("a bound cooldown the framework never resolved is a clean command failure plus a SEVERE log, never an exception")
+    void anUnresolvedBoundCooldownIsACleanFailure() throws NoSuchMethodException {
         Method method = mapping("boundMapping");
+        List<LogRecord> records = new ArrayList<>();
+        Handler capture = new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                records.add(record);
+            }
 
-        IllegalStateException failure = assertThrows(IllegalStateException.class,
-                () -> validator.validate(contextFor(method)));
+            @Override
+            public void flush() {
+                // Records are appended straight to the in-memory list.
+            }
 
-        assertTrue(failure.getMessage().contains("cooldown.wild"), failure.getMessage());
+            @Override
+            public void close() {
+                // Nothing to release.
+            }
+        };
+        Logger logger = Logger.getLogger(CooldownValidator.class.getName());
+        logger.addHandler(capture);
+        try {
+            CommandValidator.ValidationResult result = assertDoesNotThrow(() -> validator.validate(contextFor(method)));
+
+            assertFalse(result.isValid(), "an unresolved binding must fail closed, not mean no cooldown");
+            assertTrue(result.getErrorMessage() != null && !result.getErrorMessage().isEmpty());
+            assertTrue(records.stream().anyMatch(r -> Level.SEVERE.equals(r.getLevel())
+                    && r.getMessage().contains("cooldown.wild")), String.valueOf(records));
+        } finally {
+            logger.removeHandler(capture);
+        }
+    }
+
+    /** A never-resolved executor: constructed directly, not through a module load. */
+    @CmdTarget(CmdTarget.CmdTargetType.BOTH)
+    @CmdExecutor(alias = {"fw531unresolved"})
+    public static class UnresolvedBoundExecutor extends BaseCommandExecutor {
+        public int runs;
+
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Test stub - not exercised
+        }
+
+        @CmdMapping(format = "go")
+        @CmdCD(config = BindingTimingConfig.class, key = "cooldown.wild")
+        public void doGo(Player sender) {
+            runs++;
+        }
+    }
+
+    @Test
+    @DisplayName("through onCommand, an unresolved binding refuses the command with a message and throws nothing")
+    void anUnresolvedBindingThroughOnCommandThrowsNothing() {
+        UnresolvedBoundExecutor executor = new UnresolvedBoundExecutor();
+        when(command.getName()).thenReturn("fw531unresolved");
+
+        boolean handled = assertDoesNotThrow(() -> executor.onCommand(player, command, "fw531unresolved",
+                new String[]{"go"}));
+
+        assertTrue(handled);
+        assertEquals(0, executor.runs, "the mapped method must not run");
+        verify(player, atLeastOnce()).sendMessage(anyString());
     }
 
     @Test
