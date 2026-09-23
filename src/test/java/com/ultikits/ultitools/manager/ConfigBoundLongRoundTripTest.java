@@ -52,6 +52,8 @@ import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.exceptions.ConfigurationException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.exceptions.UltiToolsException;
 import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
@@ -329,5 +331,83 @@ class ConfigBoundLongRoundTripTest {
         } finally {
             assertTrue(file.toFile().setWritable(true));
         }
+    }
+
+    // ==================== Panel writes to a bound key (module gate-1 review, UltiChat round 2 WR-06) ====================
+
+    /** Boots, registers the config and resolves the module's bindings, as a module load does. */
+    private ConfigManager loadedModule() throws IOException {
+        ConfigManager configManager = boot();
+        configManager.register(module, new InterestConfig(PATH));
+        SimpleContainer container = new SimpleContainer();
+        container.registerSingleton("interestService", new InterestService());
+        container.registerSingleton("interestCommand", new InterestCommand());
+        lenient().when(module.getContext()).thenReturn(container);
+        PluginManager.validateConfigBindings(module, container);
+        return configManager;
+    }
+
+    private static String batch(String key, String value) {
+        return "{\"InterestModule\":{\"" + PATH + "\":{\"" + key + "\":" + value + "}}}";
+    }
+
+    private void assertRefusedUnchanged(ConfigManager configManager, org.junit.jupiter.api.function.Executable write,
+                                        String key, String value) throws IOException {
+        Path file = tempDir.resolve(PATH);
+        byte[] before = Files.readAllBytes(file);
+        InterestConfig config = configManager.getConfigEntity(module, InterestConfig.class);
+        Long intervalBefore = config.interval;
+        Long cooldownBefore = config.cooldown;
+
+        ConfigurationException refused = assertThrows(ConfigurationException.class, write);
+
+        assertEquals(ErrorCode.CONFIG_VALIDATION_FAILED, refused.getErrorCode());
+        assertTrue(refused.getMessage().contains(key) && refused.getMessage().contains(value), refused.getMessage());
+        assertTrue(Arrays.equals(before, Files.readAllBytes(file)), "the file is not written");
+        assertEquals(intervalBefore, config.interval, "the field is restored");
+        assertEquals(cooldownBefore, config.cooldown, "the field is restored");
+    }
+
+    @Test
+    @DisplayName("a panel write of 0 to a key bound to @Scheduled is refused like a @Range violation, and nothing is written")
+    void aPanelWriteOfZeroToABoundPeriodIsRefused() throws IOException {
+        ConfigManager configManager = loadedModule();
+
+        assertRefusedUnchanged(configManager, () -> configManager.loadFromJson(batch("interest.interval", "0")),
+                "interest.interval", "0");
+    }
+
+    @Test
+    @DisplayName("a panel write above the tick ceiling to a key bound to @Scheduled is refused")
+    void aPanelWriteAboveTheCeilingToABoundPeriodIsRefused() throws IOException {
+        ConfigManager configManager = loadedModule();
+        String tooLarge = String.valueOf(ConfigBindings.MAX_TICK_SECONDS + 1);
+
+        assertRefusedUnchanged(configManager, () -> configManager.loadFromJson(batch("interest.interval", tooLarge)),
+                "interest.interval", tooLarge);
+    }
+
+    @Test
+    @DisplayName("a single-file panel write of a negative value to a key bound to @CmdCD is refused")
+    void aSingleFilePanelWriteOfANegativeCooldownIsRefused() throws IOException {
+        ConfigManager configManager = loadedModule();
+
+        assertRefusedUnchanged(configManager,
+                () -> configManager.loadFromJson(PATH, "{\"interest.cooldown\":-1}"), "interest.cooldown", "-1");
+    }
+
+    @Test
+    @DisplayName("a panel write inside the binding range is accepted and persisted: 10 s period, 0 s cooldown")
+    void aPanelWriteInsideTheBindingRangeIsAccepted() throws IOException {
+        ConfigManager configManager = loadedModule();
+
+        assertDoesNotThrow(() -> configManager.loadFromJson(batch("interest.interval", "10")));
+        assertDoesNotThrow(() -> configManager.loadFromJson(PATH, "{\"interest.cooldown\":0}"));
+
+        InterestConfig config = configManager.getConfigEntity(module, InterestConfig.class);
+        assertEquals(Long.valueOf(10L), config.interval);
+        assertEquals(Long.valueOf(0L), config.cooldown, "0 is a valid bound cooldown: no cooldown");
+        String yaml = new String(Files.readAllBytes(tempDir.resolve(PATH)), StandardCharsets.UTF_8);
+        assertTrue(yaml.contains("interval: 10") && yaml.contains("cooldown: 0"), yaml);
     }
 }
