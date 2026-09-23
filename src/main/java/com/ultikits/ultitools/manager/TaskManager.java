@@ -392,8 +392,11 @@ public class TaskManager {
             return;
         }
         int now = Bukkit.getCurrentTick();
-        long due = hasRun ? (long) lastRun + newPeriodTicks : (long) handle.armTick + newDelayTicks;
-        long firstDelay = Math.max(1L, due - now);
+        // Elapsed ticks are measured with int subtraction, which stays correct across the signed
+        // wraparound of Bukkit's tick counter (Codex round 7 on #536); a bound interval is at most
+        // Integer.MAX_VALUE ticks, so the difference always fits.
+        long elapsed = hasRun ? now - lastRun : now - handle.armTick;
+        long firstDelay = Math.max(1L, (hasRun ? newPeriodTicks : newDelayTicks) - elapsed);
 
         handle.task.cancel();
         handle.task = arm(handle, firstDelay);
