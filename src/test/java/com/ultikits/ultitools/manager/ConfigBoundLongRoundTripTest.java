@@ -43,7 +43,6 @@ import com.ultikits.ultitools.abstracts.ConfigFileStubs;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.abstracts.command.ConfigBoundCooldownState;
-import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.abstracts.command.validation.validators.CooldownValidator;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
@@ -177,15 +176,6 @@ class ConfigBoundLongRoundTripTest {
 
     private void advanceTo(int tick) {
         server.getScheduler().performTicks(tick - Bukkit.getCurrentTick());
-    }
-
-    private static CooldownValidator cooldownValidatorOf(BaseCommandExecutor executor) {
-        for (CommandValidator validator : executor.getValidatorChain().getValidators()) {
-            if (validator instanceof CooldownValidator) {
-                return (CooldownValidator) validator;
-            }
-        }
-        throw new AssertionError("the default chain carries a CooldownValidator");
     }
 
     @Test

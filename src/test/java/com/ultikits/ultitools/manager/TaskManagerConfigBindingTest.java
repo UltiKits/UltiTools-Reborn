@@ -547,6 +547,62 @@ class TaskManagerConfigBindingTest {
             }
         }
 
+        /**
+         * Codex round 7 on #536: {@code Bukkit.getCurrentTick()} is a signed {@code int} that wraps
+         * after about 3.4 years of uptime. The reschedule arithmetic must measure elapsed ticks across
+         * the wrap, or a reload there would postpone the task by about 2^32 ticks.
+         */
+        @Test
+        @DisplayName("before the first run, a reload across the tick counter's wraparound still anchors on the arm tick")
+        void rescheduleBeforeTheFirstRunAcrossTheWraparound() {
+            config.setPeriodSeconds(10);
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                BukkitScheduler scheduler = mock(BukkitScheduler.class);
+                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+                bukkit.when(Bukkit::getLogger).thenReturn(Logger.getLogger("TaskManagerConfigBindingTest.wrapArm"));
+                bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+                bukkit.when(Bukkit::getCurrentTick).thenReturn(Integer.MAX_VALUE - 50);
+                when(scheduler.runTaskTimer(any(Plugin.class), any(Runnable.class), anyLong(), anyLong()))
+                        .thenReturn(mock(BukkitTask.class), mock(BukkitTask.class));
+                taskManager.registerScheduledMethods(module, new BoundDelayAndPeriodBean());
+
+                bukkit.when(Bukkit::getCurrentTick).thenReturn(Integer.MIN_VALUE + 50); // 101 ticks later
+                config.setPeriodSeconds(20);
+                taskManager.rescheduleBound(module);
+
+                // arm tick + 400 is 299 ticks after "now"
+                verify(scheduler).runTaskTimer(eq(host), any(Runnable.class), eq(299L), eq(400L));
+            }
+        }
+
+        @Test
+        @DisplayName("after a run, a reload across the tick counter's wraparound still anchors on the last run")
+        void rescheduleAfterARunAcrossTheWraparound() {
+            config.setPeriodSeconds(5);
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                BukkitScheduler scheduler = mock(BukkitScheduler.class);
+                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+                bukkit.when(Bukkit::getLogger).thenReturn(Logger.getLogger("TaskManagerConfigBindingTest.wrapRun"));
+                bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+                bukkit.when(Bukkit::getCurrentTick).thenReturn(Integer.MAX_VALUE - 100);
+                when(scheduler.runTaskTimer(any(Plugin.class), any(Runnable.class), anyLong(), anyLong()))
+                        .thenReturn(mock(BukkitTask.class), mock(BukkitTask.class));
+                taskManager.registerScheduledMethods(module, new BoundPeriodBean());
+                org.mockito.ArgumentCaptor<Runnable> armed = org.mockito.ArgumentCaptor.forClass(Runnable.class);
+                verify(scheduler).runTaskTimer(eq(host), armed.capture(), anyLong(), anyLong());
+
+                bukkit.when(Bukkit::getCurrentTick).thenReturn(Integer.MAX_VALUE - 10);
+                armed.getValue().run(); // the last run, stamped just before the wrap
+
+                bukkit.when(Bukkit::getCurrentTick).thenReturn(Integer.MIN_VALUE + 20); // 31 ticks later
+                config.setPeriodSeconds(10);
+                taskManager.rescheduleBound(module);
+
+                // last run + 200 is 169 ticks after "now"
+                verify(scheduler).runTaskTimer(eq(host), any(Runnable.class), eq(169L), eq(200L));
+            }
+        }
+
         @Test
         @DisplayName("a value above the ceiling on reload keeps the running period and warns")
         void aValueAboveTheCeilingOnReloadKeepsTheRunningPeriod() {

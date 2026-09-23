@@ -42,7 +42,6 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.abstracts.command.ConfigBoundCooldownState;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
-import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.abstracts.command.validation.ValidatorChain;
 import com.ultikits.ultitools.abstracts.command.validation.validators.CooldownValidator;
 import com.ultikits.ultitools.annotations.Scheduled;
@@ -483,15 +482,6 @@ class ConfigBindingValidationTest {
             }
         }
         return messages;
-    }
-
-    private static CooldownValidator cooldownValidatorOf(BaseCommandExecutor executor) {
-        for (CommandValidator validator : executor.getValidatorChain().getValidators()) {
-            if (validator instanceof CooldownValidator) {
-                return (CooldownValidator) validator;
-            }
-        }
-        throw new AssertionError("the default chain carries a CooldownValidator");
     }
 
     private static String boxedKey() throws NoSuchMethodException {
@@ -1129,7 +1119,6 @@ class ConfigBindingValidationTest {
         @DisplayName("a changed field is not seen until the reload step runs, then it is")
         void aBoundCooldownIsRefreshedOnlyByTheReloadStep() throws Exception {
             BoundCooldownExecutor executor = loadedExecutor();
-            CooldownValidator validator = cooldownValidatorOf(executor);
 
             config.setWildCooldown(30);
             assertEquals(Integer.valueOf(60), ConfigBoundCooldownState.seconds(executor).get(wildKey()),
