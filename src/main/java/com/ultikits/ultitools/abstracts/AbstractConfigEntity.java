@@ -14,8 +14,12 @@ import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -94,6 +98,19 @@ import lombok.Getter;
 @Getter
 public abstract class AbstractConfigEntity {
     private static final Logger LOGGER = Logger.getLogger(AbstractConfigEntity.class.getName());
+
+    /**
+     * The numeric wrappers in JLS 5.1.2 widening order: every conversion from an earlier entry to a
+     * later one is a widening primitive conversion, and no other conversion between them is.
+     */
+    private static final List<Class<?>> WIDENING_ORDER = Collections.unmodifiableList(Arrays.<Class<?>>asList(
+            Byte.class, Short.class, Integer.class, Long.class, Float.class, Double.class));
+
+    /** Converts a {@link Number} to the wrapper at the same index of {@link #WIDENING_ORDER}. */
+    private static final List<Function<Number, Object>> WIDENERS =
+            Collections.unmodifiableList(Arrays.<Function<Number, Object>>asList(
+                    Number::byteValue, Number::shortValue, Number::intValue, Number::longValue,
+                    Number::floatValue, Number::doubleValue));
     
     private final String configFilePath;
     private final List<ConfigChangeListener> changeListeners = new CopyOnWriteArrayList<>();
@@ -123,6 +140,27 @@ public abstract class AbstractConfigEntity {
      */
     @Getter(AccessLevel.NONE)
     private volatile boolean lastLoadUnparseable;
+    /**
+     * Whether the last {@link #init} did not run to the end of its validation -- set when it starts,
+     * cleared only after {@link #validateFields()} succeeds. A caller that catches the
+     * {@code IOException} of a failed write-back (as {@code ConfigManager} does) is otherwise left
+     * with an entity whose fields hold the file's new values unvalidated (#533). Kept on the entity
+     * so that it lives and dies with it; nothing else has to remember to clear it (Codex round 3 on
+     * #536).
+     */
+    @Getter(AccessLevel.NONE)
+    private volatile boolean lastInitIncomplete;
+
+    /**
+     * The value ranges a config binding (#531) imposes on this entity's keys, by {@code @ConfigEntry}
+     * path, then by rule text. A panel write ({@link #updateProperties}, {@link
+     * #validateProposedProperties}) is refused when it sets a bound key outside its range, the same
+     * way as a {@code @Range} violation. {@link #init} and {@link #reload()} do not consult this:
+     * the binding step handles an invalid value there (it refuses the module at load and keeps the
+     * running value on reload).
+     */
+    @Getter(AccessLevel.NONE)
+    private final Map<String, Map<String, Predicate<Long>>> bindingRanges = new ConcurrentHashMap<>();
 
     /**
      * Constructor for AbstractConfigEntity.
@@ -307,7 +345,7 @@ public abstract class AbstractConfigEntity {
             }
             Object configValue = parsed.get(path);
             if (configValue != null) {
-                ReflectionUtil.setFieldValue(probe, field, ReflectionUtil.newInstance(annotation.parser()).parse(configValue));
+                ReflectionUtil.setFieldValue(probe, field, readConfigValue(field, annotation, configValue));
             }
         }
         probe.applyFieldsTo(parsed);
@@ -426,6 +464,50 @@ public abstract class AbstractConfigEntity {
         }
     }
 
+    /**
+     * Whether the last {@link #init} failed before its field validation completed -- for example
+     * because writing back a missing key threw an {@code IOException}, which {@code ConfigManager}
+     * logs and continues past. The fields may then hold values that their validation annotations
+     * never checked. The config-bound {@code @Scheduled}/{@code @CmdCD} step (#531) does not apply
+     * values from such an entity: it refuses the module at load and keeps the running value on
+     * reload.
+     * <p>
+     * Thread contract: the marker is set by {@code init} and read by the binding step on the main
+     * server thread, where the framework and the first-party modules run both. An {@code init} or
+     * {@link #reload()} run off the main thread is not synchronized with the binding step; confining
+     * them to the main thread is tracked in UltiKits/UltiTools-Reborn#538.
+     * <p>
+     * Framework-internal: {@code public} solely because the binding step lives in another package.
+     * Module code should not call it.
+     *
+     * @return {@code true} if the last {@code init} did not complete its validation
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public final boolean isLastInitIncomplete() {
+        return lastInitIncomplete;
+    }
+
+    /**
+     * Records that {@code key} is bound by a config-bound {@code @Scheduled} or {@code @CmdCD}
+     * (#531), so that a panel write setting it to a value {@code isValid} rejects is refused, naming
+     * the key, the value and {@code rule}. The binding step calls this when it resolves the binding
+     * at load. Recording the same rule twice for a key keeps one.
+     * <p>
+     * Framework-internal: {@code public} solely because the binding step lives in another package.
+     * Module code should not call it.
+     *
+     * @param key     the {@code @ConfigEntry} path, or the field name when the path is empty
+     * @param rule    the range, as a sentence, for the refusal message
+     * @param isValid whether a value, in seconds ({@code null} for a {@code null} boxed field), is
+     *                inside the range
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public final void addBindingRange(String key, String rule, Predicate<Long> isValid) {
+        bindingRanges.computeIfAbsent(key, k -> new ConcurrentHashMap<>()).put(rule, isValid);
+    }
+
     @ApiStatus.Internal
     public final boolean isFileModifiedSinceSnapshot() {
         synchronized (this) {
@@ -476,6 +558,7 @@ public abstract class AbstractConfigEntity {
      * @throws IOException if an I/O error occurs
      */
     public final void init(UltiToolsPlugin ultiToolsPlugin) throws IOException {
+        lastInitIncomplete = true;
         synchronized (this) {
             this.ultiToolsPlugin = ultiToolsPlugin;
             File file = ultiToolsPlugin.getConfigFile(configFilePath);
@@ -512,8 +595,7 @@ public abstract class AbstractConfigEntity {
                     }
                     Object configValue = config.get(path);
                     if (configValue != null) {
-                        Object parse = ReflectionUtil.newInstance(annotation.parser()).parse(configValue);
-                        ReflectionUtil.setFieldValue(this, field, parse);
+                        ReflectionUtil.setFieldValue(this, field, readConfigValue(field, annotation, configValue));
                     } else {
                         upToDate = false;
                         config.set(path, ReflectionUtil.getFieldValue(this, field));
@@ -541,10 +623,65 @@ public abstract class AbstractConfigEntity {
 
         // Validate fields and reset invalid values to defaults
         validateFields();
+        lastInitIncomplete = false;
 
         // Notify listeners after initialization
         notifyChangeListeners();
     }
+
+    /**
+     * The one conversion from a raw YAML value to the value stored in a {@code @ConfigEntry} field:
+     * the entry's parser, then {@link #widenToFieldType}. Every place that reads the file into a
+     * field goes through here -- {@link #init}, {@link #reload()} and the #510 snapshot probe in
+     * {@code canonicalizeOnce} -- so the three cannot drift apart again. Round 2 of #531 gate-1 CR-01
+     * found the snapshot probe still unwidened: a {@code Long} field made every snapshot fail, and
+     * the shutdown save then overwrote operator edits (the #510 defect, reinstated).
+     *
+     * @param field      the target {@code @ConfigEntry} field
+     * @param annotation its {@code @ConfigEntry}
+     * @param raw        the value SnakeYAML returned for the entry's path, never {@code null}
+     * @return the value to store in {@code field}
+     */
+    private static Object readConfigValue(Field field, ConfigEntry annotation, Object raw) {
+        Object parsed = ReflectionUtil.newInstance(annotation.parser()).parse(raw);
+        return widenToFieldType(field.getType(), parsed);
+    }
+
+    /**
+     * Gives a boxed numeric field exactly the widening conversions its primitive already gets.
+     * <p>
+     * SnakeYAML hands back an {@code Integer} for a whole number such as {@code 1800}.
+     * {@code Field.set} widens that into a {@code long} or {@code double} field, but it refuses the
+     * same value for a {@code Long}, {@code Double} or {@code Float} field (measured:
+     * {@code IllegalArgumentException: Can not set java.lang.Long field ... to java.lang.Integer}).
+     * A boxed field therefore loaded on the first boot, when the key was missing and the field
+     * default was written, and threw on every later boot and on every reload (#531, gate-1 CR-01).
+     * <p>
+     * Only the JLS 5.1.2 widening primitive conversions are applied, so a boxed field accepts
+     * exactly what its primitive accepts: {@code Short} from {@code Byte}; {@code Integer} from
+     * {@code Byte}/{@code Short}; {@code Long} from {@code Byte}/{@code Short}/{@code Integer};
+     * {@code Float} from any integral value; {@code Double} from any integral value or a
+     * {@code Float}. Anything else -- a narrowing conversion, a non-numeric value, a field that
+     * is not a numeric wrapper -- is returned unchanged, so {@code Field.set} refuses it exactly as
+     * before.
+     *
+     * @param fieldType the declared type of the target field
+     * @param value     the parsed value
+     * @return {@code value} widened to {@code fieldType}, or {@code value} itself
+     */
+    static Object widenToFieldType(Class<?> fieldType, Object value) {
+        if (!(value instanceof Number) || fieldType.isInstance(value)) {
+            return value;
+        }
+        int from = WIDENING_ORDER.indexOf(value.getClass());
+        int to = WIDENING_ORDER.indexOf(fieldType);
+        // Not a numeric wrapper pair, or a narrowing conversion: unchanged, so Field.set refuses it.
+        if (from < 0 || to <= from) {
+            return value;
+        }
+        return WIDENERS.get(to).apply((Number) value);
+    }
+
 
     /**
      * Splits a {@code @ConfigEntry.comment()} value into one {@link List} element per line, in
@@ -701,6 +838,44 @@ public abstract class AbstractConfigEntity {
         // leave the in-memory YamlConfiguration holding rejected values for a later, unrelated
         // save() to flush.
         validateFields();
+        validateBindingRanges(touchedFieldsOut);
+    }
+
+    /**
+     * Refuses a panel write that sets a key bound by a config binding (#531) outside that binding's
+     * range, in the same shape as a {@code @Range} violation. Only the fields this write touched are
+     * checked: a bound field left as it was may hold a value a refused reload kept out of use, and
+     * editing another key must not fail because of it.
+     *
+     * @param touchedFields the fields this write applied
+     * @throws ConfigurationException with {@link com.ultikits.ultitools.exceptions.ErrorCode#CONFIG_VALIDATION_FAILED}
+     *                                 naming each bound key, its value and its range
+     */
+    private void validateBindingRanges(List<Field> touchedFields) {
+        if (bindingRanges.isEmpty()) {
+            return;
+        }
+        List<String> violations = new ArrayList<>();
+        for (Field field : touchedFields) {
+            ConfigEntry annotation = field.getAnnotation(ConfigEntry.class);
+            String path = annotation.path().isEmpty() ? field.getName() : annotation.path();
+            Map<String, Predicate<Long>> ranges = bindingRanges.get(path);
+            if (ranges == null) {
+                continue;
+            }
+            Object value = ReflectionUtil.getFieldValue(this, field);
+            Long seconds = value instanceof Number ? ((Number) value).longValue() : null;
+            for (Map.Entry<String, Predicate<Long>> range : ranges.entrySet()) {
+                if (!range.getValue().test(seconds)) {
+                    violations.add(String.format("key '%s' value %s is out of its binding's range: %s",
+                            path, value, range.getKey()));
+                }
+            }
+        }
+        if (!violations.isEmpty()) {
+            String moduleName = ultiToolsPlugin != null ? ultiToolsPlugin.getPluginName() : this.getClass().getSimpleName();
+            throw ConfigurationException.validationFailed(moduleName, configFilePath, violations);
+        }
     }
 
     /**
@@ -1008,8 +1183,7 @@ public abstract class AbstractConfigEntity {
                     }
                     Object configValue = config.get(path);
                     if (configValue != null) {
-                        Object parse = ReflectionUtil.newInstance(annotation.parser()).parse(configValue);
-                        ReflectionUtil.setFieldValue(this, field, parse);
+                        ReflectionUtil.setFieldValue(this, field, readConfigValue(field, annotation, configValue));
                     }
                 }
             }

@@ -777,6 +777,37 @@ the answer is: re-verify whenever the framework version changes, including a PAT
   method by a machine. Only then does it become reasonable to worry about this only across MINOR
   releases.
 
+### A floor no linker enforces: config-bound `@Scheduled` and `@CmdCD` (6.3.0)
+
+Everything above is about descriptors, where a missing symbol at least fails loudly with
+`NoSuchMethodError`. New **annotation elements** fail silently instead. As of 6.3.0,
+`@Scheduled(config = ..., periodKey = ..., delayKey = ...)` and `@CmdCD(config = ..., key = ...)`
+read an interval or cooldown from a module config key (#531). A module compiled against 6.3.0 that
+uses them still loads on an older framework. The JVM drops annotation elements that the running
+annotation type does not declare. Measured: a class compiled with `@Sch(periodKey = "x")` and run
+against an older `Sch` without `periodKey` reads back as `@Sch(period=-1L)`. Nothing is logged.
+Against 6.2.x, a bound `@Scheduled` therefore runs **once** at load instead of on its interval,
+and a bound `@CmdCD` enforces **no** cooldown.
+
+So **a module that uses either binding must declare `api-version: 630`** in its `plugin.yml`. That
+floor makes an older framework refuse the module at load, rather than run it with the wrong timing.
+Raising the `pom.xml` pin alone does not do this, for the reason given above. So that the mistake
+surfaces on the version you develop against, 6.3.0 itself refuses a module that uses a binding while
+declaring a lower `api-version`, naming the module, the binding and the required floor. A bound
+`@Scheduled` must also be synchronous: `async = true` together with a binding is refused at load,
+because a reload can keep an async task's place in its cycle only by predicting when the server
+dispatches async work (#535 tracks a design that observes it instead). The binding is
+additive: existing literal usages (`@Scheduled(period = 6000)`, `@CmdCD(60)`) behave as before
+and need no change.
+
+**A bound field must not also carry a module `@Range`.** The binding's own range is the field's
+range: 1 to `Integer.MAX_VALUE / 20` seconds for a period or delay, and 0 (no cooldown) to
+`Integer.MAX_VALUE` for a cooldown. A panel write outside it is refused like a `@Range` violation.
+An out-of-range value on `/ul reload` keeps the running value and logs a WARNING. A `@Range` on the
+same field would instead throw from the config reload itself, and that aborts the rest of the
+module's reload. That behaviour is tracked separately in #509 and is unchanged by 6.3.0. A module
+that already had a `@Range` on a field it now binds should drop it; the binding's range takes over.
+
 ### What this means for us
 
 A human process cannot catch this class of change: it would require an author changing a field type to

@@ -1,21 +1,29 @@
 package com.ultikits.ultitools.abstracts.command.validation.validators;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
+import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
+import com.ultikits.ultitools.abstracts.command.ConfigBoundCooldownState;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.annotations.PlayerCache;
 import com.ultikits.ultitools.annotations.PlayerCacheSaver;
 import com.ultikits.ultitools.annotations.command.CmdCD;
+import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
+import com.ultikits.ultitools.manager.TriggerContext;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
+import org.jetbrains.annotations.ApiStatus;
 
 import java.lang.reflect.Method;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Validates and manages command cooldowns for players.
@@ -29,6 +37,8 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
         PlayerCacheSaver {
 
     private static final int ORDER = 300;
+
+    private static final Logger LOGGER = Logger.getLogger(CooldownValidator.class.getName());
 
     /**
      * Map of player UUID -> (method name -> cooldown end timestamp)
@@ -89,11 +99,20 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
             return ValidationResult.success();
         }
 
-        int cooldownSeconds = getCooldownSeconds(method, context.getExecutorClass());
-        if (cooldownSeconds <= 0) {
+        Integer resolvedSeconds = getCooldownSeconds(method, context);
+        if (resolvedSeconds == null) {
+            return unresolvedBinding(context, method);
+        }
+        // A literal (or absent) @CmdCD cannot change at run time, so a value of 0 there never stamped
+        // anything and the unbound path stays exactly as before.
+        if (resolvedSeconds <= 0 && !isBoundMapping(method, context)) {
             return ValidationResult.success();
         }
-        
+        // A bound value can change at run time (#531), so for a bound mapping a stored, unexpired end
+        // time is honoured whatever the current value is: a refresh to 0 means that no NEW cooldown
+        // is stamped (see applyCooldown), not that running ones are lifted -- they expire on their
+        // own. Checking the value first would free every player at once and bring the old stamps
+        // back on a later non-zero value.
         UUID playerId = player.getUniqueId();
         String methodKey = method.toString();
         
@@ -133,8 +152,8 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
             return;
         }
 
-        int cooldownSeconds = getCooldownSeconds(method, context.getExecutorClass());
-        if (cooldownSeconds <= 0) {
+        Integer cooldownSeconds = getCooldownSeconds(method, context);
+        if (cooldownSeconds == null || cooldownSeconds <= 0) {
             return;
         }
         
@@ -283,22 +302,95 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
      * passes the load-time check -- whether declared on a shared abstract base or on the
      * concrete executor class itself -- now actually cools down every inherited mapping that
      * does not declare its own.
+     * <p>
+     * A config-bound {@code @CmdCD} (#531) returns the seconds the framework resolved onto the
+     * dispatching executor ({@code CommandContext.getExecutor()}, read through
+     * {@link ConfigBoundCooldownState}) instead of its literal -- never the live config field,
+     * because a refused {@code /ul reload} leaves the refused value in that field. A bound
+     * annotation with no cached value returns {@code null}: it was never resolved by a module
+     * load, and the caller refuses the command rather than treat it as "no cooldown".
      *
-     * @param method        the matched command mapping method
-     * @param executorClass the concrete executor class dispatching this command (WR-02,
-     *                      05-REVIEW.md), or {@code null} when unavailable -- falls back to the
-     *                      pre-WR-02, declaring-class-only resolution in that case
-     * @return the resolved cooldown in seconds
+     * @param method  the matched command mapping method
+     * @param context the dispatch context; its executor class resolves a class-level
+     *                {@code @CmdCD} (WR-02, 05-REVIEW.md -- {@code null} falls back to the
+     *                declaring class), its executor instance selects a bound value
+     * @return the resolved cooldown in seconds, or {@code null} for an unresolved binding
      * @since 6.3.0
      */
-    private int getCooldownSeconds(Method method, Class<?> executorClass) {
-        CmdCD cmdCD = ReflectionUtil.resolveMethodOrClassAnnotation(method, executorClass, CmdCD.class);
+    /**
+     * @return whether the {@code @CmdCD} that governs {@code method} is bound to a config key
+     */
+    private static boolean isBoundMapping(Method method, CommandContext context) {
+        CmdCD cmdCD = ReflectionUtil.resolveMethodOrClassAnnotation(method, context.getExecutorClass(), CmdCD.class);
+        return cmdCD != null && bindingKey(cmdCD) != null;
+    }
+
+    private Integer getCooldownSeconds(Method method, CommandContext context) {
+        CmdCD cmdCD = ReflectionUtil.resolveMethodOrClassAnnotation(method, context.getExecutorClass(), CmdCD.class);
         if (cmdCD != null) {
-            return cmdCD.value();
+            String bindingKey = bindingKey(cmdCD);
+            if (bindingKey == null) {
+                return cmdCD.value();
+            }
+            Object executor = context.getExecutor();
+            return executor instanceof BaseCommandExecutor
+                    ? ConfigBoundCooldownState.seconds((BaseCommandExecutor) executor).get(bindingKey)
+                    : null;
         }
         return defaultCooldownSeconds;
     }
     
+    /**
+     * Fails the command closed for a config-bound {@code @CmdCD} this validator never had resolved
+     * -- reachable only when a {@code CooldownValidator} is added after the module loaded, or an
+     * executor is registered outside the module loader. Treating it as "no cooldown" would be a
+     * silent no-op, and throwing would escape {@code onCommand} as Bukkit's generic internal
+     * error; instead the player gets the same message shape as a failed command, and the cause is
+     * logged at SEVERE and sent to the error report collector like any other command failure
+     * (#531 gate-1 WR-02).
+     */
+    private ValidationResult unresolvedBinding(CommandContext context, Method method) {
+        CmdCD cmdCD = ReflectionUtil.resolveMethodOrClassAnnotation(method, context.getExecutorClass(), CmdCD.class);
+        IllegalStateException cause = new IllegalStateException("@CmdCD on "
+                + method.getDeclaringClass().getSimpleName() + "." + method.getName() + " is bound to "
+                + cmdCD.config().getSimpleName() + " key '" + cmdCD.key() + "', but the framework never resolved "
+                + "that binding for this CooldownValidator; bound cooldowns are resolved when an UltiTools module "
+                + "loads, so a validator added later cannot enforce one");
+        LOGGER.log(Level.SEVERE, cause.getMessage(), cause);
+        reportUnresolvedBinding(context, cause);
+        return ValidationResult.failure(ChatColor.RED + "命令执行出错: " + cause.getMessage(),
+                "command.error.cooldown-unresolved");
+    }
+
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // never let error reporting break the command path
+    private static void reportUnresolvedBinding(CommandContext context, IllegalStateException cause) {
+        try {
+            UltiTools instance = UltiTools.getInstance();
+            ErrorReportCollector collector = instance == null ? null : instance.getErrorReportCollector();
+            if (collector != null) {
+                collector.reportError(cause, null,
+                        TriggerContext.command(context.getSender(), context.getCommand().getName()));
+            }
+        } catch (RuntimeException ignored) {
+            // Never re-enter logging from error reporting, matching BaseCommandExecutor's own path.
+        }
+    }
+
+    /**
+     * The cache key of a config-bound {@code @CmdCD}: its config class and key.
+     *
+     * @param cmdCD the annotation
+     * @return {@code configClassName#key}, or {@code null} when {@code cmdCD} is unbound
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public static String bindingKey(CmdCD cmdCD) {
+        if (cmdCD.config() == AbstractConfigEntity.class && cmdCD.key().isEmpty()) {
+            return null;
+        }
+        return cmdCD.config().getName() + "#" + cmdCD.key();
+    }
+
     @Override
     public int getOrder() {
         return ORDER;
