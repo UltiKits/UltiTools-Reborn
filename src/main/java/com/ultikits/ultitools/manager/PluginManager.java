@@ -859,10 +859,12 @@ public class PluginManager {
      * fixes for the full real-machine reproduction.
      * <p>
      * Every refusal path here logs a specific, actionable SEVERE naming the module and the exact
-     * reason (no {@code plugin.yml}/no {@code main:}, the declared class failed to load, or the
-     * declared class is not a concrete {@code UltiToolsPlugin}) and returns {@code null} -- never
-     * a silent skip, consistent with this milestone's core value that a declared surface must
-     * either work or say plainly that it does not. {@code null} is not fatal to the caller: {@link
+     * reason (no {@code plugin.yml}/no {@code main:}, the declared class failed to load, the
+     * declared class is not a concrete {@code UltiToolsPlugin}, or -- because every module shares
+     * one classloader over the whole module directory -- the declared class resolved but actually
+     * belongs to a different, already-installed module's jar) and returns {@code null} -- never a
+     * silent skip, consistent with this milestone's core value that a declared surface must either
+     * work or say plainly that it does not. {@code null} is not fatal to the caller: {@link
      * #init(ClassLoader)} simply omits the module from {@code pluginClassList}, so one refused jar
      * never prevents any other jar in the same directory from loading.
      *
@@ -906,6 +908,28 @@ public class PluginManager {
                     "[UltiTools-API] Module '" + pluginJar.getName() + "' declares main: '"
                         + mainClassName + "' in plugin.yml, but that class does not extend "
                         + "UltiToolsPlugin (or is abstract, or an interface) -- refusing to load.");
+                return null;
+            }
+            // Codex review, PR #549 round 1: every module shares one classloader over the whole
+            // module directory (see UltiTools.getJavaPluginClassLoader()'s javadoc), so
+            // ClassLoaderUtils.loadClass above can succeed by resolving mainClassName from a
+            // DIFFERENT, already-installed module's jar -- e.g. a malformed or malicious jar
+            // whose plugin.yml names another module's main class verbatim. The pre-plan-17-30 scan
+            // could not do this: it only ever tried names it had itself enumerated out of
+            // pluginJar's own entries, so "the candidate class is an entry in this jar" held for
+            // free. Reading main: from plugin.yml drops that free guarantee, so it is re-checked
+            // explicitly here: resolveOwnJarFile(aClass) is null-safe by design (a directory code
+            // source -- the common dev/test-classpath case -- returns null and is not a
+            // comparable jar, so it is not treated as a mismatch, mirroring
+            // validateAdditionalEntity's own "no confirmed jar, no refusal" posture below); a
+            // mismatch is a confirmed cross-jar class and is refused.
+            File actualJarFile = resolveOwnJarFile(aClass);
+            if (actualJarFile != null && !canonicalPath(actualJarFile).equals(canonicalPath(pluginJar))) {
+                Bukkit.getLogger().log(Level.SEVERE,
+                    "[UltiTools-API] Module '" + pluginJar.getName() + "' declares main: '"
+                        + mainClassName + "', but that class actually belongs to a different "
+                        + "already-installed module jar ('" + actualJarFile.getName() + "') -- "
+                        + "refusing to load a module whose declared main class is not its own.");
                 return null;
             }
             return aClass.asSubclass(UltiToolsPlugin.class);

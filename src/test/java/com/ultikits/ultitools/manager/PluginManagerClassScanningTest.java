@@ -9,6 +9,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
@@ -31,6 +33,7 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockbukkit.mockbukkit.MockBukkit;
 
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
@@ -200,6 +203,103 @@ class PluginManagerClassScanningTest {
                         && record.getMessage() != null
                         && record.getMessage().contains(pluginJar.getName())
                         && record.getMessage().contains(invalidMainClassName));
+    }
+
+    @Test
+    @DisplayName("Codex P2 (PR #549 round 1): 声明的 main: 类实际属于另一个已安装模块的 jar 时应被拒绝")
+    void shouldRefuseWhenDeclaredMainClassBelongsToADifferentJar() throws Exception {
+        // Every module shares ONE classloader over the whole module directory (see
+        // UltiTools.getJavaPluginClassLoader()), so this test needs a REAL classloader spanning
+        // two REAL jar files on disk -- only that makes the loaded class's own CodeSource
+        // genuinely resolve to one specific jar, which a mocked/ambient test classloader cannot
+        // exercise (see writeClassEntry's own javadoc on why bare fabricated jars are not enough).
+        File legitimateJar = createModuleJar(
+                "legitimate-plugin.jar", ConcretePlugin.class.getName(), ConcretePlugin.class);
+        // brokenJar's plugin.yml claims the exact same main: as legitimateJar's, but does not
+        // physically carry that class's bytecode at all -- the shape Codex's finding named: "a
+        // module's main: names a class absent from that module but present in another installed
+        // module".
+        File brokenJar = createModuleJar("broken-plugin.jar", ConcretePlugin.class.getName());
+
+        URLClassLoader sharedModuleLoader = new ChildFirstClassLoader(
+                new URL[]{legitimateJar.toURI().toURL(), brokenJar.toURI().toURL()},
+                Thread.currentThread().getContextClassLoader(),
+                ConcretePlugin.class.getName());
+        injectUltiToolsClassLoader(sharedModuleLoader);
+        try {
+            // Compared by name, not by Class identity: the returned Class was loaded by
+            // sharedModuleLoader (a ChildFirstClassLoader), a DIFFERENT loader from the one that
+            // loaded the ConcretePlugin.class literal used elsewhere in this test file, so the two
+            // are never == or #equals even on success -- same reason
+            // PluginDependencyResolverTest's own jar-backed fixtures are never compared against a
+            // plain `.class` literal either.
+            Class<? extends UltiToolsPlugin> legitimateResult = invokeLoadPluginMainClass(legitimateJar);
+            assertThat(legitimateResult)
+                    .as("the legitimate, matching pairing must still succeed")
+                    .isNotNull();
+            assertThat(legitimateResult.getName())
+                    .isEqualTo(ConcretePlugin.class.getName());
+
+            assertThat(invokeLoadPluginMainClass(brokenJar))
+                    .as("a main: borrowed from a different module's jar must be refused")
+                    .isNull();
+            assertThat(bukkitLogs).anyMatch(record ->
+                    Level.SEVERE.equals(record.getLevel())
+                            && record.getMessage() != null
+                            && record.getMessage().contains(brokenJar.getName())
+                            && record.getMessage().contains(ConcretePlugin.class.getName())
+                            && record.getMessage().contains(legitimateJar.getName()));
+        } finally {
+            injectUltiToolsClassLoader(null);
+            sharedModuleLoader.close();
+        }
+    }
+
+    /**
+     * Sets (or, with {@code null}, clears) {@code UltiTools}'s private {@code ultiToolsClassLoader}
+     * field directly on the mock {@code @BeforeEach} published -- {@code
+     * ClassLoaderUtils.loadClass}/{@code getPluginClassLoader()} reads this exact field, not a
+     * stubbable method, so a real field write is the only way to hand {@code loadPluginMainClass}
+     * a classloader backed by real jar files for this one test.
+     */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+    private void injectUltiToolsClassLoader(URLClassLoader loader) throws Exception {
+        Field field = UltiTools.class.getDeclaredField("ultiToolsClassLoader");
+        field.setAccessible(true);
+        field.set(UltiTools.getInstance(), loader);
+    }
+
+    /**
+     * Loads exactly one named class from its own URLs first, delegating everything else to
+     * {@code parent} -- otherwise a {@code URLClassLoader}'s default parent-first delegation would
+     * resolve {@code childFirstName} against the parent's copy (whose code source is {@code
+     * target/test-classes}, not either fabricated jar this test builds), the same trap
+     * {@code PluginDependencyResolverTest}'s own copy of this class documents.
+     */
+    private static final class ChildFirstClassLoader extends URLClassLoader {
+        private final String childFirstName;
+
+        ChildFirstClassLoader(URL[] urls, ClassLoader parent, String childFirstName) {
+            super(urls, parent);
+            this.childFirstName = childFirstName;
+        }
+
+        @Override
+        protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+            synchronized (getClassLoadingLock(name)) {
+                Class<?> loaded = findLoadedClass(name);
+                if (loaded == null && childFirstName.equals(name)) {
+                    loaded = findClass(name);
+                }
+                if (loaded == null) {
+                    loaded = super.loadClass(name, false);
+                }
+                if (resolve) {
+                    resolveClass(loaded);
+                }
+                return loaded;
+            }
+        }
     }
 
     @Test
