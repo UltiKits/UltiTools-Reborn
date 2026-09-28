@@ -114,7 +114,15 @@ public final class PluginYmlReader {
             try (InputStream inputStream = jar.getInputStream(entry)) {
                 return parse(inputStream);
             }
-        } catch (IOException e) {
+        } catch (Exception e) {
+            // Codex review, PR #549 round 2 (P2): a SIGNED module jar with a stale or tampered
+            // digest for plugin.yml makes JarFile's own verifier throw SecurityException while
+            // this entry's InputStream is read -- not an IOException, so a narrower catch here
+            // let it escape uncaught into loadPluginMainClass, which calls this method BEFORE its
+            // own guarded try, and from there into init()'s per-jar loop, aborting every
+            // subsequent jar's load instead of refusing only this one malformed jar. Matches
+            // read(Class)'s own catch-all posture above for the identical reason stated in this
+            // class's own javadoc: a single bad archive must never take the whole graph down.
             LOGGER.log(Level.WARNING, "[UltiTools-API] Unreadable plugin.yml in "
                 + jarFile.getName() + ": " + e.getMessage());
             return PluginYmlInfo.EMPTY;
