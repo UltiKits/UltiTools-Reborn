@@ -13,6 +13,8 @@ import java.nio.file.Files;
 import java.security.CodeSource;
 import java.util.Collections;
 import java.util.List;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -75,6 +77,58 @@ public final class PluginYmlReader {
         }
     }
 
+    /**
+     * Reads {@code plugin.yml} directly from a module's own jar {@code File}, without loading any
+     * class from it first.
+     * <p>
+     * {@link #read(Class)} above needs an already-loaded {@code Class}'s {@code ProtectionDomain}
+     * to find the jar -- which is exactly what is not yet available when a module's main class is
+     * still being *discovered*. {@code PluginManager}'s main-class discovery used to load every
+     * class entry in the jar, in entry order, until one happened to be assignable to
+     * {@code UltiToolsPlugin} -- which meant a class that exists only for an optional
+     * soft-dependency plugin (e.g. a PlaceholderAPI expansion) was linked, and failed to link, on
+     * every server where that optional plugin is absent, well before the real main class was ever
+     * reached. Reading the {@code main:} key directly out of {@code plugin.yml} and loading only
+     * that one declared class removes the rest of the jar from the discovery path entirely -- the
+     * same shape Bukkit/Paper's own {@code PluginDescriptionFile} uses to find a plugin's main
+     * class from its {@code main:} key, never by scanning the jar for a matching type.
+     *
+     * @param jarFile the module's own jar file; may be {@code null} or not a real file
+     * @return the module's declared {@code name}, {@code main} and {@code loadAfter}, or
+     *         {@link PluginYmlInfo#EMPTY} on any failure path (missing file, no {@code plugin.yml}
+     *         entry, unreadable archive, malformed YAML)
+     * @since 6.3.0
+     */
+    public static PluginYmlInfo readFromJarFile(File jarFile) {
+        if (jarFile == null || !jarFile.isFile()) {
+            return PluginYmlInfo.EMPTY;
+        }
+        try (JarFile jar = new JarFile(jarFile)) {
+            JarEntry entry = jar.getJarEntry(PLUGIN_YML_ENTRY);
+            if (entry == null) {
+                // The common case for a jar that is not an UltiTools module jar at all -- inert,
+                // not a failure worth a WARNING (the caller decides whether a missing plugin.yml
+                // is refusal-worthy for its own purpose).
+                return PluginYmlInfo.EMPTY;
+            }
+            try (InputStream inputStream = jar.getInputStream(entry)) {
+                return parse(inputStream);
+            }
+        } catch (Exception e) {
+            // Codex review, PR #549 round 2 (P2): a SIGNED module jar with a stale or tampered
+            // digest for plugin.yml makes JarFile's own verifier throw SecurityException while
+            // this entry's InputStream is read -- not an IOException, so a narrower catch here
+            // let it escape uncaught into loadPluginMainClass, which calls this method BEFORE its
+            // own guarded try, and from there into init()'s per-jar loop, aborting every
+            // subsequent jar's load instead of refusing only this one malformed jar. Matches
+            // read(Class)'s own catch-all posture above for the identical reason stated in this
+            // class's own javadoc: a single bad archive must never take the whole graph down.
+            LOGGER.log(Level.WARNING, "[UltiTools-API] Unreadable plugin.yml in "
+                + jarFile.getName() + ": " + e.getMessage());
+            return PluginYmlInfo.EMPTY;
+        }
+    }
+
     private static File toFile(URL location) {
         try {
             return new File(location.toURI());
@@ -130,27 +184,31 @@ public final class PluginYmlReader {
             return PluginYmlInfo.EMPTY;
         }
         String name = config.getString("name");
+        String main = config.getString("main");
         List<String> loadAfter = config.getStringList("loadAfter");
-        return new PluginYmlInfo(name, loadAfter);
+        return new PluginYmlInfo(name, main, loadAfter);
     }
 
     /**
-     * The subset of a module's {@code plugin.yml} this framework's dependency graph needs: its
-     * declared {@code name:} (nullable - absent when the archive has none or reading failed) and
-     * its {@code loadAfter:} list (never null; empty when absent or reading failed).
+     * The subset of a module's {@code plugin.yml} this framework needs: its declared
+     * {@code name:} and {@code main:} (both nullable - absent when the archive has none or
+     * reading failed) and its {@code loadAfter:} list (never null; empty when absent or reading
+     * failed).
      *
      * @since 6.3.0
      */
     public static final class PluginYmlInfo {
 
         /** The empty result every failure path returns. */
-        public static final PluginYmlInfo EMPTY = new PluginYmlInfo(null, Collections.emptyList());
+        public static final PluginYmlInfo EMPTY = new PluginYmlInfo(null, null, Collections.emptyList());
 
         private final String name;
+        private final String main;
         private final List<String> loadAfter;
 
-        PluginYmlInfo(String name, List<String> loadAfter) {
+        PluginYmlInfo(String name, String main, List<String> loadAfter) {
             this.name = name;
+            this.main = main;
             this.loadAfter = Collections.unmodifiableList(
                 loadAfter == null ? Collections.emptyList() : loadAfter);
         }
@@ -163,6 +221,16 @@ public final class PluginYmlReader {
          */
         public String getName() {
             return name;
+        }
+
+        /**
+         * The module's declared {@code plugin.yml} {@code main:} value.
+         *
+         * @return the declared main class name, or {@code null} if absent or unreadable
+         * @since 6.3.0
+         */
+        public String getMain() {
+            return main;
         }
 
         /**

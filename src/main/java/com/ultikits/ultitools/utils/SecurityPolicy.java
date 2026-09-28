@@ -145,7 +145,13 @@ public class SecurityPolicy {
 
         // Validate the jar file structure
         try (JarFile jar = new JarFile(jarFile)) {
-            // UltiTools modules don't require plugin.yml — they're identified by @UltiToolsModule
+            // Corrected (plan 17-30): this comment used to read "UltiTools modules don't require
+            // plugin.yml — they're identified by @UltiToolsModule". That was already superseded by
+            // #341/D-16, which refuses a module whose plugin.yml has no name: key, and is now also
+            // superseded by PluginManager#loadPluginMainClass requiring a plugin.yml main: entry to
+            // discover the module's main class at all -- see that method's own javadoc. A module
+            // jar with no plugin.yml is refused elsewhere in the load path, not here; this method's
+            // own job stays limited to the size/entry-count structural check below.
 
             // Count the entries
             Enumeration<JarEntry> entries = jar.entries();

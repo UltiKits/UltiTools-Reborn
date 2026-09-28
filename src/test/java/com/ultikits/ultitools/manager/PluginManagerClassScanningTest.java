@@ -9,6 +9,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -30,6 +33,7 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockbukkit.mockbukkit.MockBukkit;
 
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
@@ -85,15 +89,19 @@ class PluginManagerClassScanningTest {
     }
 
     @Test
-    @DisplayName("只选择具体的 UltiToolsPlugin 子类并隔离坏类条目")
-    void shouldSelectOnlyConcreteUltiToolsPluginSubclass() throws Exception {
-        File pluginJar = createJar(
+    @DisplayName("plan 17-30: 主类通过 plugin.yml 的 main: 声明解析，而不是遍历 jar 条目找第一个可赋值的子类")
+    void shouldResolveMainClassFromPluginYmlMainEntry() throws Exception {
+        // Decoys are still physically present in the jar (a real module jar also carries plenty
+        // of classes with nothing to do with main-class discovery), but with plugin.yml driving
+        // discovery none of them is ever loaded to find the main class -- only ConcretePlugin,
+        // named explicitly by main:, matters.
+        File pluginJar = createModuleJar(
                 "mixed-plugin.jar",
+                ConcretePlugin.class.getName(),
                 IPlugin.class,
                 PluginContract.class,
                 AbstractPlugin.class,
                 PlainPlugin.class,
-                "com.ultikits.ultitools.manager.MissingPlugin",
                 ConcretePlugin.class
         );
 
@@ -101,11 +109,205 @@ class PluginManagerClassScanningTest {
     }
 
     @Test
+    @DisplayName("plan 17-30: 一个只服务于可选插件、加载即失败的类不应被main类发现过程接触或记录")
+    void shouldNeverLoadOrLogAClassUnrelatedToTheDeclaredMainClass() throws Exception {
+        // "com.ultikits.ultitools.manager.OptionalPluginExpansion" names no real class anywhere
+        // on the test classpath (see writeClassEntry's javadoc) -- loading it would throw
+        // ClassNotFoundException, standing in for the LinkageError a real class referencing an
+        // absent optional plugin's type throws (e.g. a PlaceholderAPI expansion without
+        // PlaceholderAPI installed): loadPluginMainClass catches both identically, and the point
+        // of this test is that neither is ever attempted. Before plan 17-30 this class, sitting
+        // ahead of ConcretePlugin in jar entry order, would have been loaded, failed, and logged.
+        // Under plugin.yml-driven discovery it must never be touched at all.
+        String decoyClassName = "com.ultikits.ultitools.manager.OptionalPluginExpansion";
+        File pluginJar = createModuleJar(
+                "optional-dependency-plugin.jar",
+                ConcretePlugin.class.getName(),
+                decoyClassName,
+                ConcretePlugin.class
+        );
+
+        assertThat(invokeLoadPluginMainClass(pluginJar)).isEqualTo(ConcretePlugin.class);
+        assertThat(bukkitLogs).as("no log record should ever mention the untouched decoy class")
+                .noneMatch(record -> record.getMessage() != null && record.getMessage().contains(decoyClassName));
+    }
+
+    @Test
+    @DisplayName("plan 17-30: plugin.yml 中没有 main: 时应明确拒绝加载，而不是静默跳过")
+    void shouldRefuseWhenPluginYmlHasNoMainEntry() throws Exception {
+        File pluginJar = new File(tempDir, "no-main-plugin.jar");
+        try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(pluginJar.toPath()))) {
+            output.putNextEntry(new JarEntry("plugin.yml"));
+            output.write("name: NoMainModule\n".getBytes(StandardCharsets.UTF_8));
+            output.closeEntry();
+            writeClassEntry(output, ConcretePlugin.class);
+        }
+
+        assertThat(invokeLoadPluginMainClass(pluginJar)).isNull();
+        assertThat(bukkitLogs).anyMatch(record ->
+                Level.SEVERE.equals(record.getLevel())
+                        && record.getMessage() != null
+                        && record.getMessage().contains(pluginJar.getName())
+                        && record.getMessage().contains("main:"));
+    }
+
+    @Test
+    @DisplayName("plan 17-30: jar 中完全没有 plugin.yml 时应明确拒绝加载，而不是静默跳过")
+    void shouldRefuseWhenJarHasNoPluginYmlAtAll() throws Exception {
+        File pluginJar = createJar("no-plugin-yml.jar", ConcretePlugin.class);
+
+        assertThat(invokeLoadPluginMainClass(pluginJar)).isNull();
+        assertThat(bukkitLogs).anyMatch(record ->
+                Level.SEVERE.equals(record.getLevel())
+                        && record.getMessage() != null
+                        && record.getMessage().contains(pluginJar.getName()));
+    }
+
+    @Test
+    @DisplayName("plan 17-30: 声明的 main: 类加载失败时应明确拒绝加载，而不是静默跳过")
+    void shouldRefuseWhenDeclaredMainClassFailsToLoad() throws Exception {
+        String brokenMainClassName = "com.ultikits.ultitools.manager.BrokenMainClass";
+        File pluginJar = createModuleJar("broken-main-plugin.jar", brokenMainClassName, brokenMainClassName);
+
+        assertThat(invokeLoadPluginMainClass(pluginJar)).isNull();
+        assertThat(bukkitLogs).anyMatch(record ->
+                Level.SEVERE.equals(record.getLevel())
+                        && record.getMessage() != null
+                        && record.getMessage().contains(pluginJar.getName())
+                        && record.getMessage().contains(brokenMainClassName));
+    }
+
+    @Test
+    @DisplayName("plan 17-30: 声明的 main: 不是具体的 UltiToolsPlugin 子类时应明确拒绝加载")
+    void shouldRefuseWhenDeclaredMainClassIsNotAConcreteUltiToolsPlugin() throws Exception {
+        File pluginJar = createModuleJar(
+                "not-a-plugin.jar", PlainPlugin.class.getName(), PlainPlugin.class);
+
+        assertThat(invokeLoadPluginMainClass(pluginJar)).isNull();
+        assertThat(bukkitLogs).anyMatch(record ->
+                Level.SEVERE.equals(record.getLevel())
+                        && record.getMessage() != null
+                        && record.getMessage().contains(pluginJar.getName())
+                        && record.getMessage().contains("UltiToolsPlugin"));
+    }
+
+    @Test
+    @DisplayName("plan 17-30: 声明的 main: 不是合法类名格式时应明确拒绝加载而不是抛出异常")
+    void shouldRefuseWhenDeclaredMainClassNameIsInvalidFormat() throws Exception {
+        String invalidMainClassName = "1nvalid-class-name";
+        File pluginJar = createModuleJar("invalid-main-name-plugin.jar", invalidMainClassName);
+
+        assertThat(invokeLoadPluginMainClass(pluginJar)).isNull();
+        assertThat(bukkitLogs).anyMatch(record ->
+                Level.WARNING.equals(record.getLevel())
+                        && record.getMessage() != null
+                        && record.getMessage().contains(pluginJar.getName())
+                        && record.getMessage().contains(invalidMainClassName));
+    }
+
+    @Test
+    @DisplayName("Codex P2 (PR #549 round 1): 声明的 main: 类实际属于另一个已安装模块的 jar 时应被拒绝")
+    void shouldRefuseWhenDeclaredMainClassBelongsToADifferentJar() throws Exception {
+        // Every module shares ONE classloader over the whole module directory (see
+        // UltiTools.getJavaPluginClassLoader()), so this test needs a REAL classloader spanning
+        // two REAL jar files on disk -- only that makes the loaded class's own CodeSource
+        // genuinely resolve to one specific jar, which a mocked/ambient test classloader cannot
+        // exercise (see writeClassEntry's own javadoc on why bare fabricated jars are not enough).
+        File legitimateJar = createModuleJar(
+                "legitimate-plugin.jar", ConcretePlugin.class.getName(), ConcretePlugin.class);
+        // brokenJar's plugin.yml claims the exact same main: as legitimateJar's, but does not
+        // physically carry that class's bytecode at all -- the shape Codex's finding named: "a
+        // module's main: names a class absent from that module but present in another installed
+        // module".
+        File brokenJar = createModuleJar("broken-plugin.jar", ConcretePlugin.class.getName());
+
+        URLClassLoader sharedModuleLoader = new ChildFirstClassLoader(
+                new URL[]{legitimateJar.toURI().toURL(), brokenJar.toURI().toURL()},
+                Thread.currentThread().getContextClassLoader(),
+                ConcretePlugin.class.getName());
+        injectUltiToolsClassLoader(sharedModuleLoader);
+        try {
+            // Compared by name, not by Class identity: the returned Class was loaded by
+            // sharedModuleLoader (a ChildFirstClassLoader), a DIFFERENT loader from the one that
+            // loaded the ConcretePlugin.class literal used elsewhere in this test file, so the two
+            // are never == or #equals even on success -- same reason
+            // PluginDependencyResolverTest's own jar-backed fixtures are never compared against a
+            // plain `.class` literal either.
+            Class<? extends UltiToolsPlugin> legitimateResult = invokeLoadPluginMainClass(legitimateJar);
+            assertThat(legitimateResult)
+                    .as("the legitimate, matching pairing must still succeed")
+                    .isNotNull();
+            assertThat(legitimateResult.getName())
+                    .isEqualTo(ConcretePlugin.class.getName());
+
+            assertThat(invokeLoadPluginMainClass(brokenJar))
+                    .as("a main: borrowed from a different module's jar must be refused")
+                    .isNull();
+            assertThat(bukkitLogs).anyMatch(record ->
+                    Level.SEVERE.equals(record.getLevel())
+                            && record.getMessage() != null
+                            && record.getMessage().contains(brokenJar.getName())
+                            && record.getMessage().contains(ConcretePlugin.class.getName())
+                            && record.getMessage().contains(legitimateJar.getName()));
+        } finally {
+            injectUltiToolsClassLoader(null);
+            sharedModuleLoader.close();
+        }
+    }
+
+    /**
+     * Sets (or, with {@code null}, clears) {@code UltiTools}'s private {@code ultiToolsClassLoader}
+     * field directly on the mock {@code @BeforeEach} published -- {@code
+     * ClassLoaderUtils.loadClass}/{@code getPluginClassLoader()} reads this exact field, not a
+     * stubbable method, so a real field write is the only way to hand {@code loadPluginMainClass}
+     * a classloader backed by real jar files for this one test.
+     */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+    private void injectUltiToolsClassLoader(URLClassLoader loader) throws Exception {
+        Field field = UltiTools.class.getDeclaredField("ultiToolsClassLoader");
+        field.setAccessible(true);
+        field.set(UltiTools.getInstance(), loader);
+    }
+
+    /**
+     * Loads exactly one named class from its own URLs first, delegating everything else to
+     * {@code parent} -- otherwise a {@code URLClassLoader}'s default parent-first delegation would
+     * resolve {@code childFirstName} against the parent's copy (whose code source is {@code
+     * target/test-classes}, not either fabricated jar this test builds), the same trap
+     * {@code PluginDependencyResolverTest}'s own copy of this class documents.
+     */
+    private static final class ChildFirstClassLoader extends URLClassLoader {
+        private final String childFirstName;
+
+        ChildFirstClassLoader(URL[] urls, ClassLoader parent, String childFirstName) {
+            super(urls, parent);
+            this.childFirstName = childFirstName;
+        }
+
+        @Override
+        protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+            synchronized (getClassLoadingLock(name)) {
+                Class<?> loaded = findLoadedClass(name);
+                if (loaded == null && childFirstName.equals(name)) {
+                    loaded = findClass(name);
+                }
+                if (loaded == null) {
+                    loaded = super.loadClass(name, false);
+                }
+                if (resolve) {
+                    resolveClass(loaded);
+                }
+                return loaded;
+            }
+        }
+    }
+
+    @Test
     @DisplayName("坏 JAR 不应该阻止后续有效 JAR 扫描")
     void badJarShouldNotPreventLaterValidJarScan() throws Exception {
         File badJar = new File(tempDir, "bad-plugin.jar");
         Files.write(badJar.toPath(), new byte[]{0x00, 0x01, 0x02});
-        File validJar = createJar("valid-plugin.jar", ConcretePlugin.class);
+        File validJar = createModuleJar("valid-plugin.jar", ConcretePlugin.class.getName(), ConcretePlugin.class);
 
         assertThat(invokeLoadPluginMainClass(badJar)).isNull();
         assertThat(invokeLoadPluginMainClass(validJar)).isEqualTo(ConcretePlugin.class);
@@ -406,23 +608,64 @@ class PluginManagerClassScanningTest {
         File jar = new File(tempDir, name);
         try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(jar.toPath()))) {
             for (Object entry : entries) {
-                String className = entry instanceof Class ? ((Class<?>) entry).getName() : (String) entry;
-                String resourceName = className.replace('.', '/') + ".class";
-                output.putNextEntry(new JarEntry(resourceName));
-                if (entry instanceof Class) {
-                    try (InputStream input = ((Class<?>) entry).getResourceAsStream("/" + resourceName)) {
-                        assertThat(input).as("compiled class resource for %s", className).isNotNull();
-                        byte[] buffer = new byte[4096];
-                        int read;
-                        while ((read = input.read(buffer)) != -1) {
-                            output.write(buffer, 0, read);
-                        }
-                    }
-                }
-                output.closeEntry();
+                writeClassEntry(output, entry);
             }
         }
         return jar;
+    }
+
+    /**
+     * Builds a module jar carrying a {@code plugin.yml} whose {@code main:} entry names {@code
+     * mainClassName}, plus whatever class entries the test wants physically present -- plan
+     * 17-30's tests need this so that "main class discovered from plugin.yml" and "a decoy class
+     * that would fail to load" can be told apart, which a jar with no {@code plugin.yml} at all
+     * (the pre-existing {@link #createJar}) cannot express.
+     */
+    private File createModuleJar(String name, String mainClassName, Object... entries) throws IOException {
+        File jar = new File(tempDir, name);
+        try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(jar.toPath()))) {
+            output.putNextEntry(new JarEntry("plugin.yml"));
+            output.write(("main: " + mainClassName + "\n").getBytes(StandardCharsets.UTF_8));
+            output.closeEntry();
+            for (Object entry : entries) {
+                writeClassEntry(output, entry);
+            }
+        }
+        return jar;
+    }
+
+    /**
+     * Writes one jar entry for {@code entry}: a compiled {@code .class} resource when it is a
+     * {@code Class}, or an empty placeholder {@code .class} entry when it is a bare {@code
+     * String} class name that names no real class anywhere on the test classpath.
+     * <p>
+     * {@code loadPluginMainClass} resolves classes through {@code ClassLoaderUtils.loadClass},
+     * which in this test process ultimately reaches the ambient JVM classloader (see {@code
+     * UltiTools.getJavaPluginClassLoader()}'s test fallback) -- not the bytes physically written
+     * into these fabricated jar files. So a bare-{@code String} entry's class body is never
+     * actually read; what makes it fail is that no class by that name is defined anywhere the
+     * classloader can see, giving a real {@link ClassNotFoundException}. That is enough to stand
+     * in for "a class that fails to link" for these tests' purposes (a class referencing an
+     * absent optional plugin's type throws {@link LinkageError} instead, but {@code
+     * loadPluginMainClass} catches both identically) -- and, for the decoy-class test, the point
+     * being proven is that this name is never even attempted, so which exception it *would* throw
+     * if it were is moot.
+     */
+    private void writeClassEntry(JarOutputStream output, Object entry) throws IOException {
+        String className = entry instanceof Class ? ((Class<?>) entry).getName() : (String) entry;
+        String resourceName = className.replace('.', '/') + ".class";
+        output.putNextEntry(new JarEntry(resourceName));
+        if (entry instanceof Class) {
+            try (InputStream input = ((Class<?>) entry).getResourceAsStream("/" + resourceName)) {
+                assertThat(input).as("compiled class resource for %s", className).isNotNull();
+                byte[] buffer = new byte[4096];
+                int read;
+                while ((read = input.read(buffer)) != -1) {
+                    output.write(buffer, 0, read);
+                }
+            }
+        }
+        output.closeEntry();
     }
 
     interface PluginContract extends IPlugin {
