@@ -33,6 +33,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.server.PluginDisableEvent;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -979,6 +980,10 @@ public class PluginManager {
         if (pluginJar == null || !pluginJar.isFile()) {
             return entities;
         }
+        // UltiEconomy#20: read directly from the jar, not from any already-loaded plugin
+        // instance -- scanEntitiesInJar runs during module discovery, the same "no instance yet"
+        // constraint PluginYmlReader.readFromJarFile's own javadoc describes for loadPluginMainClass.
+        List<String> softDepend = PluginYmlReader.readFromJarFile(pluginJar).getSoftDepend();
         try (JarFile jarFile = new JarFile(pluginJar)) {
             Enumeration<JarEntry> entryEnumeration = jarFile.entries();
             Set<String> scannedClasses = new HashSet<>();
@@ -999,7 +1004,7 @@ public class PluginManager {
                             + "not enforced, so no entity is silently dropped).");
                 }
 
-                resolveEntityClass(className, pluginJar.getName()).ifPresent(entities::add);
+                resolveEntityClass(className, pluginJar.getName(), softDepend).ifPresent(entities::add);
             }
         } catch (IOException | LinkageError | RuntimeException e) {
             Bukkit.getLogger().log(Level.SEVERE,
@@ -1047,9 +1052,12 @@ public class PluginManager {
      * @param moduleName the D-19 diagnostic identifier for the enclosing {@link
      *                   #scanEntitiesInJar}'s jar, threaded through so this method's own catch
      *                   block can accumulate into the correct module
+     * @param softDepend the scanning module's own declared {@code plugin.yml} {@code softdepend:}
+     *                   list (UltiEconomy#20); may be empty, never {@code null}
      * @return the loaded class if it is a {@code @Table} entity, otherwise empty
      */
-    private static Optional<Class<?>> resolveEntityClass(String className, String moduleName) {
+    private static Optional<Class<?>> resolveEntityClass(
+            String className, String moduleName, List<String> softDepend) {
         try {
             // GEN-07 (D-14): records what the removed classload filter layers would have refused
             // for className, independent of whether loadClass below succeeds or throws. Purely
@@ -1060,16 +1068,150 @@ public class PluginManager {
                 return Optional.of(aClass);
             }
         } catch (ClassNotFoundException | LinkageError e) {
-            // D-19: also accumulated for scanEntitiesInJar's one-SEVERE-per-module summary --
-            // skip-and-continue itself is unchanged.
-            ModuleScanDiagnostics.recordSkippedClass(moduleName, className, e);
-            Bukkit.getLogger().log(Level.FINE,
-                "[UltiTools-API] Could not load class during entity scan: " + className + " - " + e.getMessage());
+            if (isAbsentSoftDependClasspathGap(e, softDepend)) {
+                // UltiEconomy#20: className exists only to integrate with an optional
+                // plugin the module itself declared as softdepend: -- Bukkit's own softdepend:
+                // contract is "this plugin may be absent; the dependent must tolerate it", so this
+                // is not the "module was built against an older UltiTools-API version" signal
+                // ModuleScanDiagnostics' SEVERE summary exists to report. Deliberately excluded
+                // from that accumulator entirely, not merely logged twice.
+                Bukkit.getLogger().log(Level.FINE,
+                    "[UltiTools-API] Skipped class during entity scan (declared soft-dependency "
+                        + "plugin is absent or disabled): " + className + " - " + e.getMessage());
+            } else {
+                // D-19: also accumulated for scanEntitiesInJar's one-SEVERE-per-module summary --
+                // skip-and-continue itself is unchanged.
+                ModuleScanDiagnostics.recordSkippedClass(moduleName, className, e);
+                Bukkit.getLogger().log(Level.FINE,
+                    "[UltiTools-API] Could not load class during entity scan: " + className + " - " + e.getMessage());
+            }
         } catch (SecurityException e) {
             Bukkit.getLogger().log(Level.WARNING,
                 "[UltiTools-API] Security violation during entity scan: " + className + " - " + e.getMessage());
         }
         return Optional.empty();
+    }
+
+    /**
+     * UltiEconomy#20: decides whether {@code failure}, caught while loading a class during
+     * a module's entity scan, is fully explained by an optional integration the module itself
+     * declared -- a class whose declared type hierarchy references a plugin API type, where that
+     * plugin (a) is named in the module's own {@code plugin.yml} {@code softdepend:} list and (b)
+     * is not currently installed, or installed but not enabled, on this server.
+     * <p>
+     * Bukkit's own {@code softdepend:} contract is precisely "this plugin may legitimately be
+     * absent; the dependent must tolerate it" (see {@code PluginDescriptionFile#getSoftDepend()});
+     * Spring Boot's {@code @ConditionalOnClass}/{@code ClassUtils#isPresent(String, ClassLoader)}
+     * treats an optional integration class's absence the same way -- a routing condition, not a
+     * defect. Neither precedent attributes an arbitrary missing-class failure to a specific
+     * optional dependency by guessing at a hardcoded package-name convention, and this method does
+     * not either -- that kind of fragile string-matching heuristic is exactly what GEN-07 removed
+     * from {@code SecurityPolicy}. Instead this only ever downgrades a failure when ALL of:
+     * <ol>
+     *   <li>{@code failure} is a {@link LinkageError} -- the scanned class itself WAS found
+     *   (physically present in this module's own jar) and failed only while resolving something
+     *   it references. A bare {@link ClassNotFoundException} for the scanned class's own name
+     *   always means the module's own jar entry could not be loaded at all, never "an optional
+     *   dependency is absent", and is never downgraded;</li>
+     *   <li>the module declares at least one plugin under {@code softdepend:};</li>
+     *   <li>at least one of those declared plugins is not currently installed, or installed but
+     *   not enabled; and</li>
+     *   <li>the specific missing type {@code failure} names is not otherwise resolvable through
+     *   any OTHER plugin that is currently installed and enabled on this server -- guarding
+     *   against misclassifying a class that in fact belongs to something that IS present.</li>
+     * </ol>
+     * A module that declares no {@code softdepend:} at all, or whose every declared {@code
+     * softdepend:} plugin is actually present and enabled, always stays SEVERE via {@link
+     * ModuleScanDiagnostics} -- this cannot silently swallow a module's own broken reference merely
+     * because it happens to run alongside some unrelated, genuinely-installed optional plugin.
+     *
+     * @param failure    the exception caught while loading the scanned class
+     * @param softDepend the scanning module's own declared {@code softdepend:} list; may be empty,
+     *                   never {@code null}
+     * @return {@code true} when this failure should be logged at FINE and excluded from the
+     *         module's SEVERE skipped-class summary
+     */
+    private static boolean isAbsentSoftDependClasspathGap(Throwable failure, List<String> softDepend) {
+        if (softDepend == null || softDepend.isEmpty() || !(failure instanceof LinkageError)) {
+            return false;
+        }
+        String missingClassName = extractMissingClassName(failure);
+        if (missingClassName == null || isClassAvailableFromAnyEnabledPlugin(missingClassName)) {
+            return false;
+        }
+        for (String pluginName : softDepend) {
+            if (isPluginAbsentOrDisabled(pluginName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @param pluginName a name from a module's declared {@code softdepend:} list
+     * @return {@code true} if that plugin is not currently installed, or installed but disabled
+     */
+    private static boolean isPluginAbsentOrDisabled(String pluginName) {
+        if (pluginName == null || pluginName.trim().isEmpty()) {
+            return false;
+        }
+        Plugin plugin = Bukkit.getPluginManager().getPlugin(pluginName);
+        return plugin == null || !plugin.isEnabled();
+    }
+
+    /**
+     * Best-effort extraction of the internal (dot-qualified) name of the class {@code failure}
+     * reports missing. {@link NoClassDefFoundError#getMessage()} is, across the HotSpot/OpenJDK
+     * releases this framework targets, the missing class's own internal (slash-separated) binary
+     * name, occasionally suffixed with a JVM-specific detail such as " (wrong name: ...)" -- since
+     * neither shape is documented API, this reads defensively and returns {@code null} rather than
+     * guess when the message is empty or unrecognizable.
+     *
+     * @param failure the {@link LinkageError} caught while loading a scanned class
+     * @return the missing class's dotted name, or {@code null} if it cannot be determined
+     */
+    private static String extractMissingClassName(Throwable failure) {
+        String message = failure.getMessage();
+        if (message == null || message.trim().isEmpty()) {
+            return null;
+        }
+        String internalName = message.trim().split(" ")[0].trim();
+        if (internalName.isEmpty()) {
+            return null;
+        }
+        return internalName.replace('/', '.');
+    }
+
+    /**
+     * Whether {@code missingClassName} is physically present in any currently installed AND
+     * enabled plugin's own jar -- i.e. whether the type a {@link LinkageError} named as missing is,
+     * in fact, available somewhere on this server right now. Reads each candidate plugin's own jar
+     * entries directly via {@link #resolveOwnJarFile(Class)} rather than attempting to load the
+     * class through that plugin's own classloader, which would require assuming a specific
+     * cross-plugin classloader delegation topology this check has no need to depend on.
+     *
+     * @param missingClassName the dotted class name reported missing
+     * @return {@code true} if some other enabled plugin's own jar carries that class
+     */
+    private static boolean isClassAvailableFromAnyEnabledPlugin(String missingClassName) {
+        String entryName = missingClassName.replace('.', '/') + ".class";
+        for (Plugin plugin : Bukkit.getPluginManager().getPlugins()) {
+            if (plugin == null || !plugin.isEnabled()) {
+                continue;
+            }
+            File jarFile = resolveOwnJarFile(plugin.getClass());
+            if (jarFile == null) {
+                continue;
+            }
+            try (JarFile jar = new JarFile(jarFile)) {
+                if (jar.getJarEntry(entryName) != null) {
+                    return true;
+                }
+            } catch (IOException ignored) {
+                // Unreadable jar -- cannot confirm presence via this plugin; try the next one.
+            }
+        }
+        return false;
     }
 
     /**
