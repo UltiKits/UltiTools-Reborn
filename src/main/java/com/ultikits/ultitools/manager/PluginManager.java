@@ -84,6 +84,7 @@ import com.ultikits.ultitools.manager.PluginDependencyResolver.CircularDependenc
 import com.ultikits.ultitools.manager.PluginDependencyResolver.MissingDependencyException;
 import com.ultikits.ultitools.utils.ClassLoaderUtils;
 import com.ultikits.ultitools.utils.ModuleScanDiagnostics;
+import com.ultikits.ultitools.utils.PluginYmlReader;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 import com.ultikits.ultitools.utils.SecurityPolicy;
 
@@ -845,97 +846,106 @@ public class PluginManager {
 
     /**
      * Load module main class.
+     * <p>
+     * Resolves the main class from the module jar's own {@code plugin.yml} {@code main:} entry --
+     * the same shape Bukkit/Paper's own {@code PluginDescriptionFile} uses to find a plugin's main
+     * class -- and loads exactly that one declared class, rather than the pre-6.3.0-plan-17-30
+     * approach of loading every class entry in the jar, in entry order, until one happened to be
+     * assignable to {@code UltiToolsPlugin}. That approach linked classes with nothing to do with
+     * main-class discovery: a class that exists only for an optional soft-dependency plugin (e.g.
+     * a PlaceholderAPI expansion) failed to link on every server where that optional plugin is
+     * absent, logging a misleading "skipped class...built against an older API" SEVERE line for a
+     * module that was never actually built against an older API. See the framework issue this
+     * fixes for the full real-machine reproduction.
+     * <p>
+     * Every refusal path here logs a specific, actionable SEVERE naming the module and the exact
+     * reason (no {@code plugin.yml}/no {@code main:}, the declared class failed to load, or the
+     * declared class is not a concrete {@code UltiToolsPlugin}) and returns {@code null} -- never
+     * a silent skip, consistent with this milestone's core value that a declared surface must
+     * either work or say plainly that it does not. {@code null} is not fatal to the caller: {@link
+     * #init(ClassLoader)} simply omits the module from {@code pluginClassList}, so one refused jar
+     * never prevents any other jar in the same directory from loading.
      *
      * @param classLoader Class loader
      * @param pluginJar   Plugin jar file
-     * @return Plugin main class
+     * @return Plugin main class, or {@code null} if the module is refused
      */
     private Class<? extends UltiToolsPlugin> loadPluginMainClass(ClassLoader classLoader, File pluginJar) { // NOPMD - classLoader used implicitly by Class.forName
         // Validate jar file security
         if (!SecurityPolicy.isValidModuleJar(pluginJar)) {
-            Bukkit.getLogger().log(Level.SEVERE, 
+            Bukkit.getLogger().log(Level.SEVERE,
                 "[UltiTools-API] Security validation failed for jar: " + pluginJar.getName());
             return null;
         }
-        
-        try (JarFile jarFile = new JarFile(pluginJar)) {
-            Enumeration<JarEntry> entryEnumeration = jarFile.entries();
-            Set<String> scannedClasses = new HashSet<>();
-            
-            while (entryEnumeration.hasMoreElements()) {
-                JarEntry entry = entryEnumeration.nextElement();
-                if (!entry.getName().contains(".class") || entry.getName().contains("META-INF")) {
-                    continue;
-                }
-                
-                String className = entry
-                        .getName()
-                        .replace('/', '.')
-                        .replace(".class", "");
-                
-                // Avoid scanning the same class twice
-                if (scannedClasses.contains(className)) {
-                    continue;
-                }
-                scannedClasses.add(className);
-                
-                // Cap the number of classes scanned, to guard against a denial-of-service attack
-                if (scannedClasses.size() > 1000) {
-                    Bukkit.getLogger().log(Level.WARNING, 
-                        "[UltiTools-API] Too many classes in jar, scanning stopped: " + pluginJar.getName());
-                    break;
-                }
-                
-                try {
-                    // GEN-07 (D-14): records what the removed classload filter layers would have
-                    // refused for className, independent of whether loadClass below succeeds,
-                    // throws ClassNotFoundException, or throws SecurityException -- classify() is
-                    // a pure function of the name alone. Purely observational; never refuses.
-                    ClassLoaderUtils.recordClassloadFilterAudit(pluginJar.getName(), className);
-                    // Use security-validated class loading (checks dangerous classes/packages)
-                    // but NOT loadPluginClass() which rejects non-UltiToolsPlugin classes
-                    Class<?> aClass = ClassLoaderUtils.loadClass(className);
-                    if (UltiToolsPlugin.class.isAssignableFrom(aClass)
-                            && !aClass.isInterface()
-                            && !Modifier.isAbstract(aClass.getModifiers())) {
-                        return aClass.asSubclass(UltiToolsPlugin.class);
-                    }
-                } catch (ClassNotFoundException | LinkageError e) {
-                    // Log but don't abort -- continue scanning the remaining classes
-                    // D-19: also accumulated for the one-SEVERE-per-module summary this method's
-                    // finally block emits below -- skip-and-continue itself is unchanged.
-                    ModuleScanDiagnostics.recordSkippedClass(pluginJar.getName(), className, e);
-                    Bukkit.getLogger().log(Level.FINE,
-                        "[UltiTools-API] Could not load class: " + className + " - " + e.getMessage());
-                } catch (SecurityException e) {
-                    // Security violations must be logged — only triggers for actually dangerous classes
-                    Bukkit.getLogger().log(Level.WARNING,
-                        "[UltiTools-API] Security violation while loading class: " + className + " - " + e.getMessage());
-                }
-            }
-        } catch (IOException | LinkageError | RuntimeException e) {
+
+        PluginYmlReader.PluginYmlInfo ymlInfo = PluginYmlReader.readFromJarFile(pluginJar);
+        String mainClassName = ymlInfo.getMain();
+        if (mainClassName == null || mainClassName.trim().isEmpty()) {
             Bukkit.getLogger().log(Level.SEVERE,
-                "[UltiTools-API] Failed to read jar file: " + pluginJar.getName(), e);
+                "[UltiTools-API] Module '" + pluginJar.getName() + "' has no readable plugin.yml, "
+                    + "or its plugin.yml has no 'main:' entry -- refusing to load. Every UltiTools "
+                    + "module jar must declare 'main: <fully.qualified.MainClass>' in plugin.yml.");
+            return null;
+        }
+
+        try {
+            // GEN-07 (D-14): records what the removed classload filter layers would have refused
+            // for mainClassName, independent of whether loadClass below succeeds, throws
+            // ClassNotFoundException, or throws SecurityException -- classify() is a pure function
+            // of the name alone. Purely observational; never refuses. Kept for parity with every
+            // other class-load call site in this class even though there is now exactly one class
+            // to evaluate per module.
+            ClassLoaderUtils.recordClassloadFilterAudit(pluginJar.getName(), mainClassName);
+            // Use security-validated class loading (checks dangerous classes/packages)
+            // but NOT loadPluginClass() which rejects non-UltiToolsPlugin classes
+            Class<?> aClass = ClassLoaderUtils.loadClass(mainClassName);
+            if (!UltiToolsPlugin.class.isAssignableFrom(aClass)
+                    || aClass.isInterface()
+                    || Modifier.isAbstract(aClass.getModifiers())) {
+                Bukkit.getLogger().log(Level.SEVERE,
+                    "[UltiTools-API] Module '" + pluginJar.getName() + "' declares main: '"
+                        + mainClassName + "' in plugin.yml, but that class does not extend "
+                        + "UltiToolsPlugin (or is abstract, or an interface) -- refusing to load.");
+                return null;
+            }
+            return aClass.asSubclass(UltiToolsPlugin.class);
+        } catch (ClassNotFoundException | LinkageError e) {
+            Bukkit.getLogger().log(Level.SEVERE,
+                "[UltiTools-API] Module '" + pluginJar.getName() + "' declares main: '"
+                    + mainClassName + "' in plugin.yml, but it could not be loaded: "
+                    + e.getMessage() + " -- refusing to load.", e);
+            return null;
+        } catch (SecurityException e) {
+            // Security violations must be logged — only triggers for actually dangerous classes
+            Bukkit.getLogger().log(Level.WARNING,
+                "[UltiTools-API] Security violation while loading declared main class '"
+                    + mainClassName + "' for module '" + pluginJar.getName() + "': " + e.getMessage());
+            return null;
         } finally {
-            // D-19: fires whether the method returned early (main class found), fell through
-            // (class-count cap reached / jar exhausted), or the jar itself could not be read --
-            // exactly once per call, after the scan loop, naming pluginJar as the module.
-            ModuleScanDiagnostics.emitSummary(pluginJar.getName());
-            // GEN-07 (D-14): the audit summary lands at the same point, so the two diagnostics
-            // read as one pattern rather than two.
+            // GEN-07 (D-14): the audit summary, for parity with every other call site -- see
+            // recordClassloadFilterAudit's own comment above.
             ClassLoaderUtils.emitClassloadFilterAuditSummary(pluginJar.getName());
         }
-        return null;
     }
 
     /**
-     * Scans a plugin's own JAR for classes carrying {@code @Table}, independently of {@link
-     * #loadPluginMainClass}'s scan (which returns as soon as it finds the module's main class and
-     * discards its own {@code scannedClasses} set). This pass visits every entry so a truncated
-     * result never makes a legitimate entity look unowned -- under D-15's fail-closed rule that
-     * would refuse a module that did nothing wrong. {@link #loadPluginMainClass}'s 1,000-class cap
-     * is reported here, not enforced: crossing it produces one WARNING naming the jar and the
+     * Scans a plugin's own JAR for classes carrying {@code @Table}. This pass visits every entry
+     * so a truncated result never makes a legitimate entity look unowned -- under D-15's
+     * fail-closed rule that would refuse a module that did nothing wrong. Its own 1,000-class cap
+     * (below) is reported, not enforced: crossing it produces one WARNING naming the jar and the
      * count, and the scan continues to the end of the jar regardless.
+     * <p>
+     * <b>Independent of {@link #loadPluginMainClass}</b> (plan 17-30): that method no longer scans
+     * the jar at all -- it loads exactly the one class {@code plugin.yml}'s {@code main:} key
+     * names. This method still must load every class in the jar to see whether it carries
+     * {@code @Table}, so a class that exists only for an optional soft-dependency plugin (a
+     * PlaceholderAPI expansion, say) still fails to link here, on a server where that optional
+     * plugin is absent, and is still recorded as one "skipped class" the same way it always was --
+     * plan 17-30 removes the main-class-discovery instance of that noise, not this one. A module
+     * whose only jar-wide scan is this one may still log a "skipped N class(es)...built against an
+     * older API" SEVERE line for a class that has nothing to do with age; narrowing that further
+     * needs a decision on whether an entity scan may also skip classes outside a declared scan
+     * root, which plan 17-30 does not make.
      *
      * @param pluginJar the module's own jar file
      * @return every {@code @Table}-annotated class found, never null
