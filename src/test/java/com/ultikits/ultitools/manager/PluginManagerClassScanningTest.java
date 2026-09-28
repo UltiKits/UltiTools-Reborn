@@ -189,6 +189,20 @@ class PluginManagerClassScanningTest {
     }
 
     @Test
+    @DisplayName("plan 17-30: 声明的 main: 不是合法类名格式时应明确拒绝加载而不是抛出异常")
+    void shouldRefuseWhenDeclaredMainClassNameIsInvalidFormat() throws Exception {
+        String invalidMainClassName = "1nvalid-class-name";
+        File pluginJar = createModuleJar("invalid-main-name-plugin.jar", invalidMainClassName);
+
+        assertThat(invokeLoadPluginMainClass(pluginJar)).isNull();
+        assertThat(bukkitLogs).anyMatch(record ->
+                Level.WARNING.equals(record.getLevel())
+                        && record.getMessage() != null
+                        && record.getMessage().contains(pluginJar.getName())
+                        && record.getMessage().contains(invalidMainClassName));
+    }
+
+    @Test
     @DisplayName("坏 JAR 不应该阻止后续有效 JAR 扫描")
     void badJarShouldNotPreventLaterValidJarScan() throws Exception {
         File badJar = new File(tempDir, "bad-plugin.jar");
