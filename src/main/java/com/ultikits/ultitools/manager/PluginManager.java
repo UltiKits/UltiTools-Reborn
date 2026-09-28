@@ -24,6 +24,7 @@ import java.util.function.Supplier;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.logging.Level;
+import java.util.regex.Pattern;
 
 import javax.sql.DataSource;
 
@@ -1108,11 +1109,20 @@ public class PluginManager {
      * not either -- that kind of fragile string-matching heuristic is exactly what GEN-07 removed
      * from {@code SecurityPolicy}. Instead this only ever downgrades a failure when ALL of:
      * <ol>
-     *   <li>{@code failure} is a {@link LinkageError} -- the scanned class itself WAS found
-     *   (physically present in this module's own jar) and failed only while resolving something
-     *   it references. A bare {@link ClassNotFoundException} for the scanned class's own name
-     *   always means the module's own jar entry could not be loaded at all, never "an optional
-     *   dependency is absent", and is never downgraded;</li>
+     *   <li>{@code failure} is specifically a {@link NoClassDefFoundError} naming a well-formed
+     *   internal class name -- the scanned class itself WAS found (physically present in this
+     *   module's own jar) and failed only because a type it references could not be found. Codex
+     *   review (PR #551, round 1, P2): {@link LinkageError} is a much broader family --
+     *   {@link VerifyError}, {@link ClassFormatError}, {@link UnsupportedClassVersionError} and
+     *   others all indicate corrupt or incompatible bytecode, not a missing optional type, and
+     *   their messages are prose, not a class name -- {@link #extractMissingClassName} would
+     *   misparse the first word of that prose as a "missing class", almost certainly fail the
+     *   availability check, and silently swallow a genuinely broken module into FINE. Narrowing to
+     *   {@link NoClassDefFoundError} (and, inside {@link #extractMissingClassName}, further
+     *   rejecting a "wrong name" mismatch message) keeps every other {@link LinkageError} subtype
+     *   at SEVERE. A bare {@link ClassNotFoundException} for the scanned class's own name always
+     *   means the module's own jar entry could not be loaded at all, never "an optional dependency
+     *   is absent", and is never downgraded either;</li>
      *   <li>the module declares at least one plugin under {@code softdepend:};</li>
      *   <li>at least one of those declared plugins is not currently installed, or installed but
      *   not enabled; and</li>
@@ -1132,7 +1142,7 @@ public class PluginManager {
      *         module's SEVERE skipped-class summary
      */
     private static boolean isAbsentSoftDependClasspathGap(Throwable failure, List<String> softDepend) {
-        if (softDepend == null || softDepend.isEmpty() || !(failure instanceof LinkageError)) {
+        if (softDepend == null || softDepend.isEmpty() || !(failure instanceof NoClassDefFoundError)) {
             return false;
         }
         String missingClassName = extractMissingClassName(failure);
@@ -1160,26 +1170,40 @@ public class PluginManager {
     }
 
     /**
-     * Best-effort extraction of the internal (dot-qualified) name of the class {@code failure}
-     * reports missing. {@link NoClassDefFoundError#getMessage()} is, across the HotSpot/OpenJDK
-     * releases this framework targets, the missing class's own internal (slash-separated) binary
-     * name, occasionally suffixed with a JVM-specific detail such as " (wrong name: ...)" -- since
-     * neither shape is documented API, this reads defensively and returns {@code null} rather than
-     * guess when the message is empty or unrecognizable.
+     * A bare JVM internal (slash-separated) binary class name: one or more identifier segments
+     * joined by {@code /}, each starting with a letter, {@code _} or {@code $}. Deliberately
+     * rejects anything carrying a space, parenthesis or colon -- which is exactly the shape of the
+     * JVM-specific " (wrong name: ...)" detail some JVMs append to a {@link NoClassDefFoundError}
+     * message for a class/file name mismatch (a jar-content problem, not "a type this class
+     * references is absent") and of any non-{@link NoClassDefFoundError} {@link LinkageError}'s
+     * prose message (Codex review, PR #551 round 1, P2).
+     */
+    private static final Pattern INTERNAL_CLASS_NAME_PATTERN =
+            Pattern.compile("[A-Za-z_$][A-Za-zA-Z0-9_$]*(?:/[A-Za-z_$][A-Za-zA-Z0-9_$]*)*");
+
+    /**
+     * Extraction of the internal (dot-qualified) name of the class {@code failure} reports
+     * missing -- only for a {@link NoClassDefFoundError} whose message is a well-formed bare
+     * internal class name; every other case (a different {@link LinkageError} subtype, a blank
+     * message, or a message shaped like the "wrong name" mismatch detail) returns {@code null}
+     * rather than guess, per {@link #INTERNAL_CLASS_NAME_PATTERN}'s own javadoc.
      *
-     * @param failure the {@link LinkageError} caught while loading a scanned class
+     * @param failure the exception caught while loading a scanned class
      * @return the missing class's dotted name, or {@code null} if it cannot be determined
      */
     private static String extractMissingClassName(Throwable failure) {
+        if (!(failure instanceof NoClassDefFoundError)) {
+            return null;
+        }
         String message = failure.getMessage();
-        if (message == null || message.trim().isEmpty()) {
+        if (message == null) {
             return null;
         }
-        String internalName = message.trim().split(" ")[0].trim();
-        if (internalName.isEmpty()) {
+        String candidate = message.trim();
+        if (candidate.isEmpty() || !INTERNAL_CLASS_NAME_PATTERN.matcher(candidate).matches()) {
             return null;
         }
-        return internalName.replace('/', '.');
+        return candidate.replace('/', '.');
     }
 
     /**

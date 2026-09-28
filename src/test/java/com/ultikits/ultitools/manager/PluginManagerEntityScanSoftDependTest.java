@@ -307,6 +307,29 @@ class PluginManagerEntityScanSoftDependTest {
         assertThat(invokeExtractMissingClassName(new NoClassDefFoundError(""))).isNull();
     }
 
+    @Test
+    @DisplayName("Codex 审查 P2（PR #551 第一轮）：extractMissingClassName 对 \"wrong name\" 形态的消息返回 null，"
+            + "而不是把第一个词误判成类名")
+    void extractMissingClassNameRejectsWrongNameMismatchMessage() throws Exception {
+        assertThat(invokeExtractMissingClassName(
+                new NoClassDefFoundError("pkg/a/Absent (wrong name: pkg/a/Actual)"))).isNull();
+    }
+
+    @Test
+    @DisplayName("Codex 审查 P2（PR #551 第一轮）：非 NoClassDefFoundError 的其他 LinkageError 子类"
+            + "（如 VerifyError/ClassFormatError）即使模块声明了缺失的 softdepend 插件，也绝不能降级为 FINE")
+    void nonNoClassDefFoundErrorLinkageErrorsAreNeverDowngraded() throws Exception {
+        List<String> absentSoftDepend = Collections.singletonList("FakePlaceholderAPI");
+
+        assertThat(invokeIsAbsentSoftDependClasspathGap(
+                new VerifyError("Bad type on operand stack"), absentSoftDepend)).isFalse();
+        assertThat(invokeIsAbsentSoftDependClasspathGap(
+                new ClassFormatError("Truncated class file"), absentSoftDepend)).isFalse();
+        assertThat(invokeIsAbsentSoftDependClasspathGap(
+                new UnsupportedClassVersionError("Unsupported major.minor version 99.0"),
+                absentSoftDepend)).isFalse();
+    }
+
     // ---- reflection helpers -------------------------------------------------------------------
 
     @SuppressWarnings("unchecked")
