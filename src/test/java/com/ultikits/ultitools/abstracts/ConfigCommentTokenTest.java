@@ -124,6 +124,20 @@ class ConfigCommentTokenTest {
     }
 
     @Test
+    @DisplayName("a catalogue lookup that throws is treated as a missing key: the load completes and the token is written")
+    void throwingCatalogueLookupDoesNotFailTheLoad() throws Exception {
+        lenient().when(plugin.i18n("config.demo.limit")).thenThrow(new IllegalStateException("language not loaded"));
+        DemoConfig config = new DemoConfig(PATH);
+
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            config.init(plugin);
+            assertThat(warnings.messagesContaining("config.demo.limit")).hasSize(1);
+        }
+        assertThat(reload().getComments("demo.limit")).containsExactly("{config.demo.limit}");
+        assertThat(config.limit).isEqualTo(10);
+    }
+
+    @Test
     @DisplayName("the panel payload carries the resolved comment, not the token")
     void panelPayloadCarriesResolvedText() throws Exception {
         DemoConfig config = new DemoConfig(PATH);
