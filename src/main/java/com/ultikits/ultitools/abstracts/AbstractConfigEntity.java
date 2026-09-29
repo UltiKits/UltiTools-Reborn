@@ -67,7 +67,9 @@ import lombok.Getter;
  * #save()} and the shutdown check construct nothing before 6.3.0 and are the two paths a module
  * author is most likely to consider exempt. A class with zero {@code @ConfigEntry} fields
  * constructs nothing on any of them. The documented {@code super(configFilePath)}-only idiom is
- * unaffected - each construction is a single, trivial reflective call.
+ * unaffected - each construction is a single, trivial reflective call. Since #526, an {@code init()}
+ * or {@code reload()} that finds a value it cannot bind constructs one more instance, once per pass,
+ * to read the field's declared default.
  * <p>
  * Saved-state snapshot (#510, since 6.3.0): every entity remembers what its file on disk holds as
  * of the last time the framework read or wrote it - after {@link #init(UltiToolsPlugin)} (including
@@ -345,8 +347,12 @@ public abstract class AbstractConfigEntity {
             }
             Object configValue = parsed.get(path);
             if (configValue != null) {
-                // Silent: init() already warned about any value it could not bind.
-                ReflectionUtil.setFieldValue(probe, field, readConfigValue(field, annotation, path, configValue, false));
+                // Silent: init() already warned about any value it could not bind. The probe is a fresh
+                // instance, so a value it cannot bind simply leaves the declared default (#526).
+                Object value = readConfigValue(field, annotation, path, configValue, false);
+                if (value != ConfigValueBinder.UNBOUND) {
+                    ReflectionUtil.setFieldValue(probe, field, value);
+                }
             }
         }
         probe.applyFieldsTo(parsed);
@@ -586,6 +592,7 @@ public abstract class AbstractConfigEntity {
                 LOGGER.log(Level.SEVERE, "Cannot load " + file, e);
             }
             boolean upToDate = true;
+            AbstractConfigEntity declaredDefaults = null;
             for (Field field : ReflectionUtil.getFields(this.getClass())) {
                 if (field.isAnnotationPresent(ConfigEntry.class)) {
                     field.setAccessible(true);
@@ -596,7 +603,7 @@ public abstract class AbstractConfigEntity {
                     }
                     Object configValue = config.get(path);
                     if (configValue != null) {
-                        ReflectionUtil.setFieldValue(this, field, readConfigValue(field, annotation, path, configValue, true));
+                        declaredDefaults = assignFileValue(field, annotation, path, configValue, declaredDefaults);
                     } else {
                         upToDate = false;
                         config.set(path, fileFormOfDefault(ReflectionUtil.getFieldValue(this, field)));
@@ -650,12 +657,49 @@ public abstract class AbstractConfigEntity {
      * @param path       the entry's path, named in warnings
      * @param raw        the value SnakeYAML returned for the entry's path, never {@code null}
      * @param report     whether a value that cannot be bound is logged
-     * @return the value to store in {@code field}
+     * @return the value to store in {@code field}, or {@link ConfigValueBinder#UNBOUND} when the file's
+     *         value cannot be bound to it and the field keeps its declared default (#526)
      */
     private Object readConfigValue(Field field, ConfigEntry annotation, String path, Object raw, boolean report) {
         Object parsed = ReflectionUtil.newInstance(annotation.parser()).parse(raw);
         return new ConfigValueBinder(configFilePath, report ? this::warnBinding : message -> { })
                 .bind(field, path, parsed);
+    }
+
+    /**
+     * Stores the file's value for one entry in this entity's field (#523, #526). A value that cannot
+     * be bound - {@link ConfigValueBinder#UNBOUND}, already reported - sets the field to this class's
+     * declared default instead, read from a fresh instance constructed the first time a load pass
+     * needs one (so a pass with no such value constructs nothing extra). On {@link #init} that is the
+     * value the field already holds; on {@link #reload()} it replaces the running value, so a reload
+     * with a wrongly shaped value behaves like a start with it.
+     *
+     * @param field            the {@code @ConfigEntry} field
+     * @param annotation       its {@code @ConfigEntry}
+     * @param path             the entry's path
+     * @param raw              the value the file holds, never {@code null}
+     * @param declaredDefaults the fresh instance this pass already constructed, or {@code null}
+     * @return the fresh instance, if one has now been constructed, else {@code declaredDefaults}
+     */
+    private AbstractConfigEntity assignFileValue(Field field, ConfigEntry annotation, String path, Object raw,
+                                                 AbstractConfigEntity declaredDefaults) {
+        Object value = readConfigValue(field, annotation, path, raw, true);
+        if (value != ConfigValueBinder.UNBOUND) {
+            ReflectionUtil.setFieldValue(this, field, value);
+            return declaredDefaults;
+        }
+        AbstractConfigEntity defaults = declaredDefaults;
+        if (defaults == null) {
+            try {
+                defaults = constructSibling();
+            } catch (RuntimeException e) {
+                // validateFields() refuses an unconstructable class right after the load; until then the
+                // field keeps the value it holds.
+                return null;
+            }
+        }
+        ReflectionUtil.setFieldValue(this, field, ReflectionUtil.getFieldValue(defaults, field));
+        return defaults;
     }
 
     /**
@@ -1211,6 +1255,7 @@ public abstract class AbstractConfigEntity {
             }
 
             // Update field values
+            AbstractConfigEntity declaredDefaults = null;
             for (Field field : ReflectionUtil.getFields(this.getClass())) {
                 if (field.isAnnotationPresent(ConfigEntry.class)) {
                     field.setAccessible(true);
@@ -1221,7 +1266,7 @@ public abstract class AbstractConfigEntity {
                     }
                     Object configValue = config.get(path);
                     if (configValue != null) {
-                        ReflectionUtil.setFieldValue(this, field, readConfigValue(field, annotation, path, configValue, true));
+                        declaredDefaults = assignFileValue(field, annotation, path, configValue, declaredDefaults);
                     }
                 }
             }

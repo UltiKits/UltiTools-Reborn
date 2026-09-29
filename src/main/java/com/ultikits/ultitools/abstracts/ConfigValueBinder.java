@@ -21,7 +21,10 @@ import org.bukkit.configuration.ConfigurationSection;
 
 /**
  * Converts the value a {@code @ConfigEntry}'s parser read from the file into the shape the field
- * declares (UltiKits/UltiTools-Reborn#523).
+ * declares (UltiKits/UltiTools-Reborn#523, #526).
+ * <p>
+ * A whole value that cannot be converted to its field's declared type is reported and left unbound,
+ * so the field keeps its declared default and the module still loads (#526; see {@link #bind}).
  * <p>
  * A collection field receives elements of its declared element type and a map field receives
  * values (and keys) of its declared types, read from the field's generic signature. A numeric
@@ -67,26 +70,78 @@ final class ConfigValueBinder {
     /**
      * Converts {@code parsed}, the parser's result for {@code key}, to {@code field}'s declared
      * shape.
+     * <p>
+     * #526: the value's shape is compared with the declared type before anything is assigned. A
+     * value that cannot be converted - a list or a scalar where a map is declared, a map or a scalar
+     * where a collection is declared, text that is not a number where a number is declared, a number
+     * that does not fit its field - is reported once, naming the file, the key, the declared type and
+     * what the file holds, and {@link #UNBOUND} is returned so the caller keeps the field's declared
+     * default. Before, {@code Field.set} threw {@code IllegalArgumentException} out of {@code init()}
+     * and the module never loaded. A value that converts exactly is bound: a quoted number into a
+     * number, a number or boolean into a {@code String}, a whole decimal into an integral field.
      *
      * @param field  the {@code @ConfigEntry} field
      * @param key    the entry's path, named in warnings
      * @param parsed what the entry's parser returned
-     * @return the value to store in the field
+     * @return the value to store in the field, or {@link #UNBOUND} to keep its declared default
      */
     Object bind(Field field, String key, Object parsed) {
         Class<?> type = field.getType();
+        Object converted;
         if (parsed == null) {
-            return null;
+            // A custom parser may return null; a reference field takes it, as before.
+            converted = type.isPrimitive() ? UNBOUND : null;
+        } else if (Collection.class.isAssignableFrom(type)) {
+            converted = parsed instanceof Collection ? convert(parsed, field.getGenericType(), key) : UNBOUND;
+        } else if (Map.class.isAssignableFrom(type)) {
+            converted = parsed instanceof Map ? convert(parsed, field.getGenericType(), key) : UNBOUND;
+        } else if (isSimple(type)) {
+            converted = convertSimple(parsed, boxed(type));
+        } else {
+            converted = type.isInstance(parsed) ? parsed : UNBOUND;
         }
-        if (Collection.class.isAssignableFrom(type) || Map.class.isAssignableFrom(type)) {
-            if (!(parsed instanceof Collection) && !(parsed instanceof Map)) {
-                // Not a container at all: left for Field.set to refuse, as before.
-                return parsed;
-            }
-            Object converted = convert(parsed, field.getGenericType(), key);
-            return converted == UNBOUND ? parsed : converted;
+        if (converted == UNBOUND) {
+            reporter.accept(String.format(
+                    "Config file '%s': key '%s' is declared as %s but the file holds %s %s; "
+                            + "the field keeps its default, the rest of the configuration loads",
+                    configFile, key, typeName(field.getGenericType()), kindOf(parsed), describe(key, parsed)));
         }
-        return AbstractConfigEntity.widenToFieldType(type, parsed);
+        return converted;
+    }
+
+    /**
+     * @param type a declared type
+     * @return its name without package prefixes, for example {@code Map<String, Integer>}
+     */
+    static String typeName(Type type) {
+        return type.getTypeName().replaceAll("\\b[a-z][A-Za-z0-9_]*\\.", "").replace('$', '.');
+    }
+
+    /**
+     * @param value a parsed value
+     * @return what an operator wrote, in words: {@code a list}, {@code a map}, {@code text},
+     *         {@code a number}, {@code a boolean}
+     */
+    static String kindOf(Object value) {
+        if (value == null) {
+            return "an empty value";
+        }
+        if (value instanceof Collection) {
+            return "a list";
+        }
+        if (value instanceof Map || value instanceof ConfigurationSection) {
+            return "a map";
+        }
+        if (value instanceof String || value instanceof Character) {
+            return "text";
+        }
+        if (value instanceof Number) {
+            return "a number";
+        }
+        if (value instanceof Boolean) {
+            return "a boolean";
+        }
+        return "a " + value.getClass().getSimpleName();
     }
 
     /**
