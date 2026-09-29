@@ -265,9 +265,16 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         return copies;
     }
 
+    /**
+     * Looks the entry up by the entity's id, as the relational operators do (#522). Comparing the
+     * caller's instance with the cached one through {@code equals()} stopped matching once reads
+     * and inserts were detached: an entity whose {@code equals()} covers a field it changed without
+     * calling {@code update(...)} no longer equals the stored copy.
+     */
     @Override
     public boolean exist(T object) {
-        return cache.containsValue(object);
+        Object id = object == null ? null : object.getId();
+        return id != null && findStored(id) != null;
     }
 
     @Override

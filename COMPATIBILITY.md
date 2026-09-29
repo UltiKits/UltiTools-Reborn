@@ -470,7 +470,9 @@ This section governs the third kind.
   only through `update(...)` (or `update(column, value, id)`), on every backend alike. `update(T)`
   also fires `onUpdate()` on the entity passed in, before its fields are copied into the store,
   exactly as the relational backends do — so an `AuditableDataEntity`'s `updatedAt`/`updatedBy`
-  now show on the caller's instance on the JSON backend too. A module that relied on the old
+  now show on the caller's instance on the JSON backend too, and `exist(entity)` looks the entry
+  up by the entity's id, as the relational backends do, instead of comparing it with the cached
+  copy through `equals()`. A module that relied on the old
   aliasing — changing a loaded entity and counting on the next flush to save it — must now call
   `update(...)`; no module in this monorepo was found doing so (see the pull request's consumer
   impact list). The cost is one Gson round trip per entity returned, the same materialisation the
