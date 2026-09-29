@@ -53,7 +53,8 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
  * @since 6.2.0
  */
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // ORM maps private @Column fields to SQL -- see 08-GATE05-TRIAGE.md
-public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<String>> implements DataOperator<T> {
+public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<String>>
+        implements DataOperator<T>, RowCountingDelete {
 
     private static final Logger LOGGER = Logger.getLogger(AbstractRelationalDataOperator.class.getName());
     /**
@@ -556,13 +557,26 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      */
     @Override
     public void delById(Object id) {
+        deleteByIdCounted(id);
+    }
+
+    /**
+     * {@link #delById(Object)}, returning the affected-row count the database reported for the
+     * {@code DELETE} (#521), so {@code Query#delete()} can return rows removed instead of rows
+     * matched.
+     *
+     * @param id the row id
+     * @return the number of rows the {@code DELETE} removed
+     */
+    @Override
+    public int deleteByIdCounted(Object id) {
         T entity = fetchRawById(id);
         if (entity != null) {
             entity.onDelete();
         }
         String sql = "DELETE FROM " + tableName + " WHERE id = ?";
         try {
-            queryRunner.update(sql, id);
+            return queryRunner.update(sql, id);
         } catch (SQLException e) {
             throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
                     "Failed to delete entity by id: " + id, e);

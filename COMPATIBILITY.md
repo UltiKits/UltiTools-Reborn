@@ -475,6 +475,16 @@ This section governs the third kind.
   `update(...)`; no module in this monorepo was found doing so (see the pull request's consumer
   impact list). The cost is one Gson round trip per entity returned, the same materialisation the
   relational backends already pay (see `ultitools.storage.detached-reads` in `FEATURES.md`).
+- `Query#delete()` returns the number of rows actually removed, as its javadoc always said (#521).
+  It used to return the number of rows the query *matched*, and it skipped a matched row whose id
+  was `null` while still counting it, so a caller reading the `int` as "rows removed" could be told
+  a delete succeeded when it removed nothing. As of 6.3.0 the count comes from the backend's own
+  affected-row count (a row another writer removed between the read and the delete is not
+  counted), and a matched row with a `null` id is refused with a `DataAccessException` naming the
+  entity type **before** any row is deleted, since no delete can address it. This corrects
+  behaviour that contradicted the documentation, so it takes no migration period. A third-party
+  `DataOperator` implementation is counted by checking after its `delById` whether the row is
+  still there (see `ultitools.storage.query-delete-count` in `FEATURES.md`).
 
 ### Behavioral changes that do need one
 

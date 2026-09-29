@@ -10,6 +10,8 @@ import java.util.List;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.entities.WhereCondition;
+import com.ultikits.ultitools.exceptions.DataAccessException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.Query;
 import com.ultikits.ultitools.utils.ReflectionUtil;
@@ -255,15 +257,50 @@ public class QueryImpl<T extends BaseDataEntity<String>> implements Query<T> {
         return list().size();
     }
 
+    /**
+     * Deletes every row this query matches and returns the number of rows the backend actually
+     * removed (#521).
+     * <p>
+     * Before 6.3.0 this returned the number of rows the query <em>matched</em>, and a matched row
+     * with a {@code null} id was skipped yet still counted, so the value could report rows removed
+     * that were not. Now:
+     * <ul>
+     *   <li>the count comes from the backend: the framework's operators report each delete's
+     *       affected rows through {@link RowCountingDelete}, so a matched row that another writer
+     *       removed first is not counted; a third-party operator that does not implement it is
+     *       counted by checking, after its {@code delById}, whether the row is gone;</li>
+     *   <li>a matched row with a {@code null} id cannot be addressed by any delete, so it is
+     *       refused with a {@link DataAccessException} naming the entity type <em>before</em>
+     *       anything is deleted, instead of being skipped silently.</li>
+     * </ul>
+     *
+     * @return the number of rows removed
+     * @throws DataAccessException if a matched row has a {@code null} id; nothing is deleted then
+     */
     @Override
     public int delete() {
         List<T> toDelete = list();
         for (T entity : toDelete) {
-            if (entity.getId() != null) {
-                operator.delById(entity.getId());
+            if (entity.getId() == null) {
+                throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                        "Query#delete() matched a " + entity.getClass().getName() + " row with a null id, "
+                                + "which no delete can address; nothing was deleted.");
             }
         }
-        return toDelete.size();
+        int removed = 0;
+        for (T entity : toDelete) {
+            removed += deleteOne(entity.getId());
+        }
+        return removed;
+    }
+
+    private int deleteOne(Object id) {
+        if (operator instanceof RowCountingDelete) {
+            return ((RowCountingDelete) operator).deleteByIdCounted(id);
+        }
+        operator.delById(id);
+        boolean stillThere = operator.exist(WhereCondition.builder().column("id").value(id).build());
+        return stillThere ? 0 : 1;
     }
 
     // === Internal Helpers ===

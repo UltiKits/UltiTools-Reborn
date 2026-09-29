@@ -42,6 +42,7 @@ import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.Cached;
 import com.ultikits.ultitools.interfaces.DataOperator;
+import com.ultikits.ultitools.interfaces.impl.data.RowCountingDelete;
 import com.ultikits.ultitools.manager.JsonTransactionManager;
 import com.ultikits.ultitools.utils.BeanCopyUtil;
 import com.ultikits.ultitools.utils.FileUtils;
@@ -55,7 +56,8 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
  * @author wisdomme
  * @version 1.0.0
  */
-public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements DataOperator<T>, Cached {
+public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
+        implements DataOperator<T>, Cached, RowCountingDelete {
     /**
      * Default Gson has no bundled adapter for {@code java.time.LocalDateTime}: its reflective
      * fallback tries to reach {@code LocalDateTime}'s private fields, which JDK 9+'s module
@@ -499,12 +501,24 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
      */
     @Override
     public synchronized void delById(Object id) {
+        deleteByIdCounted(id);
+    }
+
+    /**
+     * {@link #delById(Object)}, returning how many cache entries it removed (#521), so
+     * {@code Query#delete()} can return rows removed instead of rows matched.
+     *
+     * @param id the entry id
+     * @return {@code 1} if an entry with this id was removed, {@code 0} if there was none
+     */
+    @Override
+    public synchronized int deleteByIdCounted(Object id) {
         beforeMutate();
         T entity = cache.get(id);
         if (entity != null) {
             entity.onDelete();
         }
-        cache.remove(id);
+        return cache.remove(id) != null ? 1 : 0;
     }
 
     @Override
