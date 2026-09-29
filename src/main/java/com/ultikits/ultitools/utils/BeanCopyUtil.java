@@ -2,7 +2,10 @@ package com.ultikits.ultitools.utils;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Bean copy utility class.
@@ -14,6 +17,22 @@ import java.util.List;
  */
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Copies private fields between bean instances -- see 08-GATE05-TRIAGE.md
 public final class BeanCopyUtil {
+
+    /** Primitive type to its wrapper class; see {@link #boxed(Class)}. */
+    private static final Map<Class<?>, Class<?>> PRIMITIVE_TO_WRAPPER;
+
+    static {
+        Map<Class<?>, Class<?>> map = new HashMap<>();
+        map.put(boolean.class, Boolean.class);
+        map.put(char.class, Character.class);
+        map.put(byte.class, Byte.class);
+        map.put(short.class, Short.class);
+        map.put(int.class, Integer.class);
+        map.put(long.class, Long.class);
+        map.put(float.class, Float.class);
+        map.put(double.class, Double.class);
+        PRIMITIVE_TO_WRAPPER = Collections.unmodifiableMap(map);
+    }
     
     private BeanCopyUtil() {
         throw new UnsupportedOperationException("Utility class");
@@ -108,7 +127,7 @@ public final class BeanCopyUtil {
                 return;
             }
 
-            if (value != null && !targetField.getType().isAssignableFrom(value.getClass())) {
+            if (value != null && !boxed(targetField.getType()).isAssignableFrom(value.getClass())) {
                 value = convertValue(value, targetField.getType());
                 if (value == null) {
                     return;
@@ -147,7 +166,7 @@ public final class BeanCopyUtil {
             return null;
         }
 
-        if (targetType.isAssignableFrom(value.getClass())) {
+        if (boxed(targetType).isAssignableFrom(value.getClass())) {
             return value;
         }
 
@@ -160,6 +179,20 @@ public final class BeanCopyUtil {
         }
 
         return null;
+    }
+
+    /**
+     * Returns the wrapper class of a primitive type, or the type itself otherwise.
+     * <p>
+     * {@link Field#get} always boxes, so a {@code boolean} field reads as a {@code Boolean} and
+     * {@code boolean.class.isAssignableFrom(Boolean.class)} is {@code false}. Deciding
+     * assignability against the primitive type sent every {@code boolean} and {@code char} value
+     * to {@link #convertValue}, which had no branch for either and dropped the write (#520). The
+     * numeric primitives only survived because {@link #convertNumber} happens to cover them.
+     */
+    private static Class<?> boxed(Class<?> type) {
+        Class<?> wrapper = PRIMITIVE_TO_WRAPPER.get(type);
+        return wrapper != null ? wrapper : type;
     }
 
     private static Object convertNumber(Number num, Class<?> targetType) {
