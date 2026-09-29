@@ -92,10 +92,13 @@ import lombok.Getter;
  * owning module's catalogue in the server's current language and written on every framework write of
  * the file - the first-boot defaults write, {@link #save()}, the shutdown save, a panel write, and a
  * load that finds the file's comment on such an entry differs (an upgraded server's first start, a
- * language switch), keys already in the file included. Only the comment lines of those entries change;
- * an operator's hand-written comment on such an entry is replaced; values, literal comments, comments
- * on other keys and the header are never touched; a load with nothing to change writes nothing, and a
- * file that could not be parsed is not rewritten by it.
+ * language switch), keys already in the file included. An operator's hand-written comment on such an
+ * entry is replaced; values keep their meaning and literal comments, comments on other keys and the
+ * header are kept; a load with nothing to change writes nothing, a file that could not be parsed is
+ * not rewritten by it, and a comment-only difference is never a change the shutdown save writes. Like
+ * every framework write, the rewrite renders the whole file through the YAML writer, which re-lays out
+ * hand-formatted YAML and does not write back a comment the configuration API does not keep (one
+ * beside a list item).
  * <p>
  * Thread safety (#510): the framework's own read, write, snapshot and comparison paths - {@link
  * #init(UltiToolsPlugin)}'s and {@link #reload()}'s load, {@link #save()}, {@link

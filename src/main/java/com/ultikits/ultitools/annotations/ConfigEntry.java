@@ -34,8 +34,9 @@ public @interface ConfigEntry {
      * current language, and written on every framework write of the file, keys already in the file
      * included: the first-boot defaults write, an explicit save, the shutdown save, a panel write, and
      * the first start after an upgrade or a language switch. An operator's hand-written comment on
-     * such an entry is replaced; values, literal comments and comments on other entries are not
-     * changed. A key the catalogue does not contain is written as the token itself, with one warning
+     * such an entry is replaced; values keep their meaning and literal comments and comments on other
+     * entries are kept (the file is written through the framework's YAML writer, as every framework
+     * write is). A key the catalogue does not contain is written as the token itself, with one warning
      * naming the module, the file, the entry and the key. A comment that only contains a placeholder
      * inside other text (for example {@code "Message ({player} is the name)"}) is literal.
      *

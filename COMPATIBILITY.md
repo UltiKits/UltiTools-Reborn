@@ -360,26 +360,33 @@ This section governs the third kind.
   field (a list where a map is declared, text in a number field) threw `IllegalArgumentException`
   out of the entity's `init()` and the module never loaded, with no line naming the key; and a map
   key containing a dot (`my.rule`) was saved as a nested path and read back as `my`. As of 6.3.0
-  collection elements and map keys and values are converted to their declared types, a quoted
-  number the old parser wrote (`'30'`) loads as the number, an element that cannot be converted is
-  skipped, a wrongly shaped value keeps the field's declared default, and each such value is named
-  in one WARNING (file, key, declared type, and the value unless the key names a secret) while the
-  rest of the configuration loads. A dotted map key now round-trips; module paths read through
-  `getConfig()` resolve as before. A module that compensated for the old text elements by parsing
-  them itself keeps working (an `Integer` still prints as its number), but a list with one bad
-  element is now used without that element rather than reaching the module whole. A `Set` field is
-  written as a YAML list and an enum by its name, both of which used to produce a file the loader
-  refused. `DefaultConfigParser#parse` returns a sequence's elements as they are instead of as text.
+  collection elements and map keys and values are converted to their declared types, a quoted number
+  the old parser wrote (`'30'`) loads as the number, an element that cannot be converted is skipped,
+  a wrongly shaped value keeps the field's declared default, and each such value is named in one
+  WARNING (file, key, declared type, and the value unless a key in it names a secret) while the rest of
+  the configuration loads; a value the entry's parser cannot read (a YAML date in a text field) and
+  an empty list item are handled the same way. A dotted map key now round-trips; paths read through
+  `getConfig()` into a map's other entries resolve as before, and only the split path of a dotted
+  key itself (which named its renamed form) no longer does; a map key the loader could not read back
+  (an empty path segment) is refused on save, as before. A module that compensated for the old text
+  elements by parsing them itself keeps working (an `Integer` still prints as its number), but a
+  list with one bad element is now used without that element rather than reaching the module whole.
+  With the default parser a `Set` field is written as a YAML list and an enum by its name, both of
+  which used to produce a file the loader refused; a module's own `parser` serializes exactly as
+  before. `DefaultConfigParser#parse` returns a sequence's elements as they are instead of as text,
+  and a value that is neither a sequence nor a section as it is instead of failing a cast.
 - A `@ConfigEntry` comment that is exactly one language key is rewritten on every framework write,
   including the first start after an upgrade (#542, maintainer decision of 2026-09-29): a comment
   such as `comment = "{config.demo.limit}"` is resolved from the module's catalogue in the server's
   current language and written on every framework write of the file - the first-boot defaults write,
   an explicit save, the shutdown save, a panel write, and the first start after an upgrade or a
-  language switch - for keys already in the file as well as new ones. A hand-written comment an operator put on such an entry is replaced. Values, literal
-  comments and comments on other entries are never touched, and a start whose comments already
-  match writes nothing. Like any framework write, the rewrite renders the file through the
-  framework's YAML writer, which re-lays out hand-formatted YAML without changing a value. A
-  literal comment - anything that is not exactly one `{key}` - behaves as before. No element was
+  language switch - for keys already in the file as well as new ones. A hand-written comment an
+  operator put on such an entry is replaced. Values keep their meaning, literal comments and comments
+  on other entries are kept, and a start whose comments already match writes nothing. Like any
+  framework write, the rewrite renders the whole file through the framework's YAML writer:
+  hand-formatted YAML is re-laid out without changing a value, and a comment the configuration API
+  does not keep (one beside a list item) is not written back. A literal comment - anything that is
+  not exactly one `{key}` - behaves as before. No element was
   added to `@ConfigEntry`, so no module has to recompile.
 
   中文：`@ConfigEntry` 的值现在按字段声明的类型绑定（列表元素、映射的键和值），无法转换的元素被跳过、形状不对的值保留默认值，并各记一条警告（文件、键、声明类型、原值；键名像密钥时原值打码），其余配置照常加载；带点的映射键保存后原样读回。注释恰好是一个 `{key}` 时，框架每次写这个配置文件都按服务器当前语言从模块语言文件取注释重写（升级后第一次启动也会），服主在这些项上手写的注释会被覆盖；设置值和其他注释不动，没有变化时不写文件。
