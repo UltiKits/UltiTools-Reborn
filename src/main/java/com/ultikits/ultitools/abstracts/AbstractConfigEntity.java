@@ -258,7 +258,7 @@ public abstract class AbstractConfigEntity {
             if (fieldValue == null) {
                 continue;
             }
-            target.set(path, serializeForFile(annotation, fieldValue));
+            setKeepingKeys(target, path, serializeForFile(annotation, fieldValue));
         }
         // #542: every framework write carries the one-token comments in the server's language, and
         // the shutdown comparison renders the same text.
@@ -413,7 +413,7 @@ public abstract class AbstractConfigEntity {
         } catch (InvalidConfigurationException e) {
             return null;
         }
-        YamlConfiguration keyView = hasMapField(configFields) ? keyPreservingView(text) : null;
+        YamlConfiguration keyView = hasMapField(configFields) ? parseKeyPreserving(text) : null;
         for (Field field : configFields) {
             ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
             String path = annotation.path();
@@ -654,8 +654,11 @@ public abstract class AbstractConfigEntity {
             // prevent. Explicit, not inherited from the system-property default.
             config.options().parseComments(true);
             lastLoadUnparseable = false;
+            String fileText = null;
             try {
-                config.load(file);
+                // Read once: the key-preserving view of a map entry (#553) is parsed from the same text.
+                fileText = readConfigText(file);
+                config.loadFromString(fileText);
             } catch (FileNotFoundException ignored) {
                 // Mirrors the bare static factory's own behaviour for a missing file: a missing
                 // file is the normal "first run" case, not an error - config stays empty and every
@@ -668,7 +671,7 @@ public abstract class AbstractConfigEntity {
             }
             boolean upToDate = true;
             AbstractConfigEntity declaredDefaults = null;
-            YamlConfiguration keyView = lastLoadUnparseable ? null : keyPreservingView(file);
+            YamlConfiguration keyView = lastLoadUnparseable ? null : keyPreservingView(fileText);
             tokenComments = resolveTokenComments(true);
             for (Field field : ReflectionUtil.getFields(this.getClass())) {
                 if (field.isAnnotationPresent(ConfigEntry.class)) {
@@ -683,7 +686,7 @@ public abstract class AbstractConfigEntity {
                         declaredDefaults = assignFileValue(field, annotation, path, configValue, declaredDefaults);
                     } else {
                         upToDate = false;
-                        config.set(path, fileFormOfDefault(annotation, ReflectionUtil.getFieldValue(this, field)));
+                        setKeepingKeys(config, path, fileFormOfDefault(annotation, ReflectionUtil.getFieldValue(this, field)));
                         // D-07/D-09: the key never existed in the operator's file, so writing its
                         // @ConfigEntry comment alongside the value discloses nothing of theirs - this
                         // is D-01's first sanctioned exception, widened from "silently add a value" to
@@ -883,14 +886,64 @@ public abstract class AbstractConfigEntity {
     private static Object fileValue(YamlConfiguration dotted, YamlConfiguration keyView, Field field, String path) {
         if (keyView != null && Map.class.isAssignableFrom(field.getType())) {
             Object whole = keyView.get(path.replace('.', MAP_KEY_SEPARATOR));
-            if (whole instanceof ConfigurationSection) {
-                if (hasDottedKey((ConfigurationSection) whole)) {
-                    dotted.set(path, whole);
-                }
-                return whole;
+            if (whole instanceof ConfigurationSection && hasDottedKey((ConfigurationSection) whole)) {
+                setKeepingKeys(dotted, path, whole);
             }
         }
         return dotted.get(path);
+    }
+
+    /**
+     * Puts {@code value} at {@code path} in {@code target}. A section - which an entry's parser builds
+     * in a configuration of its own, and which the key-preserving view reads with a separator of its
+     * own - is copied into {@code target} as a {@link LiteralKeySection}: an ordinary child of {@code
+     * target}, so every path, {@code getKeys(true)} and {@code getCurrentPath()} of the configuration a
+     * module reads stays well formed, while a map key containing a dot stays one key (#553). The
+     * entry's own comments in {@code target} are kept. Anything else is set as before.
+     *
+     * @param target the configuration to write into
+     * @param path   the entry's path in {@code target}
+     * @param value  the value, possibly a section from another configuration
+     */
+    private static void setKeepingKeys(YamlConfiguration target, String path, Object value) {
+        if (!(value instanceof ConfigurationSection)) {
+            target.set(path, value);
+            return;
+        }
+        int lastDot = path.lastIndexOf('.');
+        ConfigurationSection parent = target;
+        if (lastDot >= 0) {
+            String parentPath = path.substring(0, lastDot);
+            parent = target.isConfigurationSection(parentPath)
+                    ? target.getConfigurationSection(parentPath) : target.createSection(parentPath);
+        }
+        String name = path.substring(lastDot + 1);
+        LiteralKeySection copy = new LiteralKeySection(parent, name);
+        copy.copyFrom((ConfigurationSection) value);
+        parent.set(name, copy);
+    }
+
+    /**
+     * Reads a configuration file's text exactly as {@code YamlConfiguration#load(File)} does - UTF-8,
+     * line by line, each line ended by {@code \n} - so that loading it with {@code loadFromString}
+     * gives the same configuration, and the key-preserving view of a map entry (#553) comes from the
+     * same read instead of a second one.
+     *
+     * @param file the configuration file
+     * @return its text
+     * @throws FileNotFoundException if it does not exist or is not a regular file, as {@code load} does
+     * @throws IOException           if it cannot be read
+     */
+    private static String readConfigText(File file) throws IOException {
+        StringBuilder text = new StringBuilder();
+        try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                new java.io.InputStreamReader(new java.io.FileInputStream(file), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                text.append(line).append('\n');
+            }
+        }
+        return text.toString();
     }
 
     private static boolean hasDottedKey(ConfigurationSection section) {
@@ -917,22 +970,18 @@ public abstract class AbstractConfigEntity {
     }
 
     /**
-     * Reads {@code file} into a key-preserving view (see {@link #fileValue}), or returns {@code null}
-     * when this class has no {@code Map} field or the file cannot be read or parsed - in which case
-     * map entries are read from the ordinary configuration, as before.
+     * The key-preserving view (see {@link #fileValue}) of a text this entity read, or {@code null}
+     * when this class has no {@code Map} field or there is no text - in which case map entries are
+     * read from the ordinary configuration, as before.
      *
-     * @param file the configuration file
+     * @param text the file's text as read, or {@code null}
      * @return the view, or {@code null}
      */
-    private YamlConfiguration keyPreservingView(File file) {
-        if (!hasMapField(configEntryFields()) || !file.isFile()) {
+    private YamlConfiguration keyPreservingView(String text) {
+        if (text == null || !hasMapField(configEntryFields())) {
             return null;
         }
-        try {
-            return keyPreservingView(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
-        } catch (IOException e) {
-            return null;
-        }
+        return parseKeyPreserving(text);
     }
 
     /**
@@ -940,7 +989,7 @@ public abstract class AbstractConfigEntity {
      * @return {@code text} parsed with {@link #MAP_KEY_SEPARATOR} as its path separator, comments
      *         kept, or {@code null} if it cannot be parsed
      */
-    private static YamlConfiguration keyPreservingView(String text) {
+    private static YamlConfiguration parseKeyPreserving(String text) {
         if (text == null) {
             return null;
         }
@@ -1566,8 +1615,10 @@ public abstract class AbstractConfigEntity {
             config = new YamlConfiguration();
             config.options().parseComments(true);
             lastLoadUnparseable = false;
+            String fileText = null;
             try {
-                config.load(file);
+                fileText = readConfigText(file);
+                config.loadFromString(fileText);
             } catch (FileNotFoundException ignored) {
                 // Mirrors init()'s own handling above: a missing file is the normal case, not an
                 // error - config stays empty and every field below simply keeps its current value.
@@ -1579,7 +1630,7 @@ public abstract class AbstractConfigEntity {
 
             // Update field values
             AbstractConfigEntity declaredDefaults = null;
-            YamlConfiguration keyView = lastLoadUnparseable ? null : keyPreservingView(file);
+            YamlConfiguration keyView = lastLoadUnparseable ? null : keyPreservingView(fileText);
             for (Field field : ReflectionUtil.getFields(this.getClass())) {
                 if (field.isAnnotationPresent(ConfigEntry.class)) {
                     field.setAccessible(true);

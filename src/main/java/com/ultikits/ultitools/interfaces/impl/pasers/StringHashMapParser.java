@@ -20,11 +20,20 @@ public class StringHashMapParser extends ConfigParser<HashMap<String, String>> {
         return map;
     }
 
+    /**
+     * Writes each entry with its key kept whole (#553): a key such as {@code o.O} stays one key
+     * instead of becoming {@code o} -> {@code O}. A key the configuration loader cannot read back (an
+     * empty path segment) is refused, as {@code DefaultConfigParser} refuses it.
+     *
+     * @param object the map to write
+     * @return the section holding its entries
+     */
     @Override
     public MemorySection serializeToMemorySection(HashMap<String, String> object) {
-        MemorySection memorySection = new MemoryConfiguration();
+        MemoryConfiguration memorySection = new MemoryConfiguration();
+        memorySection.options().pathSeparator('\u0000');
         for (String key : object.keySet()) {
-            memorySection.set(key, object.get(key));
+            memorySection.set(DefaultConfigParser.checkWritableKey(key), object.get(key));
         }
         return memorySection;
     }

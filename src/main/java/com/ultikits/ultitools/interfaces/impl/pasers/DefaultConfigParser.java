@@ -101,7 +101,7 @@ public class DefaultConfigParser extends ConfigParser<Object> {
                 Object key = entry.getKey();
                 // An enum key by its name, the form the binder reads back (Enum#toString may differ).
                 String name = key instanceof Enum ? ((Enum<?>) key).name() : String.valueOf(key);
-                mapSection.set(name, fileForm(entry.getValue()));
+                mapSection.set(checkWritableKey(name), fileForm(entry.getValue()));
             }
             return mapSection;
         }
@@ -123,6 +123,25 @@ public class DefaultConfigParser extends ConfigParser<Object> {
             memorySection.set(field.getName(), fileForm(fieldValue));
         }
         return memorySection;
+    }
+
+    /**
+     * Refuses a map key the configuration loader cannot read back (#553). A key is written whole, but
+     * the loader still reads a {@code '.'} in a key as a path separator, so a key with an empty segment
+     * - empty, or starting or ending with a dot, or holding two dots in a row - would make the whole
+     * file unreadable on the next start. Refusing it here keeps the file as it was, as the save did
+     * before 6.3.0 for such a key.
+     *
+     * @param key the map key
+     * @return {@code key}
+     * @throws IllegalArgumentException naming the key, if it has an empty path segment
+     */
+    static String checkWritableKey(String key) {
+        if (key.isEmpty() || key.startsWith(".") || key.endsWith(".") || key.contains("..")) {
+            throw new IllegalArgumentException("Cannot write map key '" + key + "': the configuration loader"
+                    + " reads a '.' in a key as a path separator, and this key has an empty segment");
+        }
+        return key;
     }
 
     /**
