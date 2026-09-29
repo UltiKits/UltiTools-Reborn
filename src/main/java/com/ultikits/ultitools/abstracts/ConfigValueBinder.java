@@ -233,14 +233,13 @@ final class ConfigValueBinder {
         if (element == null) {
             return null;
         }
-        if (element instanceof ConfigurationSection) {
-            element = ((ConfigurationSection) element).getValues(false);
-        }
+        Object value = element instanceof ConfigurationSection
+                ? ((ConfigurationSection) element).getValues(false) : element;
         Class<?> raw = rawClass(elementType);
         if (raw == Object.class) {
-            return isScalar(element) ? element.toString() : element;
+            return isScalar(value) ? value.toString() : value;
         }
-        return convert(element, elementType, key);
+        return convert(value, elementType, key);
     }
 
     /**

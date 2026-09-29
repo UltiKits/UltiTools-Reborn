@@ -822,8 +822,10 @@ public abstract class AbstractConfigEntity {
      * stays one key (#553). When the key view holds a map with such a key, that key-preserving
      * section also replaces the entry in {@code dotted}, so a later write of {@code dotted} (a missing
      * key, a comment rewrite, a panel write) writes the key back as it was instead of as a nested
-     * path; a map without a dotted key leaves {@code dotted} exactly as loaded. Every path in {@code
-     * dotted} still resolves as before: a dotted key was unreachable by a path there anyway.
+     * path; a map without a dotted key leaves {@code dotted} exactly as loaded, so every path in it
+     * resolves as before. For a map that does hold one, the paths into its other entries still resolve;
+     * only the split path of the dotted key itself ({@code rules.my.rule}, which named the renamed
+     * {@code my} -> {@code rule} form) no longer does.
      *
      * @param dotted  the configuration as loaded, with {@code '.'} as its path separator
      * @param keyView the same text read with a separator no key contains, or {@code null}
