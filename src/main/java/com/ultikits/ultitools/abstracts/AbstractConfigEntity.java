@@ -431,6 +431,10 @@ public abstract class AbstractConfigEntity {
             }
         }
         probe.applyFieldsTo(parsed);
+        // #542: a one-key entry's comment belongs to the framework and is rewritten on every write, so
+        // both sides of the comparison carry the resolved text - a comment-only difference on disk
+        // (an operator's edit, a reload before the rewrite) is never a change the shutdown save writes.
+        applyTokenComments(parsed);
         return parsed.saveToString();
     }
 
@@ -706,8 +710,18 @@ public abstract class AbstractConfigEntity {
             // first start of an upgraded server, or after a language switch. It is folded into the one
             // write this load makes, only after a successful load, and never when nothing differs.
             boolean commentsDiffer = !lastLoadUnparseable && applyTokenComments(config);
-            if (!upToDate || commentsDiffer) {
+            if (!upToDate) {
                 config.save(file);
+            } else if (commentsDiffer) {
+                // A comment-only rewrite is not worth failing the load for: a read-only file (a
+                // container's mounted config, a store symlink) keeps its old comments this start.
+                try {
+                    config.save(file);
+                } catch (IOException e) {
+                    LOGGER.warning(String.format("Config file '%s': could not rewrite its comments in the server's"
+                            + " language (%s); the values were loaded and the file is unchanged", configFilePath,
+                            e.getMessage()));
+                }
             }
             // #510: config now holds exactly the file's content, including any first-boot defaults
             // write. The snapshot is taken from that text, so a change listener below that changes a
@@ -1058,6 +1072,40 @@ public abstract class AbstractConfigEntity {
     }
 
     /**
+     * Splits a catalogue text into comment lines at every character YAML treats as a line break -
+     * {@code \r\n}, {@code \r}, {@code \n}, U+0085, U+2028 and U+2029 - and drops every character
+     * YAML does not allow in a file (control characters other than tab, unpaired surrogates,
+     * U+FFFE/U+FFFF), so no translation can make the framework write a file its own loader then
+     * refuses (#542, gate-1 review).
+     *
+     * @param text the catalogue text
+     * @return one element per line, trailing empty lines dropped
+     */
+    static List<String> commentLinesOf(String text) {
+        List<String> lines = new ArrayList<>();
+        for (String line : text.split("\r\n|[\n\r\u0085\u2028\u2029]")) {
+            lines.add(yamlPrintable(line));
+        }
+        while (!lines.isEmpty() && lines.get(lines.size() - 1).isEmpty()) {
+            lines.remove(lines.size() - 1);
+        }
+        return lines;
+    }
+
+    private static String yamlPrintable(String line) {
+        StringBuilder kept = new StringBuilder(line.length());
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+            if (Character.isHighSurrogate(c) && i + 1 < line.length() && Character.isLowSurrogate(line.charAt(i + 1))) {
+                kept.append(c).append(line.charAt(++i));
+            } else if (c == '\t' || c >= 0x20 && c <= 0x7E || c >= 0xA0 && c <= 0xD7FF || c >= 0xE000 && c <= 0xFFFD) {
+                kept.append(c);
+            }
+        }
+        return kept.toString();
+    }
+
+    /**
      * Looks {@code key} up in the owning module's language catalogue. A lookup that fails - the
      * module's language did not load - counts as a missing key, so the configuration still loads and
      * the token is written, rather than the comment taking the module down.
@@ -1121,8 +1169,7 @@ public abstract class AbstractConfigEntity {
                 }
                 resolved.put(path, Collections.singletonList(annotation.comment().trim()));
             } else {
-                resolved.put(path, text.isEmpty() ? Collections.<String>emptyList()
-                        : Arrays.asList(text.split("\\r\\n|\\r|\\n")));
+                resolved.put(path, commentLinesOf(text));
             }
         }
         return resolved;
