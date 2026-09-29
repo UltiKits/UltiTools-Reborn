@@ -18,8 +18,13 @@ import org.junit.jupiter.api.Test;
 
 class DefaultConfigParserTest {
 
+    /**
+     * #523: the parser keeps each element's own YAML value instead of turning it into text; the
+     * binder ({@code AbstractConfigEntity}) converts it to the field's declared element type. Before
+     * the fix every element came back as a {@code String}, whatever the field declared.
+     */
     @Test
-    void testParseList() {
+    void testParseListKeepsElementValues() {
         DefaultConfigParser parser = new DefaultConfigParser();
         List<Object> input = Arrays.asList("a", 1, true);
         
@@ -29,8 +34,8 @@ class DefaultConfigParserTest {
         List<?> list = (List<?>) result;
         assertEquals(3, list.size());
         assertEquals("a", list.get(0));
-        assertEquals("1", list.get(1)); // Converted to string
-        assertEquals("true", list.get(2)); // Converted to string
+        assertEquals(1, list.get(1)); // Kept as the Integer SnakeYAML produced
+        assertEquals(true, list.get(2)); // Kept as the Boolean SnakeYAML produced
     }
 
     @Test
