@@ -14,13 +14,16 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.Callable;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import javax.sql.DataSource;
 
 import org.apache.commons.dbutils.QueryRunner;
 import org.apache.commons.dbutils.ResultSetHandler;
+import org.apache.commons.dbutils.handlers.ColumnListHandler;
 import org.apache.commons.dbutils.handlers.ScalarHandler;
 
 import com.google.gson.Gson;
@@ -201,6 +204,70 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         } catch (SQLException e) {
             throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
                     "Failed to create table: " + tableName, e);
+        }
+    }
+
+    /**
+     * Gives every row of this operator's table whose {@code id} is {@code NULL} a new UUID, and
+     * logs one line naming the table and the count when there were any (#546, maintainer decision
+     * of 2026-09-27).
+     * <p>
+     * UltiTools-API 6.2.0 did not assign an id in {@link #insert}, and SQLite's generated DDL
+     * ({@code PRIMARY KEY (`id`)} with no {@code NOT NULL}) accepted the {@code NULL}, so every row
+     * a module inserted without an id on that release was stored with none. Such a row can be read
+     * by any other column, but {@code WHERE id = ?} bound to {@code null} matches nothing, so every
+     * update or delete of it silently did nothing.
+     * <p>
+     * Only the {@code id} column is written, one row at a time, keyed by the engine's row
+     * identifier and guarded by {@code id IS NULL}, so the repair is idempotent: a second start
+     * finds nothing to do and logs nothing. A failure is logged at {@code SEVERE} and does not stop
+     * the table from being used; the rows it could not repair stay as they were, and an update or
+     * delete through one of them is refused rather than silently matching nothing.
+     * <p>
+     * Called by the subclass whose engine can hold a {@code NULL} id ({@code SQLiteDataOperator});
+     * MySQL rejects a {@code NULL} primary key, so its operator never calls it.
+     *
+     * @param rowIdColumn the engine's row-identifier pseudo-column (SQLite's {@code _rowid_}); a
+     *                    constant supplied by the subclass, never caller input
+     * @return the number of rows given an id
+     * @since 6.3.0
+     */
+    protected final int backfillNullIds(String rowIdColumn) {
+        String select = "SELECT " + rowIdColumn + " FROM `" + tableName + "` WHERE `id` IS NULL";
+        String update = "UPDATE `" + tableName + "` SET `id` = ? WHERE " + rowIdColumn + " = ? AND `id` IS NULL";
+        int repaired = 0;
+        try {
+            List<Object> rowIds = queryRunner.query(select, new ColumnListHandler<Object>(1));
+            for (Object rowId : rowIds) {
+                repaired += queryRunner.update(update, UUID.randomUUID().toString(), rowId);
+            }
+        } catch (SQLException e) {
+            LOGGER.log(Level.SEVERE, "Could not assign ids to the rows of table '" + tableName
+                    + "' that have none (" + repaired + " assigned before the failure). Rows without an id "
+                    + "cannot be updated or deleted until this succeeds on a later start.", e);
+            return repaired;
+        }
+        if (repaired > 0) {
+            LOGGER.info("Assigned a new id to " + repaired + " row(s) of table '" + tableName
+                    + "' that had none (rows written without an id by UltiTools-API 6.2.0); only the id "
+                    + "column was written.");
+        }
+        return repaired;
+    }
+
+    /**
+     * Refuses an update or delete addressed by a {@code null} id (#546): {@code WHERE id = ?} bound
+     * to {@code null} matches no row, so the call used to return normally having changed nothing.
+     *
+     * @param id        the id the caller addressed the row by
+     * @param operation what was attempted, for the message
+     * @throws DataAccessException if {@code id} is {@code null}
+     */
+    private void requireId(Object id, String operation) {
+        if (id == null) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                    "Refusing to " + operation + " a row of table '" + tableName + "' (" + type.getName()
+                            + ") by a null id: no row can be addressed by it.");
         }
     }
 
@@ -570,6 +637,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      */
     @Override
     public int deleteByIdCounted(Object id) {
+        requireId(id, "delete");
         T entity = fetchRawById(id);
         if (entity != null) {
             entity.onDelete();
@@ -585,6 +653,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
 
     @Override
     public void update(String column, Object value, Object id) {
+        requireId(id, "update");
         if (value != null && !BasicTypeUtil.isBasicType(value.getClass())) {
             value = GSON.toJson(value);
         }
@@ -599,6 +668,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
 
     @Override
     public void update(T obj) throws IllegalAccessException {
+        requireId(obj.getId(), "update");
         // Fires before the fields below are read for the SQL parameters, so whatever onUpdate()
         // writes (e.g. AuditableDataEntity's updatedAt/updatedBy) is what actually gets
         // persisted. onUpdate() does not touch createdAt/createdBy, so an entity carrying its
@@ -737,6 +807,10 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
     public void updateAll(List<T> entities) throws IllegalAccessException {
         if (entities == null || entities.isEmpty()) {
             return;
+        }
+        // Checked before the batch starts, so a refused batch writes nothing.
+        for (T entity : entities) {
+            requireId(entity.getId(), "update");
         }
         try {
             transaction((Callable<Void>) () -> {

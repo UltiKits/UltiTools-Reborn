@@ -485,6 +485,21 @@ This section governs the third kind.
   behaviour that contradicted the documentation, so it takes no migration period. A third-party
   `DataOperator` implementation is counted by checking after its `delById` whether the row is
   still there (see `ultitools.storage.query-delete-count` in `FEATURES.md`).
+- Rows left without an id by UltiTools-API 6.2.0 are repaired, and addressing a row by a null id
+  is refused (#546, maintainer decision of 2026-09-27). 6.2.0 did not assign an id in `insert`, and
+  SQLite's generated DDL accepted a `NULL` primary key, so every row a module inserted without an
+  id on that release was stored with none; such a row could be read, but every `update`/`delete` of
+  it bound `WHERE id = NULL`, matched nothing and returned normally, so a change the module
+  reported as saved was lost at the next restart. As of 6.3.0, when a SQLite-backed table is
+  initialised every row whose `id` is `NULL` is given a new UUID — only the `id` column is written,
+  so the repair writes user data at startup, which is what the maintainer decided — and one INFO
+  line names the table and the count; a second start finds nothing and logs nothing. MySQL never
+  accepted a `NULL` id and runs no backfill. Independently, `update(T)`, `update(column, value, id)`,
+  `delById` and `updateAll` addressed by a `null` id now throw `DataAccessException` on every
+  backend instead of silently matching nothing (the JSON backend used to throw a raw
+  `NullPointerException`); `updateAll` checks every entity before it writes any. A call with a
+  non-null id that matches no row is unchanged. See `ultitools.storage.null-id-backfill` and
+  `ultitools.storage.null-id-refused` in `FEATURES.md`.
 
 ### Behavioral changes that do need one
 

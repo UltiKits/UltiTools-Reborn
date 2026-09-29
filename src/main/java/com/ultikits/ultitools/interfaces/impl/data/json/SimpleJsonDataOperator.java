@@ -242,6 +242,19 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         return GSON.fromJson(GSON.toJson(entity), type);
     }
 
+    /**
+     * Refuses an update or delete addressed by a {@code null} id (#546), which no entry can have
+     * as its key; the cache is a {@code ConcurrentHashMap}, so it used to surface as a raw
+     * {@code NullPointerException}. Mirrors {@code AbstractRelationalDataOperator}'s refusal.
+     */
+    private void requireId(Object id, String operation) {
+        if (id == null) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                    "Refusing to " + operation + " an entry of JSON store '" + type.getName()
+                            + "' by a null id: no entry can be addressed by it.");
+        }
+    }
+
     private List<T> detachAll(List<T> entities) {
         List<T> copies = new ArrayList<>(entities.size());
         for (T entity : entities) {
@@ -513,6 +526,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
      */
     @Override
     public synchronized int deleteByIdCounted(Object id) {
+        requireId(id, "delete");
         beforeMutate();
         T entity = cache.get(id);
         if (entity != null) {
@@ -523,6 +537,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
 
     @Override
     public synchronized void update(String column, Object value, Object id) {
+        requireId(id, "update");
         beforeMutate();
         if (!Serializable.class.isAssignableFrom(value.getClass())) {
             // GATE-05 group two (08-21): routed to the typed data-access hierarchy. Unlike the
@@ -542,8 +557,9 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
 
     @Override
     public synchronized void update(T obj) {
-        beforeMutate();
         Object id = obj.getId();
+        requireId(id, "update");
+        beforeMutate();
         T old = cache.get(id);
         if (old == null) {
             old = cache.get(id.toString());
@@ -654,6 +670,10 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
 
     @Override
     public synchronized void updateAll(List<T> entities) throws IllegalAccessException {
+        // Checked before the batch starts, so a refused batch changes nothing.
+        for (T entity : entities) {
+            requireId(entity.getId(), "update");
+        }
         try {
             transaction((Callable<Void>) () -> {
                 for (T entity : entities) {
