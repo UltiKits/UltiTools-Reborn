@@ -9,6 +9,7 @@ import java.sql.Connection;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.function.Function;
 import java.util.logging.Logger;
 
@@ -73,6 +74,22 @@ class DetachedReadParityTest {
 
         public void setName(String name) {
             this.name = name;
+        }
+
+        // Equality over a mutable field as well as the id, the shape Lombok's
+        // @EqualsAndHashCode(callSuper = true) gives most module entities.
+        @Override
+        public boolean equals(Object other) {
+            if (!(other instanceof ReadEntity)) {
+                return false;
+            }
+            ReadEntity that = (ReadEntity) other;
+            return Objects.equals(getId(), that.getId()) && Objects.equals(name, that.name);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(getId(), name);
         }
     }
 
@@ -184,6 +201,19 @@ class DetachedReadParityTest {
             assertThat(backend.operator.getById(entity.getId()).getName())
                     .as("%s: mutating the inserted instance changed the store without update()", backend.label)
                     .isEqualTo("stored");
+        }
+    }
+
+    @Test
+    @DisplayName("exist(entity) finds the stored row by its id after the entity changed without update()")
+    void existMatchesByIdAfterALocalChange() {
+        for (Backend backend : backends) {
+            ReadEntity entity = new ReadEntity("stored");
+            backend.operator.insert(entity);
+            entity.setName("changed-locally");
+            assertThat(backend.operator.exist(entity))
+                    .as("%s: exist(entity) missed a stored row because a field changed locally", backend.label)
+                    .isTrue();
         }
     }
 
