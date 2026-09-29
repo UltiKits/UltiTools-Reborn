@@ -84,6 +84,18 @@ import lombok.Getter;
  * no module code changed survives a restart. An explicit {@link #save()} call still writes
  * unconditionally.
  * <p>
+ * Operator's file (D-01): the framework touches the file as little as possible. It has two
+ * sanctioned exceptions. (1) A key missing from the file is added with its declared default and its
+ * {@code @ConfigEntry} comment. (2) Since 6.3.0 (#542, maintainer decision of 2026-09-29), a comment
+ * that is exactly one language key ({@code comment = "{config.demo.limit}"}) is resolved from the
+ * owning module's catalogue in the server's current language and written on every framework write of
+ * the file - the first-boot defaults write, {@link #save()}, the shutdown save, a panel write, and a
+ * load that finds the file's comment on such an entry differs (an upgraded server's first start, a
+ * language switch), keys already in the file included. Only the comment lines of those entries change;
+ * an operator's hand-written comment on such an entry is replaced; values, literal comments, comments
+ * on other keys and the header are never touched; a load with nothing to change writes nothing, and a
+ * file that could not be parsed is not rewritten by it.
+ * <p>
  * Thread safety (#510): the framework's own read, write, snapshot and comparison paths - {@link
  * #init(UltiToolsPlugin)}'s and {@link #reload()}'s load, {@link #save()}, {@link
  * #updateProperties(JsonObject)}, {@link #validateProposedProperties(JsonObject)} and the two
@@ -248,6 +260,42 @@ public abstract class AbstractConfigEntity {
             Object serialized = ReflectionUtil.newInstance(annotation.parser()).serialize(fieldValue);
             target.set(path, serialized);
         }
+        // #542: every framework write carries the one-token comments in the server's language, and
+        // the shutdown comparison renders the same text.
+        applyTokenComments(target);
+    }
+
+    /**
+     * Sets the resolved comment lines of every one-token entry (#542) that {@code target} holds and
+     * whose comment differs from them. Only those entries' comment lines change: a blank line that
+     * separates the entry from the one above it is kept, and nothing else in {@code target} is
+     * touched. The snapshot probe has no resolved comments, so this does nothing there.
+     *
+     * @param target the configuration about to be written or compared
+     * @return {@code true} if any comment was changed
+     */
+    private boolean applyTokenComments(YamlConfiguration target) {
+        boolean changed = false;
+        for (Map.Entry<String, List<String>> entry : tokenComments.entrySet()) {
+            String path = entry.getKey();
+            if (!target.contains(path)) {
+                continue;
+            }
+            List<String> current = target.getComments(path);
+            List<String> desired = new ArrayList<>();
+            for (String line : current) {
+                if (line != null) {
+                    break;
+                }
+                desired.add(null);
+            }
+            desired.addAll(entry.getValue());
+            if (!desired.equals(current)) {
+                target.setComments(path, desired);
+                changed = true;
+            }
+        }
+        return changed;
     }
 
     /**
@@ -638,10 +686,9 @@ public abstract class AbstractConfigEntity {
                         config.set(path, fileFormOfDefault(annotation, ReflectionUtil.getFieldValue(this, field)));
                         // D-07/D-09: the key never existed in the operator's file, so writing its
                         // @ConfigEntry comment alongside the value discloses nothing of theirs - this
-                        // is D-01's sole sanctioned exception, widened from "silently add a value" to
-                        // "silently add a value and its explanation". Never reached on the
-                        // already-has-the-key path above, and this is the only comment write in the
-                        // whole class.
+                        // is D-01's first sanctioned exception, widened from "silently add a value" to
+                        // "silently add a value and its explanation". A literal comment is written only
+                        // here; the second exception, one-token comments (#542), follows below.
                         List<String> commentLines = tokenComments.containsKey(path)
                                 ? tokenComments.get(path) : splitComment(annotation.comment());
                         if (!commentLines.isEmpty()) {
@@ -650,7 +697,13 @@ public abstract class AbstractConfigEntity {
                     }
                 }
             }
-            if (!upToDate) {
+            // #542 (maintainer 2026-09-29, "rewrite in the current language on every save"): D-01's
+            // second sanctioned exception. A one-token comment on a key already in the file is
+            // rewritten when it differs from the text resolved in the server's current language - the
+            // first start of an upgraded server, or after a language switch. It is folded into the one
+            // write this load makes, only after a successful load, and never when nothing differs.
+            boolean commentsDiffer = !lastLoadUnparseable && applyTokenComments(config);
+            if (!upToDate || commentsDiffer) {
                 config.save(file);
             }
             // #510: config now holds exactly the file's content, including any first-boot defaults
@@ -1018,6 +1071,7 @@ public abstract class AbstractConfigEntity {
                 }
                 config.set(path, ReflectionUtil.getFieldValue(this, field));
             }
+            applyTokenComments(config); // #542: a panel write carries the resolved comments too
             config.save(ultiToolsPlugin.getConfigFile(configFilePath));
             lastLoadUnparseable = false;
             // #510: config holds exactly what was written. Fields this payload did not touch are not in
