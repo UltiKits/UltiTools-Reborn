@@ -345,7 +345,8 @@ public abstract class AbstractConfigEntity {
             }
             Object configValue = parsed.get(path);
             if (configValue != null) {
-                ReflectionUtil.setFieldValue(probe, field, readConfigValue(field, annotation, configValue));
+                // Silent: init() already warned about any value it could not bind.
+                ReflectionUtil.setFieldValue(probe, field, readConfigValue(field, annotation, path, configValue, false));
             }
         }
         probe.applyFieldsTo(parsed);
@@ -595,10 +596,10 @@ public abstract class AbstractConfigEntity {
                     }
                     Object configValue = config.get(path);
                     if (configValue != null) {
-                        ReflectionUtil.setFieldValue(this, field, readConfigValue(field, annotation, configValue));
+                        ReflectionUtil.setFieldValue(this, field, readConfigValue(field, annotation, path, configValue, true));
                     } else {
                         upToDate = false;
-                        config.set(path, ReflectionUtil.getFieldValue(this, field));
+                        config.set(path, fileFormOfDefault(ReflectionUtil.getFieldValue(this, field)));
                         // D-07/D-09: the key never existed in the operator's file, so writing its
                         // @ConfigEntry comment alongside the value discloses nothing of theirs - this
                         // is D-01's sole sanctioned exception, widened from "silently add a value" to
@@ -637,14 +638,51 @@ public abstract class AbstractConfigEntity {
      * found the snapshot probe still unwidened: a {@code Long} field made every snapshot fail, and
      * the shutdown save then overwrote operator edits (the #510 defect, reinstated).
      *
+     * <p>
+     * #523: a collection or map field is then converted to its declared element, key and value
+     * types by {@link ConfigValueBinder}; an element that cannot be converted is skipped, and when
+     * {@code report} is set one WARNING names this entity's file, the key, the raw value and the
+     * declared type. The snapshot probe passes {@code false}, so a bad value is reported once per
+     * load, not again at every snapshot and shutdown comparison.
+     *
      * @param field      the target {@code @ConfigEntry} field
      * @param annotation its {@code @ConfigEntry}
+     * @param path       the entry's path, named in warnings
      * @param raw        the value SnakeYAML returned for the entry's path, never {@code null}
+     * @param report     whether a value that cannot be bound is logged
      * @return the value to store in {@code field}
      */
-    private static Object readConfigValue(Field field, ConfigEntry annotation, Object raw) {
+    private Object readConfigValue(Field field, ConfigEntry annotation, String path, Object raw, boolean report) {
         Object parsed = ReflectionUtil.newInstance(annotation.parser()).parse(raw);
-        return widenToFieldType(field.getType(), parsed);
+        return new ConfigValueBinder(configFilePath, report ? this::warnBinding : message -> { })
+                .bind(field, path, parsed);
+    }
+
+    /**
+     * Logs one binding problem {@link ConfigValueBinder} found, prefixed with the owning module's
+     * name when it is known.
+     *
+     * @param message the binder's description of the value it could not bind
+     */
+    private void warnBinding(String message) {
+        String moduleName = ultiToolsPlugin != null ? ultiToolsPlugin.getPluginName() : null;
+        LOGGER.warning(moduleName != null ? "[" + moduleName + "] " + message : message);
+    }
+
+    /**
+     * The form in which a missing key's declared default is written into the file (#523): a
+     * collection or an enum constant goes through the same {@code ConfigParser#serialize} form
+     * {@link #save()} writes - a {@code Set} as a YAML sequence, an enum by its name, which is what
+     * {@link ConfigValueBinder} reads back; everything else is written unchanged, as before.
+     *
+     * @param defaultValue the field's declared default, possibly {@code null}
+     * @return the value to put into the configuration
+     */
+    private static Object fileFormOfDefault(Object defaultValue) {
+        if (defaultValue instanceof java.util.Collection || defaultValue instanceof Enum) {
+            return new com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser().serialize(defaultValue);
+        }
+        return defaultValue;
     }
 
     /**
@@ -1047,7 +1085,7 @@ public abstract class AbstractConfigEntity {
      * verbatim to UltiPanel over the WebSocket (T-04-56), so a name-heuristic miss here leaks
      * the server, not just the console.
      */
-    private boolean isSecretShapedFieldName(String fieldName) {
+    static boolean isSecretShapedFieldName(String fieldName) {
         String lower = fieldName.toLowerCase(Locale.ROOT);
         return lower.contains("password") || lower.contains("secret")
                 || lower.contains("token") || lower.contains("credential")
@@ -1183,7 +1221,7 @@ public abstract class AbstractConfigEntity {
                     }
                     Object configValue = config.get(path);
                     if (configValue != null) {
-                        ReflectionUtil.setFieldValue(this, field, readConfigValue(field, annotation, configValue));
+                        ReflectionUtil.setFieldValue(this, field, readConfigValue(field, annotation, path, configValue, true));
                     }
                 }
             }

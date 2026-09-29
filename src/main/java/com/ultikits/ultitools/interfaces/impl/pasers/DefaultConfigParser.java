@@ -18,12 +18,24 @@ import java.util.Set;
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Config binder serializes private fields to YAML -- see 08-GATE05-TRIAGE.md
 public class DefaultConfigParser extends ConfigParser<Object> {
 
+    /**
+     * Turns a raw YAML value into plain Java values: a section becomes a {@link LinkedHashMap}
+     * (nested sections recursively), a sequence a {@link List}, and a scalar is returned as it is.
+     * <p>
+     * Since 6.3.0 (#523) a sequence keeps each element's own value - an {@code Integer} stays an
+     * {@code Integer} - instead of being turned into its text. The configuration binder converts the
+     * elements to the field's declared element type; before, a {@code List<Integer>} field received
+     * {@code String}s and every typed lookup on it silently failed.
+     *
+     * @param object the value the configuration returned for an entry
+     * @return the parsed value
+     */
     @Override
     public Object parse(Object object) {
         if (object instanceof List) {
-            List<String> list = new ArrayList<>();
+            List<Object> list = new ArrayList<>();
             for (Object o : (List<?>) object) {
-                list.add(o.toString());
+                list.add(o instanceof ConfigurationSection ? parse(o) : o);
             }
             return list;
         } else if (BasicTypeUtil.isBasicType(object) || object instanceof String) {
