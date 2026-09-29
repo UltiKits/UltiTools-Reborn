@@ -178,6 +178,17 @@ class NullIdRowsTest {
         return lines;
     }
 
+    private List<String> warningsFor(String table) {
+        List<String> lines = new ArrayList<>();
+        for (LogRecord logRecord : logged) {
+            if (logRecord.getLevel() == java.util.logging.Level.WARNING && logRecord.getMessage() != null
+                    && logRecord.getMessage().contains("'" + table + "'")) {
+                lines.add(logRecord.getMessage());
+            }
+        }
+        return lines;
+    }
+
     private List<String> backfillLines() {
         List<String> lines = new ArrayList<>();
         for (LogRecord logRecord : logged) {
@@ -360,7 +371,7 @@ class NullIdRowsTest {
         }
 
         @Test
-        @DisplayName("the backfill writes the id the entity reports, and a new UUID only when it reports none or a duplicate")
+        @DisplayName("the backfill writes the id the entity reports; a row it cannot make addressable is left and warned about")
         void backfillWritesTheReportedId() throws Exception {
             execute("CREATE TABLE derived_id_entity (`id` VARCHAR(255), `uuid` VARCHAR(255), `name` VARCHAR(255))");
             execute("INSERT INTO derived_id_entity (`id`, `uuid`, `name`) VALUES "
@@ -370,12 +381,18 @@ class NullIdRowsTest {
 
             SQLiteDataOperator<DerivedIdEntity> operator = new SQLiteDataOperator<>(dataSource, DerivedIdEntity.class);
 
-            List<String> rows = derivedRows();
-            assertThat(rows.get(0)).isEqualTo("44444444-4444-4444-4444-444444444444|44444444-4444-4444-4444-444444444444|home");
-            assertThat(rows.get(1)).doesNotStartWith("null|").endsWith("|null|no-uuid");
-            assertThat(rows.get(2)).doesNotStartWith("null|").doesNotStartWith("44444444-4444-4444-4444-444444444444|")
-                    .endsWith("|duplicate");
-            assertThat(backfillLinesFor("derived_id_entity")).hasSize(1);
+            // A random id in the id column would not change what getId() reports (null, or the
+            // other row's uuid), so it would not make either row reachable -- and for the
+            // duplicate, update(entity)/delById(entity.getId()) would still address "home".
+            assertThat(derivedRows()).containsExactly(
+                    "44444444-4444-4444-4444-444444444444|44444444-4444-4444-4444-444444444444|home",
+                    "null|null|no-uuid",
+                    "null|44444444-4444-4444-4444-444444444444|duplicate");
+            assertThat(backfillLinesFor("derived_id_entity"))
+                    .as("one INFO line for the repaired row and one WARNING for the two left")
+                    .hasSize(2);
+            assertThat(warningsFor("derived_id_entity")).hasSize(1);
+            assertThat(warningsFor("derived_id_entity").get(0)).contains("2");
 
             DerivedIdEntity home = operator.getById("44444444-4444-4444-4444-444444444444");
             home.setName("home-renamed");
@@ -383,6 +400,27 @@ class NullIdRowsTest {
             assertThat(operator.getById("44444444-4444-4444-4444-444444444444").getName())
                     .as("the backfilled row is not reachable by the id its entity reports")
                     .isEqualTo("home-renamed");
+        }
+
+        @Test
+        @DisplayName("a row that cannot be read as the entity is left without an id, and the others are repaired")
+        void unreadableRowIsLeft() throws Exception {
+            execute("DROP TABLE IF EXISTS null_id_entity");
+            execute("CREATE TABLE null_id_entity (`id` VARCHAR(255), `name` VARCHAR(255), `score` VARCHAR(255))");
+            execute("INSERT INTO null_id_entity (`id`, `name`, `score`) VALUES (NULL, 'readable', '1'), (NULL, 'unreadable', 'not-a-number')");
+
+            new SQLiteDataOperator<>(dataSource, LegacyEntity.class);
+
+            List<String> ids = new ArrayList<>();
+            try (Connection conn = dataSource.getConnection();
+                 Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery("SELECT `name`, `id` FROM null_id_entity ORDER BY _rowid_")) {
+                while (rs.next()) {
+                    ids.add(rs.getString(1) + "|" + (rs.getString(2) == null ? "null" : "set"));
+                }
+            }
+            assertThat(ids).containsExactly("readable|set", "unreadable|null");
+            assertThat(warningsFor("null_id_entity")).isNotEmpty();
         }
     }
 
