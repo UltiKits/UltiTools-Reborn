@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.logging.Handler;
+import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
@@ -181,7 +182,7 @@ class NullIdRowsTest {
     private List<String> warningsFor(String table) {
         List<String> lines = new ArrayList<>();
         for (LogRecord logRecord : logged) {
-            if (logRecord.getLevel() == java.util.logging.Level.WARNING && logRecord.getMessage() != null
+            if (Level.WARNING.equals(logRecord.getLevel()) && logRecord.getMessage() != null
                     && logRecord.getMessage().contains("'" + table + "'")) {
                 lines.add(logRecord.getMessage());
             }
