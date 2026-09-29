@@ -817,7 +817,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         }
         String sql = "UPDATE " + tableName + " SET " + column + " = ? WHERE id = ?";
         try {
-            queryRunner.update(sql, value, id);
+            warnIfNoRow(queryRunner.update(sql, value, id), id);
         } catch (SQLException e) {
             throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
                     "Failed to update column: " + column, e);
@@ -826,6 +826,14 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
 
     @Override
     public void update(T obj) throws IllegalAccessException {
+        updateRow(obj);
+    }
+
+    /**
+     * {@link #update(BaseDataEntity)}, returning the number of rows the {@code UPDATE} changed.
+     * A non-null id that matches no row writes nothing and logs one WARNING (#558).
+     */
+    private int updateRow(T obj) throws IllegalAccessException {
         requireId(obj.getId(), "update");
         // Fires before the fields below are read for the SQL parameters, so whatever onUpdate()
         // writes (e.g. AuditableDataEntity's updatedAt/updatedBy) is what actually gets
@@ -838,11 +846,25 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         sql.append(" WHERE id = ?");
         params.add(obj.getId());
         try {
-            queryRunner.update(sql.toString(), params.toArray());
+            return warnIfNoRow(queryRunner.update(sql.toString(), params.toArray()), obj.getId());
         } catch (SQLException e) {
             throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
                     "Failed to update entity", e);
         }
+    }
+
+    /**
+     * Logs one WARNING when an update by a non-null id changed no row, and returns the count
+     * unchanged (#558, maintainer decision 2026-09-29). The call still returns normally: a row
+     * another writer deleted is not a storage failure, and module code catches exceptions from
+     * {@code update} as storage failures.
+     */
+    private int warnIfNoRow(int changed, Object id) {
+        if (changed == 0) {
+            LOGGER.warning("Update of table '" + tableName + "' matched no row with id '" + id
+                    + "'; nothing was written.");
+        }
+        return changed;
     }
 
     /**
@@ -1042,7 +1064,11 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                         pstmt.setObject(idx, entity.getId());
                         pstmt.addBatch();
                     }
-                    pstmt.executeBatch();
+                    int[] changed = pstmt.executeBatch();
+                    for (int row = 0; row < changed.length; row++) {
+                        // Statement.SUCCESS_NO_INFO (-2) says nothing about the row; only 0 means no match.
+                        warnIfNoRow(changed[row], entities.get(row).getId());
+                    }
                 } catch (SQLException | IllegalAccessException e) {
                     throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
                             "Batch update failed", e);

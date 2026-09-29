@@ -24,6 +24,7 @@ import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
@@ -37,6 +38,7 @@ import com.google.gson.JsonSerializer;
 import com.google.gson.reflect.TypeToken;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
+import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
@@ -58,6 +60,7 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
  */
 public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         implements DataOperator<T>, Cached, RowCountingDelete {
+    private static final Logger LOGGER = Logger.getLogger(SimpleJsonDataOperator.class.getName());
     /**
      * Default Gson has no bundled adapter for {@code java.time.LocalDateTime}: its reflective
      * fallback tries to reach {@code LocalDateTime}'s private fields, which JDK 9+'s module
@@ -545,6 +548,10 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
             throw new DataAccessException(ErrorCode.DATA_PERSISTENCE_FAILED, "Query value is not serializable");
         }
         T obj = cache.get(id);
+        if (obj == null) {
+            warnNoEntry(id);
+            return;
+        }
         Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
         Map<String, Object> map = GSON.fromJson(GSON.toJson(obj), mapType);
         // Without resolving the column name first, putByPath would write into a brand-new key
@@ -556,9 +563,17 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
 
     @Override
     public synchronized void update(T obj) {
+        updateEntry(obj);
+    }
+
+    /**
+     * {@link #update(BaseDataEntity)}, returning how many entries it changed: an id no entry has
+     * writes nothing and logs one WARNING, where it used to throw a raw
+     * {@code NullPointerException} (#558).
+     */
+    private int updateEntry(T obj) {
         Object id = obj.getId();
         requireId(id, "update");
-        beforeMutate();
         T old = findStored(id);
         // Copied onto a detached copy of the cached entry, which then replaces it in one put:
         // reads run without this lock, so mutating the cached instance field by field could let
@@ -571,7 +586,25 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         // whatever the hook writes (e.g. AuditableDataEntity's updatedAt/updatedBy) is both what
         // persists and what the caller's instance shows afterwards, on every backend.
         obj.onUpdate();
+        if (old == null) {
+            warnNoEntry(id);
+            return 0;
+        }
+        beforeMutate();
         replaceEntry(old, obj);
+        return 1;
+    }
+
+    /**
+     * Logs one WARNING for an update by a non-null id that matches no entry (#558, maintainer
+     * decision 2026-09-29), naming the store by its {@code @Table} value -- the directory it is
+     * kept in -- as the relational backends name the table.
+     */
+    private void warnNoEntry(Object id) {
+        Table table = type.getAnnotation(Table.class);
+        String name = table != null ? table.value() : type.getSimpleName();
+        LOGGER.warning("Update of table '" + name + "' matched no entry with id '" + id
+                + "'; nothing was written.");
     }
 
     /** The cached entry for {@code id}, trying its string form when the key type differs. */
