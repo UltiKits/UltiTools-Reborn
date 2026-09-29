@@ -186,31 +186,53 @@ public final class PluginYmlReader {
         String name = config.getString("name");
         String main = config.getString("main");
         List<String> loadAfter = config.getStringList("loadAfter");
-        return new PluginYmlInfo(name, main, loadAfter);
+        // Bukkit's own plugin.yml keys are lowercase, no separator -- "softdepend"/"depend", not
+        // "soft-depend"/"soft_depend". getStringList returns an empty list (never null) when the
+        // key is absent, matching loadAfter's own established contract.
+        List<String> softDepend = config.getStringList("softdepend");
+        List<String> depend = config.getStringList("depend");
+        return new PluginYmlInfo(name, main, loadAfter, softDepend, depend);
     }
 
     /**
      * The subset of a module's {@code plugin.yml} this framework needs: its declared
      * {@code name:} and {@code main:} (both nullable - absent when the archive has none or
-     * reading failed) and its {@code loadAfter:} list (never null; empty when absent or reading
-     * failed).
+     * reading failed), its {@code loadAfter:} list, and its Bukkit-level {@code softdepend:} /
+     * {@code depend:} lists (all three never null; empty when absent or reading failed).
+     * <p>
+     * {@code softDepend} was added for UltiEconomy#20's optional-dependency log-level decision: a class
+     * that fails to load only because it references a type belonging to a plugin the module's own
+     * {@code plugin.yml} lists under {@code softdepend:}, and that plugin is not currently
+     * installed/enabled, is not a defect in the module -- Bukkit's own {@code softdepend:}
+     * contract is precisely "this plugin may be absent; the module must tolerate that". {@code
+     * depend} is carried alongside it for the same reason -- a module cannot actually be running
+     * at all if a hard {@code depend:} were genuinely missing, but the list is threaded through
+     * regardless so a diagnostic message can name it if that ever changes.
      *
      * @since 6.3.0
      */
     public static final class PluginYmlInfo {
 
         /** The empty result every failure path returns. */
-        public static final PluginYmlInfo EMPTY = new PluginYmlInfo(null, null, Collections.emptyList());
+        public static final PluginYmlInfo EMPTY = new PluginYmlInfo(
+            null, null, Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
 
         private final String name;
         private final String main;
         private final List<String> loadAfter;
+        private final List<String> softDepend;
+        private final List<String> depend;
 
-        PluginYmlInfo(String name, String main, List<String> loadAfter) {
+        PluginYmlInfo(String name, String main, List<String> loadAfter, List<String> softDepend,
+                List<String> depend) {
             this.name = name;
             this.main = main;
             this.loadAfter = Collections.unmodifiableList(
                 loadAfter == null ? Collections.emptyList() : loadAfter);
+            this.softDepend = Collections.unmodifiableList(
+                softDepend == null ? Collections.emptyList() : softDepend);
+            this.depend = Collections.unmodifiableList(
+                depend == null ? Collections.emptyList() : depend);
         }
 
         /**
@@ -241,6 +263,28 @@ public final class PluginYmlReader {
          */
         public List<String> getLoadAfter() {
             return loadAfter;
+        }
+
+        /**
+         * The module's declared {@code plugin.yml} {@code softdepend:} list -- plugin names this
+         * module integrates with optionally.
+         *
+         * @return the softdepend list, never {@code null}; empty if absent or unreadable
+         * @since 6.3.0
+         */
+        public List<String> getSoftDepend() {
+            return softDepend;
+        }
+
+        /**
+         * The module's declared {@code plugin.yml} {@code depend:} list -- plugin names this
+         * module requires to be present.
+         *
+         * @return the depend list, never {@code null}; empty if absent or unreadable
+         * @since 6.3.0
+         */
+        public List<String> getDepend() {
+            return depend;
         }
     }
 }
