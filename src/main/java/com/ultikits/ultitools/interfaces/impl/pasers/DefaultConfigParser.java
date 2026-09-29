@@ -5,6 +5,7 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.MemoryConfiguration;
 import org.bukkit.configuration.MemorySection;
+import org.jetbrains.annotations.ApiStatus;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
@@ -145,24 +146,61 @@ public class DefaultConfigParser extends ConfigParser<Object> {
     }
 
     /**
-     * The form a nested value is written in: an enum constant by its name and a collection as a list
-     * of such forms (#523) - SnakeYAML would otherwise tag an enum with its Java class, which the
-     * loader refuses - and everything else through {@link #serialize(Object)}.
+     * The form in which the framework writes a value this parser binds (#523): an enum constant by
+     * its name, a collection (a {@code List} or a {@code Set}) as a YAML list of {@linkplain
+     * #plainForm plain} elements, and everything else through {@link #serialize(Object)}. SnakeYAML
+     * would otherwise tag an enum with its Java class and write a {@code Set} as a tagged mapping, both
+     * of which the configuration loader refuses.
+     * <p>
+     * Framework-internal: {@code public} only because the configuration entity that calls it lives in
+     * another package. Module code should not call it.
      *
-     * @param value a nested value, possibly {@code null}
-     * @return the value to put into the section
+     * @param value the value, possibly {@code null}
+     * @return the value to put into the configuration
+     * @since 6.3.0
      */
-    private Object fileForm(Object value) {
+    @ApiStatus.Internal
+    public Object fileForm(Object value) {
+        if (value instanceof Enum) {
+            return ((Enum<?>) value).name();
+        }
+        if (value instanceof Collection) {
+            return plainForm(value);
+        }
+        return value == null ? null : serialize(value);
+    }
+
+    /**
+     * The form of a value inside a list: plain YAML data, never a configuration section - a list
+     * element that is a section reads back as an empty {@code getMapList} entry and sends the panel's
+     * JSON serializer through the section's parent references. An enum becomes its name, a collection
+     * a list, a map a map with plain values, and any other object the plain map of its fields.
+     *
+     * @param value the value, possibly {@code null}
+     * @return the plain form
+     */
+    private Object plainForm(Object value) {
+        if (value == null || value instanceof String || BasicTypeUtil.isBasicType(value)) {
+            return value;
+        }
         if (value instanceof Enum) {
             return ((Enum<?>) value).name();
         }
         if (value instanceof Collection) {
             List<Object> list = new ArrayList<>();
             for (Object element : (Collection<?>) value) {
-                list.add(fileForm(element));
+                list.add(plainForm(element));
             }
             return list;
         }
-        return value == null ? null : serialize(value);
+        Map<?, ?> entries = value instanceof Map ? (Map<?, ?>) value
+                : value instanceof ConfigurationSection ? ((ConfigurationSection) value).getValues(false)
+                : serializeToMemorySection(value).getValues(false);
+        Map<String, Object> map = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : entries.entrySet()) {
+            Object key = entry.getKey();
+            map.put(key instanceof Enum ? ((Enum<?>) key).name() : String.valueOf(key), plainForm(entry.getValue()));
+        }
+        return map;
     }
 }

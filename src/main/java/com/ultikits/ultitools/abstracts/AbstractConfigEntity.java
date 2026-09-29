@@ -713,6 +713,7 @@ public abstract class AbstractConfigEntity {
             // first start of an upgraded server, or after a language switch. It is folded into the one
             // write this load makes, only after a successful load, and never when nothing differs.
             boolean commentsDiffer = !lastLoadUnparseable && applyTokenComments(config);
+            boolean commentRewriteFailed = false;
             if (!upToDate) {
                 config.save(file);
             } else if (commentsDiffer) {
@@ -721,15 +722,21 @@ public abstract class AbstractConfigEntity {
                 try {
                     config.save(file);
                 } catch (IOException e) {
+                    commentRewriteFailed = true;
                     LOGGER.warning(String.format("Config file '%s': could not rewrite its comments in the server's"
-                            + " language (%s); the values were loaded and the file is unchanged", configFilePath,
-                            e.getMessage()));
+                            + " language (%s); the values were loaded, and the shutdown save will write the file"
+                            + " again", configFilePath, e.getMessage()));
                 }
             }
             // #510: config now holds exactly the file's content, including any first-boot defaults
             // write. The snapshot is taken from that text, so a change listener below that changes a
             // value in memory is still seen as a code change by the shutdown save.
             takeSnapshot();
+            if (commentRewriteFailed) {
+                // A write that failed may have left the file truncated (the writer empties the file
+                // before it writes), so do not record it as in sync: the shutdown save rewrites it.
+                savedSnapshot = null;
+            }
         }
 
         // Validate fields and reset invalid values to defaults
@@ -863,22 +870,7 @@ public abstract class AbstractConfigEntity {
         com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser<Object> parser =
                 ReflectionUtil.newInstance(annotation.parser());
         if (parser instanceof DefaultConfigParser) {
-            return listOrNameForm(parser, value);
-        }
-        return parser.serialize(value);
-    }
-
-    private static Object listOrNameForm(
-            com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser<Object> parser, Object value) {
-        if (value instanceof Enum) {
-            return ((Enum<?>) value).name();
-        }
-        if (value instanceof java.util.Collection) {
-            List<Object> list = new ArrayList<>();
-            for (Object element : (java.util.Collection<?>) value) {
-                list.add(element == null ? null : listOrNameForm(parser, element));
-            }
-            return list;
+            return ((DefaultConfigParser) parser).fileForm(value);
         }
         return parser.serialize(value);
     }
@@ -1236,7 +1228,12 @@ public abstract class AbstractConfigEntity {
                 if (path.isEmpty()) {
                     path = field.getName();
                 }
-                config.set(path, ReflectionUtil.getFieldValue(this, field));
+                Object value = ReflectionUtil.getFieldValue(this, field);
+                // An enum or a collection is written in the form the loader reads back (#523): the
+                // Gson value as it is would be a Java-class-tagged enum or a tagged set, and the next
+                // start would refuse the whole file. Other values are written as before.
+                config.set(path, value instanceof Enum || value instanceof java.util.Collection
+                        ? serializeForFile(annotation, value) : value);
             }
             applyTokenComments(config); // #542: a panel write carries the resolved comments too
             config.save(ultiToolsPlugin.getConfigFile(configFilePath));
