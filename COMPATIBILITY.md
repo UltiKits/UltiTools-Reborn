@@ -492,7 +492,10 @@ This section governs the third kind.
   it bound `WHERE id = NULL`, matched nothing and returned normally, so a change the module
   reported as saved was lost at the next restart. As of 6.3.0, when a SQLite-backed table is
   initialised every row whose `id` is `NULL` is given the id its entity reports through `getId()`,
-  or a new UUID when the entity reports none or one another row already holds — only the `id`
+  or a new UUID when the entity reports none, in either case only if the entity read back with that
+  id reports it; a row that no written id would make addressable (a derived id that is `null` or
+  already another row's, or a row that cannot be read as the entity) is left as it is and counted
+  in one WARNING line per table — only the `id`
   column is written, all rows in one transaction, so the repair writes user data at startup, which
   is what the maintainer decided — and one INFO line names the table, the count and how many rows
   took the entity's own id; a second start finds nothing and logs nothing. The reported id comes

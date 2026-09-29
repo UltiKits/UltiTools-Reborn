@@ -30,6 +30,7 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonDeserializer;
 import com.google.gson.JsonNull;
+import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonPrimitive;
 import com.google.gson.JsonSerializer;
@@ -213,9 +214,9 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
     }
 
     /**
-     * Gives every row of this operator's table whose {@code id} is {@code NULL} a new UUID, and
-     * logs one line naming the table and the count when there were any (#546, maintainer decision
-     * of 2026-09-27).
+     * Gives every row of this operator's table whose {@code id} is {@code NULL} an id that makes it
+     * addressable, and logs one line naming the table and the count when there were any (#546,
+     * maintainer decision of 2026-09-27).
      * <p>
      * UltiTools-API 6.2.0 did not assign an id in {@link #insert}, and SQLite's generated DDL
      * ({@code PRIMARY KEY (`id`)} with no {@code NOT NULL}) accepted the {@code NULL}, so every row
@@ -223,11 +224,16 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      * by any other column, but {@code WHERE id = ?} bound to {@code null} matches nothing, so every
      * update or delete of it silently did nothing.
      * <p>
-     * Only the {@code id} column is written, one row at a time, keyed by the engine's row
-     * identifier and guarded by {@code id IS NULL}, so the repair is idempotent: a second start
-     * finds nothing to do and logs nothing. A failure is logged at {@code SEVERE} and does not stop
-     * the table from being used; the rows it could not repair stay as they were, and an update or
-     * delete through one of them is refused rather than silently matching nothing.
+     * Each row gets the id its entity reports through {@code getId()} (an entity may derive it from
+     * another column), or a new UUID when it reports none -- but only if an entity read back with
+     * that id in the {@code id} column reports it, since every lookup binds {@code getId()}. A row
+     * no written id would make addressable (a derived id that is {@code null} or already another
+     * row's, or a row that cannot be read as the entity) is left as it is, and one WARNING per
+     * table counts them. Only the {@code id} column is written, guarded by {@code id IS NULL} and
+     * keyed by the engine's row identifier, all rows in one transaction. A second start writes
+     * nothing and logs no INFO line; rows that were left are counted again. A failure rolls the
+     * whole repair back and is logged at {@code SEVERE}; the table is still usable, and an update
+     * or delete through a row without an id is refused rather than silently matching nothing.
      * <p>
      * Called by the subclass whose engine can hold a {@code NULL} id ({@code SQLiteDataOperator});
      * MySQL rejects a {@code NULL} primary key, so its operator never calls it.
@@ -243,19 +249,23 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         String update = "UPDATE `" + tableName + "` SET `id` = ? WHERE " + rowIdColumn + " = ? AND `id` IS NULL";
         int reported = 0;
         int generated = 0;
+        int left = 0;
         try (Connection conn = dataSource.getConnection()) {
             boolean autoCommit = conn.getAutoCommit();
             conn.setAutoCommit(false);
             try {
                 List<Object> rowIds = new ArrayList<>();
-                List<String> reportedIds = new ArrayList<>();
-                readRowsWithoutId(conn, select, rowIds, reportedIds);
+                List<String> candidates = new ArrayList<>();
+                List<Boolean> fromEntity = new ArrayList<>();
+                readRowsWithoutId(conn, select, rowIds, candidates, fromEntity);
                 Set<String> assigned = new HashSet<>();
                 for (int i = 0; i < rowIds.size(); i++) {
-                    String id = reportedIds.get(i);
-                    if (id != null && assigned.add(id) && assignId(conn, update, id, rowIds.get(i))) {
+                    String id = candidates.get(i);
+                    if (id == null || !assigned.add(id) || !assignId(conn, update, id, rowIds.get(i))) {
+                        left++;
+                    } else if (fromEntity.get(i)) {
                         reported++;
-                    } else if (assignId(conn, update, UUID.randomUUID().toString(), rowIds.get(i))) {
+                    } else {
                         generated++;
                     }
                 }
@@ -279,45 +289,72 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                     + " took the id the entity itself reports, " + generated + " were given a new UUID; "
                     + "only the id column was written.");
         }
+        if (left > 0) {
+            LOGGER.warning(left + " row(s) of table '" + tableName + "' still have no id and were left as "
+                    + "they are: no value written to the id column would make " + type.getName()
+                    + "#getId() report it (the entity reports no id, one another row already holds, or the "
+                    + "row could not be read), so these rows cannot be updated or deleted by id.");
+        }
         return repaired;
     }
 
     /**
-     * Reads every row of {@code select} (row identifier first, then the table's columns) and the id
-     * the entity materialised from it reports. An entity may derive {@code getId()} from another
-     * column -- UltiEssentials' and UltiKits' do -- and every {@code WHERE id = ?} binds that value,
-     * so it is the only id that makes the row addressable. A row that cannot be materialised, or
-     * whose entity reports no id, is recorded with {@code null} and later given a new UUID.
+     * Reads every row of {@code select} (row identifier first, then the table's columns) and
+     * decides which id, if any, would make it addressable.
+     * <p>
+     * Every {@code WHERE id = ?} binds {@code getId()}, and an entity may derive {@code getId()}
+     * from another column -- UltiEssentials' and UltiKits' do -- so an id is useful only if an
+     * entity read back with it in the {@code id} column reports it. The id the entity already
+     * reports is tried first; otherwise a new UUID. A candidate that would not be reported back
+     * (the entity derives a {@code null} id), and a row that cannot be read as the entity at all,
+     * get {@code null}: writing anything to such a row would change nothing any lookup uses.
      */
-    private void readRowsWithoutId(Connection conn, String select, List<Object> rowIds, List<String> reportedIds)
-            throws SQLException {
+    private void readRowsWithoutId(Connection conn, String select, List<Object> rowIds, List<String> candidates,
+                                   List<Boolean> fromEntity) throws SQLException {
         RowMapper<T> mapper = getRowMapper();
         queryRunner.query(conn, select, rs -> {
             while (rs.next()) {
                 rowIds.add(rs.getObject(1));
-                reportedIds.add(reportedIdOf(mapper, rs));
+                T entity = readEntity(mapper, rs);
+                Object reported = entity == null ? null : entity.getId();
+                boolean hasReported = reported != null && !reported.toString().isEmpty();
+                String candidate = hasReported ? reported.toString() : UUID.randomUUID().toString();
+                candidates.add(entity != null && reportsAs(entity, candidate) ? candidate : null);
+                fromEntity.add(hasReported);
             }
             return null;
         });
     }
 
-    private String reportedIdOf(RowMapper<T> mapper, ResultSet rs) throws SQLException {
+    private T readEntity(RowMapper<T> mapper, ResultSet rs) throws SQLException {
         try {
-            Object id = mapper.map(rs).getId();
-            return id == null || id.toString().isEmpty() ? null : id.toString();
+            return mapper.map(rs);
         } catch (JsonParseException e) {
             LOGGER.warning("A row of table '" + tableName + "' without an id could not be read as "
-                    + type.getName() + " (" + e.getMessage() + "); it is given a new UUID.");
+                    + type.getName() + " (" + e.getMessage() + "); it is left without an id.");
             return null;
         }
     }
 
     /**
+     * Whether {@code entity}, read back with {@code candidate} in its {@code id} column, reports
+     * {@code candidate} from {@code getId()} -- that is, whether writing it makes the row
+     * addressable.
+     */
+    private boolean reportsAs(T entity, String candidate) {
+        JsonObject tree = GSON.toJsonTree(entity).getAsJsonObject();
+        // BaseDataEntity's id field is named like its column.
+        tree.addProperty(ID_COLUMN, candidate);
+        Object reported = GSON.fromJson(tree, type).getId();
+        return reported != null && candidate.equals(reported.toString());
+    }
+
+    /**
      * Writes {@code id} into the row with this row identifier, on the backfill's own connection
-     * (so inside its transaction), if the row still has none. A value
-     * another row already holds violates the primary key; that is reported as {@code false} so the
-     * caller can give the row a new UUID instead. The statement fails alone: SQLite rolls back only
-     * the failing statement, and the transaction continues.
+     * (so inside its transaction), if the row still has none. A value another row already holds
+     * violates the primary key; that is reported as {@code false} and the row is left without an
+     * id, since any other value would not be what its entity reports. The statement fails alone:
+     * SQLite rolls back only the failing statement, and the transaction continues.
      */
     private boolean assignId(Connection conn, String update, String id, Object rowId) throws SQLException {
         try {
