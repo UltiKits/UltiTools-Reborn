@@ -166,6 +166,16 @@ class NullIdRowsTest {
         return stripped;
     }
 
+    private List<String> backfillLinesFor(String table) {
+        List<String> lines = new ArrayList<>();
+        for (LogRecord logRecord : logged) {
+            if (logRecord.getMessage() != null && logRecord.getMessage().contains("'" + table + "'")) {
+                lines.add(logRecord.getMessage());
+            }
+        }
+        return lines;
+    }
+
     private List<String> backfillLines() {
         List<String> lines = new ArrayList<>();
         for (LogRecord logRecord : logged) {
@@ -243,6 +253,134 @@ class NullIdRowsTest {
 
             assertThat(rows()).filteredOn(row -> row.contains("|null|")).hasSize(3);
             assertThat(backfillLines()).isEmpty();
+        }
+    }
+
+    /**
+     * An entity whose {@code getId()} is derived from another column, the shape UltiEssentials'
+     * {@code UuidKeyedDataEntity} and UltiKits' {@code KitClaimData} use: the inherited
+     * {@code id} field is never set, and every {@code WHERE id = ?} binds {@code getId()}.
+     */
+    @Table("derived_id_entity")
+    public static class DerivedIdEntity extends BaseDataEntity<String> {
+        private static final long serialVersionUID = 1L;
+
+        @Column("uuid")
+        private String uuid;
+
+        @Column("name")
+        private String name;
+
+        public DerivedIdEntity() {
+        }
+
+        public DerivedIdEntity(String uuid, String name) {
+            this.uuid = uuid;
+            this.name = name;
+        }
+
+        @Override
+        public String getId() {
+            return uuid;
+        }
+
+        @Override
+        public void setId(String id) {
+            this.uuid = id;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public void setName(String name) {
+            this.name = name;
+        }
+    }
+
+    private static List<String> derivedRows() throws Exception {
+        List<String> rows = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(
+                     "SELECT `id`, `uuid`, `name` FROM derived_id_entity ORDER BY _rowid_")) {
+            while (rs.next()) {
+                rows.add(rs.getString(1) + "|" + rs.getString(2) + "|" + rs.getString(3));
+            }
+        }
+        return rows;
+    }
+
+    @Nested
+    @DisplayName("entities whose getId() is derived from another column")
+    class DerivedId {
+
+        @BeforeEach
+        void dropDerivedTable() throws Exception {
+            execute("DROP TABLE IF EXISTS derived_id_entity");
+        }
+
+        @Test
+        @DisplayName("insert writes getId() into the id column, so update and delete by it reach the row")
+        void insertWritesTheReportedId() throws Exception {
+            SQLiteDataOperator<DerivedIdEntity> operator = new SQLiteDataOperator<>(dataSource, DerivedIdEntity.class);
+            DerivedIdEntity entity = new DerivedIdEntity("11111111-1111-1111-1111-111111111111", "first");
+            operator.insert(entity);
+
+            assertThat(derivedRows()).containsExactly("11111111-1111-1111-1111-111111111111|11111111-1111-1111-1111-111111111111|first");
+
+            entity.setName("renamed");
+            operator.update(entity);
+            assertThat(operator.getById(entity.getId()).getName()).isEqualTo("renamed");
+
+            logged.clear();
+            new SQLiteDataOperator<>(dataSource, DerivedIdEntity.class);
+            assertThat(backfillLinesFor("derived_id_entity")).as("a row inserted on 6.3.0 had no id").isEmpty();
+
+            operator.delById(entity.getId());
+            assertThat(derivedRows()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("insertAll and updateAll write getId() into the id column too")
+        void batchPathsWriteTheReportedId() throws Exception {
+            SQLiteDataOperator<DerivedIdEntity> operator = new SQLiteDataOperator<>(dataSource, DerivedIdEntity.class);
+            DerivedIdEntity a = new DerivedIdEntity("22222222-2222-2222-2222-222222222222", "a");
+            DerivedIdEntity b = new DerivedIdEntity("33333333-3333-3333-3333-333333333333", "b");
+            operator.insertAll(Arrays.asList(a, b));
+            a.setName("a2");
+            b.setName("b2");
+            operator.updateAll(Arrays.asList(a, b));
+
+            assertThat(derivedRows()).containsExactly(
+                    "22222222-2222-2222-2222-222222222222|22222222-2222-2222-2222-222222222222|a2",
+                    "33333333-3333-3333-3333-333333333333|33333333-3333-3333-3333-333333333333|b2");
+        }
+
+        @Test
+        @DisplayName("the backfill writes the id the entity reports, and a new UUID only when it reports none or a duplicate")
+        void backfillWritesTheReportedId() throws Exception {
+            execute("CREATE TABLE derived_id_entity (`id` VARCHAR(255), `uuid` VARCHAR(255), `name` VARCHAR(255))");
+            execute("INSERT INTO derived_id_entity (`id`, `uuid`, `name`) VALUES "
+                    + "(NULL, '44444444-4444-4444-4444-444444444444', 'home'), "
+                    + "(NULL, NULL, 'no-uuid'), "
+                    + "(NULL, '44444444-4444-4444-4444-444444444444', 'duplicate')");
+
+            SQLiteDataOperator<DerivedIdEntity> operator = new SQLiteDataOperator<>(dataSource, DerivedIdEntity.class);
+
+            List<String> rows = derivedRows();
+            assertThat(rows.get(0)).isEqualTo("44444444-4444-4444-4444-444444444444|44444444-4444-4444-4444-444444444444|home");
+            assertThat(rows.get(1)).doesNotStartWith("null|").endsWith("|null|no-uuid");
+            assertThat(rows.get(2)).doesNotStartWith("null|").doesNotStartWith("44444444-4444-4444-4444-444444444444|")
+                    .endsWith("|duplicate");
+            assertThat(backfillLinesFor("derived_id_entity")).hasSize(1);
+
+            DerivedIdEntity home = operator.getById("44444444-4444-4444-4444-444444444444");
+            home.setName("home-renamed");
+            operator.update(home);
+            assertThat(operator.getById("44444444-4444-4444-4444-444444444444").getName())
+                    .as("the backfilled row is not reachable by the id its entity reports")
+                    .isEqualTo("home-renamed");
         }
     }
 
