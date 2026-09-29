@@ -111,6 +111,15 @@ public abstract class AbstractConfigEntity {
     private static final char MAP_KEY_SEPARATOR = '\u0000';
 
     /**
+     * A {@code @ConfigEntry} comment that is exactly one language key (#542): after trimming, the
+     * whole comment is {@code {key}} with an ASCII key of letters, digits, {@code .}, {@code _} and
+     * {@code -}. Any other comment - including one that merely contains {@code {player}} in its text -
+     * is literal.
+     */
+    private static final java.util.regex.Pattern COMMENT_TOKEN =
+            java.util.regex.Pattern.compile("\\{([A-Za-z0-9._-]+)\\}");
+
+    /**
      * The numeric wrappers in JLS 5.1.2 widening order: every conversion from an earlier entry to a
      * later one is a widening primitive conversion, and no other conversion between them is.
      */
@@ -172,6 +181,14 @@ public abstract class AbstractConfigEntity {
      */
     @Getter(AccessLevel.NONE)
     private final Map<String, Map<String, Predicate<Long>>> bindingRanges = new ConcurrentHashMap<>();
+
+    /**
+     * The resolved comment lines of every entry whose {@code @ConfigEntry} comment is one language
+     * key (#542), by path, as resolved by the last {@link #init}; empty before it. Resolved once per
+     * load, so a key missing from the catalogue is reported once, not at every save.
+     */
+    @Getter(AccessLevel.NONE)
+    private volatile Map<String, List<String>> tokenComments = Collections.emptyMap();
 
     /**
      * Constructor for AbstractConfigEntity.
@@ -604,6 +621,7 @@ public abstract class AbstractConfigEntity {
             boolean upToDate = true;
             AbstractConfigEntity declaredDefaults = null;
             YamlConfiguration keyView = lastLoadUnparseable ? null : keyPreservingView(file);
+            tokenComments = resolveTokenComments(true);
             for (Field field : ReflectionUtil.getFields(this.getClass())) {
                 if (field.isAnnotationPresent(ConfigEntry.class)) {
                     field.setAccessible(true);
@@ -624,7 +642,8 @@ public abstract class AbstractConfigEntity {
                         // "silently add a value and its explanation". Never reached on the
                         // already-has-the-key path above, and this is the only comment write in the
                         // whole class.
-                        List<String> commentLines = splitComment(annotation.comment());
+                        List<String> commentLines = tokenComments.containsKey(path)
+                                ? tokenComments.get(path) : splitComment(annotation.comment());
                         if (!commentLines.isEmpty()) {
                             config.setComments(path, commentLines);
                         }
@@ -888,6 +907,58 @@ public abstract class AbstractConfigEntity {
     }
 
     /**
+     * The language key a {@code @ConfigEntry} comment names, if the comment is exactly one {@code
+     * {key}} token after trimming (#542).
+     *
+     * @param comment the {@code comment()} attribute
+     * @return the key, or {@code null} for a literal comment
+     */
+    static String commentKey(String comment) {
+        if (comment == null) {
+            return null;
+        }
+        java.util.regex.Matcher matcher = COMMENT_TOKEN.matcher(comment.trim());
+        return matcher.matches() ? matcher.group(1) : null;
+    }
+
+    /**
+     * Resolves every one-token {@code @ConfigEntry} comment of this class against the owning
+     * module's language catalogue, in the server's current language (#542). The text is split into
+     * one comment line per line break ({@code \r\n}, {@code \r} or {@code \n}), so a translation that
+     * spans lines can never break the YAML file. A key the catalogue does not contain resolves to the
+     * token itself, and - when {@code warn} is set - one WARNING names the module, the file, the
+     * entry's path and the key.
+     *
+     * @param warn whether a missing catalogue key is logged
+     * @return the resolved lines by entry path, in declaration order
+     */
+    private Map<String, List<String>> resolveTokenComments(boolean warn) {
+        Map<String, List<String>> resolved = new java.util.LinkedHashMap<>();
+        for (Field field : configEntryFields()) {
+            ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
+            String key = commentKey(annotation.comment());
+            if (key == null) {
+                continue;
+            }
+            String path = annotation.path().isEmpty() ? field.getName() : annotation.path();
+            String text = ultiToolsPlugin != null ? ultiToolsPlugin.i18n(key) : null;
+            if (text == null || text.equals(key)) {
+                if (warn) {
+                    String moduleName = ultiToolsPlugin != null ? ultiToolsPlugin.getPluginName() : null;
+                    LOGGER.warning(String.format("[%s] Config file '%s': the comment of key '%s' is the language key"
+                                    + " '%s', which the module's language catalogue does not contain; the key is"
+                                    + " written as the comment", moduleName, configFilePath, path, key));
+                }
+                resolved.put(path, Collections.singletonList(annotation.comment().trim()));
+            } else {
+                resolved.put(path, text.isEmpty() ? Collections.<String>emptyList()
+                        : Arrays.asList(text.split("\\r\\n|\\r|\\n")));
+            }
+        }
+        return resolved;
+    }
+
+    /**
      * Updates the properties of the configuration entity.
      * <p>
      * The field traversal and path-derivation must match {@code init()} / {@code save()} /
@@ -1121,7 +1192,12 @@ public abstract class AbstractConfigEntity {
                 if (path.isEmpty()) {
                     path = field.getName();
                 }
-                jsonObject.addProperty(path, annotation.comment());
+                // #542: a one-token comment is sent as the text resolved in the server's language.
+                List<String> resolved = tokenComments.get(path);
+                if (resolved == null && commentKey(annotation.comment()) != null) {
+                    resolved = resolveTokenComments(false).get(path);
+                }
+                jsonObject.addProperty(path, resolved != null ? String.join("\n", resolved) : annotation.comment());
             }
         }
         return jsonObject;
