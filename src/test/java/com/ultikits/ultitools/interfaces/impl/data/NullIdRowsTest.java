@@ -372,35 +372,42 @@ class NullIdRowsTest {
         }
 
         @Test
-        @DisplayName("the backfill writes the id the entity reports; a row it cannot make addressable is left and warned about")
+        @DisplayName("a derived id reported by more than one row, or already held by another row, is written to none of them")
         void backfillWritesTheReportedId() throws Exception {
+            // Maintainer decision 2026-09-29 (option A, 「一行都不动，只警告」): the same rule as
+            // UltiEssentials' own repair. Writing a shared id into one of the rows would let a write
+            // made through the other row land on it.
             execute("CREATE TABLE derived_id_entity (`id` VARCHAR(255), `uuid` VARCHAR(255), `name` VARCHAR(255))");
             execute("INSERT INTO derived_id_entity (`id`, `uuid`, `name`) VALUES "
+                    + "('55555555-5555-5555-5555-555555555555', '55555555-5555-5555-5555-555555555555', 'existing'), "
                     + "(NULL, '44444444-4444-4444-4444-444444444444', 'home'), "
+                    + "(NULL, '44444444-4444-4444-4444-444444444444', 'duplicate'), "
                     + "(NULL, NULL, 'no-uuid'), "
-                    + "(NULL, '44444444-4444-4444-4444-444444444444', 'duplicate')");
+                    + "(NULL, '55555555-5555-5555-5555-555555555555', 'clash'), "
+                    + "(NULL, '66666666-6666-6666-6666-666666666666', 'unique')");
 
             SQLiteDataOperator<DerivedIdEntity> operator = new SQLiteDataOperator<>(dataSource, DerivedIdEntity.class);
 
-            // A random id in the id column would not change what getId() reports (null, or the
-            // other row's uuid), so it would not make either row reachable -- and for the
-            // duplicate, update(entity)/delById(entity.getId()) would still address "home".
             assertThat(derivedRows()).containsExactly(
-                    "44444444-4444-4444-4444-444444444444|44444444-4444-4444-4444-444444444444|home",
+                    "55555555-5555-5555-5555-555555555555|55555555-5555-5555-5555-555555555555|existing",
+                    "null|44444444-4444-4444-4444-444444444444|home",
+                    "null|44444444-4444-4444-4444-444444444444|duplicate",
                     "null|null|no-uuid",
-                    "null|44444444-4444-4444-4444-444444444444|duplicate");
-            assertThat(backfillLinesFor("derived_id_entity"))
-                    .as("one INFO line for the repaired row and one WARNING for the two left")
-                    .hasSize(2);
+                    "null|55555555-5555-5555-5555-555555555555|clash",
+                    "66666666-6666-6666-6666-666666666666|66666666-6666-6666-6666-666666666666|unique");
             assertThat(warningsFor("derived_id_entity")).hasSize(1);
-            assertThat(warningsFor("derived_id_entity").get(0)).contains("2");
+            assertThat(warningsFor("derived_id_entity").get(0))
+                    .contains("4 row(s)")
+                    .contains("2 share a reported id")
+                    .contains("1 report an id another row already holds");
 
-            DerivedIdEntity home = operator.getById("44444444-4444-4444-4444-444444444444");
-            home.setName("home-renamed");
-            operator.update(home);
-            assertThat(operator.getById("44444444-4444-4444-4444-444444444444").getName())
-                    .as("the backfilled row is not reachable by the id its entity reports")
-                    .isEqualTo("home-renamed");
+            assertThat(operator.getById("55555555-5555-5555-5555-555555555555").getName())
+                    .as("a write through the clashing row could reach the existing row")
+                    .isEqualTo("existing");
+            DerivedIdEntity unique = operator.getById("66666666-6666-6666-6666-666666666666");
+            unique.setName("unique-renamed");
+            operator.update(unique);
+            assertThat(operator.getById("66666666-6666-6666-6666-666666666666").getName()).isEqualTo("unique-renamed");
         }
 
         @Test
