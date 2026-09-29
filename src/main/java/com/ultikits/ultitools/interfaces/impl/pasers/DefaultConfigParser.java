@@ -46,7 +46,10 @@ public class DefaultConfigParser extends ConfigParser<Object> {
                 list.add(o instanceof ConfigurationSection ? parse(o) : o);
             }
             return list;
-        } else if (BasicTypeUtil.isBasicType(object) || object instanceof String) {
+        } else if (BasicTypeUtil.isBasicType(object) || object instanceof String
+                || !(object instanceof ConfigurationSection)) {
+            // A scalar, or a value that is neither a sequence nor a section (a YAML timestamp read as a
+            // Date, a map stored as data): returned as it is, for the binder to accept or report.
             return object;
         } else {
             Map<String, Object> map = new LinkedHashMap<>();
@@ -95,7 +98,10 @@ public class DefaultConfigParser extends ConfigParser<Object> {
             MemoryConfiguration mapSection = new MemoryConfiguration();
             mapSection.options().pathSeparator(MAP_KEY_SEPARATOR);
             for (Map.Entry<?, ?> entry : ((Map<?, ?>) object).entrySet()) {
-                mapSection.set(String.valueOf(entry.getKey()), serialize(entry.getValue()));
+                Object key = entry.getKey();
+                // An enum key by its name, the form the binder reads back (Enum#toString may differ).
+                String name = key instanceof Enum ? ((Enum<?>) key).name() : String.valueOf(key);
+                mapSection.set(name, fileForm(entry.getValue()));
             }
             return mapSection;
         }
@@ -103,7 +109,7 @@ public class DefaultConfigParser extends ConfigParser<Object> {
         if (object instanceof Collection) {
             int index = 0;
             for (Object element : (Collection<?>) object) {
-                memorySection.set(String.valueOf(index++), serialize(element));
+                memorySection.set(String.valueOf(index++), fileForm(element));
             }
             return memorySection;
         }
@@ -114,8 +120,30 @@ public class DefaultConfigParser extends ConfigParser<Object> {
             }
             field.setAccessible(true);
             Object fieldValue = ReflectionUtil.getFieldValue(object, field);
-            memorySection.set(field.getName(), serialize(fieldValue));
+            memorySection.set(field.getName(), fileForm(fieldValue));
         }
         return memorySection;
+    }
+
+    /**
+     * The form a nested value is written in: an enum constant by its name and a collection as a list
+     * of such forms (#523) - SnakeYAML would otherwise tag an enum with its Java class, which the
+     * loader refuses - and everything else through {@link #serialize(Object)}.
+     *
+     * @param value a nested value, possibly {@code null}
+     * @return the value to put into the section
+     */
+    private Object fileForm(Object value) {
+        if (value instanceof Enum) {
+            return ((Enum<?>) value).name();
+        }
+        if (value instanceof Collection) {
+            List<Object> list = new ArrayList<>();
+            for (Object element : (Collection<?>) value) {
+                list.add(fileForm(element));
+            }
+            return list;
+        }
+        return value == null ? null : serialize(value);
     }
 }

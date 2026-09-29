@@ -37,6 +37,7 @@ import com.ultikits.ultitools.annotations.config.Range;
 import com.ultikits.ultitools.annotations.config.Size;
 import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.interfaces.ConfigChangeListener;
+import com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
 import lombok.AccessLevel;
@@ -257,8 +258,7 @@ public abstract class AbstractConfigEntity {
             if (fieldValue == null) {
                 continue;
             }
-            Object serialized = ReflectionUtil.newInstance(annotation.parser()).serialize(fieldValue);
-            target.set(path, serialized);
+            target.set(path, serializeForFile(annotation, fieldValue));
         }
         // #542: every framework write carries the one-token comments in the server's language, and
         // the shutdown comparison renders the same text.
@@ -744,9 +744,21 @@ public abstract class AbstractConfigEntity {
      *         value cannot be bound to it and the field keeps its declared default (#526)
      */
     private Object readConfigValue(Field field, ConfigEntry annotation, String path, Object raw, boolean report) {
-        Object parsed = ReflectionUtil.newInstance(annotation.parser()).parse(raw);
-        return new ConfigValueBinder(configFilePath, report ? this::warnBinding : message -> { })
-                .bind(field, path, parsed);
+        java.util.function.Consumer<String> reporter = report ? this::warnBinding : message -> { };
+        Object parsed;
+        try {
+            parsed = ReflectionUtil.newInstance(annotation.parser()).parse(raw);
+        } catch (RuntimeException e) {
+            // A value the entry's parser cannot read (a YAML timestamp handed to the default parser, a
+            // module parser's own refusal) keeps the default like any other value that cannot be bound
+            // (#526), instead of leaving init() and taking the module down.
+            reporter.accept(String.format("Config file '%s': key '%s' holds %s %s, which its parser %s cannot"
+                            + " read (%s); the field keeps its default, the rest of the configuration loads",
+                    configFilePath, path, ConfigValueBinder.kindOf(raw), ConfigValueBinder.describe(path, raw),
+                    annotation.parser().getSimpleName(), e.getClass().getSimpleName()));
+            return ConfigValueBinder.UNBOUND;
+        }
+        return new ConfigValueBinder(configFilePath, reporter).bind(field, path, parsed);
     }
 
     /**
@@ -807,13 +819,48 @@ public abstract class AbstractConfigEntity {
      * @param defaultValue the field's declared default, possibly {@code null}
      * @return the value to put into the configuration
      */
-    @SuppressWarnings("unchecked")
     private static Object fileFormOfDefault(ConfigEntry annotation, Object defaultValue) {
         if (defaultValue instanceof java.util.Collection || defaultValue instanceof Map
                 || defaultValue instanceof Enum) {
-            return ReflectionUtil.newInstance(annotation.parser()).serialize(defaultValue);
+            return serializeForFile(annotation, defaultValue);
         }
         return defaultValue;
+    }
+
+    /**
+     * Serializes a field value through its entry's parser, the form {@link #save()} writes. For the
+     * default parser a collection is written as a YAML list and an enum constant by its name, at any
+     * depth of a list (#523) - SnakeYAML would otherwise tag an enum with its Java class, which the
+     * loader then refuses, and write a {@code Set} as a tagged mapping. A module's own parser
+     * serializes exactly as it always did.
+     *
+     * @param annotation the entry's {@code @ConfigEntry}
+     * @param value      the value, never {@code null}
+     * @return the value to put into the configuration
+     */
+    @SuppressWarnings("unchecked")
+    private static Object serializeForFile(ConfigEntry annotation, Object value) {
+        com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser<Object> parser =
+                ReflectionUtil.newInstance(annotation.parser());
+        if (parser instanceof DefaultConfigParser) {
+            return listOrNameForm(parser, value);
+        }
+        return parser.serialize(value);
+    }
+
+    private static Object listOrNameForm(
+            com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser<Object> parser, Object value) {
+        if (value instanceof Enum) {
+            return ((Enum<?>) value).name();
+        }
+        if (value instanceof java.util.Collection) {
+            List<Object> list = new ArrayList<>();
+            for (Object element : (java.util.Collection<?>) value) {
+                list.add(element == null ? null : listOrNameForm(parser, element));
+            }
+            return list;
+        }
+        return parser.serialize(value);
     }
 
     /**

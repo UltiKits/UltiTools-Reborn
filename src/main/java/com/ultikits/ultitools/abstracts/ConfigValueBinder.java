@@ -7,14 +7,20 @@ import java.lang.reflect.Type;
 import java.lang.reflect.WildcardType;
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
+import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
 import org.bukkit.configuration.ConfigurationSection;
@@ -91,10 +97,12 @@ final class ConfigValueBinder {
         if (parsed == null) {
             // A custom parser may return null; a reference field takes it, as before.
             converted = type.isPrimitive() ? UNBOUND : null;
-        } else if (Collection.class.isAssignableFrom(type)) {
-            converted = parsed instanceof Collection ? convert(parsed, field.getGenericType(), key) : UNBOUND;
-        } else if (Map.class.isAssignableFrom(type)) {
-            converted = parsed instanceof Map ? convert(parsed, field.getGenericType(), key) : UNBOUND;
+        } else if (Collection.class.isAssignableFrom(type) && parsed instanceof Collection
+                || Map.class.isAssignableFrom(type) && parsed instanceof Map) {
+            // The right shape: convert() reports whatever inside it cannot be bound, once.
+            return convert(parsed, field.getGenericType(), key);
+        } else if (Collection.class.isAssignableFrom(type) || Map.class.isAssignableFrom(type)) {
+            converted = UNBOUND;
         } else if (isSimple(type)) {
             converted = convertSimple(parsed, boxed(type));
         } else {
@@ -173,7 +181,7 @@ final class ConfigValueBinder {
             reportElement(key, value, raw);
             return UNBOUND;
         }
-        Collection<Object> result = newCollection(raw);
+        Collection<Object> result = newCollection(raw, rawClass(typeArgument(declared, 0)));
         if (result == null) {
             reportElement(key, value, raw);
             return UNBOUND;
@@ -183,8 +191,8 @@ final class ConfigValueBinder {
         for (Object element : (Collection<?>) value) {
             String elementKey = key + "[" + index++ + "]";
             Object converted = convertElement(element, elementType, elementKey);
-            if (converted != UNBOUND) {
-                result.add(converted);
+            if (converted != UNBOUND && !addTo(result, converted)) {
+                reportElement(elementKey, element, rawClass(elementType));
             }
         }
         return result;
@@ -198,15 +206,19 @@ final class ConfigValueBinder {
             reportElement(key, value, raw);
             return UNBOUND;
         }
-        Map<Object, Object> result = newMap(raw);
+        Map<Object, Object> result = newMap(raw, rawClass(typeArgument(declared, 0)));
         if (result == null) {
             reportElement(key, value, raw);
             return UNBOUND;
         }
         Type keyType = typeArgument(declared, 0);
         Type valueType = typeArgument(declared, 1);
+        boolean hideEntryKeys = AbstractConfigEntity.isSecretShapedFieldName(key);
+        int index = 0;
         for (Map.Entry<?, ?> entry : source.entrySet()) {
-            String entryKey = key + "." + entry.getKey();
+            // Under a secret-shaped key an entry's own key may be the secret: name it by position.
+            String entryKey = hideEntryKeys ? key + "[" + index + "]" : key + "." + entry.getKey();
+            index++;
             Object convertedKey = entry.getKey();
             Class<?> rawKey = rawClass(keyType);
             if (isSimple(rawKey) && rawKey != String.class) {
@@ -217,8 +229,8 @@ final class ConfigValueBinder {
                 }
             }
             Object convertedValue = convert(entry.getValue(), valueType, entryKey);
-            if (convertedValue != UNBOUND) {
-                result.put(convertedKey, convertedValue);
+            if (convertedValue != UNBOUND && !putInto(result, convertedKey, convertedValue)) {
+                reportElement(entryKey, entry.getValue(), rawClass(valueType));
             }
         }
         return result;
@@ -231,7 +243,9 @@ final class ConfigValueBinder {
      */
     private Object convertElement(Object element, Type elementType, String key) {
         if (element == null) {
-            return null;
+            // An empty list item ("-" with nothing after it): nothing to bind, so it is skipped.
+            reportElement(key, null, rawClass(elementType));
+            return UNBOUND;
         }
         Object value = element instanceof ConfigurationSection
                 ? ((ConfigurationSection) element).getValues(false) : element;
@@ -385,7 +399,7 @@ final class ConfigValueBinder {
      * like it names a secret (T-17-41-01).
      */
     static String describe(String key, Object value) {
-        if (AbstractConfigEntity.isSecretShapedFieldName(key)) {
+        if (AbstractConfigEntity.isSecretShapedFieldName(key) || containsSecretKey(value)) {
             return "<redacted>";
         }
         if (value == null) {
@@ -395,6 +409,63 @@ final class ConfigValueBinder {
             return "a section";
         }
         return "'" + value + "'";
+    }
+
+    /**
+     * Whether a map or list, at any depth, holds an entry whose key looks like it names a secret, so
+     * that printing it would print the secret (T-17-41-01).
+     */
+    private static boolean containsSecretKey(Object value) {
+        if (value instanceof ConfigurationSection) {
+            return containsSecretKey(((ConfigurationSection) value).getValues(false));
+        }
+        if (value instanceof Map) {
+            for (Map.Entry<?, ?> entry : ((Map<?, ?>) value).entrySet()) {
+                if (AbstractConfigEntity.isSecretShapedFieldName(String.valueOf(entry.getKey()))
+                        || containsSecretKey(entry.getValue())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (value instanceof Collection) {
+            for (Object element : (Collection<?>) value) {
+                if (containsSecretKey(element)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Adds to a collection that may refuse an element (a {@code TreeSet} of incomparable values, a
+     * queue that takes no {@code null}).
+     *
+     * @return {@code false} if the collection refused it
+     */
+    private static boolean addTo(Collection<Object> collection, Object element) {
+        try {
+            collection.add(element);
+            return true;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Puts into a map that may refuse an entry (a {@code ConcurrentHashMap} takes no {@code null}, a
+     * {@code TreeMap} no incomparable key).
+     *
+     * @return {@code false} if the map refused it
+     */
+    private static boolean putInto(Map<Object, Object> map, Object key, Object value) {
+        try {
+            map.put(key, value);
+            return true;
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     static boolean isScalar(Object value) {
@@ -462,21 +533,54 @@ final class ConfigValueBinder {
         return Object.class;
     }
 
-    @SuppressWarnings("unchecked")
-    private static Collection<Object> newCollection(Class<?> declared) {
+    /**
+     * A new, empty collection the declared type accepts: a list for {@code List}/{@code Collection},
+     * an insertion-ordered set for {@code Set}, a sorted set for {@code SortedSet}, a deque for
+     * {@code Queue}/{@code Deque}, an {@code EnumSet} of the element type, or a concrete declared
+     * class's own no-argument constructor.
+     *
+     * @return the collection, or {@code null} if none of those fits
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static Collection<Object> newCollection(Class<?> declared, Class<?> elementType) {
         if (declared.isAssignableFrom(ArrayList.class)) {
             return new ArrayList<>();
+        }
+        if (EnumSet.class.isAssignableFrom(declared)) {
+            return elementType.isEnum() ? (Collection<Object>) EnumSet.noneOf((Class<Enum>) elementType) : null;
         }
         if (declared.isAssignableFrom(LinkedHashSet.class)) {
             return new LinkedHashSet<>();
         }
+        if (declared.isAssignableFrom(TreeSet.class)) {
+            return new TreeSet<>();
+        }
+        if (declared.isAssignableFrom(ArrayDeque.class)) {
+            return new ArrayDeque<>();
+        }
         return (Collection<Object>) instantiate(declared);
     }
 
-    @SuppressWarnings("unchecked")
-    private static Map<Object, Object> newMap(Class<?> declared) {
+    /**
+     * A new, empty map the declared type accepts: an insertion-ordered map for {@code Map}, an {@code
+     * EnumMap} of the key type, a sorted map for {@code SortedMap}, a concurrent map for {@code
+     * ConcurrentMap}, or a concrete declared class's own no-argument constructor.
+     *
+     * @return the map, or {@code null} if none of those fits
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static Map<Object, Object> newMap(Class<?> declared, Class<?> keyType) {
         if (declared.isAssignableFrom(LinkedHashMap.class)) {
             return new LinkedHashMap<>();
+        }
+        if (EnumMap.class.isAssignableFrom(declared)) {
+            return keyType.isEnum() ? new EnumMap(keyType) : null;
+        }
+        if (declared.isAssignableFrom(TreeMap.class)) {
+            return new TreeMap<>();
+        }
+        if (declared.isAssignableFrom(ConcurrentHashMap.class)) {
+            return new ConcurrentHashMap<>();
         }
         return (Map<Object, Object>) instantiate(declared);
     }
