@@ -9,6 +9,7 @@ import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -227,9 +228,11 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      * Each row gets the id its entity reports through {@code getId()} (an entity may derive it from
      * another column), or a new UUID when it reports none -- but only if an entity read back with
      * that id in the {@code id} column reports it, since every lookup binds {@code getId()}. A row
-     * no written id would make addressable (a derived id that is {@code null} or already another
-     * row's, or a row that cannot be read as the entity) is left as it is, and one WARNING per
-     * table counts them. Only the {@code id} column is written, guarded by {@code id IS NULL} and
+     * no written id would make addressable is left as it is, and one WARNING per table counts them
+     * by reason: a derived id that more than one row without an id reports (none of them is
+     * written, maintainer decision of 2026-09-29, the rule UltiEssentials' own repair applies), a
+     * derived id another row already holds, and a derived id that is {@code null} or a row that
+     * cannot be read as the entity. Only the {@code id} column is written, guarded by {@code id IS NULL} and
      * keyed by the engine's row identifier, all rows in one transaction. A second start writes
      * nothing and logs no INFO line; rows that were left are counted again. A failure rolls the
      * whole repair back and is logged at {@code SEVERE}; the table is still usable, and an update
@@ -247,9 +250,12 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         String select = "SELECT " + rowIdColumn + " AS " + BACKFILL_ROWID + ", `" + tableName + "`.* FROM `"
                 + tableName + "` WHERE `id` IS NULL";
         String update = "UPDATE `" + tableName + "` SET `id` = ? WHERE " + rowIdColumn + " = ? AND `id` IS NULL";
+        String held = "SELECT COUNT(*) FROM `" + tableName + "` WHERE `id` = ?";
         int reported = 0;
         int generated = 0;
-        int left = 0;
+        int shared = 0;
+        int alreadyHeld = 0;
+        int unusable = 0;
         try (Connection conn = dataSource.getConnection()) {
             boolean autoCommit = conn.getAutoCommit();
             conn.setAutoCommit(false);
@@ -258,11 +264,23 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                 List<String> candidates = new ArrayList<>();
                 List<Boolean> fromEntity = new ArrayList<>();
                 readRowsWithoutId(conn, select, rowIds, candidates, fromEntity);
-                Set<String> assigned = new HashSet<>();
+                Map<String, Integer> occurrences = new HashMap<>();
+                for (String id : candidates) {
+                    if (id != null) {
+                        occurrences.merge(id, 1, Integer::sum);
+                    }
+                }
                 for (int i = 0; i < rowIds.size(); i++) {
                     String id = candidates.get(i);
-                    if (id == null || !assigned.add(id) || !assignId(conn, update, id, rowIds.get(i))) {
-                        left++;
+                    if (id == null) {
+                        unusable++;
+                    } else if (occurrences.get(id) > 1) {
+                        // Maintainer decision 2026-09-29 (「一行都不动，只警告」): a reported id more
+                        // than one row shares is written to none of them, or a write made through
+                        // one row would reach the other -- UltiEssentials' own repair does the same.
+                        shared++;
+                    } else if (isHeld(conn, held, id) || !assignId(conn, update, id, rowIds.get(i))) {
+                        alreadyHeld++;
                     } else if (fromEntity.get(i)) {
                         reported++;
                     } else {
@@ -289,11 +307,14 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                     + " took the id the entity itself reports, " + generated + " were given a new UUID; "
                     + "only the id column was written.");
         }
+        int left = shared + alreadyHeld + unusable;
         if (left > 0) {
             LOGGER.warning(left + " row(s) of table '" + tableName + "' still have no id and were left as "
-                    + "they are: no value written to the id column would make " + type.getName()
-                    + "#getId() report it (the entity reports no id, one another row already holds, or the "
-                    + "row could not be read), so these rows cannot be updated or deleted by id.");
+                    + "they are: " + shared + " share a reported id with another row without an id, "
+                    + alreadyHeld + " report an id another row already holds, " + unusable
+                    + " report no id or could not be read as " + type.getName() + ". No value written to "
+                    + "the id column would make them addressable by getId() alone, so they cannot be "
+                    + "updated or deleted by id.");
         }
         return repaired;
     }
@@ -347,6 +368,12 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         tree.addProperty(ID_COLUMN, candidate);
         Object reported = GSON.fromJson(tree, type).getId();
         return reported != null && candidate.equals(reported.toString());
+    }
+
+    /** Whether a row of this table already holds {@code id} in its id column. */
+    private boolean isHeld(Connection conn, String held, String id) throws SQLException {
+        Number count = queryRunner.query(conn, held, new ScalarHandler<Number>(), id);
+        return count != null && count.longValue() > 0;
     }
 
     /**

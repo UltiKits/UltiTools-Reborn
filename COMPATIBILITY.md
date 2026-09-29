@@ -495,9 +495,11 @@ This section governs the third kind.
   reported as saved was lost at the next restart. As of 6.3.0, when a SQLite-backed table is
   initialised every row whose `id` is `NULL` is given the id its entity reports through `getId()`,
   or a new UUID when the entity reports none, in either case only if the entity read back with that
-  id reports it; a row that no written id would make addressable (a derived id that is `null` or
-  already another row's, or a row that cannot be read as the entity) is left as it is and counted
-  in one WARNING line per table — only the `id`
+  id reports it; a row that no written id would make addressable is left as it is and counted, by
+  reason, in one WARNING line per table: a derived id that more than one row without an id reports
+  (none of those rows is written — maintainer decision of 2026-09-29, the rule UltiEssentials' own
+  repair applies), a derived id another row already holds, or a derived id that is `null` or a row
+  that cannot be read as the entity — only the `id`
   column is written, all rows in one transaction, so the repair writes user data at startup, which
   is what the maintainer decided — and one INFO line names the table, the count and how many rows
   took the entity's own id; a second start finds nothing and logs nothing. The reported id comes
