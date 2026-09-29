@@ -459,6 +459,23 @@ This section governs the third kind.
   `PluginInstallUtils.UndeterminedEntriesException` (`@ApiStatus.Internal`), so no outcome
   discards what another established.
 
+- The JSON storage backend no longer hands out the entities it caches (#522). Before 6.3.0,
+  `SimpleJsonDataOperator`'s read paths (`getById`, `getAll`, `page`, `getLike`, and every
+  `query()` terminal built on them) returned the very instances it kept in memory, and `insert`
+  cached the instance it was given, so on `datasource.type: json` changing a loaded (or just
+  inserted) entity **without** calling `update(...)` changed the store and was written to disk at
+  the next flush. On SQLite and MySQL the same code never persisted anything, because every read
+  materialises the row afresh. As of 6.3.0 every JSON read returns a detached copy produced by the
+  same Gson form the store writes to disk, and `insert` caches a copy: a change reaches the store
+  only through `update(...)` (or `update(column, value, id)`), on every backend alike. `update(T)`
+  also fires `onUpdate()` on the entity passed in, before its fields are copied into the store,
+  exactly as the relational backends do — so an `AuditableDataEntity`'s `updatedAt`/`updatedBy`
+  now show on the caller's instance on the JSON backend too. A module that relied on the old
+  aliasing — changing a loaded entity and counting on the next flush to save it — must now call
+  `update(...)`; no module in this monorepo was found doing so (see the pull request's consumer
+  impact list). The cost is one Gson round trip per entity returned, the same materialisation the
+  relational backends already pay (see `ultitools.storage.detached-reads` in `FEATURES.md`).
+
 ### Behavioral changes that do need one
 
 - A documented default value flipping.

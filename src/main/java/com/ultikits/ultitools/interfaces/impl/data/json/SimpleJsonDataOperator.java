@@ -161,9 +161,9 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
     }
 
     /**
-     * Deep-copies this operator's current cache: serialize/deserialize to break references, since
-     * {@code update(T)} mutates cached entities in-place via {@link
-     * BeanCopyUtil#copyProperties}. Package-private hook shared by {@link #transaction(Callable)}
+     * Deep-copies this operator's current cache: serialize/deserialize to break references, so a
+     * rollback restores the values as they were even if a cached instance is replaced or changed
+     * later. Package-private hook shared by {@link #transaction(Callable)}
      * (the pre-existing per-operator mechanism, unchanged) and {@link #beforeMutate()} (the new
      * per-plugin {@link JsonTransactionManager} hook, 02-05) -- one copy of the deep-copy logic,
      * two callers.
@@ -221,6 +221,33 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
         return fieldName != null ? fieldName : column;
     }
 
+    /**
+     * Returns a detached copy of {@code entity}, produced by the same Gson form this operator
+     * persists to disk (#522).
+     * <p>
+     * Every read path hands out one of these rather than the instance held in {@link #cache},
+     * and {@link #insert} stores one rather than the caller's instance. Before 6.3.0 the cached
+     * instances themselves were returned, so changing a loaded entity without calling
+     * {@code update(...)} changed the store and was written at the next flush -- on
+     * {@code datasource.type: json} only; the relational backends materialise every row afresh,
+     * so there a change without {@code update(...)} never persisted. The copy is what makes the
+     * same module code behave the same on every backend.
+     *
+     * @param entity the cached (or caller-supplied) instance
+     * @return a new instance equal in every persisted field
+     */
+    private T detach(T entity) {
+        return GSON.fromJson(GSON.toJson(entity), type);
+    }
+
+    private List<T> detachAll(List<T> entities) {
+        List<T> copies = new ArrayList<>(entities.size());
+        for (T entity : entities) {
+            copies.add(detach(entity));
+        }
+        return copies;
+    }
+
     @Override
     public boolean exist(T object) {
         return cache.containsValue(object);
@@ -235,10 +262,12 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
 
     @Override
     public T getById(Object id) {
-        T entity = cache.get(id);
-        if (entity != null) {
-            entity.onLoad();
+        T cached = cache.get(id);
+        if (cached == null) {
+            return null;
         }
+        T entity = detach(cached);
+        entity.onLoad();
         return entity;
     }
 
@@ -256,7 +285,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
      */
     @Override
     public List<T> getAll(WhereCondition... whereConditions) {
-        List<T> results = getAllRaw(whereConditions);
+        List<T> results = detachAll(getAllRaw(whereConditions));
         for (T entity : results) {
             entity.onLoad();
         }
@@ -343,10 +372,11 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
                     break;
             }
         }
-        for (T entity : res) {
+        List<T> copies = detachAll(res);
+        for (T entity : copies) {
             entity.onLoad();
         }
-        return res;
+        return copies;
     }
 
     @Override
@@ -364,7 +394,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
         if (end > all.size()) {
             end = all.size();
         }
-        List<T> slice = all.subList(start, end);
+        List<T> slice = detachAll(all.subList(start, end));
         for (T entity : slice) {
             entity.onLoad();
         }
@@ -386,10 +416,11 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
         }
         // Fires before the cache is touched, mirroring AbstractRelationalDataOperator.insert:
         // whatever onCreate() writes (e.g. AuditableDataEntity's createdAt/createdBy) is exactly
-        // what ends up cached (and, on flush(), persisted) -- obj is the same instance stored
-        // below, not a copy.
+        // what ends up cached (and, on flush(), persisted). A detached copy is cached, not obj
+        // itself, so a later change to obj does not reach the store without update() -- the
+        // same as on the relational backends (#522).
         obj.onCreate();
-        cache.putIfAbsent(obj.getId(), obj);
+        cache.putIfAbsent(obj.getId(), detach(obj));
     }
 
     /**
@@ -503,14 +534,20 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
         if (old == null) {
             old = cache.get(id.toString());
         }
-        BeanCopyUtil.copyProperties(obj, old, "id");
-        // Fires on old (the instance actually cached below), after the incoming obj's fields have
-        // been copied onto it -- callers may pass either the same cached instance (the common
-        // get-mutate-update pattern) or a fresh detached instance with the same id; either way,
-        // whatever onUpdate() writes on the entity that ends up cached is what persists. Mirrors
-        // AbstractRelationalDataOperator.update(T)'s "fires before the row is written" ordering.
-        old.onUpdate();
-        cache.put(old.getId(), old);
+        // Copied onto a detached copy of the cached entry, which then replaces it in one put:
+        // reads run without this lock, so mutating the cached instance field by field could let
+        // a concurrent read serialise a half-updated entity. Callers always pass a detached
+        // instance since #522 (no read hands out the cached one), and BeanCopyUtil copies every
+        // primitive field since #520.
+        //
+        // onUpdate() fires on the caller's obj before its fields are copied, exactly as
+        // AbstractRelationalDataOperator.update(T) fires it before reading the fields it writes:
+        // whatever the hook writes (e.g. AuditableDataEntity's updatedAt/updatedBy) is both what
+        // persists and what the caller's instance shows afterwards, on every backend.
+        obj.onUpdate();
+        T updated = detach(old);
+        BeanCopyUtil.copyProperties(obj, updated, "id");
+        cache.put(updated.getId(), updated);
     }
 
     @Override
@@ -561,7 +598,6 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
     @Override
     public synchronized <R> R transaction(Callable<R> action) throws Exception {
         // Deep copy: serialize/deserialize to break references
-        // (update(T) mutates entities in-place via BeanCopyUtil.copyProperties)
         Map<Object, T> snapshot = snapshotCache();
         try {
             return action.call();
