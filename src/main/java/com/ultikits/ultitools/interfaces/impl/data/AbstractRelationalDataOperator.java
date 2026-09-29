@@ -251,14 +251,12 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                 List<String> reportedIds = new ArrayList<>();
                 readRowsWithoutId(conn, select, rowIds, reportedIds);
                 Set<String> assigned = new HashSet<>();
-                try (PreparedStatement statement = conn.prepareStatement(update)) {
-                    for (int i = 0; i < rowIds.size(); i++) {
-                        String id = reportedIds.get(i);
-                        if (id != null && assigned.add(id) && assignId(statement, id, rowIds.get(i))) {
-                            reported++;
-                        } else if (assignId(statement, UUID.randomUUID().toString(), rowIds.get(i))) {
-                            generated++;
-                        }
+                for (int i = 0; i < rowIds.size(); i++) {
+                    String id = reportedIds.get(i);
+                    if (id != null && assigned.add(id) && assignId(conn, update, id, rowIds.get(i))) {
+                        reported++;
+                    } else if (assignId(conn, update, UUID.randomUUID().toString(), rowIds.get(i))) {
+                        generated++;
                     }
                 }
                 conn.commit();
@@ -294,36 +292,36 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
     private void readRowsWithoutId(Connection conn, String select, List<Object> rowIds, List<String> reportedIds)
             throws SQLException {
         RowMapper<T> mapper = getRowMapper();
-        try (PreparedStatement statement = conn.prepareStatement(select);
-             ResultSet rs = statement.executeQuery()) {
+        queryRunner.query(conn, select, rs -> {
             while (rs.next()) {
                 rowIds.add(rs.getObject(1));
-                String reportedId = null;
-                try {
-                    Object id = mapper.map(rs).getId();
-                    if (id != null && !id.toString().isEmpty()) {
-                        reportedId = id.toString();
-                    }
-                } catch (JsonParseException e) {
-                    LOGGER.warning("A row of table '" + tableName + "' without an id could not be read as "
-                            + type.getName() + " (" + e.getMessage() + "); it is given a new UUID.");
-                }
-                reportedIds.add(reportedId);
+                reportedIds.add(reportedIdOf(mapper, rs));
             }
+            return null;
+        });
+    }
+
+    private String reportedIdOf(RowMapper<T> mapper, ResultSet rs) throws SQLException {
+        try {
+            Object id = mapper.map(rs).getId();
+            return id == null || id.toString().isEmpty() ? null : id.toString();
+        } catch (JsonParseException e) {
+            LOGGER.warning("A row of table '" + tableName + "' without an id could not be read as "
+                    + type.getName() + " (" + e.getMessage() + "); it is given a new UUID.");
+            return null;
         }
     }
 
     /**
-     * Writes {@code id} into the row with this row identifier, if it still has none. A value
+     * Writes {@code id} into the row with this row identifier, on the backfill's own connection
+     * (so inside its transaction), if the row still has none. A value
      * another row already holds violates the primary key; that is reported as {@code false} so the
      * caller can give the row a new UUID instead. The statement fails alone: SQLite rolls back only
      * the failing statement, and the transaction continues.
      */
-    private boolean assignId(PreparedStatement statement, String id, Object rowId) throws SQLException {
-        statement.setString(1, id);
-        statement.setObject(2, rowId);
+    private boolean assignId(Connection conn, String update, String id, Object rowId) throws SQLException {
         try {
-            return statement.executeUpdate() > 0;
+            return queryRunner.update(conn, update, id, rowId) > 0;
         } catch (SQLException e) {
             if (isConstraintViolation(e)) {
                 return false;
@@ -644,7 +642,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
     public void insert(T obj) {
         // Auto-generate UUID for id if not set
         if (obj.getId() == null) {
-            obj.setId(java.util.UUID.randomUUID().toString());
+            obj.setId(UUID.randomUUID().toString());
         }
         // Fires before the fields below are read for the SQL parameters, so whatever onCreate()
         // writes (e.g. AuditableDataEntity's createdAt/createdBy) is what actually gets persisted.
@@ -900,7 +898,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
             // into insert() would silently skip this path.
             for (T entity : entities) {
                 if (entity.getId() == null) {
-                    entity.setId(java.util.UUID.randomUUID().toString());
+                    entity.setId(UUID.randomUUID().toString());
                 }
                 entity.onCreate();
             }

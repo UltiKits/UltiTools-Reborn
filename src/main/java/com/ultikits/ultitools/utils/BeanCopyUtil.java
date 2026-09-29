@@ -84,7 +84,7 @@ public final class BeanCopyUtil {
         }
 
         java.util.Set<String> ignoreSet = ignoreFields == null ?
-            java.util.Collections.emptySet() :
+            Collections.emptySet() :
             new java.util.HashSet<>(java.util.Arrays.asList(ignoreFields));
 
         List<Field> sourceFields = ReflectionUtil.getAllFields(source.getClass());
