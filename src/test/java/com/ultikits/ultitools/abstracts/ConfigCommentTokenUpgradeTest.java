@@ -41,7 +41,13 @@ class ConfigCommentTokenUpgradeTest {
     private static final String OLD_ZH_COMMENT = "最大物品数量";
     private static final String EN_LIMIT = "Maximum number of items";
 
-    /** What an older build wrote, then an operator edited: header, values, own comments, a blank line. */
+    /**
+     * What an older build wrote, then an operator edited: header, values, own comments, a blank line.
+     * Laid out the way the framework's YAML writer lays a file out (a blank line inside a section
+     * carries the section's indentation), so the byte comparison isolates the comment rewrite: any
+     * framework write re-renders the file through that writer, which normalizes other layouts (quotes,
+     * flow lists, {@code yes}) without changing a value - measured and recorded in the plan's review.
+     */
     private static final String UPGRADED_FILE = "# Operator header line\n"
             + "\n"
             + "demo:\n"
@@ -49,7 +55,7 @@ class ConfigCommentTokenUpgradeTest {
             + "  limit: 25\n"
             + "  # My own note on the name\n"
             + "  name: Custom\n"
-            + "\n"
+            + "  \n"
             + "  # operator note on other\n"
             + "  other: 3\n";
 
