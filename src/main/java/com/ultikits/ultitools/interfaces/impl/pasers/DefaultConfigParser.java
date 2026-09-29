@@ -19,6 +19,14 @@ import java.util.Set;
 public class DefaultConfigParser extends ConfigParser<Object> {
 
     /**
+     * Path separator of the section a {@link Map} is serialized into (#553). A map key is data, not a
+     * path, so the section must not split it: with the default {@code '.'} a key {@code my.rule} was
+     * written as {@code my: {rule: ...}} and read back as {@code my}. NUL cannot appear in a YAML key
+     * an operator writes, so no real key is ever split by it.
+     */
+    private static final char MAP_KEY_SEPARATOR = '\u0000';
+
+    /**
      * Turns a raw YAML value into plain Java values: a section becomes a {@link LinkedHashMap}
      * (nested sections recursively), a sequence a {@link List}, and a scalar is returned as it is.
      * <p>
@@ -68,6 +76,9 @@ public class DefaultConfigParser extends ConfigParser<Object> {
      * private {@code java.util} field (e.g. {@code LinkedHashMap#serialVersionUID}), because
      * {@code java.base} does not open {@code java.util} to an unnamed module.
      * <p>
+     * A map's keys are written as they are, never split into a path (#553): {@code my.rule} stays one
+     * key {@code my.rule}, where the default path separator would have written {@code my: {rule: ...}}.
+     * <p>
      * Everything else falls back to the pre-existing reflective walk of the object's own
      * fields, skipping {@code static}, {@code transient}, and synthetic fields: {@code
      * static} fields (like the JDK's own {@code serialVersionUID}) are never per-instance
@@ -80,13 +91,15 @@ public class DefaultConfigParser extends ConfigParser<Object> {
      */
     @Override
     public MemorySection serializeToMemorySection(Object object) {
-        MemorySection memorySection = new MemoryConfiguration();
         if (object instanceof Map) {
+            MemoryConfiguration mapSection = new MemoryConfiguration();
+            mapSection.options().pathSeparator(MAP_KEY_SEPARATOR);
             for (Map.Entry<?, ?> entry : ((Map<?, ?>) object).entrySet()) {
-                memorySection.set(String.valueOf(entry.getKey()), serialize(entry.getValue()));
+                mapSection.set(String.valueOf(entry.getKey()), serialize(entry.getValue()));
             }
-            return memorySection;
+            return mapSection;
         }
+        MemorySection memorySection = new MemoryConfiguration();
         if (object instanceof Collection) {
             int index = 0;
             for (Object element : (Collection<?>) object) {

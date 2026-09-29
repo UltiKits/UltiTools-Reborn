@@ -5,6 +5,7 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -15,7 +16,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
@@ -23,6 +23,7 @@ import java.util.function.Predicate;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.jetbrains.annotations.ApiStatus;
@@ -100,6 +101,14 @@ import lombok.Getter;
 @Getter
 public abstract class AbstractConfigEntity {
     private static final Logger LOGGER = Logger.getLogger(AbstractConfigEntity.class.getName());
+
+    /**
+     * Path separator of the key-preserving view a {@code Map} field is read through (#553). The
+     * configuration a module sees keeps {@code '.'}; only the framework's own read of a map entry's
+     * keys uses this, so a key {@code my.rule} is read as one key instead of {@code my} -> {@code rule}.
+     * NUL cannot appear in a YAML key an operator writes.
+     */
+    private static final char MAP_KEY_SEPARATOR = '\u0000';
 
     /**
      * The numeric wrappers in JLS 5.1.2 widening order: every conversion from an earlier entry to a
@@ -339,13 +348,14 @@ public abstract class AbstractConfigEntity {
         } catch (InvalidConfigurationException e) {
             return null;
         }
+        YamlConfiguration keyView = hasMapField(configFields) ? keyPreservingView(text) : null;
         for (Field field : configFields) {
             ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
             String path = annotation.path();
             if (path.isEmpty()) {
                 path = field.getName();
             }
-            Object configValue = parsed.get(path);
+            Object configValue = fileValue(parsed, keyView, field, path);
             if (configValue != null) {
                 // Silent: init() already warned about any value it could not bind. The probe is a fresh
                 // instance, so a value it cannot bind simply leaves the declared default (#526).
@@ -593,6 +603,7 @@ public abstract class AbstractConfigEntity {
             }
             boolean upToDate = true;
             AbstractConfigEntity declaredDefaults = null;
+            YamlConfiguration keyView = lastLoadUnparseable ? null : keyPreservingView(file);
             for (Field field : ReflectionUtil.getFields(this.getClass())) {
                 if (field.isAnnotationPresent(ConfigEntry.class)) {
                     field.setAccessible(true);
@@ -601,12 +612,12 @@ public abstract class AbstractConfigEntity {
                     if (path.isEmpty()) {
                         path = field.getName();
                     }
-                    Object configValue = config.get(path);
+                    Object configValue = fileValue(config, keyView, field, path);
                     if (configValue != null) {
                         declaredDefaults = assignFileValue(field, annotation, path, configValue, declaredDefaults);
                     } else {
                         upToDate = false;
-                        config.set(path, fileFormOfDefault(ReflectionUtil.getFieldValue(this, field)));
+                        config.set(path, fileFormOfDefault(annotation, ReflectionUtil.getFieldValue(this, field)));
                         // D-07/D-09: the key never existed in the operator's file, so writing its
                         // @ConfigEntry comment alongside the value discloses nothing of theirs - this
                         // is D-01's sole sanctioned exception, widened from "silently add a value" to
@@ -714,19 +725,113 @@ public abstract class AbstractConfigEntity {
     }
 
     /**
-     * The form in which a missing key's declared default is written into the file (#523): a
-     * collection or an enum constant goes through the same {@code ConfigParser#serialize} form
-     * {@link #save()} writes - a {@code Set} as a YAML sequence, an enum by its name, which is what
-     * {@link ConfigValueBinder} reads back; everything else is written unchanged, as before.
+     * The form in which a missing key's declared default is written into the file: a collection, a
+     * map or an enum constant goes through the entry's parser, the same {@code ConfigParser#serialize}
+     * form {@link #save()} writes - a {@code Set} as a YAML sequence and an enum by its name (#523), a
+     * map with its keys kept whole (#553) - which is what {@link ConfigValueBinder} reads back;
+     * everything else is written unchanged, as before.
      *
+     * @param annotation   the entry's {@code @ConfigEntry}
      * @param defaultValue the field's declared default, possibly {@code null}
      * @return the value to put into the configuration
      */
-    private static Object fileFormOfDefault(Object defaultValue) {
-        if (defaultValue instanceof java.util.Collection || defaultValue instanceof Enum) {
-            return new com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser().serialize(defaultValue);
+    @SuppressWarnings("unchecked")
+    private static Object fileFormOfDefault(ConfigEntry annotation, Object defaultValue) {
+        if (defaultValue instanceof java.util.Collection || defaultValue instanceof Map
+                || defaultValue instanceof Enum) {
+            return ReflectionUtil.newInstance(annotation.parser()).serialize(defaultValue);
         }
         return defaultValue;
+    }
+
+    /**
+     * Reads one entry's value from {@code dotted}, the configuration as a module sees it - except for
+     * a {@code Map} field, whose value is read from {@code keyView} so that a map key containing a dot
+     * stays one key (#553). When the key view holds a map with such a key, that key-preserving
+     * section also replaces the entry in {@code dotted}, so a later write of {@code dotted} (a missing
+     * key, a comment rewrite, a panel write) writes the key back as it was instead of as a nested
+     * path; a map without a dotted key leaves {@code dotted} exactly as loaded. Every path in {@code
+     * dotted} still resolves as before: a dotted key was unreachable by a path there anyway.
+     *
+     * @param dotted  the configuration as loaded, with {@code '.'} as its path separator
+     * @param keyView the same text read with a separator no key contains, or {@code null}
+     * @param field   the {@code @ConfigEntry} field
+     * @param path    its path
+     * @return the value, or {@code null} if the file has no such entry
+     */
+    private static Object fileValue(YamlConfiguration dotted, YamlConfiguration keyView, Field field, String path) {
+        if (keyView != null && Map.class.isAssignableFrom(field.getType())) {
+            Object whole = keyView.get(path.replace('.', MAP_KEY_SEPARATOR));
+            if (whole instanceof ConfigurationSection) {
+                if (hasDottedKey((ConfigurationSection) whole)) {
+                    dotted.set(path, whole);
+                }
+                return whole;
+            }
+        }
+        return dotted.get(path);
+    }
+
+    private static boolean hasDottedKey(ConfigurationSection section) {
+        for (String key : section.getKeys(false)) {
+            if (key.indexOf('.') >= 0) {
+                return true;
+            }
+            Object child = section.get(key);
+            if (child instanceof ConfigurationSection
+                    && hasDottedKey((ConfigurationSection) child)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasMapField(List<Field> configFields) {
+        for (Field field : configFields) {
+            if (Map.class.isAssignableFrom(field.getType())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Reads {@code file} into a key-preserving view (see {@link #fileValue}), or returns {@code null}
+     * when this class has no {@code Map} field or the file cannot be read or parsed - in which case
+     * map entries are read from the ordinary configuration, as before.
+     *
+     * @param file the configuration file
+     * @return the view, or {@code null}
+     */
+    private YamlConfiguration keyPreservingView(File file) {
+        if (!hasMapField(configEntryFields()) || !file.isFile()) {
+            return null;
+        }
+        try {
+            return keyPreservingView(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /**
+     * @param text a YAML text
+     * @return {@code text} parsed with {@link #MAP_KEY_SEPARATOR} as its path separator, comments
+     *         kept, or {@code null} if it cannot be parsed
+     */
+    private static YamlConfiguration keyPreservingView(String text) {
+        if (text == null) {
+            return null;
+        }
+        YamlConfiguration view = new YamlConfiguration();
+        view.options().parseComments(true);
+        view.options().pathSeparator(MAP_KEY_SEPARATOR);
+        try {
+            view.loadFromString(text);
+        } catch (InvalidConfigurationException e) {
+            return null;
+        }
+        return view;
     }
 
     /**
@@ -767,7 +872,7 @@ public abstract class AbstractConfigEntity {
 
     /**
      * Splits a {@code @ConfigEntry.comment()} value into one {@link List} element per line, in
-     * declaration order, ready for {@link org.bukkit.configuration.ConfigurationSection}'s
+     * declaration order, ready for {@link ConfigurationSection}'s
      * comment-writing API. No blank leading element is added (Claude's Discretion, D-07) - it
      * would produce a diff on every regenerated file for a purely cosmetic gain, contrary to
      * D-01's touch-as-little-as-possible posture.
@@ -968,14 +1073,34 @@ public abstract class AbstractConfigEntity {
     public JsonObject toJsonObject() {
         Gson gson = new Gson();
         JsonObject jsonObject = new JsonObject();
-        Set<String> keys = config.getKeys(true);
-        for (String key : keys) {
-            if (!config.isConfigurationSection(key)) {
-                Object value = config.get(key);
-                jsonObject.add(key, gson.toJsonTree(value));
+        addLeaves(config, "", gson, jsonObject);
+        return jsonObject;
+    }
+
+    /**
+     * Adds every non-section value under {@code section} to {@code out}, keyed by its dotted path
+     * from the root. Walks the tree one level at a time and joins the keys itself rather than using
+     * {@code getKeys(true)}: that builds each path with the separator of the section's own root, and a
+     * section written by {@link #save()} comes from the entry's parser with a root of its own (a
+     * map's has a separator that keeps its keys whole, #553) - so {@code getKeys(true)} returned paths
+     * such as {@code rulea} and {@code .rulea.reply} instead of {@code autoreply.rules.rulea.reply}.
+     *
+     * @param section the section to walk
+     * @param prefix  the dotted path of {@code section}, empty for the root
+     * @param gson    the serializer for leaf values
+     * @param out     the payload being built
+     */
+    private static void addLeaves(ConfigurationSection section, String prefix, Gson gson,
+                                  JsonObject out) {
+        for (String key : section.getKeys(false)) {
+            Object value = section.get(key);
+            String path = prefix.isEmpty() ? key : prefix + "." + key;
+            if (value instanceof ConfigurationSection) {
+                addLeaves((ConfigurationSection) value, path, gson, out);
+            } else {
+                out.add(path, gson.toJsonTree(value));
             }
         }
-        return jsonObject;
     }
 
     /**
@@ -1256,6 +1381,7 @@ public abstract class AbstractConfigEntity {
 
             // Update field values
             AbstractConfigEntity declaredDefaults = null;
+            YamlConfiguration keyView = lastLoadUnparseable ? null : keyPreservingView(file);
             for (Field field : ReflectionUtil.getFields(this.getClass())) {
                 if (field.isAnnotationPresent(ConfigEntry.class)) {
                     field.setAccessible(true);
@@ -1264,7 +1390,7 @@ public abstract class AbstractConfigEntity {
                     if (path.isEmpty()) {
                         path = field.getName();
                     }
-                    Object configValue = config.get(path);
+                    Object configValue = fileValue(config, keyView, field, path);
                     if (configValue != null) {
                         declaredDefaults = assignFileValue(field, annotation, path, configValue, declaredDefaults);
                     }
