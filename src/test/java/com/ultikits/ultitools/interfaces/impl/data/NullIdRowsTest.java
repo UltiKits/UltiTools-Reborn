@@ -132,6 +132,8 @@ class NullIdRowsTest {
     private static void execute(String sql) throws Exception {
         try (Connection conn = dataSource.getConnection();
              Statement stmt = conn.createStatement()) {
+            // Every caller passes a string literal from this class; nothing reaches it from input.
+            // nosemgrep: java_inject_rule-SqlInjection
             stmt.execute(sql);
         }
     }
