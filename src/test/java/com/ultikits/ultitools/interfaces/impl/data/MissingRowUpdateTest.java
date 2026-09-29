@@ -2,7 +2,16 @@ package com.ultikits.ultitools.interfaces.impl.data;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.CALLS_REAL_METHODS;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.nio.file.Path;
@@ -31,6 +40,8 @@ import org.junit.jupiter.api.io.TempDir;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
+import com.ultikits.ultitools.entities.WhereCondition;
+import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.impl.data.json.SimpleJsonDataOperator;
 import com.ultikits.ultitools.interfaces.impl.data.mysql.MysqlDataOperator;
@@ -226,5 +237,55 @@ class MissingRowUpdateTest {
             assertThat(warningsNaming(MISSING_ID)).as(backend.label).hasSize(1);
             assertThat(warningsNaming("present")).as("%s: a matched row warned", backend.label).isEmpty();
         }
+    }
+
+    @Test
+    @DisplayName("updateCounted tells the caller: 1 and written for a stored row, 0 and nothing written (one WARNING) for a missing one")
+    void updateCountedReportsTheWrite() throws Exception {
+        for (Backend backend : backends()) {
+            DataOperator<Row> operator = fresh(backend);
+            Row present = operator.getById("present");
+            present.setName("renamed");
+
+            assertThat(operator.updateCounted(present)).as(backend.label).isEqualTo(1);
+            assertThat(operator.getById("present").getName()).as(backend.label).isEqualTo("renamed");
+
+            assertThat(operator.updateCounted(new Row(MISSING_ID, "ghost"))).as(backend.label).isZero();
+            assertThat(operator.getById(MISSING_ID)).as(backend.label).isNull();
+            assertThat(warningsNaming(MISSING_ID)).as(backend.label).hasSize(1);
+        }
+    }
+
+    @Test
+    @DisplayName("updateCounted with a null id throws DataAccessException, as update does")
+    void updateCountedRefusesNullId() throws Exception {
+        for (Backend backend : backends()) {
+            DataOperator<Row> operator = fresh(backend);
+            assertThatThrownBy(() -> operator.updateCounted(new Row(null, "no-id")))
+                    .as(backend.label).isInstanceOf(DataAccessException.class);
+        }
+    }
+
+    @Test
+    @DisplayName("a third-party operator: counted by whether the row exists before its update")
+    void defaultCountsByExistence() throws Exception {
+        @SuppressWarnings("unchecked")
+        DataOperator<Row> foreign = mock(DataOperator.class, CALLS_REAL_METHODS);
+        doNothing().when(foreign).update(any(Row.class));
+        Row row = new Row("row-1", "x");
+
+        doReturn(false).when(foreign).exist(any(WhereCondition[].class));
+        assertThat(foreign.updateCounted(row)).isZero();
+        verify(foreign, never()).update(any(Row.class));
+
+        doReturn(true).when(foreign).exist(any(WhereCondition[].class));
+        assertThat(foreign.updateCounted(row)).isEqualTo(1);
+        verify(foreign, times(1)).update(row);
+
+        assertThatThrownBy(() -> foreign.updateCounted(new Row(null, "no-id")))
+                .isInstanceOf(DataAccessException.class);
+
+        doThrow(new IllegalAccessException("field")).when(foreign).update(any(Row.class));
+        assertThatThrownBy(() -> foreign.updateCounted(row)).isInstanceOf(DataAccessException.class);
     }
 }
