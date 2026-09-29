@@ -153,7 +153,10 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
      * @return {@code true} if the row matched and was written; {@code false} if no row with that
      *         id matched every condition, in which case nothing was written
      * @throws com.ultikits.ultitools.exceptions.DataAccessException if {@code entity}'s id is
-     *         {@code null}, or a condition names a column the entity does not map
+     *         {@code null}, a condition names a column the entity does not map with
+     *         {@code @Column}, or a condition's value is {@code null} (no backend can compare with
+     *         it; the write could never apply) -- on every backend, so a misspelt column cannot turn
+     *         a retry loop into an endless one
      * @throws UnsupportedOperationException if this implementation does not provide conditional
      *         writes -- the default, so a third-party implementation is never silently
      *         unconditional

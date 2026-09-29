@@ -811,6 +811,12 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                     throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
                             "updateIf was given a null condition for table '" + tableName + "'.");
                 }
+                if (!condition.isEmpty() && condition.getValue() == null) {
+                    // `column = NULL` is never true in SQL, so the write could never apply and a
+                    // caller's re-read-and-retry loop would spin forever.
+                    throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                            "updateIf cannot compare column '" + condition.getColumn() + "' with a null value.");
+                }
                 conditions.add(condition);
             }
         }
