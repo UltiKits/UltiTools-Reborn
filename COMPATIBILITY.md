@@ -491,9 +491,18 @@ This section governs the third kind.
   id on that release was stored with none; such a row could be read, but every `update`/`delete` of
   it bound `WHERE id = NULL`, matched nothing and returned normally, so a change the module
   reported as saved was lost at the next restart. As of 6.3.0, when a SQLite-backed table is
-  initialised every row whose `id` is `NULL` is given a new UUID — only the `id` column is written,
-  so the repair writes user data at startup, which is what the maintainer decided — and one INFO
-  line names the table and the count; a second start finds nothing and logs nothing. MySQL never
+  initialised every row whose `id` is `NULL` is given the id its entity reports through `getId()`,
+  or a new UUID when the entity reports none or one another row already holds — only the `id`
+  column is written, all rows in one transaction, so the repair writes user data at startup, which
+  is what the maintainer decided — and one INFO line names the table, the count and how many rows
+  took the entity's own id; a second start finds nothing and logs nothing. The reported id comes
+  first because an entity may derive `getId()` from another column (UltiEssentials'
+  `UuidKeyedDataEntity` and UltiKits' `KitClaimData` derive it from a `uuid` column) and every
+  lookup binds that value, so a random id would leave such a row exactly as unreachable as `NULL`
+  did. For the same reason every write path (`insert`, `insertAll`, `update(T)`, `updateAll`,
+  `updateIf`) now stores `getId()` in the `id` column rather than the inherited field: an entity
+  that overrides `getId()` never sets that field, so on 6.3.0 before this change it still inserted
+  a `NULL` id on SQLite, and on MySQL its insert failed outright. MySQL never
   accepted a `NULL` id and runs no backfill. Independently, `update(T)`, `update(column, value, id)`,
   `delById` and `updateAll` addressed by a `null` id now throw `DataAccessException` on every
   backend instead of silently matching nothing (the JSON backend used to throw a raw

@@ -3,6 +3,7 @@ package com.ultikits.ultitools.interfaces.impl.data;
 import java.lang.reflect.Field;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
@@ -23,13 +24,13 @@ import javax.sql.DataSource;
 
 import org.apache.commons.dbutils.QueryRunner;
 import org.apache.commons.dbutils.ResultSetHandler;
-import org.apache.commons.dbutils.handlers.ColumnListHandler;
 import org.apache.commons.dbutils.handlers.ScalarHandler;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonDeserializer;
 import com.google.gson.JsonNull;
+import com.google.gson.JsonParseException;
 import com.google.gson.JsonPrimitive;
 import com.google.gson.JsonSerializer;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
@@ -60,6 +61,10 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         implements DataOperator<T>, RowCountingDelete {
 
     private static final Logger LOGGER = Logger.getLogger(AbstractRelationalDataOperator.class.getName());
+    /** The primary-key column every generated table declares; its value is always {@code getId()}. */
+    private static final String ID_COLUMN = "id";
+    /** Alias of the row-identifier column {@link #backfillNullIds} selects next to the entity's own. */
+    private static final String BACKFILL_ROWID = "ultitools_backfill_rowid";
     /**
      * Default Gson has no bundled adapter for {@code java.time.LocalDateTime}: its reflective
      * fallback tries to reach {@code LocalDateTime}'s private fields, which JDK 9+'s module
@@ -233,26 +238,106 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      * @since 6.3.0
      */
     protected final int backfillNullIds(String rowIdColumn) {
-        String select = "SELECT " + rowIdColumn + " FROM `" + tableName + "` WHERE `id` IS NULL";
+        String select = "SELECT " + rowIdColumn + " AS " + BACKFILL_ROWID + ", `" + tableName + "`.* FROM `"
+                + tableName + "` WHERE `id` IS NULL";
         String update = "UPDATE `" + tableName + "` SET `id` = ? WHERE " + rowIdColumn + " = ? AND `id` IS NULL";
-        int repaired = 0;
-        try {
-            List<Object> rowIds = queryRunner.query(select, new ColumnListHandler<Object>(1));
-            for (Object rowId : rowIds) {
-                repaired += queryRunner.update(update, UUID.randomUUID().toString(), rowId);
+        int reported = 0;
+        int generated = 0;
+        try (Connection conn = dataSource.getConnection()) {
+            boolean autoCommit = conn.getAutoCommit();
+            conn.setAutoCommit(false);
+            try {
+                List<Object> rowIds = new ArrayList<>();
+                List<String> reportedIds = new ArrayList<>();
+                readRowsWithoutId(conn, select, rowIds, reportedIds);
+                Set<String> assigned = new HashSet<>();
+                try (PreparedStatement statement = conn.prepareStatement(update)) {
+                    for (int i = 0; i < rowIds.size(); i++) {
+                        String id = reportedIds.get(i);
+                        if (id != null && assigned.add(id) && assignId(statement, id, rowIds.get(i))) {
+                            reported++;
+                        } else if (assignId(statement, UUID.randomUUID().toString(), rowIds.get(i))) {
+                            generated++;
+                        }
+                    }
+                }
+                conn.commit();
+            } catch (SQLException e) {
+                conn.rollback();
+                throw e;
+            } finally {
+                conn.setAutoCommit(autoCommit);
             }
         } catch (SQLException e) {
             LOGGER.log(Level.SEVERE, "Could not assign ids to the rows of table '" + tableName
-                    + "' that have none (" + repaired + " assigned before the failure). Rows without an id "
-                    + "cannot be updated or deleted until this succeeds on a later start.", e);
-            return repaired;
+                    + "' that have none; nothing was changed. Rows without an id cannot be updated or deleted "
+                    + "until this succeeds on a later start.", e);
+            return 0;
         }
+        int repaired = reported + generated;
         if (repaired > 0) {
-            LOGGER.info("Assigned a new id to " + repaired + " row(s) of table '" + tableName
-                    + "' that had none (rows written without an id by UltiTools-API 6.2.0); only the id "
-                    + "column was written.");
+            LOGGER.info("Assigned an id to " + repaired + " row(s) of table '" + tableName
+                    + "' that had none (rows written without an id by UltiTools-API 6.2.0): " + reported
+                    + " took the id the entity itself reports, " + generated + " were given a new UUID; "
+                    + "only the id column was written.");
         }
         return repaired;
+    }
+
+    /**
+     * Reads every row of {@code select} (row identifier first, then the table's columns) and the id
+     * the entity materialised from it reports. An entity may derive {@code getId()} from another
+     * column -- UltiEssentials' and UltiKits' do -- and every {@code WHERE id = ?} binds that value,
+     * so it is the only id that makes the row addressable. A row that cannot be materialised, or
+     * whose entity reports no id, is recorded with {@code null} and later given a new UUID.
+     */
+    private void readRowsWithoutId(Connection conn, String select, List<Object> rowIds, List<String> reportedIds)
+            throws SQLException {
+        RowMapper<T> mapper = getRowMapper();
+        try (PreparedStatement statement = conn.prepareStatement(select);
+             ResultSet rs = statement.executeQuery()) {
+            while (rs.next()) {
+                rowIds.add(rs.getObject(1));
+                String reportedId = null;
+                try {
+                    Object id = mapper.map(rs).getId();
+                    if (id != null && !id.toString().isEmpty()) {
+                        reportedId = id.toString();
+                    }
+                } catch (JsonParseException e) {
+                    LOGGER.warning("A row of table '" + tableName + "' without an id could not be read as "
+                            + type.getName() + " (" + e.getMessage() + "); it is given a new UUID.");
+                }
+                reportedIds.add(reportedId);
+            }
+        }
+    }
+
+    /**
+     * Writes {@code id} into the row with this row identifier, if it still has none. A value
+     * another row already holds violates the primary key; that is reported as {@code false} so the
+     * caller can give the row a new UUID instead. The statement fails alone: SQLite rolls back only
+     * the failing statement, and the transaction continues.
+     */
+    private boolean assignId(PreparedStatement statement, String id, Object rowId) throws SQLException {
+        statement.setString(1, id);
+        statement.setObject(2, rowId);
+        try {
+            return statement.executeUpdate() > 0;
+        } catch (SQLException e) {
+            if (isConstraintViolation(e)) {
+                return false;
+            }
+            throw e;
+        }
+    }
+
+    private static boolean isConstraintViolation(SQLException e) {
+        String state = e.getSQLState();
+        // SQLState class 23 is "integrity constraint violation"; the SQLite driver reports a
+        // PRIMARY KEY/UNIQUE failure with no SQLState, but always names the constraint.
+        return (state != null && state.startsWith("23"))
+                || (e.getMessage() != null && e.getMessage().contains("constraint"));
     }
 
     /**
@@ -296,6 +381,27 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      * delete-hook-path split).
      */
     private ResultSetHandler<List<T>> getRawListHandler() {
+        RowMapper<T> mapper = getRowMapper();
+        return rs -> {
+            List<T> list = new ArrayList<>();
+            while (rs.next()) {
+                list.add(mapper.map(rs));
+            }
+            return list;
+        };
+    }
+
+    /** Materialises the current row of a result set as an entity; see {@link #getRowMapper()}. */
+    private interface RowMapper<E> {
+        E map(ResultSet rs) throws SQLException;
+    }
+
+    /**
+     * Materialises one row as an entity without firing {@code onLoad()}: shared by
+     * {@link #getRawListHandler()} and {@link #backfillNullIds}, so a row is read the same way
+     * whichever needs it. A column labelled {@link #BACKFILL_ROWID} is skipped.
+     */
+    private RowMapper<T> getRowMapper() {
         // Build mappings from SQL column names to Java field names and boolean detection.
         // Gson matches JSON keys to Java field names, so we must use field names (camelCase)
         // as map keys, not SQL column names (snake_case).
@@ -316,25 +422,23 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         }
 
         return rs -> {
-            List<T> list = new ArrayList<>();
             ResultSetMetaData meta = rs.getMetaData();
             int cols = meta.getColumnCount();
-            while (rs.next()) {
-                Map<String, Object> map = new LinkedHashMap<>();
-                for (int i = 1; i <= cols; i++) {
-                    String colName = meta.getColumnLabel(i).toLowerCase(Locale.ROOT);
-                    Object value = rs.getObject(i);
-                    if (booleanColumns.containsKey(colName)) {
-                        value = normaliseBoolean(value, colName);
-                    }
-                    // Use Java field name as key so Gson can match it during deserialization
-                    String fieldName = columnToFieldName.getOrDefault(colName, colName);
-                    map.put(fieldName, value);
+            Map<String, Object> map = new LinkedHashMap<>();
+            for (int i = 1; i <= cols; i++) {
+                String colName = meta.getColumnLabel(i).toLowerCase(Locale.ROOT);
+                if (BACKFILL_ROWID.equals(colName)) {
+                    continue;
                 }
-                String json = GSON.toJson(map);
-                list.add(GSON.fromJson(json, type));
+                Object value = rs.getObject(i);
+                if (booleanColumns.containsKey(colName)) {
+                    value = normaliseBoolean(value, colName);
+                }
+                // Use Java field name as key so Gson can match it during deserialization
+                String fieldName = columnToFieldName.getOrDefault(colName, colName);
+                map.put(fieldName, value);
             }
-            return list;
+            return GSON.fromJson(GSON.toJson(map), type);
         };
     }
 
@@ -561,15 +665,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                 sql.append("`").append(column.value()).append("`");
                 values.append("?");
                 try {
-                    Object value = field.get(obj);
-                    if (value != null && !BasicTypeUtil.isBasicType(field.getType())) {
-                        String jsonString = GSON.toJson(value);
-                        if (jsonString.startsWith("\"") && jsonString.endsWith("\"")) {
-                            jsonString = jsonString.substring(1, jsonString.length() - 1);
-                        }
-                        value = jsonString;
-                    }
-                    params.add(value);
+                    params.add(persistedValue(field, column.value(), obj));
                 } catch (IllegalAccessException e) {
                     throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
                             "Failed to access entity fields", e);
@@ -744,15 +840,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                     sql.append(", ");
                 }
                 sql.append("`").append(column.value()).append("` = ?");
-                Object value = field.get(obj);
-                if (value != null && !BasicTypeUtil.isBasicType(field.getType())) {
-                    String jsonString = GSON.toJson(value);
-                    if (jsonString.startsWith("\"") && jsonString.endsWith("\"")) {
-                        jsonString = jsonString.substring(1, jsonString.length() - 1);
-                    }
-                    value = jsonString;
-                }
-                params.add(value);
+                params.add(persistedValue(field, column.value(), obj));
                 first = false;
             }
         }
@@ -833,15 +921,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                 for (T entity : entities) {
                     int idx = 1;
                     for (ColumnMapping col : columns) {
-                        Object value = col.field.get(entity);
-                        if (value != null && !BasicTypeUtil.isBasicType(col.field.getType())) {
-                            String json = GSON.toJson(value);
-                            if (json.startsWith("\"") && json.endsWith("\"")) {
-                                json = json.substring(1, json.length() - 1);
-                            }
-                            value = json;
-                        }
-                        pstmt.setObject(idx++, value);
+                        pstmt.setObject(idx++, persistedValue(col.field, col.columnName, entity));
                     }
                     pstmt.addBatch();
                 }
@@ -889,15 +969,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                         entity.onUpdate();
                         int idx = 1;
                         for (ColumnMapping col : columns) {
-                            Object value = col.field.get(entity);
-                            if (value != null && !BasicTypeUtil.isBasicType(col.field.getType())) {
-                                String json = GSON.toJson(value);
-                                if (json.startsWith("\"") && json.endsWith("\"")) {
-                                    json = json.substring(1, json.length() - 1);
-                                }
-                                value = json;
-                            }
-                            pstmt.setObject(idx++, value);
+                            pstmt.setObject(idx++, persistedValue(col.field, col.columnName, entity));
                         }
                         pstmt.setObject(idx, entity.getId());
                         pstmt.addBatch();
@@ -917,6 +989,29 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
             throw new DataAccessException(ErrorCode.TRANSACTION_FAILED,
                     "Batch update transaction failed", e);
         }
+    }
+
+    /**
+     * The value written for one {@code @Column} field of {@code obj}, serialised as every write
+     * path here always has: a non-basic value goes out as JSON, with a bare string's quotes
+     * removed.
+     * <p>
+     * The {@code id} column is written from {@code getId()}, not from the inherited field, because
+     * {@code getId()} is what every {@code WHERE id = ?} binds (#546). An entity that overrides
+     * {@code getId()} onto another column -- UltiEssentials' and UltiKits' do -- never sets the
+     * inherited field, so writing the field stored a {@code NULL} id that no update or delete could
+     * reach (and that MySQL refused outright).
+     */
+    private Object persistedValue(Field field, String columnName, T obj) throws IllegalAccessException {
+        Object value = ID_COLUMN.equals(columnName) ? obj.getId() : field.get(obj);
+        if (value != null && !BasicTypeUtil.isBasicType(field.getType())) {
+            String json = GSON.toJson(value);
+            if (json.startsWith("\"") && json.endsWith("\"")) {
+                json = json.substring(1, json.length() - 1);
+            }
+            value = json;
+        }
+        return value;
     }
 
     // ===== Column mapping helper =====
