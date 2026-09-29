@@ -334,13 +334,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
             List<T> collection = new ArrayList<>();
             for (T each : cache.values()) {
                 Map<String, Object> map = GSON.fromJson(GSON.toJson(each), mapType);
-                Object byPath = JsonPathUtil.getByPath(map, resolveColumn(condition.getColumn()));
-                if (byPath == null) {
-                    continue;
-                }
-                String data = GSON.toJson(byPath);
-                String value = GSON.toJson(condition.getValue());
-                if (conditionCal(data, value, condition)) collection.add(each);
+                if (matches(map, condition)) collection.add(each);
             }
             // Multiple conditions are ANDed: the first condition establishes the initial set,
             // every condition after it intersects, and an empty set stays empty. The original
@@ -482,13 +476,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
             Set<Map.Entry<Object, T>> values = cache.entrySet();
             for (Map.Entry<Object, T> next : values) {
                 Map<String, Object> map = GSON.fromJson(GSON.toJson(next.getValue()), mapType);
-                Object byPath = JsonPathUtil.getByPath(map, resolveColumn(condition.getColumn()));
-                if (byPath == null) {
-                    continue;
-                }
-                String data = GSON.toJson(byPath);
-                String value = GSON.toJson(condition.getValue());
-                if (conditionCal(data, value, condition)) collection.add(next);
+                if (matches(map, condition)) collection.add(next);
             }
             // A copy of the same defect getAll had; likewise changed to a genuine intersection.
             // On the delete path, the original code would delete every row the second condition
@@ -578,6 +566,62 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         T updated = detach(old);
         BeanCopyUtil.copyProperties(obj, updated, "id");
         cache.put(updated.getId(), updated);
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * The stored entry is checked against {@code expected} with the same matching
+     * {@link #getAll(WhereCondition...)} uses, and replaced, while this operator's lock is held,
+     * so no other write through this operator can come between the check and the write. A JSON
+     * store belongs to one server; nothing here coordinates two servers.
+     */
+    @Override
+    public synchronized boolean updateIf(T entity, WhereCondition... expected) {
+        Object id = entity.getId();
+        requireId(id, "update");
+        T stored = cache.get(id);
+        if (stored == null) {
+            stored = cache.get(id.toString());
+        }
+        entity.onUpdate();
+        if (stored == null) {
+            return false;
+        }
+        if (expected != null) {
+            Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
+            Map<String, Object> map = GSON.fromJson(GSON.toJson(stored), mapType);
+            for (WhereCondition condition : expected) {
+                if (condition == null) {
+                    throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                            "updateIf was given a null condition for JSON store '" + type.getName() + "'.");
+                }
+                if (!condition.isEmpty() && !matches(map, condition)) {
+                    return false;
+                }
+            }
+        }
+        beforeMutate();
+        T updated = detach(stored);
+        BeanCopyUtil.copyProperties(entity, updated, "id");
+        cache.put(updated.getId(), updated);
+        return true;
+    }
+
+    /**
+     * Whether one serialised entry satisfies one condition -- the single matching rule shared by
+     * {@link #getAll(WhereCondition...)}, {@link #del(WhereCondition...)} and {@link #updateIf}.
+     * An entry that lacks the condition's column never matches.
+     */
+    private boolean matches(Map<String, Object> map, WhereCondition condition) {
+        if (!Serializable.class.isAssignableFrom(condition.getValue().getClass())) {
+            throw new DataAccessException(ErrorCode.DATA_QUERY_FAILED, "Query value is not serializable");
+        }
+        Object byPath = JsonPathUtil.getByPath(map, resolveColumn(condition.getColumn()));
+        if (byPath == null) {
+            return false;
+        }
+        return conditionCal(GSON.toJson(byPath), GSON.toJson(condition.getValue()), condition);
     }
 
     @Override

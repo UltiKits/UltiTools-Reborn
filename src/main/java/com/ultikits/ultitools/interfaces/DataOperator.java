@@ -121,6 +121,50 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
     void update(T obj) throws IllegalAccessException;
 
     /**
+     * Conditional update: writes {@code entity} over the stored row with the same id only if
+     * that row still matches every one of {@code expected}, and reports whether it did (#543).
+     * <p>
+     * The check and the write are one step: on SQLite and MySQL a single
+     * {@code UPDATE ... WHERE id = ? AND <expected>} whose affected-row count decides the result,
+     * so it holds across servers sharing one database; on the JSON backend the check and the write
+     * run under the operator's own lock (a JSON store is local to one server). The conditions mean
+     * exactly what they mean in {@link #getAll(WhereCondition...)} on the same backend, values are
+     * bound as parameters, and a condition whose {@code isEmpty()} is true is ignored.
+     * <p>
+     * Typical use is compare-and-set: read a row, compute the new state, and write it conditioned
+     * on the value that was read; if another writer changed the row in between, nothing is
+     * written and {@code false} comes back, so the caller re-reads and decides again rather than
+     * writing on top. UltiEconomy's one-time wallet merge uses it this way, conditioned on the
+     * balance it read:
+     * <pre>{@code
+     * Account read = accounts.getById(id);
+     * double seen = read.getBalance();
+     * read.setBalance(seen + amount);
+     * if (!accounts.updateIf(read, WhereCondition.builder().column("balance").value(seen).build())) {
+     *     // someone else wrote first: re-read and decide again
+     * }
+     * }</pre>
+     * Like {@link #update(BaseDataEntity)}, every mapped field of {@code entity} is written, and
+     * {@code onUpdate()} fires on {@code entity} before the fields are read, whether or not the
+     * write then applies.
+     *
+     * @param entity   the new state of the row, carrying the id of the row to write
+     * @param expected the conditions the stored row must still meet
+     * @return {@code true} if the row matched and was written; {@code false} if no row with that
+     *         id matched every condition, in which case nothing was written
+     * @throws com.ultikits.ultitools.exceptions.DataAccessException if {@code entity}'s id is
+     *         {@code null}, or a condition names a column the entity does not map
+     * @throws UnsupportedOperationException if this implementation does not provide conditional
+     *         writes -- the default, so a third-party implementation is never silently
+     *         unconditional
+     * @since 6.3.0
+     */
+    default boolean updateIf(T entity, WhereCondition... expected) {
+        throw new UnsupportedOperationException(getClass().getName()
+                + " does not implement DataOperator#updateIf, so it cannot perform a conditional write.");
+    }
+
+    /**
      * Returns a new fluent query builder for this data operator.
      *
      * @return a new Query builder

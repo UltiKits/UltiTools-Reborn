@@ -674,8 +674,66 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         // persisted. onUpdate() does not touch createdAt/createdBy, so an entity carrying its
         // original creation values in memory persists them unchanged here.
         obj.onUpdate();
-        StringBuilder sql = new StringBuilder("UPDATE ").append(tableName).append(" SET ");
+        StringBuilder sql = new StringBuilder();
         List<Object> params = new ArrayList<>();
+        appendUpdateSet(sql, params, obj);
+        sql.append(" WHERE id = ?");
+        params.add(obj.getId());
+        try {
+            queryRunner.update(sql.toString(), params.toArray());
+        } catch (SQLException e) {
+            throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
+                    "Failed to update entity", e);
+        }
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * One {@code UPDATE ... SET <every mapped column> WHERE id = ? AND <expected>} statement; the
+     * database's affected-row count decides the result, so the check and the write cannot be
+     * separated by another writer, on the same server or another one sharing the database.
+     * Condition columns pass the same allow-list as every other WHERE clause here, and values are
+     * bound as parameters.
+     */
+    @Override
+    public boolean updateIf(T entity, WhereCondition... expected) {
+        requireId(entity.getId(), "update");
+        entity.onUpdate();
+        StringBuilder sql = new StringBuilder();
+        List<Object> params = new ArrayList<>();
+        try {
+            appendUpdateSet(sql, params, entity);
+        } catch (IllegalAccessException e) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID, "Failed to access entity fields", e);
+        }
+        List<WhereCondition> conditions = new ArrayList<>();
+        conditions.add(WhereCondition.builder().column("id").value(entity.getId()).build());
+        if (expected != null) {
+            for (WhereCondition condition : expected) {
+                if (condition == null) {
+                    throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                            "updateIf was given a null condition for table '" + tableName + "'.");
+                }
+                conditions.add(condition);
+            }
+        }
+        appendConditions(sql, params, conditions.toArray(new WhereCondition[0]), true);
+        try {
+            return queryRunner.update(sql.toString(), params.toArray()) > 0;
+        } catch (SQLException e) {
+            throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
+                    "Failed to conditionally update entity", e);
+        }
+    }
+
+    /**
+     * Appends {@code UPDATE <table> SET `col` = ?, ...} for every {@code @Column} field of
+     * {@code obj}, and the values in the same order, serialised exactly as {@link #insert} does.
+     * Shared by {@link #update(BaseDataEntity)} and {@link #updateIf}.
+     */
+    private void appendUpdateSet(StringBuilder sql, List<Object> params, T obj) throws IllegalAccessException {
+        sql.append("UPDATE ").append(tableName).append(" SET ");
         Field[] fields = ReflectionUtil.getFields(obj.getClass());
         boolean first = true;
         for (Field field : fields) {
@@ -697,14 +755,6 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                 params.add(value);
                 first = false;
             }
-        }
-        sql.append(" WHERE id = ?");
-        params.add(obj.getId());
-        try {
-            queryRunner.update(sql.toString(), params.toArray());
-        } catch (SQLException e) {
-            throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
-                    "Failed to update entity", e);
         }
     }
 

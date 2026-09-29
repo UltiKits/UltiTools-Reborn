@@ -500,6 +500,15 @@ This section governs the third kind.
   `NullPointerException`); `updateAll` checks every entity before it writes any. A call with a
   non-null id that matches no row is unchanged. See `ultitools.storage.null-id-backfill` and
   `ultitools.storage.null-id-refused` in `FEATURES.md`.
+- `DataOperator` gains one method, `boolean updateIf(T entity, WhereCondition... expected)` (#543):
+  a conditional write that applies only while the stored row still matches every expected
+  condition, and reports whether it applied, on the JSON, SQLite and MySQL backends. No existing
+  method's signature changes, and it is a `default` method, so a module compiled against 6.2.x
+  still links. Its default body throws `UnsupportedOperationException` naming the implementing
+  class rather than quietly performing an unconditional write — a third-party `DataOperator`
+  implementation keeps working for every other method and must implement `updateIf` before a caller
+  can rely on it. The framework's own operators implement it (see
+  `ultitools.storage.conditional-update` in `FEATURES.md`).
 
 ### Behavioral changes that do need one
 
