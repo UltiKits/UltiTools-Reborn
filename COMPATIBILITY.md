@@ -485,8 +485,8 @@ This section governs the third kind.
   counted), and a matched row with a `null` id is refused with a `DataAccessException` naming the
   entity type **before** any row is deleted, since no delete can address it. This corrects
   behaviour that contradicted the documentation, so it takes no migration period. A third-party
-  `DataOperator` implementation is counted by checking after its `delById` whether the row is
-  still there (see `ultitools.storage.query-delete-count` in `FEATURES.md`).
+  `DataOperator` implementation, which cannot report what its `delById` removed, is counted by
+  checking that the row existed immediately before that call and is gone after it (see `ultitools.storage.query-delete-count` in `FEATURES.md`).
 - Rows left without an id by UltiTools-API 6.2.0 are repaired, and addressing a row by a null id
   is refused (#546, maintainer decision of 2026-09-27). 6.2.0 did not assign an id in `insert`, and
   SQLite's generated DDL accepted a `NULL` primary key, so every row a module inserted without an

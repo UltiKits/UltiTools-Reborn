@@ -267,8 +267,10 @@ public class QueryImpl<T extends BaseDataEntity<String>> implements Query<T> {
      * <ul>
      *   <li>the count comes from the backend: the framework's operators report each delete's
      *       affected rows through {@link RowCountingDelete}, so a matched row that another writer
-     *       removed first is not counted; a third-party operator that does not implement it is
-     *       counted by checking, after its {@code delById}, whether the row is gone;</li>
+     *       removed first is not counted. A third-party operator that does not implement it cannot
+     *       report what its {@code delById} removed, so a row is counted only if it existed
+     *       immediately before that call and is gone after it; a row another writer removes during
+     *       that one call is the only case this can still count;</li>
      *   <li>a matched row with a {@code null} id cannot be addressed by any delete, so it is
      *       refused with a {@link DataAccessException} naming the entity type <em>before</em>
      *       anything is deleted, instead of being skipped silently.</li>
@@ -298,9 +300,11 @@ public class QueryImpl<T extends BaseDataEntity<String>> implements Query<T> {
         if (operator instanceof RowCountingDelete) {
             return ((RowCountingDelete) operator).deleteByIdCounted(id);
         }
+        WhereCondition byId = WhereCondition.builder().column("id").value(id).build();
+        boolean presentBefore = operator.exist(byId);
         operator.delById(id);
-        boolean stillThere = operator.exist(WhereCondition.builder().column("id").value(id).build());
-        return stillThere ? 0 : 1;
+        boolean goneAfter = !operator.exist(byId);
+        return presentBefore && goneAfter ? 1 : 0;
     }
 
     // === Internal Helpers ===

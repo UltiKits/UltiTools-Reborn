@@ -9,8 +9,8 @@ import org.jetbrains.annotations.ApiStatus;
  * API, so the affected-row count travels through this internal side interface instead.
  * {@link QueryImpl#delete()} uses it to return the number of rows the backend removed rather than
  * the number the query matched. The framework's own operators implement it; a third-party
- * {@code DataOperator} that does not is counted by checking, after its {@code delById}, whether the
- * row is still there.
+ * {@code DataOperator} that does not is counted by checking that the row existed immediately before
+ * its {@code delById} and is gone after it.
  *
  * @since 6.3.0
  */
