@@ -275,7 +275,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                     if (id == null) {
                         unusable++;
                     } else if (occurrences.get(id) > 1) {
-                        // Maintainer decision 2026-09-29 (「一行都不动，只警告」): a reported id more
+                        // Maintainer decision 2026-09-29 ("touch none of those rows, only warn"): a reported id more
                         // than one row shares is written to none of them, or a write made through
                         // one row would reach the other -- UltiEssentials' own repair does the same.
                         shared++;
