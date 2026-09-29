@@ -962,6 +962,25 @@ public abstract class AbstractConfigEntity {
     }
 
     /**
+     * Looks {@code key} up in the owning module's language catalogue. A lookup that fails - the
+     * module's language did not load - counts as a missing key, so the configuration still loads and
+     * the token is written, rather than the comment taking the module down.
+     *
+     * @param key the catalogue key
+     * @return the catalogue text, or {@code null} if there is none
+     */
+    private String lookUpCatalogue(String key) {
+        if (ultiToolsPlugin == null) {
+            return null;
+        }
+        try {
+            return ultiToolsPlugin.i18n(key);
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /**
      * The language key a {@code @ConfigEntry} comment names, if the comment is exactly one {@code
      * {key}} token after trimming (#542).
      *
@@ -996,7 +1015,7 @@ public abstract class AbstractConfigEntity {
                 continue;
             }
             String path = annotation.path().isEmpty() ? field.getName() : annotation.path();
-            String text = ultiToolsPlugin != null ? ultiToolsPlugin.i18n(key) : null;
+            String text = lookUpCatalogue(key);
             if (text == null || text.equals(key)) {
                 if (warn) {
                     String moduleName = ultiToolsPlugin != null ? ultiToolsPlugin.getPluginName() : null;
