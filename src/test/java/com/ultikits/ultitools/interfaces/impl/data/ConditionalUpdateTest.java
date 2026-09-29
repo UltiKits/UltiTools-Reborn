@@ -234,6 +234,47 @@ class ConditionalUpdateTest {
     }
 
     @Nested
+    @DisplayName("conditions it cannot evaluate are refused on every backend")
+    class RefusedConditions {
+
+        @Test
+        @DisplayName("a column the entity does not map throws DataAccessException instead of returning false")
+        void unknownColumnThrows() throws Exception {
+            for (Backend backend : backends()) {
+                resetTable();
+                DataOperator<Account> operator = backend.factory.get();
+                Account account = new Account("alice", 100.0);
+                operator.insert(account);
+                Account read = operator.getById(account.getId());
+
+                assertThatThrownBy(() -> operator.updateIf(read,
+                        WhereCondition.builder().column("balanc").value(100.0).build()))
+                        .as("%s: a misspelt column would make a compare-and-set loop retry forever", backend.label)
+                        .isInstanceOf(DataAccessException.class);
+            }
+        }
+
+        @Test
+        @DisplayName("a null expected value throws DataAccessException, since no backend can compare it")
+        void nullExpectedValueThrows() throws Exception {
+            for (Backend backend : backends()) {
+                resetTable();
+                DataOperator<Account> operator = backend.factory.get();
+                Account account = new Account(null, 100.0);
+                operator.insert(account);
+                Account read = operator.getById(account.getId());
+                read.setOwner("claimed");
+
+                assertThatThrownBy(() -> operator.updateIf(read,
+                        WhereCondition.builder().column("owner").value(null).build()))
+                        .as(backend.label)
+                        .isInstanceOf(DataAccessException.class);
+                assertThat(operator.getById(account.getId()).getOwner()).as(backend.label).isNull();
+            }
+        }
+    }
+
+    @Nested
     @DisplayName("two operators over one database")
     class TwoWriters {
 
