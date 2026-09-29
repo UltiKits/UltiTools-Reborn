@@ -203,6 +203,38 @@ class QueryDeleteCountTest {
     }
 
     @Nested
+    @DisplayName("an operator that does not report affected rows")
+    class UncountedOperator {
+
+        @Test
+        @DisplayName("a matched row another writer removed before this delete is not counted")
+        void rowGoneBeforeTheDeleteIsNotCounted() {
+            @SuppressWarnings("unchecked")
+            DataOperator<DeleteEntity> operator = mock(DataOperator.class);
+            DeleteEntity row = new DeleteEntity("low-a", 1);
+            row.setId("row-1");
+            when(operator.getAll()).thenReturn(new ArrayList<>(Collections.singletonList(row)));
+            // Gone already when delete() looks, and still gone afterwards: this delete removed nothing.
+            when(operator.exist(any(WhereCondition[].class))).thenReturn(false);
+
+            assertThat(new QueryImpl<>(operator).delete()).isZero();
+        }
+
+        @Test
+        @DisplayName("a row present before and gone after its delById is counted")
+        void rowRemovedByThisDeleteIsCounted() {
+            @SuppressWarnings("unchecked")
+            DataOperator<DeleteEntity> operator = mock(DataOperator.class);
+            DeleteEntity row = new DeleteEntity("low-a", 1);
+            row.setId("row-1");
+            when(operator.getAll()).thenReturn(new ArrayList<>(Collections.singletonList(row)));
+            when(operator.exist(any(WhereCondition[].class))).thenReturn(true, false);
+
+            assertThat(new QueryImpl<>(operator).delete()).isEqualTo(1);
+        }
+    }
+
+    @Nested
     @DisplayName("a matched row with a null id")
     class NullIdRow {
 
