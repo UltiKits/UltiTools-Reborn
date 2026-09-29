@@ -567,6 +567,16 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
     }
 
     /**
+     * {@inheritDoc}
+     * <p>
+     * Returns the number of entries replaced, decided under this operator's lock.
+     */
+    @Override
+    public synchronized int updateCounted(T entity) {
+        return updateEntry(entity);
+    }
+
+    /**
      * {@link #update(BaseDataEntity)}, returning how many entries it changed: an id no entry has
      * writes nothing and logs one WARNING, where it used to throw a raw
      * {@code NullPointerException} (#558).

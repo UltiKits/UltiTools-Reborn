@@ -5,6 +5,8 @@ import java.util.concurrent.Callable;
 
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.entities.WhereCondition;
+import com.ultikits.ultitools.exceptions.DataAccessException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.impl.data.QueryImpl;
 
 /**
@@ -119,6 +121,48 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
      * @throws IllegalAccessException Please refer{@link IllegalAccessException}
      */
     void update(T obj) throws IllegalAccessException;
+
+    /**
+     * Counted update: {@link #update(BaseDataEntity)}, returning how many rows it wrote, so the
+     * caller can tell that nothing was written (#558).
+     * <p>
+     * An update by a non-null id that matches no row writes nothing on every backend: SQLite,
+     * MySQL and JSON each log one WARNING naming the table and the id, and return normally.
+     * {@code update(T)} gives the caller no way to see that; this method returns {@code 0}
+     * instead of {@code 1}. Use it wherever "the row was gone" must be treated as a failure --
+     * for example a write that credits an account that another server has just removed. For a
+     * write that should apply only while the stored row still has the values you read, use
+     * {@link #updateIf} instead.
+     * <p>
+     * The framework's operators return the backend's own affected-row count. This default, which
+     * a third-party implementation inherits unless it overrides it, checks with
+     * {@link #exist(WhereCondition...)} whether a row with the entity's id exists, returns
+     * {@code 0} without writing if it does not, and otherwise calls {@code update(T)} and returns
+     * {@code 1}. It cannot see what that {@code update} wrote, so one case remains in which it
+     * reports {@code 1} although nothing was written: another writer deleting the row during that
+     * one call.
+     *
+     * @param entity the new state of the row, carrying the id of the row to write
+     * @return the number of rows written: {@code 1}, or {@code 0} when no row has that id
+     * @throws DataAccessException if {@code entity}'s id is {@code null}, or the write fails
+     * @since 6.3.0
+     */
+    default int updateCounted(T entity) {
+        Object id = entity.getId();
+        if (id == null) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                    "Refusing to update a " + entity.getClass().getName() + " by a null id: no row can be addressed by it.");
+        }
+        if (!exist(WhereCondition.builder().column("id").value(id).build())) {
+            return 0;
+        }
+        try {
+            update(entity);
+        } catch (IllegalAccessException e) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID, "Failed to access entity fields", e);
+        }
+        return 1;
+    }
 
     /**
      * Conditional update: writes {@code entity} over the stored row with the same id only if

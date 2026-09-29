@@ -525,6 +525,17 @@ This section governs the third kind.
   implementation keeps working for every other method and must implement `updateIf` before a caller
   can rely on it. The framework's own operators implement it (see
   `ultitools.storage.conditional-update` in `FEATURES.md`).
+- An update by a non-null id that matches no row writes nothing and says so (#558, maintainer
+  decision of 2026-09-29). `update(T)`, `update(column, value, id)` and `updateAll` now log one
+  WARNING naming the table and the id each time, on JSON, SQLite and MySQL, and return normally —
+  as SQLite and MySQL already did, silently; the JSON backend used to throw a raw
+  `NullPointerException`, which a module catching `RuntimeException` or `Exception` around the call
+  saw as a failed write. The caller learns the outcome through a new method,
+  `int updateCounted(T entity)` on `DataOperator`: `1` for a written row, `0` when no row has the id.
+  It is a `default` method, so no existing signature changes and a module compiled against 6.2.x
+  still links; a third-party implementation that does not override it is counted by whether the row
+  exists before its `update` (the one remaining miscount: a delete by another writer during that
+  call). See `ultitools.storage.missing-row-update` in `FEATURES.md`.
 
 ### Behavioral changes that do need one
 

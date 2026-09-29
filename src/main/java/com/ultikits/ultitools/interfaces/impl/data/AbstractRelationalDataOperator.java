@@ -830,6 +830,20 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
     }
 
     /**
+     * {@inheritDoc}
+     * <p>
+     * Returns the database's affected-row count for the {@code UPDATE}.
+     */
+    @Override
+    public int updateCounted(T entity) {
+        try {
+            return updateRow(entity);
+        } catch (IllegalAccessException e) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID, "Failed to access entity fields", e);
+        }
+    }
+
+    /**
      * {@link #update(BaseDataEntity)}, returning the number of rows the {@code UPDATE} changed.
      * A non-null id that matches no row writes nothing and logs one WARNING (#558).
      */
