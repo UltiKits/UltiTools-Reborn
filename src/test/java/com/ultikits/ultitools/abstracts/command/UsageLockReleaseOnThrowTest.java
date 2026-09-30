@@ -190,7 +190,9 @@ class UsageLockReleaseOnThrowTest {
 
         assertFalse(lock.isLocked(player.getUniqueId(), goKey()), "the server-wide lock must not stay held");
         throwing.armed = false;
-        executor.onCommand(mock(Player.class), command, "guarded", new String[]{"go"});
+        Player other = mock(Player.class);
+        when(other.getUniqueId()).thenReturn(UUID.randomUUID());
+        executor.onCommand(other, command, "guarded", new String[]{"go"});
         assertEquals(1, executor.bodies.get(), "another player's call runs");
     }
 
