@@ -294,6 +294,24 @@ class ModuleUpdateRecoveryTest {
         }
 
         @Test
+        @DisplayName("staging never adopts a kept old JAR left without its record: it is refused and the JAR is kept")
+        void leftoverKeptJar_isNotAdopted() throws IOException {
+            stage(transactions());
+            catchThrowable(() -> crashingAt(ModuleFileTransactions.CrashPoints.AFTER_OLD_MOVED).applyBeforeLoad());
+            File[] records = transactions.listFiles((dir, name) -> name.endsWith(".json"));
+            assertThat(records).hasSize(1);
+            Files.delete(records[0].toPath());
+            moduleJar(oldJar, "Demo", "1.0", "demo");
+
+            ModuleFileTransactions.StageResult result = stage(transactions());
+
+            assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
+            assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_LEFTOVER_BACKUP);
+            assertThat(treeOf(transactions)).anyMatch(p -> p.endsWith("/backup/demo-1.0.jar"))
+                    .noneMatch(p -> p.endsWith(".json"));
+        }
+
+        @Test
         @DisplayName("a file already at the new JAR's name is never replaced: the apply fails and nothing changes")
         void existingFileAtTheNewName_isNotReplaced() throws IOException {
             stage(transactions());

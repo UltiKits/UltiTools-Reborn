@@ -125,6 +125,43 @@ class ModuleUpdateStagingTest {
     }
 
     @Test
+    @DisplayName("a download in progress holds no lock: cancellation returns at once and a second update is refused as busy")
+    void downloadInProgress_holdsNoLock() throws Exception {
+        java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            java.util.concurrent.Future<ModuleFileTransactions.StageResult> first = pool.submit(() ->
+                    stage((link, name, folder) -> {
+                        entered.countDown();
+                        try {
+                            release.await(10, TimeUnit.SECONDS);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            throw new IOException(e);
+                        }
+                        moduleJar(new File(folder, name), "Demo", "1.1", "demo");
+                    }));
+            assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+
+            java.util.concurrent.CompletableFuture<List<String>> cancel = java.util.concurrent.CompletableFuture
+                    .supplyAsync(() -> new ModuleFileTransactions(dataFolder).cancelStagedUpdates("Other"));
+            assertThat(cancel.get(2, TimeUnit.SECONDS)).isEmpty();
+            List<String> downloads = new ArrayList<>();
+            ModuleFileTransactions.StageResult second = stage((link, name, folder) -> downloads.add(name));
+            assertThat(second.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.BUSY);
+            assertThat(downloads).isEmpty();
+
+            release.countDown();
+            assertThat(first.get(10, TimeUnit.SECONDS).getOutcome())
+                    .isEqualTo(ModuleFileTransactions.StageResult.Outcome.STAGED);
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
     @DisplayName("an uninstall cancels a staged update: its record and staged JAR go, the modules folder is untouched")
     void cancellingAStagedUpdate_removesOnlyTheTransaction() throws IOException {
         stage(downloading("Demo", "1.1", "demo"));
