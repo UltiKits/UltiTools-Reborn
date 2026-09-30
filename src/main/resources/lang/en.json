@@ -155,6 +155,9 @@
   "卸载时记录的模块 JAR %s 仍无法删除（%s）；本次启动会再次加载它，下次启动会再试。": "The module JAR %s recorded by an uninstall still cannot be deleted (%s); it loads again at this start, and the next start tries again.",
   "卸载时记录的模块 JAR %s 自卸载后已被替换，未删除。": "The module JAR %s recorded by an uninstall has been replaced since, so it was not deleted.",
   "模块 %s 暂存的 %s 版本更新已放弃：它的 JAR %s 在暂存之后已不在模块目录中（例如已卸载）。": "The staged update of module %s to version %s was abandoned: its JAR %s left the modules folder after the update was staged (for example, it was uninstalled).",
+  "模块 %s 暂存的 %s 版本更新已放弃：它的 JAR %s 在暂存之后已被替换（例如重新安装或手动替换），替换后的文件保持不动。": "The staged update of module %s to version %s was abandoned: its JAR %s was replaced after the update was staged (for example, reinstalled or replaced by hand); the replacement was left as it is.",
+  "它的 JAR %s 同时也是已加载模块 %s 的 JAR，更新会把该模块一起替换": "its JAR %s is also the JAR of the loaded module %s, which the update would replace too",
+  "模块当前的 JAR %s 无法读取": "the module's current JAR %s cannot be read",
   "%s 的另一个更新正在进行中，请稍后再试；没有做任何改动。": "Another update of %s is in progress; try again later. Nothing was changed.",
   "%s 中有上一次更新留下、没有记录的旧版本 JAR；请先检查并移走它": "%s holds a previous-version JAR an earlier update kept and no record refers to; check it and move it away first",
   "模块 %s 保留的旧版本 JAR（%s）不见了，无法回滚；%s 保持不动。": "The previous JAR kept for module %s (%s) is missing, so it cannot be rolled back; %s stays in place."

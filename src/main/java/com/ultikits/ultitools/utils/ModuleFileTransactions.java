@@ -256,6 +256,7 @@ public final class ModuleFileTransactions {
             }
             STAGING.add(key);
         }
+        record.oldSha256 = reservation.oldSha256;
         try {
             return download(record, work, identifyString, reservation.module, reservation.oldJar, catalogue,
                     downloader, reservation.previousFailure);
@@ -310,25 +311,60 @@ public final class ModuleFileTransactions {
             return Reservation.refused(StageResult.failed(previousFailure, Keys.REASON_NOT_IN_MODULES_FOLDER,
                     oldJar == null ? "?" : oldJar.getAbsolutePath(), modulesFolder.getAbsolutePath()));
         }
-        return new Reservation(module, oldJar, previousFailure, null);
+        String sharedWith = sharedWith(module, oldJar, loaded, codeSource);
+        if (sharedWith != null) {
+            return Reservation.refused(StageResult.failed(previousFailure, Keys.REASON_SHARED_JAR,
+                    oldJar.getAbsolutePath(), sharedWith));
+        }
+        String oldSha256 = sha256Of(oldJar);
+        if (oldSha256 == null) {
+            return Reservation.refused(StageResult.failed(previousFailure, Keys.REASON_OLD_JAR_UNREADABLE,
+                    oldJar.getAbsolutePath()));
+        }
+        return new Reservation(module, oldJar, oldSha256, previousFailure, null);
+    }
+
+    /**
+     * The other loaded modules that came from the same JAR, or {@code null} when there are none.
+     * Two module classes can be packaged in one archive; replacing it would replace them too, so
+     * such an update is refused, as the uninstall refuses to delete a JAR another module uses.
+     */
+    private static String sharedWith(UltiToolsPlugin module, File oldJar, List<UltiToolsPlugin> loaded,
+                                     Function<UltiToolsPlugin, File> codeSource) {
+        String key = normalize(module.getIdentifyString());
+        String jarPath = canonicalPath(oldJar);
+        List<String> others = new ArrayList<>();
+        for (UltiToolsPlugin plugin : loaded) {
+            if (plugin == module || key.equals(normalize(plugin.getIdentifyString()))) {
+                continue;
+            }
+            File source = codeSource.apply(plugin);
+            if (source != null && jarPath.equals(canonicalPath(source))) {
+                others.add(plugin.getPluginName());
+            }
+        }
+        return others.isEmpty() ? null : String.join(", ", others);
     }
 
     /** What {@link #reserve} decided: the module and JAR to stage an update for, or the refusal. */
     private static final class Reservation {
         private final UltiToolsPlugin module;
         private final File oldJar;
+        private final String oldSha256;
         private final String previousFailure;
         private final StageResult refusal;
 
-        Reservation(UltiToolsPlugin module, File oldJar, String previousFailure, StageResult refusal) {
+        Reservation(UltiToolsPlugin module, File oldJar, String oldSha256, String previousFailure,
+                    StageResult refusal) {
             this.module = module;
             this.oldJar = oldJar;
+            this.oldSha256 = oldSha256;
             this.previousFailure = previousFailure;
             this.refusal = refusal;
         }
 
         static Reservation refused(StageResult refusal) {
-            return new Reservation(null, null, null, refusal);
+            return new Reservation(null, null, null, null, refusal);
         }
     }
 
@@ -731,8 +767,7 @@ public final class ModuleFileTransactions {
             resumeWithoutStagedJar(record, target, staged);
             return;
         }
-        if (!exists(backup) && (!exists(old) || pendingRemovals.contains(record.oldName))) {
-            abandon(record, work, old);
+        if (abandonedBeforeApply(record, work, old, backup)) {
             return;
         }
         boolean oldStillAtTarget = record.targetName.equals(record.oldName) && !exists(backup);
@@ -776,15 +811,38 @@ public final class ModuleFileTransactions {
     }
 
     /**
-     * The module's JAR left the modules folder after the update was staged -- an uninstall,
-     * whatever name it was given, or a hand removal -- or an uninstall recorded it for a deletion
-     * that has not happened yet. Installing the update now would bring back a module the operator
-     * removed, so the transaction is abandoned instead.
+     * Abandons the transaction, before anything is moved, when the old JAR is no longer the one
+     * staged against. Only while the old JAR is still in the modules folder: once it is kept aside,
+     * the kept copy is the one that was checked.
+     *
+     * <ul>
+     *   <li>The module's JAR left the modules folder after the update was staged -- an uninstall,
+     *       whatever name it was given, or a hand removal -- or an uninstall recorded it for a
+     *       deletion that has not happened yet. Installing the update now would bring back a module
+     *       the operator removed.</li>
+     *   <li>A different file now has the old JAR's name -- an install of the current version, a
+     *       hand-made hotfix. Moving it aside would make the commit delete it; its content is
+     *       compared with the SHA-256 recorded at staging, so the same bytes put back still count.</li>
+     * </ul>
+     *
+     * @return whether the transaction was abandoned
      */
-    private void abandon(Record record, File work, File old) {
+    private boolean abandonedBeforeApply(Record record, File work, File old, File backup) {
+        if (exists(backup)) {
+            return false;
+        }
+        String key;
+        if (!exists(old) || pendingRemovals.contains(record.oldName)) {
+            key = Keys.UPDATE_ABANDONED;
+        } else if (!record.oldSha256.equals(sha256Of(old))) {
+            key = Keys.UPDATE_ABANDONED_REPLACED;
+        } else {
+            return false;
+        }
         deleteTree(work);
         deleteQuietly(recordFileOf(record));
-        report(Level.WARNING, Keys.UPDATE_ABANDONED, record.moduleName, record.newVersion, old.getAbsolutePath());
+        report(Level.WARNING, key, record.moduleName, record.newVersion, old.getAbsolutePath());
+        return true;
     }
 
     private void markApplied(Record record) {
@@ -1098,7 +1156,7 @@ public final class ModuleFileTransactions {
         }
         String[][] fields = {
             {"moduleName", record.moduleName}, {"oldName", record.oldName}, {"oldVersion", record.oldVersion},
-            {"stagedName", record.stagedName}, {"targetName", record.targetName},
+            {"oldSha256", record.oldSha256}, {"stagedName", record.stagedName}, {"targetName", record.targetName},
             {"newVersion", record.newVersion}, {"stagedSha256", record.stagedSha256}};
         for (String[] field : fields) {
             if (field[1] == null) {
@@ -1469,6 +1527,8 @@ public final class ModuleFileTransactions {
         String moduleName;
         String oldName;
         String oldVersion;
+        /** The old JAR's content when the update was staged; the apply moves only that file aside. */
+        String oldSha256;
         String stagedName;
         String targetName;
         String newVersion;
@@ -1623,6 +1683,8 @@ public final class ModuleFileTransactions {
         public static final String CLEANUP_DEFERRED = "模块 %s 的更新已确认，但更新目录 %s 未能清理，下次启动会再清理。";
         public static final String ORPHAN_BACKUP = "更新目录 %s 中有不属于任何更新记录的旧版本 JAR，已保留：%s";
         public static final String UPDATE_ABANDONED = "模块 %s 暂存的 %s 版本更新已放弃：它的 JAR %s 在暂存之后已不在模块目录中（例如已卸载）。";
+        public static final String UPDATE_ABANDONED_REPLACED =
+                "模块 %s 暂存的 %s 版本更新已放弃：它的 JAR %s 在暂存之后已被替换（例如重新安装或手动替换），替换后的文件保持不动。";
         public static final String REMOVED = "已删除卸载时未能删除的模块 JAR：%s。";
         public static final String REMOVAL_FAILED = "卸载时记录的模块 JAR %s 仍无法删除（%s）；本次启动会再次加载它，下次启动会再试。";
         public static final String REMOVAL_SKIPPED = "卸载时记录的模块 JAR %s 自卸载后已被替换，未删除。";
@@ -1632,6 +1694,8 @@ public final class ModuleFileTransactions {
         public static final String REASON_NO_IDENTIFY_STRING = "该模块没有 identify-string";
         public static final String REASON_NOT_LOADED = "没有已加载的模块声明 identify-string %s";
         public static final String REASON_NOT_IN_MODULES_FOLDER = "模块的 JAR %s 不在模块目录 %s 中";
+        public static final String REASON_SHARED_JAR = "它的 JAR %s 同时也是已加载模块 %s 的 JAR，更新会把该模块一起替换";
+        public static final String REASON_OLD_JAR_UNREADABLE = "模块当前的 JAR %s 无法读取";
         public static final String REASON_NO_DOWNLOAD = "云端没有 %s 的可下载版本";
         public static final String REASON_DOWNLOAD_FAILED = "下载失败：%s";
         public static final String REASON_INVALID_JAR = "下载的文件 %s 不是有效的模块 JAR";
