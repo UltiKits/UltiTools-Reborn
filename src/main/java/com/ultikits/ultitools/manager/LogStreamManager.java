@@ -7,6 +7,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.handler.SystemLogHandler;
+import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import lombok.Getter;
 import org.bukkit.Bukkit;
@@ -57,7 +58,7 @@ public class LogStreamManager implements Listener {
         try {
             Bukkit.getPluginManager().registerEvents(this, UltiTools.getInstance());
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().warning("注册事件监听器失败: " + e.getMessage());
+            UltiTools.getInstance().getLogger().warning(FrameworkText.format("注册事件监听器失败: %s", e.getMessage()));
         }
     }
     
@@ -189,9 +190,9 @@ public class LogStreamManager implements Listener {
                 try {
                     logTransmitter.setBatchSize(batchSize);
                 } catch (IllegalArgumentException e) {
-                    UltiTools.getInstance().getLogger().warning("[UltiPanel] "
-                            + "ultipanel.logging.batch.size 配置值无效 (" + batchSize + "): " + e.getMessage()
-                            + "，保留默认值 " + logTransmitter.getBatchSize());
+                    UltiTools.getInstance().getLogger().warning(FrameworkText.format(
+                            "[UltiPanel] ultipanel.logging.batch.size 配置值无效 (%d): %s，保留默认值 %d",
+                            batchSize, e.getMessage(), logTransmitter.getBatchSize()));
                 }
             }
 
@@ -205,18 +206,18 @@ public class LogStreamManager implements Listener {
                 try {
                     logTransmitter.setIntervalMs(interval);
                 } catch (IllegalArgumentException e) {
-                    UltiTools.getInstance().getLogger().warning("[UltiPanel] "
-                            + "ultipanel.logging.batch.interval 配置值无效 (" + interval + "): " + e.getMessage()
-                            + "，保留默认值 " + logTransmitter.getIntervalMs() + "ms");
+                    UltiTools.getInstance().getLogger().warning(FrameworkText.format(
+                            "[UltiPanel] ultipanel.logging.batch.interval 配置值无效 (%d): %s，保留默认值 %dms",
+                            interval, e.getMessage(), logTransmitter.getIntervalMs()));
                 }
             }
             
-            UltiTools.getInstance().getLogger().info(String.format(
+            UltiTools.getInstance().getLogger().info(FrameworkText.format(
                 "[UltiPanel] 日志传输配置 - 批量发送: %s, 批量大小: %d, 发送间隔: %dms",
                 logTransmitter.isBatchEnabled(), logTransmitter.getBatchSize(), logTransmitter.getIntervalMs()));
             
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().warning("[UltiPanel] 加载批量发送配置失败，使用默认配置: " + e.getMessage());
+            UltiTools.getInstance().getLogger().warning(FrameworkText.format("[UltiPanel] 加载批量发送配置失败，使用默认配置: %s", e.getMessage()));
         }
     }
     
@@ -225,11 +226,11 @@ public class LogStreamManager implements Listener {
      */
     private void sendInitializationLogs() {
         // Send the server-startup information
-        logTransmitter.info("UltiTools 日志传输系统已启动", "plugin:UltiTools");
+        logTransmitter.info(FrameworkText.text("UltiTools 日志传输系统已启动"), "plugin:UltiTools");
 
         // Send the current online-player-count information
         int onlineCount = Bukkit.getOnlinePlayers().size();
-        logTransmitter.info(String.format("当前在线玩家数量: %d", onlineCount), "server");
+        logTransmitter.info(FrameworkText.format("当前在线玩家数量: %d", onlineCount), "server");
 
         // Send the system configuration information
         if (systemLogHandler != null) {
@@ -243,7 +244,7 @@ public class LogStreamManager implements Listener {
      */
     public void handleLogStreamMessage(JsonObject data) {
         if (data == null) {
-            UltiTools.getInstance().getLogger().warning("LogStreamManager: 收到空的日志流消息");
+            UltiTools.getInstance().getLogger().warning(FrameworkText.text("LogStreamManager: 收到空的日志流消息"));
             return;
         }
         
@@ -259,7 +260,7 @@ public class LogStreamManager implements Listener {
         }
         
         UltiTools.getInstance().getLogger().info(
-            String.format("LogStreamManager: 处理日志流操作 - 动作: %s, 客户端: %s, 级别: %s", 
+            FrameworkText.format("LogStreamManager: 处理日志流操作 - 动作: %s, 客户端: %s, 级别: %s", 
                 action, clientId, level));
         
         switch (action != null ? action : "") {
@@ -281,7 +282,7 @@ public class LogStreamManager implements Listener {
                 break;
             default:
                 UltiTools.getInstance().getLogger().warning(
-                    String.format("LogStreamManager: 未知的日志流操作: %s", action));
+                    FrameworkText.format("LogStreamManager: 未知的日志流操作: %s", action));
                 sendErrorResponse(clientId, "Unknown log stream action: " + action);
                 break;
         }
@@ -338,7 +339,7 @@ public class LogStreamManager implements Listener {
             sendStreamResponse(clientId, "config_updated", "Configuration updated: " + String.join("; ", changes));
 
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().warning("[UltiPanel] 更新配置失败: " + e.getMessage());
+            UltiTools.getInstance().getLogger().warning(FrameworkText.format("[UltiPanel] 更新配置失败: %s", e.getMessage()));
             sendErrorResponse(clientId, "Failed to update configuration: " + e.getMessage());
         }
     }
@@ -385,7 +386,7 @@ public class LogStreamManager implements Listener {
         }
         if (batchChanged) {
             changes.add("batch settings updated");
-            UltiTools.getInstance().getLogger().info("[UltiPanel] 批量发送配置已更新");
+            UltiTools.getInstance().getLogger().info(FrameworkText.text("[UltiPanel] 批量发送配置已更新"));
         }
     }
 
@@ -645,7 +646,7 @@ public class LogStreamManager implements Listener {
 
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().warning(
-                String.format("LogStreamManager: 发送流响应失败: %s", e.getMessage()));
+                FrameworkText.format("LogStreamManager: 发送流响应失败: %s", e.getMessage()));
         }
     }
 
@@ -673,7 +674,7 @@ public class LogStreamManager implements Listener {
             
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().warning(
-                String.format("LogStreamManager: 发送错误响应失败: %s", e.getMessage()));
+                FrameworkText.format("LogStreamManager: 发送错误响应失败: %s", e.getMessage()));
         }
     }
     
@@ -725,7 +726,7 @@ public class LogStreamManager implements Listener {
      */
     public void sendPlayerEventLog(String eventType, String playerName, String message) {
         sendCustomLog("info", 
-            String.format("[玩家事件] %s: %s - %s", eventType, playerName, message),
+            FrameworkText.format("[玩家事件] %s: %s - %s", eventType, playerName, message),
             "plugin:UltiTools");
     }
 
@@ -734,7 +735,7 @@ public class LogStreamManager implements Listener {
      */
     public void sendPluginActionLog(String action, String details) {
         sendCustomLog("info",
-            String.format("[插件操作] %s: %s", action, details),
+            FrameworkText.format("[插件操作] %s: %s", action, details),
             "plugin:UltiTools");
     }
 
@@ -743,18 +744,18 @@ public class LogStreamManager implements Listener {
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
         String playerName = event.getPlayer().getName();
-        sendPlayerEventLog("JOIN", playerName, "玩家加入服务器");
+        sendPlayerEventLog("JOIN", playerName, FrameworkText.text("玩家加入服务器"));
     }
     
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
         String playerName = event.getPlayer().getName();
-        sendPlayerEventLog("QUIT", playerName, "玩家离开服务器");
+        sendPlayerEventLog("QUIT", playerName, FrameworkText.text("玩家离开服务器"));
     }
     
     @EventHandler
     public void onServerLoad(ServerLoadEvent event) {
-        sendCustomLog("info", "服务器加载完成", "server");
+        sendCustomLog("info", FrameworkText.text("服务器加载完成"), "server");
     }
     
     /**

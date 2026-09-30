@@ -81,7 +81,7 @@ public class ConfigManager {
         try {
             configEntity.init(ultiToolsPlugin);
         } catch (IOException e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration initialization failed！File path：" + configEntity.getConfigFilePath());
+            UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration initialization failed! File path: " + configEntity.getConfigFilePath());
         }
         Map<String, AbstractConfigEntity> configMap = pluginConfigMap.computeIfAbsent(ultiToolsPlugin, k -> new HashMap<>());
         configMap.put(configEntity.getConfigFilePath(), configEntity);
@@ -323,7 +323,7 @@ public class ConfigManager {
             try {
                 configEntity.init(plugin);
             } catch (IOException e) {
-                UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration initialization failed！File path：" + configEntity.getConfigFilePath());
+                UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration initialization failed! File path: " + configEntity.getConfigFilePath());
             }
         }
     }
@@ -372,9 +372,9 @@ public class ConfigManager {
                         }
                     }
                 } catch (IOException e) {
-                    UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration save failed！File path：" + config.getConfigFilePath());
+                    UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration save failed! File path: " + config.getConfigFilePath());
                 } catch (RuntimeException e) {
-                    UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration save failed！File path：" + config.getConfigFilePath(), e);
+                    UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration save failed! File path: " + config.getConfigFilePath(), e);
                 }
             }
         }

@@ -18,6 +18,7 @@ import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.utils.CommonUtils;
+import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 import lombok.Getter;
@@ -229,7 +230,7 @@ public class UltiPanelLogTransmitter {
 
         } catch (Exception e) {
             // Avoid a logging loop -- print to the console only (do not use the logger, to avoid the loop)
-            System.err.println("[UltiPanel] 发送日志失败: " + e.getMessage() + " - " + e.getClass().getSimpleName());
+            System.err.println(FrameworkText.format("[UltiPanel] 发送日志失败: %s - %s", e.getMessage(), e.getClass().getSimpleName()));
         }
     }
 
@@ -566,7 +567,7 @@ public class UltiPanelLogTransmitter {
                 // value (a batch-size count) does not justify carrying a self-recursion hazard.
 
             } catch (Exception e) {
-                System.err.println("[UltiPanel] 发送批量日志失败: " + e.getMessage());
+                System.err.println(FrameworkText.format("[UltiPanel] 发送批量日志失败: %s", e.getMessage()));
             }
         }
     }
@@ -762,9 +763,9 @@ public class UltiPanelLogTransmitter {
         this.logTransmissionEnabled.set(enabled);
 
         if (enabled) {
-            UltiTools.getInstance().getLogger().info("[UltiPanel] 日志传输已启用");
+            UltiTools.getInstance().getLogger().info(FrameworkText.text("[UltiPanel] 日志传输已启用"));
         } else {
-            UltiTools.getInstance().getLogger().info("[UltiPanel] 日志传输已禁用");
+            UltiTools.getInstance().getLogger().info(FrameworkText.text("[UltiPanel] 日志传输已禁用"));
         }
     }
 
@@ -877,13 +878,13 @@ public class UltiPanelLogTransmitter {
             }
 
             logTransmissionEnabled.set(false);
-            UltiTools.getInstance().getLogger().info("[UltiPanel] 日志传输器已关闭");
+            UltiTools.getInstance().getLogger().info(FrameworkText.text("[UltiPanel] 日志传输器已关闭"));
 
         } catch (InterruptedException e) {
             batchScheduler.shutdownNow();
             Thread.currentThread().interrupt();
         } catch (Exception e) {
-            System.err.println("[UltiPanel] 关闭日志传输器时发生错误: " + e.getMessage());
+            System.err.println(FrameworkText.format("[UltiPanel] 关闭日志传输器时发生错误: %s", e.getMessage()));
         }
     }
 }

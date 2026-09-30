@@ -45,6 +45,7 @@ import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.manager.JsonTransactionManager;
 import com.ultikits.ultitools.utils.BeanCopyUtil;
 import com.ultikits.ultitools.utils.FileUtils;
+import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.utils.JsonPathUtil;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
@@ -115,7 +116,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
                     T entity = GSON.fromJson(reader, type);
                     cache.put(FileUtils.mainName(dataFile), entity);
                 } catch (Exception e) {
-                    Bukkit.getLogger().log(Level.SEVERE, ChatColor.RED + "发现一个数据损坏！位置：" + dataFile.getAbsolutePath());
+                    Bukkit.getLogger().log(Level.SEVERE, ChatColor.RED + FrameworkText.format("发现一个数据损坏！位置：%s", dataFile.getAbsolutePath()));
                 }
             });
         }

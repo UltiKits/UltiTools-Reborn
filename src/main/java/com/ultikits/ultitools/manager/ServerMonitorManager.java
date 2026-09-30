@@ -5,6 +5,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
+import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -276,7 +277,7 @@ public class ServerMonitorManager {
         if (scheduler == null || scheduler.isShutdown()) {
             scheduler = Executors.newScheduledThreadPool(2);
         }
-        UltiTools.getInstance().getLogger().log(Level.INFO, "启动服务器状态监控");
+        UltiTools.getInstance().getLogger().log(Level.INFO, FrameworkText.text("启动服务器状态监控"));
 
         // Send the initial status as soon as the WebSocket connection is established
         Bukkit.getScheduler().runTaskLater(UltiTools.getInstance(), () -> {
@@ -364,7 +365,7 @@ public class ServerMonitorManager {
         cancelTask(tpsTask);
         tpsTask = null;
         scheduler.shutdown();
-        UltiTools.getInstance().getLogger().log(Level.INFO, "停止服务器状态监控");
+        UltiTools.getInstance().getLogger().log(Level.INFO, FrameworkText.text("停止服务器状态监控"));
     }
 
     private static void cancelTask(BukkitTask task) {
@@ -375,7 +376,7 @@ public class ServerMonitorManager {
                 // Hand the exception itself to the logger instead of concatenating getMessage():
                 // this preserves the stack trace and avoids unconditional string concatenation at
                 // the log call site (both PMD's PreserveStackTrace and GuardLogStatement watch for this).
-                UltiTools.getInstance().getLogger().log(Level.FINE, "取消监控任务时出错", e);
+                UltiTools.getInstance().getLogger().log(Level.FINE, FrameworkText.text("取消监控任务时出错"), e);
             }
         }
     }
@@ -386,7 +387,7 @@ public class ServerMonitorManager {
     public void sendServerStatus() {
         try {
             if (webSocketClient == null || !webSocketClient.isConnected()) {
-                UltiTools.getInstance().getLogger().log(Level.WARNING, "WebSocket未连接，无法发送服务器状态");
+                UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.text("WebSocket未连接，无法发送服务器状态"));
                 return;
             }
 
@@ -405,14 +406,14 @@ public class ServerMonitorManager {
             // runs on the async thread, so reading Bukkit directly here would be the same defect.
             ServerStateSnapshot snapshot = currentSnapshot();
             UltiTools.getInstance().getLogger().log(Level.FINE,
-                String.format("已发送服务器状态: 玩家 %d/%d, TPS %.1f, 内存 %dMB/%dMB",
+                FrameworkText.format("已发送服务器状态: 玩家 %d/%d, TPS %.1f, 内存 %dMB/%dMB",
                     snapshot.playerCount, snapshot.maxPlayers,
                     calculateTPS()[0],
                     (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / 1024 / 1024,
                     Runtime.getRuntime().maxMemory() / 1024 / 1024));
 
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "发送服务器状态失败: " + e.getMessage(), e);
+            UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.format("发送服务器状态失败: %s", e.getMessage()), e);
         }
     }
     
@@ -472,7 +473,7 @@ public class ServerMonitorManager {
                 lastCpuUsage = Math.min((systemLoad / processors) * 100, 100);
             }
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.FINE, "无法获取CPU使用率: " + e.getMessage());
+            UltiTools.getInstance().getLogger().log(Level.FINE, FrameworkText.format("无法获取CPU使用率: %s", e.getMessage()));
         }
     }
 
@@ -482,7 +483,7 @@ public class ServerMonitorManager {
     public void sendServerStatusWithRequestId(String requestId) {
         try {
             if (webSocketClient == null || !webSocketClient.isConnected()) {
-                UltiTools.getInstance().getLogger().log(Level.WARNING, "WebSocket未连接，无法发送服务器状态");
+                UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.text("WebSocket未连接，无法发送服务器状态"));
                 return;
             }
 
@@ -499,10 +500,10 @@ public class ServerMonitorManager {
             webSocketClient.sendMessage(message);
 
             UltiTools.getInstance().getLogger().log(Level.INFO, 
-                String.format("已响应服务器状态请求，请求ID: %s", requestId));
+                FrameworkText.format("已响应服务器状态请求，请求ID: %s", requestId));
 
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "响应服务器状态请求失败: " + e.getMessage(), e);
+            UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.format("响应服务器状态请求失败: %s", e.getMessage()), e);
         }
     }
     
@@ -605,7 +606,7 @@ public class ServerMonitorManager {
             return true;
         }
         UltiTools.getInstance().getLogger().log(Level.SEVERE,
-            "[ServerMonitor] 试图在非主线程上采样 Bukkit 状态，已拒绝。这是一个编程错误，请检查调度。");
+            FrameworkText.text("[ServerMonitor] 试图在非主线程上采样 Bukkit 状态，已拒绝。这是一个编程错误，请检查调度。"));
         return false;
     }
 
@@ -641,7 +642,7 @@ public class ServerMonitorManager {
             // Same convention as cancelTask: hand the exception itself to the logger instead of
             // concatenating getMessage() at the call site.
             UltiTools.getInstance().getLogger().log(Level.WARNING,
-                "[ServerMonitor] 采样服务器状态失败", e);
+                FrameworkText.text("[ServerMonitor] 采样服务器状态失败"), e);
         }
     }
 
@@ -1088,7 +1089,7 @@ public class ServerMonitorManager {
             webSocketClient.sendMessage(message);
 
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "发送性能数据失败: " + e.getMessage());
+            UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.format("发送性能数据失败: %s", e.getMessage()));
         }
     }
 
@@ -1109,7 +1110,7 @@ public class ServerMonitorManager {
             webSocketClient.sendMessage(message);
 
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "发送性能数据失败: " + e.getMessage());
+            UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.format("发送性能数据失败: %s", e.getMessage()));
         }
     }
 
@@ -1138,7 +1139,7 @@ public class ServerMonitorManager {
         lastTick = currentTime;
 
         UltiTools.getInstance().getLogger().log(Level.FINEST, 
-            String.format("TPS更新: 当前TPS=%.2f, 时间间隔=%dms", currentTPS, timeDiff));
+            FrameworkText.format("TPS更新: 当前TPS=%.2f, 时间间隔=%dms", currentTPS, timeDiff));
     }
     
     /**
@@ -1249,7 +1250,7 @@ public class ServerMonitorManager {
             webSocketClient.sendMessage(message);
             
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "发送玩家事件失败: " + e.getMessage());
+            UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.format("发送玩家事件失败: %s", e.getMessage()));
         }
     }
     

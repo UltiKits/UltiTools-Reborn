@@ -19,6 +19,7 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.utils.FrameworkText;
 
 import lombok.Getter;
 
@@ -122,7 +123,7 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     @Override
     public void connect() {
         if (isConnected) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "WebSocket已经连接，请勿重复连接");
+            UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.text("WebSocket已经连接，请勿重复连接"));
             return;
         }
         super.connect();
@@ -161,7 +162,9 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
             // pattern UltiPanelLogTransmitter#sendLog's own catch block already uses for the
             // identical reason ("do not use the logger, to avoid the loop"). Regression test:
             // UltiPanelWebSocketClientTest$ClosedSocketSendDiagnosticTests.
-            System.err.println("[UltiPanel] WebSocket未连接，无法发送消息");
+            // Plain English, not the language catalogue: resolving a translation goes through
+            // UltiTools.getInstance(), which this path must not touch (the regression test above).
+            System.err.println("[UltiPanel] WebSocket is not connected; cannot send the message");
             return;
         }
 
@@ -303,7 +306,7 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
 
         if (!isAlive(PONG_TIMEOUT_MS)) {
             long silentFor = clock.getAsLong() - lastPongTime;
-            UltiTools.getInstance().getLogger().log(Level.WARNING, String.format(
+            UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.format(
                 "WebSocket 已 %d 秒未收到 pong（阈值 %d 秒），判定为静默失效，主动重连",
                 silentFor / 1000, PONG_TIMEOUT_MS / 1000));
             // Do not set intentionalDisconnect - this is not an "intentional disconnect";
@@ -313,8 +316,9 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
         }
 
         sendPing();
-        UltiTools.getInstance().getLogger().log(Level.FINE, String.format(
-            "发送心跳ping消息%s", latencyMs >= 0 ? "（上次往返 " + latencyMs + "ms）" : ""));
+        UltiTools.getInstance().getLogger().log(Level.FINE, latencyMs >= 0
+            ? FrameworkText.format("发送心跳ping消息（上次往返 %dms）", latencyMs)
+            : FrameworkText.text("发送心跳ping消息"));
     }
 
     /**
@@ -410,7 +414,7 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
             String messageType = jsonMessage.has("type") && jsonMessage.get("type").isJsonPrimitive()
                 ? jsonMessage.get("type").getAsString() : null;
             UltiTools.getInstance().getLogger().log(Level.FINE,
-                String.format("[WebSocket接收] 类型: %s", messageType != null ? messageType : "未知"));
+                FrameworkText.format("[WebSocket接收] 类型: %s", messageType != null ? messageType : FrameworkText.text("未知")));
 
             // The pong is recorded before dispatch. It is a link-layer fact and should not
             // depend on whether an upper-layer handler happens to be wired up - liveness
@@ -423,7 +427,7 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
                 messageHandler.accept(jsonMessage);
             }
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "WebSocket消息解析失败: " + e.getMessage());
+            UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.format("WebSocket消息解析失败: %s", e.getMessage()));
         }
     }
 
@@ -469,7 +473,7 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     @Override
     public void onError(Exception ex) {
         isConnected = false;
-        String errorMessage = "WebSocket连接失败: " + ex.getMessage();
+        String errorMessage = FrameworkText.format("WebSocket连接失败: %s", ex.getMessage());
         UltiTools.getInstance().getLogger().log(Level.WARNING, UltiTools.getInstance().i18n("无法连接到UltiPanel WebSocket服务器：") + ex.getMessage());
         
         if (onErrorHandler != null) {

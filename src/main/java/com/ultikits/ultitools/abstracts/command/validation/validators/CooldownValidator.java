@@ -12,6 +12,7 @@ import com.ultikits.ultitools.annotations.command.CmdCD;
 import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.manager.TriggerContext;
+import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
@@ -477,7 +478,7 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
                 + "loads, so a validator added later cannot enforce one");
         LOGGER.log(Level.SEVERE, cause.getMessage(), cause);
         reportUnresolvedBinding(context, cause);
-        return ValidationResult.failure(ChatColor.RED + "命令执行出错: " + cause.getMessage(),
+        return ValidationResult.failure(ChatColor.RED + FrameworkText.format("命令执行出错: %s", cause.getMessage()),
                 "command.error.cooldown-unresolved");
     }
 

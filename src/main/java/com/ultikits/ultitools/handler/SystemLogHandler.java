@@ -4,6 +4,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.TriggerContext;
 import com.ultikits.ultitools.manager.UltiPanelLogTransmitter;
+import com.ultikits.ultitools.utils.FrameworkText;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -149,10 +150,10 @@ public class SystemLogHandler extends Handler {
                 excludedLoggers.addAll(UltiTools.getInstance().getConfig().getStringList("ultipanel.logging.excluded-loggers"));
             }
             
-            UltiTools.getInstance().getLogger().info("[UltiPanel] 系统日志处理器配置已加载");
+            UltiTools.getInstance().getLogger().info(FrameworkText.text("[UltiPanel] 系统日志处理器配置已加载"));
             
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().warning("[UltiPanel] 加载日志配置失败，使用默认配置: " + e.getMessage());
+            UltiTools.getInstance().getLogger().warning(FrameworkText.format("[UltiPanel] 加载日志配置失败，使用默认配置: %s", e.getMessage()));
         }
     }
     
@@ -211,7 +212,7 @@ public class SystemLogHandler extends Handler {
 
         } catch (Exception e) {
             // Avoid a logging loop by writing to System.err directly
-            System.err.println("[UltiPanel] SystemLogHandler处理日志记录失败: " + e.getMessage());
+            System.err.println(FrameworkText.format("[UltiPanel] SystemLogHandler处理日志记录失败: %s", e.getMessage()));
         } finally {
             PUBLISHING.set(false);
         }
@@ -280,7 +281,7 @@ public class SystemLogHandler extends Handler {
             } catch (Exception e) {
                 // Formatting failed - fall back to the raw message plus the parameter values
                 StringBuilder sb = new StringBuilder(message);
-                sb.append(" [参数: ");
+                sb.append(FrameworkText.text(" [参数: "));
                 for (Object param : record.getParameters()) {
                     sb.append(param).append(", ");
                 }
@@ -489,11 +490,11 @@ public class SystemLogHandler extends Handler {
      */
     public String getConfigurationInfo() {
         StringBuilder sb = new StringBuilder();
-        sb.append("SystemLogHandler配置信息:\n");
-        sb.append("- 最小日志级别: ").append(minimumLevel).append("\n");
-        sb.append("- 启用的级别: ").append(enabledLevels).append("\n");
-        sb.append("- 排除的记录器数量: ").append(excludedLoggers.size()).append("\n");
-        sb.append("- 日志传输器状态: ").append(logTransmitter != null ? "已连接" : "未连接");
+        sb.append(FrameworkText.text("SystemLogHandler配置信息:")).append("\n");
+        sb.append(FrameworkText.text("- 最小日志级别: ")).append(minimumLevel).append("\n");
+        sb.append(FrameworkText.text("- 启用的级别: ")).append(enabledLevels).append("\n");
+        sb.append(FrameworkText.text("- 排除的记录器数量: ")).append(excludedLoggers.size()).append("\n");
+        sb.append(FrameworkText.text("- 日志传输器状态: ")).append(logTransmitter != null ? FrameworkText.text("已连接") : FrameworkText.text("未连接"));
         return sb.toString();
     }
 }

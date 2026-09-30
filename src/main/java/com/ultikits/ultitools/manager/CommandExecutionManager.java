@@ -18,6 +18,7 @@ import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.AccessDecision;
 import com.ultikits.ultitools.entities.Capability;
+import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -187,7 +188,7 @@ public class CommandExecutionManager {
                 // builds its own truncated command string: decision.getMessage() already names
                 // the resolved base command plus its config key and file (D-05).
                 UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    String.format("[远程命令] 已拦截: %s", command));
+                    FrameworkText.format("[远程命令] 已拦截: %s", command));
                 RemoteActionLog deniedLog = UltiTools.getInstance().getRemoteActionLog();
                 if (deniedLog != null) {
                     deniedLog.record(RemoteActionLog.Entry.denied(Capability.COMMANDS,
@@ -201,7 +202,7 @@ public class CommandExecutionManager {
             long startTime = System.currentTimeMillis();
 
             UltiTools.getInstance().getLogger().log(Level.INFO,
-                String.format("[远程命令] > %s", command));
+                FrameworkText.format("[远程命令] > %s", command));
 
             // Record the policy decision BEFORE the dispatch hop, not inside it or after it
             // (D-22). The log records the decision, not the execution result — a decision
@@ -220,7 +221,7 @@ public class CommandExecutionManager {
             });
 
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "执行命令时发生错误: " + e.getMessage());
+            UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.format("执行命令时发生错误: %s", e.getMessage()));
             String commandId = commandData.has("commandId") && !commandData.get("commandId").isJsonNull() 
                 ? commandData.get("commandId").getAsString() : null;
             sendCommandResult(commandId, false, "Internal error: " + e.getMessage(), 0);
@@ -254,7 +255,7 @@ public class CommandExecutionManager {
 
             if (!success) {
                 UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    String.format("[远程命令] 命令执行失败: %s", command));
+                    FrameworkText.format("[远程命令] 命令执行失败: %s", command));
             }
             
             // Get command output
@@ -269,7 +270,7 @@ public class CommandExecutionManager {
         } catch (Exception e) {
             long executionTime = System.currentTimeMillis() - startTime;
             UltiTools.getInstance().getLogger().log(Level.WARNING,
-                String.format("[远程命令] 命令执行异常: %s", command), e);
+                FrameworkText.format("[远程命令] 命令执行异常: %s", command), e);
             sendCommandResult(commandId, false, "Error executing command: " + e.getMessage(), executionTime);
         }
     }
@@ -305,7 +306,7 @@ public class CommandExecutionManager {
             webSocketClient.sendMessage(message);
 
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "发送命令结果失败: " + e.getMessage());
+            UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.format("发送命令结果失败: %s", e.getMessage()));
         }
     }
     

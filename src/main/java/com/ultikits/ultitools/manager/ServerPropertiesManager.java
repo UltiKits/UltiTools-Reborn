@@ -19,6 +19,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -232,18 +233,18 @@ public class ServerPropertiesManager {
          */
         public String describeFailure() {
             if (isSuccess()) return null;
-            StringBuilder sb = new StringBuilder("server.properties 批量设置未完全生效");
+            StringBuilder sb = new StringBuilder(FrameworkText.text("server.properties 批量设置未完全生效"));
             if (!rejected.isEmpty()) {
-                sb.append("；不在白名单因而被拒的键: ").append(String.join(", ", rejected));
+                sb.append(FrameworkText.text("；不在白名单因而被拒的键: ")).append(String.join(", ", rejected));
             }
             if (!failed.isEmpty()) {
-                sb.append("；写入失败的键: ").append(String.join(", ", failed));
+                sb.append(FrameworkText.text("；写入失败的键: ")).append(String.join(", ", failed));
             }
             if (!malformed.isEmpty()) {
-                sb.append("；值不是字符串或数字因而无法写入的键: ").append(String.join(", ", malformed));
+                sb.append(FrameworkText.text("；值不是字符串或数字因而无法写入的键: ")).append(String.join(", ", malformed));
             }
             if (!notPresentOnServer.isEmpty()) {
-                sb.append("；本服务器版本没有的键: ").append(String.join(", ", notPresentOnServer));
+                sb.append(FrameworkText.text("；本服务器版本没有的键: ")).append(String.join(", ", notPresentOnServer));
             }
             return sb.toString();
         }

@@ -894,7 +894,7 @@ class ConfigManagerTest {
             configManager.saveAll();
 
             verify(mockConfig).save();
-            verify(mockLogger).log(Level.WARNING, "Configuration save failed！File path：configdir");
+            verify(mockLogger).log(Level.WARNING, "Configuration save failed! File path: configdir");
             assertThat(configDir.isDirectory()).as("Config dir should exist").isTrue();
         }
 
@@ -924,7 +924,7 @@ class ConfigManagerTest {
 
             verify(healthy).save();
             verify(mockLogger).log(eq(Level.WARNING),
-                eq("Configuration save failed！File path：config/failing.yml"),
+                eq("Configuration save failed! File path: config/failing.yml"),
                 any(IllegalStateException.class));
         }
     }

@@ -46,6 +46,7 @@ import com.ultikits.ultitools.annotations.command.RunAsync;
 import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.manager.TriggerContext;
+import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
 import lombok.Getter;
@@ -569,7 +570,7 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     private void reportCommandExecutionError(CommandContext context, Method method, Exception e,
                                               TriggerContext triggerCtx) {
         Throwable cause = e.getCause() != null ? e.getCause() : e;
-        context.getSender().sendMessage(ChatColor.RED + "命令执行出错: " + describe(cause));
+        context.getSender().sendMessage(ChatColor.RED + FrameworkText.format("命令执行出错: %s", describe(cause)));
         Logger.getLogger(BaseCommandExecutor.class.getName())
                 .log(Level.SEVERE, "Command execution failed: " + method.getName(), e);
         // Report to error collector
@@ -623,7 +624,7 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         if (asyncCommand != null && asyncCommand.showProcessing()) {
             String processingKey = asyncCommand.processingMessageKey();
             String processingMsg = processingKey.isEmpty()
-                    ? "处理中..."
+                    ? FrameworkText.text("处理中...")
                     : UltiTools.getInstance().i18n(processingKey);
             context.getSender().sendMessage(ChatColor.YELLOW + processingMsg);
         }

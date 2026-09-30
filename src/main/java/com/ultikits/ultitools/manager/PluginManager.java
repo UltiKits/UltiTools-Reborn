@@ -1609,7 +1609,7 @@ public class PluginManager {
             }
             if (existing.isNewerVersionThan(plugin)) {
                 Bukkit.getLogger().log(Level.WARNING,
-                        String.format("[UltiTools-API] %s load failed！There is already a new version！", plugin.getPluginName()));
+                        String.format("[UltiTools-API] %s load failed! There is already a new version!", plugin.getPluginName()));
                 return true;
             }
         }
@@ -1640,7 +1640,7 @@ public class PluginManager {
     private boolean isUltiToolsVersionCompatible(UltiToolsPlugin plugin) {
         if (plugin.getMinUltiToolsVersion() > UltiTools.getPluginVersion()) {
             Bukkit.getLogger().log(Level.WARNING,
-                    String.format("[UltiTools-API] %s load failed！UltiTools version is outdated！", plugin.getPluginName()));
+                    String.format("[UltiTools-API] %s load failed! UltiTools version is outdated!", plugin.getPluginName()));
             return false;
         }
         return true;
@@ -1666,12 +1666,12 @@ public class PluginManager {
             } else {
                 plugin.getContext().close();
                 Bukkit.getLogger().log(Level.WARNING,
-                        String.format("[UltiTools-API] %s load failed！Version: %s。", plugin.getPluginName(), plugin.getVersion()));
+                        String.format("[UltiTools-API] %s load failed! Version: %s.", plugin.getPluginName(), plugin.getVersion()));
             }
             return registerSelf;
         } catch (Exception | Error e) {
             Bukkit.getLogger().log(Level.WARNING, e, String::new);
-            Bukkit.getLogger().log(Level.WARNING, String.format("[UltiTools-API] %s load failed！", plugin.getPluginName()));
+            Bukkit.getLogger().log(Level.WARNING, String.format("[UltiTools-API] %s load failed!", plugin.getPluginName()));
             // WR-02 (#410): onPluginRegistered() may have already run pluginList.add(plugin)
             // and recorded some of this module's beans' @Scheduled tasks (correctly, per
             // TaskManager's own #410 fix) before a LATER bean's own scheduling call threw.
@@ -1688,7 +1688,7 @@ public class PluginManager {
                 } catch (Exception | Error unregisterFailure) {
                     Bukkit.getLogger().log(Level.WARNING, unregisterFailure, String::new);
                     Bukkit.getLogger().log(Level.WARNING, String.format(
-                            "[UltiTools-API] %s failed to unregister cleanly after a failed load！",
+                            "[UltiTools-API] %s failed to unregister cleanly after a failed load!",
                             plugin.getPluginName()));
                     // #457's unregister() now closes the context in a finally (see its
                     // javadoc), so it has already run -- successfully or not -- by the time
@@ -1729,7 +1729,7 @@ public class PluginManager {
             }
         }
         Bukkit.getLogger().log(Level.INFO,
-                String.format("[UltiTools-API] %s loaded！Version: %s。", plugin.getPluginName(), plugin.getVersion()));
+                String.format("[UltiTools-API] %s loaded! Version: %s.", plugin.getPluginName(), plugin.getVersion()));
     }
 
     /**
