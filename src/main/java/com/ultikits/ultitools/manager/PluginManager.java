@@ -20,6 +20,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Supplier;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
@@ -108,8 +109,18 @@ public class PluginManager {
      */
     private static final String LEGACY_PLUGIN_LOADING_PROPERTY = "ultitools.useLegacyPluginLoading";
 
-    @Getter
-    private final List<UltiToolsPlugin> pluginList = new ArrayList<>();
+    /**
+     * The loaded modules, in load order. Only this manager changes it: a module is listed by
+     * {@link #onPluginRegistered} and delisted by {@link #unregister(UltiToolsPlugin)}.
+     * <p>
+     * A {@link CopyOnWriteArrayList} because it is read from other threads (the asynchronous
+     * {@code /upm list}, the economy facade's module attribution) while the main thread loads and
+     * unloads modules. Every mutation replaces the backing array under the list's own lock, and
+     * both {@link #getPluginList()}'s snapshot and every loop in this class read one whole array,
+     * so a reader never sees a half-applied change and a loop that unloads modules while it
+     * iterates cannot fail (#507).
+     */
+    private final List<UltiToolsPlugin> pluginList = new CopyOnWriteArrayList<>();
 
     private final List<Class<? extends UltiToolsPlugin>> pluginClassList = new ArrayList<>();
     private ClassLoader classLoader;
@@ -157,6 +168,25 @@ public class PluginManager {
      */
     static final Set<Class<?>> FRAMEWORK_SCHEDULED_OWNER_TYPES = Collections.unmodifiableSet(
             new LinkedHashSet<>(Collections.<Class<?>>singletonList(PlayerCacheManager.class)));
+
+    /**
+     * Returns the modules currently loaded, in load order, as an unmodifiable snapshot.
+     * <p>
+     * The returned list is a copy taken at the moment of the call. It does not change when a
+     * module is loaded or unloaded afterwards, and every attempt to add, remove or clear throws
+     * {@link UnsupportedOperationException}. Only this manager changes which modules are loaded:
+     * {@code register(...)} lists a module and {@link #unregister(UltiToolsPlugin)} delists it.
+     * <p>
+     * Since 6.3.0 (#507). Before, this returned the manager's live internal {@code ArrayList}, so
+     * callers delisted unloaded modules by removing from it, and a reader on another thread could
+     * fail with a {@link java.util.ConcurrentModificationException} or see a trailing {@code null}
+     * while the main thread unloaded a module. The signature and return type are unchanged.
+     *
+     * @return an unmodifiable snapshot of the loaded modules
+     */
+    public List<UltiToolsPlugin> getPluginList() {
+        return Collections.unmodifiableList(new ArrayList<>(pluginList));
+    }
 
     /**
      * Initialize plugin manager. Please do not call this method manually.
@@ -330,6 +360,16 @@ public class PluginManager {
     }
 
     /**
+     * Unloads a module: releases everything the framework registered for it, runs its unload hook
+     * through {@link UltiToolsPlugin#unregisterSelf()}, closes its container, releases its
+     * configuration entities and removes it from the loaded modules.
+     * <p>
+     * The last three always run, in that order, even when the unload hook throws; the hook's
+     * failure is then rethrown to the caller. Since 6.3.0 (#507) this method delists the module
+     * itself, by identity, so no caller has to, and releases its configuration entities from the
+     * {@link ConfigManager}, so the shutdown save no longer writes the files of a module that was
+     * unloaded.
+     *
      * @param plugin UltiTools plugin instance
      */
     public void unregister(UltiToolsPlugin plugin) {
@@ -403,8 +443,22 @@ public class PluginManager {
             // container (SILENT-19, #338). Guard the close the same way the steps above do,
             // and run it even if unregisterSelf() itself throws (Codex review on #457, round
             // 2: "Close the module context when its unload hook throws").
-            if (plugin.getContext() != null) {
-                plugin.getContext().close();
+            try {
+                if (plugin.getContext() != null) {
+                    plugin.getContext().close();
+                }
+            } finally {
+                // #507: the release and the delisting live here, not at each caller. The module's
+                // configuration entities are released only now, after its unload hook, which may
+                // still read or save them. Delisting is by identity: two copies of one module
+                // share a name and may be equal to nothing but themselves.
+                runUnregisterStep(plugin, "release configuration entities", () -> {
+                    ConfigManager configManager = UltiTools.getInstance().getConfigManager();
+                    if (configManager != null) {
+                        configManager.unregisterAll(plugin);
+                    }
+                });
+                pluginList.removeIf(listed -> listed == plugin);
             }
         }
     }
@@ -439,7 +493,8 @@ public class PluginManager {
         UltiToolsAPI.disconnectAll();
 
         Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Unregistering all plugins...");
-        for (UltiToolsPlugin plugin : pluginList) {
+        // A snapshot: unregister() delists each module as it goes (#507).
+        for (UltiToolsPlugin plugin : new ArrayList<>(pluginList)) {
             // One module's unregister() (ultimately its own onUnregister()) throwing must
             // not cascade into every subsequent module's own command/listener/EventBus/
             // PanelResponderRegistry unregistration, nor skip pluginList.clear()/
@@ -1680,8 +1735,8 @@ public class PluginManager {
             // registerSelf()" -- only a module whose OWN activation already succeeded, but
             // whose framework-side post-registration bookkeeping failed partway, reaches here.
             // unregister(plugin) itself is wrapped separately: it must not let a SECOND
-            // exception escape this handler, and the plugin must not stay in pluginList either
-            // way.
+            // exception escape this handler. It delists the plugin in its own finally block
+            // (#507), so the plugin does not stay in pluginList either way.
             if (pluginList.contains(plugin)) {
                 try {
                     unregister(plugin);
@@ -1701,8 +1756,6 @@ public class PluginManager {
                     // once even when unregister() itself throws during this teardown -- is
                     // still met, now by #457's finally, and is still asserted by this same
                     // test class's unregisterFailureDuringTeardownIsHandledAndPluginStillRemoved.
-                } finally {
-                    pluginList.remove(plugin);
                 }
             }
             return false;

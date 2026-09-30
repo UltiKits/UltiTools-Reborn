@@ -329,6 +329,21 @@ public class ConfigManager {
     }
 
     /**
+     * Releases every configuration entity registered for {@code plugin}, as part of unloading it.
+     * <p>
+     * Called only by {@code PluginManager#unregister(UltiToolsPlugin)}, after the module's unload
+     * hook has run (#507). Nothing is saved: {@link #saveAll()} then no longer reaches the entities,
+     * so the shutdown save does not write the files of a module that was unloaded, and this
+     * registry no longer pins the unloaded module instance. A module that registered nothing is a
+     * no-op.
+     *
+     * @param plugin the module being unloaded
+     */
+    void unregisterAll(UltiToolsPlugin plugin) {
+        pluginConfigMap.remove(plugin);
+    }
+
+    /**
      * Saves, at shutdown, every registered configuration that module code changed in memory.
      * <p>
      * Since 6.3.0 (#510) this writes only the entities whose {@link

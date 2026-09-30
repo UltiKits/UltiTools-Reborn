@@ -1197,7 +1197,7 @@ public class PluginInstallUtils {
     }
 
     /**
-     * Unloads every matching module through the framework's full unload path and delists it.
+     * Unloads every matching module through the framework's full unload path, which also delists it.
      *
      * <p>A module that throws while unloading is collected rather than propagated: it is already
      * unloaded and its context already closed, so the rest of the uninstall goes ahead and the
@@ -1233,17 +1233,10 @@ public class PluginInstallUtils {
                 LOGGER.log(Level.SEVERE, "Module " + identity.requested + " threw while unloading for uninstall; "
                         + "it has been removed from the loaded modules", e);
                 unloadFailure = firstOf(unloadFailure, e);
-            } finally {
-                try {
-                    pluginManager.getPluginList().remove(plugin);
-                } catch (RuntimeException e) {
-                    // Collected rather than thrown out of a finally block, where it would replace
-                    // the failure being collected and skip the rest of the uninstall (gate 1, IN-04).
-                    LOGGER.log(Level.SEVERE, "Module " + identity.requested
-                            + " could not be removed from the loaded modules", e);
-                    unloadFailure = firstOf(unloadFailure, e);
-                }
             }
+            // No delisting here: unregister() removes the module from the plugin list in its own
+            // finally block (#507), whether or not the unload threw, and getPluginList() is an
+            // unmodifiable snapshot that no caller can remove from.
         }
         return unloadFailure;
     }
