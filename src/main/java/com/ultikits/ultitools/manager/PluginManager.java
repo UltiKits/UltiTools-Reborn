@@ -2818,8 +2818,16 @@ public class PluginManager {
         // holds this data folder), nothing below has run yet -- no entity ownership recorded, no
         // DataScope attached to the adapter. A refused registerExternal() leaves no partial state.
         registerExternalScope(adapter.getDataFolder(), scope);
+        // Only the ownership records this attempt inserts are its own to undo on a refusal: a
+        // record already held -- by a live registration of the same plugin, or by anyone else --
+        // is left alone (#537, gate 1).
+        List<Class<?>> ownershipAdded = new ArrayList<>();
         try {
-            registerEntityOwnership(scope);
+            for (Class<?> entity : scope.getOwnedEntities()) {
+                if (entityOwnership.putIfAbsent(entity, scope.getPluginName()) == null) {
+                    ownershipAdded.add(entity);
+                }
+            }
             adapter.setDataScope(scope);
             wireAop(context, scope);
             context.refresh();
@@ -2844,7 +2852,7 @@ public class PluginManager {
             // a corrected connection of the same plugin in the same process met the stale scope.
             // Nothing Bukkit-facing has been registered yet at this point, so undoing these four
             // is the whole unwinding unregisterExternal would do.
-            unwindRefusedExternal(adapter, context, scope);
+            unwindRefusedExternal(adapter, context, scope, ownershipAdded);
             throw refused;
         }
 
@@ -2921,15 +2929,17 @@ public class PluginManager {
      * Undoes what {@link #registerExternal(ExternalPluginAdapter, Class[])} registered before a
      * refusal after the folder scope was recorded (#537): closes the context (if {@code refresh()}
      * got as far as building one), clears the adapter's context and data scope, removes the
-     * entity-ownership records this scope's plugin holds, and removes the folder scope -- only if it
-     * is still this attempt's own scope instance, so an existing registration this attempt did not
-     * create is left alone. Each step is isolated, so one failing does not skip the others.
+     * entity-ownership records this attempt inserted, and removes the folder scope -- only if it is
+     * still this attempt's own scope instance. A record or scope this attempt found already in place
+     * (a live registration of the same plugin, for example) is left alone.
      *
-     * @param adapter the refused adapter
-     * @param context the container this attempt built
-     * @param scope   the scope this attempt minted and registered
+     * @param adapter        the refused adapter
+     * @param context        the container this attempt built
+     * @param scope          the scope this attempt minted and registered
+     * @param ownershipAdded the entities whose ownership record this attempt inserted
      */
-    private void unwindRefusedExternal(ExternalPluginAdapter adapter, SimpleContainer context, DataScope scope) {
+    private void unwindRefusedExternal(ExternalPluginAdapter adapter, SimpleContainer context, DataScope scope,
+            List<Class<?>> ownershipAdded) {
         try {
             context.close();
         } catch (RuntimeException closeFailure) {
@@ -2938,10 +2948,13 @@ public class PluginManager {
         }
         adapter.setContext(null);
         adapter.setDataScope(null);
-        for (Class<?> entity : scope.getOwnedEntities()) {
+        for (Class<?> entity : ownershipAdded) {
             entityOwnership.remove(entity, scope.getPluginName());
         }
-        externalScopesByFolder.remove(canonicalPath(adapter.getDataFolder()), scope);
+        // By identity, not remove(key, value): DataScope's equals compares plugin name and folder,
+        // so a live registration of the same plugin would compare equal and be removed with it.
+        externalScopesByFolder.computeIfPresent(canonicalPath(adapter.getDataFolder()),
+                (folder, registered) -> registered == scope ? null : registered);
     }
 
     /**
