@@ -102,6 +102,9 @@ public final class ModuleFileTransactions {
     private static final String STAGED_FOLDER = "staged";
     private static final String BACKUP_FOLDER = "backup";
 
+    /** The "actual hash" a report gives for a staged JAR that is not there. */
+    static final String MISSING = "<missing>";
+
     private static final Logger LOGGER = Logger.getLogger(ModuleFileTransactions.class.getName());
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
@@ -784,6 +787,13 @@ public final class ModuleFileTransactions {
             resumeWithoutStagedJar(record, target, staged);
             return;
         }
+        // The staged JAR must still be the file that was downloaded, checked before anything in the
+        // modules folder is touched -- on a first attempt and on one resumed after the old JAR moved.
+        String actual = sha256Of(staged);
+        if (!record.stagedSha256.equals(actual)) {
+            failStagedIdentity(record, staged, actual == null ? MISSING : actual);
+            return;
+        }
         if (abandonedBeforeApply(record, work, old, backup)) {
             return;
         }
@@ -822,9 +832,23 @@ public final class ModuleFileTransactions {
         if (isStagedJar(target, record)) {
             markApplied(record);
         } else {
-            failApply(record, staged, new NoSuchFileException(staged.getAbsolutePath(), null,
-                    "the staged JAR is missing"));
+            failStagedIdentity(record, staged, MISSING);
         }
+    }
+
+    /**
+     * The staged JAR is not the file recorded at staging (changed, or gone): the apply fails through
+     * {@link #failApply}, so a kept old JAR goes back and the record is {@code FAILED}; the line
+     * names the staged path and both hashes. Nothing is downloaded again.
+     */
+    private void failStagedIdentity(Record record, File staged, String actual) throws RecordRefused {
+        String detail = "the staged JAR is not the one recorded at staging: expected SHA-256 "
+                + record.stagedSha256 + ", actual " + actual;
+        Throwable error = MISSING.equals(actual)
+                ? new NoSuchFileException(staged.getAbsolutePath(), null, detail)
+                : new IOException(detail);
+        failApply(record, staged, error, new Report(Level.SEVERE, Keys.STAGED_JAR_MISMATCH, record.moduleName,
+                staged.getAbsolutePath(), record.stagedSha256, actual));
     }
 
     /**
@@ -875,8 +899,24 @@ public final class ModuleFileTransactions {
      * and the error.
      */
     private void failApply(Record record, File file, Throwable error) throws RecordRefused {
+        failApply(record, file, error, null);
+    }
+
+    /**
+     * {@link #failApply(Record, File, Throwable)} with the line to log, when the old JAR is back in
+     * place, given by the caller instead of the generic one.
+     *
+     * @param specific the line to log when nothing is left out of place, or {@code null} for the generic one
+     */
+    private void failApply(Record record, File file, Throwable error, Report specific) throws RecordRefused {
         String restoreError = restoreBackup(record);
         record.state = Record.FAILED;
+        if (restoreError == null && specific != null) {
+            record.failure = file.getAbsolutePath() + ": " + describe(error);
+            persist(record);
+            reports.add(specific);
+            return;
+        }
         if (restoreError == null && isAcrossFileSystems(error)) {
             // plugins/ is on another file system than the records folder: the swap is a rename, and
             // a rename cannot cross file systems. Nothing moved; there is no copy fallback.
@@ -1750,6 +1790,8 @@ public final class ModuleFileTransactions {
                 "模块 %s 的更新（%s → %s）未能应用：%s：%s。模块目录未改变，本次启动加载 %s；下次执行 /upm update 时会再次报告。";
         public static final String APPLY_CROSS_FILE_SYSTEM =
                 "模块 %s 的更新（%s → %s）未能应用：模块目录 %s 与更新目录 %s 不在同一个文件系统上，无法原子移动。模块目录未改变，本次启动加载 %s；请把两个目录放到同一个文件系统上，再执行 /upm update。";
+        public static final String STAGED_JAR_MISMATCH =
+                "模块 %s 暂存的 JAR %s 已不是暂存时下载的文件（预期 SHA-256 %s，实际 %s），更新未应用；模块目录未改变，下次执行 /upm update 时会再次报告。";
         public static final String APPLY_FAILED_UNRESTORED =
                 "模块 %s 的更新（%s → %s）未能应用：%s：%s；把旧版本移回也失败了（%s）。旧版本 JAR 在 %s，请停止服务器后手动移回 %s。";
         public static final String RESTORE_FAILED = "模块 %s 的旧版本 JAR 仍在 %s，未能移回 %s（%s）；请停止服务器后手动移回。";

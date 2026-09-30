@@ -123,6 +123,7 @@
   "全部处理完成：%d 个已暂存，%d 个未能暂存。已暂存的更新将在下次启动时生效。": "Done: %d staged, %d not staged. Staged updates take effect at the next start.",
   "模块 %s 已从 %s 更新到 %s：本次启动确认新版本已加载，旧版本 JAR 已删除。": "Module %s updated from %s to %s: this start confirmed the new version loaded, and the old JAR has been deleted.",
   "模块 %s 的更新（%s → %s）未能应用：%s：%s。模块目录未改变，本次启动加载 %s；下次执行 /upm update 时会再次报告。": "The update of module %s (%s -> %s) could not be applied: %s: %s. The modules folder is unchanged and %s loads at this start; the next /upm update of it reports this again.",
+  "模块 %s 暂存的 JAR %s 已不是暂存时下载的文件（预期 SHA-256 %s，实际 %s），更新未应用；模块目录未改变，下次执行 /upm update 时会再次报告。": "The staged JAR of module %s, %s, is no longer the file downloaded at staging (expected SHA-256 %s, actual %s), so the update was not applied; the modules folder is unchanged and the next /upm update of it reports this again.",
   "模块 %s 的更新（%s → %s）未能应用：模块目录 %s 与更新目录 %s 不在同一个文件系统上，无法原子移动。模块目录未改变，本次启动加载 %s；请把两个目录放到同一个文件系统上，再执行 /upm update。": "The update of module %s (%s -> %s) could not be applied: the modules folder %s and the update folder %s are on different file systems, so the files cannot be swapped by an atomic move. The modules folder is unchanged and %s loads at this start; put both folders on one file system, then run /upm update again.",
   "更新记录 %s 已拒绝执行：%s": "Update record %s was refused and not carried out: %s",
   "更新记录 %s 无法读取，已跳过：%s": "Update record %s could not be read and was skipped: %s",
