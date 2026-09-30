@@ -1310,9 +1310,7 @@ public class PluginInstallUtils {
          */
         private ModuleFileTransactions.RemovedModule removedModule() {
             List<String> names = new ArrayList<>(keys);
-            for (UltiToolsPlugin plugin : loaded) {
-                names.add(plugin.getPluginName());
-            }
+            names.addAll(recorded.runtimeNames);
             List<String> jarNames = new ArrayList<>(recorded.jarNames);
             jarNames.addAll(removedJarNames);
             return new ModuleFileTransactions.RemovedModule(recorded.identifyStrings, names, jarNames);
@@ -1334,11 +1332,15 @@ public class PluginInstallUtils {
         private final Set<String> jarNames;
         /** The targets' identify-strings, normalised, less any another loaded module also reports. */
         private final List<String> identifyStrings;
+        /** The targets' runtime names, less any another loaded module also answers to. */
+        private final Set<String> runtimeNames;
 
-        private Recorded(Set<String> mainClasses, Set<String> jarNames, List<String> identifyStrings) {
+        private Recorded(Set<String> mainClasses, Set<String> jarNames, List<String> identifyStrings,
+                         Set<String> runtimeNames) {
             this.mainClasses = mainClasses;
             this.jarNames = jarNames;
             this.identifyStrings = identifyStrings;
+            this.runtimeNames = runtimeNames;
         }
     }
 
@@ -1429,18 +1431,22 @@ public class PluginInstallUtils {
                 }
             }
         }
-        // An identify-string another loaded module also reports is not this module's to match on --
-        // the same exclusion the name keys and main classes get (gate 1, BL-02).
+        // An identify-string or runtime name another loaded module also has is not this module's to
+        // match on -- the exclusion the name keys and main classes get (gate 1, BL-02). Every form a
+        // RemovedModule carries is excluded this way: keys and main classes where they are built,
+        // identify-strings and runtime names here; JAR names need none, since a JAR another loaded
+        // module came from is refused before anything is unloaded (17-44 gate 1, reviewer A).
         Set<String> identifyStrings = new java.util.LinkedHashSet<>();
+        Set<String> runtimeNames = new java.util.LinkedHashSet<>();
         for (UltiToolsPlugin plugin : targets) {
             addNormalized(identifyStrings, plugin.getIdentifyString());
+            runtimeNames.add(plugin.getPluginName());
         }
-        Set<String> othersIdentifyStrings = new java.util.HashSet<>();
         for (UltiToolsPlugin plugin : others) {
-            addNormalized(othersIdentifyStrings, plugin.getIdentifyString());
+            identifyStrings.remove(normalizeIdentifyString(plugin.getIdentifyString()));
+            runtimeNames.remove(plugin.getPluginName());
         }
-        identifyStrings.removeAll(othersIdentifyStrings);
-        return new Recorded(mainClasses, jarNames, new ArrayList<>(identifyStrings));
+        return new Recorded(mainClasses, jarNames, new ArrayList<>(identifyStrings), runtimeNames);
     }
 
     /** Adds {@code identifyString}, normalised, unless it is absent or blank. */
