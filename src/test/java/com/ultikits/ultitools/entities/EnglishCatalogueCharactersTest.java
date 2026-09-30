@@ -37,7 +37,7 @@ class EnglishCatalogueCharactersTest {
 
     /** Whether {@code text} holds a character of the contract, iterating code points, not chars. */
     static boolean containsCjkOrFullWidth(String text) {
-        return text.codePoints().anyMatch(cp -> Character.UnicodeScript.of(cp) == Character.UnicodeScript.HAN
+        return text.codePoints().anyMatch(cp -> Character.UnicodeScript.HAN.equals(Character.UnicodeScript.of(cp))
                 || (cp >= 0x3000 && cp <= 0x303F)
                 || (cp >= 0xFF00 && cp <= 0xFFEF));
     }

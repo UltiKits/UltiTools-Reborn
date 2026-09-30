@@ -392,7 +392,11 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
             this.hash = 31 * System.identityHashCode(executor) + methodKey.hashCode();
         }
 
+        // Deliberate identity comparison: the key's contract (see the class javadoc above) is that two
+        // executors of one class are two owners, so the referents are compared by reference, never by
+        // their own equals(). The referent may also already be collected, which is handled by the null check.
         @Override
+        @SuppressWarnings("PMD.CompareObjectsWithEquals")
         public boolean equals(Object other) {
             if (this == other) {
                 return true;

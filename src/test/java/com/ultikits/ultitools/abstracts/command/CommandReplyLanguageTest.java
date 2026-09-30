@@ -107,7 +107,7 @@ class CommandReplyLanguageTest {
     }
 
     private static boolean hasCjk(String text) {
-        return text.codePoints().anyMatch(cp -> Character.UnicodeScript.of(cp) == Character.UnicodeScript.HAN);
+        return text.codePoints().anyMatch(cp -> Character.UnicodeScript.HAN.equals(Character.UnicodeScript.of(cp)));
     }
 
     @Test

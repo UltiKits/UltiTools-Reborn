@@ -38,7 +38,7 @@ class LogQueueOverflowReportTest {
     private final Handler capture = new Handler() {
         @Override
         public void publish(LogRecord record) {
-            if (record.getLevel() == Level.WARNING) {
+            if (Level.WARNING.equals(record.getLevel())) {
                 warnings.add(record);
             }
         }

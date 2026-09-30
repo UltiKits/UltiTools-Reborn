@@ -54,22 +54,6 @@ class FrameworkTextCatalogueInvariantTest {
     /** The helper class added by #556; its calls are checked against both catalogues. */
     private static final String HELPER = "FrameworkText";
 
-    /**
-     * A named exemption: every CJK literal of {@code file} that is not a translated catalogue key is
-     * exempt, and there are exactly {@code count} of them.
-     */
-    private static final class Exemption {
-        final String file;
-        final int count;
-        final String reason;
-
-        Exemption(String file, int count, String reason) {
-            this.file = file;
-            this.count = count;
-            this.reason = reason;
-        }
-    }
-
     private static final List<Exemption> EXEMPTIONS = Arrays.asList(
             new Exemption("com/ultikits/ultitools/UltiTools.java", 4,
                     "the four bilingual config.yml comment constants: English first, Chinese supplement, "
@@ -91,6 +75,22 @@ class FrameworkTextCatalogueInvariantTest {
             "上一页", "下一页", "返回", "退出", "确认", "取消",
             "=== UltiTools 命令列表 ===\n/ul reload 重载插件模块\n/ul reload <模块名> 重载指定模块\n"
                     + "/ul list 查看已加载的模块列表\n================");
+
+    /**
+     * A named exemption: every CJK literal of {@code file} that is not a translated catalogue key is
+     * exempt, and there are exactly {@code count} of them.
+     */
+    private static final class Exemption {
+        final String file;
+        final int count;
+        final String reason;
+
+        Exemption(String file, int count, String reason) {
+            this.file = file;
+            this.count = count;
+            this.reason = reason;
+        }
+    }
 
     private static JsonObject catalogue(String code) throws IOException {
         try (Reader reader = Files.newBufferedReader(LANG.resolve(code + ".json"), StandardCharsets.UTF_8)) {
