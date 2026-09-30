@@ -199,6 +199,35 @@ class PluginManagerUnregisterDelistTest {
     }
 
     @Test
+    @DisplayName("close() at server shutdown keeps every module's configuration, so the shutdown save still writes its changes")
+    void closeKeepsConfigurationForTheShutdownSave() throws IOException {
+        // Gate-1 review, reviewer A P1: UltiTools#onDisable() calls pluginManager.close() and only
+        // then configManager.saveAll(). If close() released the configuration entities the way a
+        // runtime unload does, the shutdown save would find nothing and every module's unsaved
+        // change would be lost on every restart.
+        File moduleDir = new File(tempDir, "module");
+        UltiToolsPlugin module = module("Module");
+        when(module.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
+        when(module.getResourceFolderPath()).thenReturn(moduleDir.getAbsolutePath());
+        ConfigFileStubs.stubConfigFolder(module, moduleDir);
+        File configFile = new File(moduleDir, "config/scalar.yml");
+        write(configFile, "value: original\n");
+        ConfigManagerShutdownSaveTest.ScalarConfig config =
+                new ConfigManagerShutdownSaveTest.ScalarConfig("config/scalar.yml");
+        configManager.register(module, config);
+        config.setValue("changed-in-memory");
+        PluginListSeeding.add(pluginManager, module);
+
+        pluginManager.close();
+        configManager.saveAll();
+
+        assertThat(new String(bytes(configFile), StandardCharsets.UTF_8))
+                .as("the shutdown save after close() writes the module's in-memory change")
+                .contains("changed-in-memory");
+        assertThat(pluginManager.getPluginList()).isEmpty();
+    }
+
+    @Test
     @DisplayName("after unregister(m), the shutdown save does not write m's changed configuration, and still writes a loaded module's")
     void unregisterReleasesTheModulesConfigurationEntities() throws IOException {
         File unloadedDir = new File(tempDir, "unloaded");
