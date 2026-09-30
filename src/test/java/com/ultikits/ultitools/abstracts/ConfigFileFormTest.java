@@ -118,9 +118,9 @@ class ConfigFileFormTest {
         FormsConfig second = new FormsConfig(PATH);
         second.init(plugin);
         assertThat(second.servers).hasSize(1);
-        // #553 (orchestrator ruling 2026-09-30): a map inside a list goes through the same refusal point,
-        // so its dotted key "." is left out like any other; the rest of the element is kept.
-        assertThat(second.servers.get(0)).containsEntry("name", "lobby").doesNotContainKey(".");
+        // #553 (orchestrator's second ruling 2026-09-30): a map that is a list element is plain data, which
+        // Bukkit keeps whole, so its "." key is not refused.
+        assertThat(second.servers.get(0)).containsEntry("name", "lobby").containsEntry(".", "dot");
     }
 
     @Test

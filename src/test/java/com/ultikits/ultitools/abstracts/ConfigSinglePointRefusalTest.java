@@ -107,8 +107,11 @@ class ConfigSinglePointRefusalTest {
         @ConfigEntry(path = "recipes")
         Map<String, Holder> recipes = new LinkedHashMap<>();
 
-        @ConfigEntry(path = "servers")
-        List<Map<String, String>> servers = new ArrayList<>();
+        @ConfigEntry(path = "rewards")
+        List<Map<String, Integer>> rewards = new ArrayList<>();
+
+        @ConfigEntry(path = "groups")
+        Map<String, Map<String, Map<String, Integer>>> groups = new LinkedHashMap<>();
 
         @ConfigEntry(path = "holders")
         List<Holder> holders = new ArrayList<>();
@@ -117,6 +120,44 @@ class ConfigSinglePointRefusalTest {
         int counter = 1;
 
         public NestedConfig(String configFilePath) {
+            super(configFilePath);
+        }
+    }
+
+    /** A module serializer that overrides the map writer and delegates to the default one. */
+    public static class OverridingParser extends DefaultConfigParser {
+        @Override
+        public org.bukkit.configuration.MemorySection serializeToMemorySection(Object object) {
+            return super.serializeToMemorySection(object);
+        }
+    }
+
+    @SuppressWarnings("unused")
+    static class OverridingConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "rules", parser = OverridingParser.class)
+        Map<String, String> rules = new LinkedHashMap<>();
+
+        public OverridingConfig(String configFilePath) {
+            super(configFilePath);
+        }
+    }
+
+    /** A Bukkit-serializable value whose class is never registered. */
+    public static final class Unregistered implements ConfigurationSerializable {
+        private int y = 3;
+
+        @Override
+        public Map<String, Object> serialize() {
+            return Collections.<String, Object>singletonMap("y", y);
+        }
+    }
+
+    @SuppressWarnings("unused")
+    static class UnregisteredConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "things")
+        Map<String, Unregistered> things = single("one", new Unregistered());
+
+        public UnregisteredConfig(String configFilePath) {
             super(configFilePath);
         }
     }
@@ -215,21 +256,70 @@ class ConfigSinglePointRefusalTest {
     }
 
     @Test
-    @DisplayName("a dotted key in a map inside a list, directly or inside an object, is refused once, naming the entry")
-    void mapsInsideALists() throws IOException {
+    @DisplayName("a map that is a list element is plain data: its dotted key survives two save/load cycles, with no warning")
+    void listElementMapsKeepDottedKeys() throws IOException {
+        Files.createDirectories(tempDir.resolve(PATH).getParent());
+        Files.write(tempDir.resolve(PATH), ("rewards:\n- minecraft.diamond: 5\n  stick: 1\n"
+                + "holders:\n- ingredients:\n    minecraft.gold: G\n").getBytes(StandardCharsets.UTF_8));
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            for (int cycle = 0; cycle < 2; cycle++) {
+                NestedConfig config = new NestedConfig(PATH);
+                config.init(plugin);
+                assertThat(config.rewards).hasSize(1);
+                assertThat(config.rewards.get(0)).containsEntry("minecraft.diamond", 5).containsEntry("stick", 1);
+                config.counter = cycle + 5;
+                config.save();
+                assertThat(readFile()).contains("minecraft.diamond: 5").contains("minecraft.gold: G");
+            }
+            assertThat(warnings.messagesContaining("minecraft")).isEmpty();
+        }
+    }
+
+    @Test
+    @DisplayName("a section-bound dotted key is refused with a warning that names its nested path")
+    void sectionBoundKeyNamesItsNestedPath() throws IOException {
         NestedConfig config = new NestedConfig(PATH);
         config.init(plugin);
-        config.servers.add(single("o.O", "surprised"));
-        config.holders.add(holder("minecraft.gold", "G"));
+        Map<String, Map<String, Integer>> perks = new LinkedHashMap<>();
+        perks.put("perks", single("fly.speed", 2));
+        config.groups.put("vip", perks);
 
         try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
             config.save();
-            assertThat(warnings.messagesContaining("'o.O'")).hasSize(1)
-                    .allSatisfy(message -> assertThat(message).contains(PATH).contains("'servers'"));
-            assertThat(warnings.messagesContaining("'minecraft.gold'")).hasSize(1)
-                    .allSatisfy(message -> assertThat(message).contains("'holders'"));
+            List<String> named = warnings.messagesContaining("'fly.speed'");
+            assertThat(named).hasSize(1);
+            assertThat(named.get(0)).contains(PATH).contains("'groups.vip.perks'").contains("SingleModule");
         }
-        assertThat(readFile()).doesNotContain("surprised").doesNotContain("gold");
+        assertThat(readFile()).doesNotContain("fly");
+    }
+
+    @Test
+    @DisplayName("a serializer that overrides the map writer and calls super refuses on save and warns on load alike")
+    void overridingSubclassIsNotExempt() throws IOException {
+        OverridingConfig config = new OverridingConfig(PATH);
+        config.init(plugin);
+        config.rules.put("vip.gold", "x");
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            config.save();
+            assertThat(warnings.messagesContaining("'vip.gold'")).hasSize(1);
+        }
+        Files.write(tempDir.resolve(PATH), "rules:\n  vip.gold: x\n".getBytes(StandardCharsets.UTF_8));
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            new OverridingConfig(PATH).init(plugin);
+            assertThat(warnings.messagesContaining("'vip.gold'")).hasSize(1);
+        }
+    }
+
+    @Test
+    @DisplayName("an unregistered ConfigurationSerializable in a map is written as its fields, as on alpha, and the file loads")
+    void unregisteredSerializableIsWrittenAsFields() throws IOException {
+        UnregisteredConfig config = new UnregisteredConfig(PATH);
+        config.init(plugin);
+        config.save();
+        assertThat(readFile()).doesNotContain("==");
+        UnregisteredConfig second = new UnregisteredConfig(PATH);
+        assertThatCode(() -> second.init(plugin)).doesNotThrowAnyException();
+        assertThat(second.isLastLoadUnparseable()).isFalse();
     }
 
     @Test
