@@ -839,16 +839,7 @@ public final class ModuleFileTransactions {
             record.key = moduleName;
             File recordFile = recordFileOf(record);
             if (exists(recordFile)) {
-                try {
-                    Record existing = readRecord(recordFile);
-                    if (existing != null && existing.removals != null) {
-                        record.removals.addAll(existing.removals);
-                    }
-                } catch (IOException unreadable) {
-                    // An unreadable earlier record of this module cannot be merged; the new one replaces it.
-                    LOGGER.log(Level.WARNING, "Replacing an unreadable update record while recording a deletion: "
-                            + recordFile.getAbsolutePath(), unreadable);
-                }
+                record.removals.addAll(mergeableRemovals(recordFile));
             }
             for (File file : files) {
                 if (!isDirectChild(modulesFolder, file)) {
@@ -888,18 +879,8 @@ public final class ModuleFileTransactions {
     private void forgetDeferredRemovalChecked(String fileName) throws IOException {
         synchronized (LOCK) {
             for (File recordFile : recordFiles()) {
-                Record record;
-                try {
-                    record = readRecord(recordFile);
-                } catch (IOException unreadable) {
-                    // One malformed record never stops the others being cleared (round-5 review).
-                    LOGGER.log(Level.WARNING, "Skipped an unreadable update record while clearing a recorded deletion: "
-                            + recordFile.getAbsolutePath(), unreadable);
-                    continue;
-                }
-                if (record == null || !Record.REMOVE.equals(record.type) || record.removals == null
-                        || !recordFile.getName().equals(recordFileOf(record).getName())
-                        || !record.removals.removeIf(removal -> fileName.equals(removal.name))) {
+                Record record = removalRecordIn(recordFile);
+                if (record == null || !record.removals.removeIf(removal -> fileName.equals(removal.name))) {
                     continue;
                 }
                 if (record.removals.isEmpty()) {
@@ -909,6 +890,54 @@ public final class ModuleFileTransactions {
                 }
             }
         }
+    }
+
+    /**
+     * The entries of an earlier removal record of the same module, to merge into a new one; none when
+     * it cannot be read or fails the validation start-up applies ({@link #problemWith}: for example a
+     * null entry), and it is then replaced, with a warning naming it (Codex round 18, #561).
+     */
+    private List<Removal> mergeableRemovals(File recordFile) {
+        Record existing;
+        try {
+            existing = readRecord(recordFile);
+        } catch (IOException unreadable) {
+            // An unreadable earlier record of this module cannot be merged; the new one replaces it.
+            LOGGER.log(Level.WARNING, "Replacing an unreadable update record while recording a deletion: "
+                    + recordFile.getAbsolutePath(), unreadable);
+            return Collections.emptyList();
+        }
+        String problem = existing == null ? null : problemWith(existing, recordFile);
+        if (problem != null) {
+            LOGGER.log(Level.WARNING, "Replacing an update record that cannot be carried out (" + problem
+                    + ") while recording a deletion: " + recordFile.getAbsolutePath());
+            return Collections.emptyList();
+        }
+        return existing == null || existing.removals == null ? Collections.<Removal>emptyList() : existing.removals;
+    }
+
+    /**
+     * The removal record in {@code recordFile}, or {@code null} when it holds none: a record of another
+     * type, or one that cannot be read or fails the validation start-up applies ({@link #problemWith}:
+     * for example a null entry). A record that cannot be used is warned about, naming it, and never
+     * stops the others being cleared (round-5 review; Codex round 18, #561).
+     */
+    private Record removalRecordIn(File recordFile) {
+        Record record;
+        try {
+            record = readRecord(recordFile);
+        } catch (IOException unreadable) {
+            LOGGER.log(Level.WARNING, "Skipped an unreadable update record while clearing a recorded deletion: "
+                    + recordFile.getAbsolutePath(), unreadable);
+            return null;
+        }
+        String problem = record == null ? "empty record" : problemWith(record, recordFile);
+        if (problem != null) {
+            LOGGER.log(Level.WARNING, "Skipped an update record that cannot be carried out (" + problem
+                    + ") while clearing a recorded deletion: " + recordFile.getAbsolutePath());
+            return null;
+        }
+        return Record.REMOVE.equals(record.type) ? record : null;
     }
 
     // ------------------------------------------------------------------------------------------
