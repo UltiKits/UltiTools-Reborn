@@ -38,8 +38,9 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
  * load from, and how {@code /upm update} replaces a module's JAR (#505, #513).
  *
  * <p><b>Observation, not prediction.</b> An update never decides before a restart whether the new
- * JAR will load. {@code /upm update} downloads the new JAR into a transaction folder beside the
- * modules folder -- never into it -- and writes a record. At the next start, before the module
+ * JAR will load. {@code /upm update} downloads the new JAR into the transactions folder,
+ * {@code <server root>/.ultikits/upm-transactions} -- never into the modules folder -- and writes a
+ * record. At the next start, before the module
  * class loader is built, {@link #applyBeforeLoad()} moves the old JAR aside (it is kept) and puts
  * the new one in place. After the modules have loaded, {@link #observeAfterLoad(List, Function)}
  * looks at what actually loaded: the update is committed only when the module is loaded from the
@@ -66,6 +67,15 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
  * ({@link #recordDeferredRemoval(String, List)}), and the next start deletes it before any module
  * loads, if it is still that file (#518).
  *
+ * <p><b>Where the records live.</b> Under the server root, beside the credential store
+ * ({@link #transactionsFolder(File)}), not under {@code plugins/}: the panel's file interface can
+ * write under {@code plugins/} when its file writing is enabled, and a forged removal record there
+ * would delete a module JAR at the next start (maintainer decision, 2026-09-30). The price is that
+ * the start-up swap is an atomic rename between the modules folder and this folder: when
+ * {@code plugins/} is on another file system the rename is refused, the update is not applied, and
+ * one SEVERE line names both folders. There is deliberately no copy fallback -- a copy is not
+ * atomic, and the crash-window guarantees below rely on every move being a rename.
+ *
  * <p><b>Confinement.</b> A record names files only by their file name. Each name is resolved
  * against the one folder it belongs to and canonicalised; a name that leaves that folder -- a
  * separator, {@code ..}, or a link pointing elsewhere -- makes the whole record refused with a
@@ -80,7 +90,10 @@ public final class ModuleFileTransactions {
     /** The data-folder child modules are loaded from. */
     private static final String MODULES_FOLDER_NAME = "plugins";
 
-    /** The data-folder child that holds transaction records and staged JARs. */
+    /** The server-root folder the credential store also lives in ({@code CredentialStore}). */
+    private static final String ULTIKITS_FOLDER_NAME = ".ultikits";
+
+    /** The {@link #ULTIKITS_FOLDER_NAME} child that holds transaction records and staged JARs. */
     private static final String TRANSACTIONS_FOLDER_NAME = "upm-transactions";
 
     private static final String RECORD_SUFFIX = ".json";
@@ -151,7 +164,8 @@ public final class ModuleFileTransactions {
      * The folder modules are loaded from: the framework's data folder plus {@code plugins}.
      *
      * <p>The one place this is computed (#517). The module class loader's URLs, the start-up scan,
-     * install, update, uninstall and the transaction folder all come from here. The data folder
+     * install, update and uninstall all come from here; the transactions folder comes from the same
+     * data folder ({@link #transactionsFolder(File)}). The data folder
      * follows Bukkit's own plugin-directory option, so this is right wherever the server keeps its
      * plugins -- unlike the JVM's working directory, which a launcher may set anywhere.
      *
@@ -163,14 +177,34 @@ public final class ModuleFileTransactions {
     }
 
     /**
-     * The folder transaction records and staged JARs live in: a sibling of the modules folder, so
-     * the module loader never reads anything in it.
+     * The folder transaction records and staged JARs live in:
+     * {@code <server root>/.ultikits/upm-transactions}, beside the credential store. It is outside
+     * {@code plugins/}, so the module loader never reads anything in it and the panel's file
+     * interface, whose default editable roots do not include it, cannot forge a record.
      *
      * @param dataFolder the framework's data folder
      * @return the transactions folder
      */
     public static File transactionsFolder(File dataFolder) {
-        return new File(modulesFolder(dataFolder).getParentFile(), TRANSACTIONS_FOLDER_NAME);
+        return new File(new File(serverRoot(dataFolder), ULTIKITS_FOLDER_NAME), TRANSACTIONS_FOLDER_NAME);
+    }
+
+    /**
+     * The server root, found the way {@code CredentialStore} finds it: the data folder's
+     * grandparent ({@code <server root>/plugins/UltiTools}). Resolved from the absolute data folder,
+     * so a relative one gives the same root; never from the JVM's working directory.
+     *
+     * @param dataFolder the framework's data folder
+     * @return the server root
+     * @throws IllegalStateException when the data folder has no grandparent
+     */
+    private static File serverRoot(File dataFolder) {
+        File root = dataFolder.getAbsoluteFile().getParentFile().getParentFile();
+        if (root == null) {
+            throw new IllegalStateException("the data folder " + dataFolder.getAbsolutePath()
+                    + " is not inside <server root>/plugins/");
+        }
+        return root;
     }
 
     /**
@@ -697,6 +731,17 @@ public final class ModuleFileTransactions {
     private void failApply(Record record, File file, Throwable error) throws RecordRefused {
         String restoreError = restoreBackup(record);
         record.state = Record.FAILED;
+        if (restoreError == null && isAcrossFileSystems(error)) {
+            // plugins/ is on another file system than the records folder: the swap is a rename, and
+            // a rename cannot cross file systems. Nothing moved; there is no copy fallback.
+            record.failure = "the modules folder " + modulesFolder.getAbsolutePath() + " and the update folder "
+                    + transactionsFolder.getAbsolutePath() + " are on different file systems: " + describe(error);
+            persist(record);
+            report(Level.SEVERE, Keys.APPLY_CROSS_FILE_SYSTEM, record.moduleName, record.oldVersion,
+                    record.newVersion, modulesFolder.getAbsolutePath(), transactionsFolder.getAbsolutePath(),
+                    record.oldVersion);
+            return;
+        }
         record.failure = file.getAbsolutePath() + ": " + describe(error)
                 + (restoreError == null ? "" : "; moving the previous JAR back also failed: " + restoreError);
         persist(record);
@@ -708,6 +753,16 @@ public final class ModuleFileTransactions {
                     record.newVersion, file.getAbsolutePath(), describe(error), restoreError,
                     backupOf(record).getAbsolutePath(), confined(modulesFolder, record.oldName).getAbsolutePath());
         }
+    }
+
+    /** Whether a move failed because its two ends are on different file systems. */
+    private static boolean isAcrossFileSystems(Throwable error) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof AtomicMoveNotSupportedException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** A failed apply found at a later start: make sure the old JAR is back, and say so if it cannot be. */
@@ -1260,19 +1315,18 @@ public final class ModuleFileTransactions {
 
     /** How files are moved and deleted; a test substitutes a failing one. */
     interface FileOps {
-        /** An atomic rename that never replaces an existing file, and a plain delete. */
+        /**
+         * An atomic rename that never replaces an existing file, and a plain delete. A rename
+         * across file systems throws {@link AtomicMoveNotSupportedException}, which the apply
+         * reports as such; it is never replaced by a copy.
+         */
         FileOps DEFAULT = new FileOps() {
             @Override
             public void move(Path from, Path to) throws IOException {
                 if (Files.exists(to, LinkOption.NOFOLLOW_LINKS)) {
                     throw new FileAlreadyExistsException(to.toString());
                 }
-                try {
-                    Files.move(from, to, StandardCopyOption.ATOMIC_MOVE);
-                } catch (AtomicMoveNotSupportedException e) {
-                    throw new IOException("the modules folder and the transactions folder must be on one"
-                            + " file system: " + e.getMessage(), e);
-                }
+                Files.move(from, to, StandardCopyOption.ATOMIC_MOVE);
             }
 
             @Override
@@ -1471,6 +1525,8 @@ public final class ModuleFileTransactions {
         public static final String ROLLBACK_FINISHED = "模块 %s 的回滚已完成：已恢复为 %s，本次启动加载 %s。";
         public static final String APPLY_FAILED =
                 "模块 %s 的更新（%s → %s）未能应用：%s：%s。模块目录未改变，本次启动加载 %s；下次执行 /upm update 时会再次报告。";
+        public static final String APPLY_CROSS_FILE_SYSTEM =
+                "模块 %s 的更新（%s → %s）未能应用：模块目录 %s 与更新目录 %s 不在同一个文件系统上，无法原子移动。模块目录未改变，本次启动加载 %s；请把两个目录放到同一个文件系统上，再执行 /upm update。";
         public static final String APPLY_FAILED_UNRESTORED =
                 "模块 %s 的更新（%s → %s）未能应用：%s：%s；把旧版本移回也失败了（%s）。旧版本 JAR 在 %s，请停止服务器后手动移回 %s。";
         public static final String RESTORE_FAILED = "模块 %s 的旧版本 JAR 仍在 %s，未能移回 %s（%s）；请停止服务器后手动移回。";

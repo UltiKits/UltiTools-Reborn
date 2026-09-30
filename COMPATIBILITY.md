@@ -464,13 +464,16 @@ This section governs the third kind.
   reported as "Update successful" — whether or not the old JAR was gone, so a failed delete left two
   versions of the module to race at the next start. Now the update **takes effect at the next start
   and is committed only after that start shows the module loaded**: the command downloads the new JAR
-  into `plugins/UltiTools/upm-transactions/`, a sibling of the modules folder, and records it; the
+  into `.ultikits/upm-transactions/` under the server root — beside the credential store and outside
+  `plugins/`, where the panel's file interface cannot forge a record — and records it; the
   next start moves the old JAR aside (keeping it) and the new one in, before the module class loader
   is built; after the modules load, the update is kept only if the module is loaded from the new JAR
   at the new version, and otherwise the old JAR is restored and the new one removed, with one log
   line naming both versions. Nothing predicts before the restart whether a JAR will load. A move that
   fails leaves the modules folder as it was and is reported in the start-up log and again by the
-  next `/upm update` of that module. `updatePlugin(String)` keeps its signature; its `true` now
+  next `/upm update` of that module. The swap is an atomic rename, so when `plugins/` is on a
+  different file system from the server root the start refuses it, changes nothing, and names both
+  folders in one SEVERE line; there is no copy fallback. `updatePlugin(String)` keeps its signature; its `true` now
   means "staged", and `PluginInstallUtils.stageUpdate(String)` (`@ApiStatus.Internal`) returns what
   was staged or why nothing was. Measured consumers: none of the fifteen module repositories or
   UltiTools-External-Example call either method (their `origin/master`, searched for

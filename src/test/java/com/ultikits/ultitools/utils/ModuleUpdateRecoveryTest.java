@@ -508,7 +508,7 @@ class ModuleUpdateRecoveryTest {
         @Test
         @DisplayName("a commit whose decision cannot be written keeps both versions, and the next start restores the old one")
         void commitThatCannotBeRecorded_keepsBothVersions() throws IOException {
-            Assumptions.assumeTrue(Files.getFileStore(transactions.toPath().getParent()).supportsFileAttributeView("posix"));
+            Assumptions.assumeTrue(Files.getFileStore(serverRoot.toPath()).supportsFileAttributeView("posix"));
             stage(transactions());
             ModuleFileTransactions start = transactions();
             start.applyBeforeLoad();
