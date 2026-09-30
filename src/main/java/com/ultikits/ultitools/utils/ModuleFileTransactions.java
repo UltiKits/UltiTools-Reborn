@@ -282,6 +282,35 @@ public final class ModuleFileTransactions {
     public StageResult stageUpdate(String identifyString, List<UltiToolsPlugin> loaded,
                                    Function<UltiToolsPlugin, File> codeSource, Catalogue catalogue,
                                    Downloader downloader) {
+        return stageUpdate(identifyString, loaded, codeSource, catalogue, downloader, module -> null);
+    }
+
+    /**
+     * Stages an update of a loaded module, as {@link #stageUpdate(String, List, Function, Catalogue,
+     * Downloader)} does, with the module's main class as the module loader recorded it.
+     *
+     * <p>Once the new JAR's file name is known and before anything is downloaded, the update is
+     * refused when another copy of the module would load instead of it at the next start: a JAR in
+     * the modules folder whose {@code plugin.yml} declares the same {@code main:} and whose file name
+     * sorts before the new JAR's (maintainer follow-up 19). All module JARs share one class loader
+     * whose class path is in file-name order (#476), so such a copy supplies the module's classes
+     * and the observation would roll the update back at every attempt. A copy that sorts after the
+     * new JAR does not stop it; the start-up duplicate warning names that copy. A copy added after
+     * staging is caught by the observation.
+     *
+     * @param identifyString the module's identify-string
+     * @param loaded         the loaded modules
+     * @param codeSource     which JAR a loaded module came from
+     * @param catalogue      where the latest version and its download link come from
+     * @param downloader     how the new JAR is downloaded
+     * @param mainClassOf    the main class the module loader recorded for a loaded module, or
+     *                       {@code null} when it has none; the old JAR's own {@code plugin.yml}
+     *                       {@code main:} is used then
+     * @return what happened
+     */
+    public StageResult stageUpdate(String identifyString, List<UltiToolsPlugin> loaded,
+                                   Function<UltiToolsPlugin, File> codeSource, Catalogue catalogue,
+                                   Downloader downloader, Function<UltiToolsPlugin, String> mainClassOf) {
         String key = normalize(identifyString);
         if (key == null) {
             return StageResult.failed(null, Keys.REASON_NO_IDENTIFY_STRING);
@@ -302,8 +331,7 @@ public final class ModuleFileTransactions {
         }
         record.oldSha256 = reservation.oldSha256;
         try {
-            return download(record, work, identifyString, reservation.module, reservation.oldJar, catalogue,
-                    downloader, reservation.previousFailure);
+            return download(record, work, identifyString, reservation, catalogue, downloader, mainClassOf);
         } finally {
             synchronized (LOCK) {
                 STAGING.remove(key);
@@ -421,8 +449,10 @@ public final class ModuleFileTransactions {
      * the record write at its end takes the lock again.
      */
     @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.ExcessiveParameterList"})
-    private StageResult download(Record record, File work, String identifyString, UltiToolsPlugin module,
-                                 File oldJar, Catalogue catalogue, Downloader downloader, String previousFailure) {
+    private StageResult download(Record record, File work, String identifyString, Reservation reservation,
+                                 Catalogue catalogue, Downloader downloader,
+                                 Function<UltiToolsPlugin, String> mainClassOf) {
+        String previousFailure = reservation.previousFailure;
         String latest;
         String link;
         try {
@@ -432,8 +462,9 @@ public final class ModuleFileTransactions {
             return StageResult.failed(previousFailure, Keys.REASON_DOWNLOAD_FAILED, describe(e));
         }
         String targetName = PluginInstallUtils.installedJarName(identifyString, latest);
-        if (link == null || targetName == null) {
-            return StageResult.failed(previousFailure, Keys.REASON_NO_DOWNLOAD, identifyString);
+        StageResult beforeDownload = refuseBeforeDownload(identifyString, link, targetName, reservation, mainClassOf);
+        if (beforeDownload != null) {
+            return beforeDownload;
         }
         File stagedFolder = new File(work, STAGED_FOLDER);
         String downloadFailure = fetch(downloader, link, targetName, work, stagedFolder);
@@ -446,12 +477,69 @@ public final class ModuleFileTransactions {
         }
 
         record.state = Record.PENDING;
-        record.moduleName = module.getPluginName();
-        record.oldName = oldJar.getName();
-        record.oldVersion = module.getVersion();
+        record.moduleName = reservation.module.getPluginName();
+        record.oldName = reservation.oldJar.getName();
+        record.oldVersion = reservation.module.getVersion();
         record.stagedName = targetName;
         record.targetName = targetName;
         return writeStaged(record, work, previousFailure);
+    }
+
+    /**
+     * The refusals decided once the new JAR's file name is known, before anything is downloaded or
+     * written: no download offered, or another copy of the module that would load instead of the new
+     * JAR at the next start (maintainer follow-up 19).
+     *
+     * @return the refusal, or {@code null} to download
+     */
+    private StageResult refuseBeforeDownload(String identifyString, String link, String targetName,
+                                             Reservation reservation, Function<UltiToolsPlugin, String> mainClassOf) {
+        if (link == null || targetName == null) {
+            return StageResult.failed(reservation.previousFailure, Keys.REASON_NO_DOWNLOAD, identifyString);
+        }
+        List<String> copies = copiesLoadingFirst(reservation.oldJar, targetName, mainClassOf(reservation, mainClassOf));
+        return copies.isEmpty() ? null : StageResult.failed(reservation.previousFailure,
+                Keys.REASON_OTHER_COPY_LOADS_FIRST, targetName, String.join(", ", copies));
+    }
+
+    /**
+     * The module's main class: as the module loader recorded it, else as the old JAR's own
+     * {@code plugin.yml} declares it -- the same entry the loader reads. {@code null} when neither
+     * says.
+     */
+    private static String mainClassOf(Reservation reservation, Function<UltiToolsPlugin, String> recorded) {
+        String mainClass = recorded == null ? null : recorded.apply(reservation.module);
+        return mainClass != null ? mainClass : PluginYmlReader.readFromJarFile(reservation.oldJar).getMain();
+    }
+
+    /**
+     * The other JARs in the modules folder that would supply {@code mainClass} ahead of a new JAR
+     * named {@code targetName}: those whose {@code plugin.yml} declares it now and whose file name
+     * sorts before {@code targetName} in the order the module loader reads the folder (#476). The
+     * old JAR is not one: the update moves it away. Judged by what each file declares now, not by
+     * the start-up index alone, which goes stale when a copy is removed or replaced. Reads only
+     * {@code plugin.yml}.
+     *
+     * @return their file names in file-name order; empty when there is none, when the main class is
+     *         unknown, or when the folder cannot be listed (the observation still backs the update)
+     */
+    private List<String> copiesLoadingFirst(File oldJar, String targetName, String mainClass) {
+        List<String> copies = new ArrayList<>();
+        File[] jars = mainClass == null ? null : moduleJars(modulesFolder);
+        if (jars == null) {
+            return copies;
+        }
+        String oldPath = canonicalPath(oldJar);
+        for (File jar : jars) {
+            if (jar.getName().compareTo(targetName) >= 0) {
+                break;
+            }
+            if (!oldPath.equals(canonicalPath(jar))
+                    && mainClass.equals(PluginYmlReader.readFromJarFile(jar).getMain())) {
+                copies.add(jar.getName());
+            }
+        }
+        return copies;
     }
 
     /**
@@ -2104,6 +2192,8 @@ public final class ModuleFileTransactions {
         public static final String REASON_SHARED_JAR = "它的 JAR %s 同时也是已加载模块 %s 的 JAR，更新会把该模块一起替换";
         public static final String REASON_OLD_JAR_UNREADABLE = "模块当前的 JAR %s 无法读取";
         public static final String REASON_NO_DOWNLOAD = "云端没有 %s 的可下载版本";
+        public static final String REASON_OTHER_COPY_LOADS_FIRST =
+                "下次启动时会由该模块的另一份副本代替新 JAR %s 加载：模块目录中的以下 JAR 声明了同一个主类，且文件名排在它之前：%s；请先移走它们，再执行 /upm update";
         public static final String REASON_DOWNLOAD_FAILED = "下载失败：%s";
         public static final String REASON_INVALID_JAR = "下载的文件 %s 不是有效的模块 JAR";
         public static final String REASON_WRONG_IDENTITY = "下载的 %s 没有声明 identify-string %s 和版本号";

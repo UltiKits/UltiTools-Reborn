@@ -475,10 +475,30 @@ public class PluginInstallUtils {
     @ApiStatus.Internal
     public static ModuleFileTransactions.StageResult stageUpdate(String identifyString) {
         UltiTools ultiTools = UltiTools.getInstance();
+        PluginManager pluginManager = ultiTools.getPluginManager();
         return new ModuleFileTransactions(ultiTools.getDataFolder()).stageUpdate(identifyString,
-                new ArrayList<>(ultiTools.getPluginManager().getPluginList()), DEFAULT_MODULE_CODE_SOURCE,
+                new ArrayList<>(pluginManager.getPluginList()), DEFAULT_MODULE_CODE_SOURCE,
                 CATALOGUE, (link, fileName, folder) -> HttpDownloadUtils.download(link, fileName,
-                        folder.getAbsolutePath()));
+                        folder.getAbsolutePath()), recordedMainClass(pluginManager.getModuleJarIndex()));
+    }
+
+    /**
+     * The main class the module loader recorded for a loaded module, read from its start-up index
+     * (#516): what staging checks other copies of the module against (maintainer follow-up 19).
+     * {@code null} for a module the index has no record of, so that staging falls back to the old
+     * JAR's own {@code plugin.yml} {@code main:} rather than to a runtime class name no JAR declares.
+     *
+     * @param index the loader's index, or {@code null}
+     * @return the resolver
+     */
+    static java.util.function.Function<UltiToolsPlugin, String> recordedMainClass(ModuleJarIndex index) {
+        if (index == null) {
+            return module -> null;
+        }
+        return module -> {
+            String mainClass = index.mainClassOf(module);
+            return index.jarsDeclaring(mainClass).isEmpty() ? null : mainClass;
+        };
     }
 
     /**

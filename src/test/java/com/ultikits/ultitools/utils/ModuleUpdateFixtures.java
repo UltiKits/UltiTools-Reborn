@@ -53,6 +53,12 @@ public final class ModuleUpdateFixtures {
      * Writes a module JAR whose {@code plugin.yml} declares the given name, version and
      * identify-string, plus one class-shaped entry so it is an ordinary module archive.
      *
+     * <p>Its {@code main:} is derived from the identify-string, so JARs of different modules
+     * declare different main classes, as real modules do, and every copy of one module declares
+     * the same one: {@code com.example.<identify-string>.DemoModule} ({@code com.example.demo.DemoModule}
+     * for {@code demo} or none). Staging treats another JAR declaring the same {@code main:} as a
+     * copy of the module (maintainer follow-up 19).
+     *
      * @param file           where to write it
      * @param name           the {@code name:} value
      * @param version        the {@code version:} value
@@ -65,10 +71,12 @@ public final class ModuleUpdateFixtures {
         if (parent != null) {
             Files.createDirectories(parent.toPath());
         }
+        String mainPackage = "com.example." + (identifyString == null ? "demo"
+                : identifyString.replaceAll("[^A-Za-z0-9]", "_"));
         StringBuilder yml = new StringBuilder()
                 .append("name: ").append(name).append('\n')
                 .append("version: '").append(version).append("'\n")
-                .append("main: com.example.demo.DemoModule\n");
+                .append("main: ").append(mainPackage).append(".DemoModule\n");
         if (identifyString != null) {
             yml.append("identify-string: ").append(identifyString).append('\n');
         }
@@ -76,7 +84,7 @@ public final class ModuleUpdateFixtures {
             out.putNextEntry(new JarEntry("plugin.yml"));
             out.write(yml.toString().getBytes(StandardCharsets.UTF_8));
             out.closeEntry();
-            out.putNextEntry(new JarEntry("com/example/demo/DemoModule.class"));
+            out.putNextEntry(new JarEntry(mainPackage.replace('.', '/') + "/DemoModule.class"));
             out.write(new byte[]{(byte) 0xCA, (byte) 0xFE, (byte) 0xBA, (byte) 0xBE});
             out.closeEntry();
         }
