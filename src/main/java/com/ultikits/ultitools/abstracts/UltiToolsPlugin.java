@@ -324,6 +324,10 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * recorded too (#459), so an edit made to it afterwards is kept as a customisation when the
      * operator later switches language. The configured language is resolved afterwards, as before;
      * its file is then already migrated. Codes come from the jar's own {@code lang/} entries.
+     * <p>
+     * Every dictionary builder reachable from here -- {@link #readLanguageFile} and {@link
+     * #applyPlaceholderArityOverride} -- returns an empty dictionary while {@code
+     * languageMigrationOnly} is set, so no unused catalogue is parsed (Codex review of #566, run 2).
      */
     private void migrateBundledLanguageFiles() {
         CodeSource codeSource = this.getClass().getProtectionDomain().getCodeSource();
@@ -334,13 +338,24 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         try {
             for (String code : Localized.scanLangResources(codeSource.getLocation())) {
                 for (String extension : LANGUAGE_EXTENSIONS) {
-                    if (readEmbeddedResourceBytes("lang/" + code + extension) != null) {
-                        loadLanguageFromDisk(resourceFolderPath, code, extension);
-                    }
+                    migrateBundledLanguageFile(code, extension);
                 }
             }
         } finally {
             languageMigrationOnly = false;
+        }
+    }
+
+    private void migrateBundledLanguageFile(String code, String extension) {
+        // Isolated per file (Codex review of #566, run 2): a failure while migrating one language's
+        // file is logged and never stops the module from loading or the other files from migrating.
+        try {
+            if (readEmbeddedResourceBytes("lang/" + code + extension) != null) {
+                loadLanguageFromDisk(resourceFolderPath, code, extension);
+            }
+        } catch (RuntimeException e) {
+            getLogger().error(e, "Could not migrate language file 'lang/" + code + extension + "' of module '"
+                    + getPluginName() + "'; it is left as it is.");
         }
     }
 
@@ -931,6 +946,12 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * the jar-absent short-circuit also uses.
      */
     private Language readLanguageFile(File file, String extension) {
+        if (languageMigrationOnly) {
+            // Migration of a language not in use (Codex review of #566, run 2): the file decision is
+            // made, no dictionary is built, so a malformed catalogue of an unused language is never
+            // parsed -- as before the migration pass existed.
+            return new Language("{}");
+        }
         if (".json".equals(extension)) {
             return new Language(file);
         }
