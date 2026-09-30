@@ -597,6 +597,10 @@ Each corrects a declared behaviour the framework did not deliver. The panel prot
   server running `language: en` must match the English text; the UltiPanel worker and frontend do not match on
   any of them (their sources were searched, and the only hits were comments and the panel's own strings).
   The verification e-mail stays bilingual on purpose, because its recipient's language is not the server's.
+  The default teleport service's display name, `InMemeryTeleportService#getName()`, is now `TeleportService`
+  (it was `传送服务`, the only Chinese service name); its `getResourceFolderName()` still returns `传送服务`, so
+  an existing install keeps its folder. Nothing in the framework or the fifteen modules looks the service up by
+  its name.
   English log messages that carried full-width punctuation (`Configuration save failed！File path：…`,
   `… load failed！`) now use ASCII punctuation; a tool that matched the full-width form must be updated.
   `FrameworkText` (`com.ultikits.ultitools.utils`, `@ApiStatus.Internal`) is added for this.

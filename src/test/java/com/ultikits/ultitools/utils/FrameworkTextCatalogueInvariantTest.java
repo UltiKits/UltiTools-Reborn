@@ -66,9 +66,9 @@ class FrameworkTextCatalogueInvariantTest {
                     "the verification e-mail is bilingual on purpose: each Chinese line is paired with its "
                             + "English line, because the recipient's language is not the server's"),
             new Exemption("com/ultikits/ultitools/services/impl/InMemeryTeleportService.java", 1,
-                    "getName() is the service identifier, and BaseService.getResourceFolderName() defaults "
-                            + "to it, so translating it would make a folder name depend on the language; "
-                            + "reported for a decision, not changed here"));
+                    "the resource-folder name returned by getResourceFolderName(), kept at its pre-6.3.0 "
+                            + "value so an existing install keeps its folder; an identifier, never shown "
+                            + "(the display name getName() is English)"));
 
     /** Literals that reach the catalogue through a variable or a constructor field, not a literal argument. */
     private static final List<String> KEYS_VIA_VARIABLE = Arrays.asList(
