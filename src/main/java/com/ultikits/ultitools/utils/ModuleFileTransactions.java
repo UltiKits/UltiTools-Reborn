@@ -383,10 +383,10 @@ public final class ModuleFileTransactions {
             return Reservation.refused(StageResult.failed(previousFailure, Keys.REASON_NOT_IN_MODULES_FOLDER,
                     oldJar == null ? "?" : oldJar.getAbsolutePath(), modulesFolder.getAbsolutePath()));
         }
-        String sharedWith = sharedWith(module, oldJar, loaded, codeSource);
-        if (sharedWith != null) {
-            return Reservation.refused(StageResult.failed(previousFailure, Keys.REASON_SHARED_JAR,
-                    oldJar.getAbsolutePath(), sharedWith));
+        StageResult sharedOrAmbiguous = refuseSharedOrAmbiguous(module, oldJar, key, identifyString, loaded, codeSource,
+                previousFailure);
+        if (sharedOrAmbiguous != null) {
+            return Reservation.refused(sharedOrAmbiguous);
         }
         String oldSha256 = sha256Of(oldJar);
         if (oldSha256 == null) {
@@ -394,6 +394,32 @@ public final class ModuleFileTransactions {
                     oldJar.getAbsolutePath()));
         }
         return new Reservation(module, oldJar, oldSha256, previousFailure, null);
+    }
+
+    /**
+     * The refusal when the JAR to replace is not the selected module's alone, or {@code null}: another
+     * loaded module came from the same JAR, or another loaded module in another JAR declares the same
+     * identify-string. {@code /upm update} names a module only by its identify-string, so in the second
+     * case which module was meant cannot be told apart, and updating the first match could replace --
+     * and commit -- the other module's JAR while reporting the requested one staged (Codex, #561).
+     * The same-JAR check runs first, so the second only ever sees modules from other JARs.
+     */
+    private static StageResult refuseSharedOrAmbiguous(UltiToolsPlugin module, File oldJar, String key,
+                                                       String identifyString, List<UltiToolsPlugin> loaded,
+                                                       Function<UltiToolsPlugin, File> codeSource,
+                                                       String previousFailure) {
+        String sharedWith = sharedWith(module, oldJar, loaded, codeSource);
+        if (sharedWith != null) {
+            return StageResult.failed(previousFailure, Keys.REASON_SHARED_JAR, oldJar.getAbsolutePath(), sharedWith);
+        }
+        List<String> declarers = new ArrayList<>();
+        for (UltiToolsPlugin plugin : loaded) {
+            if (key.equals(normalize(plugin.getIdentifyString()))) {
+                declarers.add(plugin.getPluginName());
+            }
+        }
+        return declarers.size() > 1 ? StageResult.failed(previousFailure, Keys.REASON_AMBIGUOUS_IDENTIFY_STRING,
+                identifyString, String.join(", ", declarers)) : null;
     }
 
     /**
@@ -2191,6 +2217,8 @@ public final class ModuleFileTransactions {
         public static final String REASON_NOT_IN_MODULES_FOLDER = "模块的 JAR %s 不在模块目录 %s 中";
         public static final String REASON_SHARED_JAR = "它的 JAR %s 同时也是已加载模块 %s 的 JAR，更新会把该模块一起替换";
         public static final String REASON_OLD_JAR_UNREADABLE = "模块当前的 JAR %s 无法读取";
+        public static final String REASON_AMBIGUOUS_IDENTIFY_STRING =
+                "identify-string %s 同时由位于不同 JAR 的多个已加载模块声明（%s），无法确定要更新哪一个";
         public static final String REASON_NO_DOWNLOAD = "云端没有 %s 的可下载版本";
         public static final String REASON_OTHER_COPY_LOADS_FIRST =
                 "下次启动时会由该模块的另一份副本代替新 JAR %s 加载：模块目录中的以下 JAR 声明了同一个主类，且文件名排在它之前：%s；请先移走它们，再执行 /upm update";

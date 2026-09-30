@@ -164,6 +164,7 @@
   "它的 JAR %s 同时也是已加载模块 %s 的 JAR，更新会把该模块一起替换": "its JAR %s is also the JAR of the loaded module %s, which the update would replace too",
   "下次启动时会由该模块的另一份副本代替新 JAR %s 加载：模块目录中的以下 JAR 声明了同一个主类，且文件名排在它之前：%s；请先移走它们，再执行 /upm update": "another copy of this module would load instead of the new JAR %s at the next start, because these JARs in the modules folder declare the same main class and sort before it by file name: %s; remove them first, then run /upm update again",
   "模块当前的 JAR %s 无法读取": "the module's current JAR %s cannot be read",
+  "identify-string %s 同时由位于不同 JAR 的多个已加载模块声明（%s），无法确定要更新哪一个": "the identify-string %s is declared by more than one loaded module in different JARs (%s), so which one to update cannot be determined; give each module its own identify-string",
   "%s 的另一个更新正在进行中，请稍后再试；没有做任何改动。": "Another update of %s is in progress; try again later. Nothing was changed.",
   "%s 中有上一次更新留下、没有记录的旧版本 JAR；请先检查并移走它": "%s holds a previous-version JAR an earlier update kept and no record refers to; check it and move it away first",
   "模块 %s 保留的旧版本 JAR（%s）不见了，无法回滚；%s 保持不动。": "The previous JAR kept for module %s (%s) is missing, so it cannot be rolled back; %s stays in place.",

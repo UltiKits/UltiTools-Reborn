@@ -478,7 +478,9 @@ This section governs the third kind.
   was staged or why nothing was. Nothing is staged, and `updatePlugin(String)` returns `false`, when
   another JAR in the modules folder declares the module's `plugin.yml` `main:` and sorts before the
   new JAR's file name: that copy would load instead at the next start, so the update could only be
-  rolled back; the reply names it (maintainer follow-up 19). Measured consumers: none of the fifteen module repositories or
+  rolled back; the reply names it (maintainer follow-up 19). Likewise when two loaded modules in
+  different JARs declare the same identify-string, since the update names a module only by that
+  string. Measured consumers: none of the fifteen module repositories or
   UltiTools-External-Example call either method (their `origin/master`, searched for
   `PluginInstallUtils`, `updatePlugin(` and `uninstallPlugin(`; the only hits are UAT documents
   naming the `/upm` commands). An uninstall that goes ahead also cancels an update of that module
