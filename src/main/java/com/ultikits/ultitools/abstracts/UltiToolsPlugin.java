@@ -217,8 +217,11 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         identifyString = pluginConfig.getString("identify-string", null);
 
         resourceFolderPath = UltiTools.getInstance().getDataFolder().getAbsolutePath() + File.separator + "pluginConfig" + File.separator + this.getPluginName();
-        language = initializeLanguage();
+        // #540: extract the bundled resources first, then resolve the language. Resolving first
+        // picked whatever catalogue was on disk before extraction -- a stale lang/<code>.yml when
+        // lang/<code>.json had been deleted -- and the next reload switched to the fresh one.
         saveResources();
+        language = initializeLanguage();
         try{
             initConfig();
         } catch (IOException e) {
@@ -1193,8 +1196,9 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         this.mainClass = mainClass;
         this.identifyString = null; // Connector plugins don't have identify-string
         this.resourceFolderPath = resourceFolderPath;
-        language = createLanguageFromPath(resourceFolderPath);
+        // #540: extract first, then resolve -- see the module constructor.
         saveResources();
+        language = createLanguageFromPath(resourceFolderPath);
         try {
             initConfig();
         } catch (IOException e) {
