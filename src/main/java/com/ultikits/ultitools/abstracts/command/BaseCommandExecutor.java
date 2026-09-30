@@ -390,7 +390,7 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         };
 
         if (isAsync) {
-            dispatchScheduled(context, ranValidators, () -> dispatchAsyncCommand(context, asyncCommand, runnable, reported));
+            dispatchAsyncCommand(context, asyncCommand, runnable, reported, ranValidators);
         } else if (Bukkit.isPrimaryThread()) {
             // #541 (maintainer's answer of 2026-09-29): on the server thread the body runs now,
             // inside the dispatch, as Bukkit's own commands do -- so a command block, a command
@@ -618,22 +618,30 @@ public abstract class BaseCommandExecutor implements TabExecutor {
      * @since 6.3.0
      */
     private void dispatchAsyncCommand(CommandContext context, AsyncCommand asyncCommand,
-                                       BukkitRunnable runnable, AtomicBoolean reported) {
-        // Show processing message if enabled
-        if (asyncCommand != null && asyncCommand.showProcessing()) {
-            String processingKey = asyncCommand.processingMessageKey();
-            String processingMsg = processingKey.isEmpty()
-                    ? FrameworkText.text("处理中...")
-                    : UltiTools.getInstance().i18n(processingKey);
-            context.getSender().sendMessage(ChatColor.YELLOW + processingMsg);
-        }
+                                       BukkitRunnable runnable, AtomicBoolean reported,
+                                       List<CommandValidator> ranValidators) {
+        // The refusal hooks (#568) cover only what happens before the body is accepted: the
+        // processing notice and the body's submission. Once the scheduler has accepted the body,
+        // the body owns the validators' post-actions (onComplete), so a failure to arm the timeout
+        // watcher below must not release what the pending body still holds (local Codex review of
+        // #570, run 2).
+        dispatchScheduled(context, ranValidators, () -> {
+            // Show processing message if enabled
+            if (asyncCommand != null && asyncCommand.showProcessing()) {
+                String processingKey = asyncCommand.processingMessageKey();
+                String processingMsg = processingKey.isEmpty()
+                        ? FrameworkText.text("处理中...")
+                        : UltiTools.getInstance().i18n(processingKey);
+                context.getSender().sendMessage(ChatColor.YELLOW + processingMsg);
+            }
 
-        // WIRE-12/D-13: schedule the command body asynchronously EXACTLY ONCE. A timeout
-        // (if configured) is enforced by a SEPARATE watcher below, never by re-wrapping
-        // this runnable in another one -- that "wrap and re-dispatch" shape is what
-        // produced the double async dispatch this replaces, on the DEFAULT path of every
-        // @AsyncCommand (timeout()'s default is 30).
-        runnable.runTaskAsynchronously(UltiTools.getInstance());
+            // WIRE-12/D-13: schedule the command body asynchronously EXACTLY ONCE. A timeout
+            // (if configured) is enforced by a SEPARATE watcher below, never by re-wrapping
+            // this runnable in another one -- that "wrap and re-dispatch" shape is what
+            // produced the double async dispatch this replaces, on the DEFAULT path of every
+            // @AsyncCommand (timeout()'s default is 30).
+            runnable.runTaskAsynchronously(UltiTools.getInstance());
+        });
 
         if (asyncCommand != null && asyncCommand.timeout() > 0) {
             armTimeoutWatcher(context, asyncCommand, reported);
