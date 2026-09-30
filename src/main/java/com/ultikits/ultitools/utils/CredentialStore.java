@@ -1,14 +1,19 @@
 package com.ultikits.ultitools.utils;
 
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.IOException;
+import java.io.OutputStreamWriter;
 import java.io.Reader;
 import java.io.Writer;
+import java.nio.channels.Channels;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -39,6 +44,22 @@ import com.ultikits.ultitools.exceptions.DataAccessException;
  * so a crash mid-write leaves either the previous complete file or the new complete file, never a
  * truncated one; and {@link #read()} reports a file that exists but does not parse as an outcome
  * structurally distinct from an absent file, so a caller cannot conflate the two.
+ * <p>
+ * <b>An existing file that cannot be read as a credential document is preserved (#573).</b> A file
+ * that is empty, whitespace-only, the JSON literal {@code null}, or not valid JSON is a parse
+ * failure -- the store itself never writes any of those (an empty store is written as {@code {}}).
+ * Following the maintainer's rule for an unreadable configuration file (#470: treated like an
+ * unparseable one and never overwritten), such a file is never replaced by {@link #update}, so no
+ * new server UUID is generated over it and no cloud token is written into it; the same holds for an
+ * unreadable pre-6.3.0 {@code data.json} while no current file exists. The condition is logged once,
+ * at {@link Level#SEVERE}, naming the file and what to check. Only a file that does not exist at all
+ * starts a fresh identity.
+ * <p>
+ * <b>Durability (#573).</b> The temporary file is forced to disk before the atomic move, and the
+ * parent directory is forced after it where the platform allows (a directory cannot be opened as a
+ * channel on Windows, so that step is best-effort), so a power loss cannot leave the credential path
+ * naming a file whose bytes never reached the disk. Writes are rare -- login, token refresh, the
+ * first server UUID -- so the cost of the two flushes is negligible.
  * <p>
  * Both the current (new) and the pre-6.3.0 (old) target paths require a live
  * {@link UltiTools#getInstance()} to resolve in production -- the new one climbs two directories
@@ -108,6 +129,19 @@ public final class CredentialStore {
      * a container).
      */
     private static volatile boolean simulateWriteFailureForTesting;
+
+    /**
+     * The SEVERE message last logged for an unreadable store, so one condition is reported once
+     * rather than on every read; cleared by the next read that finds a readable or absent store.
+     * Guarded by {@link #LOCK}.
+     */
+    private static String reportedUnreadable;
+
+    /**
+     * The WARNING last logged for an unreadable pre-6.3.0 file left beside a valid current file.
+     * Guarded by {@link #LOCK}.
+     */
+    private static String reportedLeftover;
 
     private CredentialStore() {
     }
@@ -229,7 +263,7 @@ public final class CredentialStore {
     public static ReadResult read() {
         migrate();
         synchronized (LOCK) {
-            return readLocked();
+            return readCurrentLocked();
         }
     }
 
@@ -284,11 +318,10 @@ public final class CredentialStore {
         Objects.requireNonNull(mutator, "mutator");
         migrate();
         synchronized (LOCK) {
-            ReadResult current = readLocked();
+            ReadResult current = readCurrentLocked();
             if (current.isParseFailure()) {
-                throw new DataAccessException(
-                        "Refusing to update data.json: the existing file exists but failed to parse. "
-                                + "Resolve or replace it with write(...) before calling update(...).");
+                throw new DataAccessException("Refusing to update the credential store. "
+                        + current.failureMessage());
             }
             Map<String, Object> mutableCopy = new LinkedHashMap<>(current.data());
             Map<String, Object> updated = mutator.apply(mutableCopy);
@@ -327,10 +360,19 @@ public final class CredentialStore {
 
         ReadResult oldResult = readFrom(oldPath);
         if (oldResult.isParseFailure()) {
-            logWarning("Found a credential file at " + oldPath + " that does not parse as JSON -- "
-                    + "leaving it in place rather than discarding it. Inspect it manually; if it is "
-                    + "recoverable, move its content into the new location by hand: "
-                    + resolveTargetPath());
+            // Never migrated, never deleted (#573). With no current file, readCurrentLocked()
+            // reports the store as unreadable, so nothing can start a fresh identity over it.
+            Path currentPath = resolveTargetPath();
+            if (Files.exists(currentPath)) {
+                String message = "The pre-6.3.0 credential file " + oldPath + " is empty or is not a "
+                        + "valid JSON document; it has been left in place, and the current file "
+                        + currentPath + " is used. Delete the old file once you have checked it holds "
+                        + "nothing you need.";
+                if (!message.equals(reportedLeftover)) {
+                    reportedLeftover = message;
+                    logWarning(message);
+                }
+            }
             return;
         }
         // isAbsent() cannot happen here: Files.exists(oldPath) was just confirmed true above, and
@@ -404,9 +446,49 @@ public final class CredentialStore {
         }
     }
 
-    @SuppressWarnings("unchecked")
-    private static ReadResult readLocked() {
-        return readFrom(resolveTargetPath());
+    /**
+     * Reads the current file under {@link #LOCK}. When it does not exist but an unreadable pre-6.3.0
+     * file does, the store is reported as unreadable rather than empty, so no caller starts a fresh
+     * identity over a credential that merely failed to migrate (#573). Logs an unreadable store once
+     * per episode.
+     */
+    private static ReadResult readCurrentLocked() {
+        Path target = resolveTargetPath();
+        ReadResult result = readFrom(target);
+        if (result.isAbsent()) {
+            Path oldPath = resolveOldLocationPath();
+            if (oldPath != null && Files.exists(oldPath) && readFrom(oldPath).isParseFailure()) {
+                result = ReadResult.parseFailure(describeUnreadable(oldPath, target));
+            }
+        }
+        if (result.isParseFailure()) {
+            String message = result.failureMessage();
+            if (!message.equals(reportedUnreadable)) {
+                reportedUnreadable = message;
+                log(Level.SEVERE, message);
+            }
+        } else {
+            reportedUnreadable = null;
+        }
+        return result;
+    }
+
+    /**
+     * The operator-facing description of an unreadable credential file: which file, that it was
+     * left untouched, and what to check.
+     *
+     * @param unreadable     the file that exists but cannot be read as a credential document
+     * @param missingCurrent the current file's path when {@code unreadable} is the pre-6.3.0 file
+     *                       and no current file exists yet, otherwise {@code null}
+     */
+    private static String describeUnreadable(Path unreadable, Path missingCurrent) {
+        String subject = missingCurrent == null
+                ? "The credential file " + unreadable
+                : "The pre-6.3.0 credential file " + unreadable + " (not yet migrated to " + missingCurrent + ")";
+        return subject + " exists but is empty or is not a valid JSON document. It has been left "
+                + "untouched: no new server UUID is generated and no UltiCloud token is written until "
+                + "it is fixed. Check the file: restore it from a backup, or, to start over with a new "
+                + "server identity (and log in to UltiCloud again), move it out of the way.";
     }
 
     @SuppressWarnings("unchecked")
@@ -419,9 +501,15 @@ public final class CredentialStore {
             try {
                 parsed = GSON.fromJson(reader, Map.class);
             } catch (JsonParseException e) {
-                return ReadResult.parseFailure();
+                return ReadResult.parseFailure(describeUnreadable(target, null));
             }
-            return ReadResult.parsed(parsed != null ? parsed : new LinkedHashMap<>());
+            // Gson returns null for an empty, whitespace-only or literal-null document. The store
+            // never writes one (an empty store is written as {}), so it is a torn file, not an empty
+            // credential document (#573).
+            if (parsed == null) {
+                return ReadResult.parseFailure(describeUnreadable(target, null));
+            }
+            return ReadResult.parsed(parsed);
         } catch (IOException e) {
             throw new DataAccessException("Failed to read " + target, e);
         }
@@ -444,12 +532,20 @@ public final class CredentialStore {
         Path tempFile = (parent != null ? parent : target).resolve(TEMP_FILE_NAME);
         boolean moved = false;
         try {
-            try (Writer writer = Files.newBufferedWriter(tempFile, StandardCharsets.UTF_8)) {
+            try (FileChannel channel = FileChannel.open(tempFile, StandardOpenOption.CREATE,
+                    StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+                 Writer writer = new BufferedWriter(new OutputStreamWriter(
+                         Channels.newOutputStream(channel), StandardCharsets.UTF_8.newEncoder()))) {
                 GSON.toJson(data, writer);
+                writer.flush();
+                // The bytes must reach the disk before the rename can, or a power loss could leave
+                // the credential path naming an empty file (#573).
+                channel.force(true);
             }
             try {
                 Files.move(tempFile, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
                 moved = true;
+                forceDirectory(parent);
             } catch (AtomicMoveNotSupportedException e) {
                 throw new DataAccessException(
                         "Atomic replace of " + target + " is not supported on this filesystem "
@@ -470,6 +566,23 @@ public final class CredentialStore {
     }
 
     /**
+     * Forces a directory's entries to disk after the rename, so the rename itself survives a power
+     * loss. Best-effort: Windows cannot open a directory as a channel, and a failure here cannot undo
+     * a rename that already happened, so it is logged at {@link Level#FINE} and not reported as a
+     * failed write.
+     */
+    private static void forceDirectory(Path directory) {
+        if (directory == null) {
+            return;
+        }
+        try (FileChannel channel = FileChannel.open(directory, StandardOpenOption.READ)) {
+            channel.force(true);
+        } catch (IOException | UnsupportedOperationException e) {
+            log(Level.FINE, "Could not force the credential directory " + directory + " to disk: " + e);
+        }
+    }
+
+    /**
      * The outcome of a {@link #read()} call. Deliberately has no {@code isEmpty()}-style method
      * that a caller could use to conflate {@link #isAbsent()} with {@link #isParseFailure()} --
      * the two are structurally distinct outcomes and must be checked separately.
@@ -482,22 +595,34 @@ public final class CredentialStore {
 
         private final Outcome outcome;
         private final Map<String, Object> data;
+        private final String failureMessage;
 
-        private ReadResult(Outcome outcome, Map<String, Object> data) {
+        private ReadResult(Outcome outcome, Map<String, Object> data, String failureMessage) {
             this.outcome = outcome;
             this.data = data;
+            this.failureMessage = failureMessage;
         }
 
         private static ReadResult absent() {
-            return new ReadResult(Outcome.ABSENT, Collections.emptyMap());
+            return new ReadResult(Outcome.ABSENT, Collections.emptyMap(), null);
         }
 
         private static ReadResult parsed(Map<String, Object> data) {
-            return new ReadResult(Outcome.PARSED, data);
+            return new ReadResult(Outcome.PARSED, data, null);
         }
 
-        private static ReadResult parseFailure() {
-            return new ReadResult(Outcome.PARSE_FAILURE, null);
+        private static ReadResult parseFailure(String failureMessage) {
+            return new ReadResult(Outcome.PARSE_FAILURE, null, failureMessage);
+        }
+
+        /**
+         * The operator-facing description of a parse failure -- which file, that it was left
+         * untouched, and what to check -- for a caller that turns it into its own failure.
+         *
+         * @return the description, or {@code null} unless {@link #isParseFailure()}
+         */
+        String failureMessage() {
+            return failureMessage;
         }
 
         /**
@@ -515,8 +640,9 @@ public final class CredentialStore {
         }
 
         /**
-         * @return {@code true} if {@code data.json} existed but did not parse as valid JSON -- a
-         *         torn file, distinguishable from {@link #isAbsent()}
+         * @return {@code true} if the credential file existed but is empty, whitespace-only, the
+         *         JSON literal {@code null} or not valid JSON -- a torn file, distinguishable from
+         *         {@link #isAbsent()} (#573) -- or if only an unreadable pre-6.3.0 file exists
          */
         public boolean isParseFailure() {
             return outcome == Outcome.PARSE_FAILURE;

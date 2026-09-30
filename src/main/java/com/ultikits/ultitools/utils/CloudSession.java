@@ -585,9 +585,9 @@ final class CloudSession {
             }
             if (result.isParseFailure()) {
                 UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    "Saved credential file exists but could not be parsed as valid JSON; "
-                        + "treating it as no saved token rather than deleting it. "
-                        + "Use /ulticloud login to re-authenticate.");
+                    "Saved credential file exists but is empty or not valid JSON; it was left "
+                        + "untouched and no saved token was loaded. The SEVERE message from the "
+                        + "credential store names the file and what to check.");
                 return null;
             }
 

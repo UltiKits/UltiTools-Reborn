@@ -458,6 +458,20 @@ This section governs the third kind.
   those entries travel with it as a suppressed
   `PluginInstallUtils.UndeterminedEntriesException` (`@ApiStatus.Internal`), so no outcome
   discards what another established.
+- An existing credential file that cannot be read is preserved (#573). As of 6.3.0,
+  `CommonUtils.getUltiToolsUUID()` fails with its declared `IOException`, naming the file, when the
+  credential file exists but is empty, whitespace-only, the JSON literal `null` or not valid JSON,
+  and it leaves the file untouched. 6.2.5 silently wrote a new server UUID over an empty `data.json`
+  and let an unparseable one escape as an unchecked `JsonSyntaxException`. The same applies to an
+  unreadable pre-6.3.0 `data.json` while no current credential file exists, and saving or clearing
+  the UltiCloud token refuses instead of overwriting. The condition is logged once at `SEVERE`. A
+  credential file that does not exist at all still starts a new identity. This corrects behaviour
+  that contradicted the documentation: the method declares `IOException`, and silently replacing a
+  torn credential file with a fresh identity is the defect the credential store exists to prevent.
+  It follows the maintainer's rule for an unreadable configuration file (#470: treated like an
+  unparseable one, never overwritten). A module that already handles the declared `IOException`
+  needs no change. Separately, each credential write now forces the file and its directory to disk
+  around the atomic rename, a performance change of a few milliseconds per write.
 
 ### Behavioral changes that do need one
 
