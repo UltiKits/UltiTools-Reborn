@@ -1179,7 +1179,7 @@ public class PluginManager {
      * prose message (Codex review, PR #551 round 1, P2).
      */
     private static final Pattern INTERNAL_CLASS_NAME_PATTERN =
-            Pattern.compile("[A-Za-z_$][A-Za-zA-Z0-9_$]*(?:/[A-Za-z_$][A-Za-zA-Z0-9_$]*)*");
+            Pattern.compile("[A-Za-z_$][A-Za-z0-9_$]*(?:/[A-Za-z_$][A-Za-z0-9_$]*)*");
 
     /**
      * Extraction of the internal (dot-qualified) name of the class {@code failure} reports
