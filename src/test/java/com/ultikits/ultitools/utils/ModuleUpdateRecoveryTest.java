@@ -818,6 +818,131 @@ class ModuleUpdateRecoveryTest {
     }
 
     @Nested
+    @DisplayName("an unchecked exception in one transaction's apply (round 4, orchestrator decision)")
+    class UncheckedExceptionInOneTransaction {
+
+        private File otherOldJar;
+        private UltiToolsPlugin otherLoaded;
+
+        @BeforeEach
+        void stageTwoModules() throws IOException {
+            otherOldJar = moduleJar(new File(modules, "other-1.0.jar"), "Other", "1.0", "other");
+            otherLoaded = loadedModule("Other", "1.0", "other");
+            stage(transactions());
+            transactions().stageUpdate("other", Collections.singletonList(otherLoaded),
+                    new ModuleUpdateFixtures.CodeSources().with(otherLoaded, otherOldJar), catalogue("other", "1.1"),
+                    downloading("Other", "1.1", "other"));
+        }
+
+        /** File operations that throw {@code failure} from the existence check of a {@code demo} file. */
+        private ModuleFileTransactions.FileOps failingExistenceCheck(RuntimeException failure) {
+            return new ModuleFileTransactions.FileOps() {
+                @Override
+                public void move(Path from, Path to) throws IOException {
+                    ModuleFileTransactions.FileOps.DEFAULT.move(from, to);
+                }
+
+                @Override
+                public void delete(Path path) throws IOException {
+                    ModuleFileTransactions.FileOps.DEFAULT.delete(path);
+                }
+
+                @Override
+                public boolean exists(Path path) {
+                    if (path.getFileName().toString().startsWith("demo")) {
+                        throw failure;
+                    }
+                    return ModuleFileTransactions.FileOps.DEFAULT.exists(path);
+                }
+            };
+        }
+
+        /** A start that throws {@code failure} once, at {@code point}, while demo's transaction is at it. */
+        private ModuleFileTransactions throwingAt(String point, String demoFileThere, RuntimeException failure) {
+            java.util.concurrent.atomic.AtomicBoolean thrown = new java.util.concurrent.atomic.AtomicBoolean();
+            return new ModuleFileTransactions(modules, transactions, ModuleFileTransactions.FileOps.DEFAULT, reached -> {
+                if (reached.equals(point) && new File(modules, "demo-1.0.jar").exists() == "demo-1.0.jar".equals(demoFileThere)
+                        && new File(modules, "demo-1.1.jar").exists() == "demo-1.1.jar".equals(demoFileThere)
+                        && thrown.compareAndSet(false, true)) {
+                    throw failure;
+                }
+            });
+        }
+
+        private void assertDemoFailedOtherApplied(ModuleFileTransactions start, Throwable thrown) throws IOException {
+            assertThat(thrown).isNull();
+            assertThat(namesIn(modules)).containsExactlyInAnyOrder("demo-1.0.jar", "other-1.1.jar");
+            assertThat(Files.readAllBytes(oldJar.toPath())).isEqualTo(oldBytes);
+            List<ModuleFileTransactions.Report> severe = new java.util.ArrayList<>();
+            for (ModuleFileTransactions.Report report : start.pendingReports()) {
+                if (report.getLevel() == Level.SEVERE) {
+                    severe.add(report);
+                }
+            }
+            assertThat(severe).hasSize(1);
+            assertThat(severe.get(0).getKey()).isEqualTo(ModuleFileTransactions.Keys.APPLY_FAILED);
+            assertThat(severe.get(0).getArgs()[0]).isEqualTo("Demo");
+            assertThat(String.valueOf(severe.get(0).getArgs()[4])).contains("injected");
+            File[] records = transactions.listFiles((dir, name) -> name.endsWith(".json"));
+            assertThat(records).isNotNull();
+            List<String> states = new java.util.ArrayList<>();
+            for (File record : records) {
+                String text = new String(Files.readAllBytes(record.toPath()), StandardCharsets.UTF_8);
+                states.add((text.contains("\"moduleName\": \"Demo\"") ? "Demo " : "Other ")
+                        + text.replaceAll("(?s).*\"state\": \"([A-Z_]+)\".*", "$1"));
+            }
+            assertThat(states).containsExactlyInAnyOrder("Demo FAILED", "Other APPLIED");
+        }
+
+        @Test
+        @DisplayName("a SecurityException from the existence check before any move: startup continues, FAILED, nothing moved")
+        void securityExceptionBeforeAnyMove() throws IOException {
+            ModuleFileTransactions start = new ModuleFileTransactions(modules, transactions,
+                    failingExistenceCheck(new SecurityException("injected: access denied")),
+                    ModuleFileTransactions.CrashPoints.NONE);
+
+            Throwable thrown = catchThrowable(start::applyBeforeLoad);
+
+            assertDemoFailedOtherApplied(start, thrown);
+        }
+
+        @Test
+        @DisplayName("a plain RuntimeException from the existence check before any move: the same")
+        void runtimeExceptionBeforeAnyMove() throws IOException {
+            ModuleFileTransactions start = new ModuleFileTransactions(modules, transactions,
+                    failingExistenceCheck(new IllegalStateException("injected: unexpected")),
+                    ModuleFileTransactions.CrashPoints.NONE);
+
+            Throwable thrown = catchThrowable(start::applyBeforeLoad);
+
+            assertDemoFailedOtherApplied(start, thrown);
+        }
+
+        @Test
+        @DisplayName("a SecurityException after the old JAR moved aside: the old JAR goes back, FAILED, startup continues")
+        void securityExceptionAfterTheFirstMove() throws IOException {
+            ModuleFileTransactions start = throwingAt(ModuleFileTransactions.CrashPoints.AFTER_OLD_MOVED, "none",
+                    new SecurityException("injected: access denied"));
+
+            Throwable thrown = catchThrowable(start::applyBeforeLoad);
+
+            assertDemoFailedOtherApplied(start, thrown);
+        }
+
+        @Test
+        @DisplayName("a RuntimeException after the new JAR moved in: it goes back to the staged folder, the old JAR back in place")
+        void runtimeExceptionAfterTheNewJarMoved() throws IOException {
+            ModuleFileTransactions start = throwingAt(ModuleFileTransactions.CrashPoints.AFTER_NEW_MOVED, "demo-1.1.jar",
+                    new IllegalStateException("injected: unexpected"));
+
+            Throwable thrown = catchThrowable(start::applyBeforeLoad);
+
+            assertDemoFailedOtherApplied(start, thrown);
+            assertThat(treeOf(transactions)).anyMatch(p -> p.endsWith("/staged/demo-1.1.jar"));
+        }
+    }
+
+    @Nested
     @DisplayName("confinement of record paths")
     class Confinement {
 
