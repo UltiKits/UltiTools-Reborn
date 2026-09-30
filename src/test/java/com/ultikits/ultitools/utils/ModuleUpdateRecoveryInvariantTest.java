@@ -55,6 +55,17 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
  *
  * <p>A start whose file operations fail keeps the record for the next start and reports it; the
  * invariant is re-established by the first start whose operations succeed, which is what is run here.
+ *
+ * <p><b>Files the transaction cannot identify.</b> Another actor may change the modules folder or the
+ * transaction folder while a transaction is pending -- replace the new JAR, drop a file where the old
+ * one is kept, and so on. That space is open-ended, so it is closed by one rule rather than case by
+ * case: <i>the transaction only ever moves, replaces or deletes a file whose SHA-256 matches the
+ * record</i> (the staged new JAR, or the kept old JAR). A second family of cases puts a foreign file at
+ * each location a record uses (the old JAR's name in the modules folder, the kept-old location, the
+ * staged location, the new JAR's name in the modules folder), for every reachable row, and asserts
+ * that the start never moves or deletes it, never deletes the last copy of the module it can identify,
+ * never moves an identified JAR into the modules folder beside it, and leaves nothing a later start
+ * would still act on.
  */
 @DisplayName("Module update recovery keeps exactly one JAR of the module in the modules folder (Codex round 14, #561)")
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
@@ -112,6 +123,46 @@ class ModuleUpdateRecoveryInvariantTest {
     static Stream<Arguments> failed() {
         return reachable().filter(arguments -> "FAILED".equals(arguments.get()[0]) && (Boolean) arguments.get()[4])
                 .map(arguments -> Arguments.of(arguments.get()[1], arguments.get()[2], arguments.get()[3]));
+    }
+
+    /** Where a foreign file is put: one of the four locations a record uses. */
+    enum Foreign { OLD_NAME, KEPT, STAGED, NEW_NAME }
+
+    /** Every reachable row with a foreign file at each location, the new version loading or not. */
+    static Stream<Arguments> foreign() {
+        List<Arguments> cases = new ArrayList<>();
+        reachable().filter(arguments -> !(Boolean) arguments.get()[3]).forEach(arguments -> {
+            for (Foreign where : Foreign.values()) {
+                Object[] row = arguments.get();
+                cases.add(Arguments.of(row[0], row[1], row[2], where, row[4]));
+            }
+        });
+        return cases.stream();
+    }
+
+    @ParameterizedTest(name = "{0}, old {1}, new {2}, foreign file at {3}, new loads {4}")
+    @MethodSource("foreign")
+    @DisplayName("a file the transaction cannot identify is never moved or deleted, and nothing is done beside it")
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // the assertions live in Scenario#assertForeignUntouched
+    void aForeignFile_isNeverTouched(String state, Old old, New neu, Foreign where, boolean newLoads)
+            throws IOException {
+        Scenario scenario = new Scenario(false).build(state, old, neu);
+        File foreign = scenario.putForeign(where);
+        Snapshot before = scenario.snapshot();
+
+        scenario.start(newLoads);
+
+        scenario.assertForeignUntouched(foreign, before);
+        if (scenario.recordFile.exists()) {
+            Snapshot afterFirst = scenario.snapshot();
+            scenario.start(newLoads);
+            assertThat(scenario.snapshot().files).as("a later start does not act on what is left").isEqualTo(afterFirst.files);
+        }
+    }
+
+    /** Every file under the server root with its SHA-256. */
+    private static final class Snapshot {
+        private final java.util.Map<String, String> files = new java.util.TreeMap<>();
     }
 
     @ParameterizedTest(name = "{0}, old {1}, new {2}, same name {3}, new loads {4}")
@@ -273,6 +324,73 @@ class ModuleUpdateRecoveryInvariantTest {
         void assertOldVersionInPlace() throws IOException {
             assertThat(jarsOfTheModuleIn(modules)).as("the old version is back").hasSize(1)
                     .allSatisfy(jar -> assertThat(ModuleFileTransactions.sha256Of(jar)).isEqualTo(oldHash));
+        }
+
+        /** Puts a foreign JAR at {@code where}, replacing whatever the scenario left there. */
+        File putForeign(Foreign where) throws IOException {
+            File location = where == Foreign.OLD_NAME ? oldJar : where == Foreign.KEPT ? backup
+                    : where == Foreign.STAGED ? staged : target;
+            if (location.exists()) {
+                Files.delete(location.toPath());
+            }
+            moduleJar(location, "Stranger", "9.9", "stranger");
+            return location;
+        }
+
+        /** One start: the recovery before load, then the observation of what the loader loaded. */
+        void start(boolean newLoads) throws IOException {
+            ModuleFileTransactions start = transactions();
+            start.applyBeforeLoad();
+            List<UltiToolsPlugin> loaded = new ArrayList<>();
+            ModuleUpdateFixtures.CodeSources sources = load(newLoads, loaded);
+            start.observeAfterLoad(loaded, sources);
+        }
+
+        Snapshot snapshot() throws IOException {
+            Snapshot snapshot = new Snapshot();
+            for (String path : treeOf(serverRoot)) {
+                // The path comes from listing this test's own temporary folder.
+                // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
+                snapshot.files.put(path, ModuleFileTransactions.sha256Of(new File(serverRoot, path)));
+            }
+            return snapshot;
+        }
+
+        /**
+         * The foreign file is where it was, unchanged; the module keeps at most one identified JAR in the
+         * modules folder; an identified copy of the module that existed still exists somewhere; and no
+         * identified JAR was moved into the modules folder beside the foreign file.
+         */
+        void assertForeignUntouched(File foreign, Snapshot before) throws IOException {
+            String foreignHash = before.files.get(relative(foreign));
+            assertThat(foreign).as("the foreign file is never moved or deleted").exists();
+            assertThat(ModuleFileTransactions.sha256Of(foreign)).as("the foreign file is never replaced")
+                    .isEqualTo(foreignHash);
+            assertThat(jarsOfTheModuleIn(modules)).as("at most one identified JAR of the module in the modules folder")
+                    .hasSizeLessThanOrEqualTo(1);
+            Snapshot after = snapshot();
+            if (identified(before) > 0) {
+                assertThat(identified(after)).as("the last identified copy of the module is never deleted")
+                        .isPositive();
+            }
+            if (foreign.getParentFile().equals(modules)) {
+                String modulesPrefix = relative(modules) + "/";
+                for (java.util.Map.Entry<String, String> file : after.files.entrySet()) {
+                    boolean identifiedInModules = file.getKey().startsWith(modulesPrefix)
+                            && (oldHash.equals(file.getValue()) || newHash.equals(file.getValue()));
+                    assertThat(identifiedInModules && !file.getValue().equals(before.files.get(file.getKey())))
+                            .as("no identified JAR is moved into the modules folder beside a foreign file: " + file.getKey())
+                            .isFalse();
+                }
+            }
+        }
+
+        private long identified(Snapshot snapshot) {
+            return snapshot.files.values().stream().filter(hash -> oldHash.equals(hash) || newHash.equals(hash)).count();
+        }
+
+        private String relative(File file) {
+            return serverRoot.toPath().relativize(file.toPath()).toString().replace(File.separatorChar, '/');
         }
 
         private List<File> jarsOfTheModuleIn(File folder) throws IOException {
