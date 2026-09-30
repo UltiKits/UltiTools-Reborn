@@ -123,5 +123,8 @@
   "Module '%s' failed to reload: %s": "Module '%s' failed to reload: %s",
   "All %d modules reloaded.": "All %d modules reloaded.",
   "Failed to reload %d of %d modules: %s. The others reloaded; see the console for each failure.": "Failed to reload %d of %d modules: %s. The others reloaded; see the console for each failure.",
-  "Module %s failed to reload: %s. See the console for details.": "§cModule %s failed to reload: %s. See the console for details."
+  "Module %s failed to reload: %s. See the console for details.": "§cModule %s failed to reload: %s. See the console for details.",
+  "Module '%s' reloaded partially; not reloaded: %s": "Module '%s' reloaded partially; not reloaded: %s",
+  "Reloaded %d modules; %d only partially:": "Reloaded %d modules; %d only partially:",
+  "Module %s reloaded partially; not reloaded: %s": "Module %s reloaded partially; not reloaded: %s"
 }

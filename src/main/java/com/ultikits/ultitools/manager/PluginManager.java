@@ -40,6 +40,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.ReloadReport;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.abstracts.command.ConfigBoundCooldownState;
@@ -115,6 +116,15 @@ public class PluginManager {
     /** Framework i18n key: the {@code /ul reload} summary naming the modules that failed (#509). */
     static final String RELOAD_SUMMARY_FAILED_KEY =
             "Failed to reload %d of %d modules: %s. The others reloaded; see the console for each failure.";
+
+    /** Framework i18n key: the {@code /ul reload} summary when no module failed but some reloaded only partly (#529). */
+    static final String RELOAD_SUMMARY_PARTIAL_KEY = "Reloaded %d modules; %d only partially:";
+
+    /**
+     * Framework i18n key: one partially reloaded module and the parts that did not reload (#529).
+     * The same text {@code /ul reload <name>} replies; the literal is repeated in that command.
+     */
+    static final String RELOAD_PARTIAL_LINE_KEY = "Module %s reloaded partially; not reloaded: %s";
 
     /**
      * The loaded modules, in load order. Only this manager changes it: a module is listed by
@@ -954,7 +964,9 @@ public class PluginManager {
 
     /**
      * Reloads every loaded module, each isolated from the others' failures, then logs a summary
-     * and returns it (#509). {@code /ul reload} sends the returned lines to its sender.
+     * and returns it (#509). {@code /ul reload} sends the returned lines to its sender. The summary
+     * also lists every module whose reload hook reported parts that did not reload, with those
+     * parts (#529).
      * <p>
      * A module whose {@code reloadSelf()} throws has already logged a failure line naming itself
      * and its cause; it is counted as failed and the next module is reloaded. A {@link
@@ -968,9 +980,14 @@ public class PluginManager {
         Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Reloading all plugins...");
         List<UltiToolsPlugin> modules = new ArrayList<>(pluginList);
         List<String> failed = new ArrayList<>();
+        List<String> partialLines = new ArrayList<>();
         for (UltiToolsPlugin plugin : modules) {
             try {
-                plugin.reloadSelf();
+                ReloadReport report = plugin.reloadWithReport();
+                if (report.isPartial()) {
+                    partialLines.add(String.format(UltiTools.getInstance().i18n(RELOAD_PARTIAL_LINE_KEY),
+                            plugin.getPluginName(), String.join("; ", report.getPartialReasons())));
+                }
             } catch (VirtualMachineError fatal) {
                 throw fatal;
             } catch (Exception | Error e) {
@@ -980,13 +997,17 @@ public class PluginManager {
             }
         }
         List<String> summary = new ArrayList<>();
-        if (failed.isEmpty()) {
-            summary.add(String.format(UltiTools.getInstance().i18n(RELOAD_SUMMARY_ALL_KEY), modules.size()));
-        } else {
+        if (!failed.isEmpty()) {
             summary.add(String.format(UltiTools.getInstance().i18n(RELOAD_SUMMARY_FAILED_KEY),
                     failed.size(), modules.size(), String.join(", ", failed)));
+        } else if (!partialLines.isEmpty()) {
+            summary.add(String.format(UltiTools.getInstance().i18n(RELOAD_SUMMARY_PARTIAL_KEY),
+                    modules.size(), partialLines.size()));
+        } else {
+            summary.add(String.format(UltiTools.getInstance().i18n(RELOAD_SUMMARY_ALL_KEY), modules.size()));
         }
-        Level summaryLevel = failed.isEmpty() ? Level.INFO : Level.WARNING;
+        summary.addAll(partialLines);
+        Level summaryLevel = failed.isEmpty() && partialLines.isEmpty() ? Level.INFO : Level.WARNING;
         for (String line : summary) {
             Bukkit.getLogger().log(summaryLevel, "[UltiTools-API] " + line);
         }

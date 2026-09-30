@@ -106,6 +106,12 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      */
     static final String RELOAD_FAILED_LOG_MESSAGE_KEY = "Module '%s' failed to reload: %s";
     /**
+     * Framework i18n key for the WARNING line logged instead of {@link #RELOAD_LOG_MESSAGE_KEY}
+     * when the module's reload hook recorded parts that did not reload in its {@link ReloadReport}
+     * (#529). Package-private for the same catalogue-coverage test as that key.
+     */
+    static final String RELOAD_PARTIAL_LOG_MESSAGE_KEY = "Module '%s' reloaded partially; not reloaded: %s";
+    /**
      * Matches a {@code java.util.Formatter} conversion specifier, e.g. {@code %s} in {@code
      * "Hello, %s!"}, or {@code %1$s} for an explicit argument index. Used only by {@link
      * #placeholderArity(String)}, one of the two placeholder-loss detectors {@link
@@ -1672,6 +1678,26 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
+     * Extension point for a module's own reload work, with a way to report a partial reload
+     * (#529).
+     * <p>
+     * Called by {@link #reloadSelf()} and {@link #reloadWithReport()} at the point {@link
+     * #onReload()} is documented to run, with a fresh {@link ReloadReport}. A module that reloads
+     * only part of what it should records each part that did not reload with {@link
+     * ReloadReport#partial(String)} and returns normally; the framework then reports the reload
+     * as partial, naming those parts, instead of as a success. The default body calls {@link
+     * #onReload()}, so a module that overrides only that method behaves exactly as before 6.3.0.
+     * Override one of the two, not both: an override of this method replaces the call to
+     * {@link #onReload()} unless it calls {@code super.onReload(report)}.
+     *
+     * @param report the report for this reload, to record the parts that did not reload
+     * @since 6.3.0
+     */
+    protected void onReload(ReloadReport report) {
+        onReload();
+    }
+
+    /**
      * Reload this plugin's configuration and language files.
      * <p>
      * Also reports (but does not act on) any {@code @ConditionalOnConfig} drift: the condition
@@ -1682,31 +1708,72 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * pick up their reloaded values (#531; see {@code PluginManager#applyReloadedConfigBindings}).
      * {@code final} and always runs its own steps, then calls {@link #onReload()} -- a module can
      * no longer skip any of this by overriding {@code reloadSelf()} itself, because that override
-     * point no longer exists (D-01).
+     * point no longer exists (D-01). The hook it calls is {@link #onReload(ReloadReport)}, whose
+     * default body calls {@link #onReload()}.
      * <p>
-     * Only when every step and the hook returned does it log one framework-owned INFO line naming
-     * this module (D-03). If anything throws, it logs one SEVERE line naming the module and the
-     * cause instead, never the success line, and rethrows the failure unchanged, so a caller can
-     * report it -- {@code /ul reload <name>} replies failure, and a full {@code /ul reload} carries
-     * on with the next module and names this one in its summary (#509).
+     * Only when every step and the hook returned does it log one framework-owned line naming this
+     * module (D-03): an INFO success line, or a WARNING naming the parts that did not reload when
+     * the hook recorded any in its {@link ReloadReport} (#529). If anything throws, it logs one
+     * SEVERE line naming the module and the cause instead, never the success line, and rethrows the
+     * failure unchanged, so a caller can report it -- {@code /ul reload <name>} replies failure, and
+     * a full {@code /ul reload} carries on with the next module and names this one in its summary
+     * (#509).
+     * <p>
+     * The signature is unchanged since 6.2; {@link #reloadWithReport()} runs the same reload and
+     * returns the report.
      */
     @Override
-    @SuppressWarnings("PMD.AvoidCatchingGenericException") // logged and rethrown unchanged -- see javadoc
     public final void reloadSelf() {
+        performReload();
+    }
+
+    /**
+     * Reloads this module exactly as {@link #reloadSelf()} does, and returns what its reload hook
+     * reported (#529).
+     * <p>
+     * {@code /ul reload} and {@code /ul reload <name>} call this to tell the operator which parts
+     * of a module did not reload. A module's own reload command can call it for the same reason.
+     *
+     * @return the report of this reload, never {@code null}; empty when every part reloaded
+     * @throws RuntimeException whatever a reload step or the module's hook threw, after it was logged
+     * @throws Error            whatever a reload step or the module's hook threw, after it was logged
+     * @since 6.3.0
+     */
+    public final ReloadReport reloadWithReport() {
+        return performReload();
+    }
+
+    /**
+     * The body of {@link #reloadSelf()} and {@link #reloadWithReport()}. Private, so both public
+     * entry points always run exactly this.
+     *
+     * @return the report the module's hook filled in
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // logged and rethrown unchanged -- see reloadSelf()
+    private ReloadReport performReload() {
+        ReloadReport report = new ReloadReport();
         try {
-            runReloadSteps();
+            runReloadSteps(report);
         } catch (RuntimeException | Error e) {
             LOGGER.log(Level.SEVERE, String.format(UltiTools.getInstance().i18n(RELOAD_FAILED_LOG_MESSAGE_KEY),
                     getPluginName(), describeFailure(e)), e);
             throw e;
         }
-        LOGGER.log(Level.INFO, String.format(UltiTools.getInstance().i18n(RELOAD_LOG_MESSAGE_KEY), getPluginName()));
+        if (report.isPartial()) {
+            LOGGER.log(Level.WARNING, String.format(UltiTools.getInstance().i18n(RELOAD_PARTIAL_LOG_MESSAGE_KEY),
+                    getPluginName(), String.join("; ", report.getPartialReasons())));
+        } else {
+            LOGGER.log(Level.INFO, String.format(UltiTools.getInstance().i18n(RELOAD_LOG_MESSAGE_KEY), getPluginName()));
+        }
+        return report;
     }
 
     /**
-     * The reload steps {@link #reloadSelf()} runs, in order, ending with the module's own hook.
+     * The reload steps, in order, ending with the module's own hook.
+     *
+     * @param report the report handed to the module's hook
      */
-    private void runReloadSteps() {
+    private void runReloadSteps(ReloadReport report) {
         getConfigManager().reloadConfigs(this);
         // #531: apply the reloaded values to config-bound @Scheduled/@CmdCD. Only reached when
         // reloadConfigs did not throw, so a refused reload leaves the running timings alone.
@@ -1719,7 +1786,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         // @ConditionalOnConfig is evaluated once at component-scan time; a reload can only
         // report drift on a watched key, never re-register or rebuild anything (#392, D-01).
         ConditionalRegistrationEvaluator.reportDrift(this);
-        onReload();
+        onReload(report);
     }
 
     /**

@@ -8,6 +8,7 @@ import java.util.List;
 import org.bukkit.command.CommandSender;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.ReloadReport;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
@@ -29,6 +30,13 @@ import com.ultikits.ultitools.exceptions.ErrorCode;
 public class UltiToolsCommands extends BaseCommandExecutor {
     /** Framework i18n key: the {@code /ul reload <name>} reply when the module's reload threw (#509). */
     static final String RELOAD_FAILED_REPLY_KEY = "Module %s failed to reload: %s. See the console for details.";
+
+    /**
+     * Framework i18n key: the {@code /ul reload <name>} reply when the module's reload hook reported
+     * parts that did not reload (#529). The same text as the {@code /ul reload} summary line for
+     * such a module, whose key {@code PluginManager} declares.
+     */
+    static final String RELOAD_PARTIAL_REPLY_KEY = "Module %s reloaded partially; not reloaded: %s";
 
     /**
      * Reloads the framework and every module. {@code /ul reload} is handled by {@link
@@ -74,13 +82,20 @@ public class UltiToolsCommands extends BaseCommandExecutor {
                 // #509: a module whose reload threw has logged the failure with its stack trace;
                 // the sender, who may have no console, is told it failed rather than getting no
                 // reply at all. A VirtualMachineError is not the module's failure to report.
+                ReloadReport report;
                 try {
-                    plugin.reloadSelf();
+                    report = plugin.reloadWithReport();
                 } catch (VirtualMachineError fatal) {
                     throw fatal;
                 } catch (RuntimeException | Error e) {
                     sender.sendMessage(String.format(UltiTools.getInstance().i18n(RELOAD_FAILED_REPLY_KEY),
                             plugin.getPluginName(), describeFailure(e)));
+                    return;
+                }
+                // #529: a reload the module reported as partial is not answered with success.
+                if (report.isPartial()) {
+                    sender.sendMessage(String.format(UltiTools.getInstance().i18n(RELOAD_PARTIAL_REPLY_KEY),
+                            plugin.getPluginName(), String.join("; ", report.getPartialReasons())));
                     return;
                 }
                 sender.sendMessage(String.format(
