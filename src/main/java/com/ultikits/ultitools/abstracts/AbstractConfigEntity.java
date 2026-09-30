@@ -1256,8 +1256,8 @@ public abstract class AbstractConfigEntity {
      * Adds every non-section value under {@code section} to {@code out}, keyed by its dotted path
      * from the root. Walks the tree one level at a time and joins the keys itself rather than using
      * {@code getKeys(true)}: that builds each path with the separator of the section's own root, and a
-     * section written by {@link #save()} comes from the entry's parser with a root of its own (a
-     * map's has a separator that keeps its keys whole, #553) - so {@code getKeys(true)} returned paths
+     * section written by {@link #save()} comes from the entry's parser with a root of its own (the
+     * {@code MemoryConfiguration} the parser built) - so {@code getKeys(true)} returned paths
      * such as {@code rulea} and {@code .rulea.reply} instead of {@code autoreply.rules.rulea.reply}.
      *
      * @param section the section to walk

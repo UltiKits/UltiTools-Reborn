@@ -354,13 +354,13 @@ This section governs the third kind.
   `Optional.empty()`, the code throws an NPE).
 - Tightening the handling of previously undefined input (passing `null` used to be undefined
   behaviour, now it throws `IllegalArgumentException`).
-- A `@ConfigEntry` value is bound to the type its field declares (#523, #526, #534, #553). Before
+- A `@ConfigEntry` value is bound to the type its field declares (#523, #526, #534). Before
   6.3.0 the default parser turned every list element into its text, so a `List<Integer>` field held
   `String`s and every typed lookup on it silently failed; a value whose YAML shape did not fit its
   field (a list where a map is declared, text in a number field) threw `IllegalArgumentException`
   out of the entity's `init()` and the module never loaded, with no line naming the key; a
-  `float`/`Float` field could not load any decimal; and a map key containing a dot (`my.rule`) was
-  silently saved as a nested path and read back as `my`, with no line saying so. As of 6.3.0
+  `float`/`Float` field could not load any decimal; and `save()` threw a `NullPointerException`, leaving
+  the file unchanged, when a map or an object held a `null` value. As of 6.3.0
   collection elements and map keys and values are converted to their declared types, a quoted number
   the old parser wrote (`'30'`) loads as the number, an element that cannot be converted is skipped,
   a wrongly shaped value keeps the field's declared default, and each such value is named in one
@@ -369,30 +369,33 @@ This section governs the third kind.
   and an empty list item are handled the same way. A decimal loads into a `float`/`Float` field when
   the float nearest to it prints back as the same decimal (`0.1`, `0.3`, `1.5`), so a float the
   framework wrote always reads back; only a value with more digits than a float holds
-  (`0.123456789`) keeps the default with a warning (maintainer decision of 2026-09-30). A map key
-  containing a dot is still written and read exactly as in 6.2 - the configuration file uses `.` as
-  its path separator, so in a map the file stores as a section such a key is split into nested
-  levels (`my` -> `rule`), and quoting it does not change that - but it is no longer silent: a start
-  or reload that finds such a key in the file, and every framework write that is about to write one
-  (a save, a first-boot default, a panel write), logs one WARNING per key naming the file, the
-  entry, the map's nested path and the module, saying the key will be split into nested levels the
-  next time the file is loaded and asking for a rename (maintainer decision of 2026-09-30: warn
-  only, the write path stays as in 6.2). Only entries declared as a `Map` are checked, and maps
-  nested in them as far as the declared type says `Map`; maps inside other objects, list elements
-  (which the file keeps whole) and maps written by a module's own `parser` are not. The check never
-  changes a value or the file. A null value in such a map, which `save()` leaves out as it always
-  has, is named in a warning too. A module that compensated for the old text elements by parsing
+  (`0.123456789`) keeps the default with a warning (maintainer decision of 2026-09-30). A `null`
+  value inside a map or an object is now left out of the file by `save()`, with one WARNING naming
+  the file, the entry and the value's nested path, where 6.2 stopped the save with a
+  `NullPointerException` and left the file unchanged. A module that compensated for the old text elements by parsing
   them itself keeps working (an `Integer` still prints as its number), but a list with one bad
   element is now used without that element rather than reaching the module whole. With the default
   parser a `Set` field is written as a YAML list and an enum field or collection element by its
   name, both of which used to produce a file the loader refused; every other value, maps and objects
-  included, is written exactly as in 6.2, and a module's own `parser` serializes exactly as before.
-  A value the framework still writes with a Java-class tag - a top-level `UUID` or unregistered
-  `ConfigurationSerializable` default, an enum or unregistered `ConfigurationSerializable` inside a
-  map default - and `UUID` text in a file not binding to a `UUID` field are tracked as
-  UltiKits/UltiTools-Reborn#560. `DefaultConfigParser#parse` returns a sequence's elements as they
+  included, is written exactly as in 6.2. That applies only to an entry whose `parser` is
+  `DefaultConfigParser` itself: a module's own `parser`, including one that extends
+  `DefaultConfigParser`, is written exactly as in 6.2 - the raw value on a first-boot write and on a
+  panel write, its own serialization on `save()`. A value the framework still writes with a
+  Java-class tag - a top-level `UUID` or unregistered `ConfigurationSerializable` default, an enum or
+  unregistered `ConfigurationSerializable` inside a map default, and an enum a module's own `parser`
+  gets written raw on a first-boot write or a panel write - and `UUID` text in a file not binding to a
+  `UUID` field are tracked as UltiKits/UltiTools-Reborn#560. `DefaultConfigParser#parse` returns a sequence's elements as they
   are instead of as text, and a value that is neither a sequence nor a section as it is instead of
   failing a cast.
+- **Unchanged from 6.2, and documented rather than checked: a map key must not contain a dot**
+  (#553, maintainer decision of 2026-09-30). The configuration file uses `.` as its path separator,
+  so in a map the file stores as a section - a map-typed `@ConfigEntry`, a map nested in one, a map
+  inside an object stored in one - a key such as `my.rule` is split into nested levels (`my` ->
+  `rule`), both when the framework writes it and when the file is loaded. Quoting the key in YAML
+  (`"my.rule":`) does not help. The framework neither refuses such a key nor warns about it, so
+  module authors must not use `.` in such keys (in declared defaults or in keys a module builds at
+  run time), and operators must not type one into such a map; use `-` or `_`. A map that is a list
+  element is plain data and keeps a dotted key whole.
 - A `@ConfigEntry` comment that is exactly one language key is rewritten on every framework write,
   including the first start after an upgrade (#542, maintainer decision of 2026-09-29): a comment
   such as `comment = "{config.demo.limit}"` is resolved from the module's catalogue in the server's
@@ -410,7 +413,7 @@ This section governs the third kind.
   comment - anything that is not exactly one `{key}` - behaves as before. No element was added to
   `@ConfigEntry`, so no module has to recompile.
 
-  中文：`@ConfigEntry` 的值现在按字段声明的类型绑定（列表元素、映射的键和值），无法转换的元素被跳过、形状不对的值保留默认值，并各记一条警告（文件、键、声明类型、原值；键名像密钥时原值打码），其余配置照常加载。`float` 字段里的小数，只要按 float 读回来一样就接受（`0.1`、`0.3`、`1.5`），位数超过 float 能保存的值保留默认值并警告。含点的映射键仍按 6.2 的方式写入和读取（配置文件用点作路径分隔符，这样的键会被拆成嵌套的几层），但不再无声：启动或重载时在文件里发现、以及框架每次写入前发现这样的键，都会记一条警告，写明文件、配置项、嵌套路径和模块，说明这个键下次读取时会被拆成嵌套的几层，请服主改名；检查只读，不改任何值和文件。只检查声明为 `Map` 的配置项及其中声明为映射的嵌套映射；其他对象里的映射、列表元素和模块自带解析器的映射不检查。`save()` 本来就不写的 null 值也会记一条警告。仍会写出 Java 类标签的几种默认值见 #560。注释恰好是一个 `{key}` 时，框架每次写这个配置文件都按服务器当前语言从模块语言文件取注释重写（升级后第一次启动也会），服主在这些项上手写的注释会被覆盖，没有变化时不写文件。**注意：重写不只改注释行。**与框架的每一次写文件一样，整个文件会重新输出：服主加的引号会被去掉，行内列表 `[a, b]` 变成多行，`yes` 变成 `true`，`1.50` 变成 `1.5`，写在列表项旁的注释会丢失；值的含义不变。维护者 2026-09-30 接受了这一点；此前说「只改注释行」的描述是错的。
+  中文：`@ConfigEntry` 的值现在按字段声明的类型绑定（列表元素、映射的键和值），无法转换的元素被跳过、形状不对的值保留默认值，并各记一条警告（文件、键、声明类型、原值；键名像密钥时原值打码），其余配置照常加载。`float` 字段里的小数，只要按 float 读回来一样就接受（`0.1`、`0.3`、`1.5`），位数超过 float 能保存的值保留默认值并警告。映射或对象里的 null 值：6.2 的 `save()` 遇到它会抛 `NullPointerException`、文件保持不变；现在 `save()` 不写这个值，并记一条警告，写明文件、配置项和它的嵌套路径。`Set` 写成列表、枚举写成名字，只适用于解析器正是 `DefaultConfigParser` 本身的配置项；模块自己的解析器（包括继承 `DefaultConfigParser` 的）完全按 6.2 写：首次写入默认值和面板写入写原值，`save()` 走它自己的序列化。仍会写出 Java 类标签的几种值（包括模块自己的解析器在首次写入或面板写入时原样写出的枚举）见 #560。**含点的映射键（#553，维护者 2026-09-30 决定：不做检查，只写文档）：**配置文件用点作路径分隔符，文件存成小节的映射（声明为 `Map` 的配置项、其中嵌套的映射、存在其中的对象里的映射）里，`my.rule` 这样的键写入和读取时都会被拆成嵌套的几层（`my` -> `rule`），在 YAML 里给键加引号也没用。框架既不拒绝也不警告，所以模块作者不要在这类键里用点（声明的默认值和运行时生成的键都一样），服主也不要在这类映射里写带点的键，改用 `-` 或 `_`。列表元素里的映射是普通数据，带点的键会原样保留。注释恰好是一个 `{key}` 时，框架每次写这个配置文件都按服务器当前语言从模块语言文件取注释重写（升级后第一次启动也会），服主在这些项上手写的注释会被覆盖，没有变化时不写文件。**注意：重写不只改注释行。**与框架的每一次写文件一样，整个文件会重新输出：服主加的引号会被去掉，行内列表 `[a, b]` 变成多行，`yes` 变成 `true`，`1.50` 变成 `1.5`，写在列表项旁的注释会丢失；值的含义不变。维护者 2026-09-30 接受了这一点；此前说「只改注释行」的描述是错的。
 - Changes in performance, memory footprint, log wording, or exception message text.
 - Security fixes. These may land in a PATCH without prior notice.
 - Refreshing an extracted resource file nobody has customised. Before 6.3.0, `saveResources()`
