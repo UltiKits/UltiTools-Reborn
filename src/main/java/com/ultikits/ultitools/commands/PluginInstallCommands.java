@@ -265,10 +265,13 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         } catch (IOException e) {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("删除失败！文件访问错误！请手动删除！"));
             sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), modulesFolderPath()));
-        }
-        for (String version : cancelledUpdates) {
-            sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
-                    "已取消模块 %s 已暂存、尚未应用的更新（版本 %s）。"), plugin, version));
+        } finally {
+            // In a finally, like the cancellation itself: an unexpected exception from the uninstall
+            // leaves with the update already cancelled, and the operator is still told (gate 1, I-04).
+            for (String version : cancelledUpdates) {
+                sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
+                        "已取消模块 %s 已暂存、尚未应用的更新（版本 %s）。"), plugin, version));
+            }
         }
     }
 
