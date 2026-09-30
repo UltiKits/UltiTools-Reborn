@@ -948,7 +948,7 @@ public final class ModuleFileTransactions {
         return true;
     }
 
-    /** An existence check of the apply, through {@link FileOps} so a test can make it fail. */
+    /** An existence check of the apply or a rollback, through {@link FileOps} so a test can make it fail. */
     private boolean present(File file) {
         return ops.exists(file.toPath());
     }
@@ -1131,7 +1131,7 @@ public final class ModuleFileTransactions {
         File target = confined(modulesFolder, record.targetName);
         File old = confined(modulesFolder, record.oldName);
         File backup = backupOf(record);
-        if (!exists(backup)) {
+        if (!present(backup)) {
             // Nothing is kept to put back. Either an earlier attempt already put it back (then the
             // new JAR is gone too, and only the record is left to clean up), or the kept JAR went
             // missing -- and removing the new JAR then would leave no version at all, so it stays.
