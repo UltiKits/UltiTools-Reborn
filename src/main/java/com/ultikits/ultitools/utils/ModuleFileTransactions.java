@@ -61,6 +61,11 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
  * crash completes it rather than repeating it, and never deletes a file that is not the staged
  * JAR. Both versions are kept until the decision.
  *
+ * <p><b>Deferred removal.</b> An uninstall whose JAR cannot be deleted while the server runs --
+ * Windows holds every module JAR open through the shared module class loader -- records the file
+ * ({@link #recordDeferredRemoval(String, List)}), and the next start deletes it before any module
+ * loads, if it is still that file (#518).
+ *
  * <p><b>Confinement.</b> A record names files only by their file name. Each name is resolved
  * against the one folder it belongs to and canonicalised; a name that leaves that folder -- a
  * separator, {@code ..}, or a link pointing elsewhere -- makes the whole record refused with a
@@ -335,6 +340,53 @@ public final class ModuleFileTransactions {
         }
     }
 
+    /**
+     * Records module JARs an uninstall could not delete now, so the next start deletes them before
+     * any module loads (#518). On Windows the shared module class loader holds every module JAR
+     * open for the life of the server, so this is the only point at which such a JAR can go.
+     *
+     * <p>Each file is recorded with its size and SHA-256; the next start deletes it only if it is
+     * still that file, so a newer install under the same name is never deleted.
+     *
+     * @param moduleName the module being uninstalled, as the operator named it
+     * @param files      the JARs still on disk, each directly in the modules folder
+     * @throws IOException when the record cannot be written, or a file is not in the modules folder
+     *                     or cannot be read
+     */
+    public void recordDeferredRemoval(String moduleName, List<File> files) throws IOException {
+        synchronized (LOCK) {
+            Record record = new Record();
+            record.type = Record.REMOVE;
+            record.key = moduleName;
+            File recordFile = recordFileOf(record);
+            if (exists(recordFile)) {
+                Record existing = readRecord(recordFile);
+                if (existing != null && existing.removals != null) {
+                    record.removals.addAll(existing.removals);
+                }
+            }
+            for (File file : files) {
+                if (!isDirectChild(modulesFolder, file)) {
+                    throw new IOException(file.getAbsolutePath() + " is not in the modules folder "
+                            + modulesFolder.getAbsolutePath());
+                }
+                String hash = sha256Of(file);
+                if (hash == null) {
+                    throw new IOException(file.getAbsolutePath() + " could not be read");
+                }
+                Removal removal = new Removal();
+                removal.name = file.getName();
+                removal.size = file.length();
+                removal.sha256 = hash;
+                record.removals.removeIf(r -> removal.name.equals(r.name));
+                record.removals.add(removal);
+            }
+            record.state = Record.PENDING;
+            record.moduleName = moduleName;
+            writeRecord(record);
+        }
+    }
+
     // ------------------------------------------------------------------------------------------
     // Start-up -- before the module class loader is built, and after the modules load
     // ------------------------------------------------------------------------------------------
@@ -364,6 +416,10 @@ public final class ModuleFileTransactions {
     }
 
     private void applyRecord(Record record) throws RecordRefused {
+        if (Record.REMOVE.equals(record.type)) {
+            applyRemoval(record);
+            return;
+        }
         if (!Record.UPDATE.equals(record.type)) {
             throw new RecordRefused("unknown record type " + record.type);
         }
@@ -635,6 +691,51 @@ public final class ModuleFileTransactions {
                     record.oldVersion, record.oldVersion);
         } else {
             report(Level.INFO, Keys.ROLLBACK_FINISHED, record.moduleName, record.oldVersion, record.oldVersion);
+        }
+    }
+
+    /**
+     * Deletes the JARs an uninstall recorded, before any module loads: each only if it is still
+     * the file that was recorded. One that still cannot be deleted stays recorded for the next
+     * start and is reported; one replaced since is left alone and reported.
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private void applyRemoval(Record record) throws RecordRefused {
+        List<Removal> recorded = record.removals == null ? Collections.<Removal>emptyList() : record.removals;
+        List<File> targets = new ArrayList<>();
+        for (Removal removal : recorded) {
+            // Every name is checked before any file is touched, so a record with one bad name
+            // deletes nothing at all.
+            targets.add(confined(modulesFolder, removal.name));
+        }
+        List<Removal> remaining = new ArrayList<>();
+        List<String> deleted = new ArrayList<>();
+        for (int i = 0; i < recorded.size(); i++) {
+            Removal removal = recorded.get(i);
+            File file = targets.get(i);
+            if (!exists(file)) {
+                continue;
+            }
+            if (removal.sha256 == null || !removal.sha256.equals(sha256Of(file))) {
+                report(Level.WARNING, Keys.REMOVAL_SKIPPED, file.getAbsolutePath());
+                continue;
+            }
+            try {
+                ops.delete(file.toPath());
+                deleted.add(file.getAbsolutePath());
+            } catch (IOException | RuntimeException e) {
+                report(Level.SEVERE, Keys.REMOVAL_FAILED, file.getAbsolutePath(), describe(e));
+                remaining.add(removal);
+            }
+        }
+        if (!deleted.isEmpty()) {
+            report(Level.INFO, Keys.REMOVED, String.join(", ", deleted));
+        }
+        if (remaining.isEmpty()) {
+            deleteQuietly(recordFileOf(record));
+        } else {
+            record.removals = remaining;
+            persist(record);
         }
     }
 
@@ -1031,6 +1132,7 @@ public final class ModuleFileTransactions {
     @SuppressWarnings("PMD.DataClass")
     static final class Record {
         static final String UPDATE = "UPDATE";
+        static final String REMOVE = "REMOVE";
         static final String PENDING = "PENDING";
         static final String APPLIED = "APPLIED";
         static final String COMMITTING = "COMMITTING";
@@ -1049,6 +1151,15 @@ public final class ModuleFileTransactions {
         String stagedSha256;
         boolean hadOld;
         String failure;
+        List<Removal> removals = new ArrayList<>();
+    }
+
+    /** One file a {@code REMOVE} record deletes at the next start, and what it was when recorded. */
+    @SuppressWarnings("PMD.DataClass")
+    static final class Removal {
+        String name;
+        long size;
+        String sha256;
     }
 
     /** One line for the start-up log, with its catalogue key and arguments. */
@@ -1185,6 +1296,9 @@ public final class ModuleFileTransactions {
         public static final String RESTORE_FAILED = "模块 %s 的旧版本 JAR 仍在 %s，未能移回 %s（%s）；请停止服务器后手动移回。";
         public static final String CLEANUP_DEFERRED = "模块 %s 的更新已确认，但更新目录 %s 未能清理，下次启动会再清理。";
         public static final String ORPHAN_BACKUP = "更新目录 %s 中有不属于任何更新记录的旧版本 JAR，已保留：%s";
+        public static final String REMOVED = "已删除卸载时未能删除的模块 JAR：%s。";
+        public static final String REMOVAL_FAILED = "卸载时记录的模块 JAR %s 仍无法删除（%s）；本次启动会再次加载它，下次启动会再试。";
+        public static final String REMOVAL_SKIPPED = "卸载时记录的模块 JAR %s 自卸载后已被替换，未删除。";
         public static final String RECORD_REFUSED = "更新记录 %s 已拒绝执行：%s";
         public static final String RECORD_UNREADABLE = "更新记录 %s 无法读取，已跳过：%s";
         public static final String RECORD_WRITE_FAILED = "更新记录 %s 无法写入：%s";

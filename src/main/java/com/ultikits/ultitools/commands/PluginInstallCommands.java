@@ -252,6 +252,10 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             // spelling hint would be false here (#501).
             sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n("模块已卸载，但在 %s 中没有识别出属于它的 JAR 文件。"), e.getFile()));
             sendUnreadableEntriesOf(sender, e);
+        } catch (PluginInstallUtils.RemovalDeferredException e) {
+            // The JARs could not be deleted now and were recorded for the next start (#518).
+            sendDeferredRemoval(sender, e);
+            sendUnreadableEntriesOf(sender, e);
         } catch (FileSystemException e) {
             sendUndeletedJars(sender, e);
             sendUnreadableEntriesOf(sender, e);
@@ -268,6 +272,18 @@ public class PluginInstallCommands extends BaseCommandExecutor {
                         "已取消模块 %s 已暂存、尚未应用的更新（版本 %s）。"), plugin, version));
             }
         }
+    }
+
+    /**
+     * The JARs the uninstall could not delete now -- held open by the running server, as Windows
+     * does with every loaded module JAR, or in a folder that is not writable -- and has recorded for
+     * the next start, which deletes them before any module loads (#518). Not "delete them by hand":
+     * on Windows the running server prevents exactly that.
+     */
+    private static void sendDeferredRemoval(CommandSender sender, PluginInstallUtils.RemovalDeferredException deferred) {
+        sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
+                "以下模块 JAR 暂时无法删除（被占用或不可写：%s），已记录，将在下次启动、加载模块之前删除：%s"),
+                deferred.getReason(), String.join(", ", deferred.deferredFiles())));
     }
 
     /**
@@ -329,6 +345,10 @@ public class PluginInstallCommands extends BaseCommandExecutor {
                 // The undetermined entries this failure carries were reported once above, by the
                 // walk over the whole chain.
                 sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n("模块已卸载，但在 %s 中没有识别出属于它的 JAR 文件。"), ((NoSuchFileException) jarFailure).getFile()));
+                return;
+            }
+            if (jarFailure instanceof PluginInstallUtils.RemovalDeferredException) {
+                sendDeferredRemoval(sender, (PluginInstallUtils.RemovalDeferredException) jarFailure);
                 return;
             }
             if (jarFailure instanceof FileSystemException) {

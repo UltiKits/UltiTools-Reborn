@@ -149,5 +149,9 @@
   "模块 %s 的更新已确认，但更新目录 %s 未能清理，下次启动会再清理。": "The update of module %s is confirmed, but its transaction folder %s could not be cleaned up; the next start tries again.",
   "更新目录 %s 中有不属于任何更新记录的旧版本 JAR，已保留：%s": "%s holds previous-version JARs that no update record refers to; they were kept: %s",
   "该模块已有的更新记录 %s 无法读取：%s": "the module's existing update record %s could not be read: %s",
-  "上一次更新留下的旧版本 JAR 无法移回模块目录：%s": "the previous JAR the last update kept could not be moved back into the modules folder: %s"
+  "上一次更新留下的旧版本 JAR 无法移回模块目录：%s": "the previous JAR the last update kept could not be moved back into the modules folder: %s",
+  "以下模块 JAR 暂时无法删除（被占用或不可写：%s），已记录，将在下次启动、加载模块之前删除：%s": "These module JAR files cannot be deleted now (held open or not writable: %s); this is recorded, and they are deleted at the next start, before modules load: %s",
+  "已删除卸载时未能删除的模块 JAR：%s。": "Deleted the module JAR files an uninstall could not delete: %s.",
+  "卸载时记录的模块 JAR %s 仍无法删除（%s）；本次启动会再次加载它，下次启动会再试。": "The module JAR %s recorded by an uninstall still cannot be deleted (%s); it loads again at this start, and the next start tries again.",
+  "卸载时记录的模块 JAR %s 自卸载后已被替换，未删除。": "The module JAR %s recorded by an uninstall has been replaced since, so it was not deleted."
 }

@@ -477,6 +477,14 @@ This section governs the third kind.
   `PluginInstallUtils`, `updatePlugin(` and `uninstallPlugin(`; the only hits are UAT documents
   naming the `/upm` commands). An uninstall that goes ahead also cancels an update of that module
   still waiting for the next start.
+- `PluginInstallUtils.uninstallPlugin(String)` no longer leaves a JAR it cannot delete for the
+  operator to delete by hand (#518). On Windows the shared module class loader keeps every module
+  JAR open while the server runs, so that instruction could not be followed. The uninstall now
+  records such a JAR and the next start deletes it before any module loads, if it is still the
+  recorded file (same SHA-256); the failure it raises is
+  `PluginInstallUtils.RemovalDeferredException` (`@ApiStatus.Internal`), a
+  `java.nio.file.FileSystemException` that names every recorded file as before. Only when the
+  record cannot be written does the plain `FileSystemException` leave as it did.
 
 ### Behavioral changes that do need one
 

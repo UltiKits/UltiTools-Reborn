@@ -868,6 +868,52 @@ public class PluginInstallUtils {
     }
 
     /**
+     * The uninstall could not delete these JARs now -- the running server holds them open, or the
+     * folder is not writable -- and has recorded them, so the next start deletes them before any
+     * module loads (#518). A failure type of its own, so a caller tells the operator exactly that
+     * rather than asking them to delete a file they cannot delete while the server runs.
+     */
+    @ApiStatus.Internal
+    public static final class RemovalDeferredException extends java.nio.file.FileSystemException {
+        private static final long serialVersionUID = 1L;
+
+        private final List<String> deferredFiles;
+        private final String reason;
+
+        private RemovalDeferredException(List<String> deferredFiles, String reason) {
+            super(deferredFiles.isEmpty() ? null : deferredFiles.get(0), null,
+                    "could not be deleted now (" + reason + "); deleted at the next start, before modules load");
+            this.deferredFiles = Collections.unmodifiableList(new ArrayList<>(deferredFiles));
+            this.reason = reason;
+            // The uninstall's failure contract (#501): getFile() names the first JAR and one
+            // suppressed FileSystemException names each further one, so a caller walking the chain
+            // is told every file.
+            for (int i = 1; i < deferredFiles.size(); i++) {
+                addSuppressed(new java.nio.file.FileSystemException(deferredFiles.get(i), null, getReason()));
+            }
+        }
+
+        /**
+         * @param deferredFiles the absolute paths of the JARs recorded for deletion at the next start
+         * @param reason        why they could not be deleted now
+         * @return the failure
+         */
+        public static RemovalDeferredException of(List<String> deferredFiles, String reason) {
+            return new RemovalDeferredException(deferredFiles, reason);
+        }
+
+        /** @return the absolute paths of the JARs recorded for deletion at the next start */
+        public List<String> deferredFiles() {
+            return deferredFiles;
+        }
+
+        /** @return why they could not be deleted now */
+        public String getReason() {
+            return reason;
+        }
+    }
+
+    /**
      * Attaches the undetermined entries to a failure on its way out, when there are any.
      *
      * @param failure the failure leaving the uninstall
@@ -1384,9 +1430,53 @@ public class PluginInstallUtils {
         try {
             deleteAllOrThrow(matchingJars);
         } catch (java.nio.file.FileSystemException deleteFailure) {
-            throw carrying(deleteFailure, undeterminedPaths);
+            throw carrying(deferOrFail(identity, matchingJars, deleteFailure), undeterminedPaths);
         }
         return new UninstallReport(true, undeterminedPaths, deleted);
+    }
+
+    /**
+     * A JAR that could not be deleted now is recorded so the next start deletes it before any
+     * module loads (#518). On Windows the shared module class loader keeps every module JAR open
+     * while the server runs, so "delete it by hand" is an instruction the operator cannot follow;
+     * the record is what makes the uninstall complete. Only when the record itself cannot be
+     * written does the original failure leave as it was, with the record failure attached.
+     *
+     * @param identity      the resolved identity
+     * @param jars          the JARs the uninstall tried to delete
+     * @param deleteFailure what the deletion threw
+     * @return the failure to report: {@link RemovalDeferredException} when the deletion was recorded
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // a record that cannot be written leaves the original failure
+    private static java.nio.file.FileSystemException deferOrFail(ModuleIdentity identity, List<File> jars,
+                                                                 java.nio.file.FileSystemException deleteFailure) {
+        List<File> remaining = new ArrayList<>();
+        for (File jar : jars) {
+            if (probe(jar) != Presence.ABSENT) {
+                remaining.add(jar);
+            }
+        }
+        if (remaining.isEmpty()) {
+            return deleteFailure;
+        }
+        Throwable cause = deleteFailure.getCause() == null ? deleteFailure : deleteFailure.getCause();
+        String reason = cause.getClass().getSimpleName()
+                + (cause.getMessage() == null ? "" : ": " + cause.getMessage());
+        try {
+            new ModuleFileTransactions(UltiTools.getInstance().getDataFolder())
+                    .recordDeferredRemoval(identity.requested, remaining);
+        } catch (IOException | RuntimeException recordFailure) {
+            LOGGER.log(Level.WARNING, "Uninstalling module " + identity.requested
+                    + ": the deletion could not be recorded for the next start either", recordFailure);
+            deleteFailure.addSuppressed(recordFailure);
+            return deleteFailure;
+        }
+        LOGGER.warning("Uninstalling module " + identity.requested + ": " + absolutePathsOf(remaining)
+                + " could not be deleted now (" + reason + "); recorded, and deleted at the next start"
+                + " before modules load");
+        RemovalDeferredException deferred = RemovalDeferredException.of(absolutePathsOf(remaining), reason);
+        deferred.initCause(deleteFailure);
+        return deferred;
     }
 
     /**
