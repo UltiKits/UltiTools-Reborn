@@ -316,5 +316,20 @@ class UltiToolsPluginUnrecordedLanguageReplacementTest {
         assertThat(plugin.i18n("greeting")).isEqualTo("zh, edited after the upgrade");
         assertThat(langListing()).containsExactly("en.json", "en.json.bak", "zh.json", "zh.json.bak");
     }
+
+    @Test
+    @DisplayName("Codex run 2: a malformed catalogue for a language not in use never blocks the module")
+    void malformedUnusedLanguageNeverBlocksTheModule() throws Exception {
+        String malformed = "{ this is not json";
+        fixture.jarEntry(LANG, NEW).jarEntry("lang/zh.json", malformed);
+
+        UltiToolsPlugin plugin = fixture.construct("6.3.0");
+        plugin.commitLanguageProvenance();
+
+        assertThat(plugin.i18n("greeting")).isEqualTo("Hello from the 6.3 jar");
+        assertThat(BootLanguageFixture.bytesOf(fixture.disk("lang/zh.json"))).isEqualTo(utf8(malformed));
+        assertThat(ResourceHashSidecar.readRecordedHash(fixture.resourceFolder(), "lang/zh.json"))
+                .contains(ResourceHashSidecar.sha256(fixture.disk("lang/zh.json")));
+    }
 }
 
