@@ -250,7 +250,7 @@ class ConfigSinglePointRefusalTest {
             config.save();
             List<String> named = warnings.messagesContaining("'minecraft.diamond'");
             assertThat(named).hasSize(1);
-            assertThat(named.get(0)).contains("SingleModule").contains(PATH).contains("'recipes'");
+            assertThat(named.get(0)).contains("SingleModule").contains(PATH).contains("'recipes.sword.ingredients'");
         }
         assertThat(readFile()).contains("stick").doesNotContain("diamond");
     }
