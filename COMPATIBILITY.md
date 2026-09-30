@@ -574,8 +574,8 @@ Each corrects a declared behaviour the stream did not deliver. The panel protoco
 - **Records logged before the stream starts reach it** (#487). From `onLoad` until the panel
   connection opens, records are kept in a start-up buffer (2000 records, an estimated 512 KiB, five
   minutes) and sent first, oldest first, when the stream starts. The buffer applies the stream's
-  filters as records arrive and is released without sending anything when there is no cloud login,
-  when the `logs` capability is off, or when its time is up.
+  filters as records arrive and is released without sending anything when there is no cloud login
+  or when its time is up; with the `logs` capability off it is not attached and keeps nothing.
 - **The `server.properties` refusal for a key the file does not hold** now reads `This key is not in
   this server's server.properties` instead of `This server version has no such key` (#473): nothing
   tells a key the running version lacks from one the file omits. A panel or tool that matched on the

@@ -241,8 +241,9 @@ public final class UltiTools extends JavaPlugin implements Localized {
         saveDefaultConfig();
         ultiTools = this;
         // #487: keep what the server logs from here on until the panel's log stream starts, so the
-        // early boot reaches the panel too; released if the stream does not start in time.
-        EarlyLogCapture.start(getConfig().getStringList("ultipanel.logging.excluded-loggers"));
+        // early boot reaches the panel too; released if the stream does not start in time. Not
+        // attached at all when the logs capability is off (D-12).
+        EarlyLogCapture.startIfLogsEnabled(getConfig().getStringList("ultipanel.logging.excluded-loggers"));
         // Plugin classloader initialization
         URL serverJar = getServerJar();
         try {

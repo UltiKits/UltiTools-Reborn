@@ -14,6 +14,8 @@ import java.util.logging.Logger;
 
 import org.jetbrains.annotations.ApiStatus;
 
+import com.ultikits.ultitools.entities.Capability;
+
 /**
  * Holds the log records written between {@code UltiTools#onLoad()} and the moment the panel's log
  * stream starts ({@code LogStreamManager#initialize}), so they reach the panel too (#487).
@@ -75,14 +77,32 @@ public final class EarlyLogCapture extends Handler {
     }
 
     /**
-     * Attaches the capture to the root logger, replacing one already attached. Called from
-     * {@code UltiTools#onLoad()}.
+     * Attaches the capture to the root logger, replacing one already attached, whatever the logs
+     * capability says; {@code UltiTools#onLoad()} goes through {@link #startIfLogsEnabled}.
      *
      * @param excludedLoggers the configured {@code ultipanel.logging.excluded-loggers}, applied as
      *                        records arrive
      */
     public static void start(Collection<String> excludedLoggers) {
         start(excludedLoggers, MAX_RECORDS, MAX_BYTES, RELEASE_AFTER_MS, System::currentTimeMillis);
+    }
+
+    /**
+     * Attaches the capture only when the panel receives the log stream: with
+     * {@code ultipanel.capabilities.logs: false} nothing is collected, as a disabled capability
+     * prevents collection rather than collecting and discarding (D-12). Called from
+     * {@code UltiTools#onLoad()}, after the plugin instance is set, so the configured value is read.
+     *
+     * @param excludedLoggers the configured {@code ultipanel.logging.excluded-loggers}, applied as
+     *                        records arrive
+     * @return whether the capture was attached
+     */
+    public static boolean startIfLogsEnabled(Collection<String> excludedLoggers) {
+        if (!Capability.LOGS.isEnabled()) {
+            return false;
+        }
+        start(excludedLoggers);
+        return true;
     }
 
     static void start(Collection<String> excludedLoggers, int maxRecords, long maxBytes, long releaseAfterMs,

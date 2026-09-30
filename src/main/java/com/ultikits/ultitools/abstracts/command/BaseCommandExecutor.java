@@ -288,14 +288,13 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         
         // Check parameter count and build the method parameters. A refusal here -- by return or by
         // an exception, such as a module's TypeParser throwing a runtime exception -- releases what
-        // the validators acquired (#568).
+        // the validators acquired (#568). The refusal hooks run outside the try: a hook that throws
+        // must not be caught below and make every hook run a second time.
         Object[] methodParams;
         try {
-            if (!validateParameterCount(args, format, sender, command)) {
-                notifyRefused(context, validationResult);
-                return true;
-            }
-            methodParams = buildMethodParams(context, method);
+            methodParams = validateParameterCount(args, format, sender, command)
+                    ? buildMethodParams(context, method)
+                    : null;
         } catch (RuntimeException e) {
             notifyRefusedAndRethrow(context, validationResult, e);
             throw e;
