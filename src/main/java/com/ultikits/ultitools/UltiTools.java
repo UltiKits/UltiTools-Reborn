@@ -30,6 +30,7 @@ import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.jetbrains.annotations.ApiStatus;
 
 import com.ultikits.ultitools.commands.CloudLoginCommand;
 import com.ultikits.ultitools.commands.PluginInstallCommands;
@@ -584,11 +585,25 @@ public final class UltiTools extends JavaPlugin implements Localized {
      * @throws IOException if an I/O error occurs during the reloading process
      */
     public void reloadPlugins() throws IOException {
+        reloadPluginsAndReport();
+    }
+
+    /**
+     * Reloads the framework configuration and language, then every module, and returns the
+     * summary {@code /ul reload} shows its sender (#509). Each module is reloaded in isolation; see
+     * {@code PluginManager#reloadAllAndReport()}.
+     *
+     * @return the summary lines, already localized
+     * @throws IOException if an I/O error occurs during the reloading process
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public List<String> reloadPluginsAndReport() throws IOException {
         // Refresh Bukkit config from disk so language changes are picked up
         reloadConfig();
         // Reinitialize framework language based on (possibly changed) config
         initLanguage();
-        pluginManager.reload();
+        return pluginManager.reloadAllAndReport();
     }
 
     /**

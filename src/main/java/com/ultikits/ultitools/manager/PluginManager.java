@@ -109,6 +109,13 @@ public class PluginManager {
      */
     private static final String LEGACY_PLUGIN_LOADING_PROPERTY = "ultitools.useLegacyPluginLoading";
 
+    /** Framework i18n key: the {@code /ul reload} summary when every module reloaded (#509). */
+    static final String RELOAD_SUMMARY_ALL_KEY = "All %d modules reloaded.";
+
+    /** Framework i18n key: the {@code /ul reload} summary naming the modules that failed (#509). */
+    static final String RELOAD_SUMMARY_FAILED_KEY =
+            "Failed to reload %d of %d modules: %s. The others reloaded; see the console for each failure.";
+
     /**
      * The loaded modules, in load order. Only this manager changes it: a module is listed by
      * {@link #onPluginRegistered} and delisted by {@link #unregister(UltiToolsPlugin)}.
@@ -935,17 +942,59 @@ public class PluginManager {
 
     /**
      * Reload all plugins. This operation only reload plugin configuration.
+     * <p>
+     * Since 6.3.0 each module is reloaded in isolation (#509): a module whose reload throws is
+     * logged by its own {@code reloadSelf()}, the remaining modules are still reloaded, and the
+     * closing summary names every module that failed instead of an unconditional "all reloaded".
+     * See {@link #reloadAllAndReport()}.
      */
     public void reload() {
+        reloadAllAndReport();
+    }
+
+    /**
+     * Reloads every loaded module, each isolated from the others' failures, then logs a summary
+     * and returns it (#509). {@code /ul reload} sends the returned lines to its sender.
+     * <p>
+     * A module whose {@code reloadSelf()} throws has already logged a failure line naming itself
+     * and its cause; it is counted as failed and the next module is reloaded. A {@link
+     * VirtualMachineError} is not one module's failure and is rethrown.
+     *
+     * @return the summary lines, already localized, in the order they were logged
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public List<String> reloadAllAndReport() {
         Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Reloading all plugins...");
-        for (UltiToolsPlugin plugin : pluginList) {
-            plugin.reloadSelf();
+        List<UltiToolsPlugin> modules = new ArrayList<>(pluginList);
+        List<String> failed = new ArrayList<>();
+        for (UltiToolsPlugin plugin : modules) {
+            try {
+                plugin.reloadSelf();
+            } catch (VirtualMachineError fatal) {
+                throw fatal;
+            } catch (Exception | Error e) {
+                // reloadSelf() has already logged the failure line naming the module, with its
+                // stack trace; the summary below names it again for the operator.
+                failed.add(plugin.getPluginName());
+            }
         }
-        Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] All plugins reloaded.");
+        List<String> summary = new ArrayList<>();
+        if (failed.isEmpty()) {
+            summary.add(String.format(UltiTools.getInstance().i18n(RELOAD_SUMMARY_ALL_KEY), modules.size()));
+        } else {
+            summary.add(String.format(UltiTools.getInstance().i18n(RELOAD_SUMMARY_FAILED_KEY),
+                    failed.size(), modules.size(), String.join(", ", failed)));
+        }
+        Level summaryLevel = failed.isEmpty() ? Level.INFO : Level.WARNING;
+        for (String line : summary) {
+            Bukkit.getLogger().log(summaryLevel, "[UltiTools-API] " + line);
+        }
         Bukkit.getLogger().log(
                 Level.WARNING,
                 "[UltiTools-API] This operation is only used for reloading plugin configuration. If (un)installing, please restart the server!"
         );
+        return summary;
     }
 
     /**

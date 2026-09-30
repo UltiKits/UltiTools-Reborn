@@ -119,5 +119,9 @@
   "获取服务器UUID失败！": "Could not obtain the server UUID!",
   "获取版本列表失败！": "Could not fetch the version list!",
   "配置编辑Websocket服务初始化失败！": "Config-editor WebSocket service failed to initialise!",
-  "Module '%s' reloaded.": "Module '%s' reloaded."
+  "Module '%s' reloaded.": "Module '%s' reloaded.",
+  "Module '%s' failed to reload: %s": "Module '%s' failed to reload: %s",
+  "All %d modules reloaded.": "All %d modules reloaded.",
+  "Failed to reload %d of %d modules: %s. The others reloaded; see the console for each failure.": "Failed to reload %d of %d modules: %s. The others reloaded; see the console for each failure.",
+  "Module %s failed to reload: %s. See the console for details.": "§cModule %s failed to reload: %s. See the console for details."
 }
