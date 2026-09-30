@@ -62,6 +62,7 @@ import com.ultikits.ultitools.manager.UpdateManager;
 import com.ultikits.ultitools.listeners.UpdateJoinListener;
 import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.utils.Metrics;
+import com.ultikits.ultitools.utils.ModuleFileTransactions;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.utils.SecurityPolicy;
 import com.ultikits.ultitools.websocket.PanelResponderRegistry;
@@ -119,6 +120,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
     @Getter
     private DependenceManagers dependenceManagers;
     private URLClassLoader ultiToolsClassLoader;
+    /**
+     * The module update and removal transactions of this start (#505): applied before the module
+     * class loader is built, decided after the modules load.
+     */
+    private ModuleFileTransactions moduleFileTransactions;
     @Getter
     private Language language;
     @Getter
@@ -257,11 +263,19 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     @Override
     public void onEnable() {
+        // #505: recorded module updates are put in place before the class loader opens any module
+        // JAR, and decided after the modules load (initPluginModules). Their log lines wait for
+        // the language to be loaded.
+        moduleFileTransactions = new ModuleFileTransactions(getDataFolder());
         ultiToolsClassLoader = new URLClassLoader(getModuleUrls(), getClassLoader());
         this.eventBus = new EventBus();
 
-        if (!initDependencies()) return;
+        if (!initDependencies()) {
+            moduleFileTransactions.flushReports(getLogger(), text -> text);
+            return;
+        }
         initLanguage();
+        moduleFileTransactions.flushReports(getLogger(), this::i18n);
         initDataStore();
         initPluginModules();
         migrateCapabilitiesConfig();
@@ -344,13 +358,45 @@ public final class UltiTools extends JavaPlugin implements Localized {
             file.mkdirs();
         }
         try {
-            pluginManager.init(ultiToolsClassLoader);
+            loadModulesThenObserve(moduleFileTransactions, () -> pluginManager.init(ultiToolsClassLoader),
+                    pluginManager::getPluginList);
         } catch (IOException e) {
             // GATE-05 group two (08-21): routed to the typed plugin-module hierarchy -- this is
             // the module-loading subsystem itself failing to initialize, before any individual
             // module is even identified.
             throw new PluginModuleException(ErrorCode.PLUGIN_LOAD_FAILED,
                     "Failed to initialize plugin module loading", e);
+        } finally {
+            moduleFileTransactions.flushReports(getLogger(), this::i18n);
+        }
+    }
+
+    /** The module loading step {@link #loadModulesThenObserve} wraps. */
+    @FunctionalInterface
+    interface ModuleLoad {
+        void run() throws IOException;
+    }
+
+    /**
+     * Loads the modules, then decides every update applied at this start from what loaded (#505).
+     * A load that throws counts as "not loaded" for every one of them.
+     *
+     * @param transactions this start's transactions
+     * @param load         the module loading step
+     * @param loaded       the modules loaded, read after {@code load} returns
+     * @throws IOException when {@code load} does
+     */
+    static void loadModulesThenObserve(ModuleFileTransactions transactions, ModuleLoad load,
+                                       java.util.function.Supplier<List<com.ultikits.ultitools.abstracts.UltiToolsPlugin>> loaded)
+            throws IOException {
+        boolean completed = false;
+        try {
+            load.run();
+            completed = true;
+        } finally {
+            transactions.observeAfterLoad(
+                    completed ? loaded.get() : Collections.<com.ultikits.ultitools.abstracts.UltiToolsPlugin>emptyList(),
+                    ModuleFileTransactions::codeSourceOf);
         }
     }
 
@@ -658,18 +704,27 @@ public final class UltiTools extends JavaPlugin implements Localized {
      * @return Array of URLs for module plugin JARs
      */
     private URL[] getModuleUrls() {
-        List<URL> urls = new ArrayList<>();
+        return moduleClassPath(moduleFileTransactions, ModuleFileTransactions.modulesFolder(getDataFolder()),
+                getServerJar());
+    }
 
-        // Add server JAR
-        URL serverJar = getServerJar();
+    /**
+     * The module class path of this start: first the recorded module updates are put in place
+     * (#505), then the modules folder is listed -- in that order, so the class loader is built over
+     * the new JARs and never opens a JAR an update replaces.
+     *
+     * @param transactions  this start's transactions
+     * @param modulesFolder the modules folder
+     * @param serverJar     the server JAR, or {@code null}
+     * @return the URLs to build the module class loader from
+     */
+    static URL[] moduleClassPath(ModuleFileTransactions transactions, File modulesFolder, URL serverJar) {
+        transactions.applyBeforeLoad();
+        List<URL> urls = new ArrayList<>();
         if (serverJar != null) {
             urls.add(serverJar);
         }
-
-        // Add module plugin JARs from UltiTools/plugins/
-        File pluginDir = new File(getDataFolder(), "plugins");
-        urls.addAll(collectModuleJarUrls(pluginDir));
-
+        urls.addAll(collectModuleJarUrls(modulesFolder));
         return urls.toArray(new URL[0]);
     }
 

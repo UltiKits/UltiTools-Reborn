@@ -48,6 +48,19 @@ public class PluginInstallUtils {
     static final java.util.function.Function<UltiToolsPlugin, File> DEFAULT_MODULE_CODE_SOURCE =
             module -> codeSourceLocationOf(module.getClass());
 
+    /** The UltiCloud catalogue, as the update transaction asks it. */
+    private static final ModuleFileTransactions.Catalogue CATALOGUE = new ModuleFileTransactions.Catalogue() {
+        @Override
+        public String latestVersion(String identifyString) {
+            return getPluginLatestVersion(identifyString);
+        }
+
+        @Override
+        public String downloadLink(String identifyString, String version) {
+            return getPluginVersionDownloadLink(identifyString, version);
+        }
+    };
+
     private static final Gson GSON = new GsonBuilder()
             .setDateFormat("yyyy-MM-dd HH:mm:ss")
             .create();
@@ -444,36 +457,37 @@ public class PluginInstallUtils {
     }
 
     /**
-     * Update a plugin module: download latest version and delete old JAR.
+     * Stages an update of a loaded module to its latest version (#505).
+     *
+     * <p>Nothing in the modules folder changes: the new JAR is downloaded into the transaction
+     * folder beside it and recorded. At the next start the files are swapped before any module
+     * loads, and the update is kept only if the module is then seen loaded from the new JAR at the
+     * new version; otherwise the old JAR is restored. See {@link ModuleFileTransactions}.
+     *
+     * @param identifyString the module's identify-string
+     * @return what was staged, or why nothing was
+     */
+    @ApiStatus.Internal
+    public static ModuleFileTransactions.StageResult stageUpdate(String identifyString) {
+        UltiTools ultiTools = UltiTools.getInstance();
+        return new ModuleFileTransactions(ultiTools.getDataFolder()).stageUpdate(identifyString,
+                new ArrayList<>(ultiTools.getPluginManager().getPluginList()), DEFAULT_MODULE_CODE_SOURCE,
+                CATALOGUE, (link, fileName, folder) -> HttpDownloadUtils.download(link, fileName,
+                        folder.getAbsolutePath()));
+    }
+
+    /**
+     * Stages an update of a loaded module; see {@link #stageUpdate(String)}.
+     *
+     * <p>As of 6.3.0 this no longer replaces the JAR in place and no longer means "updated": it
+     * returns {@code true} when the update was staged, to take effect at the next start and to be
+     * kept only if the module then loads.
      *
      * @param identifyString the plugin identify string
-     * @return true if update succeeded
+     * @return {@code true} if the update was staged
      */
     public static boolean updatePlugin(String identifyString) {
-        String latestVersion = getPluginLatestVersion(identifyString);
-        String downloadLink = getPluginVersionDownloadLink(identifyString, latestVersion);
-        String fileName = installedJarName(identifyString, latestVersion);
-        if (downloadLink == null || fileName == null) {
-            return false;
-        }
-
-        String pluginsPath = UltiTools.getInstance().getDataFolder() + "/plugins";
-        File pluginsFolder = new File(pluginsPath);
-        File oldJar = findPluginJar(pluginsFolder, identifyString);
-
-        try {
-            HttpDownloadUtils.download(downloadLink, fileName, pluginsPath);
-        } catch (IOException e) {
-            UltiTools.getInstance().getLogger().severe("Failed to download update: " + e.getMessage());
-            return false;
-        }
-
-        // Delete old JAR if it's a different file than the new download
-        if (oldJar != null && !oldJar.getName().equals(fileName)) {
-            oldJar.delete();
-        }
-
-        return true;
+        return stageUpdate(identifyString).getOutcome() == ModuleFileTransactions.StageResult.Outcome.STAGED;
     }
 
     /**

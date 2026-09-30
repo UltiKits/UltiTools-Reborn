@@ -24,6 +24,7 @@ import com.ultikits.ultitools.entities.PluginEntity;
 import com.ultikits.ultitools.entities.UpdateInfo;
 import com.ultikits.ultitools.manager.UpdateManager;
 import com.ultikits.ultitools.utils.MessageUtils;
+import com.ultikits.ultitools.utils.ModuleFileTransactions;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
 
 import net.kyori.adventure.text.Component;
@@ -458,11 +459,31 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         }
         sender.sendMessage(ChatColor.YELLOW + String.format(
             UltiTools.getInstance().i18n("正在更新 %s..."), pluginName));
-        if (PluginInstallUtils.updatePlugin(info.getIdentifyString())) {
-            sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("更新成功！请重启服务器以应用更新。"));
-        } else {
-            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("更新失败！"));
+        sendStageResult(sender, pluginName, PluginInstallUtils.stageUpdate(info.getIdentifyString()));
+    }
+
+    /**
+     * Tells the operator what staging an update did (#505): staged to take effect at the next start
+     * -- never "updated", which is decided only by what that start observes -- or why nothing was
+     * staged.
+     *
+     * @param sender     who asked
+     * @param pluginName the module, as the operator named it
+     * @param result     what staging did
+     * @return whether the update was staged
+     */
+    private static boolean sendStageResult(CommandSender sender, String pluginName,
+                                           ModuleFileTransactions.StageResult result) {
+        if (result.getOutcome() == ModuleFileTransactions.StageResult.Outcome.STAGED) {
+            sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n(
+                    "已暂存 %s 的更新（%s → %s）。更新将在下次启动时生效：只有新版本确实加载后才会保留，否则恢复为 %s。"),
+                    pluginName, result.getOldVersion(), result.getNewVersion(), result.getOldVersion()));
+            return true;
         }
+        String reason = String.format(UltiTools.getInstance().i18n(result.getReasonKey()), result.getReasonArgs());
+        sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n(
+                "%s 的更新未能暂存：%s。没有做任何改动。"), pluginName, reason));
+        return false;
     }
 
     private void updateAllPlugins(CommandSender sender) {
@@ -471,20 +492,20 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("没有可用的更新。"));
             return;
         }
-        int success = 0;
-        int failed = 0;
+        int staged = 0;
+        int notStaged = 0;
         for (UpdateInfo info : updateManager.getModuleUpdates().values()) {
             sender.sendMessage(ChatColor.YELLOW + String.format(
                 UltiTools.getInstance().i18n("正在更新 %s..."), info.getPluginName()));
-            if (PluginInstallUtils.updatePlugin(info.getIdentifyString())) {
-                success++;
+            if (sendStageResult(sender, info.getPluginName(), PluginInstallUtils.stageUpdate(info.getIdentifyString()))) {
+                staged++;
             } else {
-                failed++;
+                notStaged++;
             }
         }
         sender.sendMessage(ChatColor.GREEN + String.format(
-            UltiTools.getInstance().i18n("全部更新完成！%d个成功，%d个失败。请重启服务器。"),
-            success, failed));
+            UltiTools.getInstance().i18n("全部处理完成：%d 个已暂存，%d 个未能暂存。已暂存的更新将在下次启动时生效。"),
+            staged, notStaged));
     }
 
     /**
