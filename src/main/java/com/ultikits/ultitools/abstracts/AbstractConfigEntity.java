@@ -242,7 +242,7 @@ public abstract class AbstractConfigEntity {
     /**
      * Copies every non-null {@code @ConfigEntry} field, serialized through its declared parser, onto
      * {@code target}. The one serialization path shared by {@link #save()}, {@link
-     * #renderSaveText()} and {@link #canonicalizeOnce(String, AbstractConfigEntity, java.util.List)}, so the shutdown comparison renders
+     * #renderSaveText(List)} and {@link #canonicalizeOnce(String, AbstractConfigEntity, java.util.List)}, so the shutdown comparison renders
      * exactly what {@code save()} would write (#510).
      *
      * @param target the configuration to write the serialized field values into
