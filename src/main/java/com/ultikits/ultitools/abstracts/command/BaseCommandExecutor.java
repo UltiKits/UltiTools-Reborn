@@ -281,17 +281,20 @@ public abstract class BaseCommandExecutor implements TabExecutor {
             if (errorMsg != null) {
                 sender.sendMessage(errorMsg);
             }
+            notifyRefused(context, validationResult);
             return true;
         }
         
         // Check parameter count
         if (!validateParameterCount(args, format, sender, command)) {
+            notifyRefused(context, validationResult);
             return true;
         }
         
         // Build method parameters
         Object[] methodParams = buildMethodParams(context, method);
         if (methodParams == null) {
+            notifyRefused(context, validationResult);
             return true;
         }
         
@@ -299,6 +302,22 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         executeCommand(context, method, methodParams, validationResult);
 
         return true;
+    }
+
+    /**
+     * Tells each validator that passed for this dispatch that it was refused before the mapped
+     * method ran, in chain order, so a validator that acquired something in {@code validate} --
+     * {@code UsageLockValidator}'s lock -- releases it (#568). Driven from the chain's own
+     * passed-validator list, like {@code onComplete}, never from a named field.
+     */
+    private static void notifyRefused(CommandContext context, ValidatorChain.ChainValidationResult validationResult) {
+        List<CommandValidator> passedValidators = validationResult.getPassedValidators();
+        if (passedValidators == null) {
+            return;
+        }
+        for (CommandValidator passed : passedValidators) {
+            passed.onRefused(context);
+        }
     }
 
     /**

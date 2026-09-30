@@ -78,6 +78,28 @@ public interface CommandValidator {
     }
 
     /**
+     * Invoked once, instead of {@link #onComplete(CommandContext, boolean)}, for each validator
+     * whose {@link #validate(CommandContext)} succeeded when the dispatch is then refused before
+     * the mapped method runs: by a validator later in the chain, by the argument-count check, or
+     * because a parameter could not be parsed. Validators are invoked in chain order. Never invoked
+     * for a validator that did not run or that refused.
+     * <p>
+     * A validator that acquires something in {@code validate} -- {@code UsageLockValidator} takes
+     * its lock there -- releases it here; the mapped method never ran, so effects that belong to an
+     * invocation (a cooldown) are not applied. Before 6.3.0 these refusals released nothing, and a
+     * {@code @UsageLimit} lock stayed held until the player quit (#568).
+     * <p>
+     * The default implementation is a no-op, like {@code onComplete}'s.
+     *
+     * @param context the command context
+     * @since 6.3.0
+     */
+    // The empty body IS the design, for the same compatibility reason as onComplete's above.
+    @SuppressWarnings("PMD.UncommentedEmptyMethodBody")
+    default void onRefused(CommandContext context) {
+    }
+
+    /**
      * Result of a validation operation.
      */
     final class ValidationResult {
