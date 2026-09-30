@@ -1332,7 +1332,7 @@ public class PluginInstallUtils {
         private final Set<String> mainClasses;
         /** The file names of the targets' code-source JARs and of every JAR recorded as declaring their main class. */
         private final Set<String> jarNames;
-        /** The targets' identify-strings, as the instances report them. */
+        /** The targets' identify-strings, normalised, less any another loaded module also reports. */
         private final List<String> identifyStrings;
 
         private Recorded(Set<String> mainClasses, Set<String> jarNames, List<String> identifyStrings) {
@@ -1429,11 +1429,26 @@ public class PluginInstallUtils {
                 }
             }
         }
-        List<String> identifyStrings = new ArrayList<>();
+        // An identify-string another loaded module also reports is not this module's to match on --
+        // the same exclusion the name keys and main classes get (gate 1, BL-02).
+        Set<String> identifyStrings = new java.util.LinkedHashSet<>();
         for (UltiToolsPlugin plugin : targets) {
-            identifyStrings.add(plugin.getIdentifyString());
+            addNormalized(identifyStrings, plugin.getIdentifyString());
         }
-        return new Recorded(mainClasses, jarNames, identifyStrings);
+        Set<String> othersIdentifyStrings = new java.util.HashSet<>();
+        for (UltiToolsPlugin plugin : others) {
+            addNormalized(othersIdentifyStrings, plugin.getIdentifyString());
+        }
+        identifyStrings.removeAll(othersIdentifyStrings);
+        return new Recorded(mainClasses, jarNames, new ArrayList<>(identifyStrings));
+    }
+
+    /** Adds {@code identifyString}, normalised, unless it is absent or blank. */
+    private static void addNormalized(Set<String> into, String identifyString) {
+        String key = normalizeIdentifyString(identifyString);
+        if (key != null) {
+            into.add(key);
+        }
     }
 
     /**
