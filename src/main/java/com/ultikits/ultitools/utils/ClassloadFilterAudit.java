@@ -41,8 +41,9 @@ import java.util.logging.Logger;
  * server's normal log format. An earlier private console handler wrote to the standard error stream,
  * which Paper prints as two WARN lines per record. What an operator sees, by design:
  * <ul>
- *   <li>a clean result (no class would have been refused) is logged at FINE and so is not shown -- the
- *       class-name filters no longer exist, so "nothing would have been refused" is not news;</li>
+ *   <li>a clean result (no class would have been refused) is logged at FINE, below what is
+ *       forwarded, and so is not shown -- the class-name filters no longer exist, so "nothing
+ *       would have been refused" is not news;</li>
  *   <li>a non-clean result is one INFO line per module jar, naming the module and the count.</li>
  * </ul>
  * The summary is emitted once per module jar, by the entity scan that visits every class of the jar;
@@ -269,7 +270,7 @@ final class ClassloadFilterAudit {
      * <p>
      * This differs deliberately from {@code ModuleScanDiagnostics.emitSummary}, which emits nothing
      * when its accumulator is empty: here a clean module is still a recorded measurement, just not one
-     * that is shown by default.
+     * that is forwarded to the console.
      *
      * @param moduleName the module whose scan just finished
      */

@@ -608,7 +608,7 @@ Each corrects a declared behaviour the framework did not deliver. The panel prot
   filters removed in 6.3.0 would have refused printed one line per module, twice per module, as two `WARN` lines
   each (it wrote to the standard error stream, which Paper prints as `WARN`), naming an internal requirement
   code. It now reaches the server log through the plugin logger: a module for which nothing would have been
-  refused is logged at `FINE` (not shown by default), and a module with at least one such class gets ONE `INFO`
+  refused is logged at `FINE` on the audit's own logger and is not forwarded to the console, and a module with at least one such class gets ONE `INFO`
   line naming the jar and the count. The module-scan diagnostics use the same route; their `SEVERE` summary for
   a skipped class is unchanged in level and content. `SecurityPolicy`'s one-time deprecation warning no longer
   carries the internal code either.

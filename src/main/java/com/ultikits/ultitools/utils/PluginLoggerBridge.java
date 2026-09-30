@@ -32,7 +32,10 @@ final class PluginLoggerBridge extends Handler {
         setLevel(level);
     }
 
+    // PMD.AvoidCatchingGenericException: any handler of the plugin logger may throw, and JUL does not
+    // catch what a handler throws; the scan that emits the line must not fail because of it.
     @Override
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     public void publish(LogRecord record) {
         if (record == null || !isLoggable(record)) {
             return;
@@ -47,7 +50,16 @@ final class PluginLoggerBridge extends Handler {
         LogRecord copy = new LogRecord(record.getLevel(), record.getMessage());
         copy.setParameters(record.getParameters());
         copy.setThrown(record.getThrown());
-        target.log(copy);
+        // Logger#log(LogRecord) does not stamp a logger name (only the log(Level, ...) overloads do), and
+        // Paper's console prints the logger name as the bracketed prefix: without this the line reads
+        // "[null] Module ..." instead of "[UltiTools] Module ..." (gate 1 of plan 17-55).
+        copy.setLoggerName(target.getName());
+        try {
+            target.log(copy);
+        } catch (RuntimeException e) {
+            // Standard error, not a logger: the logger is what just failed.
+            System.err.println("[UltiTools] A diagnostic line could not be written: " + e);
+        }
     }
 
     @Override
