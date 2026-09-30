@@ -6,20 +6,25 @@
 # checked by a machine. "Zero CJK inside the covered scope, outside a three-item allowlist" can.
 # This script IS that check.
 #
-# Detection contract (do not widen this without also updating the allowlist and this comment):
-#   The range checked is Unicode U+4E00 through U+9FFF (the CJK Unified Ideographs block),
-#   matched with `grep -P '[\x{4e00}-\x{9fff}]'`. This is deliberately the SAME range
-#   CONTEXT.md's 5,210-line measurement used (`grep -lP '[\x{4e00}-\x{9fff}]'` over src/main/**/*.java),
-#   so this gate's count and that measurement can never silently diverge.
+# Detection contract (do not change this without also updating the allowlist and this comment):
+#   A character is in the contract when it is in the Han script, in CJK Symbols and Punctuation
+#   (U+3000-U+303F), or in Halfwidth and Fullwidth Forms (U+FF00-U+FFEF), matched with
+#   `grep -P '[\p{Han}\x{3000}-\x{303f}\x{ff00}-\x{ffef}]'`. The Han script covers the CJK
+#   Unified Ideographs block (U+4E00-U+9FFF), its extensions (Extension A U+3400-U+4DBF and the
+#   supplementary-plane blocks from U+20000), the compatibility ideographs (U+F900-U+FAFF,
+#   U+2F800-U+2FA1F) and the radicals.
+#
+#   This is character for character the contract of the module language guards
+#   (I18nSourceScanner#containsCjk in each module: Character.UnicodeScript.HAN || U+3000-U+303F ||
+#   U+FF00-U+FFEF, iterating code points), widened together in 6.3.0 by the maintainer's decision of
+#   2026-09-29 (UltiRemoteBag#44). Before 6.3.0 the range was U+4E00-U+9FFF only, the range of
+#   CONTEXT.md's original 5,210-line measurement.
 #
 #   Explicitly OUT of the contract:
-#     - Full-width punctuation and forms      U+FF00-U+FFEF (e.g. full-width '！', '？', '（', '）')
-#     - CJK Symbols and Punctuation           U+3000-U+303F (e.g. '。', '、')
 #     - Hiragana / Katakana (kana)            U+3040-U+30FF
-#     - CJK Unified Ideographs Extension A    U+3400-U+4DBF
-#     - CJK Unified Ideographs Extension B+   U+20000 and upward (supplementary plane)
-#   Widening the range is a deliberate edit, not a silent drift — --self-test pins this boundary
-#   (assertion 4: a kana-only or full-width-punctuation-only line must report zero violations).
+#   Changing the contract is a deliberate edit, not a silent drift — --self-test pins it in both
+#   directions (assertion 4a: kana must not match; 4b and 8: punctuation, full-width forms and one
+#   planted character per added Han range must).
 #
 #   The script forces a UTF-8 locale before any matching so the range behaves identically on a
 #   runner whose default locale is C/POSIX, where grep's byte-oriented matching would otherwise
@@ -120,7 +125,7 @@ else
 fi
 
 # The sole detection contract. See the header above before touching this.
-CJK_RANGE='[\x{4e00}-\x{9fff}]'
+CJK_RANGE='[\p{Han}\x{3000}-\x{303f}\x{ff00}-\x{ffef}]'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
