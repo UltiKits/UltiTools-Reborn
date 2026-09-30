@@ -222,6 +222,43 @@ class UsageLockReleaseOnThrowTest {
         assertFalse(lock.isLocked(player.getUniqueId(), goKey()), "the lock validator's hook must still run");
     }
 
+    /** Passes and counts its refusal hook calls; ordered after the throwing-hook validator. */
+    static final class CountingHookValidator implements CommandValidator {
+        final AtomicInteger refusals = new AtomicInteger();
+
+        @Override
+        public ValidationResult validate(CommandContext context) {
+            return ValidationResult.success();
+        }
+
+        @Override
+        public int getOrder() {
+            return 200;
+        }
+
+        @Override
+        public void onRefused(CommandContext context) {
+            refusals.incrementAndGet();
+        }
+    }
+
+    @Test
+    @DisplayName("a wrong argument count with a throwing refusal hook runs every refusal hook once, not twice")
+    void argumentCountRefusalRunsEachHookOnce() {
+        // Local Codex review of #570, run 1: the refusal for a wrong argument count ran inside the
+        // try whose catch notifies the validators again, so a hook that threw made every hook run twice
+        // (a second lock release could free a lock another dispatch had taken in between).
+        CountingHookValidator counting = new CountingHookValidator();
+        GuardedExecutor executor = new GuardedExecutor(ValidatorChain.builder()
+                .add(new ThrowingHookValidator()).add(counting).build());
+
+        assertThrows(IllegalStateException.class,
+                () -> executor.onCommand(player, command, "guarded", new String[]{"widget"}));
+
+        assertEquals(1, counting.refusals.get(), "each refusal hook runs exactly once");
+        assertEquals(0, executor.bodies.get());
+    }
+
     private static String widgetKey() {
         try {
             return GuardedExecutor.class.getMethod("widget", CommandSender.class, Widget.class).toString();
