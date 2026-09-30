@@ -631,18 +631,20 @@ public final class ModuleFileTransactions {
      * with one transaction; every problem becomes a report line and the next record is processed.
      */
     public void applyBeforeLoad() {
-        deleteTemporaryRecords();
         List<String> ids = new ArrayList<>();
         List<Record> removals = new ArrayList<>();
         List<Record> updates = new ArrayList<>();
         List<File> recordFiles;
         try {
+            // Listed first, and guarded: every other listing of this folder runs only once this one
+            // has succeeded, so a folder that cannot be listed is reported here and never ends the start.
             recordFiles = recordFiles();
         } catch (IOException e) {
             // Nothing is carried out and nothing is deleted: the records stay for a start that can read them.
             report(Level.SEVERE, Keys.RECORDS_UNLISTABLE, transactionsFolder.getAbsolutePath(), describe(e));
             return;
         }
+        deleteTemporaryRecords();
         for (File recordFile : recordFiles) {
             Record record = readRecordOrReport(recordFile);
             if (record == null) {
@@ -1136,13 +1138,13 @@ public final class ModuleFileTransactions {
         File[] files;
         try {
             files = transactionsFolder.listFiles((dir, name) -> name.endsWith(RECORD_SUFFIX));
+            if (files == null && Files.notExists(transactionsFolder.toPath())) {
+                return Collections.emptyList();
+            }
         } catch (SecurityException e) {
             throw new IOException(transactionsFolder.getAbsolutePath() + " cannot be listed: " + describe(e), e);
         }
         if (files == null) {
-            if (Files.notExists(transactionsFolder.toPath())) {
-                return Collections.emptyList();
-            }
             throw new IOException(transactionsFolder.getAbsolutePath() + " cannot be listed");
         }
         List<File> sorted = new ArrayList<>();
@@ -1237,8 +1239,15 @@ public final class ModuleFileTransactions {
 
     /** A crash while writing a record leaves a temporary file; it is never a record. */
     private void deleteTemporaryRecords() {
-        File[] temporaries = transactionsFolder.listFiles((dir, name) -> name.startsWith(TEMPORARY_PREFIX)
-                && name.endsWith(TEMPORARY_SUFFIX));
+        File[] temporaries;
+        try {
+            temporaries = transactionsFolder.listFiles((dir, name) -> name.startsWith(TEMPORARY_PREFIX)
+                    && name.endsWith(TEMPORARY_SUFFIX));
+        } catch (SecurityException e) {
+            // Clean-up only: a leftover temporary file is never read as a record.
+            LOGGER.log(Level.FINE, "Could not list " + transactionsFolder, e);
+            return;
+        }
         if (temporaries != null) {
             for (File temporary : temporaries) {
                 deleteQuietly(temporary);
@@ -1252,7 +1261,14 @@ public final class ModuleFileTransactions {
      * JAR is never deleted without its record; it is reported instead.
      */
     private void sweepOrphanWorkFolders(List<String> ids) {
-        File[] folders = transactionsFolder.listFiles(File::isDirectory);
+        File[] folders;
+        try {
+            folders = transactionsFolder.listFiles(File::isDirectory);
+        } catch (SecurityException e) {
+            // Clean-up only: an orphan folder is left for a later start, never deleted unread.
+            LOGGER.log(Level.FINE, "Could not list " + transactionsFolder, e);
+            return;
+        }
         if (folders == null) {
             return;
         }
@@ -1262,7 +1278,7 @@ public final class ModuleFileTransactions {
             }
             File backups = new File(folder, BACKUP_FOLDER);
             if (mayHoldFiles(backups)) {
-                String[] kept = backups.list();
+                String[] kept = namesIn(backups);
                 report(Level.WARNING, Keys.ORPHAN_BACKUP, backups.getAbsolutePath(),
                         kept == null ? "(the folder cannot be listed)" : String.join(", ", kept));
             } else {
@@ -1332,8 +1348,24 @@ public final class ModuleFileTransactions {
      * read as an empty folder.
      */
     private static boolean mayHoldFiles(File folder) {
-        String[] names = folder.list();
-        return names == null ? !Files.notExists(folder.toPath()) : names.length > 0;
+        String[] names = namesIn(folder);
+        if (names != null) {
+            return names.length > 0;
+        }
+        try {
+            return !Files.notExists(folder.toPath());
+        } catch (SecurityException e) {
+            return true;
+        }
+    }
+
+    /** The names in a folder, or {@code null} when it does not exist or cannot be listed. */
+    private static String[] namesIn(File folder) {
+        try {
+            return folder.list();
+        } catch (SecurityException e) {
+            return null;
+        }
     }
 
     /** Whether a file name is one the module loader would load: it ends in {@code .jar}. */
@@ -1379,8 +1411,8 @@ public final class ModuleFileTransactions {
      */
     private static void discardStaging(File work) {
         deleteTree(new File(work, STAGED_FOLDER));
-        String[] rest = work.list();
-        if (rest != null && rest.length == 0) {
+        // Deleted only when shown empty: a folder that cannot be listed may hold a kept old JAR.
+        if (!mayHoldFiles(work)) {
             deleteQuietly(work);
         }
     }
