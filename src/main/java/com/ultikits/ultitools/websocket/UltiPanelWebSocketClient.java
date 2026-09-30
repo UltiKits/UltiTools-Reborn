@@ -34,7 +34,7 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     private final ScheduledExecutorService heartbeatExecutor;
     
     // volatile (#486): written by the socket's own thread in onOpen/onClose/onError and read by
-    // the log senders right after a send to tell whether it went out.
+    // the log senders right after a send to tell whether it went out. Read through isConnected().
     private volatile boolean isConnected = false;
     private ScheduledFuture<?> heartbeatTask;
     
@@ -92,6 +92,22 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
         this.serverId = serverId;
         this.token = token;
         this.heartbeatExecutor = Executors.newSingleThreadScheduledExecutor();
+    }
+
+    /**
+     * Whether the panel connection is up: {@code onOpen} has run and neither {@code onClose} nor
+     * {@code onError} has since, and the socket itself is still open.
+     * <p>
+     * The second half matters while a connection closes (as of 6.3.0, #486): the socket leaves the
+     * open state -- and {@link #sendMessage(JsonObject)} starts refusing to send -- before
+     * {@code onClose} runs, which can take a long time when the closing handshake waits on a dead
+     * peer. Reporting "connected" in that window made a send that was quietly refused look
+     * delivered, and the log records in it were lost.
+     *
+     * @return whether a message sent now can go out
+     */
+    public boolean isConnected() {
+        return isConnected && isOpen();
     }
 
     private static Map<String, String> getHeaders(String token) {
