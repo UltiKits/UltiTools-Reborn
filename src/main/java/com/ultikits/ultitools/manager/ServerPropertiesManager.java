@@ -74,7 +74,7 @@ public class ServerPropertiesManager {
     /**
      * Why this exists next to {@link #setProperty(String, String)}: the boolean is lossy.
      * A {@code false} could mean "the key is not on the whitelist", "the running server
-     * version has no such key", "there is no server.properties to write to", or "the write
+     * server's server.properties does not have the key", "there is no server.properties to write to", or "the write
      * itself failed" — four situations with four different fixes, collapsed into one value.
      * The batch path has to tell the caller which one happened, so the real outcome is
      * produced here and {@code setProperty} keeps its original contract by narrowing it.
@@ -123,7 +123,13 @@ public class ServerPropertiesManager {
             case REJECTED:
                 return "Key is not in the allowed list";
             case NOT_PRESENT_ON_THIS_SERVER:
-                return "This server version has no such key";
+                // #473: states only what is known. A key absent from the file may be one this
+                // server version does not have, or one the file simply omits (Paper then uses its
+                // built-in default); nothing tells the two apart -- the Bukkit Server API lists no
+                // server.properties keys (measured on paper-api 1.21.11: no property-listing method
+                // on org.bukkit.Server) and the version's own key set lives in version-specific
+                // server internals.
+                return "This key is not in this server's server.properties";
             default:
                 return "Failed to read or write server.properties";
         }
@@ -137,10 +143,10 @@ public class ServerPropertiesManager {
         REJECTED,
         /**
          * On {@link #SAFE_KEYS} (a ceiling across every Paper version this framework supports),
-         * but the running server's own {@code server.properties} has no such key -- an older or
-         * newer Paper version than the one that added it. Writing it anyway would be silently
-         * ignored by the platform, so this is refused rather than written (D-15, SAFE_KEYS
-         * issue).
+         * but the running server's own {@code server.properties} has no such key -- either an
+         * older or newer Paper version than the one that added it, or a file that omits it; the
+         * two cannot be told apart (#473). Writing it anyway could be silently ignored by the
+         * platform, so this is refused rather than written (D-15, SAFE_KEYS issue).
          */
         NOT_PRESENT_ON_THIS_SERVER,
         /** On the whitelist and present in the file, but reading or writing the file failed. */
@@ -172,7 +178,7 @@ public class ServerPropertiesManager {
          *
          * @param notPresentOnServer keys allowlisted but absent from THIS server's own
          *        {@code server.properties} (D-15) — Gate-2 finding: kept distinct from
-         *        {@code failed} so the response can say "this server version has no such key"
+         *        {@code failed} so the response can say "this key is not in this server's server.properties"
          *        rather than making it indistinguishable from a genuine read/write I/O error,
          *        matching what a single-key {@code action: "set"} already reports via
          *        {@link #describeOutcome(WriteOutcome)}.
