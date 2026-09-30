@@ -475,7 +475,10 @@ This section governs the third kind.
   different file system from the server root the start refuses it, changes nothing, and names both
   folders in one SEVERE line; there is no copy fallback. `updatePlugin(String)` keeps its signature; its `true` now
   means "staged", and `PluginInstallUtils.stageUpdate(String)` (`@ApiStatus.Internal`) returns what
-  was staged or why nothing was. Measured consumers: none of the fifteen module repositories or
+  was staged or why nothing was. Nothing is staged, and `updatePlugin(String)` returns `false`, when
+  another JAR in the modules folder declares the module's `plugin.yml` `main:` and sorts before the
+  new JAR's file name: that copy would load instead at the next start, so the update could only be
+  rolled back; the reply names it (maintainer follow-up 19). Measured consumers: none of the fifteen module repositories or
   UltiTools-External-Example call either method (their `origin/master`, searched for
   `PluginInstallUtils`, `updatePlugin(` and `uninstallPlugin(`; the only hits are UAT documents
   naming the `/upm` commands). An uninstall that goes ahead also cancels an update of that module
