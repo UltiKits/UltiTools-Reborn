@@ -108,6 +108,20 @@ class ConfigFloatDecimalTest {
     }
 
     @Test
+    @DisplayName("a float NaN the framework wrote reads back")
+    void nanReadsBack() throws IOException {
+        FloatConfig first = new FloatConfig(PATH);
+        first.init(plugin);
+        first.ratio = Float.NaN;
+        first.save();
+
+        FloatConfig second = new FloatConfig(PATH);
+        second.init(plugin);
+        assertThat(second.ratio).isNaN();
+        assertThat(second.isModifiedSinceSnapshot()).isFalse();
+    }
+
+    @Test
     @DisplayName("floats the framework wrote read back on the next start, with no warning and a clean snapshot")
     void frameworkWrittenFloatsReadBack() throws IOException {
         FloatConfig first = new FloatConfig(PATH);
