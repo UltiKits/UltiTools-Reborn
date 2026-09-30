@@ -16,9 +16,16 @@ on:
 # Why `pull_request_target` and not `pull_request`: on a pull request from a fork, `pull_request`
 # hands the job a read-only GITHUB_TOKEN, which cannot close anything. The standard hazard of
 # `pull_request_target` is running the head branch's code with a privileged token. That does not
-# apply here - the checkout below takes the *base* branch (actions/checkout's default under this
-# event), never `github.event.pull_request.head.sha`, so the script executed is the one already
-# reviewed and merged into `alpha`. Do not add a `ref:` that points at the head.
+# apply here - the checkout below takes actions/checkout's default under this event, which is the
+# last commit on the repository's *default* branch (`main`; GITHUB_SHA for `pull_request_target`),
+# never `github.event.pull_request.head.sha`, so the script executed is one already reviewed and
+# merged (the step below keeps its old name, "Checkout base branch"). Do not add a `ref:` that
+# points at the head.
+#
+# Consequence (#350): GitHub runs this event's workflow from the default branch's copy of this
+# file, so the job runs only once this file is on `main`, and even for a pull request into `alpha`
+# it executes `main`'s copy of the closing script. A fix to the script merged into `alpha` takes
+# effect only after the next `alpha` -> `main` promotion.
 
 permissions:
   issues: write
