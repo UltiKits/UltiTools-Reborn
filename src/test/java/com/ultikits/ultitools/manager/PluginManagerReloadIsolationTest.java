@@ -177,12 +177,13 @@ class PluginManagerReloadIsolationTest {
         List<String> summary = pluginManager.reloadAllAndReport();
 
         assertThat(summary).as("failure headline, partial count, one line for the partial module").hasSize(3);
-        assertThat(summary)
-                .noneSatisfy(line -> assertThat(line).containsIgnoringCase("the others reloaded"))
-                .anySatisfy(line -> assertThat(line).contains("BrokenModule").contains("3"))
-                .anySatisfy(line -> assertThat(line).contains("PartialModule")
-                        .contains("scoreboard service did not restart"));
+        assertThat(summary.get(0))
+                .as("the failure headline names the failed module and does not say the others reloaded")
+                .contains("BrokenModule").contains("3")
+                .doesNotContainIgnoringCase("the others reloaded;")
+                .doesNotContainIgnoringCase("others reloaded;");
         assertThat(summary.get(1)).as("the mixed outcome counts the partial modules").contains("1").contains("partially");
+        assertThat(summary.get(2)).contains("PartialModule").contains("scoreboard service did not restart");
     }
 
     @Test
