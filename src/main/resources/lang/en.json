@@ -153,5 +153,6 @@
   "以下模块 JAR 暂时无法删除（被占用或不可写：%s），已记录，将在下次启动、加载模块之前删除：%s": "These module JAR files cannot be deleted now (held open or not writable: %s); this is recorded, and they are deleted at the next start, before modules load: %s",
   "已删除卸载时未能删除的模块 JAR：%s。": "Deleted the module JAR files an uninstall could not delete: %s.",
   "卸载时记录的模块 JAR %s 仍无法删除（%s）；本次启动会再次加载它，下次启动会再试。": "The module JAR %s recorded by an uninstall still cannot be deleted (%s); it loads again at this start, and the next start tries again.",
-  "卸载时记录的模块 JAR %s 自卸载后已被替换，未删除。": "The module JAR %s recorded by an uninstall has been replaced since, so it was not deleted."
+  "卸载时记录的模块 JAR %s 自卸载后已被替换，未删除。": "The module JAR %s recorded by an uninstall has been replaced since, so it was not deleted.",
+  "模块 %s 暂存的 %s 版本更新已放弃：它的 JAR %s 在暂存之后已不在模块目录中（例如已卸载）。": "The staged update of module %s to version %s was abandoned: its JAR %s left the modules folder after the update was staged (for example, it was uninstalled)."
 }

@@ -525,13 +525,22 @@ public final class ModuleFileTransactions {
             }
             return;
         }
+        if (!exists(backup) && !exists(old)) {
+            // The module's JAR left the modules folder after the update was staged -- an uninstall,
+            // whatever name it was given, or a hand removal. Installing the update now would bring
+            // back a module the operator removed, so the transaction is abandoned instead.
+            deleteTree(work);
+            deleteQuietly(recordFileOf(record));
+            report(Level.WARNING, Keys.UPDATE_ABANDONED, record.moduleName, record.newVersion, old.getAbsolutePath());
+            return;
+        }
         boolean oldStillAtTarget = record.targetName.equals(record.oldName) && !exists(backup);
         if (exists(target) && !oldStillAtTarget) {
             failApply(record, target, new FileAlreadyExistsException(target.getAbsolutePath(), null,
                     "a file already has the new JAR's name; it is never replaced"));
             return;
         }
-        if (!exists(backup) && exists(old)) {
+        if (!exists(backup)) {
             try {
                 Files.createDirectories(backup.getParentFile().toPath());
                 ops.move(old.toPath(), backup.toPath());
@@ -1307,6 +1316,7 @@ public final class ModuleFileTransactions {
         public static final String RESTORE_FAILED = "模块 %s 的旧版本 JAR 仍在 %s，未能移回 %s（%s）；请停止服务器后手动移回。";
         public static final String CLEANUP_DEFERRED = "模块 %s 的更新已确认，但更新目录 %s 未能清理，下次启动会再清理。";
         public static final String ORPHAN_BACKUP = "更新目录 %s 中有不属于任何更新记录的旧版本 JAR，已保留：%s";
+        public static final String UPDATE_ABANDONED = "模块 %s 暂存的 %s 版本更新已放弃：它的 JAR %s 在暂存之后已不在模块目录中（例如已卸载）。";
         public static final String REMOVED = "已删除卸载时未能删除的模块 JAR：%s。";
         public static final String REMOVAL_FAILED = "卸载时记录的模块 JAR %s 仍无法删除（%s）；本次启动会再次加载它，下次启动会再试。";
         public static final String REMOVAL_SKIPPED = "卸载时记录的模块 JAR %s 自卸载后已被替换，未删除。";
