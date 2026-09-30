@@ -428,6 +428,63 @@ class ModuleUpdateRecoveryTest {
             assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.RECORDS_UNLISTABLE);
         }
 
+        /** Leaves a kept old JAR whose record is gone, as a crash after the old JAR moved and a lost record would. */
+        private File keptBackupWithoutRecord() throws IOException {
+            stage(transactions());
+            catchThrowable(() -> crashingAt(ModuleFileTransactions.CrashPoints.AFTER_OLD_MOVED).applyBeforeLoad());
+            File[] records = transactions.listFiles((dir, name) -> name.endsWith(".json"));
+            assertThat(records).hasSize(1);
+            Files.delete(records[0].toPath());
+            File[] backups = transactions.listFiles(File::isDirectory);
+            assertThat(backups).hasSize(1);
+            return new File(backups[0], "backup");
+        }
+
+        @Test
+        @DisplayName("staging refuses when a kept-JAR folder exists but cannot be listed, as when it lists a JAR")
+        void unlistableKeptFolder_isNotAdopted() throws IOException {
+            Assumptions.assumeTrue(Files.getFileStore(serverRoot.toPath()).supportsFileAttributeView("posix"));
+            File backups = keptBackupWithoutRecord();
+            moduleJar(oldJar, "Demo", "1.0", "demo");
+            java.util.Set<java.nio.file.attribute.PosixFilePermission> original = Files.getPosixFilePermissions(backups.toPath());
+            Files.setPosixFilePermissions(backups.toPath(), PosixFilePermissions.fromString("-wx------"));
+            ModuleFileTransactions.StageResult result;
+            try {
+                Assumptions.assumeTrue(backups.list() == null, "running as a user that ignores permissions");
+
+                result = stage(transactions());
+            } finally {
+                Files.setPosixFilePermissions(backups.toPath(), original);
+            }
+
+            assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
+            assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_LEFTOVER_BACKUP);
+            assertThat(new File(backups, "demo-1.0.jar")).exists();
+        }
+
+        @Test
+        @DisplayName("a start never deletes an orphan working folder whose kept-JAR folder cannot be listed; it reports it")
+        void unlistableOrphanKeptFolder_isReportedNotDeleted() throws IOException {
+            Assumptions.assumeTrue(Files.getFileStore(serverRoot.toPath()).supportsFileAttributeView("posix"));
+            File backups = keptBackupWithoutRecord();
+            java.util.Set<java.nio.file.attribute.PosixFilePermission> original = Files.getPosixFilePermissions(backups.toPath());
+            Files.setPosixFilePermissions(backups.toPath(), PosixFilePermissions.fromString("-wx------"));
+            ModuleFileTransactions start;
+            try {
+                Assumptions.assumeTrue(backups.list() == null, "running as a user that ignores permissions");
+                start = transactions();
+
+                start.applyBeforeLoad();
+            } finally {
+                Files.setPosixFilePermissions(backups.toPath(), original);
+            }
+
+            assertThat(new File(backups, "demo-1.0.jar")).exists();
+            ModuleFileTransactions.Report report = onlyReport(start);
+            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.ORPHAN_BACKUP);
+            assertThat(report.getArgs()[0]).isEqualTo(backups.getAbsolutePath());
+        }
+
         @Test
         @DisplayName("no records folder at all is not a failure: a start with nothing staged reports nothing")
         void absentRecordsFolder_isNotReported() {
