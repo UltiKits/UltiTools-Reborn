@@ -36,7 +36,7 @@
   "模块 %s 不存在，请使用 /ul list 查看已加载的模块": "§c%s is not a loaded UltiTools module. Use /ul list to see loaded modules",
   "========|可用插件列表|========\n": "========|Available Plugin List|========\n",
   ". 名字：": ". Name:",
-  "   安装命令：/upm install ": "   Install Command：/upm install ",
+  "   安装命令：/upm install ": "   Install Command: /upm install ",
   "   简介：": "   Intro:",
   "========  第%d页  ========": "========  Page %d  ========",
   "安装失败！": "Install Failed!",
