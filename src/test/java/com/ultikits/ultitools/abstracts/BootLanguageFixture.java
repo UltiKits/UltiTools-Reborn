@@ -13,9 +13,9 @@ import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.function.Consumer;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import java.util.logging.Logger;
@@ -23,6 +23,8 @@ import java.util.logging.Logger;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.mockito.Mockito;
 
+import com.ultikits.testfixtures.bootlanguage.BootFixturePlugin;
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.utils.ResourceHashSidecar;
 import com.ultikits.ultitools.utils.TestHelper;
@@ -32,7 +34,8 @@ import com.ultikits.ultitools.utils.TestHelper;
  * constructor end to end (resource extraction, language resolution, provenance) rather than
  * invoking the resolution methods reflectively on an Objenesis instance.
  * <p>
- * The module class ({@link BootFixturePlugin}) is copied into a temporary jar together with the
+ * The module class ({@link BootFixturePlugin}, alone in its own package) is copied into a
+ * temporary jar together with the
  * {@code lang/*} entries a test declares, and loaded child-first from that jar, so its {@code
  * CodeSource} -- which {@code saveResources()}, {@code supported()} and the jar-side language
  * lookup all read -- is that jar, exactly as on a server. It is constructed through {@link
@@ -43,10 +46,10 @@ import com.ultikits.ultitools.utils.TestHelper;
 public final class BootLanguageFixture implements Closeable {
 
     /** Module name every fixture instance reports; the resource folder is named after it. */
-    public static final String MODULE = "BootModule";
+    public static final String MODULE = BootFixturePlugin.MODULE;
 
     /** Main-class name every fixture instance reports; the duplicate-version gate compares it. */
-    public static final String MAIN_CLASS = "com.example.BootModule";
+    public static final String MAIN_CLASS = BootFixturePlugin.MAIN_CLASS;
 
     private final File root;
     private final File resourceFolder;
@@ -54,22 +57,6 @@ public final class BootLanguageFixture implements Closeable {
     private final Logger logger = mock(Logger.class);
     private final ConfigManager configManager = mock(ConfigManager.class);
     private URLClassLoader loader;
-
-    /**
-     * The module class the fixture jar ships. Constructed through the connector constructor so the
-     * test controls the resource folder and the version.
-     */
-    public static class BootFixturePlugin extends UltiToolsPlugin {
-        public BootFixturePlugin(String version, String resourceFolderPath) {
-            super(MODULE, version, Collections.emptyList(), Collections.emptyList(), 0, MAIN_CLASS,
-                    resourceFolderPath);
-        }
-
-        @Override
-        public boolean registerSelf() {
-            return true;
-        }
-    }
 
     /**
      * Child-first for the fixture's own class, parent-first for everything else, so the fixture
@@ -111,6 +98,14 @@ public final class BootLanguageFixture implements Closeable {
      * is a mock.
      */
     public static BootLanguageFixture create(File tempDir) throws IOException {
+        return create(tempDir, null);
+    }
+
+    /**
+     * As {@link #create(File)}, with {@code extraStubbing} applied to the mocked {@code UltiTools}
+     * before it is published (see {@link TestHelper#mockUltiToolsInstance(Consumer)}).
+     */
+    public static BootLanguageFixture create(File tempDir, Consumer<UltiTools> extraStubbing) throws IOException {
         BootLanguageFixture fixture = new BootLanguageFixture(tempDir);
         Files.createDirectories(fixture.resourceFolder.toPath());
         YamlConfiguration config = new YamlConfiguration();
@@ -119,6 +114,9 @@ public final class BootLanguageFixture implements Closeable {
             Mockito.lenient().when(ultiTools.getConfig()).thenReturn(config);
             Mockito.lenient().when(ultiTools.getLogger()).thenReturn(fixture.logger);
             Mockito.lenient().when(ultiTools.getConfigManager()).thenReturn(fixture.configManager);
+            if (extraStubbing != null) {
+                extraStubbing.accept(ultiTools);
+            }
         });
         return fixture;
     }
