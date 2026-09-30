@@ -571,9 +571,15 @@ public final class ModuleFileTransactions {
             record.key = moduleName;
             File recordFile = recordFileOf(record);
             if (exists(recordFile)) {
-                Record existing = readRecord(recordFile);
-                if (existing != null && existing.removals != null) {
-                    record.removals.addAll(existing.removals);
+                try {
+                    Record existing = readRecord(recordFile);
+                    if (existing != null && existing.removals != null) {
+                        record.removals.addAll(existing.removals);
+                    }
+                } catch (IOException unreadable) {
+                    // An unreadable earlier record of this module cannot be merged; the new one replaces it.
+                    LOGGER.log(Level.WARNING, "Replacing an unreadable update record while recording a deletion: "
+                            + recordFile.getAbsolutePath(), unreadable);
                 }
             }
             for (File file : files) {
@@ -609,7 +615,15 @@ public final class ModuleFileTransactions {
     public void forgetDeferredRemoval(String fileName) throws IOException {
         synchronized (LOCK) {
             for (File recordFile : recordFiles()) {
-                Record record = readRecord(recordFile);
+                Record record;
+                try {
+                    record = readRecord(recordFile);
+                } catch (IOException unreadable) {
+                    // One malformed record never stops the others being cleared (round-5 review).
+                    LOGGER.log(Level.WARNING, "Skipped an unreadable update record while clearing a recorded deletion: "
+                            + recordFile.getAbsolutePath(), unreadable);
+                    continue;
+                }
                 if (record == null || !Record.REMOVE.equals(record.type) || record.removals == null
                         || !recordFile.getName().equals(recordFileOf(record).getName())
                         || !record.removals.removeIf(removal -> fileName.equals(removal.name))) {
@@ -1317,9 +1331,22 @@ public final class ModuleFileTransactions {
         return null;
     }
 
+    /**
+     * Reads one record.
+     *
+     * @return the record, or {@code null} for an empty file
+     * @throws IOException when the file cannot be read, or cannot be parsed as a record -- a parse
+     *                     failure (Gson's unchecked {@link JsonParseException}, or any other unchecked
+     *                     exception while parsing) becomes an {@code IOException} naming the file, so
+     *                     every reader handles a malformed record through its checked path
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // any parse failure means "this record cannot be read"
     private static Record readRecord(File recordFile) throws IOException {
         try (Reader reader = Files.newBufferedReader(recordFile.toPath(), StandardCharsets.UTF_8)) {
             return GSON.fromJson(reader, Record.class);
+        } catch (RuntimeException malformed) {
+            throw new IOException(recordFile.getAbsolutePath() + " is not a readable record: " + describe(malformed),
+                    malformed);
         }
     }
 
