@@ -385,7 +385,8 @@ public class PluginManager {
      * failure is then rethrown to the caller. Since 6.3.0 (#507) this method delists the module
      * itself, by identity, so no caller has to, and releases its configuration entities from the
      * {@link ConfigManager}, so the shutdown save no longer writes the files of a module that was
-     * unloaded.
+     * unloaded while the server ran. {@link #close()}, which unloads every module at shutdown right
+     * before that save, keeps them, so the save still writes every module's changes.
      *
      * <p>
      * The three registries a module can file registrations in by name -- tab-completion
@@ -398,7 +399,7 @@ public class PluginManager {
      * @param plugin UltiTools plugin instance
      */
     public void unregister(UltiToolsPlugin plugin) {
-        unregister(plugin, isNameInUseByAnotherLoadedCopy(plugin));
+        unregister(plugin, isNameInUseByAnotherLoadedCopy(plugin), true);
     }
 
     /**
@@ -424,8 +425,10 @@ public class PluginManager {
      * @param nameStillInUse whether another copy of the module -- listed, or being activated as
      *                       this copy's replacement -- shares its name, so that name-only
      *                       registrations must not be released by name (#506)
+     * @param releaseConfiguration whether to release the module's configuration entities (#507);
+     *                       {@code false} only from {@link #close()}, whose caller saves them next
      */
-    private void unregister(UltiToolsPlugin plugin, boolean nameStillInUse) {
+    private void unregister(UltiToolsPlugin plugin, boolean nameStillInUse, boolean releaseConfiguration) {
         // Each registry-cleanup step below is isolated from every other step's failure
         // (Codex review on #457, round 4: "Run all registry cleanup after an earlier
         // failure") -- an Error from one owner registry (e.g. TaskManager.cancelAll() not
@@ -497,7 +500,9 @@ public class PluginManager {
                 // configuration entities are released only now, after its unload hook, which may
                 // still read or save them. Delisting is by identity: two copies of one module
                 // share a name and may be equal to nothing but themselves.
-                runUnregisterStep(plugin, "release configuration entities", () -> releaseConfigEntities(plugin));
+                if (releaseConfiguration) {
+                    runUnregisterStep(plugin, "release configuration entities", () -> releaseConfigEntities(plugin));
+                }
                 pluginList.removeIf(listed -> listed == plugin);
             }
         }
@@ -584,7 +589,9 @@ public class PluginManager {
         UltiToolsAPI.disconnectAll();
 
         Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Unregistering all plugins...");
-        // A snapshot: unregister() delists each module as it goes (#507).
+        // A snapshot: unregister() delists each module as it goes (#507). The configuration
+        // entities are kept: UltiTools#onDisable() runs ConfigManager#saveAll() after this method,
+        // and that save must still reach every module's changes (gate-1 review of 17-45, P1).
         for (UltiToolsPlugin plugin : new ArrayList<>(pluginList)) {
             // One module's unregister() (ultimately its own onUnregister()) throwing must
             // not cascade into every subsequent module's own command/listener/EventBus/
@@ -593,7 +600,7 @@ public class PluginManager {
             // UltiTools.onDisable() and skip configManager.saveAll() (WR-01,
             // 16-REVIEW-lifecycle.md) -- mirrors the register() convention above.
             try {
-                unregister(plugin);
+                unregister(plugin, isNameInUseByAnotherLoadedCopy(plugin), false);
             } catch (Exception | Error e) {
                 logPluginUnregistrationFailure(plugin.getPluginName(), e);
             }
@@ -1845,7 +1852,7 @@ public class PluginManager {
                 // the new copy goes on loading. A fatal virtual-machine error is not a cleanup
                 // failure to carry on from, and still aborts this registration.
                 try {
-                    unregister(existing, true);
+                    unregister(existing, true, true);
                 } catch (VirtualMachineError fatal) {
                     throw fatal;
                 } catch (Exception | Error e) {

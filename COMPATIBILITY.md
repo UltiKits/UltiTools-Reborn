@@ -472,9 +472,11 @@ This section governs the third kind.
   against the fifteen modules' `master` and UltiTools-External-Example, is every caller (two modules
   iterate it; none mutates it). `unregister` itself now removes the module from the loaded modules,
   by identity and whether or not the module's unload hook threw, and releases its configuration
-  entities, so the shutdown save no longer writes the files of a module that was unloaded — for
-  example by `/upm uninstall` — and the configuration registry no longer pins the unloaded instance.
-  The hook still runs first and may still read or save its configuration.
+  entities, so the shutdown save no longer writes the files of a module that was unloaded while the
+  server ran — for example by `/upm uninstall` — and the configuration registry no longer pins the
+  unloaded instance. The hook still runs first and may still read or save its configuration. Server
+  shutdown is unchanged: `PluginManager#close()` unloads every module without releasing its
+  configuration, so the shutdown save that follows still writes every module's changes.
 - Registrations released per module instance, and a superseded copy of a module unloaded through the
   full unload path (#506, #528). This path is reached only when code registers a newer instance of a
   loaded module through `PluginManager#register(...)`; two jars of one module in the modules folder
