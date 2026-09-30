@@ -477,6 +477,18 @@ public class PluginInstallUtils {
     }
 
     /**
+     * Cancels every update of a module that is waiting for the next start -- called by an uninstall
+     * that went ahead, so the next start does not install the module again (#505).
+     *
+     * @param moduleName the module's runtime name
+     * @return the versions whose updates were cancelled
+     */
+    @ApiStatus.Internal
+    public static List<String> cancelStagedUpdates(String moduleName) {
+        return new ModuleFileTransactions(UltiTools.getInstance().getDataFolder()).cancelStagedUpdates(moduleName);
+    }
+
+    /**
      * Stages an update of a loaded module; see {@link #stageUpdate(String)}.
      *
      * <p>As of 6.3.0 this no longer replaces the JAR in place and no longer means "updated": it

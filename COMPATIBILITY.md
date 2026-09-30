@@ -458,6 +458,25 @@ This section governs the third kind.
   those entries travel with it as a suppressed
   `PluginInstallUtils.UndeterminedEntriesException` (`@ApiStatus.Internal`), so no outcome
   discards what another established.
+- `/upm update` and `PluginInstallUtils.updatePlugin(String)` no longer replace a module's JAR while
+  the server runs (#505, #513). Before 6.3.0 the update downloaded the new JAR into the modules
+  folder, deleted the old one with `File#delete()` while ignoring its result, and returned `true` —
+  reported as "Update successful" — whether or not the old JAR was gone, so a failed delete left two
+  versions of the module to race at the next start. Now the update **takes effect at the next start
+  and is committed only after that start shows the module loaded**: the command downloads the new JAR
+  into `plugins/UltiTools/upm-transactions/`, a sibling of the modules folder, and records it; the
+  next start moves the old JAR aside (keeping it) and the new one in, before the module class loader
+  is built; after the modules load, the update is kept only if the module is loaded from the new JAR
+  at the new version, and otherwise the old JAR is restored and the new one removed, with one log
+  line naming both versions. Nothing predicts before the restart whether a JAR will load. A move that
+  fails leaves the modules folder as it was and is reported in the start-up log and again by the
+  next `/upm update` of that module. `updatePlugin(String)` keeps its signature; its `true` now
+  means "staged", and `PluginInstallUtils.stageUpdate(String)` (`@ApiStatus.Internal`) returns what
+  was staged or why nothing was. Measured consumers: none of the fifteen module repositories or
+  UltiTools-External-Example call either method (their `origin/master`, searched for
+  `PluginInstallUtils`, `updatePlugin(` and `uninstallPlugin(`; the only hits are UAT documents
+  naming the `/upm` commands). An uninstall that goes ahead also cancels an update of that module
+  still waiting for the next start.
 
 ### Behavioral changes that do need one
 

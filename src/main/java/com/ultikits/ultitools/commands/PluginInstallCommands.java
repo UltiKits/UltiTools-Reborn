@@ -217,6 +217,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
     // a handful of modules the scan costs a fraction of a tick (gate 1, IN-12).
     @CmdMapping(format = "uninstall <plugin>")
     public void uninstallPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin) {
+        boolean refused = false;
         try {
             PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(plugin);
             if (report.jarsDeleted()) {
@@ -238,6 +239,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         } catch (PluginInstallUtils.UninstallRefusedException e) {
             // The uninstall refused because its outcome would be undefined - two possible targets,
             // or a JAR another running module shares. It changed nothing, and says which.
+            refused = true;
             sender.sendMessage(ChatColor.RED + e.getMessage());
         } catch (PluginInstallUtils.ModuleUnloadFailedException e) {
             // The module's own unload threw. It has still been removed from the loaded modules and
@@ -256,6 +258,15 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         } catch (IOException e) {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("删除失败！文件访问错误！请手动删除！"));
             sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"));
+        }
+        if (!refused) {
+            // An uninstall that went ahead, whatever it could delete, also cancels any update of the
+            // module still waiting for the next start -- otherwise that start would install it again
+            // (#505). A refused uninstall changed nothing, so it cancels nothing either.
+            for (String version : PluginInstallUtils.cancelStagedUpdates(plugin)) {
+                sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
+                        "已取消模块 %s 已暂存、尚未应用的更新（版本 %s）。"), plugin, version));
+            }
         }
     }
 
@@ -474,11 +485,30 @@ public class PluginInstallCommands extends BaseCommandExecutor {
      */
     private static boolean sendStageResult(CommandSender sender, String pluginName,
                                            ModuleFileTransactions.StageResult result) {
-        if (result.getOutcome() == ModuleFileTransactions.StageResult.Outcome.STAGED) {
-            sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n(
-                    "已暂存 %s 的更新（%s → %s）。更新将在下次启动时生效：只有新版本确实加载后才会保留，否则恢复为 %s。"),
-                    pluginName, result.getOldVersion(), result.getNewVersion(), result.getOldVersion()));
-            return true;
+        if (result.getPreviousFailure() != null) {
+            // A start could not apply the previous update of this module; the operator hears about
+            // it here as well as in that start's log, before anything else.
+            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n(
+                    "上一次 %s 的更新没有应用：%s"), pluginName, result.getPreviousFailure()));
+        }
+        switch (result.getOutcome()) {
+            case STAGED:
+                sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n(
+                        "已暂存 %s 的更新（%s → %s）。更新将在下次启动时生效：只有新版本确实加载后才会保留，否则恢复为 %s。"),
+                        pluginName, result.getOldVersion(), result.getNewVersion(), result.getOldVersion()));
+                return true;
+            case ALREADY_STAGED:
+                sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
+                        "%s 已有一个暂存的更新（版本 %s），将在下次启动时生效；没有做任何改动。"),
+                        pluginName, result.getNewVersion()));
+                return false;
+            case BUSY:
+                sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
+                        "%s 的上一次更新（版本 %s）还没有处理完，请先重启服务器；没有做任何改动。"),
+                        pluginName, result.getNewVersion()));
+                return false;
+            default:
+                break;
         }
         String reason = String.format(UltiTools.getInstance().i18n(result.getReasonKey()), result.getReasonArgs());
         sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n(

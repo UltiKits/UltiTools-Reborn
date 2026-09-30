@@ -133,5 +133,21 @@
   "下载失败：%s": "the download failed: %s",
   "下载的文件 %s 不是有效的模块 JAR": "the downloaded file %s is not a valid module JAR",
   "下载的 %s 没有声明 identify-string %s 和版本号": "the downloaded %s does not declare identify-string %s and a version",
-  "更新记录无法写入：%s": "the update record could not be written: %s"
+  "更新记录无法写入：%s": "the update record could not be written: %s",
+  "上一次 %s 的更新没有应用：%s": "The previous update of %s was not applied: %s",
+  "%s 已有一个暂存的更新（版本 %s），将在下次启动时生效；没有做任何改动。": "%s already has a staged update (version %s) that takes effect at the next start; nothing was changed.",
+  "%s 的上一次更新（版本 %s）还没有处理完，请先重启服务器；没有做任何改动。": "The previous update of %s (version %s) is still being finished; restart the server first. Nothing was changed.",
+  "已取消模块 %s 已暂存、尚未应用的更新（版本 %s）。": "Cancelled the staged, not yet applied update of module %s (version %s).",
+  "模块 %s 更新到 %s 后没有加载，已恢复为 %s；%s 将在下次启动时加载。": "Module %s did not load at version %s, so version %s has been restored; %s loads at the next start.",
+  "模块 %s 的 %s 版本没有确认加载，已移除；没有可恢复的旧版本。": "Module %s at version %s was not confirmed loaded and has been removed; there was no previous version to restore.",
+  "上次启动在确认模块 %s 的 %s 版本是否加载之前就结束了；已恢复为 %s，本次启动加载 %s。": "The previous start ended before it could confirm that module %s loaded at version %s; version %s has been restored, and %s loads at this start.",
+  "模块 %s 更新到 %s 后没有加载；恢复 %s 未能在本次完成（%s），将在下次启动、加载模块之前完成。": "Module %s did not load at version %s; restoring %s could not be finished now (%s) and is finished at the next start, before modules load.",
+  "模块 %s 从 %s 恢复为 %s 未能完成（%s）；下次启动会再试。": "Restoring module %s from %s to %s could not be finished (%s); the next start tries again.",
+  "模块 %s 的回滚已完成：已恢复为 %s，本次启动加载 %s。": "The rollback of module %s is finished: version %s has been restored, and %s loads at this start.",
+  "模块 %s 的更新（%s → %s）未能应用：%s：%s；把旧版本移回也失败了（%s）。旧版本 JAR 在 %s，请停止服务器后手动移回 %s。": "The update of module %s (%s -> %s) could not be applied: %s: %s; moving the previous version back also failed (%s). The previous JAR is at %s; stop the server and move it back to %s by hand.",
+  "模块 %s 的旧版本 JAR 仍在 %s，未能移回 %s（%s）；请停止服务器后手动移回。": "The previous JAR of module %s is still at %s and could not be moved back to %s (%s); stop the server and move it back by hand.",
+  "模块 %s 的更新已确认，但更新目录 %s 未能清理，下次启动会再清理。": "The update of module %s is confirmed, but its transaction folder %s could not be cleaned up; the next start tries again.",
+  "更新目录 %s 中有不属于任何更新记录的旧版本 JAR，已保留：%s": "%s holds previous-version JARs that no update record refers to; they were kept: %s",
+  "该模块已有的更新记录 %s 无法读取：%s": "the module's existing update record %s could not be read: %s",
+  "上一次更新留下的旧版本 JAR 无法移回模块目录：%s": "the previous JAR the last update kept could not be moved back into the modules folder: %s"
 }
