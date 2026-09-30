@@ -877,7 +877,7 @@ public abstract class AbstractConfigEntity {
      * refuses its dotted keys, each reported here once; a module's own parser's map is written raw.
      */
     private Object mapFormReported(ConfigEntry annotation, String path, Object map) {
-        if (!usesBuiltInMapWriter(annotation)) {
+        if (!usesRefusalPoint(annotation)) {
             return map;
         }
         return DefaultConfigParser.plainData(serializeReported(annotation, path, map));
@@ -910,40 +910,26 @@ public abstract class AbstractConfigEntity {
         com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser<Object> parser =
                 ReflectionUtil.newInstance(annotation.parser());
         if (parser instanceof DottedMapKeyRefusal) {
-            ((DottedMapKeyRefusal) parser).reportRefusedKeysTo(
-                    refused == null ? key -> { } : key -> refused.add(refusalMessage(path, key)));
-        }
-        if (parser instanceof DefaultConfigParser) {
-            return ((DefaultConfigParser) parser).fileForm(value);
+            java.util.function.BiConsumer<String, String> sink = refused == null
+                    ? (mapPath, key) -> { }
+                    : (mapPath, key) -> refused.add(String.format("Config file '%s': ", configFilePath)
+                            + String.format(DottedMapKeyRefusal.REFUSED, key, mapPath));
+            return ((DottedMapKeyRefusal) parser).fileForm(value, path, sink);
         }
         return parser.serialize(value);
     }
 
-    private String refusalMessage(String path, String key) {
-        return String.format("Config file '%s': map key '%s' under key '%s' contains '.', which the configuration"
-                + " file reads as a path separator, so it cannot be stored as one key; the entry was not written"
-                + " - rename the key (for example with '-' or '_')", configFilePath, key, path);
-    }
-
     /**
-     * Whether this entry's map is written by one of the two built-in map writers - {@code
-     * DefaultConfigParser}'s or {@code StringHashMapParser}'s {@code serializeToMemorySection},
-     * inherited or not - where a dotted key is refused (#553). The load warning about dotted keys
-     * applies to exactly these entries; a parser with its own map writer decides its keys itself.
+     * Whether this entry's serializer implements the refusal point for dotted map keys (#553) - the
+     * two built-in serializers and every serializer extending them. The load warning about dotted keys,
+     * and the first-boot and panel map forms, apply to exactly these entries; any other serializer
+     * decides its keys itself.
      *
      * @param annotation the entry's {@code @ConfigEntry}
-     * @return {@code true} for a built-in map writer
+     * @return {@code true} if the serializer implements {@link DottedMapKeyRefusal}
      */
-    private static boolean usesBuiltInMapWriter(ConfigEntry annotation) {
-        for (Class<?> type = annotation.parser(); type != null && type != Object.class; type = type.getSuperclass()) {
-            for (java.lang.reflect.Method method : type.getDeclaredMethods()) {
-                if ("serializeToMemorySection".equals(method.getName()) && !method.isBridge()) {
-                    return type == DefaultConfigParser.class
-                            || type == com.ultikits.ultitools.interfaces.impl.pasers.StringHashMapParser.class;
-                }
-            }
-        }
-        return false;
+    private static boolean usesRefusalPoint(ConfigEntry annotation) {
+        return DottedMapKeyRefusal.class.isAssignableFrom(annotation.parser());
     }
 
     /**
@@ -959,7 +945,7 @@ public abstract class AbstractConfigEntity {
         }
         for (Field field : configEntryFields()) {
             ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
-            if (!Map.class.isAssignableFrom(field.getType()) || !usesBuiltInMapWriter(annotation)) {
+            if (!Map.class.isAssignableFrom(field.getType()) || !usesRefusalPoint(annotation)) {
                 continue;
             }
             String path = annotation.path().isEmpty() ? field.getName() : annotation.path();
@@ -978,9 +964,8 @@ public abstract class AbstractConfigEntity {
     private void warnDottedKeysIn(ConfigurationSection section, String path) {
         for (String key : section.getKeys(false)) {
             if (key.indexOf('.') >= 0) {
-                warnBinding(String.format("Config file '%s': map key '%s' under key '%s' contains '.', which the"
-                        + " configuration file reads as a path separator, so it was loaded as '%s'; rename the key"
-                        + " (for example with '-' or '_')", configFilePath, key, path, key.replace(".", "' -> '")));
+                warnBinding(String.format("Config file '%s': ", configFilePath)
+                        + String.format(DottedMapKeyRefusal.LOADED_SPLIT, key, path, key.replace(".", "' -> '")));
                 continue;
             }
             Object child = section.get(key);
