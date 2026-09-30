@@ -111,6 +111,46 @@ class ConfigDottedMapKeyTest {
         }
     }
 
+    /** A map whose first {@code entrySet()} call fails to link, as a class from a missing plugin would. */
+    static final class UnlinkedMap extends LinkedHashMap<String, String> {
+        private static final long serialVersionUID = 1L;
+        private int calls;
+
+        @Override
+        public Set<Map.Entry<String, String>> entrySet() {
+            if (calls++ == 0) {
+                throw new NoClassDefFoundError("com/example/missing/SoftDependencyType");
+            }
+            return super.entrySet();
+        }
+    }
+
+    @SuppressWarnings("unused")
+    static class UnlinkedConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "unlinked")
+        Map<String, String> unlinked = unlinked();
+
+        public UnlinkedConfig(String configFilePath) {
+            super(configFilePath);
+        }
+
+        private static Map<String, String> unlinked() {
+            UnlinkedMap map = new UnlinkedMap();
+            map.put("k", "v");
+            return map;
+        }
+    }
+
+    @SuppressWarnings("unused")
+    static class SharedConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "shared")
+        Map<String, Map<String, Integer>> shared = new LinkedHashMap<>();
+
+        public SharedConfig(String configFilePath) {
+            super(configFilePath);
+        }
+    }
+
     @SuppressWarnings("unused")
     static class FlakyConfig extends AbstractConfigEntity {
         @ConfigEntry(path = "flaky")
@@ -204,7 +244,7 @@ class ConfigDottedMapKeyTest {
             List<String> named = warnings.messagesContaining("'my.rule'");
             assertThat(named).hasSize(1);
             assertThat(named.get(0)).contains("DottedModule").contains(PATH).contains("'autoreply.rules'")
-                    .contains("split").contains("rename");
+                    .contains("split into nested levels").contains("loaded").contains("rename");
         }
         assertThat(config.rules).containsKey("my.rule");
         YamlConfiguration written = new YamlConfiguration();
@@ -213,8 +253,8 @@ class ConfigDottedMapKeyTest {
     }
 
     @Test
-    @DisplayName("maps nested in maps and inside objects are checked, with the nested path; a list-element map is not")
-    void nestedAndObjectMapsAreCheckedListElementsAreNot() throws IOException {
+    @DisplayName("maps nested in maps are checked with the nested path; maps inside objects and list elements are not")
+    void nestedMapsAreCheckedObjectsAndListElementsAreNot() throws IOException {
         RulesConfig config = new RulesConfig(PATH);
         config.init(plugin);
         Map<String, Map<String, Integer>> perks = new LinkedHashMap<>();
@@ -233,8 +273,7 @@ class ConfigDottedMapKeyTest {
             config.save();
             assertThat(warnings.messagesContaining("'fly.speed'")).hasSize(1)
                     .allSatisfy(message -> assertThat(message).contains("'groups.vip.perks'").contains("'groups'"));
-            assertThat(warnings.messagesContaining("'minecraft.diamond'")).hasSize(1)
-                    .allSatisfy(message -> assertThat(message).contains("'recipes.sword.ingredients'"));
+            assertThat(warnings.messagesContaining("minecraft.diamond")).as("never reflects into objects").isEmpty();
             assertThat(warnings.messagesContaining("minecraft.gold")).isEmpty();
         }
         assertThat(readFile()).contains("minecraft.gold: 5");
@@ -319,6 +358,104 @@ class ConfigDottedMapKeyTest {
                     .allSatisfy(message -> assertThat(message).contains(PATH));
         }
         assertThat(file()).exists();
+    }
+
+    @Test
+    @DisplayName("a map that fails to link while it is checked (NoClassDefFoundError) never breaks the write")
+    void linkageErrorInTheCheckIsContained() throws IOException {
+        UnlinkedConfig config = new UnlinkedConfig(PATH);
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            assertThatCode(() -> config.init(plugin)).doesNotThrowAnyException();
+            assertThat(warnings.messagesContaining("could not check")).hasSize(1);
+        }
+        assertThat(readFile()).contains("k: v");
+    }
+
+    @Test
+    @DisplayName("a sub-map shared by two keys is reported on each path")
+    void sharedSubMapIsReportedOnEachPath() throws IOException {
+        SharedConfig config = new SharedConfig(PATH);
+        config.init(plugin);
+        Map<String, Integer> shared = new LinkedHashMap<>();
+        shared.put("x.y", 1);
+        config.shared.put("a", shared);
+        config.shared.put("b", shared);
+
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            config.save();
+            assertThat(warnings.messagesContaining("'x.y'")).hasSize(2);
+            assertThat(warnings.messagesContaining("'shared.a'")).hasSize(1);
+            assertThat(warnings.messagesContaining("'shared.b'")).hasSize(1);
+        }
+    }
+
+    @Test
+    @DisplayName("the check before a write and the check on load report the same keys for the same content")
+    void loadAndPreWriteReportTheSameKeys() throws IOException {
+        RulesConfig inMemory = new RulesConfig(PATH);
+        inMemory.init(plugin);
+        Map<String, Object> deep = new LinkedHashMap<>();
+        deep.put("deep.key", "not a declared map level");
+        Map<String, Object> rule = new LinkedHashMap<>();
+        rule.put("reply.text", "hi");
+        rule.put("extra", deep);
+        inMemory.rules.put("my.rule", rule);
+        Map<String, Map<String, Integer>> perks = new LinkedHashMap<>();
+        Map<String, Integer> speeds = new LinkedHashMap<>();
+        speeds.put("fly.speed", 2);
+        perks.put("perks", speeds);
+        inMemory.groups.put("vip", perks);
+        Holder sword = new Holder();
+        sword.ingredients.put("minecraft.diamond", "D");
+        inMemory.recipes.put("sword", sword);
+
+        List<String> beforeWrite;
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            inMemory.save();
+            beforeWrite = keysNamed(warnings.messages());
+        }
+
+        writeFile("autoreply:\n  rules:\n    my.rule:\n      reply.text: hi\n      extra:\n        deep.key: x\n"
+                + "features:\n  aliases: {}\ngroups:\n  vip:\n    perks:\n      fly.speed: 2\n"
+                + "recipes:\n  sword:\n    ingredients:\n      minecraft.diamond: D\n"
+                + "rewards: []\na:\n  b:\n    c: 3\n");
+        List<String> onLoad;
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            new RulesConfig(PATH).init(plugin);
+            onLoad = keysNamed(warnings.messages());
+        }
+        assertThat(beforeWrite).containsExactlyInAnyOrder("my.rule@autoreply.rules", "reply.text@autoreply.rules.my.rule",
+                "fly.speed@groups.vip.perks");
+        assertThat(onLoad).containsExactlyInAnyOrderElementsOf(beforeWrite);
+    }
+
+    private static List<String> keysNamed(List<String> messages) {
+        List<String> keys = new ArrayList<>();
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("map key '([^']*)' in '([^']*)'");
+        for (String message : messages) {
+            java.util.regex.Matcher matcher = pattern.matcher(message);
+            if (matcher.find()) {
+                keys.add(matcher.group(1) + "@" + matcher.group(2));
+            }
+        }
+        return keys;
+    }
+
+    @Test
+    @DisplayName("a null map value is left out of save() as before, with one warning naming it")
+    void nullMapValueIsNamed() throws IOException {
+        RulesConfig config = new RulesConfig(PATH);
+        config.init(plugin);
+        config.aliases.put("gm", "gamemode");
+        config.aliases.put("broken", null);
+
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            config.save();
+            List<String> named = warnings.messagesContaining("'broken'");
+            assertThat(named).hasSize(1);
+            assertThat(named.get(0)).contains(PATH).contains("'features.aliases'").contains("no value");
+        }
+        assertThat(readFile()).contains("gm: gamemode").doesNotContain("broken");
     }
 
     @Test

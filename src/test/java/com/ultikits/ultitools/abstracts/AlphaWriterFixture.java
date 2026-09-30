@@ -3,12 +3,18 @@ package com.ultikits.ultitools.abstracts;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
+import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.MemoryConfiguration;
+import org.bukkit.configuration.MemorySection;
 import org.bukkit.configuration.serialization.ConfigurationSerializable;
 import org.bukkit.configuration.serialization.DelegateDeserialization;
 import com.ultikits.ultitools.annotations.ConfigEntry;
+import com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser;
 
 /** The fixture set the alpha-writer equivalence test saves (shared by the probe run on alpha). */
 final class AlphaWriterFixture {
@@ -37,6 +43,29 @@ final class AlphaWriterFixture {
         int extra = 2;
     }
 
+    /** A module's own parser for a Set field: writes the set as one comma-joined value in a section. */
+    public static class JoinedSetParser extends ConfigParser<Set<String>> {
+        @Override
+        public Set<String> parse(Object object) {
+            Set<String> result = new LinkedHashSet<>();
+            if (object instanceof ConfigurationSection) {
+                for (String part : ((ConfigurationSection) object).getString("joined", "").split(",")) {
+                    if (!part.isEmpty()) {
+                        result.add(part);
+                    }
+                }
+            }
+            return result;
+        }
+
+        @Override
+        public MemorySection serializeToMemorySection(Set<String> object) {
+            MemoryConfiguration section = new MemoryConfiguration();
+            section.set("joined", String.join(",", object));
+            return section;
+        }
+    }
+
     @SuppressWarnings("unused")
     static class Fixture extends AbstractConfigEntity {
         @ConfigEntry(path = "flat")
@@ -54,6 +83,12 @@ final class AlphaWriterFixture {
         @ConfigEntry(path = "kits")
         Map<String, ParentCs> kits = new LinkedHashMap<>();
 
+        @ConfigEntry(path = "tiers")
+        List<Map<Integer, String>> tiers = new ArrayList<>();
+
+        @ConfigEntry(path = "tags", parser = JoinedSetParser.class)
+        Set<String> tags = new LinkedHashSet<>();
+
         Fixture(String configFilePath) {
             super(configFilePath);
             flat.put("plain", "1");
@@ -68,6 +103,10 @@ final class AlphaWriterFixture {
             rewards.add(reward);
             items.add(new ChildCs());
             kits.put("starter", new ChildCs());
+            Map<Integer, String> tier = new LinkedHashMap<>();
+            tier.put(1, "a");
+            tiers.add(tier);
+            tags.add("red");
         }
 
         Fixture() {

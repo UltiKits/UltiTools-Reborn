@@ -24,7 +24,10 @@ import org.mockito.Mockito;
  * ({@link AlphaWriterFixture}) against {@code dfe71e01} in a throwaway worktree on 2026-09-30: map fields
  * and nested maps with dotted keys (split on save, as 6.2 does), a map that is a list element (kept
  * whole), and a subclass of a registered {@code ConfigurationSerializable} whose registered alias is its
- * parent - the shape of Paper's {@code CraftItemStack} - in a list and in a map.
+ * parent - the shape of Paper's {@code CraftItemStack} - in a list and in a map; and, per the
+ * orchestrator's third ruling, a list-element map with integer keys (written {@code 1: a}, not {@code
+ * '1': a}) and a {@code Set} field with a module's own parser (its first-boot default written raw, as
+ * alpha writes it; its save through the parser).
  */
 @DisplayName("AbstractConfigEntity - the write path writes what alpha writes (#553 warn-only)")
 class ConfigAlphaWriterEquivalenceTest {
@@ -35,13 +38,17 @@ class ConfigAlphaWriterEquivalenceTest {
     private static final String ALPHA_FIRST_BOOT = "flat:\n  plain: '1'\n  my.rule: x\nnested:\n  r:\n    x.y: 1\n    k: v\n"
             + "rewards:\n- minecraft.diamond: '5'\n  stick: '1'\n"
             + "items:\n- ==: com.ultikits.ultitools.abstracts.AlphaWriterFixture$ParentCs\n  x: 1\n"
-            + "kits:\n  starter:\n    ==: com.ultikits.ultitools.abstracts.AlphaWriterFixture$ParentCs\n    x: 1\n";
+            + "kits:\n  starter:\n    ==: com.ultikits.ultitools.abstracts.AlphaWriterFixture$ParentCs\n    x: 1\n"
+            + "tiers:\n- 1: a\n"
+            + "tags: !!set\n  red: null\n";
 
     /** {@code dfe71e01}'s {@code save()} of the same fixture right after that first boot. */
     private static final String ALPHA_SAVE = "flat:\n  plain: '1'\n  my:\n    rule: x\nnested:\n  r:\n    x:\n      y: 1\n    k: v\n"
             + "rewards:\n- minecraft.diamond: '5'\n  stick: '1'\n"
             + "items:\n- ==: com.ultikits.ultitools.abstracts.AlphaWriterFixture$ParentCs\n  x: 1\n"
-            + "kits:\n  starter:\n    extra: 2\n    x: 1\n";
+            + "kits:\n  starter:\n    extra: 2\n    x: 1\n"
+            + "tiers:\n- 1: a\n"
+            + "tags:\n  joined: red\n";
 
     @TempDir
     Path tempDir;
