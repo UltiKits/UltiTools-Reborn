@@ -46,7 +46,9 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
  * the new one in place. After the modules have loaded, {@link #observeAfterLoad(List, Function)}
  * looks at what actually loaded: the update is committed only when the module is loaded from the
  * new JAR at the new version, and otherwise rolled back -- the old JAR restored, the new one
- * removed. No file in the live modules folder changes while the server runs.
+ * removed. Staging never touches the modules folder; the only change while the server runs is a
+ * rollback right after loading, which removes the JAR of a module that did not load and puts the
+ * old JAR back for the next start.
  *
  * <p><b>States.</b> {@code PENDING} (staged) -&gt; {@code APPLIED} (swapped at a start) -&gt;
  * {@code COMMITTING} or {@code ROLLING_BACK} (decided) -&gt; record deleted. {@code FAILED} (the
@@ -538,6 +540,7 @@ public final class ModuleFileTransactions {
         if (!Record.UPDATE.equals(record.type)) {
             throw new RecordRefused("unknown record type " + record.type);
         }
+        refuseLinkedFolders(record);
         switch (record.state) {
             case Record.PENDING:
                 applyUpdate(record);
@@ -570,6 +573,7 @@ public final class ModuleFileTransactions {
      * @param loaded     the modules that loaded at this start; empty when loading failed
      * @param codeSource which JAR a loaded module came from
      */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // one transaction never ends the start
     public void observeAfterLoad(List<UltiToolsPlugin> loaded, Function<UltiToolsPlugin, File> codeSource) {
         List<Record> decided = new ArrayList<>(appliedThisStart);
         appliedThisStart.clear();
@@ -595,6 +599,10 @@ public final class ModuleFileTransactions {
             } catch (RecordRefused refused) {
                 report(Level.WARNING, Keys.RECORD_REFUSED, recordFileOf(record).getAbsolutePath(),
                         refused.getMessage());
+            } catch (RuntimeException unexpected) {
+                // One transaction's problem never ends the start, and never hides a load failure.
+                report(Level.WARNING, Keys.RECORD_REFUSED, recordFileOf(record).getAbsolutePath(),
+                        describe(unexpected));
             }
         }
     }
@@ -633,7 +641,7 @@ public final class ModuleFileTransactions {
             // Either the new JAR was moved in and the start ended before APPLIED was recorded, or
             // the staged JAR is gone. Its content decides which -- never its name.
             if (isStagedJar(target, record)) {
-                markApplied(record, backup);
+                markApplied(record);
             } else {
                 failApply(record, staged, new NoSuchFileException(staged.getAbsolutePath(), null,
                         "the staged JAR is missing"));
@@ -673,11 +681,10 @@ public final class ModuleFileTransactions {
             return;
         }
         crashPoints.reached(CrashPoints.AFTER_NEW_MOVED);
-        markApplied(record, backup);
+        markApplied(record);
     }
 
-    private void markApplied(Record record, File backup) {
-        record.hadOld = exists(backup);
+    private void markApplied(Record record) {
         record.state = Record.APPLIED;
         persist(record);
         crashPoints.reached(CrashPoints.AFTER_APPLIED_RECORDED);
@@ -792,17 +799,27 @@ public final class ModuleFileTransactions {
         File target = confined(modulesFolder, record.targetName);
         File old = confined(modulesFolder, record.oldName);
         File backup = backupOf(record);
+        if (!exists(backup)) {
+            // Nothing is kept to put back. Either an earlier attempt already put it back (then the
+            // new JAR is gone too, and only the record is left to clean up), or the kept JAR went
+            // missing -- and removing the new JAR then would leave no version at all, so it stays.
+            if (isStagedJar(target, record)) {
+                report(Level.WARNING, Keys.ROLLBACK_NO_BACKUP, record.moduleName, backup.getAbsolutePath(),
+                        target.getAbsolutePath());
+            }
+            deleteTree(workFolder(record));
+            deleteQuietly(recordFileOf(record));
+            return;
+        }
         try {
             if (isStagedJar(target, record)) {
                 ops.delete(target.toPath());
             }
-            if (exists(backup)) {
-                if (exists(old)) {
-                    throw new FileAlreadyExistsException(old.getAbsolutePath(), null,
-                            "the previous JAR's name is taken, so it cannot be put back");
-                }
-                ops.move(backup.toPath(), old.toPath());
+            if (exists(old)) {
+                throw new FileAlreadyExistsException(old.getAbsolutePath(), null,
+                        "the previous JAR's name is taken, so it cannot be put back");
             }
+            ops.move(backup.toPath(), old.toPath());
         } catch (IOException | RuntimeException e) {
             report(Level.SEVERE, phase == RollbackPhase.AFTER_LOAD ? Keys.ROLLBACK_DEFERRED
                     : Keys.ROLLBACK_FAILED_BEFORE_LOAD, record.moduleName, record.newVersion, record.oldVersion,
@@ -811,9 +828,7 @@ public final class ModuleFileTransactions {
         }
         deleteTree(workFolder(record));
         deleteQuietly(recordFileOf(record));
-        if (!record.hadOld) {
-            report(Level.WARNING, Keys.ROLLED_BACK_NO_OLD, record.moduleName, record.newVersion);
-        } else if (phase == RollbackPhase.AFTER_LOAD) {
+        if (phase == RollbackPhase.AFTER_LOAD) {
             report(Level.WARNING, Keys.ROLLED_BACK, record.moduleName, record.newVersion, record.oldVersion,
                     record.oldVersion);
         } else if (phase == RollbackPhase.UNCONFIRMED) {
@@ -881,6 +896,20 @@ public final class ModuleFileTransactions {
         return record.stagedSha256.equals(sha256Of(file));
     }
 
+    /**
+     * The working folder and its two subfolders are this class's own; one that is a symbolic link
+     * would take every name confined to it somewhere else, so the record is refused. (The
+     * transactions folder itself, and the modules folder, may be links an operator set up.)
+     */
+    private void refuseLinkedFolders(Record record) throws RecordRefused {
+        File work = workFolder(record);
+        for (File folder : new File[]{work, new File(work, BACKUP_FOLDER), new File(work, STAGED_FOLDER)}) {
+            if (Files.isSymbolicLink(folder.toPath())) {
+                throw new RecordRefused(folder.getAbsolutePath() + " is a symbolic link");
+            }
+        }
+    }
+
     private File backupOf(Record record) throws RecordRefused {
         return confined(new File(workFolder(record), BACKUP_FOLDER), record.oldName);
     }
@@ -908,11 +937,41 @@ public final class ModuleFileTransactions {
                 report(Level.WARNING, Keys.RECORD_REFUSED, recordFile.getAbsolutePath(), "unrecognised record");
                 return null;
             }
+            String missing = missingField(record);
+            if (missing != null) {
+                report(Level.WARNING, Keys.RECORD_REFUSED, recordFile.getAbsolutePath(), "missing field " + missing);
+                return null;
+            }
             return record;
         } catch (IOException | JsonParseException e) {
             report(Level.WARNING, Keys.RECORD_UNREADABLE, recordFile.getAbsolutePath(), describe(e));
             return null;
         }
+    }
+
+    /** The first field a record of its type needs and lacks, or {@code null} when it is complete. */
+    private static String missingField(Record record) {
+        if (Record.REMOVE.equals(record.type)) {
+            if (record.removals == null || record.removals.isEmpty()) {
+                return "removals";
+            }
+            for (Removal removal : record.removals) {
+                if (removal == null || removal.name == null || removal.sha256 == null) {
+                    return "removals[].name/sha256";
+                }
+            }
+            return null;
+        }
+        String[][] fields = {
+            {"moduleName", record.moduleName}, {"oldName", record.oldName}, {"oldVersion", record.oldVersion},
+            {"stagedName", record.stagedName}, {"targetName", record.targetName},
+            {"newVersion", record.newVersion}, {"stagedSha256", record.stagedSha256}};
+        for (String[] field : fields) {
+            if (field[1] == null) {
+                return field[0];
+            }
+        }
+        return null;
     }
 
     private static Record readRecord(File recordFile) throws IOException {
@@ -1024,6 +1083,9 @@ public final class ModuleFileTransactions {
         if (name == null || name.isEmpty() || ".".equals(name) || "..".equals(name)
                 || name.indexOf('/') >= 0 || name.indexOf('\\') >= 0 || name.indexOf('\0') >= 0) {
             throw new RecordRefused("not a plain file name: " + name);
+        }
+        if (!isJarName(name)) {
+            throw new RecordRefused("not a JAR file name: " + name);
         }
         File file = new File(folder, name);
         if (!isDirectChild(folder, file)) {
@@ -1294,7 +1356,6 @@ public final class ModuleFileTransactions {
         String targetName;
         String newVersion;
         String stagedSha256;
-        boolean hadOld;
         String failure;
         List<Removal> removals = new ArrayList<>();
     }
@@ -1428,7 +1489,7 @@ public final class ModuleFileTransactions {
     public static final class Keys {
         public static final String COMMITTED = "模块 %s 已从 %s 更新到 %s：本次启动确认新版本已加载，旧版本 JAR 已删除。";
         public static final String ROLLED_BACK = "模块 %s 更新到 %s 后没有加载，已恢复为 %s；%s 将在下次启动时加载。";
-        public static final String ROLLED_BACK_NO_OLD = "模块 %s 的 %s 版本没有确认加载，已移除；没有可恢复的旧版本。";
+        public static final String ROLLBACK_NO_BACKUP = "模块 %s 保留的旧版本 JAR（%s）不见了，无法回滚；%s 保持不动。";
         public static final String UNCONFIRMED_ROLLED_BACK =
                 "上次启动在确认模块 %s 的 %s 版本是否加载之前就结束了；已恢复为 %s，本次启动加载 %s。";
         public static final String ROLLBACK_DEFERRED =

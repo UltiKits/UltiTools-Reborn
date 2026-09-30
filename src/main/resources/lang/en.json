@@ -139,7 +139,6 @@
   "%s 的上一次更新（版本 %s）还没有处理完，请先重启服务器；没有做任何改动。": "The previous update of %s (version %s) is still being finished; restart the server first. Nothing was changed.",
   "已取消模块 %s 已暂存、尚未应用的更新（版本 %s）。": "Cancelled the staged, not yet applied update of module %s (version %s).",
   "模块 %s 更新到 %s 后没有加载，已恢复为 %s；%s 将在下次启动时加载。": "Module %s did not load at version %s, so version %s has been restored; %s loads at the next start.",
-  "模块 %s 的 %s 版本没有确认加载，已移除；没有可恢复的旧版本。": "Module %s at version %s was not confirmed loaded and has been removed; there was no previous version to restore.",
   "上次启动在确认模块 %s 的 %s 版本是否加载之前就结束了；已恢复为 %s，本次启动加载 %s。": "The previous start ended before it could confirm that module %s loaded at version %s; version %s has been restored, and %s loads at this start.",
   "模块 %s 更新到 %s 后没有加载；恢复 %s 未能在本次完成（%s），将在下次启动、加载模块之前完成。": "Module %s did not load at version %s; restoring %s could not be finished now (%s) and is finished at the next start, before modules load.",
   "模块 %s 从 %s 恢复为 %s 未能完成（%s）；下次启动会再试。": "Restoring module %s from %s to %s could not be finished (%s); the next start tries again.",
@@ -156,5 +155,6 @@
   "卸载时记录的模块 JAR %s 自卸载后已被替换，未删除。": "The module JAR %s recorded by an uninstall has been replaced since, so it was not deleted.",
   "模块 %s 暂存的 %s 版本更新已放弃：它的 JAR %s 在暂存之后已不在模块目录中（例如已卸载）。": "The staged update of module %s to version %s was abandoned: its JAR %s left the modules folder after the update was staged (for example, it was uninstalled).",
   "%s 的另一个更新正在进行中，请稍后再试；没有做任何改动。": "Another update of %s is in progress; try again later. Nothing was changed.",
-  "%s 中有上一次更新留下、没有记录的旧版本 JAR；请先检查并移走它": "%s holds a previous-version JAR an earlier update kept and no record refers to; check it and move it away first"
+  "%s 中有上一次更新留下、没有记录的旧版本 JAR；请先检查并移走它": "%s holds a previous-version JAR an earlier update kept and no record refers to; check it and move it away first",
+  "模块 %s 保留的旧版本 JAR（%s）不见了，无法回滚；%s 保持不动。": "The previous JAR kept for module %s (%s) is missing, so it cannot be rolled back; %s stays in place."
 }
