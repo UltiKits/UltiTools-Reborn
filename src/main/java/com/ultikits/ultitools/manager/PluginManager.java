@@ -14,6 +14,7 @@ import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -135,6 +136,15 @@ public class PluginManager {
      * default body a third-party {@code DataStore} that does not override that method inherits.
      */
     private final Map<String, DataScope> externalScopesByFolder = new ConcurrentHashMap<>();
+
+    /**
+     * Connected External Plugin API consumers, plugin name to scan package (#462): added when
+     * {@link #registerExternal(ExternalPluginAdapter, Class[])} completes, removed by
+     * {@link #unregisterExternal(ExternalPluginAdapter)}. Read through
+     * {@link #getConnectedExternalScanPackages()} by economy attribution, which otherwise could not
+     * name a caller that is not a module.
+     */
+    private final Map<String, String> connectedExternalScanPackages = new ConcurrentHashMap<>();
 
     /**
      * The framework-owned types whose {@link com.ultikits.ultitools.annotations.Scheduled} methods
@@ -2797,8 +2807,24 @@ public class PluginManager {
         UltiTools.getInstance().getCommandManager().registerAllExternal(adapter);
         UltiTools.getInstance().getListenerManager().registerAllExternal(adapter);
 
+        connectedExternalScanPackages.put(pluginName, adapter.getScanPackage());
+
         Bukkit.getLogger().log(Level.INFO,
                 "[UltiTools-API] External plugin registered: " + pluginName + " v" + adapter.getVersion());
+    }
+
+    /**
+     * The connected External Plugin API consumers, plugin name to scan package (#462) -- a copy,
+     * safe to read from any thread. Not part of the module-facing API; public only because
+     * economy attribution lives in another package.
+     *
+     * @return plugin name to scan package, for every external plugin registered and not yet
+     *         unregistered
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public Map<String, String> getConnectedExternalScanPackages() {
+        return Collections.unmodifiableMap(new LinkedHashMap<>(connectedExternalScanPackages));
     }
 
     /**
@@ -2858,6 +2884,7 @@ public class PluginManager {
      */
     public void unregisterExternal(ExternalPluginAdapter adapter) {
         String pluginName = adapter.getPluginName();
+        connectedExternalScanPackages.remove(pluginName);
 
         // Cancel @Scheduled tasks
         if (taskManager != null) {

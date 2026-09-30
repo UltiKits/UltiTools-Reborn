@@ -508,6 +508,8 @@ public final class EconomyUtils {
         } catch (ConcurrentModificationException | NullPointerException e) {
             return null;
         }
+        // #462: connected External Plugin API consumers take part through their scan package.
+        addExternalPluginRoots(prefixToModule, pluginManager);
         return attributeModule(Thread.currentThread().getStackTrace(), prefixToModule);
     }
 
@@ -661,6 +663,23 @@ public final class EconomyUtils {
             return FrameMatch.NO_MATCH;
         }
         return bestHasSingleOwner ? FrameMatch.resolved(bestModule) : FrameMatch.AMBIGUOUS_MATCH;
+    }
+
+    /**
+     * Merges every connected External Plugin API consumer's scan package into {@code
+     * prefixToModule} under the plugin's name (#462), by the same rules as a module's roots. An
+     * empty scan package (a plugin main class in the default package) contributes nothing.
+     *
+     * @param prefixToModule the map being built, mutated in place
+     * @param pluginManager  source of the connected external plugins
+     */
+    private static void addExternalPluginRoots(Map<String, String> prefixToModule, PluginManager pluginManager) {
+        for (Map.Entry<String, String> external : pluginManager.getConnectedExternalScanPackages().entrySet()) {
+            String scanPackage = external.getValue();
+            if (scanPackage != null && !scanPackage.isEmpty()) {
+                mergeScanPackageOwner(prefixToModule, scanPackage, external.getKey());
+            }
+        }
     }
 
     /**
