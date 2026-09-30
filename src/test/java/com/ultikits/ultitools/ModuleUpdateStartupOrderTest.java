@@ -5,6 +5,7 @@ import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.downloading;
 import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.loadedModule;
 import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.moduleJar;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 import java.io.File;
 import java.io.IOException;
@@ -48,5 +49,27 @@ class ModuleUpdateStartupOrderTest {
         URL[] classPath = UltiTools.moduleClassPath(new ModuleFileTransactions(dataFolder), modules, null);
 
         assertThat(Arrays.asList(classPath)).containsExactly(new File(modules, "demo-1.1.jar").toURI().toURL());
+    }
+
+    @Test
+    @DisplayName("a module load that throws counts as \"not loaded\": the applied update is rolled back")
+    void loadThatThrows_countsAsNotLoaded() throws IOException {
+        File modules = ModuleFileTransactions.modulesFolder(dataFolder);
+        File oldJar = moduleJar(new File(modules, "demo-1.0.jar"), "Demo", "1.0", "demo");
+        UltiToolsPlugin loadedOld = loadedModule("Demo", "1.0", "demo");
+        new ModuleFileTransactions(dataFolder).stageUpdate("demo", Collections.singletonList(loadedOld),
+                new ModuleUpdateFixtures.CodeSources().with(loadedOld, oldJar), catalogue("demo", "1.1"),
+                downloading("Demo", "1.1", "demo"));
+        ModuleFileTransactions start = new ModuleFileTransactions(dataFolder);
+        UltiTools.moduleClassPath(start, modules, null);
+        UltiToolsPlugin loadedNew = loadedModule("Demo", "1.1", "demo");
+
+        Throwable thrown = catchThrowable(() -> UltiTools.loadModulesThenObserve(start, () -> {
+            throw new IOException("module scan failed");
+        }, () -> Collections.singletonList(loadedNew)));
+
+        assertThat(thrown).isInstanceOf(IOException.class);
+        assertThat(ModuleUpdateFixtures.namesIn(modules)).containsExactly("demo-1.0.jar");
+        assertThat(ModuleUpdateFixtures.treeOf(ModuleFileTransactions.transactionsFolder(dataFolder))).isEmpty();
     }
 }
