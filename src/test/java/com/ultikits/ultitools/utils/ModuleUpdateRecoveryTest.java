@@ -500,6 +500,74 @@ class ModuleUpdateRecoveryTest {
         }
 
         @Test
+        @DisplayName("a working folder whose backup folder is a link leaving it is refused and moves nothing")
+        void linkedBackupFolder_isRefused() throws IOException {
+            stage(transactions());
+            File[] work = transactions.listFiles(File::isDirectory);
+            assertThat(work).hasSize(1);
+            File outside = new File(dataFolder, "elsewhere");
+            moduleJar(new File(outside, "demo-1.0.jar"), "Demo", "0.9", "demo");
+            try {
+                Files.createSymbolicLink(new File(work[0], "backup").toPath(), outside.toPath());
+            } catch (UnsupportedOperationException | IOException e) {
+                Assumptions.abort("symbolic links are not available here: " + e);
+            }
+            ModuleFileTransactions start = transactions();
+
+            start.applyBeforeLoad();
+
+            assertOnlyTheOldVersionIsInstalled();
+            assertThat(new File(outside, "demo-1.0.jar")).exists();
+            assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.RECORD_REFUSED);
+        }
+
+        @Test
+        @DisplayName("a record naming a file that is not a JAR is refused and moves nothing")
+        void nameThatIsNotAJar_isRefused() throws IOException {
+            stage(transactions());
+            rewriteRecord("targetName", "demo-1.1.txt");
+            ModuleFileTransactions start = transactions();
+
+            start.applyBeforeLoad();
+
+            assertOnlyTheOldVersionIsInstalled();
+            assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.RECORD_REFUSED);
+        }
+
+        @Test
+        @DisplayName("a record missing a required field is refused with a warning, and the start goes on")
+        void recordMissingAField_isRefused() throws IOException {
+            stage(transactions());
+            File record = recordFile();
+            String text = new String(Files.readAllBytes(record.toPath()), StandardCharsets.UTF_8);
+            Files.write(record.toPath(), text.replaceFirst("\\s*\"newVersion\": \"[^\"]*\",", "")
+                    .getBytes(StandardCharsets.UTF_8));
+            ModuleFileTransactions start = transactions();
+
+            start.applyBeforeLoad();
+            observeAbsent(start);
+
+            assertOnlyTheOldVersionIsInstalled();
+            assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.RECORD_REFUSED);
+        }
+
+        @Test
+        @DisplayName("an unconfirmed record with no kept old JAR never deletes the file it names")
+        void unconfirmedRecordWithoutBackup_neverDeletesItsTarget() throws IOException {
+            stage(transactions());
+            rewriteRecord("state", "APPLIED");
+            rewriteRecord("targetName", "demo-1.0.jar");
+            rewriteRecord("stagedSha256", ModuleFileTransactions.sha256Of(oldJar));
+            ModuleFileTransactions start = transactions();
+
+            start.applyBeforeLoad();
+
+            assertOnlyTheOldVersionIsInstalled();
+            assertThat(start.pendingReports()).extracting(ModuleFileTransactions.Report::getKey)
+                    .doesNotContain(ModuleFileTransactions.Keys.UNCONFIRMED_ROLLED_BACK);
+        }
+
+        @Test
         @DisplayName("a record naming ../ is refused with a warning and moves nothing")
         void parentTraversal_isRefused() throws IOException {
             stage(transactions());
