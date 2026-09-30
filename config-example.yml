@@ -23,14 +23,22 @@ ultipanel:
       - "error"
       # - "debug"  # Disabled by default; not recommended in production.
 
-    # Loggers to exclude, to avoid transmitting excessive volume.
-    # 排除的记录器，避免传输过多日志。
-    excluded-loggers:
-      - "com.mojang.authlib"
-      - "net.minecraft.network"
-      - "org.apache.http"
-      - "com.zaxxer.hikari"
-      - "org.eclipse.jetty"
+    # Loggers to exclude from the stream. An entry matches a record whose
+    # java.util.logging logger name starts with it. Only java.util.logging records
+    # reach the stream, and their names take three shapes: "Minecraft" (everything
+    # logged through Bukkit.getLogger(), including the framework's own
+    # "[UltiTools-API] ..." lines), a plugin's own name (its logger), and
+    # "com.ultikits.ultitools..." (framework class loggers). Libraries that log
+    # through Log4j or SLF4J (authlib, Netty, HikariCP, Jetty) never reach the
+    # stream, so naming them has no effect. The default is an empty list.
+    # 要从日志流中排除的记录器：条目匹配以它开头的 java.util.logging 记录器名。
+    # 只有 java.util.logging 记录会进入日志流，名称有三种："Minecraft"（经
+    # Bukkit.getLogger() 输出的一切，含框架自己的 "[UltiTools-API] ..." 行）、
+    # 插件自己的名称、"com.ultikits.ultitools..."（框架类记录器）。通过 Log4j
+    # 或 SLF4J 输出的库（authlib、Netty、HikariCP、Jetty）不会进入日志流，
+    # 写它们没有效果。默认是空列表。
+    excluded-loggers: []
+      # - "Minecraft"
 
     # Batched delivery.
     # 批量发送。

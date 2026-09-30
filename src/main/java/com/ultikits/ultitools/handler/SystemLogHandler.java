@@ -79,14 +79,19 @@ public class SystemLogHandler extends Handler {
         enabledLevels.add("error");
         // enabledLevels.add("debug"); // debug logging is disabled by default
 
-        // Loggers excluded by default (avoids transmitting excessive log volume)
+        // No logger is excluded by default (#485). An entry matches a record whose
+        // java.util.logging logger name starts with it, and this handler receives only JUL
+        // records: "Minecraft" (Bukkit's server logger, i.e. everything logged through
+        // Bukkit.getLogger(), including the framework's own "[UltiTools-API] ..." lines), each
+        // plugin's own logger, and com.ultikits.ultitools.* class loggers. The six entries shipped
+        // before 6.3.0 -- com.mojang.authlib, net.minecraft.network, org.apache.http,
+        // com.zaxxer.hikari, org.eclipse.jetty, ErrorReportCollector -- could match none of them:
+        // those libraries log through Log4j or SLF4J and never produce a JUL record, and
+        // ErrorReportCollector never logs through JUL at all. Excluding a received logger by
+        // default would hide real lines, so the default is empty. Loop prevention does not depend
+        // on this list: the PUBLISHING guard above drops any record produced while one is being
+        // delivered.
         excludedLoggers = new HashSet<>();
-        excludedLoggers.add("com.mojang.authlib");
-        excludedLoggers.add("net.minecraft.network");
-        excludedLoggers.add("org.apache.http");
-        excludedLoggers.add("com.zaxxer.hikari");
-        excludedLoggers.add("org.eclipse.jetty");
-        excludedLoggers.add("ErrorReportCollector");
 
         // Apply the minimum level
         setLevel(minimumLevel);
@@ -142,8 +147,6 @@ public class SystemLogHandler extends Handler {
             if (UltiTools.getInstance().getConfig().contains("ultipanel.logging.excluded-loggers")) {
                 excludedLoggers.clear();
                 excludedLoggers.addAll(UltiTools.getInstance().getConfig().getStringList("ultipanel.logging.excluded-loggers"));
-                // Always preserve internal loggers to prevent circular logging
-                excludedLoggers.add("ErrorReportCollector");
             }
             
             UltiTools.getInstance().getLogger().info("[UltiPanel] 系统日志处理器配置已加载");
