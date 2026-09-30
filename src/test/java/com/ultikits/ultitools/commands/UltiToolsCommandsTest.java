@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Timeout;
 import java.util.concurrent.TimeUnit;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.ReloadReport;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.exceptions.CommandException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
@@ -158,7 +159,7 @@ class UltiToolsCommandsTest {
     void reloadNamedModuleWhoseReloadThrowsRepliesFailure() {
         UltiToolsPlugin broken = mock(UltiToolsPlugin.class);
         when(broken.getPluginName()).thenReturn("BrokenModule");
-        doThrow(new IllegalStateException("hook boom")).when(broken).reloadSelf();
+        doThrow(new IllegalStateException("hook boom")).when(broken).reloadWithReport();
         when(mockPluginManager.getPluginList()).thenReturn(Arrays.asList(broken));
 
         boolean result = executor.onCommand(player, mockCommand, "ul", new String[]{"reload", "BrokenModule"});
@@ -170,6 +171,40 @@ class UltiToolsCommandsTest {
                 .contains("BrokenModule").contains("failed to reload").contains("hook boom")
                 .doesNotContain("%s");
         assertThat(player.nextMessage()).as("no success reply follows a failure").isNull();
+    }
+
+    @Test
+    @DisplayName("#529: /ul reload <name> names the parts that did not reload instead of the plain success reply")
+    void reloadNamedModuleWithPartialReportRepliesTheReasons() {
+        UltiToolsPlugin partial = mock(UltiToolsPlugin.class);
+        when(partial.getPluginName()).thenReturn("PartialModule");
+        ReloadReport report = new ReloadReport();
+        report.partial("scoreboard service did not restart");
+        when(partial.reloadWithReport()).thenReturn(report);
+        when(mockPluginManager.getPluginList()).thenReturn(Arrays.asList(partial));
+
+        boolean result = executor.onCommand(player, mockCommand, "ul", new String[]{"reload", "PartialModule"});
+        server.getScheduler().performOneTick();
+
+        assertThat(result).isTrue();
+        String reply = player.nextMessage();
+        assertThat(reply).contains("PartialModule").contains("scoreboard service did not restart")
+                .doesNotContain("%s").isNotEqualTo("模块 PartialModule 已重载");
+        assertThat(player.nextMessage()).as("no plain success reply follows").isNull();
+    }
+
+    @Test
+    @DisplayName("/ul reload <name> replies success for a complete reload")
+    void reloadNamedModuleRepliesSuccess() {
+        UltiToolsPlugin good = mock(UltiToolsPlugin.class);
+        when(good.getPluginName()).thenReturn("GoodModule");
+        when(good.reloadWithReport()).thenReturn(new ReloadReport());
+        when(mockPluginManager.getPluginList()).thenReturn(Arrays.asList(good));
+
+        executor.onCommand(player, mockCommand, "ul", new String[]{"reload", "GoodModule"});
+        server.getScheduler().performOneTick();
+
+        assertThat(player.nextMessage()).isEqualTo("模块 GoodModule 已重载");
     }
 
     @Test

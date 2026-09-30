@@ -163,6 +163,9 @@ class UltiToolsPluginLifecycleHookTest {
         Field resourceFolderPathField = UltiToolsPlugin.class.getDeclaredField("resourceFolderPath");
         resourceFolderPathField.setAccessible(true);
         resourceFolderPathField.set(plugin, System.getProperty("java.io.tmpdir"));
+        // #529: the framework calls onReload(ReloadReport), whose default body calls onReload();
+        // on a mock that default must run for this suite's onReload() assertions to hold.
+        doCallRealMethod().when(plugin).onReload(any(ReloadReport.class));
         return plugin;
     }
 

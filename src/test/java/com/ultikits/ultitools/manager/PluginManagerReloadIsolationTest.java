@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.mockbukkit.mockbukkit.MockBukkit;
 
+import com.ultikits.ultitools.abstracts.ReloadReport;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.utils.TestHelper;
 
@@ -75,6 +76,8 @@ class PluginManagerReloadIsolationTest {
     private static UltiToolsPlugin module(String name) {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
         when(plugin.getPluginName()).thenReturn(name);
+        // #529: PluginManager reads each module's report
+        when(plugin.reloadWithReport()).thenReturn(new ReloadReport());
         return plugin;
     }
 
@@ -92,15 +95,15 @@ class PluginManagerReloadIsolationTest {
         UltiToolsPlugin first = module("FirstModule");
         UltiToolsPlugin broken = module("BrokenModule");
         UltiToolsPlugin last = module("LastModule");
-        doThrow(new IllegalStateException("hook boom")).when(broken).reloadSelf();
+        doThrow(new IllegalStateException("hook boom")).when(broken).reloadWithReport();
         PluginListSeeding.add(pluginManager, first);
         PluginListSeeding.add(pluginManager, broken);
         PluginListSeeding.add(pluginManager, last);
 
         assertDoesNotThrow(pluginManager::reload, "one module's failure must not escape /ul reload");
 
-        verify(first).reloadSelf();
-        verify(last).reloadSelf();
+        verify(first).reloadWithReport();
+        verify(last).reloadWithReport();
         assertThat(loggedMessages())
                 .as("the summary names the failed module")
                 .anySatisfy(message -> assertThat(message).contains("BrokenModule").doesNotContain("%s"))
@@ -113,7 +116,7 @@ class PluginManagerReloadIsolationTest {
     void reportedSummaryNamesTheFailedModule() {
         UltiToolsPlugin good = module("GoodModule");
         UltiToolsPlugin broken = module("BrokenModule");
-        doThrow(new IllegalStateException("hook boom")).when(broken).reloadSelf();
+        doThrow(new IllegalStateException("hook boom")).when(broken).reloadWithReport();
         PluginListSeeding.add(pluginManager, good);
         PluginListSeeding.add(pluginManager, broken);
 
@@ -137,15 +140,36 @@ class PluginManagerReloadIsolationTest {
     }
 
     @Test
+    @DisplayName("#529: a partially reloaded module is listed with the parts that did not reload")
+    void partialModuleIsListedWithItsReasons() {
+        UltiToolsPlugin good = module("GoodModule");
+        UltiToolsPlugin partial = module("PartialModule");
+        ReloadReport report = new ReloadReport();
+        report.partial("scoreboard service did not restart");
+        when(partial.reloadWithReport()).thenReturn(report);
+        PluginListSeeding.add(pluginManager, good);
+        PluginListSeeding.add(pluginManager, partial);
+
+        List<String> summary = pluginManager.reloadAllAndReport();
+
+        String joined = String.join("\n", summary);
+        assertThat(joined).contains("PartialModule").contains("scoreboard service did not restart")
+                .doesNotContain("GoodModule").doesNotContain("%");
+        assertThat(loggedMessages())
+                .anySatisfy(message -> assertThat(message).contains("PartialModule")
+                        .contains("scoreboard service did not restart"));
+    }
+
+    @Test
     @DisplayName("a fatal virtual-machine error is not swallowed as one module's reload failure")
     void fatalErrorPropagates() {
         UltiToolsPlugin broken = module("BrokenModule");
         UltiToolsPlugin last = module("LastModule");
-        doThrow(new OutOfMemoryError("simulated")).when(broken).reloadSelf();
+        doThrow(new OutOfMemoryError("simulated")).when(broken).reloadWithReport();
         PluginListSeeding.add(pluginManager, broken);
         PluginListSeeding.add(pluginManager, last);
 
         assertThrows(OutOfMemoryError.class, pluginManager::reload);
-        verify(last, never()).reloadSelf();
+        verify(last, never()).reloadWithReport();
     }
 }
