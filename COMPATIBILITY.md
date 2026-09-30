@@ -523,6 +523,8 @@ recorded before the first dispatch returns.
   the nested dispatch refused with the ordinary lock message (`SENDER`: from the same sender; `ALL`:
   from any sender). Acquiring never waits, so nothing blocks; the outer lock is released when the
   outer body returns, normally or by throwing. Schedule the nested call with `runTask` if it must run.
+  A body that dispatches its own command **without** `@UsageLimit` and without a stopping condition
+  now recurses on the main thread until the stack overflows; before 6.3.0 it repeated once a tick.
 - **Two dispatches in one tick meet the cooldown.** The second of two dispatches of a `@CmdCD` command
   by one player in the same tick is refused.
 

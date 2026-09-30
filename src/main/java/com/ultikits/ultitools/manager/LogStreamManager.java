@@ -145,7 +145,8 @@ public class LogStreamManager implements Listener {
         if (notKept > 0) {
             UltiTools.getInstance().getLogger().info(String.format(
                     "[UltiPanel] %d start-up log record(s) were not kept for the panel: the start-up buffer "
-                            + "holds at most %d records.", notKept, EarlyLogCapture.MAX_RECORDS));
+                            + "holds at most %d records and about %d KiB.", notKept, EarlyLogCapture.MAX_RECORDS,
+                    EarlyLogCapture.MAX_BYTES / 1024));
         }
 
         // D-20 (maintainer decision, 2026-09-15): this used to call startLogStream("auto",

@@ -22,6 +22,8 @@
 #
 #   Explicitly OUT of the contract:
 #     - Hiragana / Katakana (kana)            U+3040-U+30FF
+#   Halfwidth katakana (U+FF65-U+FF9F) and halfwidth Hangul (U+FFA0-U+FFDC) lie inside U+FF00-U+FFEF
+#   and are matched, exactly as the module guards match them.
 #   Changing the contract is a deliberate edit, not a silent drift — --self-test pins it in both
 #   directions (assertion 4a: kana must not match; 4b and 8: punctuation, full-width forms and one
 #   planted character per added Han range must).
