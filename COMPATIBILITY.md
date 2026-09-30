@@ -368,20 +368,22 @@ This section governs the third kind.
   configuration loads; a value the entry's parser cannot read (a YAML date in a text field) and an
   empty list item are handled the same way. A decimal loads into a `float`/`Float` field when the
   float nearest to it prints back as the same decimal (`0.1`, `0.3`, `1.5`), so a float the
-  framework wrote always reads back; only a value with more digits than a float holds
-  (`0.123456789`) keeps the default with a warning (maintainer decision of 2026-09-30). A map key
-  containing a dot cannot be stored as one key, because the configuration file uses `.` as its path
-  separator and quoting the key does not change that: every framework write (a save, a first-boot
-  default, a panel write) now leaves such a key out, with one WARNING naming the file, the entry and
-  the key and asking for a rename, and a start or reload that finds such a key in the file warns the
-  operator to rename it (maintainer decision of 2026-09-30); the configuration layer and every path
-  a module reads through `getConfig()` are as in 6.2. A module that compensated for the old text
-  elements by parsing them itself keeps working (an `Integer` still prints as its number), but a
-  list with one bad element is now used without that element rather than reaching the module whole.
-  With the default parser a `Set` field is written as a YAML list and an enum by its name, both of
-  which used to produce a file the loader refused; a module's own `parser` serializes exactly as
-  before. `DefaultConfigParser#parse` returns a sequence's elements as they are instead of as text,
-  and a value that is neither a sequence nor a section as it is instead of failing a cast.
+  framework wrote always reads back, and a `UUID` field or element reads the text the framework
+  writes for it; only a value with more digits than a float holds (`0.123456789`) keeps the default
+  with a warning (maintainer decision of 2026-09-30). A map key containing a dot cannot be stored as
+  one key, because the configuration file uses `.` as its path separator and quoting the key does
+  not change that: every framework write (a save, a first-boot default, a panel write, and a map
+  inside another map, an object or a list) now leaves such a key out, with one WARNING naming the
+  file, the entry and the key and asking for a rename, and a start or reload that finds such a key
+  in the file warns the operator to rename it (maintainer decision of 2026-09-30); the configuration
+  layer and every path a module reads through `getConfig()` are as in 6.2. A module that compensated
+  for the old text elements by parsing them itself keeps working (an `Integer` still prints as its
+  number), but a list with one bad element is now used without that element rather than reaching the
+  module whole. With the default parser a `Set` field is written as a YAML list and an enum by its
+  name, both of which used to produce a file the loader refused; a module's own `parser` serializes
+  exactly as before. `DefaultConfigParser#parse` returns a sequence's elements as they are instead
+  of as text, and a value that is neither a sequence nor a section as it is instead of failing a
+  cast.
 - A `@ConfigEntry` comment that is exactly one language key is rewritten on every framework write,
   including the first start after an upgrade (#542, maintainer decision of 2026-09-29): a comment
   such as `comment = "{config.demo.limit}"` is resolved from the module's catalogue in the server's
