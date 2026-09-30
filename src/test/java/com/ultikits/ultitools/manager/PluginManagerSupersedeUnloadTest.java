@@ -205,6 +205,22 @@ class PluginManagerSupersedeUnloadTest {
     }
 
     @Test
+    @DisplayName("a programmatic subscription made with an owner instance is released by that instance, under any name")
+    void programmaticSubscriptionWithInstanceIsReleasedByInstance() {
+        // Codex review of #564, round 3: there was no instance-taking subscribe overload.
+        UltiToolsPlugin alpha = module("Alpha", "1.0.0");
+        HandlerBean handler = new HandlerBean();
+        eventBus.subscribe(SupersedeTestEvent.class, EventPriority.NORMAL, false, "AlphaAddon", alpha,
+                event -> handler.calls++);
+        PluginListSeeding.add(pluginManager, alpha);
+
+        pluginManager.unregister(alpha);
+
+        eventBus.publish(new SupersedeTestEvent());
+        assertThat(handler.calls).as("released by the owner instance, not the name it was filed under").isZero();
+    }
+
+    @Test
     @DisplayName("with no other copy of the name loaded, name-only registrations are still released by name")
     void nameOnlyRegistrationsAreReleasedWhenNoOtherCopyIsLoaded() {
         UltiToolsPlugin solo = module("Solo", "1.0.0");
