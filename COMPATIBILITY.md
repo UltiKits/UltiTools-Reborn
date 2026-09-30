@@ -417,6 +417,36 @@ This section governs the third kind.
   through `PluginManager#register(UltiToolsPlugin)` gets this automatically. One thing is
   unchanged: a language file the candidate's jar ships and the disk lacks is still extracted, with
   its hash, while the candidate is constructed (`ultitools.language.rejected-candidate-untouched`).
+- Unwinding a refused External Plugin API registration (#537). When
+  `PluginManager#registerExternal` refused a plugin after recording its data-folder scope — the
+  command-executor contract check, the config-binding refusal of #531, or a failed container
+  `refresh()` — the scope, the entity ownership, the adapter's data scope and its context stayed
+  behind, so a corrected connection of the same plugin in the same process was handed the stale
+  scope. As of 6.3.0 the refusal closes the context and removes all four before rethrowing the same
+  exception; nothing a caller observes changes except that the retry now works
+  (`ultitools.boot.external-refusal-unwind`).
+- Naming a missing required plugin instead of printing a class-not-found trace (#554). A module
+  that cannot load because a plugin in its `plugin.yml` `depend:` list is not installed or not
+  enabled used to log `Cannot initialize plugin for <main class>: <missing class>` with a
+  `NoClassDefFoundError` trace. As of 6.3.0 that case logs one WARNING,
+  `Module '<name>' requires <plugin>, which is not installed or not enabled; the module is not
+  loaded.`, with no trace. Every other load failure keeps the old message and trace
+  (`ultitools.boot.missing-required-plugin`). Log wording only; the module is refused exactly as
+  before.
+- Naming more callers in the economy unavailability warning (#462, #483, #489). The warning
+  `Module '<name>' requested the economy service, but …` could name only a loaded module whose
+  declared scan roots covered the calling class. As of 6.3.0 it also names a connected External
+  Plugin API consumer (by plugin name), a module requesting the economy while it is still being
+  registered (from its constructor, a `@PostConstruct` method or `registerSelf()`), and a module
+  whose main class sits outside its declared roots (its own package counts as a root). A caller
+  still unattributable is reported as `an unknown caller`, as before, but once per calling package
+  rather than once for all of them, so a second one is no longer silenced
+  (`ultitools.economy.attribute-caller`). Log wording and frequency only.
+- Three internal methods added to published classes for the fixes above, each
+  `@ApiStatus.Internal` and public only because the caller is in another package:
+  `UltiToolsPlugin#commitLanguageProvenance()` (#460), `PluginManager#getConnectedExternalScanPackages()`
+  (#462) and `PluginManager#getModuleBeingRegistered()` (#483). Additions only; no existing
+  signature changed. A module never needs to call them.
 - Saving at shutdown only the configuration that module code changed. Before 6.3.0,
   `UltiTools#onDisable()` rewrote **every** registered `@ConfigEntity` file from memory, so an edit
   an operator made to a module's configuration file while the server was running was silently
