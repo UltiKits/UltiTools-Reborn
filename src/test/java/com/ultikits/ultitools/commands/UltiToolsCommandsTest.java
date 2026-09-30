@@ -154,6 +154,46 @@ class UltiToolsCommandsTest {
     }
 
     @Test
+    @DisplayName("#509: /ul reload <name> replies failure, not success, when the module's reload throws")
+    void reloadNamedModuleWhoseReloadThrowsRepliesFailure() {
+        UltiToolsPlugin broken = mock(UltiToolsPlugin.class);
+        when(broken.getPluginName()).thenReturn("BrokenModule");
+        doThrow(new IllegalStateException("hook boom")).when(broken).reloadSelf();
+        when(mockPluginManager.getPluginList()).thenReturn(Arrays.asList(broken));
+
+        boolean result = executor.onCommand(player, mockCommand, "ul", new String[]{"reload", "BrokenModule"});
+        server.getScheduler().performOneTick();
+
+        assertThat(result).isTrue();
+        String reply = player.nextMessage();
+        assertThat(reply).as("the sender is told the reload failed, naming the module")
+                .contains("BrokenModule").contains("failed to reload").contains("hook boom")
+                .doesNotContain("%s");
+        assertThat(player.nextMessage()).as("no success reply follows a failure").isNull();
+    }
+
+    @Test
+    @DisplayName("#509: a bare /ul reload replies the reload summary to the sender")
+    void bareReloadRepliesTheSummary() throws IOException {
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
+            when(ultiTools.getPluginManager()).thenReturn(mockPluginManager);
+            try {
+                when(ultiTools.reloadPluginsAndReport())
+                        .thenReturn(Arrays.asList("Failed to reload 1 of 2 modules: BrokenModule."));
+            } catch (IOException ignored) {
+                // stubbing never invokes the real method; the checked exception cannot occur here
+            }
+        });
+        UltiToolsCommands freshExecutor = new UltiToolsCommands();
+
+        boolean result = freshExecutor.onCommand(player, mockCommand, "ul", new String[]{"reload"});
+        server.getScheduler().performOneTick();
+
+        assertThat(result).isTrue();
+        assertThat(player.nextMessage()).isEqualTo("Failed to reload 1 of 2 modules: BrokenModule.");
+    }
+
+    @Test
     @DisplayName("Should work with console sender")
     void testConsoleCommands() {
         ConsoleCommandSender console = server.getConsoleSender();
