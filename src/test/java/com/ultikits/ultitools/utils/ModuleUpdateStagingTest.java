@@ -179,6 +179,35 @@ class ModuleUpdateStagingTest {
     }
 
     @Test
+    @DisplayName("two loaded modules in different JARs declaring the same identify-string: the update is refused, whichever is listed first (Codex, #561)")
+    void identifyStringDeclaredByModulesInTwoJars_isRefused() throws IOException {
+        // A misconfiguration, but a real one: two modules whose plugin.yml files carry the same
+        // identify-string. /upm update passes only that string, so picking the first match could
+        // replace, and commit, the other module's JAR while reporting the requested one staged.
+        File twinJar = moduleJar(new File(modules, "twin-1.0.jar"), "Twin", "1.0", "demo");
+        UltiToolsPlugin twin = loadedModule("Twin", "1.0", "demo");
+        ModuleUpdateFixtures.CodeSources sources =
+                new ModuleUpdateFixtures.CodeSources().with(loadedOld, oldJar).with(twin, twinJar);
+        Map<String, String> before = snapshot();
+        List<String> downloads = new ArrayList<>();
+
+        ModuleFileTransactions.StageResult demoFirst = new ModuleFileTransactions(dataFolder).stageUpdate("demo",
+                java.util.Arrays.asList(loadedOld, twin), sources, catalogue("demo", "1.1"),
+                (link, name, folder) -> downloads.add(name));
+        ModuleFileTransactions.StageResult twinFirst = new ModuleFileTransactions(dataFolder).stageUpdate("demo",
+                java.util.Arrays.asList(twin, loadedOld), sources, catalogue("demo", "1.1"),
+                (link, name, folder) -> downloads.add(name));
+
+        assertThat(demoFirst.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
+        assertThat(demoFirst.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_AMBIGUOUS_IDENTIFY_STRING);
+        assertThat(demoFirst.getReasonArgs()).containsExactly("demo", "Demo, Twin");
+        assertThat(twinFirst.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_AMBIGUOUS_IDENTIFY_STRING);
+        assertThat(twinFirst.getReasonArgs()).containsExactly("demo", "Twin, Demo");
+        assertThat(downloads).isEmpty();
+        assertThat(snapshot()).isEqualTo(before);
+    }
+
+    @Test
     @DisplayName("an old JAR that cannot be read (so its content cannot be recorded) is refused before anything is downloaded")
     void unreadableOldJar_isRefused() throws IOException {
         org.junit.jupiter.api.Assumptions.assumeTrue(
