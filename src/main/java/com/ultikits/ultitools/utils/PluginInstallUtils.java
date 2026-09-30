@@ -433,7 +433,9 @@ public class PluginInstallUtils {
         if (pluginsFolder == null || !pluginsFolder.isDirectory() || normalizedIdentifyString == null) {
             return null;
         }
-        File[] jars = pluginsFolder.listFiles((f) -> f.getName().endsWith(".jar"));
+        // The loader's own listing, in its file-name order (#476), so the JAR found first is the
+        // same on every file system.
+        File[] jars = ModuleFileTransactions.moduleJars(pluginsFolder);
         if (jars == null) {
             return null;
         }
@@ -1400,7 +1402,8 @@ public class PluginInstallUtils {
         File folder = modulesFolder();
         File[] listFiles;
         try {
-            listFiles = folder.listFiles();
+            // In file-name order (#476), so the report names the entries in the same order every time.
+            listFiles = ModuleFileTransactions.sortedByName(folder.listFiles());
         } catch (SecurityException denied) {
             // A policy that denies reading the folder throws rather than answering null, and the
             // module has already been unloaded by now: this is state D, not an abort.

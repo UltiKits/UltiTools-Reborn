@@ -16,7 +16,9 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.Function;
@@ -189,15 +191,33 @@ public final class ModuleFileTransactions {
     }
 
     /**
-     * The module JARs of a modules folder: the entries whose names end in {@code .jar}, the test the
-     * module loader applies. The start-up scan and the module class loader both read this one
-     * listing (#476).
+     * The module JARs of a modules folder, in file-name order: the entries whose names end in
+     * {@code .jar}, the test the module loader applies. The start-up scan and the module class
+     * loader both read this one listing (#476).
+     *
+     * <p>Sorted because {@code File#listFiles} promises no order (on ext4 it is hash order), and the
+     * order decides which of two JARs carrying the same class supplies it and which copy of a
+     * duplicated module is read first. Sorting by name, compared as plain strings, gives the same
+     * answer for the same folder on every file system and in every locale.
      *
      * @param modulesFolder the modules folder
-     * @return the JARs, or {@code null} when the folder cannot be listed
+     * @return the JARs sorted by file name, or {@code null} when the folder cannot be listed
      */
     public static File[] moduleJars(File modulesFolder) {
-        return modulesFolder.listFiles(file -> file.getName().endsWith(".jar"));
+        return sortedByName(modulesFolder.listFiles(file -> file.getName().endsWith(".jar")));
+    }
+
+    /**
+     * {@code files} sorted by file name, compared as plain strings (#476).
+     *
+     * @param files a folder listing, or {@code null}
+     * @return the same array, sorted, or {@code null}
+     */
+    public static File[] sortedByName(File[] files) {
+        if (files != null) {
+            Arrays.sort(files, Comparator.comparing(File::getName));
+        }
+        return files;
     }
 
     /**
