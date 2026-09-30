@@ -322,8 +322,15 @@ public final class ModuleFileTransactions {
         Reservation reservation;
         // Decisions under the lock; the network outside it. An uninstall on the main thread waits
         // only for these checks and the record write, never for a download (gate-1 review).
+        // A denied file access (SecurityException) anywhere in staging is a failure result, never an
+        // exception out of the command (Codex, #561). While checking, nothing of this staging exists
+        // yet; once reserved, the work folder is this call's own and its staging is discarded.
         synchronized (LOCK) {
-            reservation = reserve(record, work, identifyString, loaded, codeSource);
+            try {
+                reservation = reserve(record, work, identifyString, loaded, codeSource);
+            } catch (SecurityException denied) {
+                return StageResult.failed(null, Keys.REASON_ACCESS_DENIED, describe(denied));
+            }
             if (reservation.refusal != null) {
                 return reservation.refusal;
             }
@@ -332,6 +339,9 @@ public final class ModuleFileTransactions {
         record.oldSha256 = reservation.oldSha256;
         try {
             return download(record, work, identifyString, reservation, catalogue, downloader, mainClassOf);
+        } catch (SecurityException denied) {
+            discardStaging(work);
+            return StageResult.failed(reservation.previousFailure, Keys.REASON_ACCESS_DENIED, describe(denied));
         } finally {
             synchronized (LOCK) {
                 STAGING.remove(key);
@@ -783,6 +793,11 @@ public final class ModuleFileTransactions {
      *                     or cannot be read
      */
     public void recordDeferredRemoval(String moduleName, List<File> files) throws IOException {
+        deniedAsIo(transactionsFolder, () -> recordDeferredRemovalChecked(moduleName, files));
+    }
+
+    /** {@link #recordDeferredRemoval(String, List)}, before a denied file access is made a checked failure. */
+    private void recordDeferredRemovalChecked(String moduleName, List<File> files) throws IOException {
         synchronized (LOCK) {
             Record record = new Record();
             record.type = Record.REMOVE;
@@ -831,6 +846,11 @@ public final class ModuleFileTransactions {
      * @throws IOException when a record cannot be read or rewritten
      */
     public void forgetDeferredRemoval(String fileName) throws IOException {
+        deniedAsIo(transactionsFolder, () -> forgetDeferredRemovalChecked(fileName));
+    }
+
+    /** {@link #forgetDeferredRemoval(String)}, before a denied file access is made a checked failure. */
+    private void forgetDeferredRemovalChecked(String fileName) throws IOException {
         synchronized (LOCK) {
             for (File recordFile : recordFiles()) {
                 Record record;
@@ -1581,16 +1601,42 @@ public final class ModuleFileTransactions {
      * record, so a crash leaves either the previous record or the new one, never a torn file.
      */
     private void writeRecord(Record record) throws IOException {
-        Files.createDirectories(transactionsFolder.toPath());
-        Path temporary = Files.createTempFile(transactionsFolder.toPath(), TEMPORARY_PREFIX, TEMPORARY_SUFFIX);
-        try {
-            try (Writer writer = Files.newBufferedWriter(temporary, StandardCharsets.UTF_8)) {
-                GSON.toJson(record, writer);
+        File recordFile = recordFileOf(record);
+        // A denied file access (SecurityException) is an IOException here, so every caller's
+        // checked path -- a failure result, discarding the staging, a report line -- runs (Codex, #561).
+        deniedAsIo(recordFile, () -> {
+            Files.createDirectories(transactionsFolder.toPath());
+            Path temporary = Files.createTempFile(transactionsFolder.toPath(), TEMPORARY_PREFIX, TEMPORARY_SUFFIX);
+            try {
+                try (Writer writer = Files.newBufferedWriter(temporary, StandardCharsets.UTF_8)) {
+                    GSON.toJson(record, writer);
+                }
+                crashPoints.reached(CrashPoints.BEFORE_RECORD_MOVED);
+                Files.move(temporary, recordFile.toPath(), StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } finally {
+                // Gone once moved; a leftover is never a record and the next start sweeps it.
+                deleteQuietly(temporary.toFile());
             }
-            Files.move(temporary, recordFileOf(record).toPath(), StandardCopyOption.ATOMIC_MOVE,
-                    StandardCopyOption.REPLACE_EXISTING);
-        } finally {
-            Files.deleteIfExists(temporary);
+        });
+    }
+
+    /** File work that may fail with an {@link IOException}. */
+    @FunctionalInterface
+    private interface FileWork {
+        void run() throws IOException;
+    }
+
+    /**
+     * Runs {@code work}, turning a denied file access -- a {@link SecurityException} from any of its
+     * {@code Files} calls -- into an {@link IOException} naming {@code file}, so a caller that handles
+     * the checked failure handles this one too.
+     */
+    private static void deniedAsIo(File file, FileWork work) throws IOException {
+        try {
+            work.run();
+        } catch (SecurityException denied) {
+            throw new IOException(file.getAbsolutePath() + ": access denied: " + describe(denied), denied);
         }
     }
 
@@ -1795,9 +1841,22 @@ public final class ModuleFileTransactions {
      * @return whether it is gone
      */
     private static boolean deleteTree(File folder) {
-        if (!Files.exists(folder.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+        // The existence check is inside the guard too: a denied access here is "not deleted", never an
+        // exception, so discarding a staging or cancelling an update cannot throw (Codex, #561).
+        try {
+            if (!Files.exists(folder.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                return true;
+            }
+            walkAndDelete(folder);
             return true;
+        } catch (IOException | SecurityException | java.io.UncheckedIOException e) {
+            LOGGER.log(Level.FINE, "Could not delete " + folder, e);
+            return false;
         }
+    }
+
+    /** Deletes {@code folder} and everything under it, deepest first. */
+    private static void walkAndDelete(File folder) throws IOException {
         try (Stream<Path> walk = Files.walk(folder.toPath())) {
             List<Path> paths = new ArrayList<>();
             walk.forEach(paths::add);
@@ -1805,10 +1864,6 @@ public final class ModuleFileTransactions {
             for (Path path : paths) {
                 Files.deleteIfExists(path);
             }
-            return true;
-        } catch (IOException | SecurityException | java.io.UncheckedIOException e) {
-            LOGGER.log(Level.FINE, "Could not delete " + folder, e);
-            return false;
         }
     }
 
@@ -1948,6 +2003,7 @@ public final class ModuleFileTransactions {
     interface CrashPoints {
         CrashPoints NONE = point -> { };
         String AFTER_RECORD_WRITTEN = "after-record-written";
+        String BEFORE_RECORD_MOVED = "before-record-moved";
         String AFTER_OLD_MOVED = "after-old-moved";
         String AFTER_NEW_MOVED = "after-new-moved";
         String AFTER_APPLIED_RECORDED = "after-applied-recorded";
@@ -2228,6 +2284,7 @@ public final class ModuleFileTransactions {
         public static final String REASON_WRONG_VERSION = "下载的 %s 声明的版本是 %s，不是云端给出的最新版本 %s";
         public static final String REASON_CANCELLED_WHILE_DOWNLOADING = "下载期间该模块已被卸载，本次更新已取消";
         public static final String REASON_RECORD_FAILED = "更新记录无法写入：%s";
+        public static final String REASON_ACCESS_DENIED = "文件访问被拒绝：%s";
         public static final String REASON_RECORD_UNREADABLE = "该模块已有的更新记录 %s 无法读取：%s";
         public static final String REASON_LEFTOVER_BACKUP = "%s 中有上一次更新留下、没有记录的旧版本 JAR；请先检查并移走它";
         public static final String REASON_PREVIOUS_UNRESTORED = "上一次更新留下的旧版本 JAR 无法移回模块目录：%s";
