@@ -71,7 +71,8 @@ class PluginInstallCommandsEnhancedTest {
         config.set("api-url", "http://localhost");
         mockedUltiTools.when(UltiTools::getEnv).thenReturn(config);
         
-        File dataFolder = new File("target/test-data");
+        // A server layout: the update records live under the data folder's grandparent (the server root).
+        File dataFolder = new File("target/test-data/plugins/UltiTools");
         dataFolder.mkdirs();
         when(instance.getDataFolder()).thenReturn(dataFolder);
         when(instance.i18n(anyString())).thenAnswer(i -> i.getArgument(0));

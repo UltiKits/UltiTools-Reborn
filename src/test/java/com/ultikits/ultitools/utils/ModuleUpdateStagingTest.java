@@ -37,7 +37,10 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 class ModuleUpdateStagingTest {
 
     @TempDir
-    File dataFolder;
+    File serverRoot;
+
+    /** {@code <server root>/plugins/UltiTools}, as on a real server; the records live under the server root. */
+    private File dataFolder;
 
     private File modules;
     private File transactions;
@@ -46,6 +49,7 @@ class ModuleUpdateStagingTest {
 
     @BeforeEach
     void setUp() throws IOException {
+        dataFolder = ModuleUpdateFixtures.dataFolderIn(serverRoot);
         modules = ModuleFileTransactions.modulesFolder(dataFolder);
         transactions = ModuleFileTransactions.transactionsFolder(dataFolder);
         oldJar = moduleJar(new File(modules, "demo-1.0.jar"), "Demo", "1.0", "demo");

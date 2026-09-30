@@ -37,7 +37,10 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 class ModuleUpdateTransactionTest {
 
     @TempDir
-    File dataFolder;
+    File serverRoot;
+
+    /** {@code <server root>/plugins/UltiTools}, as on a real server; the records live under the server root. */
+    private File dataFolder;
 
     private File modules;
     private File transactions;
@@ -47,6 +50,7 @@ class ModuleUpdateTransactionTest {
 
     @BeforeEach
     void setUp() throws IOException {
+        dataFolder = ModuleUpdateFixtures.dataFolderIn(serverRoot);
         modules = ModuleFileTransactions.modulesFolder(dataFolder);
         transactions = ModuleFileTransactions.transactionsFolder(dataFolder);
         oldJar = moduleJar(new File(modules, "demo-1.0.jar"), "Demo", "1.0", "demo");
@@ -61,11 +65,31 @@ class ModuleUpdateTransactionTest {
     }
 
     @Test
-    @DisplayName("the modules folder and transactions folder are siblings under the data folder")
-    void foldersAreSiblingsOfTheDataFolder() throws IOException {
+    @DisplayName("the records live in <server root>/.ultikits/upm-transactions, beside the credential store and outside plugins/")
+    void recordsLiveUnderTheServerRootsUltikitsFolder() throws Exception {
         assertThat(modules.getCanonicalFile()).isEqualTo(new File(dataFolder, "plugins").getCanonicalFile());
-        assertThat(transactions.getParentFile().getCanonicalFile()).isEqualTo(dataFolder.getCanonicalFile());
-        assertThat(transactions.getCanonicalPath()).doesNotStartWith(modules.getCanonicalPath() + File.separator);
+        File ultikits = new File(serverRoot, credentialStoreDirectoryName());
+        assertThat(transactions.getCanonicalFile()).isEqualTo(new File(ultikits, "upm-transactions").getCanonicalFile());
+        File pluginsFolder = dataFolder.getParentFile();
+        assertThat(transactions.getCanonicalPath()).doesNotStartWith(pluginsFolder.getCanonicalPath() + File.separator);
+    }
+
+    @Test
+    @DisplayName("a relative data folder resolves to the same server root, never to a folder outside it")
+    void relativeDataFolderResolvesTheSameServerRoot() {
+        File relative = new File("plugins" + File.separator + "UltiTools");
+
+        assertThat(ModuleFileTransactions.transactionsFolder(relative).getAbsoluteFile())
+                .isEqualTo(new File(new File(relative.getAbsoluteFile().getParentFile().getParentFile(), ".ultikits"),
+                        "upm-transactions"));
+    }
+
+    /** The credential store's folder name, read from the class itself so the two cannot drift apart. */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // the constant is private to CredentialStore
+    private static String credentialStoreDirectoryName() throws ReflectiveOperationException {
+        java.lang.reflect.Field field = CredentialStore.class.getDeclaredField("NEW_DIR_NAME");
+        field.setAccessible(true);
+        return (String) field.get(null);
     }
 
     @Test

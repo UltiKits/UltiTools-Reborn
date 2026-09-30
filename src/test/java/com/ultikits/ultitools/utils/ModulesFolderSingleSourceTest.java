@@ -97,7 +97,7 @@ class ModulesFolderSingleSourceTest {
     }
 
     @Test
-    @DisplayName("the class loader, the scan, install, update, uninstall and the transaction folder all call modulesFolder")
+    @DisplayName("the class loader, the scan, install, update and uninstall call modulesFolder; the records folder comes from the same data folder")
     void everyCallerUsesTheOneMethod() throws IOException {
         String ultiTools = read("UltiTools.java");
         assertThat(body(ultiTools, "URL[] getModuleUrls")).contains("modulesFolder(");
@@ -108,7 +108,12 @@ class ModulesFolderSingleSourceTest {
         assertThat(body(install, "File modulesFolder")).contains("ModuleFileTransactions.modulesFolder(");
         String transactions = read("utils/ModuleFileTransactions.java");
         assertThat(body(transactions, "public ModuleFileTransactions")).contains("modulesFolder(dataFolder)");
-        assertThat(body(transactions, "File transactionsFolder")).contains("modulesFolder(dataFolder)");
+        // The records live under the server root (follow-up 18), found from the same data folder --
+        // its grandparent, as the credential store finds it -- never from the working directory.
+        assertThat(body(transactions, "File transactionsFolder")).contains("serverRoot(dataFolder)")
+                .doesNotContain("user.dir");
+        assertThat(body(transactions, "File serverRoot")).contains("getParentFile().getParentFile()")
+                .doesNotContain("user.dir");
         assertThat(body(read("commands/PluginInstallCommands.java"), "void uninstallPlugin"))
                 .doesNotContain("\"/plugins\"");
     }

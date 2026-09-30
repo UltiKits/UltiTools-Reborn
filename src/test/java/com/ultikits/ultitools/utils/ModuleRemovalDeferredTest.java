@@ -47,13 +47,17 @@ class ModuleRemovalDeferredTest {
     private static final String MODULE = "RemovalFixture";
 
     @TempDir
-    File dataFolder;
+    File serverRoot;
+
+    /** {@code <server root>/plugins/UltiTools}, as on a real server; the records live under the server root. */
+    private File dataFolder;
 
     private File modules;
     private File jar;
 
     @BeforeEach
     void setUp() throws IOException {
+        dataFolder = ModuleUpdateFixtures.dataFolderIn(serverRoot);
         Assumptions.assumeTrue(Files.getFileStore(dataFolder.toPath()).supportsFileAttributeView("posix"));
         MockBukkitHelper.ensureCleanState();
         MockBukkit.mock();

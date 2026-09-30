@@ -33,6 +33,23 @@ public final class ModuleUpdateFixtures {
     }
 
     /**
+     * The framework's data folder inside a temporary server root, laid out as on a real server:
+     * {@code <server root>/plugins/UltiTools}. The update records live under the server root
+     * ({@code <server root>/.ultikits/upm-transactions}), so a bare temporary folder must never be
+     * used as the data folder: its grandparent is outside the test's own folder.
+     *
+     * @param serverRoot the temporary server root
+     * @return the data folder, created
+     */
+    public static File dataFolderIn(File serverRoot) {
+        File dataFolder = new File(new File(serverRoot, "plugins"), "UltiTools");
+        if (!dataFolder.isDirectory() && !dataFolder.mkdirs()) {
+            throw new IllegalStateException("cannot create " + dataFolder);
+        }
+        return dataFolder;
+    }
+
+    /**
      * Writes a module JAR whose {@code plugin.yml} declares the given name, version and
      * identify-string, plus one class-shaped entry so it is an ordinary module archive.
      *

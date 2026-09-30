@@ -14,6 +14,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.concurrent.TimeUnit;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -34,7 +35,15 @@ import com.ultikits.ultitools.utils.ModuleUpdateFixtures;
 class ModuleUpdateStartupOrderTest {
 
     @TempDir
-    File dataFolder;
+    File serverRoot;
+
+    /** {@code <server root>/plugins/UltiTools}, as on a real server; the records live under the server root. */
+    private File dataFolder;
+
+    @BeforeEach
+    void setUp() {
+        dataFolder = ModuleUpdateFixtures.dataFolderIn(serverRoot);
+    }
 
     @Test
     @DisplayName("the class path built at start-up holds the new JAR and not the old one")

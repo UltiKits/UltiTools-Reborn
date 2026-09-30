@@ -12,6 +12,7 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -50,7 +51,10 @@ class ModuleUpdateRecoveryTest {
     }
 
     @TempDir
-    File dataFolder;
+    File serverRoot;
+
+    /** {@code <server root>/plugins/UltiTools}, as on a real server; the records live under the server root. */
+    private File dataFolder;
 
     private File modules;
     private File transactions;
@@ -60,6 +64,7 @@ class ModuleUpdateRecoveryTest {
 
     @BeforeEach
     void setUp() throws IOException {
+        dataFolder = ModuleUpdateFixtures.dataFolderIn(serverRoot);
         modules = ModuleFileTransactions.modulesFolder(dataFolder);
         transactions = ModuleFileTransactions.transactionsFolder(dataFolder);
         oldJar = moduleJar(new File(modules, "demo-1.0.jar"), "Demo", "1.0", "demo");
@@ -227,6 +232,55 @@ class ModuleUpdateRecoveryTest {
 
             observeAbsent(start);
             assertOnlyTheOldVersionIsInstalled();
+        }
+
+        /**
+         * The modules folder and the records folder on two file systems: every move between them is
+         * refused the way the JDK refuses an atomic move across devices.
+         */
+        private ModuleFileTransactions acrossFileSystems() {
+            Path modulesPath = modules.toPath();
+            return new ModuleFileTransactions(modules, transactions, new ModuleFileTransactions.FileOps() {
+                @Override
+                public void move(Path from, Path to) throws IOException {
+                    if (from.startsWith(modulesPath) != to.startsWith(modulesPath)) {
+                        throw new AtomicMoveNotSupportedException(from.toString(), to.toString(),
+                                "Invalid cross-device link");
+                    }
+                    ModuleFileTransactions.FileOps.DEFAULT.move(from, to);
+                }
+
+                @Override
+                public void delete(Path path) throws IOException {
+                    ModuleFileTransactions.FileOps.DEFAULT.delete(path);
+                }
+            }, ModuleFileTransactions.CrashPoints.NONE);
+        }
+
+        @Test
+        @DisplayName("plugins/ on another file system: nothing in the modules folder changes, FAILED, one SEVERE line names both folders")
+        void modulesFolderOnAnotherFileSystem_failsTruthfully() throws IOException {
+            stage(transactions());
+            ModuleFileTransactions start = acrossFileSystems();
+
+            start.applyBeforeLoad();
+
+            assertOnlyTheOldVersionIsInstalled();
+            ModuleFileTransactions.Report report = onlyReport(start);
+            assertThat(report.getLevel()).isEqualTo(Level.SEVERE);
+            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.APPLY_CROSS_FILE_SYSTEM);
+            assertThat(report.getArgs()).containsExactly("Demo", "1.0", "1.1", modules.getAbsolutePath(),
+                    transactions.getAbsolutePath(), "1.0");
+            assertThat(recordText()).contains("\"state\": \"FAILED\"");
+            // No copy fallback: the staged JAR is still only in the records folder.
+            assertThat(treeOf(transactions)).anyMatch(p -> p.endsWith("/staged/demo-1.1.jar"))
+                    .noneMatch(p -> p.endsWith("/backup/demo-1.0.jar"));
+
+            observeAbsent(start);
+            assertOnlyTheOldVersionIsInstalled();
+            ModuleFileTransactions.StageResult again = stage(transactions());
+            assertThat(again.getPreviousFailure()).isNotNull().contains(modules.getAbsolutePath())
+                    .contains(transactions.getAbsolutePath());
         }
 
         @Test
