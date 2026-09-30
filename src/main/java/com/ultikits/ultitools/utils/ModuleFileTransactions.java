@@ -15,8 +15,6 @@ import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -1194,12 +1192,9 @@ public final class ModuleFileTransactions {
         }
     }
 
+    /** The identify-string normalisation every install, update and lookup shares (one implementation). */
     private static String normalize(String identifyString) {
-        if (identifyString == null) {
-            return null;
-        }
-        String normalized = identifyString.trim().toLowerCase(Locale.ROOT);
-        return normalized.isEmpty() ? null : normalized;
+        return PluginInstallUtils.normalizeIdentifyString(identifyString);
     }
 
     private static String describe(Throwable error) {
@@ -1208,39 +1203,17 @@ public final class ModuleFileTransactions {
     }
 
     private static String sha256(String text) {
-        return hex(digest().digest(text.getBytes(StandardCharsets.UTF_8)));
+        return ResourceHashSidecar.sha256(text.getBytes(StandardCharsets.UTF_8));
     }
 
-    /** A file's SHA-256, or {@code null} when it cannot be read. */
+    /** A file's SHA-256 through the framework's one hashing helper, or {@code null} when it cannot be read. */
     static String sha256Of(File file) {
-        MessageDigest digest = digest();
-        try (InputStream in = Files.newInputStream(file.toPath())) {
-            byte[] buffer = new byte[8192];
-            int read;
-            while ((read = in.read(buffer)) != -1) {
-                digest.update(buffer, 0, read);
-            }
-            return hex(digest.digest());
-        } catch (IOException | SecurityException e) {
+        try {
+            return ResourceHashSidecar.sha256(file);
+        } catch (java.io.UncheckedIOException | SecurityException e) {
             LOGGER.log(Level.FINE, "Could not read " + file, e);
             return null;
         }
-    }
-
-    private static MessageDigest digest() {
-        try {
-            return MessageDigest.getInstance("SHA-256");
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 is required by the Java runtime", e);
-        }
-    }
-
-    private static String hex(byte[] bytes) {
-        StringBuilder hex = new StringBuilder();
-        for (byte b : bytes) {
-            hex.append(String.format("%02x", b));
-        }
-        return hex.toString();
     }
 
     private void report(Level level, String key, Object... args) {

@@ -110,7 +110,7 @@ public class PluginInstallUtils {
         customBaseUrl = null;
     }
 
-    private static String normalizeIdentifyString(String idString) {
+    static String normalizeIdentifyString(String idString) {
         if (idString == null) {
             return null;
         }
