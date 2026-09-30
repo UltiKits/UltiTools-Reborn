@@ -152,6 +152,33 @@ class ModuleUpdateStagingTest {
     }
 
     @Test
+    @DisplayName("two module classes from ONE JAR share its plugin.yml identify-string: the update is still refused (Codex round 8)")
+    void jarSharedWithASameIdentityModule_isRefused() throws IOException {
+        // identify-string is read from the archive's plugin.yml, so every module class packaged in
+        // one JAR reports the same one -- the real shared-archive case.
+        UltiToolsPlugin companion = loadedModule("DemoCompanion", "1.0", "demo");
+        ModuleUpdateFixtures.CodeSources sources =
+                new ModuleUpdateFixtures.CodeSources().with(loadedOld, oldJar).with(companion, oldJar);
+        Map<String, String> before = snapshot();
+        List<String> downloads = new ArrayList<>();
+
+        ModuleFileTransactions.StageResult selectedFirst = new ModuleFileTransactions(dataFolder).stageUpdate("demo",
+                java.util.Arrays.asList(loadedOld, companion), sources, catalogue("demo", "1.1"),
+                (link, name, folder) -> downloads.add(name));
+        ModuleFileTransactions.StageResult companionFirst = new ModuleFileTransactions(dataFolder).stageUpdate("demo",
+                java.util.Arrays.asList(companion, loadedOld), sources, catalogue("demo", "1.1"),
+                (link, name, folder) -> downloads.add(name));
+
+        assertThat(selectedFirst.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
+        assertThat(selectedFirst.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_SHARED_JAR);
+        assertThat(selectedFirst.getReasonArgs()).containsExactly(oldJar.getAbsolutePath(), "DemoCompanion");
+        assertThat(companionFirst.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
+        assertThat(companionFirst.getReasonArgs()).containsExactly(oldJar.getAbsolutePath(), "Demo");
+        assertThat(downloads).isEmpty();
+        assertThat(snapshot()).isEqualTo(before);
+    }
+
+    @Test
     @DisplayName("an old JAR that cannot be read (so its content cannot be recorded) is refused before anything is downloaded")
     void unreadableOldJar_isRefused() throws IOException {
         org.junit.jupiter.api.Assumptions.assumeTrue(
