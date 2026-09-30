@@ -485,8 +485,9 @@ This section governs the third kind.
   failure thrown by its unload hook was reported as the **incoming** version failing to load and
   aborted that version's activation. As of 6.3.0 the older copy goes through `unregister` — tasks
   cancelled, container closed, registrations released, delisted — and a failure of its unload hook
-  is logged against the older copy's name and version while the incoming copy goes on loading; a
-  `VirtualMachineError` still aborts the registration. Because both copies share a module name,
+  is logged against the older copy's name and version while the incoming copy goes on loading. As in
+  `PluginManager#close()`, every `Exception` or `Error` the older copy throws counts as its own
+  failure. Because both copies share a module name,
   `TabCompletionManager`, `EventBus` and `PanelResponderRegistry` now also record the registering
   module instance, and `unregister` releases by instance first; a registration filed under the
   module's name only is released by name as before, except while another loaded copy shares that
@@ -500,14 +501,16 @@ This section governs the third kind.
 - `/ul reload` and a module's reload reporting what actually happened (#509, #529, #502). Before
   6.3.0 `reloadSelf()` logged `Module '<name>' reloaded.` before the module's `onReload()` ran and did
   not guard it, so a throwing hook printed the success line followed by a stack trace, `/ul reload
-  <name>` sent no reply at all, and a bare `/ul reload` stopped at that module, leaving every module
-  after it unreloaded. As of 6.3.0:
+  <name>` answered only with the generic command-error line, and a bare `/ul reload` stopped at that
+  module, leaving every module after it unreloaded. As of 6.3.0:
   - the per-module line is logged only after the hook returned; when any reload step or the hook
     throws, one SEVERE line names the module and the cause instead, and the failure is rethrown
     unchanged to the caller;
-  - a bare `/ul reload` reloads every module in isolation — a `VirtualMachineError` still stops it —
-    and ends with a summary naming the modules that failed instead of `All plugins reloaded.`; the
-    summary is also sent to the command's sender, which previously got no reply;
+  - a bare `/ul reload` reloads every module in isolation — as in `PluginManager#close()`, every
+    `Exception` or `Error` one module throws is that module's failure — and ends with a summary
+    naming the modules that failed instead of `All plugins reloaded.`; the summary is also sent to
+    the command's sender, which previously got no reply on success and the generic command-error
+    line on failure;
   - `/ul reload <name>` replies failure, naming the module and the cause, when the reload threw;
   - a module can report a partial reload without throwing: the new public final class
     `ReloadReport`, the new hook `protected void onReload(ReloadReport report)` — whose default body

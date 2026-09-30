@@ -1744,6 +1744,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      *
      * @return the report of this reload, never {@code null}; empty when every part reloaded
      * @throws RuntimeException whatever a reload step or the module's hook threw, after it was logged
+     *                          (a checked exception the hook threw without declaring it propagates
+     *                          unchanged in the same way)
      * @throws Error            whatever a reload step or the module's hook threw, after it was logged
      * @since 6.3.0
      */
@@ -1762,7 +1764,9 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         ReloadReport report = new ReloadReport();
         try {
             runReloadSteps(report);
-        } catch (RuntimeException | Error e) {
+        } catch (Exception | Error e) {
+            // Exception, not RuntimeException: a hook can throw a checked exception it does not
+            // declare (Lombok @SneakyThrows); it gets the failure line too. Rethrown unchanged.
             LOGGER.log(Level.SEVERE, String.format(UltiTools.getInstance().i18n(RELOAD_FAILED_LOG_MESSAGE_KEY),
                     getPluginName(), describeFailure(e)), e);
             throw e;

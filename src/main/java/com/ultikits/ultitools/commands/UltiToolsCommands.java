@@ -80,14 +80,13 @@ public class UltiToolsCommands extends BaseCommandExecutor {
         for (UltiToolsPlugin plugin : pluginList) {
             if (plugin.getPluginName().equalsIgnoreCase(name)) {
                 // #509: a module whose reload threw has logged the failure with its stack trace;
-                // the sender, who may have no console, is told it failed rather than getting no
-                // reply at all. A VirtualMachineError is not the module's failure to report.
+                // the sender, who may have no console, is told the module failed to reload and why,
+                // rather than the generic command-error line. Anything the module throws counts,
+                // an Error or an undeclared checked exception included, as in PluginManager#close().
                 ReloadReport report;
                 try {
                     report = plugin.reloadWithReport();
-                } catch (VirtualMachineError fatal) {
-                    throw fatal;
-                } catch (RuntimeException | Error e) {
+                } catch (Exception | Error e) {
                     sender.sendMessage(String.format(UltiTools.getInstance().i18n(RELOAD_FAILED_REPLY_KEY),
                             plugin.getPluginName(), describeFailure(e)));
                     return;
