@@ -19,6 +19,10 @@ import java.util.Set;
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Config binder serializes private fields to YAML -- see 08-GATE05-TRIAGE.md
 public class DefaultConfigParser extends ConfigParser<Object> {
 
+    /** The configuration binder's logger, where every #553 refusal is reported. */
+    private static final java.util.logging.Logger REFUSALS =
+            java.util.logging.Logger.getLogger("com.ultikits.ultitools.abstracts.AbstractConfigEntity");
+
     /**
      * Turns a raw YAML value into plain Java values: a section becomes a {@link LinkedHashMap}
      * (nested sections recursively), a sequence a {@link List}, and a scalar is returned as it is.
@@ -90,6 +94,15 @@ public class DefaultConfigParser extends ConfigParser<Object> {
                 Object key = entry.getKey();
                 // An enum key by its name, the form the binder reads back (Enum#toString may differ).
                 String name = key instanceof Enum ? ((Enum<?>) key).name() : String.valueOf(key);
+                if (name.indexOf('.') >= 0) {
+                    // #553: the configuration file reads '.' as its path separator, so the key cannot be
+                    // stored as one key. The configuration entity leaves such keys out of the maps it
+                    // writes, with the file and entry named; this catches one nested inside an object.
+                    REFUSALS.warning("Map key '" + name + "' contains '.', which the configuration file reads"
+                            + " as a path separator, so it cannot be stored as one key; the entry was not written"
+                            + " - rename the key (for example with '-' or '_')");
+                    continue;
+                }
                 mapSection.set(name, fileForm(entry.getValue()));
             }
             return mapSection;

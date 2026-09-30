@@ -368,6 +368,9 @@ final class ConfigValueBinder {
         } else {
             decimal = ((Number) value).doubleValue();
         }
+        if (Double.isNaN(decimal)) {
+            return Float.NaN; // NaN never equals itself, but the framework writes a float NaN as .NaN
+        }
         float nearest = (float) decimal;
         return Double.parseDouble(Float.toString(nearest)) == decimal ? (Object) nearest : UNBOUND;
     }

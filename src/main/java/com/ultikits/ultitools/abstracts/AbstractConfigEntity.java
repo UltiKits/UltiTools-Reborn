@@ -228,7 +228,9 @@ public abstract class AbstractConfigEntity {
      */
     public void save() throws IOException {
         synchronized (this) {
-            applyFieldsTo(config, true);
+            List<String> refused = new ArrayList<>();
+            applyFieldsTo(config, refused);
+            refused.forEach(this::warnBinding);
             config.save(new File(ultiToolsPlugin.getConfigFolder() + File.separator + configFilePath));
             // #510: an explicit save is a caller's deliberate act and always writes, so the file now
             // holds what the framework just wrote - whatever state it was in before.
@@ -244,11 +246,11 @@ public abstract class AbstractConfigEntity {
      * exactly what {@code save()} would write (#510).
      *
      * @param target the configuration to write the serialized field values into
-     * @param write  whether this is a real write, whose refused dotted map keys are reported (#553);
-     *               the shutdown comparison and the snapshot probe refuse the same keys silently
+     * @param refused receives one message per dotted map key left out (#553), or {@code null} to leave
+     *                them out silently (the snapshot probe)
      */
     @SuppressWarnings("unchecked")
-    private void applyFieldsTo(YamlConfiguration target, boolean write) {
+    private void applyFieldsTo(YamlConfiguration target, List<String> refused) {
         for (Field field : ReflectionUtil.getFields(this.getClass())) {
             if (!field.isAnnotationPresent(ConfigEntry.class)) {
                 continue;
@@ -263,7 +265,7 @@ public abstract class AbstractConfigEntity {
             if (fieldValue == null) {
                 continue;
             }
-            target.set(path, serializeForFile(annotation, withoutDottedKeys(annotation, path, fieldValue, write)));
+            target.set(path, serializeForFile(annotation, withoutDottedKeys(annotation, path, fieldValue, refused)));
         }
         // #542: every framework write carries the one-token comments in the server's language, and
         // the shutdown comparison renders the same text.
@@ -307,13 +309,13 @@ public abstract class AbstractConfigEntity {
      * Renders the exact text {@link #save()} would write right now, without writing it and without
      * touching the live {@link #config} (which {@link #toJsonObject()} still reports to the panel).
      * The live configuration is copied through its own YAML text - comments included - and the
-     * fields are applied to the copy through {@link #applyFieldsTo(YamlConfiguration, boolean)}, the same
+     * fields are applied to the copy through {@link #applyFieldsTo(YamlConfiguration, List)}, the same
      * path {@code save()} uses.
      *
      * @return the rendered text, or {@code null} if the live configuration's own text cannot be
      *         parsed back
      */
-    private String renderSaveText() {
+    private String renderSaveText(List<String> refused) {
         YamlConfiguration copy = new YamlConfiguration();
         copy.options().parseComments(true);
         try {
@@ -321,7 +323,7 @@ public abstract class AbstractConfigEntity {
         } catch (InvalidConfigurationException e) {
             return null;
         }
-        applyFieldsTo(copy, false);
+        applyFieldsTo(copy, refused);
         return copy.saveToString();
     }
 
@@ -331,7 +333,7 @@ public abstract class AbstractConfigEntity {
      * construction counts in this class's own javadoc) loads every present {@code @ConfigEntry} key
      * through its parser exactly as {@link #init(UltiToolsPlugin)} does
      * (absent keys keep that instance's declared defaults), and the instance's fields are applied back
-     * onto the parsed text through {@link #applyFieldsTo(YamlConfiguration, boolean)}. Two passes make the
+     * onto the parsed text through {@link #applyFieldsTo(YamlConfiguration, List)}. Two passes make the
      * result stable, because a default filled in for an absent key by the first pass is re-read
      * through the parser by the second.
      * <p>
@@ -434,7 +436,7 @@ public abstract class AbstractConfigEntity {
                 }
             }
         }
-        probe.applyFieldsTo(parsed, false);
+        probe.applyFieldsTo(parsed, null);
         // #542: a one-key entry's comment belongs to the framework and is rewritten on every write, so
         // both sides of the comparison carry the resolved text - a comment-only difference on disk
         // (an operator's edit, a reload before the rewrite) is never a change the shutdown save writes.
@@ -512,7 +514,14 @@ public abstract class AbstractConfigEntity {
                 return true;
             }
             try {
-                return !snapshot.equals(canonicalize(renderSaveText()));
+                List<String> refused = new ArrayList<>();
+                boolean modified = !snapshot.equals(canonicalize(renderSaveText(refused)));
+                if (!modified) {
+                    // #553: a dotted map key held only in memory is what the shutdown save would leave out,
+                    // so it is not saved at all - say so here, where it is decided; a save reports it itself.
+                    refused.forEach(this::warnBinding);
+                }
+                return modified;
             } catch (RuntimeException e) {
                 LOGGER.log(Level.WARNING, "Cannot compare the state of " + configFilePath
                         + " with its snapshot; treating it as changed", e);
@@ -851,7 +860,15 @@ public abstract class AbstractConfigEntity {
      */
     private Object fileFormOfDefault(ConfigEntry annotation, String path, Object defaultValue) {
         if (defaultValue instanceof Map) {
-            return withoutDottedKeys(annotation, path, defaultValue, true);
+            List<String> refused = new ArrayList<>();
+            Object kept = withoutDottedKeys(annotation, path, defaultValue, refused);
+            refused.forEach(this::warnBinding);
+            if (!refusesDottedKeys(annotation)) {
+                return kept; // a module's own parser: written as in 6.2
+            }
+            // The parser's form (an enum by name, never a Java-class tag, #523), put in as plain data
+            // rather than a section of another configuration, so the paths a module reads stay as in 6.2.
+            return plainData(serializeForFile(annotation, kept));
         }
         if (defaultValue instanceof java.util.Collection || defaultValue instanceof Enum) {
             return serializeForFile(annotation, defaultValue);
@@ -886,36 +903,44 @@ public abstract class AbstractConfigEntity {
      * key - Bukkit's loader reads {@code my.rule} as {@code my} -> {@code rule}, and quoting the key
      * does not help. Every framework write therefore leaves such a key out of a map it writes - at the
      * map's own level and in maps nested as its values, which become sections too; keys inside a list
-     * element are plain data and are kept - and, when {@code report} is set, logs one WARNING per key
+     * element are plain data and are kept - and adds to {@code refused}, if given, one message per key
      * naming the file, the entry and the key and asking for a rename. The in-memory value is not
-     * changed. Applies to the framework's own writes of a map: with the built-in parsers
-     * ({@code DefaultConfigParser}, {@code StringHashMapParser}), and to a panel write whatever the
-     * parser; a module's own parser writes as it always did.
+     * changed. Applies to the framework's own writes of a map through the built-in parsers
+     * ({@code DefaultConfigParser}, {@code StringHashMapParser}); a module's own parser writes as it
+     * always did.
      *
-     * @param annotation the entry's {@code @ConfigEntry}, or {@code null} for a panel write
+     * @param annotation the entry's {@code @ConfigEntry}
      * @param path       the entry's path
      * @param value      the value about to be written
-     * @param report     whether a refused key is logged
+     * @param refused    receives one message per refused key, or {@code null}
      * @return {@code value} unchanged, or a copy of the map without its dotted keys
      */
-    private Object withoutDottedKeys(ConfigEntry annotation, String path, Object value, boolean report) {
-        if (!(value instanceof Map)) {
+    private Object withoutDottedKeys(ConfigEntry annotation, String path, Object value, List<String> refused) {
+        if (!(value instanceof Map) || !refusesDottedKeys(annotation)) {
             return value;
         }
-        if (annotation != null && annotation.parser() != DefaultConfigParser.class
-                && annotation.parser() != com.ultikits.ultitools.interfaces.impl.pasers.StringHashMapParser.class) {
-            return value;
-        }
-        return mapWithoutDottedKeys((Map<?, ?>) value, path, report);
+        return mapWithoutDottedKeys((Map<?, ?>) value, path, refused);
     }
 
-    private Map<Object, Object> mapWithoutDottedKeys(Map<?, ?> map, String path, boolean report) {
+    /**
+     * Whether the framework writes this entry's map itself, through a built-in parser whose map form
+     * splits a dotted key (#553). A module's own parser decides its keys itself and is left alone -
+     * on a save, a first-boot default, a panel write and the load warning alike.
+     */
+    private static boolean refusesDottedKeys(ConfigEntry annotation) {
+        return annotation.parser() == DefaultConfigParser.class
+                || annotation.parser() == com.ultikits.ultitools.interfaces.impl.pasers.StringHashMapParser.class;
+    }
+
+    private Map<Object, Object> mapWithoutDottedKeys(Map<?, ?> map, String path, List<String> refused) {
         Map<Object, Object> kept = new java.util.LinkedHashMap<>();
         for (Map.Entry<?, ?> entry : map.entrySet()) {
-            String key = String.valueOf(entry.getKey());
+            Object rawKey = entry.getKey();
+            // The key as it is written: an enum key by its name (DefaultConfigParser), whatever toString says.
+            String key = rawKey instanceof Enum ? ((Enum<?>) rawKey).name() : String.valueOf(rawKey);
             if (key.indexOf('.') >= 0) {
-                if (report) {
-                    warnBinding(String.format("Config file '%s': map key '%s' under key '%s' contains '.', which the"
+                if (refused != null) {
+                    refused.add(String.format("Config file '%s': map key '%s' under key '%s' contains '.', which the"
                             + " configuration file reads as a path separator, so it cannot be stored as one key; the"
                             + " entry was not written - rename the key (for example with '-' or '_')",
                             configFilePath, key, path));
@@ -923,10 +948,36 @@ public abstract class AbstractConfigEntity {
                 continue;
             }
             Object child = entry.getValue();
-            kept.put(entry.getKey(), child instanceof Map
-                    ? mapWithoutDottedKeys((Map<?, ?>) child, path + "." + key, report) : child);
+            kept.put(rawKey, child instanceof Map
+                    ? mapWithoutDottedKeys((Map<?, ?>) child, path + "." + key, refused) : child);
         }
         return kept;
+    }
+
+    /**
+     * The value a panel write puts into the file for a map entry: without dotted keys, each named in a
+     * warning (#553), for a built-in parser's map; anything else unchanged, as before.
+     */
+    private Object panelFormOf(ConfigEntry annotation, String path, Object value) {
+        List<String> refused = new ArrayList<>();
+        Object kept = withoutDottedKeys(annotation, path, value, refused);
+        refused.forEach(this::warnBinding);
+        return kept;
+    }
+
+    /**
+     * @param value a value, possibly a section of another configuration
+     * @return the value, with every section replaced by an insertion-ordered map of its plain values
+     */
+    private static Object plainData(Object value) {
+        if (!(value instanceof ConfigurationSection)) {
+            return value;
+        }
+        Map<String, Object> map = new java.util.LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : ((ConfigurationSection) value).getValues(false).entrySet()) {
+            map.put(entry.getKey(), plainData(entry.getValue()));
+        }
+        return map;
     }
 
     /**
@@ -941,10 +992,10 @@ public abstract class AbstractConfigEntity {
             return;
         }
         for (Field field : configEntryFields()) {
-            if (!Map.class.isAssignableFrom(field.getType())) {
+            ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
+            if (!Map.class.isAssignableFrom(field.getType()) || !refusesDottedKeys(annotation)) {
                 continue;
             }
-            ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
             String path = annotation.path().isEmpty() ? field.getName() : annotation.path();
             Object section;
             try {
@@ -1261,7 +1312,7 @@ public abstract class AbstractConfigEntity {
                 // Gson value as it is would be a Java-class-tagged enum or a tagged set, and the next
                 // start would refuse the whole file. Other values are written as before.
                 config.set(path, value instanceof Enum || value instanceof java.util.Collection
-                        ? serializeForFile(annotation, value) : withoutDottedKeys(null, path, value, true));
+                        ? serializeForFile(annotation, value) : panelFormOf(annotation, path, value));
             }
             applyTokenComments(config); // #542: a panel write carries the resolved comments too
             config.save(ultiToolsPlugin.getConfigFile(configFilePath));
