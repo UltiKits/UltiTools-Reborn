@@ -52,6 +52,7 @@ import com.ultikits.ultitools.manager.DependenceManagers;
 import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.FileOperationManager;
 import com.ultikits.ultitools.manager.ListenerManager;
+import com.ultikits.ultitools.manager.EarlyLogCapture;
 import com.ultikits.ultitools.manager.LogStreamManager;
 import com.ultikits.ultitools.manager.PlayerEventManager;
 import com.ultikits.ultitools.manager.PluginManager;
@@ -239,6 +240,9 @@ public final class UltiTools extends JavaPlugin implements Localized {
     public void onLoad() {
         saveDefaultConfig();
         ultiTools = this;
+        // #487: keep what the server logs from here on until the panel's log stream starts, so the
+        // early boot reaches the panel too; released if the stream does not start in time.
+        EarlyLogCapture.start(getConfig().getStringList("ultipanel.logging.excluded-loggers"));
         // Plugin classloader initialization
         URL serverJar = getServerJar();
         try {
@@ -282,6 +286,21 @@ public final class UltiTools extends JavaPlugin implements Localized {
         registerCommands();
         Bukkit.getServer().getPluginManager().registerEvents(new PlayerJoinListener(), this);
         scheduleStartupMessages(loginSuccess);
+        releaseEarlyLogCapture(loginSuccess);
+    }
+
+    /**
+     * Releases the early log capture (#487) when the panel's log stream cannot start soon: without
+     * a cloud login no connection opens until an operator logs in, which may never happen.
+     * Otherwise it is released once its time is up, even on a server that logs nothing more.
+     */
+    private void releaseEarlyLogCapture(boolean loginSuccess) {
+        if (!loginSuccess) {
+            EarlyLogCapture.release();
+            return;
+        }
+        long ticks = EarlyLogCapture.RELEASE_AFTER_MS / 50L + 20L;
+        Bukkit.getScheduler().runTaskLater(this, EarlyLogCapture::releaseIfExpired, ticks);
     }
 
     private boolean initDependencies() {
@@ -523,6 +542,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
     @Override
     public void onDisable() {
         // Plugin shutdown logic
+        EarlyLogCapture.release();
 
         if (eventBus != null) {
             eventBus.shutdown();

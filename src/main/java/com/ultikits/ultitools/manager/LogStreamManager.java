@@ -127,9 +127,18 @@ public class LogStreamManager implements Listener {
         this.systemLogHandler = new SystemLogHandler(logTransmitter);
         this.systemLogHandler.loadConfiguration();
 
-        // Add the system log handler to the root Logger
+        // Add the system log handler to the root Logger -- after replaying, oldest first, what
+        // the early capture attached in UltiTools#onLoad() kept, so the lines logged before the
+        // panel connection opened reach the stream ahead of any live line (#487). On a reconnect
+        // there is no capture any more and this only attaches the handler.
         Logger rootLogger = Logger.getLogger("");
-        rootLogger.addHandler(systemLogHandler);
+        SystemLogHandler liveHandler = systemLogHandler;
+        int notKept = EarlyLogCapture.drainInto(liveHandler, () -> rootLogger.addHandler(liveHandler));
+        if (notKept > 0) {
+            UltiTools.getInstance().getLogger().info(String.format(
+                    "[UltiPanel] %d start-up log record(s) were not kept for the panel: the start-up buffer "
+                            + "holds at most %d records.", notKept, EarlyLogCapture.MAX_RECORDS));
+        }
 
         // D-20 (maintainer decision, 2026-09-15): this used to call startLogStream("auto",
         // "info") here to auto-subscribe a permanent sentinel client. That call did nothing real

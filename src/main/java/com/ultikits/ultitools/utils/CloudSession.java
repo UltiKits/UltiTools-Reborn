@@ -18,6 +18,7 @@ import com.google.gson.JsonParser;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.entities.TokenEntity;
+import com.ultikits.ultitools.manager.EarlyLogCapture;
 import com.ultikits.ultitools.websocket.ExponentialBackoffStrategy;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
@@ -1012,6 +1013,8 @@ final class CloudSession {
                         UltiTools.getInstance().getLogStreamManager().initialize(webSocketClient);
                     }
                 } else {
+                    // #487: the stream will not start, so the early capture must not keep waiting.
+                    EarlyLogCapture.release();
                     PluginInitiationUtils.logSkippedCapability(Capability.LOGS);
                 }
             }
