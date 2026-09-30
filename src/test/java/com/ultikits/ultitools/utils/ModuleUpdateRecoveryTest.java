@@ -818,6 +818,70 @@ class ModuleUpdateRecoveryTest {
     }
 
     @Nested
+    @DisplayName("an unchecked exception in a transaction already past its apply (round 4 deviation, orchestrator)")
+    class UncheckedExceptionPastTheApply {
+
+        @Test
+        @DisplayName("a resumed ROLLING_BACK record whose existence check throws keeps its state, one SEVERE line, the next transaction applies")
+        void resumedRollbackThatThrows_keepsItsState() throws IOException {
+            stage(transactions());
+            ModuleFileTransactions first = crashingAt(ModuleFileTransactions.CrashPoints.AFTER_DECISION_RECORDED);
+            first.applyBeforeLoad();
+            catchThrowable(() -> observeAbsent(first));
+            assertThat(recordText()).contains("\"state\": \"ROLLING_BACK\"");
+            File demoRecord = transactions.listFiles((dir, name) -> name.endsWith(".json"))[0];
+            File otherOldJar = moduleJar(new File(modules, "other-1.0.jar"), "Other", "1.0", "other");
+            UltiToolsPlugin otherLoaded = loadedModule("Other", "1.0", "other");
+            transactions().stageUpdate("other", Collections.singletonList(otherLoaded),
+                    new ModuleUpdateFixtures.CodeSources().with(otherLoaded, otherOldJar), catalogue("other", "1.1"),
+                    downloading("Other", "1.1", "other"));
+            ModuleFileTransactions second = new ModuleFileTransactions(modules, transactions,
+                    new ModuleFileTransactions.FileOps() {
+                        @Override
+                        public void move(Path from, Path to) throws IOException {
+                            ModuleFileTransactions.FileOps.DEFAULT.move(from, to);
+                        }
+
+                        @Override
+                        public void delete(Path path) throws IOException {
+                            ModuleFileTransactions.FileOps.DEFAULT.delete(path);
+                        }
+
+                        @Override
+                        public boolean exists(Path path) {
+                            if (path.getFileName().toString().startsWith("demo")) {
+                                throw new SecurityException("injected: access denied");
+                            }
+                            return ModuleFileTransactions.FileOps.DEFAULT.exists(path);
+                        }
+                    }, ModuleFileTransactions.CrashPoints.NONE);
+
+            Throwable thrown = catchThrowable(second::applyBeforeLoad);
+
+            assertThat(thrown).isNull();
+            String demoText = new String(Files.readAllBytes(demoRecord.toPath()), StandardCharsets.UTF_8);
+            assertThat(demoText).contains("\"state\": \"ROLLING_BACK\"");
+            assertThat(namesIn(modules)).containsExactlyInAnyOrder("demo-1.1.jar", "other-1.1.jar");
+            List<ModuleFileTransactions.Report> severe = new java.util.ArrayList<>();
+            for (ModuleFileTransactions.Report report : second.pendingReports()) {
+                if (report.getLevel() == Level.SEVERE) {
+                    severe.add(report);
+                }
+            }
+            assertThat(severe).hasSize(1);
+            assertThat(severe.get(0).getKey()).isEqualTo(ModuleFileTransactions.Keys.TRANSACTION_ERROR);
+            assertThat(severe.get(0).getArgs()[0]).isEqualTo(demoRecord.getAbsolutePath());
+            assertThat(String.valueOf(severe.get(0).getArgs()[1])).contains("injected");
+
+            // The next start, with the file access back, finishes the rollback the record describes.
+            ModuleFileTransactions third = transactions();
+            third.applyBeforeLoad();
+            assertThat(namesIn(modules)).contains("demo-1.0.jar").doesNotContain("demo-1.1.jar");
+            assertThat(Files.readAllBytes(oldJar.toPath())).isEqualTo(oldBytes);
+        }
+    }
+
+    @Nested
     @DisplayName("an unchecked exception in one transaction's apply (round 4, orchestrator decision)")
     class UncheckedExceptionInOneTransaction {
 
