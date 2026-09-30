@@ -299,6 +299,74 @@ class ModuleUpdateStagingTest {
         }
     }
 
+    /**
+     * Stages Demo's update with a download that waits, runs {@code cancel} while it waits, then lets
+     * it finish, and returns what staging replied.
+     */
+    private ModuleFileTransactions.StageResult cancelledWhileDownloading(java.util.function.Supplier<List<String>> cancel)
+            throws Exception {
+        java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            java.util.concurrent.Future<ModuleFileTransactions.StageResult> staging = pool.submit(() ->
+                    stage((link, name, folder) -> {
+                        entered.countDown();
+                        try {
+                            release.await(10, TimeUnit.SECONDS);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            throw new IOException(e);
+                        }
+                        moduleJar(new File(folder, name), "Demo", "1.1", "demo");
+                    }));
+            assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(java.util.concurrent.CompletableFuture.supplyAsync(cancel).get(2, TimeUnit.SECONDS)).isEmpty();
+            release.countDown();
+            return staging.get(10, TimeUnit.SECONDS);
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("an uninstall by name during the download cancels it: no record is written, nothing applies (Codex round 9)")
+    void uninstallByNameDuringDownload_cancelsIt() throws Exception {
+        byte[] before = Files.readAllBytes(oldJar.toPath());
+
+        ModuleFileTransactions.StageResult result = cancelledWhileDownloading(
+                () -> new ModuleFileTransactions(dataFolder).cancelStagedUpdates("Demo"));
+
+        assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
+        assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_CANCELLED_WHILE_DOWNLOADING);
+        assertThat(treeOf(transactions)).isEmpty();
+        ModuleFileTransactions start = new ModuleFileTransactions(dataFolder);
+        start.applyBeforeLoad();
+        assertThat(namesIn(modules)).containsExactly("demo-1.0.jar");
+        assertThat(Files.readAllBytes(oldJar.toPath())).isEqualTo(before);
+    }
+
+    @Test
+    @DisplayName("an uninstall by another name that removed the module's JAR during the download cancels it too")
+    void uninstallByJarDuringDownload_cancelsIt() throws Exception {
+        ModuleFileTransactions.StageResult result = cancelledWhileDownloading(
+                () -> new ModuleFileTransactions(dataFolder).cancelStagedUpdates("demo-module",
+                        Collections.singletonList(oldJar.getName())));
+
+        assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_CANCELLED_WHILE_DOWNLOADING);
+        assertThat(treeOf(transactions)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a cancellation for another module during the download leaves it staged, and leaves no marker behind")
+    void unrelatedCancellationDuringDownload_leavesItStaged() throws Exception {
+        ModuleFileTransactions.StageResult result = cancelledWhileDownloading(
+                () -> new ModuleFileTransactions(dataFolder).cancelStagedUpdates("Other"));
+
+        assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.STAGED);
+    }
+
     @Test
     @DisplayName("an uninstall cancels a staged update: its record and staged JAR go, the modules folder is untouched")
     void cancellingAStagedUpdate_removesOnlyTheTransaction() throws IOException {
