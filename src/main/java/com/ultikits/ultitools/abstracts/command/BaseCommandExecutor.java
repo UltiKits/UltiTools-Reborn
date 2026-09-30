@@ -7,6 +7,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 import java.util.logging.Level;
@@ -388,19 +389,21 @@ public abstract class BaseCommandExecutor implements TabExecutor {
                                     AtomicBoolean reported) {
         try {
             // T-02-REP-1/T-02-EOP-4 (02-08): the current-user context for
-            // AuditableDataEntity's audit columns is set and cleared HERE, inside the
+            // AuditableDataEntity's audit columns is set and restored HERE, inside the
             // runnable that actually invokes the matched method -- not around the
-            // runTask()/runTaskAsynchronously() call below that schedules this runnable.
-            // Sync command bodies are deferred one tick and @AsyncCommand/@RunAsync bodies
-            // run on another thread entirely; a ThreadLocal write made on the scheduling
-            // thread would be invisible on whichever thread actually executes this run()
-            // (T-02-REP-4). clearCurrentUser() -- not setCurrentUser(null) -- runs in a
-            // finally around the whole body so a pooled Bukkit worker thread never carries
-            // one command's user into the next, whether this command's sender was a Player
-            // or not, and whether the handler returned normally or threw.
-            if (context.isPlayer()) {
-                AuditableDataEntity.setCurrentUser(context.getPlayer().getUniqueId());
-            }
+            // runTask()/runTaskAsynchronously() call that may schedule this runnable. An
+            // off-primary-thread sync body and every @AsyncCommand/@RunAsync body run on
+            // another thread; a ThreadLocal write made on the scheduling thread would be
+            // invisible on whichever thread actually executes this run() (T-02-REP-4).
+            // #541: on the primary thread a body runs at dispatch, so a body that dispatches
+            // another command runs the nested body right here, on the same thread, before its
+            // own has finished. The user current before this body is therefore saved and put
+            // back in the finally -- the nested body sees its own sender (none for a sender
+            // that is not a player), the outer body sees its own again afterwards, and a thread
+            // that carried no user before the outermost command (a pooled worker included)
+            // carries none after it, whether the handler returned normally or threw.
+            final UUID previousUser = AuditableDataEntity.swapCurrentUser(
+                    context.isPlayer() ? context.getPlayer().getUniqueId() : null);
             try {
                 boolean commandSucceeded = false;
                 try {
@@ -421,7 +424,7 @@ public abstract class BaseCommandExecutor implements TabExecutor {
                     }
                 }
             } finally {
-                AuditableDataEntity.clearCurrentUser();
+                AuditableDataEntity.swapCurrentUser(previousUser);
             }
         } finally {
             // WIRE-12: claim the flag so a watcher that fires later -- a stale delayed
