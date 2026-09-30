@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -33,13 +34,20 @@ import com.ultikits.ultitools.UltiTools;
 @DisplayName("Audit and scan diagnostics reach the plugin logger at their true level (#557)")
 class AuditReachesPluginLoggerTest {
 
+    /** A named logger, as Paper's plugin logger is named after the plugin; an anonymous one has no name. */
+    private static final String PLUGIN_LOGGER_NAME = "UltiTools-AuditReachesPluginLoggerTest";
+
     private MockedStatic<UltiTools> ultiToolsMock;
     private final List<LogRecord> atPluginLogger = Collections.synchronizedList(new ArrayList<>());
+    private Logger pluginLogger;
 
     @BeforeEach
     void setUp() {
         atPluginLogger.clear();
-        Logger pluginLogger = Logger.getAnonymousLogger();
+        pluginLogger = Logger.getLogger(PLUGIN_LOGGER_NAME);
+        for (Handler stale : pluginLogger.getHandlers()) {
+            pluginLogger.removeHandler(stale);
+        }
         pluginLogger.setUseParentHandlers(false);
         pluginLogger.setLevel(Level.ALL);
         pluginLogger.addHandler(new Handler() {
@@ -88,6 +96,9 @@ class AuditReachesPluginLoggerTest {
     @AfterEach
     void tearDown() {
         ultiToolsMock.close();
+        for (Handler handler : pluginLogger.getHandlers()) {
+            pluginLogger.removeHandler(handler);
+        }
     }
 
     private List<LogRecord> infoOrAbove() {
@@ -134,5 +145,50 @@ class AuditReachesPluginLoggerTest {
         assertThat(severe.get(0).getThrown())
                 .as("a SEVERE record carrying a Throwable would be auto-reported by the log handler")
                 .isNull();
+    }
+
+    @Test
+    @DisplayName("a forwarded line carries the plugin logger's name, so Paper prints [UltiTools], not [null]")
+    void forwardedLineCarriesThePluginLoggerName() {
+        // Logger#log(LogRecord) does not stamp a logger name; Paper's console takes the bracketed prefix
+        // from it, so a copy without one is printed as "[null] Module ...".
+        ClassloadFilterAudit.record("named-module", "com.example.thirdparty.Foo");
+        ClassloadFilterAudit.emitSummary("named-module");
+        ModuleScanDiagnostics.recordSkippedClass("named-module", "com.example.Gone",
+                new NoClassDefFoundError("com/example/Missing"));
+        ModuleScanDiagnostics.emitSummary("named-module");
+
+        List<LogRecord> info = infoOrAbove();
+        assertThat(info).hasSize(2);
+        assertThat(info).extracting(LogRecord::getLoggerName).containsOnly(PLUGIN_LOGGER_NAME);
+    }
+
+    @Test
+    @DisplayName("a handler of the plugin logger that throws does not break the scan that emits the line")
+    void throwingPluginLoggerHandlerDoesNotBreakTheCaller() {
+        pluginLogger.addHandler(new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                throw new IllegalStateException("a broken downstream handler");
+            }
+
+            @Override
+            public void flush() {
+                // nothing buffered
+            }
+
+            @Override
+            public void close() {
+                // nothing to release
+            }
+        });
+        ClassloadFilterAudit.record("broken-handler-module", "com.example.thirdparty.Foo");
+
+        assertThatCode(() -> ClassloadFilterAudit.emitSummary("broken-handler-module"))
+                .doesNotThrowAnyException();
+        ModuleScanDiagnostics.recordSkippedClass("broken-handler-module", "com.example.Gone",
+                new NoClassDefFoundError("com/example/Missing"));
+        assertThatCode(() -> ModuleScanDiagnostics.emitSummary("broken-handler-module"))
+                .doesNotThrowAnyException();
     }
 }
