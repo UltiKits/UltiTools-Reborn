@@ -164,6 +164,30 @@ class ModuleUpdateStagingTest {
     }
 
     @Test
+    @DisplayName("an uninstall's cancellation over an unlistable records folder cancels nothing and does not throw")
+    void cancellationOverUnlistableFolder_cancelsNothing() throws IOException {
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                Files.getFileStore(serverRoot.toPath()).supportsFileAttributeView("posix"));
+        stage(downloading("Demo", "1.1", "demo"));
+        java.util.Set<java.nio.file.attribute.PosixFilePermission> original =
+                Files.getPosixFilePermissions(transactions.toPath());
+        Files.setPosixFilePermissions(transactions.toPath(),
+                java.nio.file.attribute.PosixFilePermissions.fromString("-wx------"));
+        List<String> cancelled;
+        try {
+            org.junit.jupiter.api.Assumptions.assumeTrue(transactions.list() == null,
+                    "running as a user that ignores permissions");
+
+            cancelled = new ModuleFileTransactions(dataFolder).cancelStagedUpdates("Demo");
+        } finally {
+            Files.setPosixFilePermissions(transactions.toPath(), original);
+        }
+
+        assertThat(cancelled).isEmpty();
+        assertThat(treeOf(transactions)).anyMatch(p -> p.endsWith(".json"));
+    }
+
+    @Test
     @DisplayName("a second update of a module with a staged update names the staged version and changes nothing")
     void secondUpdateWhilePending_changesNothing() throws IOException {
         stage(downloading("Demo", "1.1", "demo"));

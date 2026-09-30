@@ -381,6 +381,65 @@ class ModuleUpdateRecoveryTest {
         }
 
         @Test
+        @DisplayName("a records folder that exists but cannot be listed is reported SEVERE, not treated as empty (Codex P2, #561)")
+        void unlistableRecordsFolder_isReported() throws IOException {
+            Assumptions.assumeTrue(Files.getFileStore(serverRoot.toPath()).supportsFileAttributeView("posix"));
+            stage(transactions());
+            java.util.Set<java.nio.file.attribute.PosixFilePermission> original =
+                    Files.getPosixFilePermissions(transactions.toPath());
+            Files.setPosixFilePermissions(transactions.toPath(), PosixFilePermissions.fromString("-wx------"));
+            ModuleFileTransactions start;
+            try {
+                Assumptions.assumeTrue(transactions.list() == null, "running as a user that ignores permissions");
+                start = transactions();
+
+                start.applyBeforeLoad();
+            } finally {
+                Files.setPosixFilePermissions(transactions.toPath(), original);
+            }
+
+            assertOnlyTheOldVersionIsInstalled();
+            ModuleFileTransactions.Report report = onlyReport(start);
+            assertThat(report.getLevel()).isEqualTo(Level.SEVERE);
+            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.RECORDS_UNLISTABLE);
+            assertThat(report.getArgs()[0]).isEqualTo(transactions.getAbsolutePath());
+            assertThat(recordText()).contains("\"state\": \"PENDING\"");
+        }
+
+        @Test
+        @DisplayName("a records folder whose parent cannot be searched is reported the same way, not taken as absent")
+        void unsearchableUltikitsFolder_isReported() throws IOException {
+            Assumptions.assumeTrue(Files.getFileStore(serverRoot.toPath()).supportsFileAttributeView("posix"));
+            stage(transactions());
+            java.nio.file.Path ultikits = transactions.getParentFile().toPath();
+            java.util.Set<java.nio.file.attribute.PosixFilePermission> original = Files.getPosixFilePermissions(ultikits);
+            Files.setPosixFilePermissions(ultikits, PosixFilePermissions.fromString("rw-------"));
+            ModuleFileTransactions start;
+            try {
+                Assumptions.assumeTrue(transactions.list() == null, "running as a user that ignores permissions");
+                start = transactions();
+
+                start.applyBeforeLoad();
+            } finally {
+                Files.setPosixFilePermissions(ultikits, original);
+            }
+
+            assertOnlyTheOldVersionIsInstalled();
+            assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.RECORDS_UNLISTABLE);
+        }
+
+        @Test
+        @DisplayName("no records folder at all is not a failure: a start with nothing staged reports nothing")
+        void absentRecordsFolder_isNotReported() {
+            ModuleFileTransactions start = transactions();
+
+            start.applyBeforeLoad();
+
+            assertThat(transactions).doesNotExist();
+            assertThat(start.pendingReports()).isEmpty();
+        }
+
+        @Test
         @DisplayName("staging never adopts a kept old JAR left without its record: it is refused and the JAR is kept")
         void leftoverKeptJar_isNotAdopted() throws IOException {
             stage(transactions());
