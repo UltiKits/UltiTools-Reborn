@@ -159,6 +159,33 @@ class PluginManagerReloadIsolationTest {
     }
 
     @Test
+    @DisplayName("with one module failed and another partial, no summary line claims the others fully reloaded")
+    void mixedFailureAndPartialSummaryDoesNotClaimTheOthersReloaded() {
+        // Codex review of #564, round 2 (P2): the failure headline said "The others reloaded" while
+        // a line below it listed a module that reloaded only partly.
+        UltiToolsPlugin broken = module("BrokenModule");
+        UltiToolsPlugin partial = module("PartialModule");
+        UltiToolsPlugin good = module("GoodModule");
+        doThrow(new IllegalStateException("hook boom")).when(broken).reloadWithReport();
+        ReloadReport report = new ReloadReport();
+        report.partial("scoreboard service did not restart");
+        when(partial.reloadWithReport()).thenReturn(report);
+        PluginListSeeding.add(pluginManager, broken);
+        PluginListSeeding.add(pluginManager, partial);
+        PluginListSeeding.add(pluginManager, good);
+
+        List<String> summary = pluginManager.reloadAllAndReport();
+
+        assertThat(summary).as("failure headline, partial count, one line for the partial module").hasSize(3);
+        assertThat(summary)
+                .noneSatisfy(line -> assertThat(line).containsIgnoringCase("the others reloaded"))
+                .anySatisfy(line -> assertThat(line).contains("BrokenModule").contains("3"))
+                .anySatisfy(line -> assertThat(line).contains("PartialModule")
+                        .contains("scoreboard service did not restart"));
+        assertThat(summary.get(1)).as("the mixed outcome counts the partial modules").contains("1").contains("partially");
+    }
+
+    @Test
     @DisplayName("an Error from one module's reload, such as a StackOverflowError, is isolated exactly as close() isolates one")
     void errorFromOneModuleIsIsolatedLikeClose() {
         // Gate-1 review (reviewer B IN-01): a recursive onReload() is the realistic module-code
