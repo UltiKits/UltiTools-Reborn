@@ -542,11 +542,13 @@ Each corrects behaviour that contradicted the documentation or left state held b
   `getRemainingCooldown(UUID, Object, String)` address one executor. The executor is held weakly, so
   an active cooldown never keeps an unloaded module's executor reachable.
 - **A `@UsageLimit` lock is released when the dispatch is refused after it was taken** (#568): by the
-  cooldown (which validates after the lock), by the argument-count check, or because a parameter did
-  not parse. Before 6.3.0 the lock stayed held until the player quit, and every later call of the
+  cooldown (which validates after the lock), by the argument-count check, because a parameter did
+  not parse, or by an exception from a later validator, a parameter parser or the scheduler. Before 6.3.0 the lock stayed held until the player quit, and every later call of the
   mapping was refused. The mechanism is a new default method, `CommandValidator#onRefused`, called for
   each validator that passed; its default does nothing, so existing validators are unaffected, and a
-  refused dispatch runs no `onComplete`, so it applies no cooldown.
+  refused dispatch runs no `onComplete`, so it applies no cooldown. Every `onRefused` and every
+  `onComplete` hook now runs even when an earlier validator's hook throws; the first exception is
+  rethrown afterwards.
 - **`@Scheduled` methods declared on a superclass of a bean are scheduled** (#532), as the annotation's
   javadoc always said. An overridden method is scheduled once, with the most derived declaration's
   annotation; an override without `@Scheduled` is not scheduled. A method that previously never ran
