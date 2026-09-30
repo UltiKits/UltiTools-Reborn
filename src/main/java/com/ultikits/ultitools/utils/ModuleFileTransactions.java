@@ -504,9 +504,11 @@ public final class ModuleFileTransactions {
         } catch (IOException | JsonParseException e) {
             return StageResult.failed(null, Keys.REASON_RECORD_UNREADABLE, existingFile.getAbsolutePath(), describe(e));
         }
-        if (existing == null || existing.state == null) {
-            return StageResult.failed(null, Keys.REASON_RECORD_UNREADABLE, existingFile.getAbsolutePath(),
-                    "empty record");
+        // The same validation as start-up: a record start-up would refuse is never reported as a
+        // staged update (round-7 review).
+        String problem = existing == null ? "empty record" : problemWith(existing, existingFile);
+        if (problem != null) {
+            return StageResult.failed(null, Keys.REASON_RECORD_UNREADABLE, existingFile.getAbsolutePath(), problem);
         }
         if (Record.PENDING.equals(existing.state)) {
             return StageResult.of(StageResult.Outcome.ALREADY_STAGED, existing.moduleName, existing.oldVersion,
@@ -1325,14 +1327,9 @@ public final class ModuleFileTransactions {
     private Record readRecordOrReport(File recordFile) {
         try {
             Record record = readRecord(recordFile);
-            if (record == null || record.type == null || record.key == null || record.state == null
-                    || !recordFile.getName().equals(recordFileOf(record).getName())) {
-                report(Level.WARNING, Keys.RECORD_REFUSED, recordFile.getAbsolutePath(), "unrecognised record");
-                return null;
-            }
-            String missing = missingField(record);
-            if (missing != null) {
-                report(Level.WARNING, Keys.RECORD_REFUSED, recordFile.getAbsolutePath(), "missing field " + missing);
+            String problem = record == null ? "unrecognised record" : problemWith(record, recordFile);
+            if (problem != null) {
+                report(Level.WARNING, Keys.RECORD_REFUSED, recordFile.getAbsolutePath(), problem);
                 return null;
             }
             return record;
@@ -1340,6 +1337,19 @@ public final class ModuleFileTransactions {
             report(Level.WARNING, Keys.RECORD_UNREADABLE, recordFile.getAbsolutePath(), describe(e));
             return null;
         }
+    }
+
+    /**
+     * Why a record read from a file cannot be carried out, or {@code null} when it can: the one
+     * validation start-up and staging share.
+     */
+    private String problemWith(Record record, File recordFile) {
+        if (record.type == null || record.key == null || record.state == null
+                || !recordFile.getName().equals(recordFileOf(record).getName())) {
+            return "unrecognised record";
+        }
+        String missing = missingField(record);
+        return missing == null ? null : "missing field " + missing;
     }
 
     /** The first field a record of its type needs and lacks, or {@code null} when it is complete. */
