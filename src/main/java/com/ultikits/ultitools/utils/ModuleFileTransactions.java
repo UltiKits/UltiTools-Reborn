@@ -573,8 +573,9 @@ public final class ModuleFileTransactions {
 
     /**
      * The other JARs in the modules folder that would supply {@code mainClass} ahead of a new JAR
-     * named {@code targetName}: those whose {@code plugin.yml} declares it now and whose file name
-     * sorts before {@code targetName} in the order the module loader reads the folder (#476). The
+     * named {@code targetName}: those the start-up would put on the module class path, whose
+     * {@code plugin.yml} declares it now and whose file name sorts before {@code targetName} in the
+     * order the module loader reads the folder (#476; {@link #loadsAhead}). The
      * old JAR is not one: the update moves it away. Judged by what each file declares now, not by
      * the start-up index alone, which goes stale when a copy is removed or replaced. Reads only
      * {@code plugin.yml}.
@@ -593,12 +594,23 @@ public final class ModuleFileTransactions {
             if (jar.getName().compareTo(targetName) >= 0) {
                 break;
             }
-            if (!oldPath.equals(canonicalPath(jar))
-                    && mainClass.equals(PluginYmlReader.readFromJarFile(jar).getMain())) {
+            if (loadsAhead(jar, oldPath, mainClass)) {
                 copies.add(jar.getName());
             }
         }
         return copies;
+    }
+
+    /**
+     * Whether {@code jar}, sorting before the new JAR, would supply {@code mainClass} at the next start:
+     * it is not the old JAR, it passes the check the start-up applies before putting a JAR on the
+     * module class path ({@link SecurityPolicy#isValidModuleJar}, as {@code UltiTools#collectModuleJarUrls}
+     * and {@code PluginManager#loadPluginMainClass} do; a JAR failing it is never loaded -- Codex round
+     * 17), and its {@code plugin.yml} declares the class.
+     */
+    private static boolean loadsAhead(File jar, String oldPath, String mainClass) {
+        return !oldPath.equals(canonicalPath(jar)) && SecurityPolicy.isValidModuleJar(jar)
+                && mainClass.equals(PluginYmlReader.readFromJarFile(jar).getMain());
     }
 
     /**
