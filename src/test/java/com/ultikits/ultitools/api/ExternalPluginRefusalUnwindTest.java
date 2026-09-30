@@ -73,7 +73,10 @@ class ExternalPluginRefusalUnwindTest {
         when(dependenceManagers.getContext()).thenReturn(parentContext);
         TestHelper.mockUltiToolsInstance(ultiTools -> {
             when(ultiTools.getDependenceManagers()).thenReturn(dependenceManagers);
-            when(ultiTools.getCommandManager()).thenReturn(new CommandManager());
+            // A mock: the corrected connection reaches Bukkit command registration, which needs a
+            // real CommandMap MockBukkit does not expose to CommandManager (the pre-existing NPE
+            // ExternalPluginAdapterTest documents). Every refusal happens before that step.
+            when(ultiTools.getCommandManager()).thenReturn(mock(CommandManager.class));
             when(ultiTools.getListenerManager()).thenReturn(new ListenerManager());
             when(ultiTools.getDataStore()).thenReturn(mock(DataStore.class, CALLS_REAL_METHODS));
             PluginDescriptionFile description = mock(PluginDescriptionFile.class);
