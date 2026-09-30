@@ -138,6 +138,32 @@ class ModuleUpdateStagingTest {
     }
 
     @Test
+    @DisplayName("an old JAR that cannot be read (so its content cannot be recorded) is refused before anything is downloaded")
+    void unreadableOldJar_isRefused() throws IOException {
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                Files.getFileStore(serverRoot.toPath()).supportsFileAttributeView("posix"));
+        java.util.Set<java.nio.file.attribute.PosixFilePermission> original = Files.getPosixFilePermissions(oldJar.toPath());
+        Files.setPosixFilePermissions(oldJar.toPath(), java.nio.file.attribute.PosixFilePermissions.fromString("---------"));
+        try {
+            org.junit.jupiter.api.Assumptions.assumeFalse(Files.isReadable(oldJar.toPath()),
+                    "running as a user that ignores permissions");
+            List<String> downloads = new ArrayList<>();
+
+            ModuleFileTransactions.StageResult result = new ModuleFileTransactions(dataFolder).stageUpdate("demo",
+                    Collections.singletonList(loadedOld), new ModuleUpdateFixtures.CodeSources().with(loadedOld, oldJar),
+                    catalogue("demo", "1.1"), (link, name, folder) -> downloads.add(name));
+
+            assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
+            assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_OLD_JAR_UNREADABLE);
+            assertThat(result.getReasonArgs()).containsExactly(oldJar.getAbsolutePath());
+            assertThat(downloads).isEmpty();
+        } finally {
+            Files.setPosixFilePermissions(oldJar.toPath(), original);
+        }
+        assertThat(treeOf(transactions)).noneMatch(p -> p.endsWith(".json"));
+    }
+
+    @Test
     @DisplayName("a second update of a module with a staged update names the staged version and changes nothing")
     void secondUpdateWhilePending_changesNothing() throws IOException {
         stage(downloading("Demo", "1.1", "demo"));
