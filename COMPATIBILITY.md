@@ -489,18 +489,23 @@ This section governs the third kind.
   `PluginManager#close()`, every `Exception` or `Error` the older copy throws counts as its own
   failure. Because both copies share a module name,
   `TabCompletionManager`, `EventBus` and `PanelResponderRegistry` can now also record the registering
-  module instance, and `unregister` releases by instance first. The framework records it for every
-  completer a module registers while it loads and for every `@ModuleEventHandler` method; a panel
-  responder or a programmatic EventBus subscription records it only when registered through the new
-  overload that takes the instance. A registration filed under the module's name only is released by
-  name as before, except while another loaded copy shares that name, when it stays until the last
-  copy of the name is unloaded. Added, all `@since 6.3.0`:
+  module instance, and `unregister` releases by instance first. The framework records it for
+  everything a module registers in the three registries while it loads — during its container
+  refresh, where `@PostConstruct` runs, and during `registerSelf()` — through the ordinary name-only
+  methods, and for every `@ModuleEventHandler` method. A registration made later records it only
+  through the new overloads that take the instance. A registration filed under the module's name
+  only is released by name as before, except while another loaded copy shares that name, when it
+  stays until the last copy of the name is unloaded. One visible consequence: a completer a module
+  registers in `registerSelf()` is now released when the module unloads; before, only completers
+  registered during the container refresh were. Added, all `@since 6.3.0`:
   `TabCompletionManager#beginRegistrationScope(String, UltiToolsPlugin)` and
-  `#unregisterByOwnerInstance(UltiToolsPlugin)`; `EventBus#register(...)` with an owner-instance
-  parameter and `#unregisterByOwnerInstance(UltiToolsPlugin)`; `PanelResponderRegistry#registerResponder(...)`
-  with an owner-instance parameter and `#unregisterByOwnerInstance(UltiToolsPlugin)`; a
-  `HandlerEntry` constructor and getter for the owner instance. Every name-keyed method keeps its
-  signature and behaviour.
+  `#unregisterByOwnerInstance(UltiToolsPlugin)`; `EventBus#register(...)` and `EventBus#subscribe(...)`
+  with an owner-instance parameter, `#beginRegistrationScope(UltiToolsPlugin)`,
+  `#endRegistrationScope()` and `#unregisterByOwnerInstance(UltiToolsPlugin)`;
+  `PanelResponderRegistry#registerResponder(...)` with an owner-instance parameter,
+  `#beginRegistrationScope(UltiToolsPlugin)`, `#endRegistrationScope()` and
+  `#unregisterByOwnerInstance(UltiToolsPlugin)`; two `HandlerEntry` constructors and a getter for
+  the owner instance. Every name-keyed method keeps its signature and behaviour.
 - `/ul reload` and a module's reload reporting what actually happened (#509, #529, #502). Before
   6.3.0 `reloadSelf()` logged `Module '<name>' reloaded.` before the module's `onReload()` ran and did
   not guard it, so a throwing hook printed the success line followed by a stack trace,

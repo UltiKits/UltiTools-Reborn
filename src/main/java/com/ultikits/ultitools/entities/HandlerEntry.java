@@ -77,11 +77,28 @@ public class HandlerEntry implements Comparable<HandlerEntry> {
     public HandlerEntry(Class<? extends ModuleEvent> eventType, EventPriority priority,
                         boolean ignoreCancelled, String ownerModule,
                         Consumer<? extends ModuleEvent> consumer) {
+        this(eventType, priority, ignoreCancelled, ownerModule, (UltiToolsPlugin) null, consumer);
+    }
+
+    /**
+     * Constructor for programmatic handlers that records the registering module instance (#506).
+     *
+     * @param eventType       the event type handled
+     * @param priority        the dispatch priority
+     * @param ignoreCancelled whether a cancelled event skips this handler
+     * @param ownerModule     the owning module's name
+     * @param ownerInstance   the owning module instance, or {@code null}
+     * @param consumer        the handler
+     * @since 6.3.0
+     */
+    public HandlerEntry(Class<? extends ModuleEvent> eventType, EventPriority priority,
+                        boolean ignoreCancelled, String ownerModule, UltiToolsPlugin ownerInstance,
+                        Consumer<? extends ModuleEvent> consumer) {
         this.eventType = eventType;
         this.priority = priority;
         this.ignoreCancelled = ignoreCancelled;
         this.ownerModule = ownerModule;
-        this.ownerInstance = null;
+        this.ownerInstance = ownerInstance;
         this.method = null;
         this.instance = null;
         this.consumer = consumer;

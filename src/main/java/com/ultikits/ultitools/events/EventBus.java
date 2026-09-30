@@ -36,6 +36,15 @@ public class EventBus {
 
     private final ExecutorService asyncPool;
 
+    /**
+     * The module instance the framework is loading on this thread, if any (#506): set by
+     * {@link #beginRegistrationScope(UltiToolsPlugin)} while a module's container refreshes and its
+     * {@code registerSelf()} runs, and recorded on every handler registered meanwhile without an
+     * explicit owner instance. A {@code ThreadLocal}, like {@code TabCompletionManager}'s scope, so a
+     * registration another thread makes during that window is not attributed to the module.
+     */
+    private final ThreadLocal<UltiToolsPlugin> registrationScopeOwner = new ThreadLocal<>();
+
     public EventBus() {
         this.asyncPool = new ThreadPoolExecutor(
                 2, 4, 60L, TimeUnit.SECONDS,
@@ -81,8 +90,8 @@ public class EventBus {
                          boolean ignoreCancelled, String ownerModule, UltiToolsPlugin ownerInstance,
                          Method method, Object instance) {
         method.setAccessible(true); // NOPMD - required for handler invocation
-        HandlerEntry entry = new HandlerEntry(eventType, priority, ignoreCancelled, ownerModule, ownerInstance,
-                method, instance);
+        HandlerEntry entry = new HandlerEntry(eventType, priority, ignoreCancelled, ownerModule,
+                ownerInstanceOrScope(ownerInstance), method, instance);
         handlers.computeIfAbsent(eventType, k -> new CopyOnWriteArrayList<>()).add(entry);
     }
 
@@ -96,12 +105,35 @@ public class EventBus {
     /**
      * Register a programmatic handler with full options.
      */
-    @SuppressWarnings("unchecked")
     public <T extends ModuleEvent> Subscription subscribe(Class<T> eventType, EventPriority priority,
                                                            boolean ignoreCancelled, String ownerModule,
                                                            Consumer<T> consumer) {
+        return subscribe(eventType, priority, ignoreCancelled, ownerModule, null, consumer);
+    }
+
+    /**
+     * Register a programmatic handler and record the module instance that owns it (#506), so
+     * {@link #unregisterByOwnerInstance(UltiToolsPlugin)} releases it whatever name it was filed
+     * under. Without an instance, a handler subscribed while the framework loads a module (see
+     * {@link #beginRegistrationScope(UltiToolsPlugin)}) is recorded against that module; one
+     * subscribed later is filed under {@code ownerModule} only.
+     *
+     * @param eventType       the event type handled
+     * @param priority        the dispatch priority
+     * @param ignoreCancelled whether a cancelled event skips this handler
+     * @param ownerModule     the owning module's name, used by {@link #unregisterAll(String)}
+     * @param ownerInstance   the owning module instance; {@code null} records the loading module, if any
+     * @param consumer        the handler
+     * @param <T>             the event type
+     * @return a subscription for manual unsubscribe
+     * @since 6.3.0
+     */
+    @SuppressWarnings("unchecked")
+    public <T extends ModuleEvent> Subscription subscribe(Class<T> eventType, EventPriority priority,
+                                                           boolean ignoreCancelled, String ownerModule,
+                                                           UltiToolsPlugin ownerInstance, Consumer<T> consumer) {
         HandlerEntry entry = new HandlerEntry(eventType, priority, ignoreCancelled, ownerModule,
-                (Consumer<? extends ModuleEvent>) consumer);
+                ownerInstanceOrScope(ownerInstance), (Consumer<? extends ModuleEvent>) consumer);
         handlers.computeIfAbsent(eventType, k -> new CopyOnWriteArrayList<>()).add(entry);
 
         AtomicBoolean active = new AtomicBoolean(true);
@@ -153,6 +185,38 @@ public class EventBus {
         for (CopyOnWriteArrayList<HandlerEntry> list : handlers.values()) {
             list.removeIf(entry -> entry.getOwnerInstance() == ownerInstance);
         }
+    }
+
+    /**
+     * Attributes every handler registered on this thread, until {@link #endRegistrationScope()},
+     * to {@code owner} when the registration names no owner instance itself (#506). The framework
+     * opens this scope while it loads a module -- around the module's container refresh, where
+     * {@code @PostConstruct} runs, and around its {@code registerSelf()} -- so that a module's
+     * programmatic subscriptions made while it loads are released with that module instance.
+     * Intended for {@code PluginManager}, not for module authors. Scopes do not nest.
+     *
+     * @param owner the module instance being loaded
+     * @since 6.3.0
+     */
+    public void beginRegistrationScope(UltiToolsPlugin owner) {
+        if (owner != null) {
+            registrationScopeOwner.set(owner);
+        } else {
+            registrationScopeOwner.remove();
+        }
+    }
+
+    /**
+     * Ends the scope started by {@link #beginRegistrationScope(UltiToolsPlugin)} on this thread.
+     *
+     * @since 6.3.0
+     */
+    public void endRegistrationScope() {
+        registrationScopeOwner.remove();
+    }
+
+    private UltiToolsPlugin ownerInstanceOrScope(UltiToolsPlugin ownerInstance) {
+        return ownerInstance != null ? ownerInstance : registrationScopeOwner.get();
     }
 
     // --- Dispatch ---

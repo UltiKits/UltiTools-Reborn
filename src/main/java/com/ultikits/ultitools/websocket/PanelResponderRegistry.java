@@ -67,6 +67,14 @@ public class PanelResponderRegistry {
      */
     private final ScheduledThreadPoolExecutor timeoutScheduler = createTimeoutScheduler();
 
+    /**
+     * The module instance the framework is loading on this thread, if any (#506): set by
+     * {@link #beginRegistrationScope(UltiToolsPlugin)} while a module's container refreshes and its
+     * {@code registerSelf()} runs, and recorded on every responder registered meanwhile without an
+     * explicit owner instance.
+     */
+    private final ThreadLocal<UltiToolsPlugin> registrationScopeOwner = new ThreadLocal<>();
+
     private static ScheduledThreadPoolExecutor createTimeoutScheduler() {
         ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(1, r -> {
             Thread thread = new Thread(r, "UltiTools-PanelResponderRegistry-Timeout");
@@ -114,8 +122,10 @@ public class PanelResponderRegistry {
      * @param messageType   the exact message type string this responder will serve
      * @param responder     the responder function
      * @param ownerModule   the name of the module registering this responder
-     * @param ownerInstance the module instance registering it; {@code null} records none, which is
-     *                      exactly {@link #registerResponder(String, Function, String)}
+     * @param ownerInstance the module instance registering it; {@code null} records the module the
+     *                      framework is loading on this thread, if any (see {@link
+     *                      #beginRegistrationScope(UltiToolsPlugin)}), which is exactly {@link
+     *                      #registerResponder(String, Function, String)}
      * @throws IllegalArgumentException if {@code messageType} or {@code ownerModule} is
      *                                   {@code null}/empty, or {@code responder} is {@code null}
      * @throws PluginModuleException    if the framework already owns {@code messageType}, or
@@ -136,7 +146,8 @@ public class PanelResponderRegistry {
         if (PluginInitiationUtils.isFrameworkOwnedType(messageType)) {
             throw PluginModuleException.responderTypeOwnedByFramework(messageType);
         }
-        ResponderEntry entry = new ResponderEntry(responder, ownerModule, ownerInstance);
+        UltiToolsPlugin recordedOwner = ownerInstance != null ? ownerInstance : registrationScopeOwner.get();
+        ResponderEntry entry = new ResponderEntry(responder, ownerModule, recordedOwner);
         ResponderEntry existing = responders.putIfAbsent(messageType, entry);
         if (existing != null) {
             throw PluginModuleException.responderTypeAlreadyOwned(messageType, existing.ownerModule);
@@ -175,6 +186,34 @@ public class PanelResponderRegistry {
             return;
         }
         responders.values().removeIf(entry -> entry.ownerInstance == ownerInstance);
+    }
+
+    /**
+     * Attributes every responder registered on this thread, until {@link #endRegistrationScope()},
+     * to {@code owner} when the registration names no owner instance itself (#506). The framework
+     * opens this scope while it loads a module -- around its container refresh and its
+     * {@code registerSelf()} -- so a responder a module registers while it loads, through {@link
+     * #registerResponder(String, Function, String)}, is released with that module instance.
+     * Intended for {@code PluginManager}, not for module authors. Scopes do not nest.
+     *
+     * @param owner the module instance being loaded
+     * @since 6.3.0
+     */
+    public void beginRegistrationScope(UltiToolsPlugin owner) {
+        if (owner != null) {
+            registrationScopeOwner.set(owner);
+        } else {
+            registrationScopeOwner.remove();
+        }
+    }
+
+    /**
+     * Ends the scope started by {@link #beginRegistrationScope(UltiToolsPlugin)} on this thread.
+     *
+     * @since 6.3.0
+     */
+    public void endRegistrationScope() {
+        registrationScopeOwner.remove();
     }
 
     /**

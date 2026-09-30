@@ -558,6 +558,46 @@ public class PluginManager {
         }
     }
 
+    /**
+     * Opens, on this thread, the registration scopes of the three registries a module files
+     * registrations in by name -- tab-completion completers, EventBus handlers, panel responders --
+     * so that what the module registers while the framework loads it (its container refresh and its
+     * {@code registerSelf()}) is recorded against this instance (#506; Codex review of #564, round
+     * 3). Always paired with {@link #endLoadScopes()} in a {@code finally}.
+     */
+    private static void beginLoadScopes(UltiToolsPlugin plugin) {
+        TabCompletionManager.getInstance().beginRegistrationScope(plugin.getPluginName(), plugin);
+        UltiTools framework = UltiTools.getInstance();
+        if (framework == null) {
+            return;
+        }
+        EventBus eventBus = framework.getEventBus();
+        if (eventBus != null) {
+            eventBus.beginRegistrationScope(plugin);
+        }
+        PanelResponderRegistry panelResponderRegistry = framework.getPanelResponderRegistry();
+        if (panelResponderRegistry != null) {
+            panelResponderRegistry.beginRegistrationScope(plugin);
+        }
+    }
+
+    /** Closes the scopes {@link #beginLoadScopes(UltiToolsPlugin)} opened on this thread. */
+    private static void endLoadScopes() {
+        TabCompletionManager.getInstance().endRegistrationScope();
+        UltiTools framework = UltiTools.getInstance();
+        if (framework == null) {
+            return;
+        }
+        EventBus eventBus = framework.getEventBus();
+        if (eventBus != null) {
+            eventBus.endRegistrationScope();
+        }
+        PanelResponderRegistry panelResponderRegistry = framework.getPanelResponderRegistry();
+        if (panelResponderRegistry != null) {
+            panelResponderRegistry.endRegistrationScope();
+        }
+    }
+
     /** Releases {@code plugin}'s configuration entities from the {@link ConfigManager} (#507). */
     private static void releaseConfigEntities(UltiToolsPlugin plugin) {
         ConfigManager configManager = UltiTools.getInstance().getConfigManager();
@@ -1887,7 +1927,14 @@ public class PluginManager {
 
     private boolean attemptPluginRegistration(UltiToolsPlugin plugin) {
         try {
-            boolean registerSelf = plugin.registerSelf();
+            boolean registerSelf;
+            // #506: what the module registers in registerSelf() is recorded against this instance.
+            beginLoadScopes(plugin);
+            try {
+                registerSelf = plugin.registerSelf();
+            } finally {
+                endLoadScopes();
+            }
             if (registerSelf) {
                 // Unloading the old version can only happen here: the container being built does
                 // not mean the module is alive -- registerSelf() returning true is the step where
@@ -2375,12 +2422,13 @@ public class PluginManager {
         // identical D-19 finding above) -- an explicit scope is the only mechanism that still
         // separates two modules' completers.
         // #506: the instance as well as the name, so unloading a superseded copy of this module
-        // later releases this copy's completers and not its replacement's.
-        TabCompletionManager.getInstance().beginRegistrationScope(plugin.getPluginName(), plugin);
+        // later releases this copy's registrations and not its replacement's. The same scope, in
+        // all three registries, is opened around registerSelf() in attemptPluginRegistration.
+        beginLoadScopes(plugin);
         try {
             pluginContext.refresh();
         } finally {
-            TabCompletionManager.getInstance().endRegistrationScope();
+            endLoadScopes();
         }
 
         // @ContextEntry handling (WIRE-06): read after refresh() -- registerSingleton above
