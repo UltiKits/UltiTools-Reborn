@@ -102,6 +102,20 @@ class ModuleUpdateStagingTest {
     }
 
     @Test
+    @DisplayName("a download declaring a version other than the catalogue's latest is refused and leaves nothing behind (Codex round 6)")
+    void downloadOfAnotherVersion_changesNothing() throws IOException {
+        Map<String, String> before = snapshot();
+
+        // The catalogue says 1.1; a stale endpoint serves a valid JAR of the same module declaring 1.0.
+        ModuleFileTransactions.StageResult result = stage(downloading("Demo", "1.0", "demo"));
+
+        assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
+        assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_WRONG_VERSION);
+        assertThat(result.getReasonArgs()).containsExactly("demo-1.1.jar", "1.0", "1.1");
+        assertThat(snapshot()).isEqualTo(before);
+    }
+
+    @Test
     @DisplayName("a module not loaded from the modules folder is refused before anything is downloaded")
     void moduleLoadedFromElsewhere_isRefused() throws IOException {
         File elsewhere = moduleJar(new File(dataFolder, "dev/demo.jar"), "Demo", "1.0", "demo");
