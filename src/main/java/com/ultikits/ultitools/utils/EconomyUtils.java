@@ -403,15 +403,15 @@ public final class EconomyUtils {
         if (stack == null) {
             return null;
         }
+        String callerClass = null;
         for (StackTraceElement frame : stack) {
-            String className = frame.getClassName();
-            if (isFrameworkOrJdkClass(className)) {
-                continue;
+            if (!isFrameworkOrJdkClass(frame.getClassName())) {
+                callerClass = frame.getClassName();
+                break;
             }
-            int lastDot = className.lastIndexOf('.');
-            return lastDot > 0 ? className.substring(0, lastDot) : null;
         }
-        return null;
+        int lastDot = callerClass == null ? -1 : callerClass.lastIndexOf('.');
+        return lastDot > 0 ? callerClass.substring(0, lastDot) : null;
     }
 
     private static boolean isFrameworkOrJdkClass(String className) {

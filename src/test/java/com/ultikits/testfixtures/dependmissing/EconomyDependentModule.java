@@ -15,6 +15,7 @@ public class EconomyDependentModule extends UltiToolsPlugin {
         super();
     }
 
+    @SuppressWarnings("PMD.UnusedFormalParameter") // the parameter's type, not its value, is the fixture
     public EconomyDependentModule(AbsentEconomyApi economy) {
         this();
     }

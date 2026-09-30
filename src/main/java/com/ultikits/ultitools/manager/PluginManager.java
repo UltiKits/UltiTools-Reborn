@@ -109,6 +109,15 @@ public class PluginManager {
      */
     private static final String LEGACY_PLUGIN_LOADING_PROPERTY = "ultitools.useLegacyPluginLoading";
 
+    /**
+     * Framework i18n key for the one line logged when a module cannot load because a plugin its
+     * {@code plugin.yml} lists under {@code depend:} is not installed or not enabled (#554).
+     * Arguments: the module, the missing plugins joined by {@code ", "}. Package-private so a test
+     * can assert both shipped catalogues translate it.
+     */
+    static final String MISSING_REQUIRED_PLUGIN_LOG_KEY =
+            "Module '%s' requires %s, which is not installed or not enabled; the module is not loaded.";
+
     @Getter
     private final List<UltiToolsPlugin> pluginList = new ArrayList<>();
 
@@ -309,15 +318,6 @@ public class PluginManager {
     }
 
     /**
-     * Framework i18n key for the one line logged when a module cannot load because a plugin its
-     * {@code plugin.yml} lists under {@code depend:} is not installed or not enabled (#554).
-     * Arguments: the module, the missing plugins joined by {@code ", "}. Package-private so a test
-     * can assert both shipped catalogues translate it.
-     */
-    static final String MISSING_REQUIRED_PLUGIN_LOG_KEY =
-            "Module '%s' requires %s, which is not installed or not enabled; the module is not loaded.";
-
-    /**
      * Logs a module's initialization failure (#554): when the failure is a class-not-found kind
      * ({@link NoClassDefFoundError} or {@link ClassNotFoundException} anywhere in the cause chain)
      * and at least one plugin the module lists under {@code depend:} is not installed or not
@@ -391,7 +391,7 @@ public class PluginManager {
      * (#483). Set by both {@code register} entry points before the module is constructed or
      * assembled and cleared when the attempt ends, successful or not, so a module requesting the
      * economy from its constructor, a {@code @PostConstruct} method or {@code registerSelf()} --
-     * before it is in {@link #getPluginList()} -- can still be named. Per thread: another thread,
+     * before it is in {@code getPluginList()} -- can still be named. Per thread: another thread,
      * even one the module starts during registration, never sees it. Not part of the module-facing
      * API; public only because economy attribution lives in another package.
      *

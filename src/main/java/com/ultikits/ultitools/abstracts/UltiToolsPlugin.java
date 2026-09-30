@@ -619,9 +619,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             // fall through to "operator customisation" -- unchanged from before -- when the disk
             // bytes are ACTUALLY different from the bundle.
             if (diskHash.equals(jarHash)) {
-                if (!languageDryRun) {
-                    ResourceHashSidecar.record(resourceFolder, resourcePath, diskHash);
-                }
+                recordUnlessDryRun(resourceFolder, resourcePath, diskHash);
                 return readLanguageFile(file, extension);
             }
             return applyPlaceholderArityOverride(file, jarBytes, extension, resourcePath);
@@ -640,9 +638,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         if (diskHash.equals(jarHash)) {
             // Branch 3: unknown provenance, but provably unmodified -> record the baseline now;
             // no overwrite this pass (D-06). Recorded only by the committing pass (#460).
-            if (!languageDryRun) {
-                ResourceHashSidecar.record(resourceFolder, resourcePath, diskHash);
-            }
+            recordUnlessDryRun(resourceFolder, resourcePath, diskHash);
             return readLanguageFile(file, extension);
         }
         // Branch 4: unknown provenance and the bytes differ. Until #459 this assumed customisation
@@ -650,18 +646,25 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         // kept its old wording forever. The maintainer decided on 2026-09-29 (question 3, option 2)
         // to replace it by the jar's copy, keeping the old file as a backup and saying so in the
         // log -- an operator-edited file included, accepted in writing.
-        if (languageDryRun) {
-            // #460: construction only computes the decision; the committing pass replaces the file.
-            return new Language(readFlatDictionary(jarBytes, extension));
-        }
         return replaceUnrecordedLanguageFile(file, jarBytes, resourceFolder, resourcePath, extension);
     }
 
     /**
-     * Branch 4 of {@link #resolveLanguageWithProvenance}, committing pass only (#459, maintainer
+     * Records {@code hash} for {@code resourcePath}, except during the construction-time pass,
+     * which writes nothing (#460).
+     */
+    private void recordUnlessDryRun(File resourceFolder, String resourcePath, String hash) {
+        if (!languageDryRun) {
+            ResourceHashSidecar.record(resourceFolder, resourcePath, hash);
+        }
+    }
+
+    /**
+     * Branch 4 of {@link #resolveLanguageWithProvenance} (#459, maintainer
      * 2026-09-29, question 3 option 2): a language file with no provenance record whose bytes differ
      * from the jar's copy is replaced by the jar's copy and recorded; the previous file is kept as a
-     * backup beside it and one catalogue line names both.
+     * backup beside it and one catalogue line names both. During the construction-time pass (#460)
+     * it writes nothing and returns the jar's dictionary, the language a replacement yields.
      * <p>
      * Steps, each undone if a later one fails, so a failure at any step leaves the original file in
      * place, byte-identical, with nothing recorded and no backup left behind:
@@ -682,6 +685,10 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      */
     private Language replaceUnrecordedLanguageFile(File file, byte[] jarBytes, File resourceFolder,
                                                    String resourcePath, String extension) {
+        if (languageDryRun) {
+            // #460: construction only computes the decision; the committing pass replaces the file.
+            return new Language(readFlatDictionary(jarBytes, extension));
+        }
         File backup = copyToFreshBackup(file);
         if (backup != null) {
             if (!writeBytes(file, jarBytes)) {
