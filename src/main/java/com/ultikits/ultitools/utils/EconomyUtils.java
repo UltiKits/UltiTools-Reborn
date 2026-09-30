@@ -501,6 +501,12 @@ public final class EconomyUtils {
         }
         Map<String, String> prefixToModule = new LinkedHashMap<>();
         try {
+            // #483: a module requesting the economy from its constructor, a @PostConstruct method
+            // or registerSelf() is not in the loaded list yet; the registering thread sees it here.
+            Map.Entry<String, Class<? extends UltiToolsPlugin>> registering = pluginManager.getModuleBeingRegistered();
+            if (registering != null) {
+                addModuleRoots(prefixToModule, pluginManager, registering.getValue(), registering.getKey());
+            }
             List<UltiToolsPlugin> pluginsSnapshot = new ArrayList<>(pluginManager.getPluginList());
             for (UltiToolsPlugin plugin : pluginsSnapshot) {
                 addModuleRoots(prefixToModule, pluginManager, plugin.getClass(), plugin.getPluginName());

@@ -113,6 +113,14 @@ public class PluginManager {
     private final List<UltiToolsPlugin> pluginList = new ArrayList<>();
 
     private final List<Class<? extends UltiToolsPlugin>> pluginClassList = new ArrayList<>();
+
+    /**
+     * The module being registered on each thread, name and main class (#483); see {@link
+     * #getModuleBeingRegistered()}. A {@link ThreadLocal} so it can never be read by, or leak
+     * into, another thread.
+     */
+    private final ThreadLocal<Map.Entry<String, Class<? extends UltiToolsPlugin>>> moduleBeingRegistered =
+            new ThreadLocal<>();
     private ClassLoader classLoader;
     @Getter
     private TaskManager taskManager;
@@ -226,6 +234,19 @@ public class PluginManager {
      * @return Register result
      */
     public boolean register(Class<? extends UltiToolsPlugin> pluginClass) {
+        // #483: before construction only the class is known; a module's name is its plugin.yml
+        // name: (the no-argument constructor refuses a module without one, D-16).
+        String name = PluginYmlReader.read(pluginClass).getName();
+        Map.Entry<String, Class<? extends UltiToolsPlugin>> previous = beginRegistration(
+                name != null ? name : pluginClass.getSimpleName(), pluginClass);
+        try {
+            return registerClass(pluginClass);
+        } finally {
+            endRegistration(previous);
+        }
+    }
+
+    private boolean registerClass(Class<? extends UltiToolsPlugin> pluginClass) {
         UltiToolsPlugin plugin;
         try {
             plugin = initializePlugin(classLoader, pluginClass);
@@ -250,6 +271,16 @@ public class PluginManager {
      * @return Register result
      */
     public boolean register(UltiToolsPlugin plugin) {
+        Map.Entry<String, Class<? extends UltiToolsPlugin>> previous = beginRegistration(
+                plugin.getPluginName(), plugin.getClass());
+        try {
+            return registerInstance(plugin);
+        } finally {
+            endRegistration(previous);
+        }
+    }
+
+    private boolean registerInstance(UltiToolsPlugin plugin) {
         // The gate runs first: this path's instance is caller-supplied and the container hasn't
         // been built yet, so if it's refused, not a single bean gets constructed. See issue #184.
         if (!passesCompatibilityGates(plugin)) {
@@ -332,6 +363,44 @@ public class PluginManager {
             }
         }
         return false;
+    }
+
+    /**
+     * Records the module being registered on this thread (#483) and returns the record it replaces
+     * (a registration started from inside another module's registration), for {@link
+     * #endRegistration} to restore.
+     */
+    private Map.Entry<String, Class<? extends UltiToolsPlugin>> beginRegistration(String name,
+            Class<? extends UltiToolsPlugin> pluginClass) {
+        Map.Entry<String, Class<? extends UltiToolsPlugin>> previous = moduleBeingRegistered.get();
+        moduleBeingRegistered.set(new AbstractMap.SimpleImmutableEntry<>(name, pluginClass));
+        return previous;
+    }
+
+    /** Restores the record {@link #beginRegistration} replaced, or clears it; runs in a {@code finally}. */
+    private void endRegistration(Map.Entry<String, Class<? extends UltiToolsPlugin>> previous) {
+        if (previous == null) {
+            moduleBeingRegistered.remove();
+        } else {
+            moduleBeingRegistered.set(previous);
+        }
+    }
+
+    /**
+     * The module being registered on the calling thread, as name and main class, or {@code null}
+     * (#483). Set by both {@code register} entry points before the module is constructed or
+     * assembled and cleared when the attempt ends, successful or not, so a module requesting the
+     * economy from its constructor, a {@code @PostConstruct} method or {@code registerSelf()} --
+     * before it is in {@link #getPluginList()} -- can still be named. Per thread: another thread,
+     * even one the module starts during registration, never sees it. Not part of the module-facing
+     * API; public only because economy attribution lives in another package.
+     *
+     * @return the module being registered on this thread, or {@code null} when none is
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public Map.Entry<String, Class<? extends UltiToolsPlugin>> getModuleBeingRegistered() {
+        return moduleBeingRegistered.get();
     }
 
     /**
