@@ -36,6 +36,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -111,6 +112,13 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * (#529). Package-private for the same catalogue-coverage test as that key.
      */
     static final String RELOAD_PARTIAL_LOG_MESSAGE_KEY = "Module '%s' reloaded partially; not reloaded: %s";
+    /**
+     * Framework i18n key for the partial-reload reason a per-module reload records when the
+     * {@code language} setting in the framework's {@code config.yml} on disk differs from the one
+     * the framework runs with (#502). Package-private for the catalogue-coverage test.
+     */
+    static final String LANGUAGE_CHANGE_PENDING_KEY =
+            "the language setting in config.yml changed from %s to %s; a full /ul reload applies it to every module";
     /**
      * Matches a {@code java.util.Formatter} conversion specifier, e.g. {@code %s} in {@code
      * "Hello, %s!"}, or {@code %1$s} for an explicit argument index. Used only by {@link
@@ -1781,12 +1789,52 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         if (pluginManager != null) {
             pluginManager.applyReloadedConfigBindings(this);
         }
-        // Reinitialize language in case language setting changed
+        // Rebuild the catalogue from this module's language files, re-read from disk and jar, in
+        // the language the framework runs with. The `language` setting is one value for the
+        // whole server: a per-module reload does not apply a changed value to this module alone,
+        // which would leave it speaking a different language from the framework and every other
+        // module. It records the change instead, so the operator is told a full /ul reload
+        // applies it (#502).
         language = createLanguageFromPath(resourceFolderPath);
+        String pendingLanguage = pendingLanguageSetting();
+        if (pendingLanguage != null) {
+            report.partial(String.format(UltiTools.getInstance().i18n(LANGUAGE_CHANGE_PENDING_KEY),
+                    getLanguageCode(), pendingLanguage));
+        }
         // @ConditionalOnConfig is evaluated once at component-scan time; a reload can only
         // report drift on a watched key, never re-register or rebuild anything (#392, D-01).
         ConditionalRegistrationEvaluator.reportDrift(this);
         onReload(report);
+    }
+
+    /**
+     * The framework's {@code language} setting as it is in {@code config.yml} on disk now, when it
+     * differs from the value the framework runs with (#502).
+     * <p>
+     * The framework reads its configuration once and re-reads it only on a full {@code /ul
+     * reload}. A missing, unreadable or unparseable file, or one without the key, is not a pending
+     * change: that is reported, if at all, by the full reload that reads it.
+     *
+     * @return the value on disk, or {@code null} if it is the running value or cannot be read
+     */
+    private String pendingLanguageSetting() {
+        UltiTools framework = UltiTools.getInstance();
+        File dataFolder = framework.getDataFolder();
+        if (dataFolder == null) {
+            return null;
+        }
+        File configFile = new File(dataFolder, "config.yml");
+        if (!configFile.isFile()) {
+            return null;
+        }
+        YamlConfiguration onDisk = new YamlConfiguration();
+        try {
+            onDisk.load(configFile);
+        } catch (IOException | InvalidConfigurationException e) {
+            return null;
+        }
+        String diskLanguage = onDisk.getString("language");
+        return diskLanguage != null && !diskLanguage.equals(getLanguageCode()) ? diskLanguage : null;
     }
 
     /**

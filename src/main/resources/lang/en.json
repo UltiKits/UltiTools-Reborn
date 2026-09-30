@@ -126,5 +126,6 @@
   "Module %s failed to reload: %s. See the console for details.": "§cModule %s failed to reload: %s. See the console for details.",
   "Module '%s' reloaded partially; not reloaded: %s": "Module '%s' reloaded partially; not reloaded: %s",
   "Reloaded %d modules; %d only partially:": "Reloaded %d modules; %d only partially:",
-  "Module %s reloaded partially; not reloaded: %s": "Module %s reloaded partially; not reloaded: %s"
+  "Module %s reloaded partially; not reloaded: %s": "Module %s reloaded partially; not reloaded: %s",
+  "the language setting in config.yml changed from %s to %s; a full /ul reload applies it to every module": "the language setting in config.yml changed from %s to %s; a full /ul reload applies it to every module"
 }

@@ -53,5 +53,6 @@
   "Module %s failed to reload: %s. See the console for details.": "§c模块 %s 重载失败：%s。详情见控制台。",
   "Module '%s' reloaded partially; not reloaded: %s": "模块 '%s' 只重载了一部分；未重载：%s",
   "Reloaded %d modules; %d only partially:": "已重载 %d 个模块，其中 %d 个只重载了一部分：",
-  "Module %s reloaded partially; not reloaded: %s": "模块 %s 只重载了一部分；未重载：%s"
+  "Module %s reloaded partially; not reloaded: %s": "模块 %s 只重载了一部分；未重载：%s",
+  "the language setting in config.yml changed from %s to %s; a full /ul reload applies it to every module": "config.yml 中的语言设置已从 %s 改为 %s；执行完整的 /ul reload 才会对所有模块生效"
 }
