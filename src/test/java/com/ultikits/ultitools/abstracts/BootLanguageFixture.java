@@ -56,6 +56,7 @@ public final class BootLanguageFixture implements Closeable {
     private final Map<String, byte[]> jarEntries = new LinkedHashMap<>();
     private final Logger logger = mock(Logger.class);
     private final ConfigManager configManager = mock(ConfigManager.class);
+    private final YamlConfiguration config = new YamlConfiguration();
     private URLClassLoader loader;
 
     /**
@@ -108,10 +109,9 @@ public final class BootLanguageFixture implements Closeable {
     public static BootLanguageFixture create(File tempDir, Consumer<UltiTools> extraStubbing) throws IOException {
         BootLanguageFixture fixture = new BootLanguageFixture(tempDir);
         Files.createDirectories(fixture.resourceFolder.toPath());
-        YamlConfiguration config = new YamlConfiguration();
-        config.set("language", "en");
+        fixture.config.set("language", "en");
         TestHelper.mockUltiToolsInstance(ultiTools -> {
-            Mockito.lenient().when(ultiTools.getConfig()).thenReturn(config);
+            Mockito.lenient().when(ultiTools.getConfig()).thenReturn(fixture.config);
             Mockito.lenient().when(ultiTools.getLogger()).thenReturn(fixture.logger);
             Mockito.lenient().when(ultiTools.getConfigManager()).thenReturn(fixture.configManager);
             if (extraStubbing != null) {
@@ -138,6 +138,12 @@ public final class BootLanguageFixture implements Closeable {
     /** Records {@code path}'s current on-disk hash in the provenance record. */
     public BootLanguageFixture recordCurrent(String path) {
         ResourceHashSidecar.record(resourceFolder, path, ResourceHashSidecar.sha256(disk(path)));
+        return this;
+    }
+
+    /** Sets the framework's configured {@code language}, as an operator editing {@code config.yml} does. */
+    public BootLanguageFixture language(String code) {
+        config.set("language", code);
         return this;
     }
 

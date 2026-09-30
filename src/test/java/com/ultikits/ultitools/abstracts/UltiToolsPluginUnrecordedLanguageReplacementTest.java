@@ -289,5 +289,32 @@ class UltiToolsPluginUnrecordedLanguageReplacementTest {
                     .as(catalogue).contains("lang/en.json", "UltiDemo", "lang/en.json.bak");
         }
     }
+
+    @Test
+    @DisplayName("Codex run 1: every bundled language file is migrated on the upgrade start, not only the configured one")
+    void everyBundledLanguageFileIsMigratedNotOnlyTheConfiguredOne() throws Exception {
+        String oldZh = "{\"greeting\":\"6.2 zh\"}";
+        String newZh = "{\"greeting\":\"6.3 zh\"}";
+        fixture.jarEntry(LANG, NEW).jarEntry("lang/zh.json", newZh)
+                .onDisk(LANG, OLD).onDisk("lang/zh.json", oldZh);
+
+        UltiToolsPlugin plugin = start();
+
+        assertThat(BootLanguageFixture.bytesOf(fixture.disk("lang/zh.json"))).isEqualTo(utf8(newZh));
+        assertThat(BootLanguageFixture.bytesOf(new File(langDir(), "zh.json.bak"))).isEqualTo(utf8(oldZh));
+        assertThat(ResourceHashSidecar.readRecordedHash(fixture.resourceFolder(), "lang/zh.json"))
+                .contains(ResourceHashSidecar.sha256(fixture.disk("lang/zh.json")));
+        verify(fixture.logger(), times(2)).warning(anyString());
+
+        // The reproduction: after the upgrade the operator edits zh.json, switches to zh and reloads;
+        // the edit is kept as a customisation, not replaced by the jar's copy.
+        String edited = "{\"greeting\":\"zh, edited after the upgrade\"}";
+        fixture.onDisk("lang/zh.json", edited).language("zh");
+        plugin.reloadSelf();
+
+        assertThat(BootLanguageFixture.bytesOf(fixture.disk("lang/zh.json"))).isEqualTo(utf8(edited));
+        assertThat(plugin.i18n("greeting")).isEqualTo("zh, edited after the upgrade");
+        assertThat(langListing()).containsExactly("en.json", "en.json.bak", "zh.json", "zh.json.bak");
+    }
 }
 
