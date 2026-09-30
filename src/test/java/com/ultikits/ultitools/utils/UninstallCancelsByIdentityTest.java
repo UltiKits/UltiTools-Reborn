@@ -285,7 +285,7 @@ class UninstallCancelsByIdentityTest {
 
         // No JAR of External is in the modules folder, so the uninstall reports that -- and still
         // runs its cancellation, in its finally, which is what is checked here.
-        Throwable outcome = org.assertj.core.api.Assertions.catchThrowable(
+        Throwable outcome = catchThrowable(
                 () -> PluginInstallUtils.uninstallPluginReporting("External", codeSources, cancelled));
 
         assertThat(outcome).isInstanceOf(java.nio.file.NoSuchFileException.class);

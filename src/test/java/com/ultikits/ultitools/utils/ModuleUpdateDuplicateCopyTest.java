@@ -151,6 +151,29 @@ class ModuleUpdateDuplicateCopyTest {
     }
 
     @Test
+    @DisplayName("a copy the start-up excludes from the class path (it fails the JAR check) cannot load first, so it does not stop the update (Codex round 17)")
+    void copyExcludedFromTheClassPath_doesNotStopTheUpdate() throws IOException {
+        // Readable, declaring the module's main class, sorting first -- but over the entry limit, so
+        // the start-up leaves it off the module class path and never scans it.
+        File invalid = new File(modules, "a-demo-0.9.jar");
+        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(invalid))) {
+            out.putNextEntry(new JarEntry("plugin.yml"));
+            out.write(("name: DemoCopy\nversion: '0.9'\nmain: " + MAIN + "\n").getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+            for (int i = 0; i <= 10_000; i++) {
+                out.putNextEntry(new JarEntry("filler/" + i));
+                out.closeEntry();
+            }
+        }
+        assertThat(SecurityPolicy.isValidModuleJar(invalid)).as("the start-up rejects it").isFalse();
+
+        ModuleFileTransactions.StageResult result = stage();
+
+        assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.STAGED);
+        assertThat(downloads).containsExactly("demo-1.1.jar");
+    }
+
+    @Test
     @DisplayName("a copy that sorts after the new JAR does not stop the update")
     void copyThatSortsAfter_proceeds() throws IOException {
         copy("zz-demo.jar", MAIN);
