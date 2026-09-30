@@ -221,6 +221,25 @@ class PluginManagerSupersedeUnloadTest {
     }
 
     @Test
+    @DisplayName("a newer version under a different module name does not keep the old name's name-only registrations")
+    void renamedSuccessorReleasesTheOldNamesRegistrations() throws Exception {
+        // Codex review of #564, round 6: the superseded unload assumed both copies share a name.
+        UltiToolsPlugin older = module("OldName", "1.0.0");
+        UltiToolsPlugin newer = module("NewName", "2.0.0");
+        String sharedMainClass = older.getMainClass();
+        when(newer.getMainClass()).thenReturn(sharedMainClass);
+        when(newer.isNewerVersionThan(older)).thenReturn(true);
+        when(newer.registerSelf()).thenReturn(true);
+        responders.registerResponder("renamed.old", responder(), "OldName");
+        PluginListSeeding.add(pluginManager, older);
+
+        assertThat(pluginManager.register(newer)).isTrue();
+
+        assertThat(responders.hasResponder("renamed.old"))
+                .as("no loaded copy is named OldName any more, so its name-only registration is released").isFalse();
+    }
+
+    @Test
     @DisplayName("with no other copy of the name loaded, name-only registrations are still released by name")
     void nameOnlyRegistrationsAreReleasedWhenNoOtherCopyIsLoaded() {
         UltiToolsPlugin solo = module("Solo", "1.0.0");
