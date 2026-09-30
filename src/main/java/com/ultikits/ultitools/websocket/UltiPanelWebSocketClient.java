@@ -33,7 +33,9 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     private final String token;
     private final ScheduledExecutorService heartbeatExecutor;
     
-    private boolean isConnected = false;
+    // volatile (#486): written by the socket's own thread in onOpen/onClose/onError and read by
+    // the log senders right after a send to tell whether it went out.
+    private volatile boolean isConnected = false;
     private ScheduledFuture<?> heartbeatTask;
     
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();

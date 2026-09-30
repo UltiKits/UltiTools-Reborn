@@ -764,6 +764,8 @@ public class ServerMonitorManager {
             // first. Widening the lock to cover the send closes that window; the errors-drain in
             // between is harmless to include (it does not itself race against anything).
             synchronized (logDrainLock) {
+                UltiPanelLogTransmitter drainedFrom = null;
+                JsonArray drainedLogs = null;
                 // Drain logs from the log transmitter -- whether to drain is decided by the LOGS
                 // capability switch (D-12). The gate must sit before drainQueue(...), not after
                 // the result is obtained only to be thrown away: drain-then-discard is still the
@@ -791,6 +793,8 @@ public class ServerMonitorManager {
                             JsonArray logs = transmitter.drainQueue(transmitter.getBatchSize());
                             if (logs.size() > 0) {
                                 data.add("logs", logs);
+                                drainedFrom = transmitter;
+                                drainedLogs = logs;
                             }
                         }
                     }
@@ -812,7 +816,7 @@ public class ServerMonitorManager {
                 }
 
                 message.add("data", data);
-                webSocketClient.sendMessage(message);
+                sendKeepingUndeliveredLogs(message, drainedFrom, drainedLogs);
             }
 
             tickCount++;
@@ -936,7 +940,28 @@ public class ServerMonitorManager {
             JsonObject data = new JsonObject();
             data.add("logs", logs);
             message.add("data", data);
+            sendKeepingUndeliveredLogs(message, transmitter, logs);
+        }
+    }
+
+    /**
+     * Sends a {@code batch_update} frame and, when it carried log records and did not go out, hands
+     * them back to the transmitter so the next drain sends them before anything newer (#486). The
+     * frame did not go out if {@code sendMessage} threw -- the exception still propagates to the
+     * caller's own handler -- or if the client no longer reports itself connected afterwards, which
+     * is what the closed-socket path of {@code sendMessage} leaves behind. Called with
+     * {@link #logDrainLock} held, so the hand-back cannot interleave with another drain.
+     */
+    private void sendKeepingUndeliveredLogs(JsonObject message, UltiPanelLogTransmitter transmitter,
+                                            JsonArray logs) {
+        boolean sent = false;
+        try {
             webSocketClient.sendMessage(message);
+            sent = webSocketClient.isConnected();
+        } finally {
+            if (!sent && transmitter != null) {
+                transmitter.holdUndelivered(logs);
+            }
         }
     }
 
