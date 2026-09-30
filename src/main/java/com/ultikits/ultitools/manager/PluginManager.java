@@ -112,6 +112,14 @@ public class PluginManager {
     private final List<UltiToolsPlugin> pluginList = new ArrayList<>();
 
     private final List<Class<? extends UltiToolsPlugin>> pluginClassList = new ArrayList<>();
+
+    /**
+     * What the start-up scan read: per declared main class, every JAR in the modules folder that
+     * declares it, and the JAR its class was loaded from (#516). {@code /upm uninstall} reads it to
+     * find every file of a loaded module.
+     */
+    @Getter
+    private final ModuleJarIndex moduleJarIndex = new ModuleJarIndex();
     private ClassLoader classLoader;
     @Getter
     private TaskManager taskManager;
@@ -906,6 +914,9 @@ public class PluginManager {
                     + "module jar must declare 'main: <fully.qualified.MainClass>' in plugin.yml.");
             return null;
         }
+        // #516: kept per main class, whether or not the class loads, so an uninstall can find every
+        // JAR that declares a loaded module -- the loader's own read, not a second scan.
+        moduleJarIndex.record(mainClassName, pluginJar);
 
         try {
             // GEN-07 (D-14): records what the removed classload filter layers would have refused
@@ -949,6 +960,7 @@ public class PluginManager {
                         + "refusing to load a module whose declared main class is not its own.");
                 return null;
             }
+            moduleJarIndex.recordSupplier(mainClassName, actualJarFile != null ? actualJarFile : pluginJar);
             return aClass.asSubclass(UltiToolsPlugin.class);
         } catch (ClassNotFoundException | LinkageError e) {
             Bukkit.getLogger().log(Level.SEVERE,

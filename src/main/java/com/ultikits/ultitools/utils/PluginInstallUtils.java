@@ -30,6 +30,7 @@ import com.google.gson.reflect.TypeToken;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.entities.PluginEntity;
+import com.ultikits.ultitools.manager.ModuleJarIndex;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
 
@@ -668,10 +669,17 @@ public class PluginInstallUtils {
     private static final class ArchiveIdentity {
         private final EntryState state;
         private final String declaredName;
+        /** The {@code main:} its {@code plugin.yml} declares: the one entry the module loader reads (#516). */
+        private final String declaredMain;
 
         private ArchiveIdentity(EntryState state, String declaredName) {
+            this(state, declaredName, null);
+        }
+
+        private ArchiveIdentity(EntryState state, String declaredName, String declaredMain) {
             this.state = state;
             this.declaredName = declaredName;
+            this.declaredMain = declaredMain;
         }
 
         /** Whether the archive was read and declares a module name. */
@@ -721,7 +729,8 @@ public class PluginInstallUtils {
                 // back from a folder the operator was told is clear. Do not "optimise" this into
                 // NOT_THIS_MODULES by reading it as metadata-free-means-unrelated; deciding it any
                 // other way means predicting what a class loader would do with the archive, which
-                // is the approach this work removed. The documented limit is #516.
+                // is the approach this work removed. (#516 identifies a copy by its plugin.yml
+                // main: entry, which this archive does not have; it stays reported.)
                 return new ArchiveIdentity(EntryState.UNDETERMINED, null);
             }
             return readDeclaredName(jarFile, entry, file);
@@ -750,14 +759,19 @@ public class PluginInstallUtils {
             // file that says nothing into one that says no.
             config.load(reader);
             String declared = config.getString("name");
+            // The main: entry is read with the name, from the same parse: it is what the module loader
+            // loads (#548/#549), so it identifies the module whatever the name says (#516).
+            String main = config.getString("main");
+            String declaredMain = main == null || main.trim().isEmpty() ? null : main;
             if (declared == null || declared.trim().isEmpty()) {
                 // A plugin.yml with no name: key -- or one whose name is blank -- carries exactly as
-                // much about which module this is as no plugin.yml at all, which is nothing (gate 1,
-                // WR-01, and its completion). A blank name must never become a key either: every
-                // other blank-named archive would then match it.
-                return new ArchiveIdentity(EntryState.UNDETERMINED, null);
+                // much about which module this is by name as no plugin.yml at all, which is nothing
+                // (gate 1, WR-01, and its completion). A blank name must never become a key either:
+                // every other blank-named archive would then match it. Its main:, if any, still
+                // counts (#516).
+                return new ArchiveIdentity(EntryState.UNDETERMINED, null, declaredMain);
             }
-            return new ArchiveIdentity(EntryState.NOT_THIS_MODULES, declared);
+            return new ArchiveIdentity(EntryState.NOT_THIS_MODULES, declared, declaredMain);
         } catch (org.bukkit.configuration.InvalidConfigurationException malformed) {
             LOGGER.log(Level.FINE, "plugin.yml is not valid YAML in " + file, malformed);
             return new ArchiveIdentity(EntryState.UNDETERMINED, null);
@@ -1176,12 +1190,20 @@ public class PluginInstallUtils {
         private final Map<String, String> bystanderOf;
         private final boolean resolvedFromLoadedModule;
         private final boolean someCodeSourceUnknown;
+        /**
+         * The main classes of the loaded instances this uninstall targets, as the module loader
+         * recorded them, less any another loaded module also has: an entry whose {@code plugin.yml}
+         * declares one of them is a JAR the loader would load this module from again (#516).
+         */
+        private final Set<String> mainClasses;
 
         @SuppressWarnings("PMD.ExcessiveParameterList") // one resolution's result, built in one place
         private ModuleIdentity(String requested, List<UltiToolsPlugin> loaded, Set<String> ownJars,
-                               Set<String> keys, Set<String> bystanderJars, Map<String, String> bystanderOf,
-                               boolean resolvedFromLoadedModule, boolean someCodeSourceUnknown) {
+                               Set<String> keys, Set<String> mainClasses, Set<String> bystanderJars,
+                               Map<String, String> bystanderOf, boolean resolvedFromLoadedModule,
+                               boolean someCodeSourceUnknown) {
             this.requested = requested;
+            this.mainClasses = mainClasses;
             this.loaded = loaded;
             this.ownJars = ownJars;
             this.keys = keys;
@@ -1250,8 +1272,33 @@ public class PluginInstallUtils {
         // even when it was the argument itself. The target's own JAR is still found through its
         // code source, and matching other entries on a name a running module answers to would take
         // that module's JAR (gate 1, BL-02).
-        return new ModuleIdentity(requested, loaded, ownJars, keys, bystanderJars, bystanderOf,
-                !loaded.isEmpty(), unknown.get());
+        return new ModuleIdentity(requested, loaded, ownJars, keys, mainClassesOf(pluginManager, loaded, others),
+                bystanderJars, bystanderOf, !loaded.isEmpty(), unknown.get());
+    }
+
+    /**
+     * The main classes the module loader recorded for the targets, less every one another loaded
+     * module also has (#516) -- the same exclusion the name keys get (gate 1, BL-02).
+     *
+     * @param pluginManager the manager whose start-up scan recorded them
+     * @param targets       the loaded instances this uninstall targets
+     * @param others        every other loaded instance
+     * @return the main classes an entry is matched on
+     */
+    private static Set<String> mainClassesOf(PluginManager pluginManager, List<UltiToolsPlugin> targets,
+                                             List<UltiToolsPlugin> others) {
+        ModuleJarIndex index = pluginManager.getModuleJarIndex();
+        Set<String> mainClasses = new java.util.HashSet<>();
+        if (index == null) {
+            return mainClasses;
+        }
+        for (UltiToolsPlugin plugin : targets) {
+            mainClasses.add(index.mainClassOf(plugin));
+        }
+        for (UltiToolsPlugin plugin : others) {
+            mainClasses.remove(index.mainClassOf(plugin));
+        }
+        return mainClasses;
     }
 
     /**
@@ -1588,6 +1635,9 @@ public class PluginInstallUtils {
                 return EntryState.THIS_MODULES;
             }
             ArchiveIdentity archive = readArchive(file);
+            if (archive.declaredMain != null && identity.mainClasses.contains(archive.declaredMain)) {
+                return byDeclaredMainClass(identity);
+            }
             if (!archive.declaresAName()) {
                 return archive.state;
             }
@@ -1608,6 +1658,19 @@ public class PluginInstallUtils {
                     + identity.requested, denied);
             return EntryState.UNDETERMINED;
         }
+    }
+
+    /**
+     * An entry whose {@code plugin.yml} declares one of the targets' main classes: the module loader
+     * loads exactly the class {@code main:} names (#548/#549), so after a restart this file loads the
+     * module the operator removed (#516). The same caution as a name match applies: while some loaded
+     * module's own JAR could not be determined, the entry may be that module's, and is reported.
+     *
+     * @param identity the resolved identity
+     * @return the entry's state
+     */
+    private static EntryState byDeclaredMainClass(ModuleIdentity identity) {
+        return identity.someCodeSourceUnknown ? EntryState.UNDETERMINED : EntryState.THIS_MODULES;
     }
 
     /** The absolute paths of {@code files}, in the order given. */
