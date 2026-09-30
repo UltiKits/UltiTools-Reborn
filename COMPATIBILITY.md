@@ -503,9 +503,9 @@ This section governs the third kind.
   signature and behaviour.
 - `/ul reload` and a module's reload reporting what actually happened (#509, #529, #502). Before
   6.3.0 `reloadSelf()` logged `Module '<name>' reloaded.` before the module's `onReload()` ran and did
-  not guard it, so a throwing hook printed the success line followed by a stack trace, `/ul reload
-  <name>` answered only with the generic command-error line, and a bare `/ul reload` stopped at that
-  module, leaving every module after it unreloaded. As of 6.3.0:
+  not guard it, so a throwing hook printed the success line followed by a stack trace,
+  `/ul reload <name>` answered only with the generic command-error line, and a bare `/ul reload`
+  stopped at that module, leaving every module after it unreloaded. As of 6.3.0:
   - the per-module line is logged only after the hook returned; when any reload step or the hook
     throws, one SEVERE line names the module and the cause instead, and the failure is rethrown
     unchanged to the caller;
@@ -525,8 +525,8 @@ This section governs the third kind.
     with them;
   - a per-module reload whose framework `config.yml` on disk holds a different `language` than the
     one the framework runs with keeps the running language — one server-wide setting is not applied
-    to one module — and reports the reload as partial, naming both values and that a full `/ul
-    reload` applies it. A full `/ul reload` applies the new language to every module, as before.
+    to one module — and reports the reload as partial, naming both values and that a full
+    `/ul reload` applies it. A full `/ul reload` applies the new language to every module, as before.
 
   The new console lines and replies are in both shipped catalogues. A module that catches a failure
   in `onReload()` and only logs it keeps working unchanged; to make the operator see it, override
