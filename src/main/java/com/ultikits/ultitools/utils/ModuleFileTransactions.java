@@ -105,6 +105,8 @@ public final class ModuleFileTransactions {
     private final CrashPoints crashPoints;
     private final List<Report> reports = new ArrayList<>();
     private final List<Record> appliedThisStart = new ArrayList<>();
+    /** The modules-folder file names a recorded deletion still has to remove after this start's removals. */
+    private final java.util.Set<String> pendingRemovals = new java.util.HashSet<>();
 
     /** Which start-up step a rollback is finished from; it decides what the log line says. */
     private enum RollbackPhase {
@@ -309,14 +311,30 @@ public final class ModuleFileTransactions {
     }
 
     /**
-     * Cancels every update transaction of a module being uninstalled: its record and its working
-     * folder -- the staged JAR and any kept old JAR -- are deleted, so nothing brings the module
-     * back at the next start. The modules folder is not touched; the uninstall owns that.
+     * {@link #cancelStagedUpdates(String, java.util.Collection)} by the runtime name alone.
      *
      * @param moduleName the module's runtime name
      * @return the versions whose updates were cancelled
      */
     public List<String> cancelStagedUpdates(String moduleName) {
+        return cancelStagedUpdates(moduleName, Collections.<String>emptyList());
+    }
+
+    /**
+     * Cancels every update transaction of a module being uninstalled: its record and its working
+     * folder -- the staged JAR and any kept old JAR -- are deleted, so nothing brings the module
+     * back at the next start. The modules folder is not touched; the uninstall owns that.
+     *
+     * <p>A transaction belongs to the module when it was staged under that runtime name, or when
+     * the JAR it would replace is one the uninstall removed or recorded for removal -- the second
+     * test is what matches an uninstall that named the module some other way. Whatever this
+     * misses, the next start still abandons an update whose old JAR is gone or pending removal.
+     *
+     * @param moduleName       the module's runtime name, as the uninstall was given it
+     * @param removedJarNames  the file names of the JARs the uninstall deleted or recorded
+     * @return the versions whose updates were cancelled
+     */
+    public List<String> cancelStagedUpdates(String moduleName, java.util.Collection<String> removedJarNames) {
         synchronized (LOCK) {
             List<String> cancelled = new ArrayList<>();
             for (File recordFile : recordFiles()) {
@@ -327,9 +345,14 @@ public final class ModuleFileTransactions {
                     LOGGER.log(Level.FINE, "Could not read " + recordFile, e);
                     continue;
                 }
-                if (record == null || !Record.UPDATE.equals(record.type) || moduleName == null
-                        || !moduleName.equals(record.moduleName)
+                if (record == null || !Record.UPDATE.equals(record.type)
                         || !recordFile.getName().equals(recordFileOf(record).getName())) {
+                    continue;
+                }
+                boolean byName = moduleName != null && moduleName.equals(record.moduleName);
+                boolean byJar = removedJarNames != null && record.oldName != null
+                        && removedJarNames.contains(record.oldName);
+                if (!byName && !byJar) {
                     continue;
                 }
                 if (deleteTree(workFolder(record)) && deleteQuietly(recordFile)) {
@@ -345,8 +368,10 @@ public final class ModuleFileTransactions {
      * any module loads (#518). On Windows the shared module class loader holds every module JAR
      * open for the life of the server, so this is the only point at which such a JAR can go.
      *
-     * <p>Each file is recorded with its size and SHA-256; the next start deletes it only if it is
-     * still that file, so a newer install under the same name is never deleted.
+     * <p>Each file is recorded with its size, modification time and SHA-256; the next start deletes
+     * it only if it is still that file, so an install under the same name since -- or a copy put
+     * back -- is never deleted. An install through {@code /upm} also forgets the record
+     * ({@link #forgetDeferredRemoval(String)}).
      *
      * @param moduleName the module being uninstalled, as the operator named it
      * @param files      the JARs still on disk, each directly in the modules folder
@@ -377,6 +402,7 @@ public final class ModuleFileTransactions {
                 Removal removal = new Removal();
                 removal.name = file.getName();
                 removal.size = file.length();
+                removal.lastModified = file.lastModified();
                 removal.sha256 = hash;
                 record.removals.removeIf(r -> removal.name.equals(r.name));
                 record.removals.add(removal);
@@ -384,6 +410,31 @@ public final class ModuleFileTransactions {
             record.state = Record.PENDING;
             record.moduleName = moduleName;
             writeRecord(record);
+        }
+    }
+
+    /**
+     * Forgets a recorded deletion of a file name an install is writing again, so the next start does
+     * not delete the new install -- even when it is byte-for-byte the JAR that was recorded.
+     *
+     * @param fileName the file name the install wrote into the modules folder
+     * @throws IOException when a record cannot be read or rewritten
+     */
+    public void forgetDeferredRemoval(String fileName) throws IOException {
+        synchronized (LOCK) {
+            for (File recordFile : recordFiles()) {
+                Record record = readRecord(recordFile);
+                if (record == null || !Record.REMOVE.equals(record.type) || record.removals == null
+                        || !recordFile.getName().equals(recordFileOf(record).getName())
+                        || !record.removals.removeIf(removal -> fileName.equals(removal.name))) {
+                    continue;
+                }
+                if (record.removals.isEmpty()) {
+                    Files.deleteIfExists(recordFile.toPath());
+                } else {
+                    writeRecord(record);
+                }
+            }
         }
     }
 
@@ -399,6 +450,8 @@ public final class ModuleFileTransactions {
     public void applyBeforeLoad() {
         deleteTemporaryRecords();
         List<String> ids = new ArrayList<>();
+        List<Record> removals = new ArrayList<>();
+        List<Record> updates = new ArrayList<>();
         for (File recordFile : recordFiles()) {
             Record record = readRecordOrReport(recordFile);
             if (record == null) {
@@ -406,13 +459,27 @@ public final class ModuleFileTransactions {
                 continue;
             }
             ids.add(idOf(record));
-            try {
-                applyRecord(record);
-            } catch (RecordRefused refused) {
-                report(Level.WARNING, Keys.RECORD_REFUSED, recordFile.getAbsolutePath(), refused.getMessage());
-            }
+            (Record.REMOVE.equals(record.type) ? removals : updates).add(record);
+        }
+        // Deletions an uninstall recorded run first, by rule and not by how record names sort: an
+        // update whose old JAR an uninstall removed, or still has to remove, must see that before
+        // it moves anything.
+        pendingRemovals.clear();
+        for (Record record : removals) {
+            applyGuarded(record);
+        }
+        for (Record record : updates) {
+            applyGuarded(record);
         }
         sweepOrphanWorkFolders(ids);
+    }
+
+    private void applyGuarded(Record record) {
+        try {
+            applyRecord(record);
+        } catch (RecordRefused refused) {
+            report(Level.WARNING, Keys.RECORD_REFUSED, recordFileOf(record).getAbsolutePath(), refused.getMessage());
+        }
     }
 
     private void applyRecord(Record record) throws RecordRefused {
@@ -525,10 +592,11 @@ public final class ModuleFileTransactions {
             }
             return;
         }
-        if (!exists(backup) && !exists(old)) {
+        if (!exists(backup) && (!exists(old) || pendingRemovals.contains(record.oldName))) {
             // The module's JAR left the modules folder after the update was staged -- an uninstall,
-            // whatever name it was given, or a hand removal. Installing the update now would bring
-            // back a module the operator removed, so the transaction is abandoned instead.
+            // whatever name it was given, or a hand removal -- or an uninstall recorded it for a
+            // deletion that has not happened yet. Installing the update now would bring back a
+            // module the operator removed, so the transaction is abandoned instead.
             deleteTree(work);
             deleteQuietly(recordFileOf(record));
             report(Level.WARNING, Keys.UPDATE_ABANDONED, record.moduleName, record.newVersion, old.getAbsolutePath());
@@ -730,7 +798,10 @@ public final class ModuleFileTransactions {
             if (!exists(file)) {
                 continue;
             }
-            if (removal.sha256 == null || !removal.sha256.equals(sha256Of(file))) {
+            // Still the recorded file: same size, same modification time, same content. A copy put
+            // back after the uninstall has a new timestamp even when its bytes are the same.
+            if (removal.sha256 == null || file.length() != removal.size
+                    || file.lastModified() != removal.lastModified || !removal.sha256.equals(sha256Of(file))) {
                 report(Level.WARNING, Keys.REMOVAL_SKIPPED, file.getAbsolutePath());
                 continue;
             }
@@ -740,6 +811,7 @@ public final class ModuleFileTransactions {
             } catch (IOException | RuntimeException e) {
                 report(Level.SEVERE, Keys.REMOVAL_FAILED, file.getAbsolutePath(), describe(e));
                 remaining.add(removal);
+                pendingRemovals.add(removal.name);
             }
         }
         if (!deleted.isEmpty()) {
@@ -1179,6 +1251,7 @@ public final class ModuleFileTransactions {
     static final class Removal {
         String name;
         long size;
+        long lastModified;
         String sha256;
     }
 

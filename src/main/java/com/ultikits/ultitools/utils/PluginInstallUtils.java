@@ -382,6 +382,7 @@ public class PluginInstallUtils {
             HttpDownloadUtils.download(pluginVersionDownloadLink,
                     fileName,
                     modulesFolder().getPath());
+            forgetDeferredRemoval(fileName);
             return true;
         } catch (IOException e) {
             UltiTools.getInstance().getLogger().severe("Failed to download plugin: " + e.getMessage());
@@ -411,6 +412,7 @@ public class PluginInstallUtils {
             HttpDownloadUtils.download(pluginVersionDownloadLink,
                     fileName,
                     modulesFolder().getPath());
+            forgetDeferredRemoval(fileName);
             return true;
         } catch (IOException e) {
             UltiTools.getInstance().getLogger().severe("Failed to download plugin: " + e.getMessage());
@@ -478,14 +480,32 @@ public class PluginInstallUtils {
 
     /**
      * Cancels every update of a module that is waiting for the next start -- called by an uninstall
-     * that went ahead, so the next start does not install the module again (#505).
+     * that went ahead, so the next start does not install the module again (#505). A transaction is
+     * the module's when it was staged under this name, or when the JAR it would replace is one the
+     * uninstall removed or recorded for removal.
      *
-     * @param moduleName the module's runtime name
+     * @param moduleName      the module's name, as the uninstall was given it
+     * @param removedJarNames the file names of the JARs the uninstall deleted or recorded for deletion
      * @return the versions whose updates were cancelled
      */
     @ApiStatus.Internal
-    public static List<String> cancelStagedUpdates(String moduleName) {
-        return new ModuleFileTransactions(UltiTools.getInstance().getDataFolder()).cancelStagedUpdates(moduleName);
+    public static List<String> cancelStagedUpdates(String moduleName, java.util.Collection<String> removedJarNames) {
+        return new ModuleFileTransactions(UltiTools.getInstance().getDataFolder())
+                .cancelStagedUpdates(moduleName, removedJarNames);
+    }
+
+    /**
+     * After an install wrote {@code fileName} into the modules folder, forgets a deletion an earlier
+     * uninstall recorded for that name, so the next start does not delete the new install (#518).
+     * A failure is logged: the install itself succeeded.
+     */
+    private static void forgetDeferredRemoval(String fileName) {
+        try {
+            new ModuleFileTransactions(UltiTools.getInstance().getDataFolder()).forgetDeferredRemoval(fileName);
+        } catch (IOException e) {
+            LOGGER.log(Level.WARNING, "Installed " + fileName + ", but a deletion recorded for that name by an"
+                    + " earlier uninstall could not be cancelled; the next start may delete it", e);
+        }
     }
 
     /**
