@@ -140,10 +140,10 @@ public class DefaultConfigParser extends ConfigParser<Object> {
 
     /**
      * The form of a value inside a list, where 6.2 put every element into the file as it was: an enum
-     * becomes its name and a collection a list (#523), a map a map of such values - a map inside a list
-     * is plain data the file keeps whole, dotted keys included - and every other element is left as it
-     * is, exactly as 6.2 left it (a Bukkit {@code ConfigurationSerializable} such as an item, a section,
-     * any other object).
+     * becomes its name and a collection a list (#523), a map a map of such values whose enum keys become
+     * their names and whose other keys stay as they are - a map inside a list is plain data the file
+     * keeps whole, dotted keys included - and every other element is left as it is, exactly as 6.2 left
+     * it (a Bukkit {@code ConfigurationSerializable} such as an item, a section, any other object).
      *
      * @param value the value, possibly {@code null}
      * @return the plain form
@@ -160,9 +160,12 @@ public class DefaultConfigParser extends ConfigParser<Object> {
             return list;
         }
         if (value instanceof Map) {
-            Map<String, Object> map = new LinkedHashMap<>();
+            // Only an enum key changes (to its name); every other key stays the object it is, so an
+            // integer key is written as the integer 6.2 wrote (`1: a`), not as text.
+            Map<Object, Object> map = new LinkedHashMap<>();
             for (Map.Entry<?, ?> entry : ((Map<?, ?>) value).entrySet()) {
-                map.put(keyName(entry.getKey()), plainForm(entry.getValue()));
+                Object key = entry.getKey();
+                map.put(key instanceof Enum ? ((Enum<?>) key).name() : key, plainForm(entry.getValue()));
             }
             return map;
         }

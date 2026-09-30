@@ -231,8 +231,8 @@ public abstract class AbstractConfigEntity {
         synchronized (this) {
             for (Field field : configEntryFields()) {
                 ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
-                warnDottedKeysBeforeWrite(field, annotation, entryPath(field, annotation),
-                        ReflectionUtil.getFieldValue(this, field));
+                checkMapKeysBeforeWrite(field, annotation, entryPath(field, annotation),
+                        ReflectionUtil.getFieldValue(this, field), true);
             }
             applyFieldsTo(config);
             config.save(new File(ultiToolsPlugin.getConfigFolder() + File.separator + configFilePath));
@@ -699,7 +699,7 @@ public abstract class AbstractConfigEntity {
                     } else {
                         upToDate = false;
                         Object defaultValue = ReflectionUtil.getFieldValue(this, field);
-                        warnDottedKeysBeforeWrite(field, annotation, path, defaultValue);
+                        checkMapKeysBeforeWrite(field, annotation, path, defaultValue, false);
                         config.set(path, fileFormOfDefault(annotation, defaultValue));
                         // D-07/D-09: the key never existed in the operator's file, so writing its
                         // @ConfigEntry comment alongside the value discloses nothing of theirs - this
@@ -855,10 +855,25 @@ public abstract class AbstractConfigEntity {
      * @return the value to put into the configuration
      */
     private static Object fileFormOfDefault(ConfigEntry annotation, Object defaultValue) {
-        if (defaultValue instanceof java.util.Collection || defaultValue instanceof Enum) {
-            return serializeForFile(annotation, defaultValue);
+        return defaultParserForm(annotation, defaultValue);
+    }
+
+    /**
+     * The value a first-boot default or a panel write puts into the file: with the default parser, an
+     * enum constant by its name and a collection as a YAML list (#523, read back by {@link
+     * ConfigValueBinder}); anything else - and every value of a module's own parser, which 6.2 wrote raw
+     * on these two paths and still does - exactly as it is.
+     *
+     * @param annotation the entry's {@code @ConfigEntry}
+     * @param value      the value, possibly {@code null}
+     * @return the value to put into the configuration
+     */
+    private static Object defaultParserForm(ConfigEntry annotation, Object value) {
+        if ((value instanceof java.util.Collection || value instanceof Enum)
+                && DefaultConfigParser.class.isAssignableFrom(annotation.parser())) {
+            return serializeForFile(annotation, value);
         }
-        return defaultValue;
+        return value;
     }
 
     /**
@@ -884,109 +899,111 @@ public abstract class AbstractConfigEntity {
     /**
      * The one warning about a dotted map key (#553; maintainer answer of 2026-09-30: warn only, the
      * write path stays as in 6.2). Arguments: the file, the entry, the key, the nested path of the map
-     * holding it, and the nested levels it is split into.
+     * holding it, and the nested levels it becomes.
      */
     private static final String DOTTED_KEY_WARNING = "Config file '%s', entry '%s': map key '%s' in '%s' contains"
-            + " '.', which the configuration file reads as a path separator, so it is stored split into nested"
-            + " levels (%s); rename the key (for example with '-' or '_')";
+            + " '.', which the configuration file uses as its path separator, so it will be split into nested levels"
+            + " (%s) the next time this file is loaded; rename it (for example with '-' or '_')";
 
-    /** How deep the check before a write follows maps and objects; deeper values are not checked. */
-    private static final int DOTTED_KEY_CHECK_DEPTH = 16;
+    /** The warning about a null map value that {@link #save()} leaves out, as it always has. */
+    private static final String NULL_MAP_VALUE_WARNING = "Config file '%s', entry '%s': map key '%s' in '%s' has no"
+            + " value (null), so it is not written; give it a value or remove it";
 
     /**
-     * Whether this entry's map keys are checked for dots (#553): its value is written as a section -
-     * a map, or an object the default parser writes field by field - by one of the two built-in parsers.
-     * A module's own parser decides its keys itself and is not checked.
+     * The one scope rule of the dotted-key check (#553; orchestrator ruling of 2026-09-30): an entry is
+     * checked when its declared type is a {@code Map} and it is written by one of the two built-in
+     * parsers. A module's own parser decides its keys itself.
      */
-    private static boolean checksKeys(Field field, ConfigEntry annotation) {
+    private static boolean checksMapKeys(Field field, ConfigEntry annotation) {
         Class<?> parser = annotation.parser();
-        if (!DefaultConfigParser.class.isAssignableFrom(parser)
-                && !com.ultikits.ultitools.interfaces.impl.pasers.StringHashMapParser.class.isAssignableFrom(parser)) {
-            return false;
-        }
-        Class<?> type = field.getType();
-        return !type.isPrimitive() && !java.util.Collection.class.isAssignableFrom(type) && !type.isEnum()
-                && type != String.class && !Number.class.isAssignableFrom(type) && type != Boolean.class
-                && type != Character.class;
+        return Map.class.isAssignableFrom(field.getType())
+                && (DefaultConfigParser.class.isAssignableFrom(parser)
+                || com.ultikits.ultitools.interfaces.impl.pasers.StringHashMapParser.class.isAssignableFrom(parser));
     }
 
     private static String entryPath(Field field, ConfigEntry annotation) {
         return annotation.path().isEmpty() ? field.getName() : annotation.path();
     }
 
-    private void warnDottedKey(String entry, String mapPath, String key) {
-        warnBinding(String.format(DOTTED_KEY_WARNING, configFilePath, entry, key, mapPath, key.replace(".", " -> ")));
+    /** Receives one map entry reached by {@link #walkDeclaredMaps}. */
+    private interface MapEntryVisitor {
+        void visit(String mapPath, String key, Object value);
     }
 
     /**
-     * Read-only check before a framework write of one entry (#553): every key containing {@code '.'} in a
-     * map the file will store as a section - the entry's map, maps nested in it and maps inside objects
-     * it holds - is named in one warning. A map that is a list element is plain data the file keeps
-     * whole and is not checked, nor is a {@code ConfigurationSerializable} (Bukkit's own objects). Never
-     * changes a value; a failure inside the check is logged and the write goes on exactly as before.
-     *
-     * @param field      the {@code @ConfigEntry} field
-     * @param annotation its {@code @ConfigEntry}
-     * @param entry      its path
-     * @param value      the value about to be written, possibly {@code null}
+     * The one walk both checks share (#553): the entries of {@code value} - a {@code Map} in memory or a
+     * section of the file - and, as far as the declared type says the values are maps too, the entries
+     * of those maps, each with the nested path of its map. Never reflects into an object, never enters a
+     * value the declared type does not call a map ({@code ConfigurationSerializable} and list values
+     * included), keeps no identity state, so a map shared by two keys is visited on each path. The depth
+     * is bounded by the declared type.
      */
-    private void warnDottedKeysBeforeWrite(Field field, ConfigEntry annotation, String entry, Object value) {
-        if (value == null || !checksKeys(field, annotation)) {
+    private static void walkDeclaredMaps(Object value, java.lang.reflect.Type declared, String path,
+                                         MapEntryVisitor visitor) {
+        Map<?, ?> entries = value instanceof ConfigurationSection
+                ? ((ConfigurationSection) value).getValues(false)
+                : value instanceof Map ? (Map<?, ?>) value : null;
+        if (entries == null) {
             return;
         }
+        java.lang.reflect.Type valueType = declared instanceof java.lang.reflect.ParameterizedType
+                && ((java.lang.reflect.ParameterizedType) declared).getActualTypeArguments().length == 2
+                ? ((java.lang.reflect.ParameterizedType) declared).getActualTypeArguments()[1] : Object.class;
+        boolean valuesAreMaps = Map.class.isAssignableFrom(ConfigValueBinder.rawClass(valueType));
+        for (Map.Entry<?, ?> entry : entries.entrySet()) {
+            Object rawKey = entry.getKey();
+            String key = rawKey instanceof Enum ? ((Enum<?>) rawKey).name() : String.valueOf(rawKey);
+            visitor.visit(path, key, entry.getValue());
+            if (valuesAreMaps) {
+                walkDeclaredMaps(entry.getValue(), valueType, path + "." + key, visitor);
+            }
+        }
+    }
+
+    /**
+     * Runs the shared walk for one entry, naming each dotted key once per (entry, nested path, key) and,
+     * when {@code reportNulls} is set, each null value; any failure inside - a {@code RuntimeException},
+     * a {@code LinkageError} from a class a missing plugin would provide, a {@code StackOverflowError} -
+     * is logged once and never leaves the caller.
+     */
+    private void checkMapKeys(Field field, String entry, Object value, boolean reportNulls) {
+        Set<String> reported = new java.util.HashSet<>();
         try {
-            scanForDottedKeys(value, entry, entry, 0,
-                    Collections.newSetFromMap(new java.util.IdentityHashMap<Object, Boolean>()));
-        } catch (RuntimeException | StackOverflowError e) {
+            walkDeclaredMaps(value, field.getGenericType(), entry, (mapPath, key, child) -> {
+                if (key.indexOf('.') >= 0 && reported.add(mapPath + '\u0000' + key)) {
+                    warnBinding(String.format(DOTTED_KEY_WARNING, configFilePath, entry, key, mapPath,
+                            key.replace(".", " -> ")));
+                }
+                if (reportNulls && child == null && reported.add("null\u0000" + mapPath + '\u0000' + key)) {
+                    warnBinding(String.format(NULL_MAP_VALUE_WARNING, configFilePath, entry, key, mapPath));
+                }
+            });
+        } catch (RuntimeException | LinkageError | StackOverflowError e) {
             String moduleName = ultiToolsPlugin != null ? ultiToolsPlugin.getPluginName() : null;
             LOGGER.log(Level.WARNING, (moduleName != null ? "[" + moduleName + "] " : "") + String.format(
-                    "Config file '%s', entry '%s': could not check its map keys for '.'; the entry is written as before",
+                    "Config file '%s', entry '%s': could not check its map keys for '.'; nothing else changes",
                     configFilePath, entry), e);
         }
     }
 
-    private void scanForDottedKeys(Object value, String entry, String path, int depth, Set<Object> seen) {
-        if (value == null || depth > DOTTED_KEY_CHECK_DEPTH || !seen.add(value)) {
-            return;
-        }
-        if (value instanceof Map) {
-            for (Map.Entry<?, ?> mapEntry : ((Map<?, ?>) value).entrySet()) {
-                Object rawKey = mapEntry.getKey();
-                String key = rawKey instanceof Enum ? ((Enum<?>) rawKey).name() : String.valueOf(rawKey);
-                if (key.indexOf('.') >= 0) {
-                    warnDottedKey(entry, path, key);
-                }
-                scanForDottedKeys(mapEntry.getValue(), entry, path + "." + key, depth + 1, seen);
-            }
-            return;
-        }
-        Class<?> type = value.getClass();
-        String typeName = type.getName();
-        if (value instanceof java.util.Collection || value instanceof CharSequence || value instanceof Number
-                || value instanceof Boolean || value instanceof Character || value instanceof Enum
-                || value instanceof ConfigurationSection || type.isArray()
-                || value instanceof org.bukkit.configuration.serialization.ConfigurationSerializable
-                || typeName.startsWith("java.") || typeName.startsWith("javax.") || typeName.startsWith("jdk.")
-                || typeName.startsWith("sun.") || typeName.startsWith("com.sun.")) {
-            return;
-        }
-        // An object the default parser writes field by field, as a section: its maps are sections too.
-        for (Field objectField : ReflectionUtil.getFields(type)) {
-            int modifiers = objectField.getModifiers();
-            if (java.lang.reflect.Modifier.isStatic(modifiers) || java.lang.reflect.Modifier.isTransient(modifiers)
-                    || objectField.isSynthetic()) {
-                continue;
-            }
-            objectField.setAccessible(true);
-            scanForDottedKeys(ReflectionUtil.getFieldValue(value, objectField), entry,
-                    path + "." + objectField.getName(), depth + 1, seen);
+    /**
+     * Read-only check before a framework write of one entry (#553): see {@link #checksMapKeys} for the
+     * scope and {@link #walkDeclaredMaps} for the walk. Never changes a value or the file. {@code
+     * reportNulls} is set for {@link #save()}, whose serializer leaves a null map value out; a first-boot
+     * default and a panel write put the map in raw, null values included, as 6.2 does.
+     */
+    private void checkMapKeysBeforeWrite(Field field, ConfigEntry annotation, String entry, Object value,
+                                         boolean reportNulls) {
+        if (value != null && checksMapKeys(field, annotation)) {
+            checkMapKeys(field, entry, value, reportNulls);
         }
     }
 
     /**
      * Warns, once per load, about every map key in the file that contains a dot (#553): the loader
-     * has read it as a nested path ({@code my.rule} as {@code my} -> {@code rule}), exactly as in 6.2,
-     * and the operator is asked to rename it. Only the entries of {@code Map} fields are checked.
+     * reads it as a nested path ({@code my.rule} as {@code my} -> {@code rule}), exactly as in 6.2, and
+     * the operator is asked to rename it. Same scope and walk as the check before a write ({@link
+     * #checksMapKeys}, {@link #walkDeclaredMaps}), over the text this load already read.
      *
      * @param keyView the file read with a separator no key contains, or {@code null}
      */
@@ -996,7 +1013,7 @@ public abstract class AbstractConfigEntity {
         }
         for (Field field : configEntryFields()) {
             ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
-            if (!checksKeys(field, annotation)) {
+            if (!checksMapKeys(field, annotation)) {
                 continue;
             }
             String path = entryPath(field, annotation);
@@ -1007,25 +1024,7 @@ public abstract class AbstractConfigEntity {
                 continue;
             }
             if (section instanceof ConfigurationSection) {
-                try {
-                    warnDottedKeysIn((ConfigurationSection) section, path, path);
-                } catch (RuntimeException e) {
-                    LOGGER.log(Level.WARNING, "Config file '" + configFilePath + "', entry '" + path
-                            + "': could not check its map keys for '.'; the load goes on as before", e);
-                }
-            }
-        }
-    }
-
-    private void warnDottedKeysIn(ConfigurationSection section, String entry, String path) {
-        for (String key : section.getKeys(false)) {
-            if (key.indexOf('.') >= 0) {
-                warnDottedKey(entry, path, key);
-                continue;
-            }
-            Object child = section.get(key);
-            if (child instanceof ConfigurationSection) {
-                warnDottedKeysIn((ConfigurationSection) child, entry, path + "." + key);
+                checkMapKeys(field, path, section, false);
             }
         }
     }
@@ -1055,7 +1054,7 @@ public abstract class AbstractConfigEntity {
 
     private static boolean hasCheckedField(List<Field> configFields) {
         for (Field field : configFields) {
-            if (checksKeys(field, ReflectionUtil.getAnnotation(field, ConfigEntry.class))) {
+            if (checksMapKeys(field, ReflectionUtil.getAnnotation(field, ConfigEntry.class))) {
                 return true;
             }
         }
@@ -1314,12 +1313,11 @@ public abstract class AbstractConfigEntity {
                     path = field.getName();
                 }
                 Object value = ReflectionUtil.getFieldValue(this, field);
-                warnDottedKeysBeforeWrite(field, annotation, path, value);
-                // An enum or a collection is written in the form the loader reads back (#523): the
-                // Gson value as it is would be a Java-class-tagged enum or a tagged set, and the next
-                // start would refuse the whole file. Other values are written as before.
-                config.set(path, value instanceof Enum || value instanceof java.util.Collection
-                        ? serializeForFile(annotation, value) : value);
+                checkMapKeysBeforeWrite(field, annotation, path, value, false);
+                // With the default parser an enum or a collection is written in the form the loader reads
+                // back (#523); every other value, and every value of a module's own parser, is written as
+                // it always was (the raw Gson value).
+                config.set(path, defaultParserForm(annotation, value));
             }
             applyTokenComments(config); // #542: a panel write carries the resolved comments too
             config.save(ultiToolsPlugin.getConfigFile(configFilePath));
