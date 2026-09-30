@@ -783,7 +783,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             }
         } catch (IOException e) {
             languageLog().error(e, "Could not restore language file '" + file.getPath() + "' of module '"
-                    + getPluginName() + "' from '" + backup.getPath() + "'; the previous file is still there.");
+                    + getPluginName() + "': it now holds the bundled version, and the previous file is kept only as '"
+                    + backup.getPath() + "'. To restore it, stop the server and rename it back.");
         }
     }
 
