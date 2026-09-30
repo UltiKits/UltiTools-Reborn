@@ -670,12 +670,47 @@ public final class ModuleFileTransactions {
         sweepOrphanWorkFolders(ids);
     }
 
+    /**
+     * Carries out one record. The transaction is the boundary: an unchecked exception from any file
+     * operation in it -- a {@link SecurityException}, or anything else unexpected -- fails that
+     * transaction and never the start (round-4 review; orchestrator decision 2026-09-30).
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // the boundary of one transaction, by design
     private void applyGuarded(Record record) {
+        String entryState = record.state;
         try {
             applyRecord(record);
         } catch (RecordRefused refused) {
             report(Level.WARNING, Keys.RECORD_REFUSED, recordFileOf(record).getAbsolutePath(), refused.getMessage());
+        } catch (RuntimeException unexpected) {
+            failUnexpectedly(record, entryState, unexpected);
         }
+    }
+
+    /**
+     * An unchecked exception ended one transaction. An update being applied goes through the same
+     * failure path as every other apply failure ({@link #failApply}): whatever step already
+     * happened is undone, the record is {@code FAILED}, and one SEVERE line names the transaction
+     * and the exception.
+     *
+     * <p>A record already past its apply ({@code APPLIED}, {@code COMMITTING}, {@code ROLLING_BACK}),
+     * a {@code FAILED} one, or a removal is not re-marked: its state already says what is left,
+     * every step is idempotent, and the next start finishes it, as after a crash at that point.
+     * Marking a decided update {@code FAILED} instead would put the old JAR back beside a committed
+     * new one. It is reported with one SEVERE line.
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // the failure handling itself must not end the start
+    private void failUnexpectedly(Record record, String entryState, RuntimeException error) {
+        appliedThisStart.remove(record);
+        if (Record.UPDATE.equals(record.type) && Record.PENDING.equals(entryState)) {
+            try {
+                failApply(record, recordFileOf(record), error);
+                return;
+            } catch (RecordRefused | RuntimeException again) {
+                error.addSuppressed(again);
+            }
+        }
+        report(Level.SEVERE, Keys.TRANSACTION_ERROR, recordFileOf(record).getAbsolutePath(), describe(error));
     }
 
     private void applyRecord(Record record) throws RecordRefused {
@@ -783,27 +818,14 @@ public final class ModuleFileTransactions {
         File backup = confined(new File(work, BACKUP_FOLDER), record.oldName);
         File staged = confined(new File(work, STAGED_FOLDER), record.stagedName);
 
-        if (!exists(staged)) {
+        if (!present(staged)) {
             resumeWithoutStagedJar(record, target, staged);
             return;
         }
-        // The staged JAR must still be the file that was downloaded, checked before anything in the
-        // modules folder is touched -- on a first attempt and on one resumed after the old JAR moved.
-        String actual = sha256Of(staged);
-        if (!record.stagedSha256.equals(actual)) {
-            failStagedIdentity(record, staged, actual == null ? MISSING : actual);
+        if (stoppedBeforeMoving(record, work, old, target, backup, staged)) {
             return;
         }
-        if (abandonedBeforeApply(record, work, old, backup)) {
-            return;
-        }
-        boolean oldStillAtTarget = record.targetName.equals(record.oldName) && !exists(backup);
-        if (exists(target) && !oldStillAtTarget) {
-            failApply(record, target, new FileAlreadyExistsException(target.getAbsolutePath(), null,
-                    "a file already has the new JAR's name; it is never replaced"));
-            return;
-        }
-        if (!exists(backup)) {
+        if (!present(backup)) {
             try {
                 Files.createDirectories(backup.getParentFile().toPath());
                 ops.move(old.toPath(), backup.toPath());
@@ -821,6 +843,32 @@ public final class ModuleFileTransactions {
         }
         crashPoints.reached(CrashPoints.AFTER_NEW_MOVED);
         markApplied(record);
+    }
+
+    /**
+     * The checks an apply makes before it moves anything; each that fails ends the transaction.
+     *
+     * @return whether the transaction was ended (failed or abandoned)
+     */
+    private boolean stoppedBeforeMoving(Record record, File work, File old, File target, File backup, File staged)
+            throws RecordRefused {
+        // The staged JAR must still be the file that was downloaded, checked before anything in the
+        // modules folder is touched -- on a first attempt and on one resumed after the old JAR moved.
+        String actual = sha256Of(staged);
+        if (!record.stagedSha256.equals(actual)) {
+            failStagedIdentity(record, staged, actual == null ? MISSING : actual);
+            return true;
+        }
+        if (abandonedBeforeApply(record, work, old, backup)) {
+            return true;
+        }
+        boolean oldStillAtTarget = record.targetName.equals(record.oldName) && !present(backup);
+        if (present(target) && !oldStillAtTarget) {
+            failApply(record, target, new FileAlreadyExistsException(target.getAbsolutePath(), null,
+                    "a file already has the new JAR's name; it is never replaced"));
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -886,6 +934,11 @@ public final class ModuleFileTransactions {
         return true;
     }
 
+    /** An existence check of the apply, through {@link FileOps} so a test can make it fail. */
+    private boolean present(File file) {
+        return ops.exists(file.toPath());
+    }
+
     private void markApplied(Record record) {
         record.state = Record.APPLIED;
         persist(record);
@@ -909,7 +962,10 @@ public final class ModuleFileTransactions {
      * @param specific the line to log when nothing is left out of place, or {@code null} for the generic one
      */
     private void failApply(Record record, File file, Throwable error, Report specific) throws RecordRefused {
-        String restoreError = restoreBackup(record);
+        String restoreError = returnStagedJar(record);
+        if (restoreError == null) {
+            restoreError = restoreBackup(record);
+        }
         record.state = Record.FAILED;
         if (restoreError == null && specific != null) {
             record.failure = file.getAbsolutePath() + ": " + describe(error);
@@ -938,6 +994,29 @@ public final class ModuleFileTransactions {
             report(Level.SEVERE, Keys.APPLY_FAILED_UNRESTORED, record.moduleName, record.oldVersion,
                     record.newVersion, file.getAbsolutePath(), describe(error), restoreError,
                     backupOf(record).getAbsolutePath(), confined(modulesFolder, record.oldName).getAbsolutePath());
+        }
+    }
+
+    /**
+     * Moves the new JAR back to the staged folder when it was already moved into the modules
+     * folder -- recognised by its recorded hash, so nothing else is ever moved. Part of undoing a
+     * failed apply; the old JAR goes back after it.
+     *
+     * @return {@code null} when the new JAR is not in the modules folder (or is back), otherwise what failed
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private String returnStagedJar(Record record) throws RecordRefused {
+        File target = confined(modulesFolder, record.targetName);
+        File staged = confined(new File(workFolder(record), STAGED_FOLDER), record.stagedName);
+        if (exists(staged) || !isStagedJar(target, record)) {
+            return null;
+        }
+        try {
+            Files.createDirectories(staged.getParentFile().toPath());
+            ops.move(target.toPath(), staged.toPath());
+            return null;
+        } catch (IOException | RuntimeException e) {
+            return target.getAbsolutePath() + " could not be moved back: " + describe(e);
         }
     }
 
@@ -1599,6 +1678,16 @@ public final class ModuleFileTransactions {
         void move(Path from, Path to) throws IOException;
 
         void delete(Path path) throws IOException;
+
+        /**
+         * Whether a file exists, links not followed -- the existence checks of an apply.
+         *
+         * @param path the file
+         * @return whether it exists
+         */
+        default boolean exists(Path path) {
+            return Files.exists(path, LinkOption.NOFOLLOW_LINKS);
+        }
     }
 
     /** Named points of a transaction; a test crashes at one to reproduce that window. */
@@ -1797,6 +1886,8 @@ public final class ModuleFileTransactions {
         public static final String RESTORE_FAILED = "模块 %s 的旧版本 JAR 仍在 %s，未能移回 %s（%s）；请停止服务器后手动移回。";
         public static final String RECORDS_UNLISTABLE =
                 "更新目录 %s 无法列出（%s）；本次启动没有执行任何暂存的更新或卸载时记录的删除，它们保持原样，下次启动会再试。";
+        public static final String TRANSACTION_ERROR =
+                "更新记录 %s 处理时出错（%s）；记录保持原样，下次启动会从它记录的步骤继续。";
         public static final String CLEANUP_DEFERRED = "模块 %s 的更新已确认，但更新目录 %s 未能清理，下次启动会再清理。";
         public static final String ORPHAN_BACKUP = "更新目录 %s 中有不属于任何更新记录的旧版本 JAR，已保留：%s";
         public static final String UPDATE_ABANDONED = "模块 %s 暂存的 %s 版本更新已放弃：它的 JAR %s 在暂存之后已不在模块目录中（例如已卸载）。";
