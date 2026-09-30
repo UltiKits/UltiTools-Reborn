@@ -226,6 +226,26 @@ class UninstallCancelsByIdentityTest {
     }
 
     @Test
+    @DisplayName("self-review: an identify-string another loaded module also reports never cancels that module's update")
+    void sharedIdentifyString_doesNotCancelTheOtherModulesUpdate() throws IOException {
+        // A misconfiguration, but a real one: two modules whose plugin.yml files carry the same
+        // identify-string. Demo's update is staged; uninstalling Twin must not cancel it -- the
+        // identify-string is not Twin's alone, exactly as a name another loaded module owns is not.
+        File twinJar = moduleJar(new File(modules, "twin-1.0.jar"), "Twin", "1.0", "demo");
+        UltiToolsPlugin twin = loaded("Twin", "demo");
+        codeSources.with(twin, twinJar);
+        stage();
+        List<String> cancelled = new ArrayList<>();
+
+        PluginInstallUtils.uninstallPluginReporting("Twin", codeSources, cancelled);
+
+        assertThat(twinJar).doesNotExist();
+        assertThat(cancelled).isEmpty();
+        assertThat(treeOf(transactions)).isNotEmpty();
+        assertThat(pluginManager.getPluginList()).containsExactly(demo);
+    }
+
+    @Test
     @DisplayName("round 10 control: uninstalling another module leaves this module's staged update alone")
     void uninstallingAnotherModule_leavesTheUpdate() throws IOException {
         File otherJar = moduleJar(new File(modules, "other-1.0.jar"), "Other", "1.0", "other");
