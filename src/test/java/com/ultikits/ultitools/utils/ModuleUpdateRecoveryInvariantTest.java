@@ -128,11 +128,14 @@ class ModuleUpdateRecoveryInvariantTest {
         start.observeAfterLoad(loaded, sources);
 
         scenario.assertInvariant(old == Old.GONE && "PENDING".equals(state));
+        if ("FAILED".equals(state)) {
+            scenario.assertOldVersionInPlace();
+        }
     }
 
     @ParameterizedTest(name = "FAILED, old {0}, new {1}, same name {2}")
     @MethodSource("failed")
-    @DisplayName("after /upm update discards a FAILED record, the modules folder holds exactly one JAR and nothing is stray")
+    @DisplayName("after /upm update discards a FAILED record, the old JAR alone is in the modules folder and nothing is stray")
     void afterDiscardingAFailedRecord_theInvariantHolds(Old old, New neu, boolean sameName) throws IOException {
         Scenario scenario = new Scenario(sameName).build("FAILED", old, neu);
 
@@ -142,6 +145,7 @@ class ModuleUpdateRecoveryInvariantTest {
                 catalogue("other", "9.9"), downloading("Demo", "1.1", "demo"));
 
         scenario.assertInvariant(false);
+        scenario.assertOldVersionInPlace();
     }
 
     /** One server layout with one staged update of {@code demo} from 1.0 to 1.1. */
@@ -250,6 +254,15 @@ class ModuleUpdateRecoveryInvariantTest {
                     assertThat(recordLeft).as("a staged JAR exists only while its record does").isTrue();
                 }
             }
+        }
+
+        /**
+         * A failed apply is fully undone once file operations succeed: the old version is the JAR in
+         * the modules folder, whether or not it shares the new JAR's file name.
+         */
+        void assertOldVersionInPlace() throws IOException {
+            assertThat(jarsOfTheModuleIn(modules)).as("the old version is back").hasSize(1)
+                    .allSatisfy(jar -> assertThat(ModuleFileTransactions.sha256Of(jar)).isEqualTo(oldHash));
         }
 
         private List<File> jarsOfTheModuleIn(File folder) throws IOException {

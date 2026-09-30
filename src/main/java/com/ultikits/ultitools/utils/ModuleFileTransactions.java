@@ -1214,10 +1214,7 @@ public final class ModuleFileTransactions {
      * @param specific the line to log when nothing is left out of place, or {@code null} for the generic one
      */
     private void failApply(Record record, File file, Throwable error, Report specific) throws RecordRefused {
-        String restoreError = returnStagedJar(record);
-        if (restoreError == null) {
-            restoreError = restoreBackup(record);
-        }
+        String restoreError = undoApply(record);
         record.state = Record.FAILED;
         if (restoreError == null && specific != null) {
             record.failure = file.getAbsolutePath() + ": " + describe(error);
@@ -1247,6 +1244,24 @@ public final class ModuleFileTransactions {
                     record.newVersion, file.getAbsolutePath(), describe(error), restoreError,
                     backupOf(record).getAbsolutePath(), confined(modulesFolder, record.oldName).getAbsolutePath());
         }
+    }
+
+    /**
+     * Undoes whatever part of an apply happened: the new JAR goes back to the staged folder if it is
+     * in the modules folder ({@link #returnStagedJar}, by its recorded hash), then the kept old JAR goes
+     * back ({@link #restoreBackup}) -- in that order, and the second only once the first is done, so
+     * the modules folder never holds both. The one undo of a failed apply: when it fails
+     * ({@link #failApply}), at every later start while the record is {@code FAILED}
+     * ({@link #restoreAfterFailure}), and when {@code /upm update} discards the record
+     * ({@link #discardFailed}). Restoring only the old JAR at those later points put it back beside a
+     * new JAR whose return had failed (Codex round 14, #561).
+     *
+     * @return {@code null} when nothing of the apply is left in the modules folder and the old JAR is in
+     *         place (or there was none), otherwise what failed
+     */
+    private String undoApply(Record record) throws RecordRefused {
+        String error = returnStagedJar(record);
+        return error != null ? error : restoreBackup(record);
     }
 
     /**
@@ -1282,9 +1297,12 @@ public final class ModuleFileTransactions {
         return false;
     }
 
-    /** A failed apply found at a later start: make sure the old JAR is back, and say so if it cannot be. */
+    /**
+     * A failed apply found at a later start: make sure it is undone -- the new JAR out of the modules
+     * folder and the old JAR back ({@link #undoApply}) -- and say so if it cannot be.
+     */
     private void restoreAfterFailure(Record record) throws RecordRefused {
-        String restoreError = restoreBackup(record);
+        String restoreError = undoApply(record);
         if (restoreError != null) {
             report(Level.SEVERE, Keys.RESTORE_FAILED, record.moduleName, backupOf(record).getAbsolutePath(),
                     confined(modulesFolder, record.oldName).getAbsolutePath(), restoreError);
@@ -1315,14 +1333,15 @@ public final class ModuleFileTransactions {
     }
 
     /**
-     * Discards a {@code FAILED} record before staging again: the old JAR goes back if it is still
-     * aside, then the working folder and the record are deleted.
+     * Discards a {@code FAILED} record before staging again: the apply is undone ({@link #undoApply}:
+     * the new JAR out of the modules folder, the old JAR back if it is still aside), then the working
+     * folder and the record are deleted.
      *
      * @return {@code null} on success, otherwise why the old JAR could not be put back
      */
     private String discardFailed(Record record) {
         try {
-            String restoreError = restoreBackup(record);
+            String restoreError = undoApply(record);
             if (restoreError != null) {
                 return restoreError;
             }
