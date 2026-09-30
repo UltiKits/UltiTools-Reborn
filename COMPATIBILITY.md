@@ -360,33 +360,35 @@ This section governs the third kind.
   field (a list where a map is declared, text in a number field) threw `IllegalArgumentException`
   out of the entity's `init()` and the module never loaded, with no line naming the key; a
   `float`/`Float` field could not load any decimal; and a map key containing a dot (`my.rule`) was
-  silently saved as a nested path and read back as `my`. As of 6.3.0 collection elements and map
-  keys and values are converted to their declared types, a quoted number the old parser wrote
-  (`'30'`) loads as the number, an element that cannot be converted is skipped, a wrongly shaped
-  value keeps the field's declared default, and each such value is named in one WARNING (file, key,
-  declared type, and the value unless a key in it names a secret) while the rest of the
-  configuration loads; a value the entry's parser cannot read (a YAML date in a text field) and an
-  empty list item are handled the same way. A decimal loads into a `float`/`Float` field when the
-  float nearest to it prints back as the same decimal (`0.1`, `0.3`, `1.5`), so a float the
-  framework wrote always reads back, and a `UUID` collection element or map value is written as text
-  and read back (a top-level `UUID` field's first-boot default is still written raw, as before -
-  UltiKits/UltiTools-Reborn#560); only a value with more digits than a float holds (`0.123456789`)
-  keeps the default with a warning (maintainer decision of 2026-09-30). A map key containing a dot
-  cannot be stored as one key, because the configuration file uses `.` as its path separator and
-  quoting the key does not change that: every framework write (a save, a first-boot default, a panel
-  write, and a map nested in such a map or inside an object - every map the file stores as a
-  section) now leaves such a key out, with one WARNING naming the file, the entry and the key and
-  asking for a rename, and a start or reload that finds such a key in the file warns the operator to
-  rename it (maintainer decision of 2026-09-30); a map that is a list element is plain data, which
-  the file keeps whole, so its dotted key is kept and not warned about; the configuration layer and
-  every path a module reads through `getConfig()` are as in 6.2. A module that compensated for the
-  old text elements by parsing them itself keeps working (an `Integer` still prints as its number),
-  but a list with one bad element is now used without that element rather than reaching the module
-  whole. With the default parser a `Set` field is written as a YAML list and an enum by its name,
-  both of which used to produce a file the loader refused; a module's own `parser` serializes
-  exactly as before. `DefaultConfigParser#parse` returns a sequence's elements as they are instead
-  of as text, and a value that is neither a sequence nor a section as it is instead of failing a
-  cast.
+  silently saved as a nested path and read back as `my`, with no line saying so. As of 6.3.0
+  collection elements and map keys and values are converted to their declared types, a quoted number
+  the old parser wrote (`'30'`) loads as the number, an element that cannot be converted is skipped,
+  a wrongly shaped value keeps the field's declared default, and each such value is named in one
+  WARNING (file, key, declared type, and the value unless a key in it names a secret) while the rest
+  of the configuration loads; a value the entry's parser cannot read (a YAML date in a text field)
+  and an empty list item are handled the same way. A decimal loads into a `float`/`Float` field when
+  the float nearest to it prints back as the same decimal (`0.1`, `0.3`, `1.5`), so a float the
+  framework wrote always reads back; only a value with more digits than a float holds
+  (`0.123456789`) keeps the default with a warning (maintainer decision of 2026-09-30). A map key
+  containing a dot is still written and read exactly as in 6.2 - the configuration file uses `.` as
+  its path separator, so in a map the file stores as a section such a key is split into nested
+  levels (`my` -> `rule`), and quoting it does not change that - but it is no longer silent: a start
+  or reload that finds such a key in the file, and every framework write that is about to write one
+  (a save, a first-boot default, a panel write), logs one WARNING per key naming the file, the
+  entry, the map's nested path and the module and asking for a rename (maintainer decision of
+  2026-09-30: warn only, the write path stays as in 6.2). The check never changes a value or the
+  file. A map that is a list element is plain data the file keeps whole and is not warned about; a
+  map written by a module's own `parser` is not checked. A module that compensated for the old text
+  elements by parsing them itself keeps working (an `Integer` still prints as its number), but a
+  list with one bad element is now used without that element rather than reaching the module whole.
+  With the default parser a `Set` field is written as a YAML list and an enum field or collection
+  element by its name, both of which used to produce a file the loader refused; every other value,
+  maps and objects included, is written exactly as in 6.2, and a module's own `parser` serializes
+  exactly as before. A value the framework still writes with a Java-class tag - a top-level `UUID`
+  or unregistered `ConfigurationSerializable` default, an enum or unregistered
+  `ConfigurationSerializable` inside a map default - is tracked as UltiKits/UltiTools-Reborn#560.
+  `DefaultConfigParser#parse` returns a sequence's elements as they are instead of as text, and a
+  value that is neither a sequence nor a section as it is instead of failing a cast.
 - A `@ConfigEntry` comment that is exactly one language key is rewritten on every framework write,
   including the first start after an upgrade (#542, maintainer decision of 2026-09-29): a comment
   such as `comment = "{config.demo.limit}"` is resolved from the module's catalogue in the server's
@@ -404,7 +406,7 @@ This section governs the third kind.
   comment - anything that is not exactly one `{key}` - behaves as before. No element was added to
   `@ConfigEntry`, so no module has to recompile.
 
-  中文：`@ConfigEntry` 的值现在按字段声明的类型绑定（列表元素、映射的键和值），无法转换的元素被跳过、形状不对的值保留默认值，并各记一条警告（文件、键、声明类型、原值；键名像密钥时原值打码），其余配置照常加载。`float` 字段里的小数，只要按 float 读回来一样就接受（`0.1`、`0.3`、`1.5`），位数超过 float 能保存的值保留默认值并警告。配置文件用点作路径分隔符，所以会变成配置节的映射（映射字段、嵌套映射、对象里的映射）不能保存含点的键：框架每次写文件时会跳过这样的键（列表元素里的映射是普通数据，文件能原样保存，不跳过也不警告），并记一条警告写明文件、配置项和键名，请服主改名；启动或重载时发现文件里有这样的键，也会警告改名。配置层结构与 6.2 相同。注释恰好是一个 `{key}` 时，框架每次写这个配置文件都按服务器当前语言从模块语言文件取注释重写（升级后第一次启动也会），服主在这些项上手写的注释会被覆盖，没有变化时不写文件。**注意：重写不只改注释行。**与框架的每一次写文件一样，整个文件会重新输出：服主加的引号会被去掉，行内列表 `[a, b]` 变成多行，`yes` 变成 `true`，`1.50` 变成 `1.5`，写在列表项旁的注释会丢失；值的含义不变。维护者 2026-09-30 接受了这一点；此前说「只改注释行」的描述是错的。
+  中文：`@ConfigEntry` 的值现在按字段声明的类型绑定（列表元素、映射的键和值），无法转换的元素被跳过、形状不对的值保留默认值，并各记一条警告（文件、键、声明类型、原值；键名像密钥时原值打码），其余配置照常加载。`float` 字段里的小数，只要按 float 读回来一样就接受（`0.1`、`0.3`、`1.5`），位数超过 float 能保存的值保留默认值并警告。含点的映射键仍按 6.2 的方式写入和读取（配置文件用点作路径分隔符，这样的键会被拆成嵌套的几层），但不再无声：启动或重载时在文件里发现、以及框架每次写入前发现这样的键，都会记一条警告，写明文件、配置项、嵌套路径和模块，请服主改名；检查只读，不改任何值和文件。列表元素里的映射和模块自带解析器的映射不检查。仍会写出 Java 类标签的几种默认值见 #560。注释恰好是一个 `{key}` 时，框架每次写这个配置文件都按服务器当前语言从模块语言文件取注释重写（升级后第一次启动也会），服主在这些项上手写的注释会被覆盖，没有变化时不写文件。**注意：重写不只改注释行。**与框架的每一次写文件一样，整个文件会重新输出：服主加的引号会被去掉，行内列表 `[a, b]` 变成多行，`yes` 变成 `true`，`1.50` 变成 `1.5`，写在列表项旁的注释会丢失；值的含义不变。维护者 2026-09-30 接受了这一点；此前说「只改注释行」的描述是错的。
 - Changes in performance, memory footprint, log wording, or exception message text.
 - Security fixes. These may land in a PATCH without prior notice.
 - Refreshing an extracted resource file nobody has customised. Before 6.3.0, `saveResources()`
