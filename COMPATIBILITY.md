@@ -483,6 +483,73 @@ The migration period runs in two steps:
 This section follows [PEP 387](https://peps.python.org/pep-0387/); the principle is the same one:
 tell people which floor they are standing on before removing it.
 
+### Command bodies run at dispatch (6.3.0) — changed without a migration period
+
+This is a change "in the timing of a side effect", the last kind listed above, made in 6.3.0 without
+the two-step period by the maintainer's decision of 2026-09-29 (#541), which accepted that it changes
+command timing for **every module, third-party modules included**.
+
+**What changed.** Before 6.3.0, `BaseCommandExecutor` ran every synchronous command body one tick after
+the command was dispatched. As of 6.3.0 the body runs **at dispatch**, inside the call that dispatched
+it, whenever that call is on the server's primary thread — which is where Bukkit dispatches everything
+a player, the console, a command block, a command minecart, RCON or the panel sends. It is handed to
+`runTask` only when `onCommand` is called from another thread, as Bukkit's own commands behave. An
+`@AsyncCommand` or `@RunAsync` body is unchanged: it always runs asynchronously. The deferral had no
+recorded reason: it came from sharing one `BukkitRunnable` with `@RunAsync` in 6.0.0.
+
+**Why.** Paper 1.21.11 records a command block's output only while its dispatch is open, and the
+panel's remote command and RCON read their output as soon as the dispatch returns, so a deferred body's
+replies to those senders were lost. The deferral also let two dispatches in one tick both pass
+`@CmdCD`, because the cooldown was recorded when the deferred body finished; the cooldown is now
+recorded before the first dispatch returns.
+
+**What a module author has to check.**
+
+- Code that relied on the one-tick delay — for example a command body that expected the dispatching
+  event to have finished first — must schedule that work itself with `runTask`.
+- **Paper's rule for inventory clicks.** An `InventoryClickEvent` handler (including a GUI library's
+  `onClick` callback) must not open or close an inventory directly, and must not call
+  `performCommand` or `Bukkit.dispatchCommand` directly either: a module command dispatched there now
+  runs its body — which may open or close an inventory — inside the click event. Defer the call with
+  `Bukkit.getScheduler().runTask(...)`. The fifteen UltiKits modules were surveyed; the handlers that
+  did this are tracked as UltiMenu#28, UltiSocial#27, UltiKits#41, UltiMail#43 and UltiWorlds#50.
+- **A body that dispatches another command** runs the nested body on the same thread before its own
+  has finished. The audit user (`AuditableDataEntity`'s current user, written into `created_by` /
+  `updated_by`) is saved before each body and restored after it: the nested body sees its own sender
+  (none for a sender that is not a player), the outer body sees its own sender again afterwards, and a
+  thread that carried no user before the outermost command carries none after it. Before 6.3.0 the
+  body cleared the user when it finished.
+- **`@UsageLimit` and re-entry.** A body that dispatches its own command while holding its lock gets
+  the nested dispatch refused with the ordinary lock message (`SENDER`: from the same sender; `ALL`:
+  from any sender). Acquiring never waits, so nothing blocks; the outer lock is released when the
+  outer body returns, normally or by throwing. Schedule the nested call with `runTask` if it must run.
+- **Two dispatches in one tick meet the cooldown.** The second of two dispatches of a `@CmdCD` command
+  by one player in the same tick is refused.
+
+### Other command and task runtime changes (6.3.0) that need no migration period
+
+Each corrects behaviour that contradicted the documentation or left state held by mistake.
+
+- **Active `@CmdCD` cooldowns are kept per executor instance** as well as per mapping (#539). One
+  `CooldownValidator` shared by two executors of one class — two modules passing one `ValidatorChain`
+  — no longer refuses a player on executor B for a use through executor A. `clearCooldown(UUID, String)`
+  and `getRemainingCooldown(UUID, String)` keep working unchanged for one executor per validator, which
+  is the shape both `BaseCommandExecutor` constructors create; when a validator serves several
+  executors they span all of them (the longest remaining time, and every executor's cooldown
+  cleared). The new overloads `clearCooldown(UUID, Object, String)` and
+  `getRemainingCooldown(UUID, Object, String)` address one executor. The executor is held weakly, so
+  an active cooldown never keeps an unloaded module's executor reachable.
+- **A `@UsageLimit` lock is released when the dispatch is refused after it was taken** (#568): by the
+  cooldown (which validates after the lock), by the argument-count check, or because a parameter did
+  not parse. Before 6.3.0 the lock stayed held until the player quit, and every later call of the
+  mapping was refused. The mechanism is a new default method, `CommandValidator#onRefused`, called for
+  each validator that passed; its default does nothing, so existing validators are unaffected, and a
+  refused dispatch runs no `onComplete`, so it applies no cooldown.
+- **`@Scheduled` methods declared on a superclass of a bean are scheduled** (#532), as the annotation's
+  javadoc always said. An overridden method is scheduled once, with the most derived declaration's
+  annotation; an override without `@Scheduled` is not scheduled. A method that previously never ran
+  because an abstract base declared it now runs; none of the fifteen UltiKits modules declares one.
+
 ## Binary incompatibilities the removal list cannot cover
 
 The removal list only covers changes where somebody knew they were changing an API. Both of its
