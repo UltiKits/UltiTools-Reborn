@@ -285,14 +285,20 @@ public abstract class BaseCommandExecutor implements TabExecutor {
             return true;
         }
         
-        // Check parameter count
-        if (!validateParameterCount(args, format, sender, command)) {
-            notifyRefused(context, validationResult);
-            return true;
+        // Check parameter count and build the method parameters. A refusal here -- by return or by
+        // an exception, such as a module's TypeParser throwing a runtime exception -- releases what
+        // the validators acquired (#568).
+        Object[] methodParams;
+        try {
+            if (!validateParameterCount(args, format, sender, command)) {
+                notifyRefused(context, validationResult);
+                return true;
+            }
+            methodParams = buildMethodParams(context, method);
+        } catch (RuntimeException e) {
+            notifyRefusedAndRethrow(context, validationResult, e);
+            throw e;
         }
-        
-        // Build method parameters
-        Object[] methodParams = buildMethodParams(context, method);
         if (methodParams == null) {
             notifyRefused(context, validationResult);
             return true;
@@ -311,12 +317,20 @@ public abstract class BaseCommandExecutor implements TabExecutor {
      * passed-validator list, like {@code onComplete}, never from a named field.
      */
     private static void notifyRefused(CommandContext context, ValidatorChain.ChainValidationResult validationResult) {
-        List<CommandValidator> passedValidators = validationResult.getPassedValidators();
-        if (passedValidators == null) {
-            return;
-        }
-        for (CommandValidator passed : passedValidators) {
-            passed.onRefused(context);
+        ValidatorChain.notifyRefused(context, validationResult.getPassedValidators());
+    }
+
+    /**
+     * {@link #notifyRefused} for a dispatch leaving by {@code cause}: every hook still runs, and a hook
+     * that throws is attached to {@code cause} as suppressed rather than replacing it.
+     */
+    private static void notifyRefusedAndRethrow(CommandContext context,
+                                                ValidatorChain.ChainValidationResult validationResult,
+                                                RuntimeException cause) {
+        try {
+            notifyRefused(context, validationResult);
+        } catch (RuntimeException hookFailure) {
+            cause.addSuppressed(hookFailure);
         }
     }
 
@@ -376,7 +390,7 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         };
 
         if (isAsync) {
-            dispatchAsyncCommand(context, asyncCommand, runnable, reported);
+            dispatchScheduled(context, ranValidators, () -> dispatchAsyncCommand(context, asyncCommand, runnable, reported));
         } else if (Bukkit.isPrimaryThread()) {
             // #541 (maintainer's answer of 2026-09-29): on the server thread the body runs now,
             // inside the dispatch, as Bukkit's own commands do -- so a command block, a command
@@ -387,7 +401,26 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         } else {
             // Off the server thread the body must not touch the Bukkit API directly, so it is
             // handed to the main thread, exactly as before 6.3.0.
-            runnable.runTask(UltiTools.getInstance());
+            dispatchScheduled(context, ranValidators, () -> runnable.runTask(UltiTools.getInstance()));
+        }
+    }
+
+    /**
+     * Hands a body to the scheduler; if the scheduler refuses it (the plugin is disabling, for
+     * example), the body never runs and so never reaches its {@code onComplete} hooks, so the
+     * validators that passed are told of the refusal instead (#568) before the exception leaves.
+     */
+    private static void dispatchScheduled(CommandContext context, List<CommandValidator> ranValidators,
+                                          Runnable schedule) {
+        try {
+            schedule.run();
+        } catch (RuntimeException e) {
+            try {
+                ValidatorChain.notifyRefused(context, ranValidators);
+            } catch (RuntimeException hookFailure) {
+                e.addSuppressed(hookFailure);
+            }
+            throw e;
         }
     }
 
@@ -438,9 +471,7 @@ public abstract class BaseCommandExecutor implements TabExecutor {
                     // acquisition happened inside its validate() step (acquire-as-you-validate),
                     // so it is no longer named by field here either -- lockValidator.releaseLock
                     // is reached only via onComplete, only for a validator that actually ran.
-                    for (CommandValidator ranValidator : ranValidators) {
-                        ranValidator.onComplete(context, commandSucceeded);
-                    }
+                    completeAll(context, ranValidators, commandSucceeded);
                 }
             } finally {
                 AuditableDataEntity.swapCurrentUser(previousUser);
@@ -451,6 +482,30 @@ public abstract class BaseCommandExecutor implements TabExecutor {
             // The body is NEVER interrupted to make this deadline; it always runs this
             // finally exactly once, win or lose the race.
             reported.compareAndSet(false, true);
+        }
+    }
+
+    /**
+     * Calls every validator's {@code onComplete} in chain order. Each runs even when an earlier one
+     * throws, so one validator's failing hook cannot keep a later {@code UsageLockValidator} from
+     * releasing its lock (#568); the first exception is rethrown afterwards, later ones suppressed.
+     */
+    private static void completeAll(CommandContext context, List<CommandValidator> ranValidators,
+                                    boolean commandSucceeded) {
+        RuntimeException first = null;
+        for (CommandValidator ranValidator : ranValidators) {
+            try {
+                ranValidator.onComplete(context, commandSucceeded);
+            } catch (RuntimeException e) {
+                if (first == null) {
+                    first = e;
+                } else {
+                    first.addSuppressed(e);
+                }
+            }
+        }
+        if (first != null) {
+            throw first;
         }
     }
 
