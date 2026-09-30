@@ -99,7 +99,7 @@ import lombok.Getter;
 public class PluginManager {
     /**
      * The name of the JVM system property that opts back into the pre-6.3.0 degraded load
-     * order (D-10): every module in filesystem/classpath order, with no dependency resolution
+     * order (D-10): every module in discovery order (file-name order, #476), with no dependency resolution
      * at all. Modeled on Paper's own {@code -Dpaper.useLegacyPluginLoading=true} precedent -- a
      * one-shot, consumed-at-bootstrap decision, which is why it is a system property rather than
      * a reloadable {@code config.yml} key. The literal name is repeated (rather than referenced
@@ -2658,7 +2658,7 @@ public class PluginManager {
             Bukkit.getLogger().log(Level.SEVERE,
                 "[UltiTools-API] Legacy unsorted plugin load order is ACTIVE because "
                     + "-Dultitools.useLegacyPluginLoading=true is set on the command line. "
-                    + "Dependency resolution is skipped entirely - modules load in filesystem "
+                    + "Dependency resolution is skipped entirely - modules load in file-name "
                     + "order and may fail to initialize if they rely on load order.");
             return new ArrayList<>(plugins);
         }

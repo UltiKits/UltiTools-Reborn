@@ -479,7 +479,32 @@ This section governs the third kind.
   UltiTools-External-Example call either method (their `origin/master`, searched for
   `PluginInstallUtils`, `updatePlugin(` and `uninstallPlugin(`; the only hits are UAT documents
   naming the `/upm` commands). An uninstall that goes ahead also cancels an update of that module
-  still waiting for the next start.
+  still waiting for the next start, and any download of one still running, on every outcome — its
+  JARs deleted, recorded for deletion, not deletable, or a modules folder that could not be listed —
+  matched on the identity it resolved (the unloaded instances' identify-strings and runtime names,
+  the names it was given or their JARs declare, and their JARs), not only on the name typed.
+  `PluginInstallUtils.uninstallPlugin(String)` does this too; the command reads the cancelled
+  versions through `uninstallPluginReporting(String, List)` (`@ApiStatus.Internal`).
+- `PluginInstallUtils.uninstallPlugin(String)` also deletes a JAR whose `plugin.yml` `main:` names
+  the loaded module's main class, whatever `name:` it declares (#516). The module loader identifies
+  a module JAR by that entry alone (since #548), and its start-up scan now records, per main class,
+  every JAR that declares it; before 6.3.0 a second copy of a module whose `plugin.yml` declared a
+  different `name:` survived the uninstall and loaded the module again at the next start. A main
+  class another loaded module also has is never matched, a file is judged by what it declares at the
+  time of the uninstall, and no class is read out of any archive.
+- Module JARs are discovered in file-name order (#476). Before 6.3.0 the start-up scan and the module
+  class loader took the modules folder in `File#listFiles()` order, which Java does not define (on
+  ext4 it is hash order). The order decides which of several JARs carrying the same class supplies it,
+  which copy of a duplicated module is read first, which module a `plugin.yml` `name:` shared by two
+  modules resolves to, and the order of the opt-in legacy load (`-Dultitools.useLegacyPluginLoading`).
+  Modules without a dependency between them already loaded in alphabetical order of their class names
+  and still do. An install that relied on one copy winning by listing order may see the other one win
+  after upgrading, once, and then the same one on every start and file system.
+- Two or more JARs in the modules folder declaring the same `plugin.yml` `main:` class are reported by
+  one start-up WARNING naming every one of them and the JAR the classes load from (UltiTools-Dev-Doc#96).
+  The copies were never loaded side by side and still are not; before, each refused copy logged its
+  own SEVERE line saying its main class belonged to another JAR. A JAR borrowing a class from a JAR that
+  does not declare it keeps that SEVERE refusal.
 - `PluginInstallUtils.uninstallPlugin(String)` no longer leaves a JAR it cannot delete for the
   operator to delete by hand (#518). On Windows the shared module class loader keeps every module
   JAR open while the server runs, so that instruction could not be followed. The uninstall now
