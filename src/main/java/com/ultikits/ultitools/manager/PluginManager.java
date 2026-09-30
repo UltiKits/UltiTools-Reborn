@@ -229,7 +229,56 @@ public class PluginManager {
                 pluginClassList.add(pluginClass);
             }
         }
+        warnOnDuplicateModuleJars();
         return true;
+    }
+
+    /**
+     * One warning per module main class that two or more JARs in the modules folder declare,
+     * naming every one of them and the JAR the module's classes load from (UltiTools-Dev-Doc#96).
+     *
+     * <p>All module JARs share one class loader, so the copies are not loaded side by side and no
+     * version comparison runs between them: the class comes from the first JAR on the class path
+     * that carries it -- in file-name order (#476) -- and the other copies are refused. Without this
+     * line an operator who dropped a new version next to the old one would see the old one keep
+     * running with nothing saying why.
+     *
+     * <p>A main class none of whose copies loaded gets no line here: each copy has already been
+     * refused with its own line saying why.
+     */
+    private void warnOnDuplicateModuleJars() {
+        for (Map.Entry<String, List<File>> duplicate : moduleJarIndex.duplicates().entrySet()) {
+            File supplier = moduleJarIndex.supplierOf(duplicate.getKey());
+            if (supplier == null) {
+                continue;
+            }
+            List<String> names = new ArrayList<>();
+            for (File jar : duplicate.getValue()) {
+                names.add(jar.getName());
+            }
+            Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + String.format(UltiTools.getInstance().i18n(
+                    "以下 JAR 文件都声明了同一个模块主类 %s：%s。该模块的类只从 %s 加载，其余副本不会加载；请只保留其中一个。"),
+                    duplicate.getKey(), String.join(", ", names), supplier.getName()));
+        }
+    }
+
+    /**
+     * Whether a JAR whose declared main class was loaded from another JAR is another copy of that
+     * module: the other JAR is in the same modules folder and its own {@code plugin.yml} declares
+     * the same {@code main:}. Anything else is a class borrowed from a JAR that is not this module,
+     * which stays refused with its own SEVERE line. Reads only {@code plugin.yml}.
+     *
+     * @param pluginJar     the JAR being scanned
+     * @param supplier      the JAR its declared main class was loaded from
+     * @param mainClassName the main class it declares
+     * @return {@code true} when it is a duplicate copy
+     */
+    private static boolean isDuplicateCopy(File pluginJar, File supplier, String mainClassName) {
+        File folder = pluginJar.getAbsoluteFile().getParentFile();
+        File supplierFolder = supplier.getAbsoluteFile().getParentFile();
+        return folder != null && supplierFolder != null
+                && canonicalPath(folder).equals(canonicalPath(supplierFolder))
+                && mainClassName.equals(PluginYmlReader.readFromJarFile(supplier).getMain());
     }
 
     /**
@@ -953,6 +1002,18 @@ public class PluginManager {
             // mismatch is a confirmed cross-jar class and is refused.
             File actualJarFile = resolveOwnJarFile(aClass);
             if (actualJarFile != null && !canonicalPath(actualJarFile).equals(canonicalPath(pluginJar))) {
+                if (isDuplicateCopy(pluginJar, actualJarFile, mainClassName)) {
+                    // UltiTools-Dev-Doc#96: another copy of the same module -- the JAR the class
+                    // came from declares this very main: too. It is still not loaded twice, and it
+                    // is reported once for every copy together after the scan
+                    // (warnOnDuplicateModuleJars), not here once per copy.
+                    moduleJarIndex.record(mainClassName, actualJarFile);
+                    moduleJarIndex.recordSupplier(mainClassName, actualJarFile);
+                    Bukkit.getLogger().log(Level.FINE, "[UltiTools-API] Module '" + pluginJar.getName()
+                            + "' is another copy of " + mainClassName + ", whose classes load from '"
+                            + actualJarFile.getName() + "'");
+                    return null;
+                }
                 Bukkit.getLogger().log(Level.SEVERE,
                     "[UltiTools-API] Module '" + pluginJar.getName() + "' declares main: '"
                         + mainClassName + "', but that class actually belongs to a different "
@@ -960,7 +1021,9 @@ public class PluginManager {
                         + "refusing to load a module whose declared main class is not its own.");
                 return null;
             }
-            moduleJarIndex.recordSupplier(mainClassName, actualJarFile != null ? actualJarFile : pluginJar);
+            if (actualJarFile != null) {
+                moduleJarIndex.recordSupplier(mainClassName, actualJarFile);
+            }
             return aClass.asSubclass(UltiToolsPlugin.class);
         } catch (ClassNotFoundException | LinkageError e) {
             Bukkit.getLogger().log(Level.SEVERE,
