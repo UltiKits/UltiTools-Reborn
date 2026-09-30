@@ -31,8 +31,8 @@ import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser;
 
 /**
- * UltiKits/UltiTools-Reborn#553, maintainer answer of 2026-09-30 ("只警告，写入保持 6.2" - warn only, the
- * write path stays as in 6.2; it supersedes the earlier "refuse and say so"). The configuration file uses
+ * UltiKits/UltiTools-Reborn#553, maintainer answer of 2026-09-30 (warn only, the write path stays as in
+ * 6.2; in the maintainer's words "只警告，写入保持 6.2"; it supersedes the earlier "refuse and say so"). The configuration file uses
  * {@code '.'} as its path separator, so a key such as {@code my.rule} in a map the file stores as a
  * section is split into nested levels. The framework still writes it exactly as 6.2 did; a read-only
  * check warns, once per key, when a load finds such a key in the file and before each framework save

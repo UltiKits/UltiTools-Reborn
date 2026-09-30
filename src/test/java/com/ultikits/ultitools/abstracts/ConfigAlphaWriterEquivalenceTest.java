@@ -18,8 +18,8 @@ import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mockito;
 
 /**
- * UltiKits/UltiTools-Reborn#553, maintainer answer of 2026-09-30 ("只警告，写入保持 6.2" - warn only, the
- * write path stays as in 6.2): saving a configuration writes exactly the text {@code origin/alpha}
+ * UltiKits/UltiTools-Reborn#553, maintainer answer of 2026-09-30 (warn only, the write path stays as in
+ * 6.2; in the maintainer's words "只警告，写入保持 6.2"): saving a configuration writes exactly the text {@code origin/alpha}
  * ({@code dfe71e01}) writes. The expected texts below were produced by running this same fixture
  * ({@link AlphaWriterFixture}) against {@code dfe71e01} in a throwaway worktree on 2026-09-30: map fields
  * and nested maps with dotted keys (split on save, as 6.2 does), a map that is a list element (kept
