@@ -229,6 +229,14 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      */
     private boolean languageDryRun;
 
+    /**
+     * True only while {@link #commitLanguageProvenance()} migrates the language files of languages
+     * other than the one being resolved (Codex review of #566): the provenance writes happen, but no
+     * dictionary is built for them, so no per-key placeholder warning is logged about a file that is
+     * not in use.
+     */
+    private boolean languageMigrationOnly;
+
 
     /**
      * Constructor for UltiToolsPlugin. For module development only.
@@ -305,7 +313,35 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      */
     @ApiStatus.Internal
     public final void commitLanguageProvenance() {
+        migrateBundledLanguageFiles();
         language = createLanguageFromPath(resourceFolderPath);
+    }
+
+    /**
+     * Applies the provenance decision to every language file this module's jar bundles and the disk
+     * holds, not only the configured language's (Codex review of #566): on the first start after an
+     * upgrade, an unrecorded {@code lang/zh.json} of a server running {@code en} is replaced and
+     * recorded too (#459), so an edit made to it afterwards is kept as a customisation when the
+     * operator later switches language. The configured language is resolved afterwards, as before;
+     * its file is then already migrated. Codes come from the jar's own {@code lang/} entries.
+     */
+    private void migrateBundledLanguageFiles() {
+        CodeSource codeSource = this.getClass().getProtectionDomain().getCodeSource();
+        if (codeSource == null || codeSource.getLocation() == null) {
+            return;
+        }
+        languageMigrationOnly = true;
+        try {
+            for (String code : Localized.scanLangResources(codeSource.getLocation())) {
+                for (String extension : LANGUAGE_EXTENSIONS) {
+                    if (readEmbeddedResourceBytes("lang/" + code + extension) != null) {
+                        loadLanguageFromDisk(resourceFolderPath, code, extension);
+                    }
+                }
+            }
+        } finally {
+            languageMigrationOnly = false;
+        }
     }
 
     /**
@@ -944,6 +980,10 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      */
     private Language applyPlaceholderArityOverride(File file, byte[] jarBytes, String extension,
                                                      String resourcePath) {
+        if (languageMigrationOnly) {
+            // Migration of a language not in use: the file decision is made, no dictionary is needed.
+            return new Language("{}");
+        }
         Map<String, String> diskDictionary = readFlatDictionary(file, extension);
         Map<String, String> jarDictionary = readFlatDictionary(jarBytes, extension);
         Map<String, String> resolved = new LinkedHashMap<>(diskDictionary);

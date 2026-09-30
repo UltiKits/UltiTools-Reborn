@@ -2823,11 +2823,7 @@ public class PluginManager {
         // is left alone (#537, gate 1).
         List<Class<?>> ownershipAdded = new ArrayList<>();
         try {
-            for (Class<?> entity : scope.getOwnedEntities()) {
-                if (entityOwnership.putIfAbsent(entity, scope.getPluginName()) == null) {
-                    ownershipAdded.add(entity);
-                }
-            }
+            recordNewEntityOwnership(scope, ownershipAdded);
             adapter.setDataScope(scope);
             wireAop(context, scope);
             context.refresh();
@@ -2923,6 +2919,20 @@ public class PluginManager {
     private static <T> void registerOwnType(SimpleContainer context, T instance) {
         Class<T> ownType = (Class<T>) instance.getClass();
         context.registerType(ownType, instance);
+    }
+
+    /**
+     * Records {@code scope}'s owned entities in {@link #entityOwnership} where no owner is recorded
+     * yet, adding each entity it recorded to {@code added} -- the records a refused registration may
+     * undo (#537, gate 1). Adds to the caller's list as it goes, so an exception midway still leaves
+     * the caller knowing what was recorded.
+     */
+    private void recordNewEntityOwnership(DataScope scope, List<Class<?>> added) {
+        for (Class<?> entity : scope.getOwnedEntities()) {
+            if (entityOwnership.putIfAbsent(entity, scope.getPluginName()) == null) {
+                added.add(entity);
+            }
+        }
     }
 
     /**
