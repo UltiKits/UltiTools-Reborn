@@ -720,6 +720,20 @@ public final class ModuleFileTransactions {
         if (problem != null) {
             return StageResult.failed(null, Keys.REASON_RECORD_UNREADABLE, existingFile.getAbsolutePath(), problem);
         }
+        return existingOutcome(existing, existingFile);
+    }
+
+    /**
+     * What a valid existing record of this module means for staging now: an update already waiting,
+     * one in progress, one held for the operator (refused until the operator removes the record), or a
+     * {@code FAILED} one, discarded -- unless discarding it would touch a file the transaction cannot
+     * identify, which holds it for the operator instead.
+     */
+    private StageResult existingOutcome(Record existing, File existingFile) {
+        if (Record.NEEDS_OPERATOR.equals(existing.state)) {
+            return StageResult.failed(null, Keys.REASON_NEEDS_OPERATOR, existing.failure,
+                    existingFile.getAbsolutePath());
+        }
         if (Record.PENDING.equals(existing.state)) {
             return StageResult.of(StageResult.Outcome.ALREADY_STAGED, existing.moduleName, existing.oldVersion,
                     existing.newVersion, null);
@@ -729,6 +743,10 @@ public final class ModuleFileTransactions {
                     existing.newVersion, null);
         }
         String restoreError = discardFailed(existing);
+        if (Record.NEEDS_OPERATOR.equals(existing.state)) {
+            return StageResult.failed(null, Keys.REASON_NEEDS_OPERATOR, existing.failure,
+                    existingFile.getAbsolutePath());
+        }
         if (restoreError != null) {
             return StageResult.failed(existing.failure, Keys.REASON_PREVIOUS_UNRESTORED, restoreError);
         }
@@ -804,11 +822,70 @@ public final class ModuleFileTransactions {
                 if (!removed.matches(record.key, record.moduleName, record.oldName)) {
                     continue;
                 }
-                if (deleteTree(workFolder(record)) && deleteQuietly(recordFile)) {
+                if (cancelOne(record, recordFile)) {
                     cancelled.add(record.newVersion);
                 }
             }
             return cancelled;
+        }
+    }
+
+    /**
+     * Cancels one staged update: its working folder and record are deleted -- unless the record is
+     * held for the operator, or its folder holds a file the transaction cannot identify, which is then
+     * held for the operator rather than deleted (foreign-file rule). Called under {@link #LOCK}.
+     *
+     * @return whether it was cancelled
+     */
+    private boolean cancelOne(Record record, File recordFile) {
+        if (Record.NEEDS_OPERATOR.equals(record.state)) {
+            return false;
+        }
+        try {
+            requireRecorded(record, may(backupOf(record), record.oldSha256), may(stagedOf(record), record.stagedSha256));
+        } catch (RecordRefused refused) {
+            LOGGER.log(Level.SEVERE, "The staged update of module " + record.moduleName + " was not cancelled: "
+                    + refused.getMessage() + "; its record " + recordFile.getAbsolutePath() + " is kept");
+            return false;
+        }
+        return deleteTree(workFolder(record)) && deleteQuietly(recordFile);
+    }
+
+    /**
+     * The records of this module's updates held for the operator, which {@code /upm uninstall} refuses
+     * to go past (foreign-file rule): the module is matched as a cancellation matches it.
+     *
+     * @param removed the module an uninstall would remove
+     * @return the record files, empty when there is none (or the folder cannot be listed)
+     */
+    public List<String> heldForOperator(RemovedModule removed) {
+        List<String> held = new ArrayList<>();
+        synchronized (LOCK) {
+            List<File> recordFiles;
+            try {
+                recordFiles = recordFiles();
+            } catch (IOException e) {
+                return held;
+            }
+            for (File recordFile : recordFiles) {
+                Record record = updateRecordIn(recordFile);
+                if (record != null && Record.NEEDS_OPERATOR.equals(record.state)
+                        && removed.matches(record.key, record.moduleName, record.oldName)) {
+                    held.add(recordFile.getAbsolutePath());
+                }
+            }
+        }
+        return held;
+    }
+
+    /** The update record in {@code recordFile}, or {@code null} when it cannot be read or is not one. */
+    private Record updateRecordIn(File recordFile) {
+        try {
+            Record record = readRecord(recordFile);
+            return record != null && Record.UPDATE.equals(record.type)
+                    && recordFile.getName().equals(recordFileOf(record).getName()) ? record : null;
+        } catch (IOException e) {
+            return null;
         }
     }
 
@@ -996,6 +1073,9 @@ public final class ModuleFileTransactions {
         String entryState = record.state;
         try {
             applyRecord(record);
+        } catch (NeedsOperator held) {
+            // Already recorded and reported by requireRecorded.
+            appliedThisStart.remove(record);
         } catch (RecordRefused refused) {
             report(Level.WARNING, Keys.RECORD_REFUSED, recordFileOf(record).getAbsolutePath(), refused.getMessage());
         } catch (RuntimeException unexpected) {
@@ -1021,6 +1101,8 @@ public final class ModuleFileTransactions {
         if (Record.UPDATE.equals(record.type) && Record.PENDING.equals(entryState)) {
             try {
                 failApply(record, recordFileOf(record), error);
+                return;
+            } catch (NeedsOperator held) {
                 return;
             } catch (RecordRefused | RuntimeException again) {
                 error.addSuppressed(again);
@@ -1058,6 +1140,11 @@ public final class ModuleFileTransactions {
             case Record.FAILED:
                 restoreAfterFailure(record);
                 break;
+            case Record.NEEDS_OPERATOR:
+                // Held for the operator: nothing is moved or deleted, and every start says so again.
+                report(Level.SEVERE, Keys.NEEDS_OPERATOR, record.moduleName, record.failure,
+                        recordFileOf(record).getAbsolutePath());
+                break;
             default:
                 throw new RecordRefused("unknown state " + record.state);
         }
@@ -1093,6 +1180,9 @@ public final class ModuleFileTransactions {
                     crashPoints.reached(CrashPoints.AFTER_DECISION_RECORDED);
                     finishRollback(record, RollbackPhase.AFTER_LOAD);
                 }
+            } catch (NeedsOperator held) {
+                // Already recorded and reported by requireRecorded.
+                continue;
             } catch (RecordRefused refused) {
                 report(Level.WARNING, Keys.RECORD_REFUSED, recordFileOf(record).getAbsolutePath(),
                         refused.getMessage());
@@ -1138,6 +1228,10 @@ public final class ModuleFileTransactions {
             resumeWithoutStagedJar(record, target, staged);
             return;
         }
+        // The swap moves the old JAR aside and the staged JAR in: each file it touches must be the
+        // recorded one, and the places it moves them to must be free (foreign-file rule).
+        requireRecorded(record, may(old, record.oldSha256), may(backup, record.oldSha256),
+                must(staged, record.stagedSha256), may(target));
         if (stoppedBeforeMoving(record, work, old, target, backup, staged)) {
             return;
         }
@@ -1236,17 +1330,14 @@ public final class ModuleFileTransactions {
         if (exists(backup)) {
             return false;
         }
-        String key;
-        if (!exists(old) || pendingRemovals.contains(record.oldName)) {
-            key = Keys.UPDATE_ABANDONED;
-        } else if (!record.oldSha256.equals(sha256Of(old))) {
-            key = Keys.UPDATE_ABANDONED_REPLACED;
-        } else {
+        // A different file under the old JAR's name never reaches this point: the swap's guard holds
+        // the transaction for the operator instead (foreign-file rule).
+        if (exists(old) && !pendingRemovals.contains(record.oldName)) {
             return false;
         }
         deleteTree(work);
         deleteQuietly(recordFileOf(record));
-        report(Level.WARNING, key, record.moduleName, record.newVersion, old.getAbsolutePath());
+        report(Level.WARNING, Keys.UPDATE_ABANDONED, record.moduleName, record.newVersion, old.getAbsolutePath());
         return true;
     }
 
@@ -1324,8 +1415,89 @@ public final class ModuleFileTransactions {
      *         place (or there was none), otherwise what failed
      */
     private String undoApply(Record record) throws RecordRefused {
+        File target = confined(modulesFolder, record.targetName);
+        File old = confined(modulesFolder, record.oldName);
+        requireRecorded(record, may(target, record.stagedSha256), may(stagedOf(record), record.stagedSha256),
+                may(backupOf(record), record.oldSha256), may(old, record.oldSha256));
         String error = returnStagedJar(record);
         return error != null ? error : restoreBackup(record);
+    }
+
+    /** A file a destructive step touches, and the recorded hashes it may hold; none means it must be absent. */
+    private static final class Expected {
+        private final File file;
+        private final java.util.Set<String> hashes = new java.util.LinkedHashSet<>();
+        private boolean mustExist;
+
+        Expected(File file, boolean mustExist, String... hashes) {
+            this.file = file;
+            this.mustExist = mustExist;
+            Collections.addAll(this.hashes, hashes);
+        }
+    }
+
+    /** {@code file} may be absent, or hold one of {@code hashes}; with none given it must be absent. */
+    private static Expected may(File file, String... hashes) {
+        return new Expected(file, false, hashes);
+    }
+
+    /** {@code file} must be there and hold {@code hash}. */
+    private static Expected must(File file, String hash) {
+        return new Expected(file, true, hash);
+    }
+
+    /**
+     * The foreign-file rule, at every destructive step: the transaction only ever moves, replaces or
+     * deletes a file whose SHA-256 matches the record -- the staged new JAR or the kept old JAR -- and
+     * only into a place that is free. Each file the step touches, source and target, is checked here
+     * before the step does anything. When one is not what the record says -- another actor replaced
+     * the new JAR, dropped a file where the old one is kept, and so on -- nothing is done to any file:
+     * the record is kept as {@code NEEDS_OPERATOR}, which later starts do not act on and which
+     * {@code /upm update} and {@code /upm uninstall} of the module refuse to go past, and one SEVERE
+     * line names each unexpected file with its expected and actual hash and says how to resolve it
+     * (Codex round 19, #561; the maintainer's precedent for ambiguous identity: write nothing, warn).
+     * Two expectations for the same path (the old and new JAR sharing a name) are merged.
+     *
+     * @throws NeedsOperator when a file is not the recorded one; the record is already held
+     */
+    private void requireRecorded(Record record, Expected... expected) throws NeedsOperator {
+        java.util.Map<String, Expected> byPath = new java.util.LinkedHashMap<>();
+        for (Expected each : expected) {
+            Expected merged = byPath.computeIfAbsent(canonicalPath(each.file), path -> new Expected(each.file, false));
+            merged.hashes.addAll(each.hashes);
+            merged.mustExist |= each.mustExist;
+        }
+        List<String> unexpected = new ArrayList<>();
+        for (Expected each : byPath.values()) {
+            String problem = unexpected(each);
+            if (problem != null) {
+                unexpected.add(problem);
+            }
+        }
+        if (!unexpected.isEmpty()) {
+            holdForOperator(record, String.join("; ", unexpected));
+        }
+    }
+
+    /** What is wrong with one expected file, or {@code null} when it is as recorded. */
+    private static String unexpected(Expected expected) {
+        String actual = exists(expected.file) ? sha256Of(expected.file) : MISSING;
+        boolean recorded = MISSING.equals(actual) ? !expected.mustExist : expected.hashes.contains(actual);
+        if (recorded) {
+            return null;
+        }
+        String wanted = expected.hashes.isEmpty() ? "no file" : "SHA-256 " + String.join(" or ", expected.hashes);
+        String found = MISSING.equals(actual) ? "no file" : actual == null ? "an unreadable file" : "SHA-256 " + actual;
+        return expected.file.getAbsolutePath() + " (expected " + wanted + ", found " + found + ")";
+    }
+
+    /** Keeps the record as {@code NEEDS_OPERATOR}, says so once, and ends the step. */
+    private void holdForOperator(Record record, String detail) throws NeedsOperator {
+        record.state = Record.NEEDS_OPERATOR;
+        record.failure = detail;
+        persist(record);
+        report(Level.SEVERE, Keys.NEEDS_OPERATOR, record.moduleName, detail, recordFileOf(record).getAbsolutePath());
+        throw new NeedsOperator(detail);
     }
 
     /**
@@ -1436,7 +1608,11 @@ public final class ModuleFileTransactions {
         return false;
     }
 
-    private void finishCommit(Record record) {
+    private void finishCommit(Record record) throws RecordRefused {
+        // The commit deletes the kept old JAR: it must be the recorded one, and the new JAR it commits
+        // to must still be the staged one at the new JAR's name (Codex round 19, foreign-file rule).
+        requireRecorded(record, may(backupOf(record), record.oldSha256), may(stagedOf(record), record.stagedSha256),
+                must(confined(modulesFolder, record.targetName), record.stagedSha256));
         if (!deleteTree(workFolder(record)) || !deleteQuietly(recordFileOf(record))) {
             // Kept as COMMITTING: the next start finishes it. The module is updated either way.
             report(Level.WARNING, Keys.CLEANUP_DEFERRED, record.moduleName, workFolder(record).getAbsolutePath());
@@ -1455,6 +1631,10 @@ public final class ModuleFileTransactions {
         File target = confined(modulesFolder, record.targetName);
         File old = confined(modulesFolder, record.oldName);
         File backup = backupOf(record);
+        // The rollback deletes the new JAR and puts the kept old JAR back: nothing is removed or put
+        // back beside a file it cannot identify (Codex round 19, foreign-file rule).
+        requireRecorded(record, may(target, record.stagedSha256), may(backup, record.oldSha256),
+                may(old, record.oldSha256), may(stagedOf(record), record.stagedSha256));
         if (!present(backup)) {
             // Nothing is kept to put back. Either an earlier attempt already put it back (then the
             // new JAR is gone too, and only the record is left to clean up), or the kept JAR went
@@ -1571,6 +1751,13 @@ public final class ModuleFileTransactions {
                 throw new RecordRefused(folder.getAbsolutePath() + " is a symbolic link");
             }
         }
+    }
+
+    private File stagedOf(Record record) throws RecordRefused {
+        // The folder is this transaction's working folder plus a constant; the record's name goes
+        // through confined(), which refuses anything but a plain JAR name directly inside it.
+        // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
+        return confined(new File(workFolder(record), STAGED_FOLDER), record.stagedName);
     }
 
     private File backupOf(Record record) throws RecordRefused {
@@ -2099,10 +2286,19 @@ public final class ModuleFileTransactions {
     }
 
     /** A record whose names would leave their folder, or that this version does not understand. */
-    static final class RecordRefused extends Exception {
+    static class RecordRefused extends Exception {
         private static final long serialVersionUID = 1L;
 
         RecordRefused(String message) {
+            super(message);
+        }
+    }
+
+    /** A step found a file the transaction cannot identify; the record is held for the operator. */
+    static final class NeedsOperator extends RecordRefused {
+        private static final long serialVersionUID = 1L;
+
+        NeedsOperator(String message) {
             super(message);
         }
     }
@@ -2117,6 +2313,8 @@ public final class ModuleFileTransactions {
         static final String COMMITTING = "COMMITTING";
         static final String ROLLING_BACK = "ROLLING_BACK";
         static final String FAILED = "FAILED";
+        /** Held for the operator: a file the transaction cannot identify; later starts do nothing to it. */
+        static final String NEEDS_OPERATOR = "NEEDS_OPERATOR";
 
         String type;
         String key;
@@ -2346,8 +2544,8 @@ public final class ModuleFileTransactions {
         public static final String CLEANUP_DEFERRED = "模块 %s 的更新已确认，但更新目录 %s 未能清理，下次启动会再清理。";
         public static final String ORPHAN_BACKUP = "更新目录 %s 中有不属于任何更新记录的旧版本 JAR，已保留：%s";
         public static final String UPDATE_ABANDONED = "模块 %s 暂存的 %s 版本更新已放弃：它的 JAR %s 在暂存之后已不在模块目录中（例如已卸载）。";
-        public static final String UPDATE_ABANDONED_REPLACED =
-                "模块 %s 暂存的 %s 版本更新已放弃：它的 JAR %s 在暂存之后已被替换（例如重新安装或手动替换），替换后的文件保持不动。";
+        public static final String NEEDS_OPERATOR =
+                "模块 %s 的更新已暂停，等待处理：%s。在这些文件与更新记录一致之前，更新不会移动或删除任何文件，/upm update 和 /upm uninstall 也会拒绝该模块。请检查这些文件（需要的 JAR 可从更新目录中取回），然后删除更新记录 %s 及其同名文件夹，以放弃这次更新。";
         public static final String REMOVED = "已删除卸载时未能删除的模块 JAR：%s。";
         public static final String REMOVAL_FAILED = "卸载时记录的模块 JAR %s 仍无法删除（%s）；本次启动会再次加载它，下次启动会再试。";
         public static final String REMOVAL_SKIPPED = "卸载时记录的模块 JAR %s 自卸载后已被替换，未删除。";
@@ -2369,6 +2567,8 @@ public final class ModuleFileTransactions {
         public static final String REASON_WRONG_IDENTITY = "下载的 %s 没有声明 identify-string %s 和版本号";
         public static final String REASON_WRONG_VERSION = "下载的 %s 声明的版本是 %s，不是云端给出的最新版本 %s";
         public static final String REASON_CANCELLED_WHILE_DOWNLOADING = "下载期间该模块已被卸载，本次更新已取消";
+        public static final String REASON_NEEDS_OPERATOR =
+                "该模块的更新已暂停，等待处理（%s）；请按启动日志处理后删除更新记录 %s 及其同名文件夹";
         public static final String REASON_RECORD_FAILED = "更新记录无法写入：%s";
         public static final String REASON_ACCESS_DENIED = "文件访问被拒绝：%s";
         public static final String REASON_RECORD_UNREADABLE = "该模块已有的更新记录 %s 无法读取：%s";

@@ -295,6 +295,28 @@ class UninstallCancelsByIdentityTest {
     }
 
     @Test
+    @DisplayName("round 19: an update held for the operator refuses /upm uninstall of the module before anything is unloaded or deleted")
+    void updateHeldForTheOperator_refusesTheUninstall() throws IOException {
+        stage();
+        File[] records = transactions.listFiles((dir, name) -> name.endsWith(".json"));
+        assertThat(records).hasSize(1);
+        String text = new String(Files.readAllBytes(records[0].toPath()), java.nio.charset.StandardCharsets.UTF_8)
+                .replace("\"state\": \"PENDING\"", "\"state\": \"NEEDS_OPERATOR\"");
+        Files.write(records[0].toPath(), text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        List<String> tree = treeOf(transactions);
+        List<String> cancelled = new ArrayList<>();
+
+        Throwable outcome = catchThrowable(() -> PluginInstallUtils.uninstallPluginReporting("Demo", codeSources, cancelled));
+
+        assertThat(outcome).isInstanceOf(PluginInstallUtils.UninstallRefusedException.class)
+                .hasMessageContaining(records[0].getAbsolutePath());
+        assertThat(pluginManager.getPluginList()).contains(demo);
+        assertThat(new File(modules, "demo-1.0.jar")).exists();
+        assertThat(cancelled).isEmpty();
+        assertThat(treeOf(transactions)).isEqualTo(tree);
+    }
+
+    @Test
     @DisplayName("round 10 control: uninstalling another module leaves this module's staged update alone")
     void uninstallingAnotherModule_leavesTheUpdate() throws IOException {
         File otherJar = moduleJar(new File(modules, "other-1.0.jar"), "Other", "1.0", "other");

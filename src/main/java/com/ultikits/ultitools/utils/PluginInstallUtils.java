@@ -1144,6 +1144,7 @@ public class PluginInstallUtils {
         PluginManager pluginManager = UltiTools.getInstance().getPluginManager();
         ModuleIdentity identity = resolveIdentity(name, pluginManager, codeSource);
         refuseIfAnotherModuleSharesTheJar(identity);
+        refuseIfAnUpdateIsHeldForTheOperator(identity);
         Throwable unloadFailure = unloadEvery(identity, pluginManager);
         boolean refused = false;
         try {
@@ -1769,6 +1770,22 @@ public class PluginInstallUtils {
      *
      * @param identity the resolved identity
      */
+    /**
+     * Refuses, before anything is unloaded, while an update of the module is held for the operator:
+     * its record names a file the transaction could not identify, and the uninstall's cancellation
+     * would otherwise have to delete that record's folder, files included (foreign-file rule).
+     */
+    private static void refuseIfAnUpdateIsHeldForTheOperator(ModuleIdentity identity) {
+        List<String> held = new ModuleFileTransactions(UltiTools.getInstance().getDataFolder())
+                .heldForOperator(identity.removedModule());
+        if (!held.isEmpty()) {
+            throw new UninstallRefusedException("Refusing to uninstall " + identity.requested
+                    + ": an update of it is on hold for the operator (" + String.join(", ", held)
+                    + "); resolve it as the start-up log says, then delete that record and the folder of the"
+                    + " same name. Nothing was unloaded or deleted");
+        }
+    }
+
     private static void refuseIfAnotherModuleSharesTheJar(ModuleIdentity identity) {
         for (String jar : identity.ownJars) {
             if (identity.bystanderJars.contains(jar)) {

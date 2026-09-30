@@ -255,6 +255,26 @@ class ModuleUpdateStagingTest {
     }
 
     @Test
+    @DisplayName("an update held for the operator refuses /upm update of the module, and nothing changes (round 19)")
+    void updateHeldForTheOperator_refusesStaging() throws IOException {
+        assertThat(stage(ModuleUpdateFixtures.downloading("Demo", "1.1", "demo")).getOutcome())
+                .isEqualTo(ModuleFileTransactions.StageResult.Outcome.STAGED);
+        File[] records = transactions.listFiles((dir, name) -> name.endsWith(".json"));
+        assertThat(records).hasSize(1);
+        String text = new String(Files.readAllBytes(records[0].toPath()), StandardCharsets.UTF_8)
+                .replace("\"state\": \"PENDING\"", "\"state\": \"NEEDS_OPERATOR\",\n  \"failure\": \"a foreign file\"");
+        Files.write(records[0].toPath(), text.getBytes(StandardCharsets.UTF_8));
+        Map<String, String> before = snapshot();
+
+        ModuleFileTransactions.StageResult result = stage(ModuleUpdateFixtures.downloading("Demo", "1.1", "demo"));
+
+        assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
+        assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_NEEDS_OPERATOR);
+        assertThat(result.getReasonArgs()).containsExactly("a foreign file", records[0].getAbsolutePath());
+        assertThat(snapshot()).isEqualTo(before);
+    }
+
+    @Test
     @DisplayName("an old JAR that cannot be read (so its content cannot be recorded) is refused before anything is downloaded")
     void unreadableOldJar_isRefused() throws IOException {
         org.junit.jupiter.api.Assumptions.assumeTrue(

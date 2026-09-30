@@ -150,9 +150,16 @@ class ModuleUpdateRecoveryInvariantTest {
         File foreign = scenario.putForeign(where);
         Snapshot before = scenario.snapshot();
 
-        scenario.start(newLoads);
+        ModuleFileTransactions first = scenario.start(newLoads);
 
         scenario.assertForeignUntouched(foreign, before);
+        if (scenario.recordFile.exists() && scenario.held()) {
+            assertThat(first.pendingReports()).as("a record held for the operator is reported once, SEVERE")
+                    .anySatisfy(report -> {
+                        assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.NEEDS_OPERATOR);
+                        assertThat(report.getLevel()).isEqualTo(java.util.logging.Level.SEVERE);
+                    });
+        }
         if (scenario.recordFile.exists()) {
             Snapshot afterFirst = scenario.snapshot();
             scenario.start(newLoads);
@@ -338,12 +345,18 @@ class ModuleUpdateRecoveryInvariantTest {
         }
 
         /** One start: the recovery before load, then the observation of what the loader loaded. */
-        void start(boolean newLoads) throws IOException {
+        ModuleFileTransactions start(boolean newLoads) throws IOException {
             ModuleFileTransactions start = transactions();
             start.applyBeforeLoad();
             List<UltiToolsPlugin> loaded = new ArrayList<>();
             ModuleUpdateFixtures.CodeSources sources = load(newLoads, loaded);
             start.observeAfterLoad(loaded, sources);
+            return start;
+        }
+
+        /** Whether the record is held for the operator. */
+        boolean held() throws IOException {
+            return "NEEDS_OPERATOR".equals(readRecord().get("state").getAsString());
         }
 
         Snapshot snapshot() throws IOException {

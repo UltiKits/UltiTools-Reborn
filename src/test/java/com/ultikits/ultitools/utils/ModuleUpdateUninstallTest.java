@@ -182,12 +182,12 @@ class ModuleUpdateUninstallTest {
     /** Rewrites the removal record of {@code moduleName} so its list of removals holds a null entry. */
     private File withNullRemoval(String moduleName) throws IOException {
         File[] before = transactions.listFiles((dir, name) -> name.startsWith("remove-") && name.endsWith(".json"));
-        java.util.Set<File> known = new java.util.HashSet<>(java.util.Arrays.asList(before == null ? new File[0] : before));
+        java.util.Set<File> known = new java.util.HashSet<>(Arrays.asList(before == null ? new File[0] : before));
         File extra = moduleJar(new File(modules, moduleName.toLowerCase(java.util.Locale.ROOT) + "-x.jar"),
                 moduleName, "1.0", moduleName.toLowerCase(java.util.Locale.ROOT));
         new ModuleFileTransactions(dataFolder).recordDeferredRemoval(moduleName, Collections.singletonList(extra));
         File[] after = transactions.listFiles((dir, name) -> name.startsWith("remove-") && name.endsWith(".json"));
-        File record = java.util.Arrays.stream(after).filter(f -> !known.contains(f)).findFirst()
+        File record = Arrays.stream(after).filter(f -> !known.contains(f)).findFirst()
                 .orElseGet(() -> after[0]);
         com.google.gson.JsonObject json;
         try (java.io.Reader reader = java.nio.file.Files.newBufferedReader(record.toPath())) {

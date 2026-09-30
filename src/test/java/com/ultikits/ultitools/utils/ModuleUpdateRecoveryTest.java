@@ -348,11 +348,12 @@ class ModuleUpdateRecoveryTest {
         }
 
         @Test
-        @DisplayName("an old JAR replaced after staging is never moved aside or deleted: the update is abandoned (Codex P2, #561)")
-        void oldJarReplacedAfterStaging_isKeptAndTheUpdateAbandoned() throws IOException {
+        @DisplayName("an old JAR replaced after staging is never moved aside or deleted: the update is held for the operator (Codex P2 and round 19, #561)")
+        void oldJarReplacedAfterStaging_isKeptAndTheUpdateHeld() throws IOException {
             stage(transactions());
             // For example /upm install of the current version, or a hand-made hotfix under the same name.
             byte[] replacement = Files.readAllBytes(moduleJar(oldJar, "Demo", "1.0-hotfix", "demo").toPath());
+            List<String> stagedFiles = treeOf(transactions);
             ModuleFileTransactions start = transactions();
 
             start.applyBeforeLoad();
@@ -360,11 +361,12 @@ class ModuleUpdateRecoveryTest {
 
             assertThat(namesIn(modules)).containsExactly("demo-1.0.jar");
             assertThat(Files.readAllBytes(oldJar.toPath())).isEqualTo(replacement);
-            assertThat(treeOf(transactions)).isEmpty();
+            assertThat(treeOf(transactions)).as("nothing of the transaction is deleted").isEqualTo(stagedFiles);
+            assertThat(recordText()).contains("\"state\": \"NEEDS_OPERATOR\"");
             ModuleFileTransactions.Report report = onlyReport(start);
-            assertThat(report.getLevel()).isEqualTo(Level.WARNING);
-            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.UPDATE_ABANDONED_REPLACED);
-            assertThat(report.getArgs()).containsExactly("Demo", "1.1", oldJar.getAbsolutePath());
+            assertThat(report.getLevel()).isEqualTo(Level.SEVERE);
+            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.NEEDS_OPERATOR);
+            assertThat(String.valueOf(report.getArgs()[1])).contains(oldJar.getAbsolutePath());
         }
 
         @Test
@@ -569,7 +571,7 @@ class ModuleUpdateRecoveryTest {
         }
 
         @Test
-        @DisplayName("a staged JAR changed after staging moves nothing: FAILED, one SEVERE line names the path and both hashes (round 4)")
+        @DisplayName("a staged JAR changed after staging moves nothing: held for the operator, one SEVERE line names the path and both hashes (round 4, round 19)")
         void stagedJarChangedAfterStaging_nothingMoves() throws IOException {
             stage(transactions());
             File staged = stagedJar();
@@ -587,9 +589,9 @@ class ModuleUpdateRecoveryTest {
             assertOnlyTheOldVersionIsInstalled();
             ModuleFileTransactions.Report report = onlyReport(start);
             assertThat(report.getLevel()).isEqualTo(Level.SEVERE);
-            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.STAGED_JAR_MISMATCH);
-            assertThat(report.getArgs()).containsExactly("Demo", staged.getAbsolutePath(), expected, actual);
-            assertThat(recordText()).contains("\"state\": \"FAILED\"");
+            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.NEEDS_OPERATOR);
+            assertThat(String.valueOf(report.getArgs()[1])).contains(staged.getAbsolutePath(), expected, actual);
+            assertThat(recordText()).contains("\"state\": \"NEEDS_OPERATOR\"");
             assertThat(ModuleFileTransactions.sha256Of(staged)).isEqualTo(actual);
         }
 
@@ -614,8 +616,8 @@ class ModuleUpdateRecoveryTest {
         }
 
         @Test
-        @DisplayName("a staged JAR changed after the old JAR was moved aside: the old JAR goes back, FAILED, reported")
-        void stagedJarChangedAfterOldMoved_oldJarGoesBack() throws IOException {
+        @DisplayName("a staged JAR changed after the old JAR was moved aside: nothing moves, the old JAR stays kept, held for the operator (round 19)")
+        void stagedJarChangedAfterOldMoved_heldWithTheOldJarKept() throws IOException {
             stage(transactions());
             File staged = stagedJar();
             catchThrowable(() -> crashingAt(ModuleFileTransactions.CrashPoints.AFTER_OLD_MOVED).applyBeforeLoad());
@@ -625,9 +627,15 @@ class ModuleUpdateRecoveryTest {
 
             start.applyBeforeLoad();
 
-            assertOnlyTheOldVersionIsInstalled();
-            assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.STAGED_JAR_MISMATCH);
-            assertThat(recordText()).contains("\"state\": \"FAILED\"");
+            // A crash and then a changed staged JAR: the foreign-file rule does nothing to any file, so
+            // the old JAR stays in the kept-old location, which the SEVERE line names, until the operator
+            // resolves it -- the module does not load in between.
+            assertThat(namesIn(modules)).isEmpty();
+            assertThat(treeOf(transactions)).anyMatch(path -> path.endsWith("backup/demo-1.0.jar"));
+            ModuleFileTransactions.Report report = onlyReport(start);
+            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.NEEDS_OPERATOR);
+            assertThat(String.valueOf(report.getArgs()[1])).contains(staged.getAbsolutePath());
+            assertThat(recordText()).contains("\"state\": \"NEEDS_OPERATOR\"");
         }
 
         @Test
@@ -649,7 +657,7 @@ class ModuleUpdateRecoveryTest {
         }
 
         @Test
-        @DisplayName("a file already at the new JAR's name is never replaced: the apply fails and nothing changes")
+        @DisplayName("a file already at the new JAR's name is never replaced: nothing changes and the update is held for the operator (round 19)")
         void existingFileAtTheNewName_isNotReplaced() throws IOException {
             stage(transactions());
             byte[] squatter = "someone else's file".getBytes(StandardCharsets.UTF_8);
@@ -661,7 +669,9 @@ class ModuleUpdateRecoveryTest {
             assertThat(namesIn(modules)).containsExactly("demo-1.0.jar", "demo-1.1.jar");
             assertThat(Files.readAllBytes(newJar().toPath())).isEqualTo(squatter);
             assertThat(Files.readAllBytes(oldJar.toPath())).isEqualTo(oldBytes);
-            assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.APPLY_FAILED);
+            assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.NEEDS_OPERATOR);
+            assertThat(String.valueOf(onlyReport(start).getArgs()[1])).contains(newJar().getAbsolutePath());
+            assertThat(recordText()).contains("\"state\": \"NEEDS_OPERATOR\"");
         }
     }
 
