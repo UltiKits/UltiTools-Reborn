@@ -353,16 +353,37 @@ run_self_test() {
         failures=1
     fi
 
-    # Assertion 4: the encoding boundary itself — kana and full-width punctuation are OUTSIDE the
-    # U+4E00-U+9FFF contract and must not match, pinning the range against silent future widening.
+    # Assertion 4: the encoding boundary itself — kana is OUTSIDE the contract and must not match,
+    # while CJK and full-width punctuation are INSIDE it and must (6.3.0 widening, UltiRemoteBag#44:
+    # the same contract as the module language guards' I18nSourceScanner#containsCjk). Pins the
+    # range in both directions against silent drift.
     local kana='ひらがなカタカナ'
     local fullwidth='。、！？（）'
-    if printf '%s\n%s\n' "$kana" "$fullwidth" | grep -P "$CJK_RANGE" > /dev/null; then
-        echo "FAIL: assertion 4 — kana/full-width punctuation must not match U+4E00-U+9FFF."
+    if printf '%s\n' "$kana" | grep -P "$CJK_RANGE" > /dev/null; then
+        echo "FAIL: assertion 4a — kana must not match the contract."
         failures=1
     else
-        echo "PASS: assertion 4 — kana/full-width punctuation must not match U+4E00-U+9FFF."
+        echo "PASS: assertion 4a — kana must not match the contract."
     fi
+    if printf '%s\n' "$fullwidth" | grep -P "$CJK_RANGE" > /dev/null; then
+        echo "PASS: assertion 4b — CJK and full-width punctuation match the contract."
+    else
+        echo "FAIL: assertion 4b — CJK and full-width punctuation match the contract."
+        failures=1
+    fi
+
+    # Assertion 8: one planted character per range the 6.3.0 widening added, each alone on its
+    # line, must match: Extension A (U+3400), a supplementary-plane ideograph (U+20000), a
+    # compatibility ideograph (U+F900), CJK punctuation (U+3001) and a full-width form (U+FF1A).
+    local planted
+    for planted in $'\u3400' $'\U00020000' $'\uf900' $'\u3001' $'\uff1a'; do
+        if printf 'x %s x\n' "$planted" | grep -P "$CJK_RANGE" > /dev/null; then
+            echo "PASS: assertion 8 — planted $(printf '%s' "$planted" | od -An -tx1 | tr -d ' \n') matches."
+        else
+            echo "FAIL: assertion 8 — planted $(printf '%s' "$planted" | od -An -tx1 | tr -d ' \n') matches."
+            failures=1
+        fi
+    done
 
     # Assertions 5-7 (08-17): is_comment_or_javadoc_line()'s three directions. A whole comment
     # line and a same-line trailing comment must still be counted (the string-literal exclusion
