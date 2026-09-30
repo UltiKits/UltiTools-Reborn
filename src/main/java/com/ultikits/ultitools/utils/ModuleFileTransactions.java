@@ -330,14 +330,18 @@ public final class ModuleFileTransactions {
      * The other loaded modules that came from the same JAR, or {@code null} when there are none.
      * Two module classes can be packaged in one archive; replacing it would replace them too, so
      * such an update is refused, as the uninstall refuses to delete a JAR another module uses.
+     *
+     * <p>Only the selected instance itself is exempt (reference identity). Every other instance is
+     * compared by where it was loaded from, whatever its identify-string: that string is read from
+     * the archive's {@code plugin.yml}, so all module classes of one JAR report the same one (round-8
+     * review).
      */
     private static String sharedWith(UltiToolsPlugin module, File oldJar, List<UltiToolsPlugin> loaded,
                                      Function<UltiToolsPlugin, File> codeSource) {
-        String key = normalize(module.getIdentifyString());
         String jarPath = canonicalPath(oldJar);
         List<String> others = new ArrayList<>();
         for (UltiToolsPlugin plugin : loaded) {
-            if (plugin == module || key.equals(normalize(plugin.getIdentifyString()))) {
+            if (plugin == module) {
                 continue;
             }
             File source = codeSource.apply(plugin);
