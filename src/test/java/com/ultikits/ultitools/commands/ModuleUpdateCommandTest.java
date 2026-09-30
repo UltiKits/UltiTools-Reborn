@@ -181,6 +181,23 @@ class ModuleUpdateCommandTest {
     }
 
     @Test
+    @DisplayName("gate 1 I-04: an uninstall that ends in an unexpected exception still says which update it cancelled")
+    void uninstallThatThrowsUnexpectedly_stillReportsTheCancelledUpdate() {
+        IllegalArgumentException unexpected = new IllegalArgumentException("unexpected");
+        utils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("Demo"), anyList()))
+                .thenAnswer(invocation -> {
+                    // The uninstall's own finally cancelled the update before the failure left it.
+                    invocation.<List<String>>getArgument(1).add("1.1");
+                    throw unexpected;
+                });
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() -> executor.uninstallPlugin(sender, "Demo"));
+
+        assertThat(thrown).isSameAs(unexpected);
+        assertThat(all()).contains("已取消模块 Demo 已暂存、尚未应用的更新（版本 1.1）");
+    }
+
+    @Test
     @DisplayName("an uninstall that is refused reports no cancelled update")
     void refusedUninstall_cancelsNothing() throws Exception {
         utils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("Demo"), anyList()))
