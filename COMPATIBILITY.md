@@ -581,6 +581,34 @@ Each corrects a declared behaviour the stream did not deliver. The panel protoco
   tells a key the running version lacks from one the file omits. A panel or tool that matched on the
   old text must match the new one; the UltiPanel worker and frontend do not match on it.
 
+### Framework text follows `language`; the class-load audit is quiet on a clean start (6.3.0) that need no migration period
+
+Each corrects a declared behaviour the framework did not deliver. The panel protocol is unchanged.
+
+- **The framework's own console, reply and panel-stream text follows `language`** (#556). Until 6.3.0 about 150
+  lines of framework text were Chinese string literals that never went through `lang/*.json`, so an English
+  server still printed and sent them in Chinese. They now resolve through the catalogue (`en.json` gives the
+  English; under `language: zh` the text is unchanged): the reply every command sender gets when a module's
+  command body throws (`Command execution failed: <reason>`), the default processing notice of an
+  `@AsyncCommand` (`Processing...`), the framework's console lines (server status monitoring, log transmission,
+  WebSocket message handling, remote command and file operation logging), the lines it streams to the panel
+  (player join, quit and chat, plugin actions, the online-player count), and the `server.properties`
+  batch-failure text returned to the panel. A tool that matched one of these lines by its Chinese text on a
+  server running `language: en` must match the English text; the UltiPanel worker and frontend do not match on
+  any of them (their sources were searched, and the only hits were comments and the panel's own strings).
+  The verification e-mail stays bilingual on purpose, because its recipient's language is not the server's.
+  English log messages that carried full-width punctuation (`Configuration save failed！File path：…`,
+  `… load failed！`) now use ASCII punctuation; a tool that matched the full-width form must be updated.
+  `FrameworkText` (`com.ultikits.ultitools.utils`, `@ApiStatus.Internal`) is added for this.
+- **The class-load audit is quiet on a clean start** (#557). The audit that reports which classes the name-based
+  filters removed in 6.3.0 would have refused printed one line per module, twice per module, as two `WARN` lines
+  each (it wrote to the standard error stream, which Paper prints as `WARN`), naming an internal requirement
+  code. It now reaches the server log through the plugin logger: a module for which nothing would have been
+  refused is logged at `FINE` (not shown by default), and a module with at least one such class gets ONE `INFO`
+  line naming the jar and the count. The module-scan diagnostics use the same route; their `SEVERE` summary for
+  a skipped class is unchanged in level and content. `SecurityPolicy`'s one-time deprecation warning no longer
+  carries the internal code either.
+
 ## Binary incompatibilities the removal list cannot cover
 
 The removal list only covers changes where somebody knew they were changing an API. Both of its
