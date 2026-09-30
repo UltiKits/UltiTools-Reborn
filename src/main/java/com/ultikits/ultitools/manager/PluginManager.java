@@ -17,6 +17,7 @@ import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -1857,9 +1858,10 @@ public class PluginManager {
     /**
      * Unloads the old version this load supersedes, through the full {@link
      * #unregister(UltiToolsPlugin)} path (#506): its tasks are cancelled, its container closed, its
-     * registrations released and it is delisted. Because the incoming copy shares its name and
-     * has already registered under it, only the registrations recorded against the old instance
-     * are released; name-only ones stay with the incoming copy.
+     * registrations released and it is delisted. When the incoming copy shares its name, it has
+     * already registered under it, so only the registrations recorded against the old instance are
+     * released and name-only ones stay with the incoming copy; a successor under a different name
+     * leaves the old name unused, and its name-only registrations are released too.
      * <p>
      * Each old copy's unload is isolated (#528): a failure thrown by its unload hook is logged
      * against that copy's name and version and does not abort the incoming registration. The
@@ -1884,8 +1886,13 @@ public class PluginManager {
                 // unregister() has closed the old copy's container and delisted it whether or not
                 // its hook threw, so a failure here is the old copy's, is reported against it, and
                 // the new copy goes on loading -- close()'s policy, Errors included.
+                // #506: the incoming copy shares the old name only if its plugin.yml says so; a
+                // renamed successor cannot own registrations filed under the old name (Codex review
+                // of #564, round 6). The incoming copy is not listed yet, so it is compared here.
+                boolean nameStillInUse = Objects.equals(existing.getPluginName(), plugin.getPluginName())
+                        || isNameInUseByAnotherLoadedCopy(existing);
                 try {
-                    unregister(existing, true);
+                    unregister(existing, nameStillInUse);
                 } catch (Exception | Error e) {
                     Bukkit.getLogger().log(Level.WARNING, String.format(
                             "[UltiTools-API] Version %s of %s, superseded by version %s, threw while unloading: %s. "
