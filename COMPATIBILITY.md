@@ -480,7 +480,10 @@ This section governs the third kind.
   new JAR's file name: that copy would load instead at the next start, so the update could only be
   rolled back; the reply names it (maintainer follow-up 19). Likewise when two loaded modules in
   different JARs declare the same identify-string, since the update names a module only by that
-  string. Measured consumers: none of the fifteen module repositories or
+  string. The update only ever moves, replaces or deletes a file whose SHA-256 matches its record;
+  when another actor has changed one, it does nothing, keeps the record as `NEEDS_OPERATOR` with one
+  SEVERE line, and refuses `/upm update` and `/upm uninstall` of that module until the record and its
+  folder are deleted. Measured consumers: none of the fifteen module repositories or
   UltiTools-External-Example call either method (their `origin/master`, searched for
   `PluginInstallUtils`, `updatePlugin(` and `uninstallPlugin(`; the only hits are UAT documents
   naming the `/upm` commands). An uninstall that goes ahead also cancels an update of that module
