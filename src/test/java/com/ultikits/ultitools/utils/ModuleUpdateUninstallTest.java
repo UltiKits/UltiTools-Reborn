@@ -119,6 +119,83 @@ class ModuleUpdateUninstallTest {
         assertThat(treeOf(transactions)).isEmpty();
     }
 
+    /** Collects what {@code ModuleFileTransactions} logs while {@code action} runs. */
+    private static List<java.util.logging.LogRecord> logged(ThrowingAction action) throws IOException {
+        java.util.logging.Logger logger = java.util.logging.Logger.getLogger(ModuleFileTransactions.class.getName());
+        List<java.util.logging.LogRecord> records = new java.util.ArrayList<>();
+        java.util.logging.Handler handler = new java.util.logging.Handler() {
+            @Override
+            public void publish(java.util.logging.LogRecord record) {
+                records.add(record);
+            }
+
+            @Override
+            public void flush() {
+                // nothing buffered
+            }
+
+            @Override
+            public void close() {
+                // nothing held
+            }
+        };
+        logger.addHandler(handler);
+        try {
+            action.run();
+        } finally {
+            logger.removeHandler(handler);
+        }
+        return records;
+    }
+
+    /** An action that may throw an I/O error. */
+    @FunctionalInterface
+    private interface ThrowingAction {
+        void run() throws IOException;
+    }
+
+    private static List<java.util.logging.LogRecord> warningsNaming(List<java.util.logging.LogRecord> records, File file) {
+        return records.stream().filter(r -> r.getLevel() == java.util.logging.Level.WARNING
+                && r.getMessage().contains(file.getAbsolutePath())).collect(Collectors.toList());
+    }
+
+    @Test
+    @DisplayName("an install clears its recorded deletion past a malformed record, warning once and naming it (Codex round 5)")
+    void installPastAMalformedRecord_clearsTheMatchingRemoval() throws IOException {
+        new ModuleFileTransactions(dataFolder).recordDeferredRemoval("Demo", Collections.singletonList(oldJar));
+        // Sorts before every "remove-..." and "update-..." record, so it is read first.
+        File malformed = new File(transactions, "a-malformed.json");
+        java.nio.file.Files.write(malformed.toPath(), "{ not json".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        List<java.util.logging.LogRecord> records = logged(
+                () -> new ModuleFileTransactions(dataFolder).forgetDeferredRemoval(oldJar.getName()));
+        ModuleFileTransactions start = new ModuleFileTransactions(dataFolder);
+        start.applyBeforeLoad();
+
+        assertThat(warningsNaming(records, malformed)).hasSize(1);
+        assertThat(oldJar).exists();
+        assertThat(keys(start)).doesNotContain(ModuleFileTransactions.Keys.REMOVED);
+        assertThat(treeOf(transactions)).noneMatch(p -> p.startsWith("remove-"));
+    }
+
+    @Test
+    @DisplayName("an uninstall records its deletion over an unreadable earlier record of the same module, warning once")
+    void recordingOverAMalformedRecord_writesTheNewRecord() throws IOException {
+        new ModuleFileTransactions(dataFolder).recordDeferredRemoval("Demo", Collections.singletonList(oldJar));
+        File[] existing = transactions.listFiles((dir, name) -> name.startsWith("remove-") && name.endsWith(".json"));
+        assertThat(existing).hasSize(1);
+        java.nio.file.Files.write(existing[0].toPath(), "{ not json".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        List<java.util.logging.LogRecord> records = logged(() -> new ModuleFileTransactions(dataFolder)
+                .recordDeferredRemoval("Demo", Collections.singletonList(oldJar)));
+        ModuleFileTransactions start = new ModuleFileTransactions(dataFolder);
+        start.applyBeforeLoad();
+
+        assertThat(warningsNaming(records, existing[0])).hasSize(1);
+        assertThat(oldJar).doesNotExist();
+        assertThat(keys(start)).containsExactly(ModuleFileTransactions.Keys.REMOVED);
+    }
+
     @Test
     @DisplayName("a JAR copied back after the uninstall (same bytes, another timestamp) is not deleted")
     void copiedBackJar_isNotDeleted() throws IOException {
