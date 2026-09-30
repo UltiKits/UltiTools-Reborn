@@ -202,6 +202,25 @@ class ModuleUpdateStagingTest {
     }
 
     @Test
+    @DisplayName("an incomplete staged record is reported as unreadable, never as already staged (Codex round 7)")
+    void incompleteRecord_isReportedNotAlreadyStaged() throws IOException {
+        stage(downloading("Demo", "1.1", "demo"));
+        File[] records = transactions.listFiles((dir, name) -> name.endsWith(".json"));
+        assertThat(records).hasSize(1);
+        String text = new String(Files.readAllBytes(records[0].toPath()), StandardCharsets.UTF_8);
+        Files.write(records[0].toPath(), text.replaceFirst("\\s*\"newVersion\": \"[^\"]*\",", "")
+                .getBytes(StandardCharsets.UTF_8));
+        List<String> downloads = new ArrayList<>();
+
+        ModuleFileTransactions.StageResult again = stage((link, name, folder) -> downloads.add(name));
+
+        assertThat(again.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
+        assertThat(again.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_RECORD_UNREADABLE);
+        assertThat(again.getReasonArgs()).containsExactly(records[0].getAbsolutePath(), "missing field newVersion");
+        assertThat(downloads).isEmpty();
+    }
+
+    @Test
     @DisplayName("a second update of a module with a staged update names the staged version and changes nothing")
     void secondUpdateWhilePending_changesNothing() throws IOException {
         stage(downloading("Demo", "1.1", "demo"));
