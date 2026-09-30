@@ -46,7 +46,8 @@ class ModuleRemovalDeferredCommandTest {
         org.mockito.Mockito.doAnswer(invocation -> messages.add(invocation.getArgument(0)))
                 .when(sender).sendMessage(anyString());
         utils = mockStatic(PluginInstallUtils.class);
-        utils.when(() -> PluginInstallUtils.cancelStagedUpdates(anyString())).thenReturn(Collections.emptyList());
+        utils.when(() -> PluginInstallUtils.cancelStagedUpdates(anyString(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(Collections.emptyList());
         executor = new PluginInstallCommands();
     }
 
@@ -68,7 +69,9 @@ class ModuleRemovalDeferredCommandTest {
 
         String all = String.join("\n", messages);
         assertThat(all).contains("以下模块 JAR 暂时无法删除（被占用或不可写：FileSystemException")
-                .contains("将在下次启动、加载模块之前删除：/srv/plugins/UltiTools/plugins/demo-1.0.jar")
+                .contains("已记录：下次启动会在加载模块之前删除它们，仍无法删除时会在启动日志中报告：/srv/plugins/UltiTools/plugins/demo-1.0.jar")
                 .doesNotContain("请手动删除");
+        // The deferred JAR counts as removed: an update of the module waiting on it is cancelled.
+        utils.verify(() -> PluginInstallUtils.cancelStagedUpdates("Demo", Collections.singletonList("demo-1.0.jar")));
     }
 }
