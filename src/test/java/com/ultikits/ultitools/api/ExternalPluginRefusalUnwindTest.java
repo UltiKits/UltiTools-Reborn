@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Timeout;
 import org.mockbukkit.mockbukkit.MockBukkit;
 
 import com.ultikits.testfixtures.configbinding531external.ConnectorPluginFixtureBoundCooldown;
+import com.ultikits.testfixtures.externalunwind.UnwindOwnedEntity;
 import com.ultikits.testfixtures.wr01contractgap.broken.ConnectorPluginFixtureBroken;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.context.SimpleContainer;
@@ -157,4 +158,24 @@ class ExternalPluginRefusalUnwindTest {
         assertThat(UltiToolsAPI.isConnected(plugin)).isFalse();
         assertThat(scopesHeldBy(pluginManager, plugin.getName())).isZero();
     }
+
+    @Test
+    @DisplayName("a refused second registration of a connected plugin leaves the live registration's ownership and scope")
+    void refusedSecondRegistrationKeepsTheLiveRegistration() throws Exception {
+        PluginManager pluginManager = newPluginManager();
+        ConnectorPluginFixtureBroken plugin = MockBukkit.loadSimple(ConnectorPluginFixtureBroken.class);
+        Class<?>[] owned = {UnwindOwnedEntity.class};
+        ExternalPluginAdapter live = spy(new ExternalPluginAdapter(plugin));
+        doReturn(PASSING_PACKAGE).when(live).getScanPackage();
+        pluginManager.registerExternal(live, owned);
+        DataScope liveScope = pluginManager.findScopeForDataFolder(plugin.getDataFolder());
+
+        Throwable thrown = catchThrowable(() -> pluginManager.registerExternal(new ExternalPluginAdapter(plugin), owned));
+
+        assertThat(thrown).isInstanceOf(PluginModuleException.class);
+        assertThat(pluginManager.findOwningPlugin(UnwindOwnedEntity.class)).isEqualTo(plugin.getName());
+        assertThat(pluginManager.findScopeForDataFolder(plugin.getDataFolder())).isSameAs(liveScope);
+        assertThat(live.getContext()).isNotNull();
+    }
 }
+
