@@ -119,6 +119,25 @@ class ModuleUpdateStagingTest {
     }
 
     @Test
+    @DisplayName("a JAR another loaded module also came from is refused before anything is downloaded (Codex P1, #561)")
+    void jarSharedWithAnotherLoadedModule_isRefused() throws IOException {
+        UltiToolsPlugin bystander = loadedModule("Companion", "1.0", "companion");
+        Map<String, String> before = snapshot();
+        List<String> downloads = new ArrayList<>();
+
+        ModuleFileTransactions.StageResult result = new ModuleFileTransactions(dataFolder).stageUpdate("demo",
+                java.util.Arrays.asList(loadedOld, bystander),
+                new ModuleUpdateFixtures.CodeSources().with(loadedOld, oldJar).with(bystander, oldJar),
+                catalogue("demo", "1.1"), (link, name, folder) -> downloads.add(name));
+
+        assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
+        assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_SHARED_JAR);
+        assertThat(result.getReasonArgs()).containsExactly(oldJar.getAbsolutePath(), "Companion");
+        assertThat(downloads).isEmpty();
+        assertThat(snapshot()).isEqualTo(before);
+    }
+
+    @Test
     @DisplayName("a second update of a module with a staged update names the staged version and changes nothing")
     void secondUpdateWhilePending_changesNothing() throws IOException {
         stage(downloading("Demo", "1.1", "demo"));

@@ -348,6 +348,39 @@ class ModuleUpdateRecoveryTest {
         }
 
         @Test
+        @DisplayName("an old JAR replaced after staging is never moved aside or deleted: the update is abandoned (Codex P2, #561)")
+        void oldJarReplacedAfterStaging_isKeptAndTheUpdateAbandoned() throws IOException {
+            stage(transactions());
+            // For example /upm install of the current version, or a hand-made hotfix under the same name.
+            byte[] replacement = Files.readAllBytes(moduleJar(oldJar, "Demo", "1.0-hotfix", "demo").toPath());
+            ModuleFileTransactions start = transactions();
+
+            start.applyBeforeLoad();
+            observeLoaded(start);
+
+            assertThat(namesIn(modules)).containsExactly("demo-1.0.jar");
+            assertThat(Files.readAllBytes(oldJar.toPath())).isEqualTo(replacement);
+            assertThat(treeOf(transactions)).isEmpty();
+            ModuleFileTransactions.Report report = onlyReport(start);
+            assertThat(report.getLevel()).isEqualTo(Level.WARNING);
+            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.UPDATE_ABANDONED_REPLACED);
+            assertThat(report.getArgs()).containsExactly("Demo", "1.1", oldJar.getAbsolutePath());
+        }
+
+        @Test
+        @DisplayName("the same bytes put back under the old name are still the old JAR: the update applies")
+        void oldJarRewrittenWithTheSameBytes_stillApplies() throws IOException {
+            stage(transactions());
+            Files.write(oldJar.toPath(), oldBytes);
+            ModuleFileTransactions start = transactions();
+
+            start.applyBeforeLoad();
+
+            assertThat(namesIn(modules)).containsExactly("demo-1.1.jar");
+            assertThat(recordText()).contains("\"state\": \"APPLIED\"");
+        }
+
+        @Test
         @DisplayName("staging never adopts a kept old JAR left without its record: it is refused and the JAR is kept")
         void leftoverKeptJar_isNotAdopted() throws IOException {
             stage(transactions());
