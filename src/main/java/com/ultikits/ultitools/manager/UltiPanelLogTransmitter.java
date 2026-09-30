@@ -13,6 +13,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
@@ -604,6 +605,54 @@ public class UltiPanelLogTransmitter {
             merged.addAll(existing);
             return merged;
         });
+    }
+
+    /**
+     * Removes and returns every record this transmitter has not sent -- the held batch first, then
+     * the queue, oldest first -- so {@code LogStreamManager} can hand them to the transmitter that
+     * replaces this one when the panel reconnects on a new client (#486). Call it after
+     * {@link #shutdown()}, whose flush sends what the old connection still can.
+     *
+     * @return the unsent records, oldest first; empty when there are none
+     * @since 6.3.0
+     */
+    public JsonArray takePending() {
+        synchronized (batchModeLock) {
+            JsonArray pending = new JsonArray();
+            JsonArray held = heldBatch.getAndSet(null);
+            if (held != null) {
+                pending.addAll(held);
+            }
+            JsonObject log;
+            while ((log = logQueue.poll()) != null) {
+                pending.add(log);
+            }
+            return pending;
+        }
+    }
+
+    /**
+     * Queues records a replaced transmitter could not send ({@link #takePending()}) ahead of anything
+     * this one logs afterwards, so they reach the panel first and in order (#486). The queue's own
+     * bound applies: beyond {@link #MAX_QUEUE_SIZE} the oldest are discarded and counted.
+     *
+     * @param pending the records, oldest first; ignored when {@code null}
+     * @since 6.3.0
+     */
+    public void adoptPending(JsonArray pending) {
+        if (pending == null) {
+            return;
+        }
+        synchronized (batchModeLock) {
+            for (JsonElement record : pending) {
+                while (logQueue.size() >= MAX_QUEUE_SIZE) {
+                    if (logQueue.poll() != null) {
+                        discardedRecords.incrementAndGet();
+                    }
+                }
+                logQueue.offer(record.getAsJsonObject());
+            }
+        }
     }
 
     /**

@@ -82,9 +82,16 @@ public class LogStreamManager implements Listener {
         // shutdown(), and shutdown()'s only caller is onDisable. So every connection blip leaked
         // one handler plus one thread, and every log line got sent N times over. See issue #181.
         detachAllSystemLogHandlers();
+        // #486: what the previous transmitter could not send -- a batch held from a failed send and
+        // anything still queued -- is carried to the new one below instead of being dropped with the
+        // old object. Its shutdown flush first sends what the old connection still can (the same
+        // client reconnecting); after a reconnect on a fresh client that flush fails and the records
+        // are still here.
+        com.google.gson.JsonArray unsent = null;
         if (logTransmitter != null) {
             try {
                 logTransmitter.shutdown();
+                unsent = logTransmitter.takePending();
             } catch (Exception e) {
                 UltiTools.getInstance().getLogger().warning(
                     "[UltiPanel] Error shutting down previous log transmitter: " + e.getMessage());
@@ -96,6 +103,7 @@ public class LogStreamManager implements Listener {
         // Initialize the log transmitter
         String serverId = getServerId();
         this.logTransmitter = new UltiPanelLogTransmitter(client, serverId);
+        this.logTransmitter.adoptPending(unsent);
 
         // Gate-2 finding (round 4): externalDrainMode must be re-applied to EVERY freshly-created
         // transmitter, not only once from ServerMonitorManager#startMonitoring(). wireManagers()
