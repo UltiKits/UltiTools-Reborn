@@ -1725,6 +1725,10 @@ public class PluginManager {
      * has already registered under it, only the registrations recorded against the old instance
      * are released; name-only ones stay with the incoming copy.
      * <p>
+     * Each old copy's unload is isolated (#528): a failure thrown by its unload hook is logged
+     * against that copy's name and version and does not abort the incoming registration. A
+     * {@link VirtualMachineError} is rethrown.
+     * <p>
      * <b>May only be called after the new module's {@code registerSelf()} returns true</b> -- not
      * "after the container is built". The two are one step apart: the container being built only
      * means the bean graph could be constructed, the module is not yet active; and when {@code
@@ -1738,7 +1742,22 @@ public class PluginManager {
                 continue;
             }
             if (plugin.isNewerVersionThan(existing)) {
-                unregister(existing, true);
+                // #528: the outgoing copy's cleanup is isolated from the incoming registration.
+                // unregister() has closed the old copy's container and delisted it whether or not
+                // its hook threw, so a failure here is the old copy's, is reported against it, and
+                // the new copy goes on loading. A fatal virtual-machine error is not a cleanup
+                // failure to carry on from, and still aborts this registration.
+                try {
+                    unregister(existing, true);
+                } catch (VirtualMachineError fatal) {
+                    throw fatal;
+                } catch (Exception | Error e) {
+                    Bukkit.getLogger().log(Level.WARNING, String.format(
+                            "[UltiTools-API] Version %s of %s, superseded by version %s, threw while unloading: %s. "
+                                    + "It has been unloaded and delisted; version %s continues to load.",
+                            existing.getVersion(), existing.getPluginName(), plugin.getVersion(),
+                            rootCauseMessage(e), plugin.getVersion()), e);
+                }
             }
         }
     }
