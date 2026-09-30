@@ -277,6 +277,23 @@ class ModuleUpdateRecoveryTest {
         }
 
         @Test
+        @DisplayName("a module whose JAR was removed after staging is not installed again by its staged update")
+        void moduleRemovedAfterStaging_isNotInstalledAgain() throws IOException {
+            stage(transactions());
+            Files.delete(oldJar.toPath());
+            ModuleFileTransactions start = transactions();
+
+            start.applyBeforeLoad();
+
+            assertThat(namesIn(modules)).isEmpty();
+            assertThat(treeOf(transactions)).isEmpty();
+            ModuleFileTransactions.Report report = onlyReport(start);
+            assertThat(report.getLevel()).isEqualTo(Level.WARNING);
+            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.UPDATE_ABANDONED);
+            assertThat(report.getArgs()).containsExactly("Demo", "1.1", oldJar.getAbsolutePath());
+        }
+
+        @Test
         @DisplayName("a file already at the new JAR's name is never replaced: the apply fails and nothing changes")
         void existingFileAtTheNewName_isNotReplaced() throws IOException {
             stage(transactions());
