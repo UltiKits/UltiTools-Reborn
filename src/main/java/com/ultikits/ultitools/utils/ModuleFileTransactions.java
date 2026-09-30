@@ -99,12 +99,17 @@ public final class ModuleFileTransactions {
      */
     private static final Object LOCK = new Object();
 
+    /** The modules (by identify-string) whose update is being downloaded right now; guarded by {@link #LOCK}. */
+    private static final java.util.Set<String> STAGING = new java.util.HashSet<>();
+
     private final File modulesFolder;
     private final File transactionsFolder;
     private final FileOps ops;
     private final CrashPoints crashPoints;
     private final List<Report> reports = new ArrayList<>();
     private final List<Record> appliedThisStart = new ArrayList<>();
+    /** The failure of a {@code FAILED} record {@link #checkExisting} just discarded; guarded by {@link #LOCK}. */
+    private String lastDiscardedFailure;
     /** The modules-folder file names a recorded deletion still has to remove after this start's removals. */
     private final java.util.Set<String> pendingRemovals = new java.util.HashSet<>();
 
@@ -200,44 +205,37 @@ public final class ModuleFileTransactions {
     public StageResult stageUpdate(String identifyString, List<UltiToolsPlugin> loaded,
                                    Function<UltiToolsPlugin, File> codeSource, Catalogue catalogue,
                                    Downloader downloader) {
+        String key = normalize(identifyString);
+        if (key == null) {
+            return StageResult.failed(null, Keys.REASON_NO_IDENTIFY_STRING);
+        }
+        Record record = new Record();
+        record.type = Record.UPDATE;
+        record.key = key;
+        File work = workFolder(record);
+        String previousFailure;
+        UltiToolsPlugin module;
+        File oldJar;
+        // Decisions under the lock; the network outside it. An uninstall on the main thread waits
+        // only for these checks and the record write, never for a download (gate-1 review).
         synchronized (LOCK) {
-            String key = normalize(identifyString);
-            if (key == null) {
-                return StageResult.failed(null, Keys.REASON_NO_IDENTIFY_STRING);
+            if (STAGING.contains(key)) {
+                return StageResult.of(StageResult.Outcome.BUSY, null, null, null, null);
             }
-            Record lookup = new Record();
-            lookup.type = Record.UPDATE;
-            lookup.key = key;
-            File existingFile = recordFileOf(lookup);
-            String previousFailure = null;
-            if (exists(existingFile)) {
-                Record existing;
-                try {
-                    existing = readRecord(existingFile);
-                } catch (IOException | JsonParseException e) {
-                    return StageResult.failed(null, Keys.REASON_RECORD_UNREADABLE,
-                            existingFile.getAbsolutePath(), describe(e));
-                }
-                if (existing == null || existing.state == null) {
-                    return StageResult.failed(null, Keys.REASON_RECORD_UNREADABLE,
-                            existingFile.getAbsolutePath(), "empty record");
-                }
-                if (Record.PENDING.equals(existing.state)) {
-                    return StageResult.of(StageResult.Outcome.ALREADY_STAGED, existing.moduleName,
-                            existing.oldVersion, existing.newVersion, null);
-                }
-                if (!Record.FAILED.equals(existing.state)) {
-                    return StageResult.of(StageResult.Outcome.BUSY, existing.moduleName, existing.oldVersion,
-                            existing.newVersion, null);
-                }
-                previousFailure = existing.failure;
-                String restoreError = discardFailed(existing);
-                if (restoreError != null) {
-                    return StageResult.failed(previousFailure, Keys.REASON_PREVIOUS_UNRESTORED, restoreError);
-                }
+            StageResult refusal = checkExisting(record);
+            previousFailure = refusal == null ? lastDiscardedFailure : refusal.getPreviousFailure();
+            lastDiscardedFailure = null;
+            if (refusal != null) {
+                return refusal;
             }
-
-            UltiToolsPlugin module = null;
+            String[] kept = new File(work, BACKUP_FOLDER).list();
+            if (kept != null && kept.length > 0) {
+                // A kept old JAR without its record: never adopted as this transaction's backup and
+                // never deleted by staging. The start-up log already reports it.
+                return StageResult.failed(previousFailure, Keys.REASON_LEFTOVER_BACKUP,
+                        new File(work, BACKUP_FOLDER).getAbsolutePath());
+            }
+            module = null;
             for (UltiToolsPlugin plugin : loaded) {
                 if (key.equals(normalize(plugin.getIdentifyString()))) {
                     module = plugin;
@@ -247,67 +245,117 @@ public final class ModuleFileTransactions {
             if (module == null) {
                 return StageResult.failed(previousFailure, Keys.REASON_NOT_LOADED, identifyString);
             }
-            File oldJar = codeSource.apply(module);
-            if (oldJar == null || !isDirectChild(modulesFolder, oldJar)) {
+            oldJar = codeSource.apply(module);
+            if (oldJar == null || !isDirectChild(modulesFolder, oldJar) || !isJarName(oldJar.getName())) {
                 return StageResult.failed(previousFailure, Keys.REASON_NOT_IN_MODULES_FOLDER,
                         oldJar == null ? "?" : oldJar.getAbsolutePath(), modulesFolder.getAbsolutePath());
             }
-            String latest;
-            String link;
-            try {
-                latest = catalogue.latestVersion(identifyString);
-                link = latest == null ? null : catalogue.downloadLink(identifyString, latest);
-            } catch (RuntimeException e) {
-                return StageResult.failed(previousFailure, Keys.REASON_DOWNLOAD_FAILED, describe(e));
+            STAGING.add(key);
+        }
+        try {
+            return download(record, work, identifyString, module, oldJar, catalogue, downloader, previousFailure);
+        } finally {
+            synchronized (LOCK) {
+                STAGING.remove(key);
             }
-            String targetName = PluginInstallUtils.installedJarName(identifyString, latest);
-            if (link == null || targetName == null) {
-                return StageResult.failed(previousFailure, Keys.REASON_NO_DOWNLOAD, identifyString);
-            }
+        }
+    }
 
-            Record record = new Record();
-            record.type = Record.UPDATE;
-            record.key = key;
-            File work = workFolder(record);
-            File stagedFolder = new File(work, STAGED_FOLDER);
+    /**
+     * The part of staging that touches the network and the staged file, run outside the lock; only
+     * the record write at its end takes the lock again.
+     */
+    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.ExcessiveParameterList"})
+    private StageResult download(Record record, File work, String identifyString, UltiToolsPlugin module,
+                                 File oldJar, Catalogue catalogue, Downloader downloader, String previousFailure) {
+        String latest;
+        String link;
+        try {
+            latest = catalogue.latestVersion(identifyString);
+            link = latest == null ? null : catalogue.downloadLink(identifyString, latest);
+        } catch (RuntimeException e) {
+            return StageResult.failed(previousFailure, Keys.REASON_DOWNLOAD_FAILED, describe(e));
+        }
+        String targetName = PluginInstallUtils.installedJarName(identifyString, latest);
+        if (link == null || targetName == null) {
+            return StageResult.failed(previousFailure, Keys.REASON_NO_DOWNLOAD, identifyString);
+        }
+        File stagedFolder = new File(work, STAGED_FOLDER);
+        discardStaging(work);
+        try {
+            Files.createDirectories(stagedFolder.toPath());
+            downloader.download(link, targetName, stagedFolder);
+        } catch (IOException | RuntimeException e) {
             discardStaging(work);
-            try {
-                Files.createDirectories(stagedFolder.toPath());
-                downloader.download(link, targetName, stagedFolder);
-            } catch (IOException | RuntimeException e) {
-                discardStaging(work);
-                return StageResult.failed(previousFailure, Keys.REASON_DOWNLOAD_FAILED, describe(e));
-            }
-            File staged = new File(stagedFolder, targetName);
-            if (!staged.isFile() || !SecurityPolicy.isValidModuleJar(staged)) {
-                discardStaging(work);
-                return StageResult.failed(previousFailure, Keys.REASON_INVALID_JAR, targetName);
-            }
-            String stagedVersion = declaredVersion(staged, key);
-            String stagedHash = sha256Of(staged);
-            if (stagedVersion == null || stagedHash == null) {
-                discardStaging(work);
-                return StageResult.failed(previousFailure, Keys.REASON_WRONG_IDENTITY, targetName, key);
-            }
+            return StageResult.failed(previousFailure, Keys.REASON_DOWNLOAD_FAILED, describe(e));
+        }
+        File staged = new File(stagedFolder, targetName);
+        if (!staged.isFile() || !SecurityPolicy.isValidModuleJar(staged)) {
+            discardStaging(work);
+            return StageResult.failed(previousFailure, Keys.REASON_INVALID_JAR, targetName);
+        }
+        String stagedVersion = declaredVersion(staged, record.key);
+        String stagedHash = sha256Of(staged);
+        if (stagedVersion == null || stagedHash == null) {
+            discardStaging(work);
+            return StageResult.failed(previousFailure, Keys.REASON_WRONG_IDENTITY, targetName, record.key);
+        }
 
-            record.state = Record.PENDING;
-            record.moduleName = module.getPluginName();
-            record.oldName = oldJar.getName();
-            record.oldVersion = module.getVersion();
-            record.stagedName = targetName;
-            record.targetName = targetName;
-            record.newVersion = stagedVersion;
-            record.stagedSha256 = stagedHash;
+        record.state = Record.PENDING;
+        record.moduleName = module.getPluginName();
+        record.oldName = oldJar.getName();
+        record.oldVersion = module.getVersion();
+        record.stagedName = targetName;
+        record.targetName = targetName;
+        record.newVersion = stagedVersion;
+        record.stagedSha256 = stagedHash;
+        synchronized (LOCK) {
             try {
                 writeRecord(record);
             } catch (IOException e) {
                 discardStaging(work);
                 return StageResult.failed(previousFailure, Keys.REASON_RECORD_FAILED, describe(e));
             }
-            crashPoints.reached(CrashPoints.AFTER_RECORD_WRITTEN);
-            return StageResult.of(StageResult.Outcome.STAGED, record.moduleName, record.oldVersion,
-                    record.newVersion, previousFailure);
         }
+        crashPoints.reached(CrashPoints.AFTER_RECORD_WRITTEN);
+        return StageResult.of(StageResult.Outcome.STAGED, record.moduleName, record.oldVersion,
+                record.newVersion, previousFailure);
+    }
+
+    /**
+     * What an existing record of this module says about staging now, under the lock: {@code null}
+     * to go ahead (after discarding a {@code FAILED} record, whose failure is left in
+     * {@link #lastDiscardedFailure}), or the refusal to return.
+     */
+    private StageResult checkExisting(Record lookup) {
+        File existingFile = recordFileOf(lookup);
+        if (!exists(existingFile)) {
+            return null;
+        }
+        Record existing;
+        try {
+            existing = readRecord(existingFile);
+        } catch (IOException | JsonParseException e) {
+            return StageResult.failed(null, Keys.REASON_RECORD_UNREADABLE, existingFile.getAbsolutePath(), describe(e));
+        }
+        if (existing == null || existing.state == null) {
+            return StageResult.failed(null, Keys.REASON_RECORD_UNREADABLE, existingFile.getAbsolutePath(),
+                    "empty record");
+        }
+        if (Record.PENDING.equals(existing.state)) {
+            return StageResult.of(StageResult.Outcome.ALREADY_STAGED, existing.moduleName, existing.oldVersion,
+                    existing.newVersion, null);
+        }
+        if (!Record.FAILED.equals(existing.state)) {
+            return StageResult.of(StageResult.Outcome.BUSY, existing.moduleName, existing.oldVersion,
+                    existing.newVersion, null);
+        }
+        String restoreError = discardFailed(existing);
+        if (restoreError != null) {
+            return StageResult.failed(existing.failure, Keys.REASON_PREVIOUS_UNRESTORED, restoreError);
+        }
+        lastDiscardedFailure = existing.failure;
+        return null;
     }
 
     /**
@@ -984,6 +1032,11 @@ public final class ModuleFileTransactions {
         return file;
     }
 
+    /** Whether a file name is one the module loader would load: it ends in {@code .jar}. */
+    private static boolean isJarName(String name) {
+        return name != null && name.endsWith(".jar");
+    }
+
     /** Whether {@code file}, canonicalised, sits directly in {@code folder}, canonicalised. */
     private static boolean isDirectChild(File folder, File file) {
         try {
@@ -1405,6 +1458,7 @@ public final class ModuleFileTransactions {
         public static final String REASON_WRONG_IDENTITY = "下载的 %s 没有声明 identify-string %s 和版本号";
         public static final String REASON_RECORD_FAILED = "更新记录无法写入：%s";
         public static final String REASON_RECORD_UNREADABLE = "该模块已有的更新记录 %s 无法读取：%s";
+        public static final String REASON_LEFTOVER_BACKUP = "%s 中有上一次更新留下、没有记录的旧版本 JAR；请先检查并移走它";
         public static final String REASON_PREVIOUS_UNRESTORED = "上一次更新留下的旧版本 JAR 无法移回模块目录：%s";
 
         private Keys() {

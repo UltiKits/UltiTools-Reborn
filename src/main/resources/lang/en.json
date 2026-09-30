@@ -154,5 +154,7 @@
   "已删除卸载时未能删除的模块 JAR：%s。": "Deleted the module JAR files an uninstall could not delete: %s.",
   "卸载时记录的模块 JAR %s 仍无法删除（%s）；本次启动会再次加载它，下次启动会再试。": "The module JAR %s recorded by an uninstall still cannot be deleted (%s); it loads again at this start, and the next start tries again.",
   "卸载时记录的模块 JAR %s 自卸载后已被替换，未删除。": "The module JAR %s recorded by an uninstall has been replaced since, so it was not deleted.",
-  "模块 %s 暂存的 %s 版本更新已放弃：它的 JAR %s 在暂存之后已不在模块目录中（例如已卸载）。": "The staged update of module %s to version %s was abandoned: its JAR %s left the modules folder after the update was staged (for example, it was uninstalled)."
+  "模块 %s 暂存的 %s 版本更新已放弃：它的 JAR %s 在暂存之后已不在模块目录中（例如已卸载）。": "The staged update of module %s to version %s was abandoned: its JAR %s left the modules folder after the update was staged (for example, it was uninstalled).",
+  "%s 的另一个更新正在进行中，请稍后再试；没有做任何改动。": "Another update of %s is in progress; try again later. Nothing was changed.",
+  "%s 中有上一次更新留下、没有记录的旧版本 JAR；请先检查并移走它": "%s holds a previous-version JAR an earlier update kept and no record refers to; check it and move it away first"
 }

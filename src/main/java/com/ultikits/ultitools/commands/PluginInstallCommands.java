@@ -538,9 +538,15 @@ public class PluginInstallCommands extends BaseCommandExecutor {
                         pluginName, result.getNewVersion()));
                 return false;
             case BUSY:
-                sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
-                        "%s 的上一次更新（版本 %s）还没有处理完，请先重启服务器；没有做任何改动。"),
-                        pluginName, result.getNewVersion()));
+                if (result.getNewVersion() == null) {
+                    // Another /upm command is downloading an update of this module right now.
+                    sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
+                            "%s 的另一个更新正在进行中，请稍后再试；没有做任何改动。"), pluginName));
+                } else {
+                    sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
+                            "%s 的上一次更新（版本 %s）还没有处理完，请先重启服务器；没有做任何改动。"),
+                            pluginName, result.getNewVersion()));
+                }
                 return false;
             default:
                 break;
