@@ -40,6 +40,7 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Scheduled;
 import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.ListenerManager;
+import com.ultikits.ultitools.manager.PluginListSeeding;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.manager.TaskManager;
 
@@ -179,7 +180,7 @@ class PluginInstallUtilsUninstallTest {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
         when(plugin.getPluginName()).thenReturn(MODULE_NAME);
         doCallRealMethod().when(plugin).unregisterSelf();
-        pluginManager.getPluginList().add(plugin);
+        PluginListSeeding.add(pluginManager, plugin);
 
         Set<PosixFilePermission> original = Files.getPosixFilePermissions(folder);
         Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("---------"));
@@ -204,7 +205,7 @@ class PluginInstallUtilsUninstallTest {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
         when(plugin.getPluginName()).thenReturn(MODULE_NAME);
         doCallRealMethod().when(plugin).unregisterSelf();
-        pluginManager.getPluginList().add(plugin);
+        PluginListSeeding.add(pluginManager, plugin);
         // The module loaded from a JAR that has since become unreadable: nothing can be identified
         // as its own, and the entry that may be it says nothing.
         File unreadable = new File(pluginsFolder, MODULE_NAME + "-1.0.0.jar");
@@ -226,7 +227,7 @@ class PluginInstallUtilsUninstallTest {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
         when(plugin.getPluginName()).thenReturn(MODULE_NAME);
         doThrow(new IllegalStateException("module unload step boom")).when(plugin).unregisterSelf();
-        pluginManager.getPluginList().add(plugin);
+        PluginListSeeding.add(pluginManager, plugin);
         writeModuleJar(MODULE_NAME);
         File unreadable = new File(pluginsFolder, "zz-corrupt.jar");
         Files.write(unreadable.toPath(), "not an archive".getBytes(StandardCharsets.UTF_8));
@@ -308,7 +309,7 @@ class PluginInstallUtilsUninstallTest {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
         when(plugin.getPluginName()).thenReturn(MODULE_NAME);
         doCallRealMethod().when(plugin).unregisterSelf();
-        pluginManager.getPluginList().add(plugin);
+        PluginListSeeding.add(pluginManager, plugin);
         // The folder is a link whose target is away: its contents are unknown, and the module's
         // JAR comes back with the target.
         Files.delete(pluginsFolder.toPath());
@@ -328,7 +329,7 @@ class PluginInstallUtilsUninstallTest {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
         when(plugin.getPluginName()).thenReturn(MODULE_NAME);
         doCallRealMethod().when(plugin).unregisterSelf();
-        pluginManager.getPluginList().add(plugin);
+        PluginListSeeding.add(pluginManager, plugin);
         // A module JAR carrying no plugin.yml at all: UltiTools modules are identified by
         // @UltiToolsModule, so this loads perfectly well and metadata cannot rule it in or out.
         File jar = writeJarWithoutPluginYml(MODULE_NAME + "-1.0.0.jar");
@@ -348,7 +349,7 @@ class PluginInstallUtilsUninstallTest {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
         when(plugin.getPluginName()).thenReturn(MODULE_NAME);
         doCallRealMethod().when(plugin).unregisterSelf();
-        pluginManager.getPluginList().add(plugin);
+        PluginListSeeding.add(pluginManager, plugin);
         File jar = writeJarWithoutPluginYml(MODULE_NAME + "-1.0.0.jar");
         java.util.List<Boolean> stillLoadedWhenAsked = new java.util.ArrayList<>();
         uninstallReporting(MODULE_NAME, module -> {
@@ -368,7 +369,7 @@ class PluginInstallUtilsUninstallTest {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
         when(plugin.getPluginName()).thenReturn(MODULE_NAME);
         doCallRealMethod().when(plugin).unregisterSelf();
-        pluginManager.getPluginList().add(plugin);
+        PluginListSeeding.add(pluginManager, plugin);
         File codeSource = writeModuleJar(MODULE_NAME);
         // Another JAR with no metadata: it may be a module too, since a module needs no plugin.yml.
         File metadataFree = writeJarWithoutPluginYml("zz-no-metadata.jar");
@@ -389,7 +390,7 @@ class PluginInstallUtilsUninstallTest {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
         when(plugin.getPluginName()).thenReturn(MODULE_NAME);
         doCallRealMethod().when(plugin).unregisterSelf();
-        pluginManager.getPluginList().add(plugin);
+        PluginListSeeding.add(pluginManager, plugin);
         File jar = writeModuleJar(MODULE_NAME);
         // A development checkout: the module runs from an exploded class directory.
         File exploded = new File(dataFolder, "classes");
@@ -444,7 +445,7 @@ class PluginInstallUtilsUninstallTest {
         // given, and its JAR declares something else entirely.
         when(plugin.getPluginName()).thenReturn(MODULE_NAME);
         doCallRealMethod().when(plugin).unregisterSelf();
-        pluginManager.getPluginList().add(plugin);
+        PluginListSeeding.add(pluginManager, plugin);
         File loaded = writeModuleJar("DivergentName");
         File secondCopy = writeModuleJar("DivergentName", "0.9.0");
 
@@ -465,7 +466,7 @@ class PluginInstallUtilsUninstallTest {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
         when(plugin.getPluginName()).thenReturn("RuntimeName");
         doCallRealMethod().when(plugin).unregisterSelf();
-        pluginManager.getPluginList().add(plugin);
+        PluginListSeeding.add(pluginManager, plugin);
         File jar = writeModuleJar("DeclaredName");
         PluginInstallUtils.UninstallReport report = uninstallReporting("DeclaredName", module -> jar);
 
@@ -485,8 +486,8 @@ class PluginInstallUtilsUninstallTest {
         UltiToolsPlugin bystander = mock(UltiToolsPlugin.class);
         when(bystander.getPluginName()).thenReturn("Bystander");
         doCallRealMethod().when(bystander).unregisterSelf();
-        pluginManager.getPluginList().add(target);
-        pluginManager.getPluginList().add(bystander);
+        PluginListSeeding.add(pluginManager, target);
+        PluginListSeeding.add(pluginManager, bystander);
         // The target's own JAR declares the bystander's name -- the retarget this must not follow.
         File targetJar = writeModuleJar("Bystander", "2.0.0");
         File bystanderJar = writeModuleJar("Bystander");
@@ -511,8 +512,8 @@ class PluginInstallUtilsUninstallTest {
         UltiToolsPlugin bystander = mock(UltiToolsPlugin.class);
         when(bystander.getPluginName()).thenReturn("Bystander");
         doCallRealMethod().when(bystander).unregisterSelf();
-        pluginManager.getPluginList().add(target);
-        pluginManager.getPluginList().add(bystander);
+        PluginListSeeding.add(pluginManager, target);
+        PluginListSeeding.add(pluginManager, bystander);
         // One JAR both modules were loaded from, declaring neither: the target is matched by its
         // runtime name and the JAR is its code source, so classification reaches a delete that
         // would also take a running module's JAR. Whatever decided to get here, that is not an
@@ -555,7 +556,7 @@ class PluginInstallUtilsUninstallTest {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
         when(plugin.getPluginName()).thenReturn(MODULE_NAME);
         doCallRealMethod().when(plugin).unregisterSelf();
-        pluginManager.getPluginList().add(plugin);
+        PluginListSeeding.add(pluginManager, plugin);
         writeModuleJar(MODULE_NAME);
 
         Set<PosixFilePermission> original = Files.getPosixFilePermissions(dataFolder.toPath());
@@ -582,8 +583,8 @@ class PluginInstallUtilsUninstallTest {
         UltiToolsPlugin other = mock(UltiToolsPlugin.class);
         when(other.getPluginName()).thenReturn("OtherModule");
         doCallRealMethod().when(other).unregisterSelf();
-        pluginManager.getPluginList().add(target);
-        pluginManager.getPluginList().add(other);
+        PluginListSeeding.add(pluginManager, target);
+        PluginListSeeding.add(pluginManager, other);
         File targetJar = writeModuleJar("Foo");
         // Another loaded module whose JAR happens to declare the name that was typed.
         File otherJar = writeModuleJar("Foo", "9.9.9");
@@ -608,8 +609,8 @@ class PluginInstallUtilsUninstallTest {
         UltiToolsPlugin second = mock(UltiToolsPlugin.class);
         when(second.getPluginName()).thenReturn("SecondModule");
         doCallRealMethod().when(second).unregisterSelf();
-        pluginManager.getPluginList().add(first);
-        pluginManager.getPluginList().add(second);
+        PluginListSeeding.add(pluginManager, first);
+        PluginListSeeding.add(pluginManager, second);
         // No loaded module answers to "Foo" by name, and two JARs declare it.
         File firstJar = writeModuleJar("Foo");
         File secondJar = writeModuleJar("Foo", "2.0.0");
@@ -634,7 +635,7 @@ class PluginInstallUtilsUninstallTest {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
         when(plugin.getPluginName()).thenReturn(MODULE_NAME);
         doCallRealMethod().when(plugin).unregisterSelf();
-        pluginManager.getPluginList().add(plugin);
+        PluginListSeeding.add(pluginManager, plugin);
         File loaded = writeJarDeclaring("zz-blank-loaded.jar", "name: \"   \"\n");
         File other = writeJarDeclaring("zz-blank-other.jar", "name: \"\"\n");
 
@@ -653,7 +654,7 @@ class PluginInstallUtilsUninstallTest {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
         when(plugin.getPluginName()).thenReturn("RuntimeName");
         doCallRealMethod().when(plugin).unregisterSelf();
-        pluginManager.getPluginList().add(plugin);
+        PluginListSeeding.add(pluginManager, plugin);
         // Its JAR declares another name, and a policy denies reading which JAR it came from: the
         // answer is unknown, not "it has none".
         File jar = writeModuleJar("DeclaredName");
@@ -703,8 +704,8 @@ class PluginInstallUtilsUninstallTest {
         UltiToolsPlugin other = mock(UltiToolsPlugin.class);
         when(other.getPluginName()).thenReturn("SecondModule");
         doCallRealMethod().when(other).unregisterSelf();
-        pluginManager.getPluginList().add(target);
-        pluginManager.getPluginList().add(other);
+        PluginListSeeding.add(pluginManager, target);
+        PluginListSeeding.add(pluginManager, other);
         // Both module classes packaged in one JAR, which PluginManager.register makes possible.
         File shared = writeModuleJar(MODULE_NAME);
 
@@ -724,7 +725,7 @@ class PluginInstallUtilsUninstallTest {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
         when(plugin.getPluginName()).thenReturn(MODULE_NAME);
         doCallRealMethod().when(plugin).unregisterSelf();
-        pluginManager.getPluginList().add(plugin);
+        PluginListSeeding.add(pluginManager, plugin);
         // unregisterSelf() collects and rethrows what its steps throw, Errors included.
         AssertionError unloadFailure = new AssertionError("module unload step asserted");
         doThrow(unloadFailure).when(commandManager).unregisterAll(plugin);
@@ -747,7 +748,7 @@ class PluginInstallUtilsUninstallTest {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
         when(plugin.getPluginName()).thenReturn(MODULE_NAME);
         doCallRealMethod().when(plugin).unregisterSelf();
-        pluginManager.getPluginList().add(plugin);
+        PluginListSeeding.add(pluginManager, plugin);
         OutOfMemoryError fatal = new OutOfMemoryError("pretend heap exhaustion");
         doThrow(fatal).when(commandManager).unregisterAll(plugin);
         File jar = writeModuleJar(MODULE_NAME);
@@ -769,8 +770,8 @@ class PluginInstallUtilsUninstallTest {
         UltiToolsPlugin second = mock(UltiToolsPlugin.class);
         when(second.getPluginName()).thenReturn(MODULE_NAME);
         doCallRealMethod().when(second).unregisterSelf();
-        pluginManager.getPluginList().add(first);
-        pluginManager.getPluginList().add(second);
+        PluginListSeeding.add(pluginManager, first);
+        PluginListSeeding.add(pluginManager, second);
         // One shared object, as a module reusing a static sentinel would throw.
         IllegalStateException shared = new IllegalStateException("shared sentinel");
         doThrow(shared).when(commandManager).unregisterAll(first);
@@ -826,7 +827,7 @@ class PluginInstallUtilsUninstallTest {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
         when(plugin.getPluginName()).thenReturn(MODULE_NAME);
         doCallRealMethod().when(plugin).unregisterSelf();
-        pluginManager.getPluginList().add(plugin);
+        PluginListSeeding.add(pluginManager, plugin);
 
         TickingBean bean = new TickingBean();
         taskManager.registerScheduledMethods(plugin, bean);
@@ -924,7 +925,7 @@ class PluginInstallUtilsUninstallTest {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
         when(plugin.getPluginName()).thenReturn(MODULE_NAME);
         doCallRealMethod().when(plugin).unregisterSelf();
-        pluginManager.getPluginList().add(plugin);
+        PluginListSeeding.add(pluginManager, plugin);
 
         Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
 
@@ -948,7 +949,7 @@ class PluginInstallUtilsUninstallTest {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
         when(plugin.getPluginName()).thenReturn(MODULE_NAME);
         doCallRealMethod().when(plugin).unregisterSelf();
-        pluginManager.getPluginList().add(plugin);
+        PluginListSeeding.add(pluginManager, plugin);
         IllegalStateException unloadFailure = new IllegalStateException("module unload step boom");
         // unregisterSelf() rethrows its first failed step; a command-cleanup failure stands in for
         // a throwing onUnregister(), which is protected and not stubbable from this package.
@@ -979,7 +980,7 @@ class PluginInstallUtilsUninstallTest {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
         when(plugin.getPluginName()).thenReturn(MODULE_NAME);
         doCallRealMethod().when(plugin).unregisterSelf();
-        pluginManager.getPluginList().add(plugin);
+        PluginListSeeding.add(pluginManager, plugin);
         IllegalStateException unloadFailure = new IllegalStateException("module unload step boom");
         doThrow(unloadFailure).when(commandManager).unregisterAll(plugin);
         File jar = writeModuleJar(MODULE_NAME);

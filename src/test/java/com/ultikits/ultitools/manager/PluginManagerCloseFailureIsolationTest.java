@@ -74,8 +74,8 @@ class PluginManagerCloseFailureIsolationTest {
         UltiToolsPlugin healthy = mock(UltiToolsPlugin.class);
         when(healthy.getPluginName()).thenReturn("Healthy");
 
-        pluginManager.getPluginList().add(throwing);
-        pluginManager.getPluginList().add(healthy);
+        PluginListSeeding.add(pluginManager, throwing);
+        PluginListSeeding.add(pluginManager, healthy);
 
         TaskManager mockTaskManager = mock(TaskManager.class);
         injectMockTaskManager(mockTaskManager);
