@@ -118,8 +118,7 @@ class ConfigFileFormTest {
         FormsConfig second = new FormsConfig(PATH);
         second.init(plugin);
         assertThat(second.servers).hasSize(1);
-        // #553 (orchestrator's second ruling 2026-09-30): a map that is a list element is plain data, which
-        // Bukkit keeps whole, so its "." key is not refused.
+        // #553: a map that is a list element is plain data, which Bukkit keeps whole, "." key included.
         assertThat(second.servers.get(0)).containsEntry("name", "lobby").containsEntry(".", "dot");
     }
 

@@ -11,7 +11,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Plan 17-41 (#553 warn-only, write path as in 6.2): a configuration section inside a list is left in the
+ * Plan 17-41 (#553 documentation only, write path as in 6.2): a configuration section inside a list is left in the
  * list as it is, exactly as {@code origin/alpha} {@code dfe71e01} leaves it (measured), never walked by
  * reflection - an earlier revision of this branch recursed through the section's root and parent
  * references and overflowed the stack.

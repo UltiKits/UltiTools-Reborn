@@ -18,8 +18,8 @@ import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mockito;
 
 /**
- * UltiKits/UltiTools-Reborn#553, maintainer answer of 2026-09-30 (warn only, the write path stays as in
- * 6.2; in the maintainer's words "只警告，写入保持 6.2"): saving a configuration writes exactly the text {@code origin/alpha}
+ * UltiKits/UltiTools-Reborn#553, maintainer answers of 2026-09-30 (the write path stays as in 6.2, "只警告，
+ * 写入保持 6.2"; then no check at all, documentation only, "不做检查，只写文档"): saving a configuration writes exactly the text {@code origin/alpha}
  * ({@code dfe71e01}) writes. The expected texts below were produced by running this same fixture
  * ({@link AlphaWriterFixture}) against {@code dfe71e01} in a throwaway worktree on 2026-09-30: map fields
  * and nested maps with dotted keys (split on save, as 6.2 does), a map that is a list element (kept
@@ -29,7 +29,7 @@ import org.mockito.Mockito;
  * '1': a}) and a {@code Set} field with a module's own parser (its first-boot default written raw, as
  * alpha writes it; its save through the parser).
  */
-@DisplayName("AbstractConfigEntity - the write path writes what alpha writes (#553 warn-only)")
+@DisplayName("AbstractConfigEntity - the write path writes what alpha writes (#553 documentation only)")
 class ConfigAlphaWriterEquivalenceTest {
 
     private static final String PATH = "config/alpha-writer.yml";
