@@ -485,6 +485,66 @@ class ModuleUpdateRecoveryTest {
             assertThat(report.getArgs()[0]).isEqualTo(backups.getAbsolutePath());
         }
 
+        /**
+         * The records folder as a security policy that denies listing it would present it: every
+         * listing throws {@link SecurityException}. {@code recordsListable} keeps the record
+         * listing working so that only the later listings are denied.
+         */
+        @SuppressWarnings("serial")
+        private File deniedListing(boolean recordsListable) {
+            return new File(transactions.getPath()) {
+                @Override
+                public File[] listFiles(java.io.FilenameFilter filter) {
+                    if (recordsListable) {
+                        return super.listFiles(filter);
+                    }
+                    throw new SecurityException("injected: listing denied");
+                }
+
+                @Override
+                public File[] listFiles(java.io.FileFilter filter) {
+                    throw new SecurityException("injected: listing denied");
+                }
+
+                @Override
+                public String[] list() {
+                    throw new SecurityException("injected: listing denied");
+                }
+            };
+        }
+
+        @Test
+        @DisplayName("a security policy that denies listing the records folder is reported, never thrown out of the start (Codex P2, #561)")
+        void deniedListing_isReportedNotThrown() throws IOException {
+            stage(transactions());
+            ModuleFileTransactions start = new ModuleFileTransactions(modules, deniedListing(false),
+                    ModuleFileTransactions.FileOps.DEFAULT, ModuleFileTransactions.CrashPoints.NONE);
+
+            Throwable thrown = catchThrowable(start::applyBeforeLoad);
+
+            assertThat(thrown).isNull();
+            assertOnlyTheOldVersionIsInstalled();
+            ModuleFileTransactions.Report report = onlyReport(start);
+            assertThat(report.getLevel()).isEqualTo(Level.SEVERE);
+            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.RECORDS_UNLISTABLE);
+            assertThat(String.valueOf(report.getArgs()[1])).contains("injected");
+            assertThat(recordText()).contains("\"state\": \"PENDING\"");
+        }
+
+        @Test
+        @DisplayName("a listing denied after the records were read never ends the start: the staged update still applies")
+        void deniedCleanupListing_neverEndsTheStart() throws IOException {
+            stage(transactions());
+            ModuleFileTransactions start = new ModuleFileTransactions(modules, deniedListing(true),
+                    ModuleFileTransactions.FileOps.DEFAULT, ModuleFileTransactions.CrashPoints.NONE);
+
+            Throwable thrown = catchThrowable(start::applyBeforeLoad);
+
+            assertThat(thrown).isNull();
+            assertThat(namesIn(modules)).containsExactly("demo-1.1.jar");
+            assertThat(recordText()).contains("\"state\": \"APPLIED\"");
+        }
+
         @Test
         @DisplayName("no records folder at all is not a failure: a start with nothing staged reports nothing")
         void absentRecordsFolder_isNotReported() {
