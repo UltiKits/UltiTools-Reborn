@@ -556,6 +556,80 @@ class ModuleUpdateRecoveryTest {
             assertThat(start.pendingReports()).isEmpty();
         }
 
+        /** The staged JAR of the one staged update, found in the records folder. */
+        private File stagedJar() throws IOException {
+            List<String> staged = new java.util.ArrayList<>();
+            for (String path : treeOf(transactions)) {
+                if (path.endsWith("/staged/demo-1.1.jar")) {
+                    staged.add(path);
+                }
+            }
+            assertThat(staged).hasSize(1);
+            return new File(transactions, staged.get(0));
+        }
+
+        @Test
+        @DisplayName("a staged JAR changed after staging moves nothing: FAILED, one SEVERE line names the path and both hashes (round 4)")
+        void stagedJarChangedAfterStaging_nothingMoves() throws IOException {
+            stage(transactions());
+            File staged = stagedJar();
+            String expected = ModuleFileTransactions.sha256Of(staged);
+            // Same identity and version, different bytes: not the file that was downloaded.
+            moduleJar(staged, "Demo", "1.1", "demo");
+            Files.write(staged.toPath(), new byte[]{1, 2, 3}, java.nio.file.StandardOpenOption.APPEND);
+            String actual = ModuleFileTransactions.sha256Of(staged);
+            assertThat(actual).isNotEqualTo(expected);
+            ModuleFileTransactions start = transactions();
+
+            start.applyBeforeLoad();
+            observeAbsent(start);
+
+            assertOnlyTheOldVersionIsInstalled();
+            ModuleFileTransactions.Report report = onlyReport(start);
+            assertThat(report.getLevel()).isEqualTo(Level.SEVERE);
+            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.STAGED_JAR_MISMATCH);
+            assertThat(report.getArgs()).containsExactly("Demo", staged.getAbsolutePath(), expected, actual);
+            assertThat(recordText()).contains("\"state\": \"FAILED\"");
+            assertThat(ModuleFileTransactions.sha256Of(staged)).isEqualTo(actual);
+        }
+
+        @Test
+        @DisplayName("a missing staged JAR moves nothing and is reported with the expected hash")
+        void stagedJarMissing_nothingMoves() throws IOException {
+            stage(transactions());
+            File staged = stagedJar();
+            String expected = ModuleFileTransactions.sha256Of(staged);
+            Files.delete(staged.toPath());
+            ModuleFileTransactions start = transactions();
+
+            start.applyBeforeLoad();
+
+            assertOnlyTheOldVersionIsInstalled();
+            ModuleFileTransactions.Report report = onlyReport(start);
+            assertThat(report.getLevel()).isEqualTo(Level.SEVERE);
+            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.STAGED_JAR_MISMATCH);
+            assertThat(report.getArgs()).containsExactly("Demo", staged.getAbsolutePath(), expected,
+                    ModuleFileTransactions.MISSING);
+            assertThat(recordText()).contains("\"state\": \"FAILED\"");
+        }
+
+        @Test
+        @DisplayName("a staged JAR changed after the old JAR was moved aside: the old JAR goes back, FAILED, reported")
+        void stagedJarChangedAfterOldMoved_oldJarGoesBack() throws IOException {
+            stage(transactions());
+            File staged = stagedJar();
+            catchThrowable(() -> crashingAt(ModuleFileTransactions.CrashPoints.AFTER_OLD_MOVED).applyBeforeLoad());
+            assertThat(namesIn(modules)).isEmpty();
+            Files.write(staged.toPath(), new byte[]{1, 2, 3}, java.nio.file.StandardOpenOption.APPEND);
+            ModuleFileTransactions start = transactions();
+
+            start.applyBeforeLoad();
+
+            assertOnlyTheOldVersionIsInstalled();
+            assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.STAGED_JAR_MISMATCH);
+            assertThat(recordText()).contains("\"state\": \"FAILED\"");
+        }
+
         @Test
         @DisplayName("staging never adopts a kept old JAR left without its record: it is refused and the JAR is kept")
         void leftoverKeptJar_isNotAdopted() throws IOException {
