@@ -32,7 +32,9 @@ import java.util.List;
  * }
  * </pre>
  * <p>
- * A report is safe to write from more than one thread. Readers get immutable snapshots.
+ * A report is safe to write from more than one thread. Readers get immutable snapshots. The
+ * framework creates one per reload with the public no-argument constructor; a module's own test
+ * may create one the same way to call its {@code onReload(ReloadReport)} directly.
  *
  * @since 6.3.0
  */
@@ -42,14 +44,6 @@ public final class ReloadReport {
     static final String UNSPECIFIED_REASON = "(no reason given)";
 
     private final List<String> partialReasons = new ArrayList<>();
-
-    /**
-     * Creates an empty report. The framework creates one per reload; module tests may create one to
-     * call their {@code onReload(ReloadReport)} directly.
-     */
-    public ReloadReport() {
-        // an empty report: no part of the reload has been reported as missing yet
-    }
 
     /**
      * Records one part of this reload that did not reload.

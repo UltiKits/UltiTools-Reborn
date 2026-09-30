@@ -449,36 +449,17 @@ public class PluginManager {
         // pin the module's ClassLoader after unload (T-05-24 / D-08). A module that registered
         // nothing is a no-op (unregisterByOwner(null) and unregisterByOwner("unknown-name") both
         // return 0 and throw nothing).
-        runUnregisterStep(plugin, "unregister tab-completion completers", () -> {
-            TabCompletionManager completions = TabCompletionManager.getInstance();
-            completions.unregisterByOwnerInstance(plugin);
-            if (!nameStillInUse) {
-                completions.unregisterByOwner(plugin.getPluginName());
-            }
-        });
+        runUnregisterStep(plugin, "unregister tab-completion completers",
+                () -> releaseCompleters(plugin, nameStillInUse));
         // Unregister @ModuleEventHandler handlers from EventBus
-        runUnregisterStep(plugin, "unregister EventBus handlers", () -> {
-            EventBus eventBus = UltiTools.getInstance().getEventBus();
-            if (eventBus != null) {
-                eventBus.unregisterByOwnerInstance(plugin);
-                if (!nameStillInUse) {
-                    eventBus.unregisterAll(plugin.getPluginName());
-                }
-            }
-        });
+        runUnregisterStep(plugin, "unregister EventBus handlers",
+                () -> releaseEventHandlers(plugin, nameStillInUse));
         // Unregister this module's panel message responders (WIRE-16, D-26/D-27, Plan 06-08
-        // Task 3) — mirrors the EventBus.unregisterAll call immediately above; a responder
-        // left behind by an unloaded module would go on answering panel requests with code
-        // whose classloader is gone.
-        runUnregisterStep(plugin, "unregister panel message responders", () -> {
-            PanelResponderRegistry panelResponderRegistry = UltiTools.getInstance().getPanelResponderRegistry();
-            if (panelResponderRegistry != null) {
-                panelResponderRegistry.unregisterByOwnerInstance(plugin);
-                if (!nameStillInUse) {
-                    panelResponderRegistry.unregisterAll(plugin.getPluginName());
-                }
-            }
-        });
+        // Task 3) — mirrors the EventBus release immediately above; a responder left behind by
+        // an unloaded module would go on answering panel requests with code whose classloader
+        // is gone.
+        runUnregisterStep(plugin, "unregister panel message responders",
+                () -> releasePanelResponders(plugin, nameStillInUse));
         // Release this module's recorded @ConditionalOnConfig scan-time decisions (#392,
         // D-01). The record holds Class<?> references and would otherwise pin the module's
         // ClassLoader after unload, exactly like the TabCompletionManager / EventBus /
@@ -516,14 +497,60 @@ public class PluginManager {
                 // configuration entities are released only now, after its unload hook, which may
                 // still read or save them. Delisting is by identity: two copies of one module
                 // share a name and may be equal to nothing but themselves.
-                runUnregisterStep(plugin, "release configuration entities", () -> {
-                    ConfigManager configManager = UltiTools.getInstance().getConfigManager();
-                    if (configManager != null) {
-                        configManager.unregisterAll(plugin);
-                    }
-                });
+                runUnregisterStep(plugin, "release configuration entities", () -> releaseConfigEntities(plugin));
                 pluginList.removeIf(listed -> listed == plugin);
             }
+        }
+    }
+
+    /**
+     * Releases {@code plugin}'s tab-completion completers: those recorded against the instance,
+     * then -- unless another copy of the module shares its name -- those recorded by name only
+     * (#506).
+     */
+    private static void releaseCompleters(UltiToolsPlugin plugin, boolean nameStillInUse) {
+        TabCompletionManager completions = TabCompletionManager.getInstance();
+        completions.unregisterByOwnerInstance(plugin);
+        if (!nameStillInUse) {
+            completions.unregisterByOwner(plugin.getPluginName());
+        }
+    }
+
+    /**
+     * Releases {@code plugin}'s EventBus handlers, by instance and then, unless another copy of the
+     * module shares its name, by name (#506).
+     */
+    private static void releaseEventHandlers(UltiToolsPlugin plugin, boolean nameStillInUse) {
+        EventBus eventBus = UltiTools.getInstance().getEventBus();
+        if (eventBus == null) {
+            return;
+        }
+        eventBus.unregisterByOwnerInstance(plugin);
+        if (!nameStillInUse) {
+            eventBus.unregisterAll(plugin.getPluginName());
+        }
+    }
+
+    /**
+     * Releases {@code plugin}'s panel responders, by instance and then, unless another copy of the
+     * module shares its name, by name (#506).
+     */
+    private static void releasePanelResponders(UltiToolsPlugin plugin, boolean nameStillInUse) {
+        PanelResponderRegistry panelResponderRegistry = UltiTools.getInstance().getPanelResponderRegistry();
+        if (panelResponderRegistry == null) {
+            return;
+        }
+        panelResponderRegistry.unregisterByOwnerInstance(plugin);
+        if (!nameStillInUse) {
+            panelResponderRegistry.unregisterAll(plugin.getPluginName());
+        }
+    }
+
+    /** Releases {@code plugin}'s configuration entities from the {@link ConfigManager} (#507). */
+    private static void releaseConfigEntities(UltiToolsPlugin plugin) {
+        ConfigManager configManager = UltiTools.getInstance().getConfigManager();
+        if (configManager != null) {
+            configManager.unregisterAll(plugin);
         }
     }
 
