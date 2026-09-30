@@ -39,10 +39,10 @@ import com.ultikits.ultitools.utils.TestHelper;
  * Before the fix {@code unregister} released a module's registrations and closed its container
  * but left it in the plugin list, so every caller had to delist it by hand -- and code outside
  * the manager could only do that by mutating the live internal list {@code getPluginList()}
- * returned. The same method also left the module's configuration entities in the
- * {@link ConfigManager}, so the shutdown save could still write an unloaded module's files.
+ * returned. Releasing the module's configuration entities is not part of this change: it moved
+ * to the configuration-layer refactor, which redesigns that registry (the rest of #507).
  */
-@DisplayName("PluginManager.unregister delists the module and releases its configuration (#507)")
+@DisplayName("PluginManager.unregister delists the module; getPluginList is a snapshot (#507)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class PluginManagerUnregisterDelistTest {
 
@@ -201,10 +201,9 @@ class PluginManagerUnregisterDelistTest {
     @Test
     @DisplayName("close() at server shutdown keeps every module's configuration, so the shutdown save still writes its changes")
     void closeKeepsConfigurationForTheShutdownSave() throws IOException {
-        // Gate-1 review, reviewer A P1: UltiTools#onDisable() calls pluginManager.close() and only
-        // then configManager.saveAll(). If close() released the configuration entities the way a
-        // runtime unload does, the shutdown save would find nothing and every module's unsaved
-        // change would be lost on every restart.
+        // Guard, not the removed feature: UltiTools#onDisable() calls pluginManager.close() and
+        // only then configManager.saveAll(), so nothing close() does may keep that save from
+        // writing a module's unsaved change.
         File moduleDir = new File(tempDir, "module");
         UltiToolsPlugin module = module("Module");
         when(module.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
@@ -225,50 +224,5 @@ class PluginManagerUnregisterDelistTest {
                 .as("the shutdown save after close() writes the module's in-memory change")
                 .contains("changed-in-memory");
         assertThat(pluginManager.getPluginList()).isEmpty();
-    }
-
-    @Test
-    @DisplayName("after unregister(m), the shutdown save does not write m's changed configuration, and still writes a loaded module's")
-    void unregisterReleasesTheModulesConfigurationEntities() throws IOException {
-        File unloadedDir = new File(tempDir, "unloaded");
-        File loadedDir = new File(tempDir, "loaded");
-        UltiToolsPlugin unloaded = module("Unloaded");
-        UltiToolsPlugin loaded = module("Loaded");
-        for (UltiToolsPlugin plugin : new UltiToolsPlugin[] {unloaded, loaded}) {
-            when(plugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
-        }
-        when(unloaded.getResourceFolderPath()).thenReturn(unloadedDir.getAbsolutePath());
-        when(loaded.getResourceFolderPath()).thenReturn(loadedDir.getAbsolutePath());
-        ConfigFileStubs.stubConfigFolder(unloaded, unloadedDir);
-        ConfigFileStubs.stubConfigFolder(loaded, loadedDir);
-
-        File unloadedFile = new File(unloadedDir, "config/scalar.yml");
-        File loadedFile = new File(loadedDir, "config/scalar.yml");
-        write(unloadedFile, "value: original\n");
-        write(loadedFile, "value: original\n");
-        ConfigManagerShutdownSaveTest.ScalarConfig unloadedConfig =
-                new ConfigManagerShutdownSaveTest.ScalarConfig("config/scalar.yml");
-        ConfigManagerShutdownSaveTest.ScalarConfig loadedConfig =
-                new ConfigManagerShutdownSaveTest.ScalarConfig("config/scalar.yml");
-        configManager.register(unloaded, unloadedConfig);
-        configManager.register(loaded, loadedConfig);
-        unloadedConfig.setValue("changed-in-memory");
-        loadedConfig.setValue("changed-in-memory");
-        byte[] unloadedBefore = bytes(unloadedFile);
-        PluginListSeeding.add(pluginManager, unloaded);
-        PluginListSeeding.add(pluginManager, loaded);
-
-        pluginManager.unregister(unloaded);
-        configManager.saveAll();
-
-        assertThat(bytes(unloadedFile))
-                .as("an unloaded module's configuration file must not be written by the shutdown save")
-                .isEqualTo(unloadedBefore);
-        assertThat(new String(bytes(loadedFile), StandardCharsets.UTF_8))
-                .as("control: the same change on a still-loaded module is written, so the check above is not vacuous")
-                .contains("changed-in-memory");
-        assertThat(configManager.getAllConfigEntities(unloaded))
-                .as("the configuration registry must not pin the unloaded module")
-                .isNull();
     }
 }

@@ -460,8 +460,7 @@ This section governs the third kind.
   discards what another established.
 
 - `PluginManager#getPluginList()` returning an unmodifiable snapshot, and
-  `PluginManager#unregister(UltiToolsPlugin)` delisting the module and releasing its configuration
-  (#507). `getPluginList()` used to return the manager's live internal `ArrayList`, which callers had
+  `PluginManager#unregister(UltiToolsPlugin)` delisting the module (#507). `getPluginList()` used to return the manager's live internal `ArrayList`, which callers had
   to mutate to delist a module `unregister` had unloaded, and which a reader on another thread (the
   asynchronous `/upm list`, the economy facade's module attribution) could see fail with a
   `ConcurrentModificationException` or a trailing `null` while the main thread unloaded a module.
@@ -471,12 +470,9 @@ This section governs the third kind.
   `UnsupportedOperationException`. Code that only reads or iterates it is unaffected — which, measured
   against the fifteen modules' `master` and UltiTools-External-Example, is every caller (two modules
   iterate it; none mutates it). `unregister` itself now removes the module from the loaded modules,
-  by identity and whether or not the module's unload hook threw, and releases its configuration
-  entities, so the shutdown save no longer writes the files of a module that was unloaded while the
-  server ran — for example by `/upm uninstall` — and the configuration registry no longer pins the
-  unloaded instance. The hook still runs first and may still read or save its configuration. Server
-  shutdown is unchanged: `PluginManager#close()` unloads every module without releasing its
-  configuration, so the shutdown save that follows still writes every module's changes.
+  by identity and whether or not the module's unload hook threw. It does not change the module's
+  configuration entities: releasing them, so the shutdown save stops writing the files of a module
+  unloaded while the server ran, is part of the configuration-layer rework in this release.
 - Registrations released per module instance, and a superseded copy of a module unloaded through the
   full unload path (#506, #528). This path is reached only when code registers a newer instance of a
   loaded module through `PluginManager#register(...)`; two jars of one module in the modules folder
