@@ -99,8 +99,8 @@ class ModuleUpdateCommandTest {
     @DisplayName("a staged update says it takes effect at the next start and names the version that is restored otherwise")
     void stagedUpdate_saysItTakesEffectAtTheNextStart() {
         available("Demo", "demo", "1.0", "1.1");
-        utils.when(() -> PluginInstallUtils.stageUpdate("demo"))
-                .thenReturn(result(ModuleFileTransactions.StageResult.Outcome.STAGED, "1.0", "1.1", null));
+        ModuleFileTransactions.StageResult stagedDemo = result(ModuleFileTransactions.StageResult.Outcome.STAGED, "1.0", "1.1", null);
+        utils.when(() -> PluginInstallUtils.stageUpdate("demo")).thenReturn(stagedDemo);
 
         executor.updatePlugin(sender, "Demo");
 
@@ -112,8 +112,8 @@ class ModuleUpdateCommandTest {
     @DisplayName("an update already staged is named, and nothing is reported as changed")
     void alreadyStaged_isNamed() {
         available("Demo", "demo", "1.0", "1.1");
-        utils.when(() -> PluginInstallUtils.stageUpdate("demo"))
-                .thenReturn(result(ModuleFileTransactions.StageResult.Outcome.ALREADY_STAGED, "1.0", "1.1", null));
+        ModuleFileTransactions.StageResult stagedDemo = result(ModuleFileTransactions.StageResult.Outcome.ALREADY_STAGED, "1.0", "1.1", null);
+        utils.when(() -> PluginInstallUtils.stageUpdate("demo")).thenReturn(stagedDemo);
 
         executor.updatePlugin(sender, "Demo");
 
@@ -124,9 +124,9 @@ class ModuleUpdateCommandTest {
     @DisplayName("a previous apply that failed is reported first")
     void previousFailure_isReportedFirst() {
         available("Demo", "demo", "1.0", "1.1");
-        utils.when(() -> PluginInstallUtils.stageUpdate("demo"))
-                .thenReturn(result(ModuleFileTransactions.StageResult.Outcome.STAGED, "1.0", "1.1",
-                        "/srv/plugins/UltiTools/plugins/demo-1.0.jar: AccessDeniedException"));
+        ModuleFileTransactions.StageResult stagedDemo = result(ModuleFileTransactions.StageResult.Outcome.STAGED, "1.0", "1.1",
+                        "/srv/plugins/UltiTools/plugins/demo-1.0.jar: AccessDeniedException");
+        utils.when(() -> PluginInstallUtils.stageUpdate("demo")).thenReturn(stagedDemo);
 
         executor.updatePlugin(sender, "Demo");
 
@@ -138,8 +138,8 @@ class ModuleUpdateCommandTest {
     @DisplayName("a failure to stage names the cause and says nothing changed")
     void failureToStage_namesTheCause() {
         available("Demo", "demo", "1.0", "1.1");
-        utils.when(() -> PluginInstallUtils.stageUpdate("demo"))
-                .thenReturn(result(ModuleFileTransactions.StageResult.Outcome.FAILED, null, null, null));
+        ModuleFileTransactions.StageResult stagedDemo = result(ModuleFileTransactions.StageResult.Outcome.FAILED, null, null, null);
+        utils.when(() -> PluginInstallUtils.stageUpdate("demo")).thenReturn(stagedDemo);
 
         executor.updatePlugin(sender, "Demo");
 
@@ -151,10 +151,10 @@ class ModuleUpdateCommandTest {
     void updateAll_reportsEachModule() {
         available("Alpha", "alpha", "1.0", "1.1");
         available("Beta", "beta", "2.0", "2.1");
-        utils.when(() -> PluginInstallUtils.stageUpdate("alpha"))
-                .thenReturn(result(ModuleFileTransactions.StageResult.Outcome.STAGED, "1.0", "1.1", null));
-        utils.when(() -> PluginInstallUtils.stageUpdate("beta"))
-                .thenReturn(result(ModuleFileTransactions.StageResult.Outcome.FAILED, null, null, null));
+        ModuleFileTransactions.StageResult stagedAlpha = result(ModuleFileTransactions.StageResult.Outcome.STAGED, "1.0", "1.1", null);
+        utils.when(() -> PluginInstallUtils.stageUpdate("alpha")).thenReturn(stagedAlpha);
+        ModuleFileTransactions.StageResult stagedBeta = result(ModuleFileTransactions.StageResult.Outcome.FAILED, null, null, null);
+        utils.when(() -> PluginInstallUtils.stageUpdate("beta")).thenReturn(stagedBeta);
 
         executor.updatePlugin(sender, "all");
 
