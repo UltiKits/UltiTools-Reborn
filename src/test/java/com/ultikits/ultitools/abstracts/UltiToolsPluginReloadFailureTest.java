@@ -138,6 +138,31 @@ class UltiToolsPluginReloadFailureTest {
                 });
     }
 
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable failure) throws T {
+        throw (T) failure;
+    }
+
+    @Test
+    @DisplayName("a checked exception thrown without being declared (Lombok @SneakyThrows) also gets the failure line and propagates")
+    void sneakyCheckedExceptionIsLoggedAsAFailure() throws Exception {
+        // Gate-1 review (reviewer A P3, reviewer B IN-02): catching only RuntimeException | Error
+        // let such an exception past the failure line.
+        FixturePlugin plugin = reloadSafePlugin("SneakyModule");
+        IOException hookFailure = new IOException("disk gone");
+        org.mockito.Mockito.doAnswer(invocation -> {
+            sneakyThrow(hookFailure);
+            return null;
+        }).when(plugin).onReload();
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(plugin::reloadSelf);
+
+        assertThat(thrown).isSameAs(hookFailure);
+        assertThat(recordsAt(Level.SEVERE)).hasSize(1)
+                .allSatisfy(record -> assertThat(record.getMessage()).contains("SneakyModule").contains("disk gone"));
+        assertThat(recordsAt(Level.INFO)).isEmpty();
+    }
+
     @Test
     @DisplayName("the success line is logged after the hook returned")
     void successLineComesAfterTheHook() throws Exception {

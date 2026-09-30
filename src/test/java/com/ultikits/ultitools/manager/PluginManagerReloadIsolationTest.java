@@ -2,10 +2,8 @@ package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -161,15 +159,19 @@ class PluginManagerReloadIsolationTest {
     }
 
     @Test
-    @DisplayName("a fatal virtual-machine error is not swallowed as one module's reload failure")
-    void fatalErrorPropagates() {
+    @DisplayName("an Error from one module's reload, such as a StackOverflowError, is isolated exactly as close() isolates one")
+    void errorFromOneModuleIsIsolatedLikeClose() {
+        // Gate-1 review (reviewer B IN-01): a recursive onReload() is the realistic module-code
+        // Error; rethrowing it stopped every later module. The policy is now close()'s.
         UltiToolsPlugin broken = module("BrokenModule");
         UltiToolsPlugin last = module("LastModule");
-        doThrow(new OutOfMemoryError("simulated")).when(broken).reloadWithReport();
+        doThrow(new StackOverflowError("recursive onReload")).when(broken).reloadWithReport();
         PluginListSeeding.add(pluginManager, broken);
         PluginListSeeding.add(pluginManager, last);
 
-        assertThrows(OutOfMemoryError.class, pluginManager::reload);
-        verify(last, never()).reloadWithReport();
+        List<String> summary = assertDoesNotThrow(pluginManager::reloadAllAndReport);
+
+        verify(last).reloadWithReport();
+        assertThat(String.join("\n", summary)).contains("BrokenModule");
     }
 }

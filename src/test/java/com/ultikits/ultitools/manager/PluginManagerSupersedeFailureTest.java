@@ -142,10 +142,14 @@ class PluginManagerSupersedeFailureTest {
     }
 
     @Test
-    @DisplayName("a fatal virtual-machine error from the superseded unload is not swallowed as an ordinary unload failure")
-    void fatalErrorFromTheSupersededUnloadIsNotTreatedAsRecoverable() throws Exception {
+    @DisplayName("an Error from the superseded unload, such as a StackOverflowError, is isolated exactly as close() isolates one")
+    void errorFromTheSupersededUnloadIsIsolatedLikeClose() throws Exception {
+        // Gate-1 review (reviewer B WR-01): rethrowing a VirtualMachineError here did not abort
+        // anything cleanly -- attemptPluginRegistration's own catch took it, blamed the incoming
+        // version, never closed its container, and left neither copy listed. The policy is now
+        // close()'s: every Exception or Error one module's unload throws is that module's failure.
         UltiToolsPlugin older = module("1.0.0");
-        doThrow(new OutOfMemoryError("simulated")).when(older).unregisterSelf();
+        doThrow(new StackOverflowError("recursive onUnregister")).when(older).unregisterSelf();
         UltiToolsPlugin newer = module("2.0.0");
         when(newer.isNewerVersionThan(older)).thenReturn(true);
         when(newer.registerSelf()).thenReturn(true);
@@ -153,9 +157,11 @@ class PluginManagerSupersedeFailureTest {
 
         boolean registered = pluginManager.register(newer);
 
-        assertThat(registered)
-                .as("an OutOfMemoryError is not an old copy's cleanup failure to log and carry on from")
-                .isFalse();
-        assertThat(pluginManager.getPluginList()).doesNotContain(newer);
+        assertThat(registered).isTrue();
+        assertThat(pluginManager.getPluginList()).containsExactly(newer);
+        assertThat(messagesAtOrAbove(Level.WARNING))
+                .anySatisfy(message -> assertThat(message).contains("Dup").contains("1.0.0")
+                        .contains("recursive onUnregister"))
+                .noneSatisfy(message -> assertThat(message).contains("load failed"));
     }
 }

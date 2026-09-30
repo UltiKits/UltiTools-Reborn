@@ -207,6 +207,38 @@ class UltiToolsCommandsTest {
         assertThat(player.nextMessage()).isEqualTo("模块 GoodModule 已重载");
     }
 
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable failure) throws T {
+        throw (T) failure;
+    }
+
+    @Test
+    @DisplayName("#509: /ul reload <name> replies failure for an Error or an undeclared checked exception too")
+    void reloadNamedModuleRepliesFailureForErrorsAndSneakyCheckedExceptions() {
+        // Gate-1 review (reviewer A P3, reviewer B IN-01/IN-02): the command caught only
+        // RuntimeException | Error and rethrew VirtualMachineError, so these reached the generic
+        // command-error line instead of the reload's own failure reply.
+        UltiToolsPlugin recursive = mock(UltiToolsPlugin.class);
+        when(recursive.getPluginName()).thenReturn("RecursiveModule");
+        doThrow(new StackOverflowError("recursive onReload")).when(recursive).reloadWithReport();
+        UltiToolsPlugin sneaky = mock(UltiToolsPlugin.class);
+        when(sneaky.getPluginName()).thenReturn("SneakyModule");
+        when(sneaky.reloadWithReport()).thenAnswer(invocation -> {
+            sneakyThrow(new IOException("disk gone"));
+            return null;
+        });
+        when(mockPluginManager.getPluginList()).thenReturn(Arrays.asList(recursive, sneaky));
+
+        executor.onCommand(player, mockCommand, "ul", new String[]{"reload", "RecursiveModule"});
+        server.getScheduler().performOneTick();
+        executor.onCommand(player, mockCommand, "ul", new String[]{"reload", "SneakyModule"});
+        server.getScheduler().performOneTick();
+
+        assertThat(player.nextMessage()).contains("RecursiveModule").contains("failed to reload")
+                .contains("recursive onReload");
+        assertThat(player.nextMessage()).contains("SneakyModule").contains("failed to reload").contains("disk gone");
+    }
+
     @Test
     @DisplayName("#509: a bare /ul reload replies the reload summary to the sender")
     void bareReloadRepliesTheSummary() throws IOException {
