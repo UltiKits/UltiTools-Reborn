@@ -179,6 +179,55 @@ class ModuleUpdateUninstallTest {
         assertThat(treeOf(transactions)).noneMatch(p -> p.startsWith("remove-"));
     }
 
+    /** Rewrites the removal record of {@code moduleName} so its list of removals holds a null entry. */
+    private File withNullRemoval(String moduleName) throws IOException {
+        File[] before = transactions.listFiles((dir, name) -> name.startsWith("remove-") && name.endsWith(".json"));
+        java.util.Set<File> known = new java.util.HashSet<>(java.util.Arrays.asList(before == null ? new File[0] : before));
+        File extra = moduleJar(new File(modules, moduleName.toLowerCase(java.util.Locale.ROOT) + "-x.jar"),
+                moduleName, "1.0", moduleName.toLowerCase(java.util.Locale.ROOT));
+        new ModuleFileTransactions(dataFolder).recordDeferredRemoval(moduleName, Collections.singletonList(extra));
+        File[] after = transactions.listFiles((dir, name) -> name.startsWith("remove-") && name.endsWith(".json"));
+        File record = java.util.Arrays.stream(after).filter(f -> !known.contains(f)).findFirst()
+                .orElseGet(() -> after[0]);
+        com.google.gson.JsonObject json;
+        try (java.io.Reader reader = java.nio.file.Files.newBufferedReader(record.toPath())) {
+            json = new com.google.gson.Gson().fromJson(reader, com.google.gson.JsonObject.class);
+        }
+        json.getAsJsonArray("removals").add(com.google.gson.JsonNull.INSTANCE);
+        java.nio.file.Files.write(record.toPath(), json.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        return record;
+    }
+
+    @Test
+    @DisplayName("an install clears its recorded deletion past a removal record with a null entry, warning once (Codex round 18)")
+    void installPastARecordWithANullRemoval_clearsTheMatchingRemoval() throws IOException {
+        new ModuleFileTransactions(dataFolder).recordDeferredRemoval("Demo", Collections.singletonList(oldJar));
+        File invalid = withNullRemoval("Other");
+
+        List<java.util.logging.LogRecord> records = logged(
+                () -> new ModuleFileTransactions(dataFolder).forgetDeferredRemoval(oldJar.getName()));
+        ModuleFileTransactions start = new ModuleFileTransactions(dataFolder);
+        start.applyBeforeLoad();
+
+        assertThat(warningsNaming(records, invalid)).hasSize(1);
+        assertThat(oldJar).as("Demo's recorded deletion was cleared by the install").exists();
+    }
+
+    @Test
+    @DisplayName("an uninstall records its deletion over its own earlier record with a null entry, which it replaces (Codex round 18)")
+    void recordingOverARecordWithANullRemoval_writesTheNewRecord() throws IOException {
+        File invalid = withNullRemoval("Demo");
+
+        List<java.util.logging.LogRecord> records = logged(() -> new ModuleFileTransactions(dataFolder)
+                .recordDeferredRemoval("Demo", Collections.singletonList(oldJar)));
+        ModuleFileTransactions start = new ModuleFileTransactions(dataFolder);
+        start.applyBeforeLoad();
+
+        assertThat(warningsNaming(records, invalid)).hasSize(1);
+        assertThat(oldJar).doesNotExist();
+        assertThat(keys(start)).containsExactly(ModuleFileTransactions.Keys.REMOVED);
+    }
+
     @Test
     @DisplayName("an uninstall records its deletion over an unreadable earlier record of the same module, warning once")
     void recordingOverAMalformedRecord_writesTheNewRecord() throws IOException {
