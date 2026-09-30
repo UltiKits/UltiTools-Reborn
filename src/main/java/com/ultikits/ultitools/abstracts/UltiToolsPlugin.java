@@ -91,6 +91,13 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     private static final Logger LOGGER = Logger.getLogger(UltiToolsPlugin.class.getName());
 
     /**
+     * Receives nothing: {@link #languageLog()} hands it out while a language is resolved without
+     * writing (#460), so a construction-time pass logs nothing and the committing pass after the
+     * load gates logs everything exactly once.
+     */
+    private static final Logger SILENT_LANGUAGE_LOGGER = newSilentLogger();
+
+    /**
      * Framework i18n key (this class's own {@code lang/en.json}/{@code lang/zh.json} catalogue,
      * not a module's) for the per-module reload line {@link #reloadSelf()} logs after its three
      * steps (D-03). Package-private so {@code UltiToolsPluginLifecycleHookTest} can assert both
@@ -189,6 +196,14 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     private SimpleContainer context;
     private com.ultikits.ultitools.manager.DataScope dataScope;
 
+    /**
+     * True only while the constructor resolves this module's language (#460): the provenance
+     * decision is computed but nothing is written, renamed or recorded, and nothing is logged.
+     * {@link #commitLanguageProvenance()} re-resolves with writes once the load gates accepted
+     * this candidate. Construction is single-threaded, so a plain field is enough.
+     */
+    private boolean languageDryRun;
+
 
     /**
      * Constructor for UltiToolsPlugin. For module development only.
@@ -221,6 +236,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         // picked whatever catalogue was on disk before extraction -- a stale lang/<code>.yml when
         // lang/<code>.json had been deleted -- and the next reload switched to the fresh one.
         saveResources();
+        // #460: resolve without writing; the provenance writes are committed only after the load
+        // gates accept this candidate (PluginManager calls commitLanguageProvenance()).
         language = initializeLanguage();
         try{
             initConfig();
@@ -230,11 +247,56 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
-     * Initializes the language object
-     * @return Language object
+     * Resolves this module's language during construction without writing anything (#460): no
+     * language file is refreshed, replaced or backed up, no provenance is recorded, and nothing is
+     * logged. The returned language is the one the commit will produce when its writes succeed;
+     * {@link #commitLanguageProvenance()} performs the writes and replaces it once the load gates
+     * have accepted this candidate, so a rejected candidate leaves the shared files untouched.
+     *
+     * @return the language this module will use once its provenance decision is committed
      */
     private Language initializeLanguage() {
-        return createLanguageFromPath(resourceFolderPath);
+        languageDryRun = true;
+        try {
+            return createLanguageFromPath(resourceFolderPath);
+        } finally {
+            languageDryRun = false;
+        }
+    }
+
+    /**
+     * Commits this module's language provenance decision (#460): re-resolves the language with its
+     * writes enabled -- the refresh of an untouched language file and its provenance record -- and
+     * makes the result this module's language. Called by {@code PluginManager} once the load gates
+     * have accepted this candidate, before its container is assembled; construction only computed
+     * the decision, so a candidate the gates reject never writes to the language files it shares
+     * with the accepted version.
+     * <p>
+     * Not part of the module-facing API. Public only because {@code PluginManager} lives in another
+     * package, like {@link #setContext}. Calling it again re-runs the same resolution a reload's
+     * language step runs, so it is harmless but pointless.
+     *
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public final void commitLanguageProvenance() {
+        language = createLanguageFromPath(resourceFolderPath);
+    }
+
+    /**
+     * The logger the language-resolution methods write through: this module's logger, except
+     * during the construction-time pass (#460), when it discards everything so each message is
+     * logged once, by the committing pass.
+     */
+    private PluginLogger languageLog() {
+        return languageDryRun ? new PluginLogger(this.pluginName, SILENT_LANGUAGE_LOGGER) : getLogger();
+    }
+
+    private static Logger newSilentLogger() {
+        Logger silent = Logger.getAnonymousLogger();
+        silent.setUseParentHandlers(false);
+        silent.setLevel(Level.OFF);
+        return silent;
     }
 
     /**
@@ -257,7 +319,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             return configured;
         }
         String fallback = supportedCodes.contains("en") ? "en" : supportedCodes.get(0);
-        getLogger().warn("Module '" + getPluginName() + "' is configured for language '" + configured
+        languageLog().warn("Module '" + getPluginName() + "' is configured for language '" + configured
                 + "' but only ships " + supportedCodes + " - falling back to '" + fallback + "'.");
         return fallback;
     }
@@ -296,7 +358,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         // what a player sees, and what nobody sees in the log. Eight of sixteen modules were in
         // this state for a whole release because they ship lang/*.yml and only .json was looked
         // for. Whatever the cause next time, it will say so.
-        getLogger().warn("Module '" + getPluginName() + "' has no loadable language file for '"
+        languageLog().warn("Module '" + getPluginName() + "' has no loadable language file for '"
                 + resolvedCode + "'. Looked for lang/" + resolvedCode + " with extensions "
                 + Arrays.toString(LANGUAGE_EXTENSIONS) + ", on disk under " + folderPath
                 + " and inside the module jar. Every i18n(...) call in this module will render its "
@@ -369,7 +431,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         File langDir = new File(folderPath, "lang");
         File file = new File(langDir, code + extension);
         if (!isWithinDirectory(langDir, file)) {
-            getLogger().warn("Module '" + getPluginName() + "' resolved a language code that would "
+            languageLog().warn("Module '" + getPluginName() + "' resolved a language code that would "
                     + "escape its lang/ directory ('" + langDir + "'); refusing to load or write '"
                     + file + "'.");
             return null;
@@ -475,7 +537,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             // its startup. readLanguageFile()/Language(File) already catch a read failure on
             // their own and return an empty dictionary, which Language.withFallback (in the
             // caller) then backstops from the jar side.
-            getLogger().error("Could not hash on-disk language file " + file.getPath()
+            languageLog().error("Could not hash on-disk language file " + file.getPath()
                     + " for module '" + getPluginName() + "'; leaving it untouched.", e);
             try {
                 return readLanguageFile(file, extension);
@@ -485,7 +547,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                 // catch does not cover -- this method must still never propagate, so fall back
                 // one more step to an empty dictionary. Language.withFallback (in the caller)
                 // then resolves every key from the jar side instead.
-                getLogger().error("Also failed to read on-disk language file " + file.getPath()
+                languageLog().error("Also failed to read on-disk language file " + file.getPath()
                         + " as a best-effort fallback for module '" + getPluginName() + "'.", readFailure);
                 return new Language("{}");
             }
@@ -529,7 +591,9 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             // fall through to "operator customisation" -- unchanged from before -- when the disk
             // bytes are ACTUALLY different from the bundle.
             if (diskHash.equals(jarHash)) {
-                ResourceHashSidecar.record(resourceFolder, resourcePath, diskHash);
+                if (!languageDryRun) {
+                    ResourceHashSidecar.record(resourceFolder, resourcePath, diskHash);
+                }
                 return readLanguageFile(file, extension);
             }
             return applyPlaceholderArityOverride(file, jarBytes, extension, resourcePath);
@@ -547,8 +611,10 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         // self-healing by construction, not merely by coincidence.
         if (diskHash.equals(jarHash)) {
             // Branch 3: unknown provenance, but provably unmodified -> record the baseline now;
-            // no overwrite this pass (D-06).
-            ResourceHashSidecar.record(resourceFolder, resourcePath, diskHash);
+            // no overwrite this pass (D-06). Recorded only by the committing pass (#460).
+            if (!languageDryRun) {
+                ResourceHashSidecar.record(resourceFolder, resourcePath, diskHash);
+            }
             return readLanguageFile(file, extension);
         }
         // Branch 4: unknown provenance and the bytes differ -> assume customisation, never record.
@@ -618,6 +684,11 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         if (jarHash.equals(diskHash)) {
             return readLanguageFile(file, extension);
         }
+        if (languageDryRun) {
+            // #460: construction only computes the decision. The language is the one a successful
+            // refresh yields -- the jar's dictionary -- and the committing pass writes it.
+            return new Language(readFlatDictionary(jarBytes, extension));
+        }
         if (writeBytes(file, jarBytes)) {
             try {
                 String newDiskHash = ResourceHashSidecar.sha256(file);
@@ -625,11 +696,11 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                 boolean recordPersisted = ResourceHashSidecar.readRecordedHash(resourceFolder, resourcePath)
                         .filter(newDiskHash::equals).isPresent();
                 if (recordPersisted) {
-                    getLogger().info("Language file '" + resourcePath + "' for module '" + getPluginName()
+                    languageLog().info("Language file '" + resourcePath + "' for module '" + getPluginName()
                             + "' was not modified since it was extracted and has been updated to the "
                             + "current bundled version.");
                 } else {
-                    getLogger().error("Refreshed language file '" + resourcePath + "' for module '"
+                    languageLog().error("Refreshed language file '" + resourcePath + "' for module '"
                             + getPluginName() + "' but could not persist its provenance record; it may "
                             + "be treated as customised on the next start until this is resolved.");
                 }
@@ -642,7 +713,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                 // file itself WAS refreshed and is still used below via readLanguageFile -- only
                 // its provenance record is skipped, so the next boot's hash comparison falls
                 // back to "unknown provenance" (branches 3/4) instead of crashing this one.
-                getLogger().error("Could not hash refreshed language file '" + resourcePath
+                languageLog().error("Could not hash refreshed language file '" + resourcePath
                         + "' for module '" + getPluginName() + "' immediately after writing it; "
                         + "its provenance record was not updated.", e);
             }
@@ -663,7 +734,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         try (Reader reader = Files.newBufferedReader(file.toPath(), StandardCharsets.UTF_8)) {
             return Language.fromYaml(reader);
         } catch (IOException e) {
-            getLogger().error("Failed to read language file " + file.getPath(), e);
+            languageLog().error("Failed to read language file " + file.getPath(), e);
             return new Language("{}");
         }
     }
@@ -731,7 +802,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                 // mismatch is already handled below: fall back to the bundled version's value
                 // for this key, and say why (never either value) in the warning.
                 resolved.put(key, jarValue);
-                getLogger().warn("Language key '" + key + "' in '" + resourcePath + "' for module '"
+                languageLog().warn("Language key '" + key + "' in '" + resourcePath + "' for module '"
                         + getPluginName() + "' has a malformed format-argument index and could "
                         + "not be compared; using the current bundled version's value for this key.");
                 continue;
@@ -744,7 +815,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             boolean braceTokenLost = !arityMismatch && missingBracePlaceholder(diskValue, jarValue);
             if (arityMismatch || braceTokenLost) {
                 resolved.put(key, jarValue);
-                getLogger().warn("Language key '" + key + "' in '" + resourcePath + "' for module '"
+                languageLog().warn("Language key '" + key + "' in '" + resourcePath + "' for module '"
                         + getPluginName() + "' " + (arityMismatch
                                 ? "has a different placeholder count than the current bundled version"
                                 : "is missing a placeholder that the current bundled version has")
@@ -948,21 +1019,21 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         return PosixAttributePreserver.replaceInPlace(file, bytes, new PosixAttributePreserver.ReplaceInPlaceListener() {
             @Override
             public void onOperatorPinnedReadOnly() {
-                getLogger().warn("Language file '" + file.getPath() + "' for module '" + getPluginName()
+                languageLog().warn("Language file '" + file.getPath() + "' for module '" + getPluginName()
                         + "' is not writable; treating it as operator-pinned and leaving it untouched "
                         + "instead of refreshing it from the bundled version.");
             }
 
             @Override
             public void onSymbolicLink() {
-                getLogger().warn("Language file '" + file.getPath() + "' for module '" + getPluginName()
+                languageLog().warn("Language file '" + file.getPath() + "' for module '" + getPluginName()
                         + "' is a symbolic link; treating it as operator-pinned and leaving it "
                         + "untouched instead of replacing the link with a regular file.");
             }
 
             @Override
             public void onSourceAttributesUnreadable() {
-                getLogger().warn("Could not read the current permissions and owner/group of "
+                languageLog().warn("Could not read the current permissions and owner/group of "
                         + "language file '" + file.getPath() + "' for module '" + getPluginName()
                         + "'; treating its identity as unreplicable and skipping the refresh instead "
                         + "of silently replacing it with a process-owned copy.");
@@ -970,14 +1041,14 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
 
             @Override
             public void onPermissionCopyFailure() {
-                getLogger().warn("Could not preserve file permissions while refreshing '" + file.getPath()
+                languageLog().warn("Could not preserve file permissions while refreshing '" + file.getPath()
                         + "' for module '" + getPluginName() + "'; the refreshed file may not match the "
                         + "original's permissions.");
             }
 
             @Override
             public void onOwnershipCopyFailure(String ownerName, String groupName) {
-                getLogger().warn("Language file '" + file.getPath() + "' for module '"
+                languageLog().warn("Language file '" + file.getPath() + "' for module '"
                         + getPluginName() + "' is owned by '" + ownerName + ":" + groupName
                         + "', which this process cannot replicate onto the refreshed file; "
                         + "skipping the refresh instead of silently changing the file's ownership.");
@@ -985,7 +1056,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
 
             @Override
             public void onWriteFailure(IOException cause) {
-                getLogger().error("Failed to write language file " + file.getPath(), cause);
+                languageLog().error("Failed to write language file " + file.getPath(), cause);
             }
         });
     }
@@ -1022,7 +1093,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                 return buffer.toByteArray();
             }
         } catch (IOException e) {
-            getLogger().error(e, "Failed to read embedded resource " + resourcePath + " from " + location);
+            languageLog().error(e, "Failed to read embedded resource " + resourcePath + " from " + location);
             return null;
         }
     }
@@ -1044,7 +1115,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         // mirror that guard here so this directory-CodeSource branch cannot be used to read
         // outside the module's own resource folder either.
         if (!isWithinDirectory(location, resource)) {
-            getLogger().warn("Module '" + getPluginName() + "' resolved an embedded resource "
+            languageLog().warn("Module '" + getPluginName() + "' resolved an embedded resource "
                     + "path that would escape its resource folder ('" + location + "'); "
                     + "refusing to read '" + resource + "'.");
             return null;
@@ -1055,7 +1126,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         try {
             return Files.readAllBytes(resource.toPath());
         } catch (IOException e) {
-            getLogger().error(e, "Failed to read embedded resource " + resource + " from " + location);
+            languageLog().error(e, "Failed to read embedded resource " + resource + " from " + location);
             return null;
         }
     }
@@ -1090,7 +1161,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             // allowlist) or not restricted at all (a hostile config.yml language: value), so the
             // file boundary is still enforced here rather than trusted from upstream.
             if (!isWithinDirectory(langDir, resource)) {
-                getLogger().warn("Module '" + getPluginName() + "' resolved a language code that "
+                languageLog().warn("Module '" + getPluginName() + "' resolved a language code that "
                         + "would escape its lang/ directory ('" + langDir + "'); refusing to load '"
                         + resource + "'.");
                 return null;
@@ -1101,7 +1172,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             try (BufferedReader reader = Files.newBufferedReader(resource.toPath(), StandardCharsets.UTF_8)) {
                 return parseLanguageResource(reader, extension);
             } catch (IOException e) {
-                getLogger().error(e, "Failed to read language resource " + resource + " from " + location);
+                languageLog().error(e, "Failed to read language resource " + resource + " from " + location);
                 return new Language("{}");
             }
         }
@@ -1116,7 +1187,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                 return parseLanguageResource(reader, extension);
             }
         } catch (IOException e) {
-            getLogger().error(e, "Failed to read language resource " + entryName + " from " + location);
+            languageLog().error(e, "Failed to read language resource " + entryName + " from " + location);
             return new Language("{}");
         }
     }
@@ -1198,7 +1269,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         this.resourceFolderPath = resourceFolderPath;
         // #540: extract first, then resolve -- see the module constructor.
         saveResources();
-        language = createLanguageFromPath(resourceFolderPath);
+        // #460: resolve without writing -- see the module constructor.
+        language = initializeLanguage();
         try {
             initConfig();
         } catch (IOException e) {

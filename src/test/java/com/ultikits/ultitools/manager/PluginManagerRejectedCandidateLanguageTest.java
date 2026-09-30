@@ -2,9 +2,14 @@ package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
@@ -150,5 +155,22 @@ class PluginManagerRejectedCandidateLanguageTest {
         assertThat(ResourceHashSidecar.readRecordedHash(fixture.resourceFolder(), LANG))
                 .contains(ResourceHashSidecar.sha256(fixture.disk(LANG)));
         assertThat(candidate.i18n("greeting")).isEqualTo("text of the accepted jar");
+    }
+
+    @Test
+    @DisplayName("construction logs nothing about the language; the committing pass logs each line once")
+    void constructionIsSilentAndTheCommitLogsOnce() throws Exception {
+        fixture.jarEntry(LANG, "{\"greeting\":\"Hi %s, you have %d items\"}")
+                .onDisk(LANG, "{\"greeting\":\"Hi %s\"}")
+                .recordCurrent(LANG);
+        // Recorded, then edited: the operator-customisation branch, which warns about the key
+        // whose placeholder count moved.
+        fixture.onDisk(LANG, "{\"greeting\":\"Hello %s\"}");
+
+        UltiToolsPlugin candidate = fixture.construct("1.0.0");
+        verify(fixture.logger(), never()).warning(anyString());
+
+        candidate.commitLanguageProvenance();
+        verify(fixture.logger(), times(1)).warning(argThat((String message) -> message.contains("greeting")));
     }
 }

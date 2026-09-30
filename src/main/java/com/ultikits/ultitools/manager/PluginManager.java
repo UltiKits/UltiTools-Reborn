@@ -246,6 +246,8 @@ public class PluginManager {
             return false;
         }
         try {
+            // #460: only a candidate the gates accepted writes its language provenance.
+            plugin.commitLanguageProvenance();
             // WIRE-05/WIRE-06: this path now assembles through the exact same method
             // initializePlugin does -- see its javadoc for the full instruction sequence. The
             // only remaining difference between the two entry points is where the plugin
@@ -2033,6 +2035,10 @@ public class PluginManager {
 
         SimpleContainer pluginContext = new SimpleContainer();
         try {
+            // #460: the language provenance decision computed during construction is written only
+            // now, after the gates accepted this candidate -- a rejected duplicate or a module
+            // built for a newer framework never touches the language files the module shares.
+            plugin.commitLanguageProvenance();
             // WIRE-05: both entry points build their container through this one shared
             // assembly method now -- see its own javadoc for the full instruction sequence and
             // why setContext() runs first. Pass THIS method's own `classLoader` PARAMETER, not
