@@ -272,6 +272,29 @@ class UninstallCancelsByIdentityTest {
     }
 
     @Test
+    @DisplayName("Codex round 16: a module loaded from a JAR outside the modules folder never cancels the update of a module JAR sharing its file name")
+    void externalJarSharingAFileName_doesNotCancelTheOtherModulesUpdate() throws IOException {
+        // The external module's JAR has the same file name as Demo's JAR in the modules folder. An
+        // update's old JAR is always directly in the modules folder, so the external one's name must
+        // never be matched against it.
+        File external = moduleJar(new File(serverRoot, "elsewhere/demo-1.0.jar"), "External", "1.0", "external");
+        UltiToolsPlugin outside = loaded("External", "external");
+        codeSources.with(outside, external);
+        stage();
+        List<String> cancelled = new ArrayList<>();
+
+        // No JAR of External is in the modules folder, so the uninstall reports that -- and still
+        // runs its cancellation, in its finally, which is what is checked here.
+        Throwable outcome = org.assertj.core.api.Assertions.catchThrowable(
+                () -> PluginInstallUtils.uninstallPluginReporting("External", codeSources, cancelled));
+
+        assertThat(outcome).isInstanceOf(java.nio.file.NoSuchFileException.class);
+        assertThat(cancelled).isEmpty();
+        assertThat(treeOf(transactions)).as("Demo's staged update is still there").isNotEmpty();
+        assertThat(pluginManager.getPluginList()).contains(demo).doesNotContain(outside);
+    }
+
+    @Test
     @DisplayName("round 10 control: uninstalling another module leaves this module's staged update alone")
     void uninstallingAnotherModule_leavesTheUpdate() throws IOException {
         File otherJar = moduleJar(new File(modules, "other-1.0.jar"), "Other", "1.0", "other");

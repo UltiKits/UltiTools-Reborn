@@ -208,6 +208,53 @@ class ModuleUpdateStagingTest {
     }
 
     @Test
+    @DisplayName("an uninstall that cancels while staging reads the loaded modules is not missed: the loaded modules are read under the lock (Codex round 16, #561)")
+    void uninstallDuringTheLoadedModulesRead_cancelsTheUpdate() throws Exception {
+        // /upm update used to take its snapshot of the loaded modules before staging took its lock:
+        // an uninstall completing in that gap found no download marker and no record to cancel,
+        // and the stale snapshot then staged the update of a module that had just been removed.
+        java.util.concurrent.CountDownLatch reading = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch cancelled = new java.util.concurrent.CountDownLatch(1);
+        java.util.function.Supplier<List<UltiToolsPlugin>> loaded = () -> {
+            reading.countDown();
+            try {
+                // Long enough for the uninstall below to reach the lock while this read is running.
+                Thread.sleep(300);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return Collections.singletonList(loadedOld);
+        };
+        ModuleFileTransactions.Downloader waitsForTheUninstall = (link, name, folder) -> {
+            try {
+                cancelled.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            moduleJar(new File(folder, name), "Demo", "1.1", "demo");
+        };
+        java.util.concurrent.ExecutorService command = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            java.util.concurrent.Future<ModuleFileTransactions.StageResult> staging = command.submit(() ->
+                    new ModuleFileTransactions(dataFolder).stageUpdate("demo", loaded,
+                            new ModuleUpdateFixtures.CodeSources().with(loadedOld, oldJar), catalogue("demo", "1.1"),
+                            waitsForTheUninstall, null));
+            assertThat(reading.await(10, TimeUnit.SECONDS)).isTrue();
+
+            new ModuleFileTransactions(dataFolder).cancelStagedUpdates(new ModuleFileTransactions.RemovedModule(
+                    Collections.singletonList("demo"), Collections.singletonList("Demo"),
+                    Collections.singletonList("demo-1.0.jar")));
+            cancelled.countDown();
+
+            ModuleFileTransactions.StageResult result = staging.get(20, TimeUnit.SECONDS);
+            assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_CANCELLED_WHILE_DOWNLOADING);
+            assertThat(treeOf(transactions)).as("no record is written for the uninstalled module").isEmpty();
+        } finally {
+            command.shutdownNow();
+        }
+    }
+
+    @Test
     @DisplayName("an old JAR that cannot be read (so its content cannot be recorded) is refused before anything is downloaded")
     void unreadableOldJar_isRefused() throws IOException {
         org.junit.jupiter.api.Assumptions.assumeTrue(
