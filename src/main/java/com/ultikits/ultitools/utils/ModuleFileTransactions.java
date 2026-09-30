@@ -1274,6 +1274,9 @@ public final class ModuleFileTransactions {
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private String returnStagedJar(Record record) throws RecordRefused {
         File target = confined(modulesFolder, record.targetName);
+        // The folder is this transaction's working folder plus a constant; the record's name goes
+        // through confined(), which refuses anything but a plain JAR name directly inside it.
+        // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
         File staged = confined(new File(workFolder(record), STAGED_FOLDER), record.stagedName);
         if (exists(staged) || !isStagedJar(target, record)) {
             return null;

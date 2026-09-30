@@ -117,6 +117,7 @@ class ModuleUpdateRecoveryInvariantTest {
     @ParameterizedTest(name = "{0}, old {1}, new {2}, same name {3}, new loads {4}")
     @MethodSource("reachable")
     @DisplayName("after a start, the modules folder holds exactly one JAR of the module and nothing is stray")
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // the assertions live in Scenario#assertInvariant
     void afterAStart_theInvariantHolds(String state, Old old, New neu, boolean sameName, boolean newLoads)
             throws IOException {
         Scenario scenario = new Scenario(sameName).build(state, old, neu);
@@ -135,6 +136,7 @@ class ModuleUpdateRecoveryInvariantTest {
 
     @ParameterizedTest(name = "FAILED, old {0}, new {1}, same name {2}")
     @MethodSource("failed")
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // the assertions live in Scenario#assertInvariant
     @DisplayName("after /upm update discards a FAILED record, the old JAR alone is in the modules folder and nothing is stray")
     void afterDiscardingAFailedRecord_theInvariantHolds(Old old, New neu, boolean sameName) throws IOException {
         Scenario scenario = new Scenario(sameName).build("FAILED", old, neu);
@@ -166,6 +168,8 @@ class ModuleUpdateRecoveryInvariantTest {
             modules = ModuleFileTransactions.modulesFolder(dataFolder);
             transactions = ModuleFileTransactions.transactionsFolder(dataFolder);
             // With the same name, the old JAR already has the file name the new one is staged under.
+            // Both names are this test's own constants, inside its temporary folder.
+            // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
             oldJar = moduleJar(new File(modules, sameName ? "demo-1.1.jar" : "demo-1.0.jar"), "Demo", "1.0", "demo");
             oldHash = ModuleFileTransactions.sha256Of(oldJar);
             loadedOld = loadedModule("Demo", "1.0", "demo");
@@ -183,10 +187,16 @@ class ModuleUpdateRecoveryInvariantTest {
                     catalogue("demo", "1.1"), downloading("Demo", "1.1", "demo"));
             assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.STAGED);
             recordFile = onlyRecord();
+            // Every name below comes from the record this test's own staging just wrote into its
+            // temporary folder; nothing is external input.
+            // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
             File work = new File(transactions, recordFile.getName().replace(".json", ""));
             JsonObject record = readRecord();
+            // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
             backup = new File(new File(work, "backup"), record.get("oldName").getAsString());
+            // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
             staged = new File(new File(work, "staged"), record.get("stagedName").getAsString());
+            // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
             target = new File(modules, record.get("targetName").getAsString());
             newHash = ModuleFileTransactions.sha256Of(staged);
 
