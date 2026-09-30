@@ -8,6 +8,7 @@ import static org.mockito.Mockito.mockStatic;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Collections;
@@ -75,9 +76,10 @@ class EarlyLogCaptureLogsCapabilityTest {
     @Test
     @DisplayName("UltiTools#onLoad starts the capture through the capability check, never directly")
     void onLoadGoesThroughTheCapabilityCheck() throws IOException {
-        String source = new String(Files.readAllBytes(
-                Paths.get("src/main/java/com/ultikits/ultitools/UltiTools.java")), StandardCharsets.UTF_8);
+        Path root = Paths.get("src/main/java/com/ultikits/ultitools");
+        String source = new String(Files.readAllBytes(root.resolve("UltiTools.java")), StandardCharsets.UTF_8);
 
+        assertThat(source.length()).as("control: UltiTools.java was read").isGreaterThan(1000);
         assertThat(source).contains("EarlyLogCapture.startIfLogsEnabled(");
         assertThat(source).doesNotContain("EarlyLogCapture.start(");
     }
