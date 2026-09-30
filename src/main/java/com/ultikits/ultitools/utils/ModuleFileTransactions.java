@@ -394,7 +394,29 @@ public final class ModuleFileTransactions {
         if (downloadFailure != null) {
             return StageResult.failed(previousFailure, Keys.REASON_DOWNLOAD_FAILED, downloadFailure);
         }
-        File staged = new File(stagedFolder, targetName);
+        StageResult refusal = verifyStaged(record, work, new File(stagedFolder, targetName), latest, previousFailure);
+        if (refusal != null) {
+            return refusal;
+        }
+
+        record.state = Record.PENDING;
+        record.moduleName = module.getPluginName();
+        record.oldName = oldJar.getName();
+        record.oldVersion = module.getVersion();
+        record.stagedName = targetName;
+        record.targetName = targetName;
+        return writeStaged(record, work, previousFailure);
+    }
+
+    /**
+     * Checks the downloaded JAR -- the size/entry guard, its identity, and that it declares the
+     * version the catalogue offered -- and on success records its version and SHA-256.
+     *
+     * @return the refusal, with the staging discarded, or {@code null} when the JAR is accepted
+     */
+    private static StageResult verifyStaged(Record record, File work, File staged, String latest,
+                                            String previousFailure) {
+        String targetName = staged.getName();
         if (!staged.isFile() || !SecurityPolicy.isValidModuleJar(staged)) {
             discardStaging(work);
             return StageResult.failed(previousFailure, Keys.REASON_INVALID_JAR, targetName);
@@ -405,16 +427,30 @@ public final class ModuleFileTransactions {
             discardStaging(work);
             return StageResult.failed(previousFailure, Keys.REASON_WRONG_IDENTITY, targetName, record.key);
         }
-
-        record.state = Record.PENDING;
-        record.moduleName = module.getPluginName();
-        record.oldName = oldJar.getName();
-        record.oldVersion = module.getVersion();
-        record.stagedName = targetName;
-        record.targetName = targetName;
+        StageResult wrongVersion = refuseOtherVersion(work, targetName, stagedVersion, latest, previousFailure);
+        if (wrongVersion != null) {
+            return wrongVersion;
+        }
         record.newVersion = stagedVersion;
         record.stagedSha256 = stagedHash;
-        return writeStaged(record, work, previousFailure);
+        return null;
+    }
+
+    /**
+     * A download must be the version the catalogue offered: a stale or misconfigured endpoint can
+     * serve a valid JAR of the same module declaring another version, which would otherwise be
+     * recorded -- and committed -- under the offered version's file name (round-6 review).
+     *
+     * @return the refusal, with the staging discarded, or {@code null} when the versions agree
+     */
+    private static StageResult refuseOtherVersion(File work, String targetName, String stagedVersion, String latest,
+                                                  String previousFailure) {
+        if (stagedVersion.trim().equals(latest.trim())) {
+            return null;
+        }
+        discardStaging(work);
+        return StageResult.failed(previousFailure, Keys.REASON_WRONG_VERSION, targetName, stagedVersion.trim(),
+                latest.trim());
     }
 
     /** Writes the {@code PENDING} record of a staged JAR, under the lock; the staging is discarded when it cannot be. */
@@ -1935,6 +1971,7 @@ public final class ModuleFileTransactions {
         public static final String REASON_DOWNLOAD_FAILED = "下载失败：%s";
         public static final String REASON_INVALID_JAR = "下载的文件 %s 不是有效的模块 JAR";
         public static final String REASON_WRONG_IDENTITY = "下载的 %s 没有声明 identify-string %s 和版本号";
+        public static final String REASON_WRONG_VERSION = "下载的 %s 声明的版本是 %s，不是云端给出的最新版本 %s";
         public static final String REASON_RECORD_FAILED = "更新记录无法写入：%s";
         public static final String REASON_RECORD_UNREADABLE = "该模块已有的更新记录 %s 无法读取：%s";
         public static final String REASON_LEFTOVER_BACKUP = "%s 中有上一次更新留下、没有记录的旧版本 JAR；请先检查并移走它";
