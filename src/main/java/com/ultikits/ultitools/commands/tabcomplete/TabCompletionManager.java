@@ -11,6 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.bukkit.command.Command;
 import org.bukkit.entity.Player;
 
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.command.CmdParam;
 
 /**
@@ -84,6 +85,20 @@ public class TabCompletionManager {
     private final ThreadLocal<String> currentOwner = new ThreadLocal<>();
 
     /**
+     * Key -&gt; the module instance that registered it (#506). Populated only while a scope opened
+     * with {@link #beginRegistrationScope(String, UltiToolsPlugin)} carries an instance, which is
+     * what {@code PluginManager} opens for every module it loads. Two copies of one module share a
+     * name, so the name in {@link #keyOwners} cannot tell a superseded copy's completers from its
+     * replacement's; this map can, and {@link #unregisterByOwnerInstance(UltiToolsPlugin)} releases
+     * by it. An entry holds the module instance only until that module is unloaded, exactly as the
+     * completer object itself does.
+     */
+    private final Map<String, UltiToolsPlugin> keyOwnerInstances = new ConcurrentHashMap<>();
+
+    /** The module instance attributed to registrations in the current scope, if the scope names one (#506). */
+    private final ThreadLocal<UltiToolsPlugin> currentOwnerInstance = new ThreadLocal<>();
+
+    /**
      * Private constructor - use getInstance().
      */
     private TabCompletionManager() {
@@ -136,6 +151,12 @@ public class TabCompletionManager {
         } else {
             keyOwners.remove(key);
         }
+        UltiToolsPlugin ownerInstance = currentOwnerInstance.get();
+        if (ownerInstance != null) {
+            keyOwnerInstances.put(key, ownerInstance);
+        } else {
+            keyOwnerInstances.remove(key);
+        }
     }
 
     /**
@@ -146,6 +167,7 @@ public class TabCompletionManager {
     public void unregister(String key) {
         completers.remove(key);
         keyOwners.remove(key);
+        keyOwnerInstances.remove(key);
     }
 
     /**
@@ -183,7 +205,30 @@ public class TabCompletionManager {
      * @since 6.3.0
      */
     public void beginRegistrationScope(String owner) {
+        beginRegistrationScope(owner, null);
+    }
+
+    /**
+     * Same as {@link #beginRegistrationScope(String)}, and additionally attributes every key
+     * registered in the scope to {@code ownerInstance}, so {@link
+     * #unregisterByOwnerInstance(UltiToolsPlugin)} can release exactly that module instance's
+     * completers (#506). {@code PluginManager} opens this form for every module it loads: when a
+     * newer copy of a module replaces an older one, both copies share a name, and only the
+     * instance tells their completers apart.
+     *
+     * @param owner         the name to attribute subsequent registrations to, as in {@link
+     *                      #beginRegistrationScope(String)}
+     * @param ownerInstance the module instance to attribute them to; {@code null} records none,
+     *                      which is exactly {@link #beginRegistrationScope(String)}
+     * @since 6.3.0
+     */
+    public void beginRegistrationScope(String owner, UltiToolsPlugin ownerInstance) {
         currentOwner.set(owner);
+        if (ownerInstance != null) {
+            currentOwnerInstance.set(ownerInstance);
+        } else {
+            currentOwnerInstance.remove();
+        }
     }
 
     /**
@@ -196,6 +241,7 @@ public class TabCompletionManager {
      */
     public void endRegistrationScope() {
         currentOwner.remove();
+        currentOwnerInstance.remove();
     }
 
     /**
@@ -226,6 +272,34 @@ public class TabCompletionManager {
             unregister(key);
         }
         return keysToRemove.size();
+    }
+
+    /**
+     * Unregisters every completer key registered in a scope that named {@code ownerInstance}
+     * (#506), whatever name the scope carried. A key another module or another copy of the same
+     * module registered afterwards belongs to that registrant and is not touched, and a key
+     * registered without an instance is never matched here -- {@link #unregisterByOwner(String)}
+     * still releases those by name.
+     *
+     * @param ownerInstance the module instance being unloaded; {@code null} matches nothing
+     * @return the number of keys unregistered
+     * @since 6.3.0
+     */
+    public int unregisterByOwnerInstance(UltiToolsPlugin ownerInstance) {
+        if (ownerInstance == null) {
+            return 0;
+        }
+        int removed = 0;
+        for (Map.Entry<String, UltiToolsPlugin> entry : keyOwnerInstances.entrySet()) {
+            // remove(key, value) is atomic: a key another registrant took over in the meantime is
+            // attributed to that registrant now and is left alone.
+            if (entry.getValue() == ownerInstance && keyOwnerInstances.remove(entry.getKey(), ownerInstance)) {
+                completers.remove(entry.getKey());
+                keyOwners.remove(entry.getKey());
+                removed++;
+            }
+        }
+        return removed;
     }
 
     /**

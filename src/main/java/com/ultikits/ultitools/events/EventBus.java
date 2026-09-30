@@ -17,6 +17,7 @@ import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.entities.HandlerEntry;
 import com.ultikits.ultitools.entities.Subscription;
 
@@ -56,8 +57,32 @@ public class EventBus {
     public void register(Class<? extends ModuleEvent> eventType, EventPriority priority,
                          boolean ignoreCancelled, String ownerModule,
                          Method method, Object instance) {
+        register(eventType, priority, ignoreCancelled, ownerModule, null, method, instance);
+    }
+
+    /**
+     * Register an annotation-based handler and record the module instance that owns it (#506).
+     * <p>
+     * {@link #unregisterByOwnerInstance(UltiToolsPlugin)} then releases exactly this instance's
+     * handlers, whatever name they were filed under. The framework registers every module's
+     * {@code @ModuleEventHandler} methods this way, so unloading a superseded copy of a module
+     * cannot release its replacement's handlers, which share its name.
+     *
+     * @param eventType       the event type handled
+     * @param priority        the dispatch priority
+     * @param ignoreCancelled whether a cancelled event skips this handler
+     * @param ownerModule     the owning module's name, used by {@link #unregisterAll(String)}
+     * @param ownerInstance   the owning module instance; {@code null} records none
+     * @param method          the handler method
+     * @param instance        the bean the method is invoked on
+     * @since 6.3.0
+     */
+    public void register(Class<? extends ModuleEvent> eventType, EventPriority priority,
+                         boolean ignoreCancelled, String ownerModule, UltiToolsPlugin ownerInstance,
+                         Method method, Object instance) {
         method.setAccessible(true); // NOPMD - required for handler invocation
-        HandlerEntry entry = new HandlerEntry(eventType, priority, ignoreCancelled, ownerModule, method, instance);
+        HandlerEntry entry = new HandlerEntry(eventType, priority, ignoreCancelled, ownerModule, ownerInstance,
+                method, instance);
         handlers.computeIfAbsent(eventType, k -> new CopyOnWriteArrayList<>()).add(entry);
     }
 
@@ -110,6 +135,23 @@ public class EventBus {
                     list.remove(entry);
                 }
             }
+        }
+    }
+
+    /**
+     * Unregister every handler registered with {@code ownerInstance} as its owner (#506), whatever
+     * module name it was filed under. Handlers registered with a name only are not matched here;
+     * {@link #unregisterAll(String)} releases those.
+     *
+     * @param ownerInstance the module instance being unloaded; {@code null} matches nothing
+     * @since 6.3.0
+     */
+    public void unregisterByOwnerInstance(UltiToolsPlugin ownerInstance) {
+        if (ownerInstance == null) {
+            return;
+        }
+        for (CopyOnWriteArrayList<HandlerEntry> list : handlers.values()) {
+            list.removeIf(entry -> entry.getOwnerInstance() == ownerInstance);
         }
     }
 

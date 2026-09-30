@@ -370,9 +370,45 @@ public class PluginManager {
      * {@link ConfigManager}, so the shutdown save no longer writes the files of a module that was
      * unloaded.
      *
+     * <p>
+     * The three registries a module can file registrations in by name -- tab-completion
+     * completers, EventBus handlers and panel responders -- are released by instance first: every
+     * registration recorded against this module instance goes, whatever name it was filed under.
+     * Registrations filed under the module's name only are then released by name, unless another
+     * loaded copy of the module shares that name; they cannot be told apart from that copy's, so
+     * they stay until the last copy of the name is unloaded (#506).
+     *
      * @param plugin UltiTools plugin instance
      */
     public void unregister(UltiToolsPlugin plugin) {
+        unregister(plugin, isNameInUseByAnotherLoadedCopy(plugin));
+    }
+
+    /**
+     * Whether a loaded module other than {@code plugin} itself carries {@code plugin}'s name.
+     *
+     * @param plugin the module about to be unloaded
+     * @return {@code true} if releasing by name would also release another loaded copy's registrations
+     */
+    private boolean isNameInUseByAnotherLoadedCopy(UltiToolsPlugin plugin) {
+        String name = plugin.getPluginName();
+        for (UltiToolsPlugin listed : pluginList) {
+            if (listed != plugin && name != null && name.equals(listed.getPluginName())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The body of {@link #unregister(UltiToolsPlugin)}.
+     *
+     * @param plugin         the module to unload
+     * @param nameStillInUse whether another copy of the module -- listed, or being activated as
+     *                       this copy's replacement -- shares its name, so that name-only
+     *                       registrations must not be released by name (#506)
+     */
+    private void unregister(UltiToolsPlugin plugin, boolean nameStillInUse) {
         // Each registry-cleanup step below is isolated from every other step's failure
         // (Codex review on #457, round 4: "Run all registry cleanup after an earlier
         // failure") -- an Error from one owner registry (e.g. TaskManager.cancelAll() not
@@ -396,13 +432,21 @@ public class PluginManager {
         // pin the module's ClassLoader after unload (T-05-24 / D-08). A module that registered
         // nothing is a no-op (unregisterByOwner(null) and unregisterByOwner("unknown-name") both
         // return 0 and throw nothing).
-        runUnregisterStep(plugin, "unregister tab-completion completers",
-                () -> TabCompletionManager.getInstance().unregisterByOwner(plugin.getPluginName()));
+        runUnregisterStep(plugin, "unregister tab-completion completers", () -> {
+            TabCompletionManager completions = TabCompletionManager.getInstance();
+            completions.unregisterByOwnerInstance(plugin);
+            if (!nameStillInUse) {
+                completions.unregisterByOwner(plugin.getPluginName());
+            }
+        });
         // Unregister @ModuleEventHandler handlers from EventBus
         runUnregisterStep(plugin, "unregister EventBus handlers", () -> {
             EventBus eventBus = UltiTools.getInstance().getEventBus();
             if (eventBus != null) {
-                eventBus.unregisterAll(plugin.getPluginName());
+                eventBus.unregisterByOwnerInstance(plugin);
+                if (!nameStillInUse) {
+                    eventBus.unregisterAll(plugin.getPluginName());
+                }
             }
         });
         // Unregister this module's panel message responders (WIRE-16, D-26/D-27, Plan 06-08
@@ -412,7 +456,10 @@ public class PluginManager {
         runUnregisterStep(plugin, "unregister panel message responders", () -> {
             PanelResponderRegistry panelResponderRegistry = UltiTools.getInstance().getPanelResponderRegistry();
             if (panelResponderRegistry != null) {
-                panelResponderRegistry.unregisterAll(plugin.getPluginName());
+                panelResponderRegistry.unregisterByOwnerInstance(plugin);
+                if (!nameStillInUse) {
+                    panelResponderRegistry.unregisterAll(plugin.getPluginName());
+                }
             }
         });
         // Release this module's recorded @ConditionalOnConfig scan-time decisions (#392,
@@ -1672,7 +1719,11 @@ public class PluginManager {
     }
 
     /**
-     * Unloads the old version this load supersedes.
+     * Unloads the old version this load supersedes, through the full {@link
+     * #unregister(UltiToolsPlugin)} path (#506): its tasks are cancelled, its container closed, its
+     * registrations released and it is delisted. Because the incoming copy shares its name and
+     * has already registered under it, only the registrations recorded against the old instance
+     * are released; name-only ones stay with the incoming copy.
      * <p>
      * <b>May only be called after the new module's {@code registerSelf()} returns true</b> -- not
      * "after the container is built". The two are one step apart: the container being built only
@@ -1687,7 +1738,7 @@ public class PluginManager {
                 continue;
             }
             if (plugin.isNewerVersionThan(existing)) {
-                existing.unregisterSelf();
+                unregister(existing, true);
             }
         }
     }
@@ -1804,7 +1855,7 @@ public class PluginManager {
             @SuppressWarnings("unchecked")
             Class<? extends ModuleEvent> eventType = (Class<? extends ModuleEvent>) params[0];
             eventBus.register(eventType, annotation.priority(), annotation.ignoreCancelled(),
-                    plugin.getPluginName(), method, bean);
+                    plugin.getPluginName(), plugin, method, bean);
         }
     }
 
@@ -2190,7 +2241,9 @@ public class PluginManager {
         // module shares ONE URLClassLoader (see init(ClassLoader) and validateAdditionalEntity's
         // identical D-19 finding above) -- an explicit scope is the only mechanism that still
         // separates two modules' completers.
-        TabCompletionManager.getInstance().beginRegistrationScope(plugin.getPluginName());
+        // #506: the instance as well as the name, so unloading a superseded copy of this module
+        // later releases this copy's completers and not its replacement's.
+        TabCompletionManager.getInstance().beginRegistrationScope(plugin.getPluginName(), plugin);
         try {
             pluginContext.refresh();
         } finally {

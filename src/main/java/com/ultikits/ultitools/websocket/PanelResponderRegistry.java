@@ -9,6 +9,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
 import com.google.gson.JsonObject;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.exceptions.PluginModuleException;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
 
@@ -46,9 +47,10 @@ public class PanelResponderRegistry {
     static final long RESPONDER_TIMEOUT_MILLIS = 3000L;
 
     /**
-     * Pairs a responder function with the module name that registered it. Never exposed outside
-     * this class — {@link #hasResponder(String)}/{@link #unregisterAll(String)} are the only
-     * externally visible views of what this map holds.
+     * Pairs a responder function with the module name (and, when recorded, the module instance)
+     * that registered it. Never exposed outside this class — {@link #hasResponder(String)},
+     * {@link #unregisterAll(String)} and {@link #unregisterByOwnerInstance(UltiToolsPlugin)} are the
+     * only externally visible views of what this map holds.
      */
     private final Map<String, ResponderEntry> responders = new ConcurrentHashMap<>();
 
@@ -99,6 +101,29 @@ public class PanelResponderRegistry {
      */
     public void registerResponder(String messageType, Function<JsonObject, CompletableFuture<JsonObject>> responder,
             String ownerModule) {
+        registerResponder(messageType, responder, ownerModule, null);
+    }
+
+    /**
+     * Same as {@link #registerResponder(String, Function, String)}, and additionally records the
+     * module instance that owns the responder (#506), so {@link
+     * #unregisterByOwnerInstance(UltiToolsPlugin)} releases exactly that instance's responders
+     * whatever name they were filed under. Two copies of one module share a name; only the instance
+     * tells a superseded copy's responders from its replacement's.
+     *
+     * @param messageType   the exact message type string this responder will serve
+     * @param responder     the responder function
+     * @param ownerModule   the name of the module registering this responder
+     * @param ownerInstance the module instance registering it; {@code null} records none, which is
+     *                      exactly {@link #registerResponder(String, Function, String)}
+     * @throws IllegalArgumentException if {@code messageType} or {@code ownerModule} is
+     *                                   {@code null}/empty, or {@code responder} is {@code null}
+     * @throws PluginModuleException    if the framework already owns {@code messageType}, or
+     *                                   another registration already claims it
+     * @since 6.3.0
+     */
+    public void registerResponder(String messageType, Function<JsonObject, CompletableFuture<JsonObject>> responder,
+            String ownerModule, UltiToolsPlugin ownerInstance) {
         if (messageType == null || messageType.isEmpty()) {
             throw new IllegalArgumentException("messageType must not be null or empty");
         }
@@ -111,7 +136,7 @@ public class PanelResponderRegistry {
         if (PluginInitiationUtils.isFrameworkOwnedType(messageType)) {
             throw PluginModuleException.responderTypeOwnedByFramework(messageType);
         }
-        ResponderEntry entry = new ResponderEntry(responder, ownerModule);
+        ResponderEntry entry = new ResponderEntry(responder, ownerModule, ownerInstance);
         ResponderEntry existing = responders.putIfAbsent(messageType, entry);
         if (existing != null) {
             throw PluginModuleException.responderTypeAlreadyOwned(messageType, existing.ownerModule);
@@ -135,6 +160,21 @@ public class PanelResponderRegistry {
             return;
         }
         responders.values().removeIf(entry -> moduleName.equals(entry.ownerModule));
+    }
+
+    /**
+     * Removes every responder registered with {@code ownerInstance} as its owner (#506), whatever
+     * module name it was filed under. A responder registered with a name only is not matched here;
+     * {@link #unregisterAll(String)} releases those.
+     *
+     * @param ownerInstance the module instance being unloaded; {@code null} is a no-op
+     * @since 6.3.0
+     */
+    public void unregisterByOwnerInstance(UltiToolsPlugin ownerInstance) {
+        if (ownerInstance == null) {
+            return;
+        }
+        responders.values().removeIf(entry -> entry.ownerInstance == ownerInstance);
     }
 
     /**
@@ -259,14 +299,20 @@ public class PanelResponderRegistry {
         timeoutScheduler.shutdownNow();
     }
 
-    /** An immutable pairing of a responder function and the module name that registered it. */
+    /**
+     * An immutable pairing of a responder function with the module name that registered it and,
+     * when the registration named one, the module instance (#506).
+     */
     private static final class ResponderEntry {
         private final Function<JsonObject, CompletableFuture<JsonObject>> responder;
         private final String ownerModule;
+        private final UltiToolsPlugin ownerInstance;
 
-        private ResponderEntry(Function<JsonObject, CompletableFuture<JsonObject>> responder, String ownerModule) {
+        private ResponderEntry(Function<JsonObject, CompletableFuture<JsonObject>> responder, String ownerModule,
+                UltiToolsPlugin ownerInstance) {
             this.responder = responder;
             this.ownerModule = ownerModule;
+            this.ownerInstance = ownerInstance;
         }
     }
 }
