@@ -220,7 +220,7 @@ public class PluginManager {
         try {
             plugin = initializePlugin(classLoader, pluginClass);
         } catch (Exception | Error e) {
-            logPluginInitializationFailure(pluginClass.getName(), e);
+            logPluginInitializationFailure(pluginClass, pluginClass.getName(), e);
             return false;
         }
         // null means the compatibility gate refused it; the refusal reason has already been
@@ -257,7 +257,7 @@ public class PluginManager {
             SimpleContainer pluginContext = new SimpleContainer();
             assemblePluginContainer(pluginContext, plugin, plugin.getClass(), classLoader);
         } catch (Exception | Error e) {
-            logPluginInitializationFailure(plugin.getPluginName(), e);
+            logPluginInitializationFailure(plugin.getClass(), plugin.getPluginName(), e);
             return false;
         }
         boolean result = attemptPluginRegistration(plugin);
@@ -265,6 +265,63 @@ public class PluginManager {
             registerBukkit(plugin);
         }
         return result;
+    }
+
+    /**
+     * Framework i18n key for the one line logged when a module cannot load because a plugin its
+     * {@code plugin.yml} lists under {@code depend:} is not installed or not enabled (#554).
+     * Arguments: the module, the missing plugins joined by {@code ", "}. Package-private so a test
+     * can assert both shipped catalogues translate it.
+     */
+    static final String MISSING_REQUIRED_PLUGIN_LOG_KEY =
+            "Module '%s' requires %s, which is not installed or not enabled; the module is not loaded.";
+
+    /**
+     * Logs a module's initialization failure (#554): when the failure is a class-not-found kind
+     * ({@link NoClassDefFoundError} or {@link ClassNotFoundException} anywhere in the cause chain)
+     * and at least one plugin the module lists under {@code depend:} is not installed or not
+     * enabled, one WARNING names the module and those plugins, without the raw trace -- the
+     * missing class belongs to the missing plugin and the trace says nothing more. In every other
+     * case, including a class-not-found failure while every {@code depend:} plugin is present,
+     * {@link #logPluginInitializationFailure(String, Throwable)} logs the existing message and
+     * trace unchanged.
+     *
+     * @param pluginClass the module's main class, whose own jar's {@code plugin.yml} is read
+     * @param moduleName  the module refusing to load, however the caller identifies it
+     * @param thrown      the throwable caught at the registration boundary
+     */
+    static void logPluginInitializationFailure(Class<?> pluginClass, String moduleName, Throwable thrown) {
+        if (isClassNotFoundKind(thrown)) {
+            PluginYmlReader.PluginYmlInfo pluginYml = PluginYmlReader.read(pluginClass);
+            List<String> missing = new ArrayList<>();
+            for (String required : pluginYml.getDepend()) {
+                if (isPluginAbsentOrDisabled(required)) {
+                    missing.add(required);
+                }
+            }
+            if (!missing.isEmpty()) {
+                String name = pluginYml.getName() != null ? pluginYml.getName() : moduleName;
+                Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + String.format(
+                        UltiTools.getInstance().i18n(MISSING_REQUIRED_PLUGIN_LOG_KEY), name, String.join(", ", missing)));
+                return;
+            }
+        }
+        logPluginInitializationFailure(moduleName, thrown);
+    }
+
+    /**
+     * Whether {@code thrown}'s cause chain holds a {@link NoClassDefFoundError} or a {@link
+     * ClassNotFoundException}. Bounded by identity-based cycle detection, like {@link
+     * #rootCauseMessage(Throwable)}.
+     */
+    private static boolean isClassNotFoundKind(Throwable thrown) {
+        Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Throwable current = thrown; current != null && visited.add(current); current = current.getCause()) {
+            if (current instanceof NoClassDefFoundError || current instanceof ClassNotFoundException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
