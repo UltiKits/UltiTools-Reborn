@@ -463,7 +463,12 @@ public final class ModuleFileTransactions {
                 File target = confined(modulesFolder, record.targetName);
                 if (isLoadedFrom(record, target, loaded, codeSource)) {
                     record.state = Record.COMMITTING;
-                    persist(record);
+                    if (!persist(record)) {
+                        // The kept old JAR may be deleted only once the decision is on disk. The
+                        // record still says APPLIED, so the next start restores the old version as
+                        // unconfirmed -- deleting the old JAR now would leave it nothing to restore.
+                        continue;
+                    }
                     crashPoints.reached(CrashPoints.AFTER_DECISION_RECORDED);
                     finishCommit(record);
                 } else {
@@ -805,12 +810,18 @@ public final class ModuleFileTransactions {
         }
     }
 
-    /** {@link #writeRecord(Record)} at start-up, where a failure is a report line, not an abort. */
-    private void persist(Record record) {
+    /**
+     * {@link #writeRecord(Record)} at start-up, where a failure is a report line, not an abort.
+     *
+     * @return whether the record is on disk
+     */
+    private boolean persist(Record record) {
         try {
             writeRecord(record);
+            return true;
         } catch (IOException e) {
             report(Level.SEVERE, Keys.RECORD_WRITE_FAILED, recordFileOf(record).getAbsolutePath(), describe(e));
+            return false;
         }
     }
 
