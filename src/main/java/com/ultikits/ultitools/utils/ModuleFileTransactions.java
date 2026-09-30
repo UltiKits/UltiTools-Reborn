@@ -283,8 +283,7 @@ public final class ModuleFileTransactions {
             return Reservation.refused(refusal);
         }
         File backups = new File(work, BACKUP_FOLDER);
-        String[] kept = backups.list();
-        if (kept != null && kept.length > 0) {
+        if (mayHoldFiles(backups)) {
             // A kept old JAR without its record: never adopted as this transaction's backup and
             // never deleted by staging. The start-up log already reports it.
             return Reservation.refused(StageResult.failed(previousFailure, Keys.REASON_LEFTOVER_BACKUP,
@@ -513,7 +512,15 @@ public final class ModuleFileTransactions {
     public List<String> cancelStagedUpdates(String moduleName, java.util.Collection<String> removedJarNames) {
         synchronized (LOCK) {
             List<String> cancelled = new ArrayList<>();
-            for (File recordFile : recordFiles()) {
+            List<File> recordFiles;
+            try {
+                recordFiles = recordFiles();
+            } catch (IOException e) {
+                // The next start cannot list the folder either, so it applies nothing and reports it.
+                LOGGER.log(Level.WARNING, "No staged update of " + moduleName + " could be cancelled", e);
+                return cancelled;
+            }
+            for (File recordFile : recordFiles) {
                 Record record;
                 try {
                     record = readRecord(recordFile);
@@ -628,7 +635,15 @@ public final class ModuleFileTransactions {
         List<String> ids = new ArrayList<>();
         List<Record> removals = new ArrayList<>();
         List<Record> updates = new ArrayList<>();
-        for (File recordFile : recordFiles()) {
+        List<File> recordFiles;
+        try {
+            recordFiles = recordFiles();
+        } catch (IOException e) {
+            // Nothing is carried out and nothing is deleted: the records stay for a start that can read them.
+            report(Level.SEVERE, Keys.RECORDS_UNLISTABLE, transactionsFolder.getAbsolutePath(), describe(e));
+            return;
+        }
+        for (File recordFile : recordFiles) {
             Record record = readRecordOrReport(recordFile);
             if (record == null) {
                 ids.add(stripSuffix(recordFile.getName()));
@@ -1110,10 +1125,25 @@ public final class ModuleFileTransactions {
     // Records
     // ------------------------------------------------------------------------------------------
 
-    private List<File> recordFiles() {
-        File[] files = transactionsFolder.listFiles((dir, name) -> name.endsWith(RECORD_SUFFIX));
+    /**
+     * The record files, sorted by name.
+     *
+     * @return the records; empty when the transactions folder does not exist
+     * @throws IOException when the folder exists -- or cannot be shown not to -- but cannot be
+     *                     listed; a failed listing is never read as "no records"
+     */
+    private List<File> recordFiles() throws IOException {
+        File[] files;
+        try {
+            files = transactionsFolder.listFiles((dir, name) -> name.endsWith(RECORD_SUFFIX));
+        } catch (SecurityException e) {
+            throw new IOException(transactionsFolder.getAbsolutePath() + " cannot be listed: " + describe(e), e);
+        }
         if (files == null) {
-            return Collections.emptyList();
+            if (Files.notExists(transactionsFolder.toPath())) {
+                return Collections.emptyList();
+            }
+            throw new IOException(transactionsFolder.getAbsolutePath() + " cannot be listed");
         }
         List<File> sorted = new ArrayList<>();
         Collections.addAll(sorted, files);
@@ -1231,9 +1261,10 @@ public final class ModuleFileTransactions {
                 continue;
             }
             File backups = new File(folder, BACKUP_FOLDER);
-            String[] kept = backups.list();
-            if (kept != null && kept.length > 0) {
-                report(Level.WARNING, Keys.ORPHAN_BACKUP, backups.getAbsolutePath(), String.join(", ", kept));
+            if (mayHoldFiles(backups)) {
+                String[] kept = backups.list();
+                report(Level.WARNING, Keys.ORPHAN_BACKUP, backups.getAbsolutePath(),
+                        kept == null ? "(the folder cannot be listed)" : String.join(", ", kept));
             } else {
                 deleteTree(folder);
             }
@@ -1293,6 +1324,16 @@ public final class ModuleFileTransactions {
             throw new RecordRefused(file.getAbsolutePath() + " resolves outside " + folder.getAbsolutePath());
         }
         return file;
+    }
+
+    /**
+     * Whether a folder holds anything, or might: {@code true} when it lists an entry, and also
+     * when it exists (or cannot be shown not to) but cannot be listed -- a failed listing is never
+     * read as an empty folder.
+     */
+    private static boolean mayHoldFiles(File folder) {
+        String[] names = folder.list();
+        return names == null ? !Files.notExists(folder.toPath()) : names.length > 0;
     }
 
     /** Whether a file name is one the module loader would load: it ends in {@code .jar}. */
@@ -1680,6 +1721,8 @@ public final class ModuleFileTransactions {
         public static final String APPLY_FAILED_UNRESTORED =
                 "模块 %s 的更新（%s → %s）未能应用：%s：%s；把旧版本移回也失败了（%s）。旧版本 JAR 在 %s，请停止服务器后手动移回 %s。";
         public static final String RESTORE_FAILED = "模块 %s 的旧版本 JAR 仍在 %s，未能移回 %s（%s）；请停止服务器后手动移回。";
+        public static final String RECORDS_UNLISTABLE =
+                "更新目录 %s 无法列出（%s）；本次启动没有执行任何暂存的更新或卸载时记录的删除，它们保持原样，下次启动会再试。";
         public static final String CLEANUP_DEFERRED = "模块 %s 的更新已确认，但更新目录 %s 未能清理，下次启动会再清理。";
         public static final String ORPHAN_BACKUP = "更新目录 %s 中有不属于任何更新记录的旧版本 JAR，已保留：%s";
         public static final String UPDATE_ABANDONED = "模块 %s 暂存的 %s 版本更新已放弃：它的 JAR %s 在暂存之后已不在模块目录中（例如已卸载）。";

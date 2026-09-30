@@ -147,6 +147,7 @@
   "模块 %s 的更新（%s → %s）未能应用：%s：%s；把旧版本移回也失败了（%s）。旧版本 JAR 在 %s，请停止服务器后手动移回 %s。": "The update of module %s (%s -> %s) could not be applied: %s: %s; moving the previous version back also failed (%s). The previous JAR is at %s; stop the server and move it back to %s by hand.",
   "模块 %s 的旧版本 JAR 仍在 %s，未能移回 %s（%s）；请停止服务器后手动移回。": "The previous JAR of module %s is still at %s and could not be moved back to %s (%s); stop the server and move it back by hand.",
   "模块 %s 的更新已确认，但更新目录 %s 未能清理，下次启动会再清理。": "The update of module %s is confirmed, but its transaction folder %s could not be cleaned up; the next start tries again.",
+  "更新目录 %s 无法列出（%s）；本次启动没有执行任何暂存的更新或卸载时记录的删除，它们保持原样，下次启动会再试。": "The update folder %s cannot be listed (%s); no staged update and no deletion recorded by an uninstall was carried out at this start. They are kept as they are, and the next start tries again.",
   "更新目录 %s 中有不属于任何更新记录的旧版本 JAR，已保留：%s": "%s holds previous-version JARs that no update record refers to; they were kept: %s",
   "该模块已有的更新记录 %s 无法读取：%s": "the module's existing update record %s could not be read: %s",
   "上一次更新留下的旧版本 JAR 无法移回模块目录：%s": "the previous JAR the last update kept could not be moved back into the modules folder: %s",

@@ -411,7 +411,7 @@ class ModuleUpdateRecoveryTest {
         void unsearchableUltikitsFolder_isReported() throws IOException {
             Assumptions.assumeTrue(Files.getFileStore(serverRoot.toPath()).supportsFileAttributeView("posix"));
             stage(transactions());
-            java.nio.file.Path ultikits = transactions.getParentFile().toPath();
+            Path ultikits = transactions.getParentFile().toPath();
             java.util.Set<java.nio.file.attribute.PosixFilePermission> original = Files.getPosixFilePermissions(ultikits);
             Files.setPosixFilePermissions(ultikits, PosixFilePermissions.fromString("rw-------"));
             ModuleFileTransactions start;
