@@ -244,7 +244,7 @@ class ConfigDottedMapKeyTest {
     @DisplayName("a dotted key an operator wrote loads split, as in 6.2, with one warning per load")
     void operatorWrittenDottedKeyWarnsOnLoad() throws IOException {
         writeFile("autoreply:\n  rules:\n    my.rule:\n      reply: hi\n    ok:\n      reply: yo\n"
-                + "features:\n  aliases: {}\na:\n  b:\n    c: 3\nrewards:\n- minecraft.gold: 5\n");
+                + "features:\n  aliases: {}\na:\n  b:\n    c: 3\nrewards:\n- minecraft.gold: 5\ngroups: {}\nrecipes: {}\n");
         byte[] before = Files.readAllBytes(file());
         RulesConfig config = new RulesConfig(PATH);
 
@@ -258,7 +258,8 @@ class ConfigDottedMapKeyTest {
         assertThat(config.rules).containsOnlyKeys("my", "ok");
         assertThat(Files.readAllBytes(file())).as("the check never writes").isEqualTo(before);
 
-        writeFile("autoreply:\n  rules:\n    'x.y':\n      reply: hi\nfeatures:\n  aliases: {}\na:\n  b:\n    c: 3\nrewards: []\n");
+        writeFile("autoreply:\n  rules:\n    'x.y':\n      reply: hi\nfeatures:\n  aliases: {}\na:\n  b:\n    c: 3\nrewards: []\n"
+                + "groups: {}\nrecipes: {}\n");
         try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
             config.reload();
             assertThat(warnings.messagesContaining("'x.y'")).hasSize(1);
