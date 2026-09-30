@@ -159,7 +159,8 @@ class ConfigRefusalConsistencyTest {
             new EnumMapsConfig(PATH).init(plugin);
             assertThat(warnings.messages()).isEmpty();
         }
-        assertThat(readFile()).doesNotContain("!!");
+        // No Java-class tag (which the loader refuses); YAML's own `!!float 'NaN'` is fine.
+        assertThat(readFile()).doesNotContainPattern("!![a-z]+\\.");
 
         EnumMapsConfig second = new EnumMapsConfig(PATH);
         try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
