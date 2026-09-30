@@ -10,11 +10,14 @@ import static org.mockito.Mockito.verify;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.Reader;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Arrays;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -25,6 +28,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mockito;
+
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Language;
@@ -51,6 +57,15 @@ class UltiToolsPluginUnrecordedLanguageReplacementTest {
     private static final String LANG = "lang/en.json";
     private static final String OLD = "{\"greeting\":\"Hello from the 6.2 jar\"}";
     private static final String NEW = "{\"greeting\":\"Hello from the 6.3 jar\"}";
+
+    /**
+     * The framework catalogue key of the replacement line, spelled out rather than read from the
+     * production constant, so the exact operator-visible text is pinned here.
+     */
+    private static final String REPLACED_LINE_KEY = "Language file '%s' of module '%s' had no provenance "
+            + "record and differed from the version bundled with this release, so it was replaced by the "
+            + "bundled version: this release cannot tell whether it had been edited. The previous file was "
+            + "kept as '%s'; to restore it, stop the server and rename it back.";
 
     @TempDir
     File tempDir;
@@ -258,4 +273,21 @@ class UltiToolsPluginUnrecordedLanguageReplacementTest {
 
         assertThat(language.getLocalizedText("Module '%s' reloaded.")).isEqualTo("Module '%s' reloaded.");
     }
+
+    @Test
+    @DisplayName("both shipped framework catalogues translate the replacement line, and it formats with its three arguments")
+    void bothCataloguesTranslateTheReplacementLine() throws IOException {
+        for (String catalogue : new String[]{"/lang/en.json", "/lang/zh.json"}) {
+            Map<String, String> entries;
+            try (Reader reader = new InputStreamReader(
+                    UltiToolsPlugin.class.getResourceAsStream(catalogue), StandardCharsets.UTF_8)) {
+                entries = new Gson().fromJson(reader, new TypeToken<Map<String, String>>() { }.getType());
+            }
+            String value = entries.get(REPLACED_LINE_KEY);
+            assertThat(value).as(catalogue).isNotNull();
+            assertThat(String.format(value, "lang/en.json", "UltiDemo", "lang/en.json.bak"))
+                    .as(catalogue).contains("lang/en.json", "UltiDemo", "lang/en.json.bak");
+        }
+    }
 }
+

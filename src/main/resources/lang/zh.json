@@ -46,5 +46,6 @@
   "指令正确用法": "§e正确用法: §7/%s %s",
   "需要权限": "§7执行此命令需要 §f%s §7权限",
   "命令执行超时，已停止等待，命令仍在后台继续执行": "命令执行超时，已停止等待，命令仍在后台继续执行",
-  "Module '%s' reloaded.": "模块 '%s' 已重载。"
+  "Module '%s' reloaded.": "模块 '%s' 已重载。",
+  "Language file '%s' of module '%s' had no provenance record and differed from the version bundled with this release, so it was replaced by the bundled version: this release cannot tell whether it had been edited. The previous file was kept as '%s'; to restore it, stop the server and rename it back.": "模块 '%2$s' 的语言文件 '%1$s' 没有来源记录，且与本版本自带的版本不同，因此已替换为自带版本：本版本无法判断它是否被修改过。原文件已保留为 '%3$s'；如需恢复，请停服后把它改回原名。"
 }

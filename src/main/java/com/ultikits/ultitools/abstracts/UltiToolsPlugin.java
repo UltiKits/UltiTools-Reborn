@@ -16,7 +16,11 @@ import java.net.JarURLConnection;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.security.CodeSource;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -105,6 +109,27 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * literal string between production and test code.
      */
     static final String RELOAD_LOG_MESSAGE_KEY = "Module '%s' reloaded.";
+
+    /**
+     * Framework i18n key for the one line logged per language file replaced on the upgrade start
+     * (#459, maintainer 2026-09-29, question 3 option 2). Arguments: the replaced file, the module,
+     * the backup. Package-private so a test can assert both shipped catalogues translate it.
+     */
+    static final String LANGUAGE_REPLACED_LOG_KEY = "Language file '%s' of module '%s' had no provenance "
+            + "record and differed from the version bundled with this release, so it was replaced by the "
+            + "bundled version: this release cannot tell whether it had been edited. The previous file was "
+            + "kept as '%s'; to restore it, stop the server and rename it back.";
+
+    /**
+     * Suffix of the backup kept when an unrecorded language file is replaced (#459). A backup is
+     * named {@code <file>.bak}, then {@code <file>.1.bak}, {@code <file>.2.bak} and so on, so no
+     * name ends in a catalogue extension the loader resolves ({@code .json}, {@code .yml}, {@code
+     * .yaml}) and an existing file is never overwritten.
+     */
+    private static final String BACKUP_SUFFIX = ".bak";
+
+    /** Upper bound on backup names tried for one file, so a full directory cannot loop forever. */
+    private static final int MAX_BACKUP_NAMES = 1000;
     /**
      * Matches a {@code java.util.Formatter} conversion specifier, e.g. {@code %s} in {@code
      * "Hello, %s!"}, or {@code %1$s} for an explicit argument index. Used only by {@link
@@ -487,18 +512,21 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      *       as the new baseline and enter the normal mechanism, with no overwrite this pass
      *       (D-06). Never adopt an unequal disk hash as a baseline -- that would silently
      *       overwrite a real customisation on the next jar change.</li>
-     *   <li>No recorded hash and the disk bytes differ from the jar's -- unknown provenance,
-     *       assume customisation: never record, never overwrite; the per-key placeholder-arity
-     *       override still applies.</li>
+     *   <li>No recorded hash and the disk bytes differ from the jar's -- unknown provenance: the
+     *       file is replaced by the jar's copy and recorded, the old file kept as a backup and named
+     *       in the log (#459, maintainer 2026-09-29, question 3 option 2; see {@link
+     *       #replaceUnrecordedLanguageFile}). If the replacement fails the file is kept and the
+     *       per-key placeholder-arity override applies, as before.</li>
      * </ol>
      * A jar entry absent for this exact {@code resourcePath} (D-05's stated exception) short-
      * circuits before any of the four branches: the disk file is left alone and nothing is
      * recorded, since there is nothing to compare against.
      * <p>
-     * Every branch above that concludes "customisation" derives that conclusion from an ACTUAL
-     * disk-bytes-vs-jar-bytes comparison, never from the record alone -- branches 3 and 4 already
-     * did (their own classification IS a content comparison); branch 2 was corrected to do the
-     * same (see its own code comment). The record is provenance BOOKKEEPING, not the source of
+     * Every branch above derives its conclusion from an ACTUAL disk-bytes-vs-jar-bytes comparison,
+     * never from the record alone -- branches 3 and 4 already did (their own classification IS a
+     * content comparison); branch 2 was corrected to do the same (see its own code comment). Since
+     * #459, branch 4 no longer concludes "customisation" at all: an unrecorded differing file is
+     * replaced, with a backup, by the committing pass. The record is provenance BOOKKEEPING, not the source of
      * truth for whether a file has been customised; it can go stale (most deterministically, since
      * the previous round, when the sidecar itself is symlinked or read-only and its own write is
      * refused) without that staleness ever being able to cause a PERMANENT misclassification.
@@ -603,8 +631,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         // already derived their conclusion from an actual diskHash-vs-jarHash comparison before
         // this finding was reported -- this `if` IS that comparison -- so neither needed the
         // branch-2-style fix. Branch 3 concludes "not customised" (record now, proceed) only
-        // because diskHash.equals(jarHash) was just confirmed true; branch 4 concludes
-        // "customised" only because that same comparison was false. A record() failure inside
+        // because diskHash.equals(jarHash) was just confirmed true; branch 4 replaces the file
+        // (#459) only because that same comparison was false. A record() failure inside
         // branch 3 (e.g. a symlinked sidecar) cannot cause a permanent misclassification either:
         // recorded stays Optional.empty() (nothing was ever persisted), so EVERY later boot
         // re-enters this same "no recorded hash" path and re-derives fresh from content again --
@@ -617,8 +645,139 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             }
             return readLanguageFile(file, extension);
         }
-        // Branch 4: unknown provenance and the bytes differ -> assume customisation, never record.
+        // Branch 4: unknown provenance and the bytes differ. Until #459 this assumed customisation
+        // and never touched the file, so every file extracted before provenance tracking existed
+        // kept its old wording forever. The maintainer decided on 2026-09-29 (question 3, option 2)
+        // to replace it by the jar's copy, keeping the old file as a backup and saying so in the
+        // log -- an operator-edited file included, accepted in writing.
+        if (languageDryRun) {
+            // #460: construction only computes the decision; the committing pass replaces the file.
+            return new Language(readFlatDictionary(jarBytes, extension));
+        }
+        return replaceUnrecordedLanguageFile(file, jarBytes, resourceFolder, resourcePath, extension);
+    }
+
+    /**
+     * Branch 4 of {@link #resolveLanguageWithProvenance}, committing pass only (#459, maintainer
+     * 2026-09-29, question 3 option 2): a language file with no provenance record whose bytes differ
+     * from the jar's copy is replaced by the jar's copy and recorded; the previous file is kept as a
+     * backup beside it and one catalogue line names both.
+     * <p>
+     * Steps, each undone if a later one fails, so a failure at any step leaves the original file in
+     * place, byte-identical, with nothing recorded and no backup left behind:
+     * <ol>
+     *   <li>copy the file to a backup name that does not exist yet ({@link #copyToFreshBackup}).
+     *       A copy rather than a rename, so the language file is never absent: a crash here leaves
+     *       the original in place and, at worst, one extra backup;</li>
+     *   <li>write the jar's bytes to a temporary file in the same folder and move it over the
+     *       original atomically ({@link #writeBytes}, the refresh path branch 1 uses; it refuses a
+     *       read-only or symbolic-link file, which an operator pinned). On failure the backup this
+     *       call created is deleted -- it is a copy, so nothing is lost;</li>
+     *   <li>record the new hash and read the record back. On failure the backup is moved back over
+     *       the file, restoring the original bytes;</li>
+     *   <li>log one line naming the file and its backup.</li>
+     * </ol>
+     * The language returned is the jar's dictionary after a replacement, and the kept file's
+     * dictionary with the placeholder-arity guard (the pre-#459 behaviour) after a failure.
+     */
+    private Language replaceUnrecordedLanguageFile(File file, byte[] jarBytes, File resourceFolder,
+                                                   String resourcePath, String extension) {
+        File backup = copyToFreshBackup(file);
+        if (backup != null) {
+            if (!writeBytes(file, jarBytes)) {
+                deleteOwnBackup(backup);
+            } else if (!recordReplacedFile(file, resourceFolder, resourcePath)) {
+                restoreFromBackup(backup, file);
+            } else {
+                languageLog().warn(String.format(UltiTools.getInstance().i18n(LANGUAGE_REPLACED_LOG_KEY),
+                        file.getPath(), getPluginName(), backup.getPath()));
+            }
+        }
         return applyPlaceholderArityOverride(file, jarBytes, extension, resourcePath);
+    }
+
+    /**
+     * Copies {@code file} to the first backup name that does not exist yet -- {@code <name>.bak},
+     * then {@code <name>.1.bak}, {@code <name>.2.bak} -- never overwriting anything: a name is
+     * skipped when any file or link exists there, and the copy itself refuses an existing target,
+     * so a name taken in between is skipped too.
+     *
+     * @return the backup created, or {@code null} if none could be (the reason is logged)
+     */
+    private File copyToFreshBackup(File file) {
+        for (int index = 0; index < MAX_BACKUP_NAMES; index++) {
+            String name = index == 0 ? file.getName() + BACKUP_SUFFIX
+                    : file.getName() + "." + index + BACKUP_SUFFIX;
+            File candidate = new File(file.getParentFile(), name);
+            if (Files.exists(candidate.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                continue;
+            }
+            try {
+                Files.copy(file.toPath(), candidate.toPath(), StandardCopyOption.COPY_ATTRIBUTES);
+                return candidate;
+            } catch (FileAlreadyExistsException takenMeanwhile) {
+                // Created by someone else between the check and the copy: try the next name.
+                continue;
+            } catch (IOException e) {
+                languageLog().error(e, "Could not back up language file '" + file.getPath() + "' of module '"
+                        + getPluginName() + "'; leaving it unchanged instead of replacing it without a backup.");
+                return null;
+            }
+        }
+        languageLog().error("No free backup name for language file '" + file.getPath() + "' of module '"
+                + getPluginName() + "' after " + MAX_BACKUP_NAMES + " tries; leaving it unchanged.");
+        return null;
+    }
+
+    /**
+     * Records {@code file}'s current hash and reads the record back.
+     *
+     * @return whether the record now holds exactly that hash
+     */
+    private boolean recordReplacedFile(File file, File resourceFolder, String resourcePath) {
+        try {
+            String hash = ResourceHashSidecar.sha256(file);
+            ResourceHashSidecar.record(resourceFolder, resourcePath, hash);
+            return ResourceHashSidecar.readRecordedHash(resourceFolder, resourcePath).filter(hash::equals).isPresent();
+        } catch (UncheckedIOException e) {
+            languageLog().error(e, "Could not hash replaced language file '" + file.getPath() + "' of module '"
+                    + getPluginName() + "'.");
+            return false;
+        }
+    }
+
+    /**
+     * Deletes the backup {@link #copyToFreshBackup} created in this same replacement attempt, after
+     * the replacement itself failed. It is a copy of a file that is still in place, so nothing is
+     * lost, and leaving it would add one more backup on every start that fails the same way.
+     */
+    private void deleteOwnBackup(File backup) {
+        try {
+            Files.deleteIfExists(backup.toPath());
+        } catch (IOException e) {
+            languageLog().error(e, "Could not remove the unused backup '" + backup.getPath() + "' of module '"
+                    + getPluginName() + "'; it is a copy of the unchanged language file and can be deleted.");
+        }
+    }
+
+    /**
+     * Moves the backup this attempt created back over {@code file}, restoring the original bytes,
+     * after the provenance record could not be written. Atomic where the filesystem supports it.
+     */
+    private void restoreFromBackup(File backup, File file) {
+        languageLog().error("Could not record provenance for replaced language file '" + file.getPath()
+                + "' of module '" + getPluginName() + "'; restoring the previous file.");
+        try {
+            try {
+                Files.move(backup.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING,
+                        StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(backup.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (IOException e) {
+            languageLog().error(e, "Could not restore language file '" + file.getPath() + "' of module '"
+                    + getPluginName() + "' from '" + backup.getPath() + "'; the previous file is still there.");
+        }
     }
 
     /**
