@@ -32,7 +32,7 @@ class ModuleFileCatalogueTest {
     private static Map<String, String> catalogue(String language) throws IOException {
         // The language is one of this test's own constants ("en", "zh"); the path names a file in
         // this repository and nothing is derived from input.
-        // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
+        // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
         try (Reader reader = Files.newBufferedReader(Paths.get("src/main/resources/lang/" + language + ".json"),
                 StandardCharsets.UTF_8)) {
             return new Gson().fromJson(reader, new TypeToken<Map<String, String>>() { }.getType());

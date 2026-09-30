@@ -1102,7 +1102,7 @@ public final class ModuleFileTransactions {
     private File backupOf(Record record) throws RecordRefused {
         // The folder is this transaction's working folder plus a constant; the record's name goes
         // through confined(), which refuses anything but a plain JAR name directly inside it.
-        // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
+        // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
         return confined(new File(workFolder(record), BACKUP_FOLDER), record.oldName);
     }
 
@@ -1243,13 +1243,13 @@ public final class ModuleFileTransactions {
     private File recordFileOf(Record record) {
         // idOf() is a lower-cased type plus 16 hex digits of a SHA-256: no separator or ".." can
         // reach the name, whatever the record contains.
-        // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
+        // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
         return new File(transactionsFolder, idOf(record) + RECORD_SUFFIX);
     }
 
     private File workFolder(Record record) {
         // Same name as recordFileOf() without the suffix: a hash, never text from the record.
-        // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
+        // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
         return new File(transactionsFolder, idOf(record));
     }
 
@@ -1287,7 +1287,7 @@ public final class ModuleFileTransactions {
         // This is the confinement itself: the name was refused above unless it is a plain JAR file
         // name, and the canonical check below refuses one that resolves anywhere but directly in
         // the folder (a link included).
-        // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
+        // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
         File file = new File(folder, name);
         if (!isDirectChild(folder, file)) {
             throw new RecordRefused(file.getAbsolutePath() + " resolves outside " + folder.getAbsolutePath());

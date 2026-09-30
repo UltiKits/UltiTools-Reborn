@@ -69,7 +69,7 @@ class ModuleUpdateStagingTest {
         Map<String, String> files = new TreeMap<>();
         for (String path : treeOf(serverRoot)) {
             // The path comes from listing this test's own temporary folder; nothing is external input.
-            // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
+            // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
             files.put(path, new String(Files.readAllBytes(new File(serverRoot, path).toPath()),
                     StandardCharsets.ISO_8859_1));
         }
