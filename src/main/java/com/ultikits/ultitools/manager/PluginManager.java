@@ -2682,25 +2682,35 @@ public class PluginManager {
         // holds this data folder), nothing below has run yet -- no entity ownership recorded, no
         // DataScope attached to the adapter. A refused registerExternal() leaves no partial state.
         registerExternalScope(adapter.getDataFolder(), scope);
-        registerEntityOwnership(scope);
-        adapter.setDataScope(scope);
-        wireAop(context, scope);
-        context.refresh();
-        adapter.setContext(context);
+        try {
+            registerEntityOwnership(scope);
+            adapter.setDataScope(scope);
+            wireAop(context, scope);
+            context.refresh();
+            adapter.setContext(context);
 
-        // WR-01 (05-REVIEW.md): the External Plugin API's own registration path never reached
-        // validateCommandExecutorContracts -- register(UltiToolsPlugin)/initializePlugin already
-        // enforce it (assemblePluginContainer's own last line), but registerExternal is a
-        // separate, parallel container-assembly path that built its own SimpleContainer and
-        // skipped straight to task/listener/command registration. Placed here -- immediately
-        // after refresh(), before ANY Bukkit-facing side effect (task scheduling, @PlayerCache
-        // registration, EventBus wiring, command/listener registration) -- mirroring the internal
-        // path's placement as the last step of container assembly, so a refusal leaves no partial
-        // registration on either path (fail-closed, module-granularity isolation, D-01/D-04).
-        validateCommandExecutorContracts(context);
-        // #531: an external plugin has no module config registry, so a config binding cannot
-        // resolve; refuse it here, before any side effect, rather than mid-scheduling.
-        refuseConfigBindingsOutsideModules(context);
+            // WR-01 (05-REVIEW.md): the External Plugin API's own registration path never reached
+            // validateCommandExecutorContracts -- register(UltiToolsPlugin)/initializePlugin already
+            // enforce it (assemblePluginContainer's own last line), but registerExternal is a
+            // separate, parallel container-assembly path that built its own SimpleContainer and
+            // skipped straight to task/listener/command registration. Placed here -- immediately
+            // after refresh(), before ANY Bukkit-facing side effect (task scheduling, @PlayerCache
+            // registration, EventBus wiring, command/listener registration) -- mirroring the internal
+            // path's placement as the last step of container assembly, so a refusal leaves no partial
+            // registration on either path (fail-closed, module-granularity isolation, D-01/D-04).
+            validateCommandExecutorContracts(context);
+            // #531: an external plugin has no module config registry, so a config binding cannot
+            // resolve; refuse it here, before any side effect, rather than mid-scheduling.
+            refuseConfigBindingsOutsideModules(context);
+        } catch (RuntimeException | Error refused) {
+            // #537: a refusal (or a failed refresh()) after the scope was registered used to leave
+            // the scope, the entity ownership, the adapter's data scope and its context behind, so
+            // a corrected connection of the same plugin in the same process met the stale scope.
+            // Nothing Bukkit-facing has been registered yet at this point, so undoing these four
+            // is the whole unwinding unregisterExternal would do.
+            unwindRefusedExternal(adapter, context, scope);
+            throw refused;
+        }
 
         String pluginName = adapter.getPluginName();
 
@@ -2753,6 +2763,33 @@ public class PluginManager {
     private static <T> void registerOwnType(SimpleContainer context, T instance) {
         Class<T> ownType = (Class<T>) instance.getClass();
         context.registerType(ownType, instance);
+    }
+
+    /**
+     * Undoes what {@link #registerExternal(ExternalPluginAdapter, Class[])} registered before a
+     * refusal after the folder scope was recorded (#537): closes the context (if {@code refresh()}
+     * got as far as building one), clears the adapter's context and data scope, removes the
+     * entity-ownership records this scope's plugin holds, and removes the folder scope -- only if it
+     * is still this attempt's own scope instance, so an existing registration this attempt did not
+     * create is left alone. Each step is isolated, so one failing does not skip the others.
+     *
+     * @param adapter the refused adapter
+     * @param context the container this attempt built
+     * @param scope   the scope this attempt minted and registered
+     */
+    private void unwindRefusedExternal(ExternalPluginAdapter adapter, SimpleContainer context, DataScope scope) {
+        try {
+            context.close();
+        } catch (RuntimeException closeFailure) {
+            Bukkit.getLogger().log(Level.WARNING, closeFailure, () -> "[UltiTools-API] Could not close the container of "
+                    + "refused external plugin " + adapter.getPluginName());
+        }
+        adapter.setContext(null);
+        adapter.setDataScope(null);
+        for (Class<?> entity : scope.getOwnedEntities()) {
+            entityOwnership.remove(entity, scope.getPluginName());
+        }
+        externalScopesByFolder.remove(canonicalPath(adapter.getDataFolder()), scope);
     }
 
     /**
