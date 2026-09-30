@@ -20,14 +20,6 @@ import java.util.Set;
 public class DefaultConfigParser extends ConfigParser<Object> {
 
     /**
-     * Path separator of the section a {@link Map} is serialized into (#553). A map key is data, not a
-     * path, so the section must not split it: with the default {@code '.'} a key {@code my.rule} was
-     * written as {@code my: {rule: ...}} and read back as {@code my}. NUL cannot appear in a YAML key
-     * an operator writes, so no real key is ever split by it.
-     */
-    private static final char MAP_KEY_SEPARATOR = '\u0000';
-
-    /**
      * Turns a raw YAML value into plain Java values: a section becomes a {@link LinkedHashMap}
      * (nested sections recursively), a sequence a {@link List}, and a scalar is returned as it is.
      * <p>
@@ -80,9 +72,6 @@ public class DefaultConfigParser extends ConfigParser<Object> {
      * private {@code java.util} field (e.g. {@code LinkedHashMap#serialVersionUID}), because
      * {@code java.base} does not open {@code java.util} to an unnamed module.
      * <p>
-     * A map's keys are written as they are, never split into a path (#553): {@code my.rule} stays one
-     * key {@code my.rule}, where the default path separator would have written {@code my: {rule: ...}}.
-     * <p>
      * Everything else falls back to the pre-existing reflective walk of the object's own
      * fields, skipping {@code static}, {@code transient}, and synthetic fields: {@code
      * static} fields (like the JDK's own {@code serialVersionUID}) are never per-instance
@@ -96,13 +85,12 @@ public class DefaultConfigParser extends ConfigParser<Object> {
     @Override
     public MemorySection serializeToMemorySection(Object object) {
         if (object instanceof Map) {
-            MemoryConfiguration mapSection = new MemoryConfiguration();
-            mapSection.options().pathSeparator(MAP_KEY_SEPARATOR);
+            MemorySection mapSection = new MemoryConfiguration();
             for (Map.Entry<?, ?> entry : ((Map<?, ?>) object).entrySet()) {
                 Object key = entry.getKey();
                 // An enum key by its name, the form the binder reads back (Enum#toString may differ).
                 String name = key instanceof Enum ? ((Enum<?>) key).name() : String.valueOf(key);
-                mapSection.set(checkWritableKey(name), fileForm(entry.getValue()));
+                mapSection.set(name, fileForm(entry.getValue()));
             }
             return mapSection;
         }
@@ -124,25 +112,6 @@ public class DefaultConfigParser extends ConfigParser<Object> {
             memorySection.set(field.getName(), fileForm(fieldValue));
         }
         return memorySection;
-    }
-
-    /**
-     * Refuses a map key the configuration loader cannot read back (#553). A key is written whole, but
-     * the loader still reads a {@code '.'} in a key as a path separator, so a key with an empty segment
-     * - empty, or starting or ending with a dot, or holding two dots in a row - would make the whole
-     * file unreadable on the next start. Refusing it here keeps the file as it was, as the save did
-     * before 6.3.0 for such a key.
-     *
-     * @param key the map key
-     * @return {@code key}
-     * @throws IllegalArgumentException naming the key, if it has an empty path segment
-     */
-    static String checkWritableKey(String key) {
-        if (key.isEmpty() || key.startsWith(".") || key.endsWith(".") || key.contains("..")) {
-            throw new IllegalArgumentException("Cannot write map key '" + key + "': the configuration loader"
-                    + " reads a '.' in a key as a path separator, and this key has an empty segment");
-        }
-        return key;
     }
 
     /**

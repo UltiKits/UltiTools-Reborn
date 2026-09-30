@@ -119,10 +119,10 @@ public abstract class AbstractConfigEntity {
     private static final Logger LOGGER = Logger.getLogger(AbstractConfigEntity.class.getName());
 
     /**
-     * Path separator of the key-preserving view a {@code Map} field is read through (#553). The
-     * configuration a module sees keeps {@code '.'}; only the framework's own read of a map entry's
-     * keys uses this, so a key {@code my.rule} is read as one key instead of {@code my} -> {@code rule}.
-     * NUL cannot appear in a YAML key an operator writes.
+     * Path separator of the view the framework reads a file through only to find map keys that
+     * contain {@code '.'} (#553), so that it can tell the operator to rename them. The configuration
+     * a module sees, and every value the framework binds, keep {@code '.'} as in 6.2. NUL cannot
+     * appear in a YAML key an operator writes.
      */
     private static final char MAP_KEY_SEPARATOR = '\u0000';
 
@@ -228,7 +228,7 @@ public abstract class AbstractConfigEntity {
      */
     public void save() throws IOException {
         synchronized (this) {
-            applyFieldsTo(config);
+            applyFieldsTo(config, true);
             config.save(new File(ultiToolsPlugin.getConfigFolder() + File.separator + configFilePath));
             // #510: an explicit save is a caller's deliberate act and always writes, so the file now
             // holds what the framework just wrote - whatever state it was in before.
@@ -244,9 +244,11 @@ public abstract class AbstractConfigEntity {
      * exactly what {@code save()} would write (#510).
      *
      * @param target the configuration to write the serialized field values into
+     * @param write  whether this is a real write, whose refused dotted map keys are reported (#553);
+     *               the shutdown comparison and the snapshot probe refuse the same keys silently
      */
     @SuppressWarnings("unchecked")
-    private void applyFieldsTo(YamlConfiguration target) {
+    private void applyFieldsTo(YamlConfiguration target, boolean write) {
         for (Field field : ReflectionUtil.getFields(this.getClass())) {
             if (!field.isAnnotationPresent(ConfigEntry.class)) {
                 continue;
@@ -261,7 +263,7 @@ public abstract class AbstractConfigEntity {
             if (fieldValue == null) {
                 continue;
             }
-            setKeepingKeys(target, path, serializeForFile(annotation, fieldValue));
+            target.set(path, serializeForFile(annotation, withoutDottedKeys(annotation, path, fieldValue, write)));
         }
         // #542: every framework write carries the one-token comments in the server's language, and
         // the shutdown comparison renders the same text.
@@ -305,7 +307,7 @@ public abstract class AbstractConfigEntity {
      * Renders the exact text {@link #save()} would write right now, without writing it and without
      * touching the live {@link #config} (which {@link #toJsonObject()} still reports to the panel).
      * The live configuration is copied through its own YAML text - comments included - and the
-     * fields are applied to the copy through {@link #applyFieldsTo(YamlConfiguration)}, the same
+     * fields are applied to the copy through {@link #applyFieldsTo(YamlConfiguration, boolean)}, the same
      * path {@code save()} uses.
      *
      * @return the rendered text, or {@code null} if the live configuration's own text cannot be
@@ -319,7 +321,7 @@ public abstract class AbstractConfigEntity {
         } catch (InvalidConfigurationException e) {
             return null;
         }
-        applyFieldsTo(copy);
+        applyFieldsTo(copy, false);
         return copy.saveToString();
     }
 
@@ -329,7 +331,7 @@ public abstract class AbstractConfigEntity {
      * construction counts in this class's own javadoc) loads every present {@code @ConfigEntry} key
      * through its parser exactly as {@link #init(UltiToolsPlugin)} does
      * (absent keys keep that instance's declared defaults), and the instance's fields are applied back
-     * onto the parsed text through {@link #applyFieldsTo(YamlConfiguration)}. Two passes make the
+     * onto the parsed text through {@link #applyFieldsTo(YamlConfiguration, boolean)}. Two passes make the
      * result stable, because a default filled in for an absent key by the first pass is re-read
      * through the parser by the second.
      * <p>
@@ -416,14 +418,13 @@ public abstract class AbstractConfigEntity {
         } catch (InvalidConfigurationException e) {
             return null;
         }
-        YamlConfiguration keyView = hasMapField(configFields) ? parseKeyPreserving(text) : null;
         for (Field field : configFields) {
             ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
             String path = annotation.path();
             if (path.isEmpty()) {
                 path = field.getName();
             }
-            Object configValue = fileValue(parsed, keyView, field, path);
+            Object configValue = parsed.get(path);
             if (configValue != null) {
                 // Silent: init() already warned about any value it could not bind. The probe is a fresh
                 // instance, so a value it cannot bind simply leaves the declared default (#526).
@@ -433,7 +434,7 @@ public abstract class AbstractConfigEntity {
                 }
             }
         }
-        probe.applyFieldsTo(parsed);
+        probe.applyFieldsTo(parsed, false);
         // #542: a one-key entry's comment belongs to the framework and is rewritten on every write, so
         // both sides of the comparison carry the resolved text - a comment-only difference on disk
         // (an operator's edit, a reload before the rewrite) is never a change the shutdown save writes.
@@ -663,7 +664,7 @@ public abstract class AbstractConfigEntity {
             lastLoadUnparseable = false;
             String fileText = null;
             try {
-                // Read once: the key-preserving view of a map entry (#553) is parsed from the same text.
+                // Read once: the check for dotted map keys (#553) looks at the same text.
                 fileText = readConfigText(file);
                 config.loadFromString(fileText);
             } catch (FileNotFoundException ignored) {
@@ -688,12 +689,12 @@ public abstract class AbstractConfigEntity {
                     if (path.isEmpty()) {
                         path = field.getName();
                     }
-                    Object configValue = fileValue(config, keyView, field, path);
+                    Object configValue = config.get(path);
                     if (configValue != null) {
                         declaredDefaults = assignFileValue(field, annotation, path, configValue, declaredDefaults);
                     } else {
                         upToDate = false;
-                        setKeepingKeys(config, path, fileFormOfDefault(annotation, ReflectionUtil.getFieldValue(this, field)));
+                        config.set(path, fileFormOfDefault(annotation, path, ReflectionUtil.getFieldValue(this, field)));
                         // D-07/D-09: the key never existed in the operator's file, so writing its
                         // @ConfigEntry comment alongside the value discloses nothing of theirs - this
                         // is D-01's first sanctioned exception, widened from "silently add a value" to
@@ -707,6 +708,7 @@ public abstract class AbstractConfigEntity {
                     }
                 }
             }
+            warnDottedMapKeys(keyView);
             // #542 (maintainer 2026-09-29, "rewrite in the current language on every save"): D-01's
             // second sanctioned exception. A one-token comment on a key already in the file is
             // rewritten when it differs from the text resolved in the server's current language - the
@@ -836,19 +838,22 @@ public abstract class AbstractConfigEntity {
     }
 
     /**
-     * The form in which a missing key's declared default is written into the file: a collection, a
-     * map or an enum constant goes through the entry's parser, the same {@code ConfigParser#serialize}
-     * form {@link #save()} writes - a {@code Set} as a YAML sequence and an enum by its name (#523), a
-     * map with its keys kept whole (#553) - which is what {@link ConfigValueBinder} reads back;
-     * everything else is written unchanged, as before.
+     * The form in which a missing key's declared default is written into the file: a collection or
+     * an enum constant goes through the entry's parser, the same form {@link #save()} writes - a
+     * {@code Set} as a YAML sequence and an enum by its name (#523), which is what {@link
+     * ConfigValueBinder} reads back; a map is written as it is, as in 6.2, without any key that
+     * contains a dot (#553, reported); everything else is written unchanged, as before.
      *
      * @param annotation   the entry's {@code @ConfigEntry}
+     * @param path         the entry's path, named in a warning
      * @param defaultValue the field's declared default, possibly {@code null}
      * @return the value to put into the configuration
      */
-    private static Object fileFormOfDefault(ConfigEntry annotation, Object defaultValue) {
-        if (defaultValue instanceof java.util.Collection || defaultValue instanceof Map
-                || defaultValue instanceof Enum) {
+    private Object fileFormOfDefault(ConfigEntry annotation, String path, Object defaultValue) {
+        if (defaultValue instanceof Map) {
+            return withoutDottedKeys(annotation, path, defaultValue, true);
+        }
+        if (defaultValue instanceof java.util.Collection || defaultValue instanceof Enum) {
             return serializeForFile(annotation, defaultValue);
         }
         return defaultValue;
@@ -876,67 +881,103 @@ public abstract class AbstractConfigEntity {
     }
 
     /**
-     * Reads one entry's value from {@code dotted}, the configuration as a module sees it - except for
-     * a {@code Map} field, whose value is read from {@code keyView} so that a map key containing a dot
-     * stays one key (#553). When the key view holds a map with such a key, that key-preserving
-     * section also replaces the entry in {@code dotted}, so a later write of {@code dotted} (a missing
-     * key, a comment rewrite, a panel write) writes the key back as it was instead of as a nested
-     * path; a map without a dotted key leaves {@code dotted} exactly as loaded, so every path in it
-     * resolves as before. For a map that does hold one, the paths into its other entries still resolve;
-     * only the split path of the dotted key itself ({@code rules.my.rule}, which named the renamed
-     * {@code my} -> {@code rule} form) no longer does.
+     * #553, maintainer decision of 2026-09-30 ("refuse, and say so plainly"): the configuration file
+     * uses {@code '.'} as its path separator, so a map key containing a dot cannot be stored as one
+     * key - Bukkit's loader reads {@code my.rule} as {@code my} -> {@code rule}, and quoting the key
+     * does not help. Every framework write therefore leaves such a key out of a map it writes - at the
+     * map's own level and in maps nested as its values, which become sections too; keys inside a list
+     * element are plain data and are kept - and, when {@code report} is set, logs one WARNING per key
+     * naming the file, the entry and the key and asking for a rename. The in-memory value is not
+     * changed. Applies to the framework's own writes of a map: with the built-in parsers
+     * ({@code DefaultConfigParser}, {@code StringHashMapParser}), and to a panel write whatever the
+     * parser; a module's own parser writes as it always did.
      *
-     * @param dotted  the configuration as loaded, with {@code '.'} as its path separator
-     * @param keyView the same text read with a separator no key contains, or {@code null}
-     * @param field   the {@code @ConfigEntry} field
-     * @param path    its path
-     * @return the value, or {@code null} if the file has no such entry
+     * @param annotation the entry's {@code @ConfigEntry}, or {@code null} for a panel write
+     * @param path       the entry's path
+     * @param value      the value about to be written
+     * @param report     whether a refused key is logged
+     * @return {@code value} unchanged, or a copy of the map without its dotted keys
      */
-    private static Object fileValue(YamlConfiguration dotted, YamlConfiguration keyView, Field field, String path) {
-        if (keyView != null && Map.class.isAssignableFrom(field.getType())) {
-            Object whole = keyView.get(path.replace('.', MAP_KEY_SEPARATOR));
-            if (whole instanceof ConfigurationSection && hasDottedKey((ConfigurationSection) whole)) {
-                setKeepingKeys(dotted, path, whole);
-            }
+    private Object withoutDottedKeys(ConfigEntry annotation, String path, Object value, boolean report) {
+        if (!(value instanceof Map)) {
+            return value;
         }
-        return dotted.get(path);
+        if (annotation != null && annotation.parser() != DefaultConfigParser.class
+                && annotation.parser() != com.ultikits.ultitools.interfaces.impl.pasers.StringHashMapParser.class) {
+            return value;
+        }
+        return mapWithoutDottedKeys((Map<?, ?>) value, path, report);
+    }
+
+    private Map<Object, Object> mapWithoutDottedKeys(Map<?, ?> map, String path, boolean report) {
+        Map<Object, Object> kept = new java.util.LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+            String key = String.valueOf(entry.getKey());
+            if (key.indexOf('.') >= 0) {
+                if (report) {
+                    warnBinding(String.format("Config file '%s': map key '%s' under key '%s' contains '.', which the"
+                            + " configuration file reads as a path separator, so it cannot be stored as one key; the"
+                            + " entry was not written - rename the key (for example with '-' or '_')",
+                            configFilePath, key, path));
+                }
+                continue;
+            }
+            Object child = entry.getValue();
+            kept.put(entry.getKey(), child instanceof Map
+                    ? mapWithoutDottedKeys((Map<?, ?>) child, path + "." + key, report) : child);
+        }
+        return kept;
     }
 
     /**
-     * Puts {@code value} at {@code path} in {@code target}. A section - which an entry's parser builds
-     * in a configuration of its own, and which the key-preserving view reads with a separator of its
-     * own - is copied into {@code target} as a {@link LiteralKeySection}: an ordinary child of {@code
-     * target}, so every path, {@code getKeys(true)} and {@code getCurrentPath()} of the configuration a
-     * module reads stays well formed, while a map key containing a dot stays one key (#553). The
-     * entry's own comments in {@code target} are kept. Anything else is set as before.
+     * Warns, once per load, about every map key in the file that contains a dot (#553): the loader
+     * has read it as a nested path ({@code my.rule} as {@code my} -> {@code rule}), exactly as in 6.2,
+     * and the operator is asked to rename it. Only the entries of {@code Map} fields are checked.
      *
-     * @param target the configuration to write into
-     * @param path   the entry's path in {@code target}
-     * @param value  the value, possibly a section from another configuration
+     * @param keyView the file read with a separator no key contains, or {@code null}
      */
-    private static void setKeepingKeys(YamlConfiguration target, String path, Object value) {
-        if (!(value instanceof ConfigurationSection)) {
-            target.set(path, value);
+    private void warnDottedMapKeys(YamlConfiguration keyView) {
+        if (keyView == null) {
             return;
         }
-        int lastDot = path.lastIndexOf('.');
-        ConfigurationSection parent = target;
-        if (lastDot >= 0) {
-            String parentPath = path.substring(0, lastDot);
-            parent = target.isConfigurationSection(parentPath)
-                    ? target.getConfigurationSection(parentPath) : target.createSection(parentPath);
+        for (Field field : configEntryFields()) {
+            if (!Map.class.isAssignableFrom(field.getType())) {
+                continue;
+            }
+            ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
+            String path = annotation.path().isEmpty() ? field.getName() : annotation.path();
+            Object section;
+            try {
+                section = keyView.get(path.replace('.', MAP_KEY_SEPARATOR));
+            } catch (RuntimeException e) {
+                continue;
+            }
+            if (section instanceof ConfigurationSection) {
+                warnDottedKeysIn((ConfigurationSection) section, path);
+            }
         }
-        String name = path.substring(lastDot + 1);
-        LiteralKeySection copy = new LiteralKeySection(parent, name);
-        copy.copyFrom((ConfigurationSection) value);
-        parent.set(name, copy);
+    }
+
+    private void warnDottedKeysIn(ConfigurationSection section, String path) {
+        for (String key : section.getKeys(false)) {
+            if (key.indexOf('.') >= 0) {
+                warnBinding(String.format("Config file '%s': map key '%s' under key '%s' contains '.', which the"
+                        + " configuration file reads as a path separator, so it was loaded as '%s'; rename the key"
+                        + " (for example with '-' or '_')", configFilePath, key, path, key.replace(".", "' -> '")));
+                continue;
+            }
+            Object child = section.get(key);
+            if (child instanceof ConfigurationSection) {
+                warnDottedKeysIn((ConfigurationSection) child, path + "." + key);
+            }
+        }
     }
 
     /**
      * Reads a configuration file's text exactly as {@code YamlConfiguration#load(File)} does - UTF-8,
      * line by line, each line ended by {@code \n} - so that loading it with {@code loadFromString}
-     * gives the same configuration, and the key-preserving view of a map entry (#553) comes from the
-     * same read instead of a second one.
+     * gives the same configuration, and the check for dotted map keys (#553) looks at the same text
+     * instead of a second read.
      *
      * @param file the configuration file
      * @return its text
@@ -955,20 +996,6 @@ public abstract class AbstractConfigEntity {
         return text.toString();
     }
 
-    private static boolean hasDottedKey(ConfigurationSection section) {
-        for (String key : section.getKeys(false)) {
-            if (key.indexOf('.') >= 0) {
-                return true;
-            }
-            Object child = section.get(key);
-            if (child instanceof ConfigurationSection
-                    && hasDottedKey((ConfigurationSection) child)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private static boolean hasMapField(List<Field> configFields) {
         for (Field field : configFields) {
             if (Map.class.isAssignableFrom(field.getType())) {
@@ -979,9 +1006,8 @@ public abstract class AbstractConfigEntity {
     }
 
     /**
-     * The key-preserving view (see {@link #fileValue}) of a text this entity read, or {@code null}
-     * when this class has no {@code Map} field or there is no text - in which case map entries are
-     * read from the ordinary configuration, as before.
+     * The view {@link #warnDottedMapKeys} reads a text this entity read through, or {@code null} when
+     * this class has no {@code Map} field or there is no text.
      *
      * @param text the file's text as read, or {@code null}
      * @return the view, or {@code null}
@@ -1007,7 +1033,9 @@ public abstract class AbstractConfigEntity {
         view.options().pathSeparator(MAP_KEY_SEPARATOR);
         try {
             view.loadFromString(text);
-        } catch (InvalidConfigurationException e) {
+        } catch (InvalidConfigurationException | RuntimeException e) {
+            // Only used to warn about dotted keys: a text this view cannot read (a key ending in NUL)
+            // simply gets no such warning.
             return null;
         }
         return view;
@@ -1233,7 +1261,7 @@ public abstract class AbstractConfigEntity {
                 // Gson value as it is would be a Java-class-tagged enum or a tagged set, and the next
                 // start would refuse the whole file. Other values are written as before.
                 config.set(path, value instanceof Enum || value instanceof java.util.Collection
-                        ? serializeForFile(annotation, value) : value);
+                        ? serializeForFile(annotation, value) : withoutDottedKeys(null, path, value, true));
             }
             applyTokenComments(config); // #542: a panel write carries the resolved comments too
             config.save(ultiToolsPlugin.getConfigFile(configFilePath));
@@ -1686,12 +1714,13 @@ public abstract class AbstractConfigEntity {
                     if (path.isEmpty()) {
                         path = field.getName();
                     }
-                    Object configValue = fileValue(config, keyView, field, path);
+                    Object configValue = config.get(path);
                     if (configValue != null) {
                         declaredDefaults = assignFileValue(field, annotation, path, configValue, declaredDefaults);
                     }
                 }
             }
+            warnDottedMapKeys(keyView);
             // #510: same snapshot point as init(). A field whose key is absent from the file keeps its
             // in-memory value above, but the snapshot is taken from the file's text, so that value is
             // still seen as unsaved if it differs from what the file implies.
