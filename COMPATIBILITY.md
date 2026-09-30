@@ -435,10 +435,10 @@ This section governs the third kind.
   URL for every entry of the modules folder, so a stray file or a subdirectory there no longer
   fails the uninstall (#504). A loaded module is asked which JAR it came from — its own
   `getProtectionDomain().getCodeSource()`, read before it is unloaded — and that JAR is deleted
-  whatever its metadata says, since an UltiTools module is identified by `@UltiToolsModule` and
-  needs no `plugin.yml` at all. Every other entry of the modules folder is placed in exactly one of
+  whatever its metadata says now (a file may have been replaced since the start, and a module
+  registered from code has no `plugin.yml` the loader read). Every other entry of the modules folder is placed in exactly one of
   four states, each decided by reading the archive — with one exception, an entry the module loader
-  itself would never load, judged by the same `.jar` test `PluginManager#init` applies to this
+  itself would never load, judged by the same `.jar` test the start-up scan applies to this
   folder, which is state B without being opened. The states: its `plugin.yml` declares this module,
   or it is a loaded instance's own code-source JAR (deleted); it opened and its `plugin.yml`
   declares another module, or it is a directory (ignored); nothing about it identifies a module,

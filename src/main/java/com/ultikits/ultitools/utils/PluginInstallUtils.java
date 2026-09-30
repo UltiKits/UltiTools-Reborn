@@ -583,12 +583,11 @@ public class PluginInstallUtils {
     /**
      * The JAR a module class was loaded from, or {@code null} when it was not loaded from one.
      *
-     * <p>A module that is loaded does not have to be identified by metadata at all: UltiTools
-     * modules are recognised by {@code @UltiToolsModule}, and {@code PluginManager} selects a
-     * module class with {@code UltiToolsPlugin.class.isAssignableFrom} and instantiates it through
-     * {@code getDeclaredConstructor().newInstance()} -- no {@code plugin.yml} is consulted. So the
-     * framework asks the instance instead, exactly as {@code UltiToolsPlugin} itself does when it
-     * reads its own embedded resources.
+     * <p>The loaded instance is the authority on which file it came from, whatever that file's
+     * {@code plugin.yml} says now: the file may have been replaced or edited since the start, and a
+     * module registered from code has no {@code plugin.yml} entry the loader read at all. So the
+     * framework asks the instance, exactly as {@code UltiToolsPlugin} itself does when it reads its
+     * own embedded resources.
      *
      * <p>A code source that is a directory is a development checkout rather than an installed JAR
      * and answers nothing about which file to delete. One that cannot be probed is still named:
@@ -685,7 +684,7 @@ public class PluginInstallUtils {
      * @return what it says about itself
      */
     private static ArchiveIdentity readArchive(File file) {
-        // The same `.jar` test PluginManager#init applies to this folder (PluginManager.java:167):
+        // The same `.jar` test the start-up scan applies to this folder (ModuleFileTransactions#moduleJars):
         // an entry it would never load can hold no module, whatever it contains. This is the one
         // decision taken from the file's own name, and it is taken to stay in step with the loader
         // rather than to identify anything -- if that filter ever changes, this must change with it.
@@ -706,15 +705,13 @@ public class PluginInstallUtils {
         try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(file)) {
             java.util.jar.JarEntry entry = jarFile.getJarEntry("plugin.yml");
             if (entry == null) {
-                // Undetermined, not "not this module's": a module needs no plugin.yml -- it is
-                // identified by @UltiToolsModule -- so a JAR without one may be a copy of this
-                // module that loads again after the next restart. The cost of saying so is that a
-                // stray sources JAR gets reported; the cost of not saying so is a module coming
-                // back from a folder the operator was told is clear. Do not "optimise" this into
-                // NOT_THIS_MODULES by reading it as metadata-free-means-unrelated; deciding it any
-                // other way means predicting what a class loader would do with the archive, which
-                // is the approach this work removed. (#516 identifies a copy by its plugin.yml
-                // main: entry, which this archive does not have; it stays reported.)
+                // Reported as undetermined rather than passed over. This dates from before #548,
+                // when a module needed no plugin.yml at all; since #548 the start-up scan refuses a
+                // JAR whose plugin.yml has no main:, so such a JAR cannot load a module by itself.
+                // It is still named, without being called a copy, which is the conservative side:
+                // whether to stop naming it changes what the operator is told, never what is
+                // deleted, and deciding it from the archive's classes is the approach this work
+                // removed. (#516 identifies a copy by its plugin.yml main:, which this lacks.)
                 return new ArchiveIdentity(EntryState.UNDETERMINED, null);
             }
             return readDeclaredName(jarFile, entry, file);
