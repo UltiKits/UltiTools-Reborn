@@ -1,7 +1,9 @@
 package com.ultikits.ultitools.commands;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
@@ -163,13 +165,15 @@ class ModuleUpdateCommandTest {
     }
 
     @Test
-    @DisplayName("an uninstall that goes ahead cancels the module's staged update and says so")
+    @DisplayName("an uninstall that goes ahead says which staged update of the module it cancelled")
     void uninstall_cancelsTheStagedUpdate() throws Exception {
-        utils.when(() -> PluginInstallUtils.uninstallPluginReporting("Demo"))
-                .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.<String>emptyList(),
-                        Arrays.asList("/srv/plugins/UltiTools/plugins/demo-1.0.jar")));
-        utils.when(() -> PluginInstallUtils.cancelStagedUpdates("Demo", Collections.singletonList("demo-1.0.jar")))
-                .thenReturn(Collections.singletonList("1.1"));
+        utils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("Demo"), anyList()))
+                .thenAnswer(invocation -> {
+                    // The uninstall itself cancels, on the identity it resolved, and hands back the versions.
+                    invocation.<List<String>>getArgument(1).add("1.1");
+                    return PluginInstallUtils.UninstallReport.of(true, Collections.<String>emptyList(),
+                            Arrays.asList("/srv/plugins/UltiTools/plugins/demo-1.0.jar"));
+                });
 
         executor.uninstallPlugin(sender, "Demo");
 
@@ -177,17 +181,13 @@ class ModuleUpdateCommandTest {
     }
 
     @Test
-    @DisplayName("an uninstall that is refused cancels nothing")
+    @DisplayName("an uninstall that is refused reports no cancelled update")
     void refusedUninstall_cancelsNothing() throws Exception {
-        utils.when(() -> PluginInstallUtils.uninstallPluginReporting("Demo"))
+        utils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("Demo"), anyList()))
                 .thenThrow(mock(PluginInstallUtils.UninstallRefusedException.class));
-        utils.when(() -> PluginInstallUtils.cancelStagedUpdates(anyString(), org.mockito.ArgumentMatchers.any()))
-                .thenReturn(Collections.singletonList("1.1"));
 
         executor.uninstallPlugin(sender, "Demo");
 
-        utils.verify(() -> PluginInstallUtils.cancelStagedUpdates(anyString(), org.mockito.ArgumentMatchers.any()),
-                org.mockito.Mockito.never());
         assertThat(all()).doesNotContain("已取消");
     }
 }

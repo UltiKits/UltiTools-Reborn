@@ -578,55 +578,56 @@ public final class ModuleFileTransactions {
     }
 
     /**
-     * Marks the downloads running now that an uninstall matches -- by the module's name, or by the
-     * old JAR it removed -- so staging discards them instead of writing their record. Their version
-     * is not known yet, so they are not among the versions a cancellation returns; staging's own
-     * reply says it was cancelled. Called under {@link #LOCK}.
+     * Marks the downloads running now that belong to the uninstalled module -- by its
+     * identify-string, a name it was loaded under, or the JAR it was loaded from -- so staging
+     * discards them instead of writing their record. Their version is not known yet, so they are
+     * not among the versions a cancellation returns; staging's own reply says it was cancelled.
+     * Called under {@link #LOCK}.
      */
-    private static void cancelDownloads(String moduleName, java.util.Collection<String> removedJarNames) {
+    private static void cancelDownloads(RemovedModule removed) {
         for (java.util.Map.Entry<String, String[]> download : STAGING.entrySet()) {
-            boolean byName = moduleName != null && moduleName.equals(download.getValue()[0]);
-            boolean byJar = removedJarNames != null && removedJarNames.contains(download.getValue()[1]);
-            if (byName || byJar) {
+            if (removed.matches(download.getKey(), download.getValue()[0], download.getValue()[1])) {
                 CANCELLED.add(download.getKey());
             }
         }
     }
 
     /**
-     * {@link #cancelStagedUpdates(String, java.util.Collection)} by the runtime name alone.
+     * {@link #cancelStagedUpdates(RemovedModule)} for a module known by one runtime name only.
      *
      * @param moduleName the module's runtime name
      * @return the versions whose updates were cancelled
      */
-    public List<String> cancelStagedUpdates(String moduleName) {
-        return cancelStagedUpdates(moduleName, Collections.<String>emptyList());
+    List<String> cancelStagedUpdates(String moduleName) {
+        return cancelStagedUpdates(new RemovedModule(Collections.<String>emptyList(),
+                Collections.singletonList(moduleName), Collections.<String>emptyList()));
     }
 
     /**
      * Cancels every update transaction of a module being uninstalled: its record and its working
      * folder -- the staged JAR and any kept old JAR -- are deleted, so nothing brings the module
-     * back at the next start. The modules folder is not touched; the uninstall owns that.
+     * back at the next start, and a download of its update still running is discarded. The modules
+     * folder is not touched; the uninstall owns that.
      *
-     * <p>A transaction belongs to the module when it was staged under that runtime name, or when
-     * the JAR it would replace is one the uninstall removed or recorded for removal -- the second
-     * test is what matches an uninstall that named the module some other way. Whatever this
-     * misses, the next start still abandons an update whose old JAR is gone or pending removal.
+     * <p>A transaction belongs to the module when its identify-string, the runtime name it was staged
+     * under, or the JAR it would replace is one the uninstall resolved (see {@link RemovedModule}). The
+     * uninstall resolves those before it touches the modules folder, so the match holds whatever
+     * happened to the files afterwards -- deleted, deferred, not deletable, or a folder that could not
+     * be listed (round-10 review).
      *
-     * @param moduleName       the module's runtime name, as the uninstall was given it
-     * @param removedJarNames  the file names of the JARs the uninstall deleted or recorded
+     * @param removed the uninstalled module, as the uninstall resolved it
      * @return the versions whose updates were cancelled
      */
-    public List<String> cancelStagedUpdates(String moduleName, java.util.Collection<String> removedJarNames) {
+    public List<String> cancelStagedUpdates(RemovedModule removed) {
         synchronized (LOCK) {
-            cancelDownloads(moduleName, removedJarNames);
+            cancelDownloads(removed);
             List<String> cancelled = new ArrayList<>();
             List<File> recordFiles;
             try {
                 recordFiles = recordFiles();
             } catch (IOException e) {
                 // The next start cannot list the folder either, so it applies nothing and reports it.
-                LOGGER.log(Level.WARNING, "No staged update of " + moduleName + " could be cancelled", e);
+                LOGGER.log(Level.WARNING, "No staged update of " + removed + " could be cancelled", e);
                 return cancelled;
             }
             for (File recordFile : recordFiles) {
@@ -641,10 +642,7 @@ public final class ModuleFileTransactions {
                         || !recordFile.getName().equals(recordFileOf(record).getName())) {
                     continue;
                 }
-                boolean byName = moduleName != null && moduleName.equals(record.moduleName);
-                boolean byJar = removedJarNames != null && record.oldName != null
-                        && removedJarNames.contains(record.oldName);
-                if (!byName && !byJar) {
+                if (!removed.matches(record.key, record.moduleName, record.oldName)) {
                     continue;
                 }
                 if (deleteTree(workFolder(record)) && deleteQuietly(recordFile)) {
@@ -1887,6 +1885,66 @@ public final class ModuleFileTransactions {
         long size;
         long lastModified;
         String sha256;
+    }
+
+    /**
+     * A module an uninstall removed, in every form a transaction can name it by: the
+     * identify-strings and runtime names of the instances it unloaded (plus the argument it was
+     * given), and the file names of its JARs -- the ones those instances were loaded from, the ones
+     * the start-up scan recorded as declaring their main class, and the ones it deleted or recorded
+     * for deletion. A cancellation matches on all of them, so it follows the identity the uninstall
+     * resolved rather than the name the operator typed (round-10 review).
+     */
+    public static final class RemovedModule {
+        private final java.util.Set<String> identifyKeys = new java.util.HashSet<>();
+        private final java.util.Set<String> moduleNames = new java.util.LinkedHashSet<>();
+        private final java.util.Set<String> jarNames = new java.util.HashSet<>();
+
+        /**
+         * The uninstalled module.
+         *
+         * @param identifyStrings its identify-strings; a {@code null} or blank one is skipped
+         * @param moduleNames     the names it was loaded under or named by
+         * @param jarNames        the file names of its JARs in the modules folder
+         */
+        public RemovedModule(java.util.Collection<String> identifyStrings, java.util.Collection<String> moduleNames,
+                             java.util.Collection<String> jarNames) {
+            for (String identifyString : identifyStrings) {
+                String key = normalize(identifyString);
+                if (key != null) {
+                    identifyKeys.add(key);
+                }
+            }
+            addNonNull(this.moduleNames, moduleNames);
+            addNonNull(this.jarNames, jarNames);
+        }
+
+        private static void addNonNull(java.util.Set<String> into, java.util.Collection<String> values) {
+            for (String value : values) {
+                if (value != null) {
+                    into.add(value);
+                }
+            }
+        }
+
+        /**
+         * Whether a transaction that names a module this way belongs to this one.
+         *
+         * @param key        the transaction's normalised identify-string
+         * @param moduleName the runtime name it was staged under
+         * @param oldJarName the file name of the JAR it replaces
+         * @return {@code true} when any of them is this module's
+         */
+        boolean matches(String key, String moduleName, String oldJarName) {
+            return key != null && identifyKeys.contains(key)
+                    || moduleName != null && moduleNames.contains(moduleName)
+                    || oldJarName != null && jarNames.contains(oldJarName);
+        }
+
+        @Override
+        public String toString() {
+            return String.join("/", moduleNames);
+        }
     }
 
     /** One line for the start-up log, with its catalogue key and arguments. */

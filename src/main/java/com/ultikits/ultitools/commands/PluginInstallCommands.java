@@ -217,11 +217,13 @@ public class PluginInstallCommands extends BaseCommandExecutor {
     // a handful of modules the scan costs a fraction of a tick (gate 1, IN-12).
     @CmdMapping(format = "uninstall <plugin>")
     public void uninstallPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin) {
-        boolean refused = false;
-        List<String> removedJars = new ArrayList<>();
+        // The uninstall itself cancels any update of the module still waiting for the next start, on
+        // every outcome but a refusal, matched on the identity it resolved (#505, round-10 review);
+        // this collects the versions so the reply can say so.
+        List<String> cancelledUpdates = new ArrayList<>();
         try {
-            PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(plugin);
-            addFileNames(removedJars, report.deletedFiles());
+            PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(plugin,
+                    cancelledUpdates);
             if (report.jarsDeleted()) {
                 // uninstallPlugin returns true only after every JAR identified as the module's is
                 // deleted (#501), so there is nothing left for the operator to remove by hand. The
@@ -241,7 +243,6 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         } catch (PluginInstallUtils.UninstallRefusedException e) {
             // The uninstall refused because its outcome would be undefined - two possible targets,
             // or a JAR another running module shares. It changed nothing, and says which.
-            refused = true;
             sender.sendMessage(ChatColor.RED + e.getMessage());
         } catch (PluginInstallUtils.ModuleUnloadFailedException e) {
             // The module's own unload threw. It has still been removed from the loaded modules and
@@ -256,7 +257,6 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             sendUnreadableEntriesOf(sender, e);
         } catch (PluginInstallUtils.RemovalDeferredException e) {
             // The JARs could not be deleted now and were recorded for the next start (#518).
-            addFileNames(removedJars, e.deferredFiles());
             sendDeferredRemoval(sender, e);
             sendUnreadableEntriesOf(sender, e);
         } catch (FileSystemException e) {
@@ -266,14 +266,9 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("删除失败！文件访问错误！请手动删除！"));
             sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), modulesFolderPath()));
         }
-        if (!refused) {
-            // An uninstall that went ahead, whatever it could delete, also cancels any update of the
-            // module still waiting for the next start -- otherwise that start would install it again
-            // (#505). A refused uninstall changed nothing, so it cancels nothing either.
-            for (String version : PluginInstallUtils.cancelStagedUpdates(plugin, removedJars)) {
-                sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
-                        "已取消模块 %s 已暂存、尚未应用的更新（版本 %s）。"), plugin, version));
-            }
+        for (String version : cancelledUpdates) {
+            sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
+                    "已取消模块 %s 已暂存、尚未应用的更新（版本 %s）。"), plugin, version));
         }
     }
 
@@ -287,13 +282,6 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
                 "以下模块 JAR 暂时无法删除（被占用或不可写：%s），已记录：下次启动会在加载模块之前删除它们，仍无法删除时会在启动日志中报告：%s"),
                 deferred.getReason(), String.join(", ", deferred.deferredFiles())));
-    }
-
-    /** Adds the file name of each absolute path. */
-    private static void addFileNames(List<String> names, List<String> paths) {
-        for (String path : paths) {
-            names.add(new java.io.File(path).getName());
-        }
     }
 
     /** The modules folder, as the uninstall replies name it -- the one the loader reads (#517). */

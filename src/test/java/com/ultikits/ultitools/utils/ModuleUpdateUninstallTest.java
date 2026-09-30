@@ -72,7 +72,8 @@ class ModuleUpdateUninstallTest {
         stage();
 
         List<String> cancelled = new ModuleFileTransactions(dataFolder)
-                .cancelStagedUpdates("UltiTools-Demo", Collections.singletonList(oldJar.getName()));
+                .cancelStagedUpdates(new ModuleFileTransactions.RemovedModule(Collections.<String>emptyList(),
+                        Collections.singletonList("UltiTools-Demo"), Collections.singletonList(oldJar.getName())));
 
         assertThat(cancelled).containsExactly("1.1");
         assertThat(treeOf(transactions)).isEmpty();

@@ -1,7 +1,9 @@
 package com.ultikits.ultitools.commands;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 
@@ -46,8 +48,6 @@ class ModuleRemovalDeferredCommandTest {
         org.mockito.Mockito.doAnswer(invocation -> messages.add(invocation.getArgument(0)))
                 .when(sender).sendMessage(anyString());
         utils = mockStatic(PluginInstallUtils.class);
-        utils.when(() -> PluginInstallUtils.cancelStagedUpdates(anyString(), org.mockito.ArgumentMatchers.any()))
-                .thenReturn(Collections.emptyList());
         executor = new PluginInstallCommands();
     }
 
@@ -63,7 +63,11 @@ class ModuleRemovalDeferredCommandTest {
         PluginInstallUtils.RemovalDeferredException deferred = PluginInstallUtils.RemovalDeferredException.of(
                 Collections.singletonList("/srv/plugins/UltiTools/plugins/demo-1.0.jar"),
                 "FileSystemException: The process cannot access the file because it is being used by another process");
-        utils.when(() -> PluginInstallUtils.uninstallPluginReporting("Demo")).thenThrow(deferred);
+        utils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("Demo"), anyList())).thenAnswer(invocation -> {
+            // The uninstall cancels the module's update on this outcome too, before the failure leaves it.
+            invocation.<List<String>>getArgument(1).add("1.1");
+            throw deferred;
+        });
 
         executor.uninstallPlugin(sender, "Demo");
 
@@ -71,7 +75,7 @@ class ModuleRemovalDeferredCommandTest {
         assertThat(all).contains("以下模块 JAR 暂时无法删除（被占用或不可写：FileSystemException")
                 .contains("已记录：下次启动会在加载模块之前删除它们，仍无法删除时会在启动日志中报告：/srv/plugins/UltiTools/plugins/demo-1.0.jar")
                 .doesNotContain("请手动删除");
-        // The deferred JAR counts as removed: an update of the module waiting on it is cancelled.
-        utils.verify(() -> PluginInstallUtils.cancelStagedUpdates("Demo", Collections.singletonList("demo-1.0.jar")));
+        // A deferred deletion is an uninstall that went ahead: the cancelled update is reported too.
+        assertThat(all).contains("已取消模块 Demo 已暂存、尚未应用的更新（版本 1.1）");
     }
 }

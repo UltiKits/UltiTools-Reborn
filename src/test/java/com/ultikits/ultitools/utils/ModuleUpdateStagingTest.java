@@ -351,8 +351,9 @@ class ModuleUpdateStagingTest {
     @DisplayName("an uninstall by another name that removed the module's JAR during the download cancels it too")
     void uninstallByJarDuringDownload_cancelsIt() throws Exception {
         ModuleFileTransactions.StageResult result = cancelledWhileDownloading(
-                () -> new ModuleFileTransactions(dataFolder).cancelStagedUpdates("demo-module",
-                        Collections.singletonList(oldJar.getName())));
+                () -> new ModuleFileTransactions(dataFolder).cancelStagedUpdates(
+                        new ModuleFileTransactions.RemovedModule(Collections.<String>emptyList(),
+                                Collections.singletonList("demo-module"), Collections.singletonList(oldJar.getName()))));
 
         assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_CANCELLED_WHILE_DOWNLOADING);
         assertThat(treeOf(transactions)).isEmpty();
