@@ -311,6 +311,29 @@ public final class ModuleFileTransactions {
     public StageResult stageUpdate(String identifyString, List<UltiToolsPlugin> loaded,
                                    Function<UltiToolsPlugin, File> codeSource, Catalogue catalogue,
                                    Downloader downloader, Function<UltiToolsPlugin, String> mainClassOf) {
+        return stageUpdate(identifyString, () -> loaded, codeSource, catalogue, downloader, mainClassOf);
+    }
+
+    /**
+     * Stages an update, as {@link #stageUpdate(String, List, Function, Catalogue, Downloader, Function)}
+     * does, reading the loaded modules only under the lock that an uninstall's cancellation also takes
+     * (Codex round 16, #561). A list taken before the lock could still name a module an uninstall
+     * removed in between, and that uninstall would have found neither a running download nor a record
+     * to cancel. Read under the lock, either the module is already gone from the list (refused as not
+     * loaded) or the download is marked running before the cancellation can look (and is cancelled).
+     *
+     * @param identifyString the module's identify-string
+     * @param loaded         reads the modules loaded now; called once, under the lock
+     * @param codeSource     which JAR a loaded module came from
+     * @param catalogue      where the latest version and its download link come from
+     * @param downloader     how the new JAR is downloaded
+     * @param mainClassOf    the main class the module loader recorded for a loaded module, or
+     *                       {@code null}
+     * @return what happened
+     */
+    public StageResult stageUpdate(String identifyString, java.util.function.Supplier<List<UltiToolsPlugin>> loaded,
+                                   Function<UltiToolsPlugin, File> codeSource, Catalogue catalogue,
+                                   Downloader downloader, Function<UltiToolsPlugin, String> mainClassOf) {
         String key = normalize(identifyString);
         if (key == null) {
             return StageResult.failed(null, Keys.REASON_NO_IDENTIFY_STRING);
@@ -327,7 +350,7 @@ public final class ModuleFileTransactions {
         // yet; once reserved, the work folder is this call's own and its staging is discarded.
         synchronized (LOCK) {
             try {
-                reservation = reserve(record, work, identifyString, loaded, codeSource);
+                reservation = reserve(record, work, identifyString, loaded.get(), codeSource);
             } catch (SecurityException denied) {
                 return StageResult.failed(null, Keys.REASON_ACCESS_DENIED, describe(denied));
             }

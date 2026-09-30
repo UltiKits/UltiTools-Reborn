@@ -476,8 +476,10 @@ public class PluginInstallUtils {
     public static ModuleFileTransactions.StageResult stageUpdate(String identifyString) {
         UltiTools ultiTools = UltiTools.getInstance();
         PluginManager pluginManager = ultiTools.getPluginManager();
+        // The loaded modules are read by staging under its lock, not snapshotted here: an uninstall
+        // completing between a snapshot and the lock would be missed (Codex round 16).
         return new ModuleFileTransactions(ultiTools.getDataFolder()).stageUpdate(identifyString,
-                new ArrayList<>(pluginManager.getPluginList()), DEFAULT_MODULE_CODE_SOURCE,
+                () -> new ArrayList<>(pluginManager.getPluginList()), DEFAULT_MODULE_CODE_SOURCE,
                 CATALOGUE, (link, fileName, folder) -> HttpDownloadUtils.download(link, fileName,
                         folder.getAbsolutePath()), recordedMainClass(pluginManager.getModuleJarIndex()));
     }
@@ -1437,8 +1439,15 @@ public class PluginInstallUtils {
                                        List<UltiToolsPlugin> others, Set<String> ownJars) {
         Set<String> mainClasses = mainClassesOf(pluginManager, targets, others);
         Set<String> jarNames = new java.util.HashSet<>();
+        String modulesFolderPath = canonicalPathOf(modulesFolder());
         for (String path : ownJars) {
-            jarNames.add(new File(path).getName());
+            // Only a JAR directly in the modules folder can be an update's old JAR, and a cancellation
+            // matches JARs by file name: an external code source's name could be an unrelated module
+            // JAR's in the modules folder (Codex round 16).
+            File jar = new File(path);
+            if (jar.getParentFile() != null && modulesFolderPath.equals(jar.getParentFile().getPath())) {
+                jarNames.add(jar.getName());
+            }
         }
         ModuleJarIndex index = pluginManager.getModuleJarIndex();
         if (index != null) {
