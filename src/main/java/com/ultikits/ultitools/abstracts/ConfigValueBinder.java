@@ -320,6 +320,9 @@ final class ConfigValueBinder {
                 return UNBOUND;
             }
         }
+        if (target == Float.class) {
+            return toFloat(value);
+        }
         BigDecimal decimal = toBigDecimal(value);
         if (decimal == null) {
             return UNBOUND;
@@ -341,6 +344,32 @@ final class ConfigValueBinder {
             return UNBOUND;
         }
         return UNBOUND;
+    }
+
+    /**
+     * #534 (maintainer decision of 2026-09-30, "accept it when it reads back the same"): YAML reads
+     * every decimal as a {@code Double}, and {@code double} to {@code float} is narrowing. A decimal
+     * is accepted when the float nearest to it prints back as the same decimal - {@code 0.1},
+     * {@code 0.3} and {@code 1.5} load - which is also exactly the text the framework writes for a
+     * float, so a float it wrote always reads back. A value with more digits than a float holds
+     * ({@code 0.123456789}), or one out of the float range, is not converted.
+     *
+     * @param value a {@code Double} or other decimal from the file, or its text
+     * @return the float, or {@link #UNBOUND}
+     */
+    private static Object toFloat(Object value) {
+        double decimal;
+        if (value instanceof String) {
+            try {
+                decimal = Double.parseDouble(((String) value).trim());
+            } catch (NumberFormatException e) {
+                return UNBOUND;
+            }
+        } else {
+            decimal = ((Number) value).doubleValue();
+        }
+        float nearest = (float) decimal;
+        return Double.parseDouble(Float.toString(nearest)) == decimal ? (Object) nearest : UNBOUND;
     }
 
     private static BigDecimal toBigDecimal(Object value) {
