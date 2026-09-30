@@ -75,17 +75,17 @@ class ModuleRemovalDeferredTest {
 
     @AfterEach
     void tearDown() throws IOException {
-        Files.setPosixFilePermissions(modules.toPath(), PosixFilePermissions.fromString("rwxr-xr-x"));
+        Files.setPosixFilePermissions(modules.toPath(), PosixFilePermissions.fromString("rwx------"));
         MockBukkitHelper.safeUnmock();
     }
 
     private void readOnlyModulesFolder() throws IOException {
-        Files.setPosixFilePermissions(modules.toPath(), PosixFilePermissions.fromString("r-xr-xr-x"));
+        Files.setPosixFilePermissions(modules.toPath(), PosixFilePermissions.fromString("r-x------"));
         Assumptions.assumeFalse(Files.isWritable(modules.toPath()), "running as a user that ignores permissions");
     }
 
     private void writableModulesFolder() throws IOException {
-        Files.setPosixFilePermissions(modules.toPath(), PosixFilePermissions.fromString("rwxr-xr-x"));
+        Files.setPosixFilePermissions(modules.toPath(), PosixFilePermissions.fromString("rwx------"));
     }
 
     private PluginInstallUtils.RemovalDeferredException uninstallThatCannotDelete() throws IOException {

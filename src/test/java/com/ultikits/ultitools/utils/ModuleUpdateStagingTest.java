@@ -61,11 +61,16 @@ class ModuleUpdateStagingTest {
                 new ModuleUpdateFixtures.CodeSources().with(loadedOld, oldJar), catalogue("demo", "1.1"), downloader);
     }
 
-    /** Every file under the data folder with its bytes, to prove "nothing changed". */
+    /**
+     * Every file under the server root with its bytes, to prove "nothing changed": the modules
+     * folder and the records folder, which lives under the server root, not the data folder.
+     */
     private Map<String, String> snapshot() throws IOException {
         Map<String, String> files = new TreeMap<>();
-        for (String path : treeOf(dataFolder)) {
-            files.put(path, new String(Files.readAllBytes(new File(dataFolder, path).toPath()),
+        for (String path : treeOf(serverRoot)) {
+            // The path comes from listing this test's own temporary folder; nothing is external input.
+            // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
+            files.put(path, new String(Files.readAllBytes(new File(serverRoot, path).toPath()),
                     StandardCharsets.ISO_8859_1));
         }
         return files;

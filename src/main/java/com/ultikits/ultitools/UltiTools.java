@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
@@ -31,6 +32,7 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.commands.CloudLoginCommand;
 import com.ultikits.ultitools.commands.PluginInstallCommands;
 import com.ultikits.ultitools.commands.UltiToolsCommands;
@@ -387,7 +389,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
      * @throws IOException when {@code load} does
      */
     static void loadModulesThenObserve(ModuleFileTransactions transactions, ModuleLoad load,
-                                       java.util.function.Supplier<List<com.ultikits.ultitools.abstracts.UltiToolsPlugin>> loaded)
+                                       Supplier<List<UltiToolsPlugin>> loaded)
             throws IOException {
         boolean completed = false;
         try {
@@ -395,7 +397,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
             completed = true;
         } finally {
             transactions.observeAfterLoad(
-                    completed ? loaded.get() : Collections.<com.ultikits.ultitools.abstracts.UltiToolsPlugin>emptyList(),
+                    completed ? loaded.get() : Collections.<UltiToolsPlugin>emptyList(),
                     ModuleFileTransactions::codeSourceOf);
         }
     }

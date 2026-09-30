@@ -41,15 +41,6 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class ModuleUpdateRecoveryTest {
 
-    /** What a crash looks like to the code: the thread stops at that point. */
-    static final class SimulatedCrash extends Error {
-        private static final long serialVersionUID = 1L;
-
-        SimulatedCrash(String point) {
-            super("crash at " + point);
-        }
-    }
-
     @TempDir
     File serverRoot;
 
@@ -61,6 +52,15 @@ class ModuleUpdateRecoveryTest {
     private File oldJar;
     private byte[] oldBytes;
     private UltiToolsPlugin loadedOld;
+
+    /** What a crash looks like to the code: the thread stops at that point. */
+    static final class SimulatedCrash extends Error {
+        private static final long serialVersionUID = 1L;
+
+        SimulatedCrash(String point) {
+            super("crash at " + point);
+        }
+    }
 
     @BeforeEach
     void setUp() throws IOException {
@@ -288,7 +288,7 @@ class ModuleUpdateRecoveryTest {
         void readOnlyModulesFolder_nothingChanges() throws IOException {
             Assumptions.assumeTrue(Files.getFileStore(modules.toPath()).supportsFileAttributeView("posix"));
             stage(transactions());
-            Files.setPosixFilePermissions(modules.toPath(), PosixFilePermissions.fromString("r-xr-xr-x"));
+            Files.setPosixFilePermissions(modules.toPath(), PosixFilePermissions.fromString("r-x------"));
             try {
                 Assumptions.assumeFalse(Files.isWritable(modules.toPath()), "running as a user that ignores permissions");
                 ModuleFileTransactions start = transactions();
@@ -297,7 +297,7 @@ class ModuleUpdateRecoveryTest {
 
                 assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.APPLY_FAILED);
             } finally {
-                Files.setPosixFilePermissions(modules.toPath(), PosixFilePermissions.fromString("rwxr-xr-x"));
+                Files.setPosixFilePermissions(modules.toPath(), PosixFilePermissions.fromString("rwx------"));
             }
             assertOnlyTheOldVersionIsInstalled();
             assertThat(recordText()).contains("\"state\": \"FAILED\"");
@@ -512,7 +512,7 @@ class ModuleUpdateRecoveryTest {
             stage(transactions());
             ModuleFileTransactions start = transactions();
             start.applyBeforeLoad();
-            Files.setPosixFilePermissions(transactions.toPath(), PosixFilePermissions.fromString("r-xr-xr-x"));
+            Files.setPosixFilePermissions(transactions.toPath(), PosixFilePermissions.fromString("r-x------"));
             try {
                 Assumptions.assumeFalse(Files.isWritable(transactions.toPath()), "running as a user that ignores permissions");
 
@@ -523,7 +523,7 @@ class ModuleUpdateRecoveryTest {
                         .contains(ModuleFileTransactions.Keys.RECORD_WRITE_FAILED);
                 assertThat(treeOf(transactions)).anyMatch(p -> p.endsWith("/backup/demo-1.0.jar"));
             } finally {
-                Files.setPosixFilePermissions(transactions.toPath(), PosixFilePermissions.fromString("rwxr-xr-x"));
+                Files.setPosixFilePermissions(transactions.toPath(), PosixFilePermissions.fromString("rwx------"));
             }
 
             ModuleFileTransactions next = transactions();

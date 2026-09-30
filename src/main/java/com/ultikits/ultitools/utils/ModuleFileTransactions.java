@@ -235,7 +235,6 @@ public final class ModuleFileTransactions {
      * @param downloader     how the new JAR is downloaded
      * @return what happened
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException") // a catalogue or download failure of any kind is reported
     public StageResult stageUpdate(String identifyString, List<UltiToolsPlugin> loaded,
                                    Function<UltiToolsPlugin, File> codeSource, Catalogue catalogue,
                                    Downloader downloader) {
@@ -247,51 +246,89 @@ public final class ModuleFileTransactions {
         record.type = Record.UPDATE;
         record.key = key;
         File work = workFolder(record);
-        String previousFailure;
-        UltiToolsPlugin module;
-        File oldJar;
+        Reservation reservation;
         // Decisions under the lock; the network outside it. An uninstall on the main thread waits
         // only for these checks and the record write, never for a download (gate-1 review).
         synchronized (LOCK) {
-            if (STAGING.contains(key)) {
-                return StageResult.of(StageResult.Outcome.BUSY, null, null, null, null);
-            }
-            StageResult refusal = checkExisting(record);
-            previousFailure = refusal == null ? lastDiscardedFailure : refusal.getPreviousFailure();
-            lastDiscardedFailure = null;
-            if (refusal != null) {
-                return refusal;
-            }
-            String[] kept = new File(work, BACKUP_FOLDER).list();
-            if (kept != null && kept.length > 0) {
-                // A kept old JAR without its record: never adopted as this transaction's backup and
-                // never deleted by staging. The start-up log already reports it.
-                return StageResult.failed(previousFailure, Keys.REASON_LEFTOVER_BACKUP,
-                        new File(work, BACKUP_FOLDER).getAbsolutePath());
-            }
-            module = null;
-            for (UltiToolsPlugin plugin : loaded) {
-                if (key.equals(normalize(plugin.getIdentifyString()))) {
-                    module = plugin;
-                    break;
-                }
-            }
-            if (module == null) {
-                return StageResult.failed(previousFailure, Keys.REASON_NOT_LOADED, identifyString);
-            }
-            oldJar = codeSource.apply(module);
-            if (oldJar == null || !isDirectChild(modulesFolder, oldJar) || !isJarName(oldJar.getName())) {
-                return StageResult.failed(previousFailure, Keys.REASON_NOT_IN_MODULES_FOLDER,
-                        oldJar == null ? "?" : oldJar.getAbsolutePath(), modulesFolder.getAbsolutePath());
+            reservation = reserve(record, work, identifyString, loaded, codeSource);
+            if (reservation.refusal != null) {
+                return reservation.refusal;
             }
             STAGING.add(key);
         }
         try {
-            return download(record, work, identifyString, module, oldJar, catalogue, downloader, previousFailure);
+            return download(record, work, identifyString, reservation.module, reservation.oldJar, catalogue,
+                    downloader, reservation.previousFailure);
         } finally {
             synchronized (LOCK) {
                 STAGING.remove(key);
             }
+        }
+    }
+
+    /**
+     * The checks staging makes before it downloads, under {@link #LOCK}: no download of this
+     * module running, no update already staged, no kept old JAR left without its record.
+     */
+    private Reservation reserve(Record record, File work, String identifyString, List<UltiToolsPlugin> loaded,
+                                Function<UltiToolsPlugin, File> codeSource) {
+        if (STAGING.contains(record.key)) {
+            return Reservation.refused(StageResult.of(StageResult.Outcome.BUSY, null, null, null, null));
+        }
+        StageResult refusal = checkExisting(record);
+        String previousFailure = refusal == null ? lastDiscardedFailure : refusal.getPreviousFailure();
+        lastDiscardedFailure = null;
+        if (refusal != null) {
+            return Reservation.refused(refusal);
+        }
+        File backups = new File(work, BACKUP_FOLDER);
+        String[] kept = backups.list();
+        if (kept != null && kept.length > 0) {
+            // A kept old JAR without its record: never adopted as this transaction's backup and
+            // never deleted by staging. The start-up log already reports it.
+            return Reservation.refused(StageResult.failed(previousFailure, Keys.REASON_LEFTOVER_BACKUP,
+                    backups.getAbsolutePath()));
+        }
+        return locate(record.key, identifyString, loaded, codeSource, previousFailure);
+    }
+
+    /** The loaded module to update and the JAR in the modules folder it was loaded from. */
+    private Reservation locate(String key, String identifyString, List<UltiToolsPlugin> loaded,
+                               Function<UltiToolsPlugin, File> codeSource, String previousFailure) {
+        UltiToolsPlugin module = null;
+        for (UltiToolsPlugin plugin : loaded) {
+            if (key.equals(normalize(plugin.getIdentifyString()))) {
+                module = plugin;
+                break;
+            }
+        }
+        if (module == null) {
+            return Reservation.refused(StageResult.failed(previousFailure, Keys.REASON_NOT_LOADED, identifyString));
+        }
+        File oldJar = codeSource.apply(module);
+        if (oldJar == null || !isDirectChild(modulesFolder, oldJar) || !isJarName(oldJar.getName())) {
+            return Reservation.refused(StageResult.failed(previousFailure, Keys.REASON_NOT_IN_MODULES_FOLDER,
+                    oldJar == null ? "?" : oldJar.getAbsolutePath(), modulesFolder.getAbsolutePath()));
+        }
+        return new Reservation(module, oldJar, previousFailure, null);
+    }
+
+    /** What {@link #reserve} decided: the module and JAR to stage an update for, or the refusal. */
+    private static final class Reservation {
+        private final UltiToolsPlugin module;
+        private final File oldJar;
+        private final String previousFailure;
+        private final StageResult refusal;
+
+        Reservation(UltiToolsPlugin module, File oldJar, String previousFailure, StageResult refusal) {
+            this.module = module;
+            this.oldJar = oldJar;
+            this.previousFailure = previousFailure;
+            this.refusal = refusal;
+        }
+
+        static Reservation refused(StageResult refusal) {
+            return new Reservation(null, null, null, refusal);
         }
     }
 
@@ -315,13 +352,9 @@ public final class ModuleFileTransactions {
             return StageResult.failed(previousFailure, Keys.REASON_NO_DOWNLOAD, identifyString);
         }
         File stagedFolder = new File(work, STAGED_FOLDER);
-        discardStaging(work);
-        try {
-            Files.createDirectories(stagedFolder.toPath());
-            downloader.download(link, targetName, stagedFolder);
-        } catch (IOException | RuntimeException e) {
-            discardStaging(work);
-            return StageResult.failed(previousFailure, Keys.REASON_DOWNLOAD_FAILED, describe(e));
+        String downloadFailure = fetch(downloader, link, targetName, work, stagedFolder);
+        if (downloadFailure != null) {
+            return StageResult.failed(previousFailure, Keys.REASON_DOWNLOAD_FAILED, downloadFailure);
         }
         File staged = new File(stagedFolder, targetName);
         if (!staged.isFile() || !SecurityPolicy.isValidModuleJar(staged)) {
@@ -343,6 +376,11 @@ public final class ModuleFileTransactions {
         record.targetName = targetName;
         record.newVersion = stagedVersion;
         record.stagedSha256 = stagedHash;
+        return writeStaged(record, work, previousFailure);
+    }
+
+    /** Writes the {@code PENDING} record of a staged JAR, under the lock; the staging is discarded when it cannot be. */
+    private StageResult writeStaged(Record record, File work, String previousFailure) {
         synchronized (LOCK) {
             try {
                 writeRecord(record);
@@ -354,6 +392,26 @@ public final class ModuleFileTransactions {
         crashPoints.reached(CrashPoints.AFTER_RECORD_WRITTEN);
         return StageResult.of(StageResult.Outcome.STAGED, record.moduleName, record.oldVersion,
                 record.newVersion, previousFailure);
+    }
+
+    /**
+     * Downloads the new JAR into a fresh staged folder.
+     *
+     * @return {@code null} when it was downloaded, otherwise the failure, described; the staged
+     *         folder is then discarded
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // a download failure of any kind is reported
+    private static String fetch(Downloader downloader, String link, String targetName, File work,
+                                File stagedFolder) {
+        discardStaging(work);
+        try {
+            Files.createDirectories(stagedFolder.toPath());
+            downloader.download(link, targetName, stagedFolder);
+            return null;
+        } catch (IOException | RuntimeException e) {
+            discardStaging(work);
+            return describe(e);
+        }
     }
 
     /**
@@ -670,24 +728,11 @@ public final class ModuleFileTransactions {
         File staged = confined(new File(work, STAGED_FOLDER), record.stagedName);
 
         if (!exists(staged)) {
-            // Either the new JAR was moved in and the start ended before APPLIED was recorded, or
-            // the staged JAR is gone. Its content decides which -- never its name.
-            if (isStagedJar(target, record)) {
-                markApplied(record);
-            } else {
-                failApply(record, staged, new NoSuchFileException(staged.getAbsolutePath(), null,
-                        "the staged JAR is missing"));
-            }
+            resumeWithoutStagedJar(record, target, staged);
             return;
         }
         if (!exists(backup) && (!exists(old) || pendingRemovals.contains(record.oldName))) {
-            // The module's JAR left the modules folder after the update was staged -- an uninstall,
-            // whatever name it was given, or a hand removal -- or an uninstall recorded it for a
-            // deletion that has not happened yet. Installing the update now would bring back a
-            // module the operator removed, so the transaction is abandoned instead.
-            deleteTree(work);
-            deleteQuietly(recordFileOf(record));
-            report(Level.WARNING, Keys.UPDATE_ABANDONED, record.moduleName, record.newVersion, old.getAbsolutePath());
+            abandon(record, work, old);
             return;
         }
         boolean oldStillAtTarget = record.targetName.equals(record.oldName) && !exists(backup);
@@ -714,6 +759,32 @@ public final class ModuleFileTransactions {
         }
         crashPoints.reached(CrashPoints.AFTER_NEW_MOVED);
         markApplied(record);
+    }
+
+    /**
+     * The staged JAR is not in its folder: either the new JAR was moved in and the start ended
+     * before {@code APPLIED} was recorded, or the staged JAR is gone. Its content decides which --
+     * never its name.
+     */
+    private void resumeWithoutStagedJar(Record record, File target, File staged) throws RecordRefused {
+        if (isStagedJar(target, record)) {
+            markApplied(record);
+        } else {
+            failApply(record, staged, new NoSuchFileException(staged.getAbsolutePath(), null,
+                    "the staged JAR is missing"));
+        }
+    }
+
+    /**
+     * The module's JAR left the modules folder after the update was staged -- an uninstall,
+     * whatever name it was given, or a hand removal -- or an uninstall recorded it for a deletion
+     * that has not happened yet. Installing the update now would bring back a module the operator
+     * removed, so the transaction is abandoned instead.
+     */
+    private void abandon(Record record, File work, File old) {
+        deleteTree(work);
+        deleteQuietly(recordFileOf(record));
+        report(Level.WARNING, Keys.UPDATE_ABANDONED, record.moduleName, record.newVersion, old.getAbsolutePath());
     }
 
     private void markApplied(Record record) {
@@ -914,10 +985,7 @@ public final class ModuleFileTransactions {
             if (!exists(file)) {
                 continue;
             }
-            // Still the recorded file: same size, same modification time, same content. A copy put
-            // back after the uninstall has a new timestamp even when its bytes are the same.
-            if (removal.sha256 == null || file.length() != removal.size
-                    || file.lastModified() != removal.lastModified || !removal.sha256.equals(sha256Of(file))) {
+            if (!isStillRecorded(removal, file)) {
                 report(Level.WARNING, Keys.REMOVAL_SKIPPED, file.getAbsolutePath());
                 continue;
             }
@@ -939,6 +1007,16 @@ public final class ModuleFileTransactions {
             record.removals = remaining;
             persist(record);
         }
+    }
+
+    /**
+     * Whether a file is still the one an uninstall recorded: same size, same modification time,
+     * same content. A copy put back after the uninstall has a new timestamp even when its bytes are
+     * the same.
+     */
+    private static boolean isStillRecorded(Removal removal, File file) {
+        return removal.sha256 != null && file.length() == removal.size
+                && file.lastModified() == removal.lastModified && removal.sha256.equals(sha256Of(file));
     }
 
     /** Whether {@code file} is the JAR this transaction staged, by content. */
@@ -964,6 +1042,9 @@ public final class ModuleFileTransactions {
     }
 
     private File backupOf(Record record) throws RecordRefused {
+        // The folder is this transaction's working folder plus a constant; the record's name goes
+        // through confined(), which refuses anything but a plain JAR name directly inside it.
+        // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
         return confined(new File(workFolder(record), BACKUP_FOLDER), record.oldName);
     }
 
@@ -1102,10 +1183,15 @@ public final class ModuleFileTransactions {
     }
 
     private File recordFileOf(Record record) {
+        // idOf() is a lower-cased type plus 16 hex digits of a SHA-256: no separator or ".." can
+        // reach the name, whatever the record contains.
+        // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
         return new File(transactionsFolder, idOf(record) + RECORD_SUFFIX);
     }
 
     private File workFolder(Record record) {
+        // Same name as recordFileOf() without the suffix: a hash, never text from the record.
+        // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
         return new File(transactionsFolder, idOf(record));
     }
 
@@ -1140,6 +1226,10 @@ public final class ModuleFileTransactions {
         if (!isJarName(name)) {
             throw new RecordRefused("not a JAR file name: " + name);
         }
+        // This is the confinement itself: the name was refused above unless it is a plain JAR file
+        // name, and the canonical check below refuses one that resolves anywhere but directly in
+        // the folder (a link included).
+        // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
         File file = new File(folder, name);
         if (!isDirectChild(folder, file)) {
             throw new RecordRefused(file.getAbsolutePath() + " resolves outside " + folder.getAbsolutePath());

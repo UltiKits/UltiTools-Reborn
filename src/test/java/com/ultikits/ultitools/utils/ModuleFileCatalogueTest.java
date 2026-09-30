@@ -30,6 +30,9 @@ class ModuleFileCatalogueTest {
     private static final Pattern NON_ASCII_PUNCTUATION = Pattern.compile("[\\u3000-\\u303F\\uFF00-\\uFFEF\\u4E00-\\u9FFF]");
 
     private static Map<String, String> catalogue(String language) throws IOException {
+        // The language is one of this test's own constants ("en", "zh"); the path names a file in
+        // this repository and nothing is derived from input.
+        // nosemgrep: java.inject.rule-SpotbugsPathTraversalAbsolute
         try (Reader reader = Files.newBufferedReader(Paths.get("src/main/resources/lang/" + language + ".json"),
                 StandardCharsets.UTF_8)) {
             return new Gson().fromJson(reader, new TypeToken<Map<String, String>>() { }.getType());
