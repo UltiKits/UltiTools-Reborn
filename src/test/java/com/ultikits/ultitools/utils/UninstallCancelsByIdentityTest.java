@@ -65,7 +65,6 @@ class UninstallCancelsByIdentityTest {
     private File dataFolder;
     private File modules;
     private File transactions;
-    private File oldJar;
     private UltiToolsPlugin demo;
     private ModuleUpdateFixtures.CodeSources codeSources;
     private PluginManager pluginManager;
@@ -78,7 +77,7 @@ class UninstallCancelsByIdentityTest {
         MockBukkit.createMockPlugin();
         modules = ModuleFileTransactions.modulesFolder(dataFolder);
         transactions = ModuleFileTransactions.transactionsFolder(dataFolder);
-        oldJar = moduleJar(new File(modules, "demo-1.0.jar"), "UltiTools-Demo", "1.0", "demo");
+        File oldJar = moduleJar(new File(modules, "demo-1.0.jar"), "UltiTools-Demo", "1.0", "demo");
         AtomicReference<PluginManager> ref = new AtomicReference<>();
         CommandManager commandManager = mock(CommandManager.class);
         ListenerManager listenerManager = mock(ListenerManager.class);
@@ -139,7 +138,7 @@ class UninstallCancelsByIdentityTest {
 
     @Test
     @DisplayName("round 10: by the declared name with an unlistable modules folder, the staged update is cancelled and the next start does not revive the module")
-    void unlistableFolder_byDeclaredName_cancelsTheStagedUpdate() throws IOException {
+    void unlistableFolderByDeclaredName_cancelsTheStagedUpdate() throws IOException {
         stage();
         makeModulesFolderUnlistable();
         List<String> cancelled = new ArrayList<>();
@@ -157,7 +156,7 @@ class UninstallCancelsByIdentityTest {
 
     @Test
     @DisplayName("round 10: by the declared name with the JAR deleted, the staged update is cancelled")
-    void deleted_byDeclaredName_cancelsTheStagedUpdate() throws IOException {
+    void deletedByDeclaredName_cancelsTheStagedUpdate() throws IOException {
         stage();
         List<String> cancelled = new ArrayList<>();
 
@@ -172,7 +171,7 @@ class UninstallCancelsByIdentityTest {
 
     @Test
     @DisplayName("round 10: by the declared name with the deletion deferred, the staged update is cancelled and only the removal remains")
-    void deferred_byDeclaredName_cancelsTheStagedUpdate() throws IOException {
+    void deferredByDeclaredName_cancelsTheStagedUpdate() throws IOException {
         stage();
         Assumptions.assumeTrue(modules.toPath().getFileSystem().supportedFileAttributeViews().contains("posix"),
                 "needs POSIX permissions");
@@ -191,7 +190,7 @@ class UninstallCancelsByIdentityTest {
 
     @Test
     @DisplayName("round 10: a download running when the module is uninstalled by the declared name, folder unlistable, is cancelled")
-    void runningDownload_byDeclaredName_unlistableFolder_isCancelled() throws Exception {
+    void runningDownloadByDeclaredNameUnlistableFolder_isCancelled() throws Exception {
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         ExecutorService pool = Executors.newSingleThreadExecutor();

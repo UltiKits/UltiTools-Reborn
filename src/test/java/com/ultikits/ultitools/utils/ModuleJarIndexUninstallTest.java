@@ -39,14 +39,6 @@ import com.ultikits.ultitools.manager.PluginManager;
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class ModuleJarIndexUninstallTest {
 
-    /** The loaded module's class; a mock of it is a subclass, as a proxy would be. */
-    abstract static class IndexFixtureModule extends UltiToolsPlugin {
-    }
-
-    /** Another loaded module's class. */
-    abstract static class OtherFixtureModule extends UltiToolsPlugin {
-    }
-
     private static final String MAIN = IndexFixtureModule.class.getName();
     private static final String OTHER_MAIN = OtherFixtureModule.class.getName();
 
@@ -55,6 +47,22 @@ class ModuleJarIndexUninstallTest {
 
     private File modules;
     private PluginManager pluginManager;
+
+    /** The loaded module's class; a mock of it is a subclass, as a proxy would be. */
+    static class IndexFixtureModule extends UltiToolsPlugin {
+        @Override
+        public boolean registerSelf() {
+            return true;
+        }
+    }
+
+    /** Another loaded module's class. */
+    static class OtherFixtureModule extends UltiToolsPlugin {
+        @Override
+        public boolean registerSelf() {
+            return true;
+        }
+    }
 
     @BeforeEach
     void setUp() {

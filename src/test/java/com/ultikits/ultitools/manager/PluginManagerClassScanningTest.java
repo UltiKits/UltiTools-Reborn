@@ -47,6 +47,10 @@ import com.ultikits.ultitools.interfaces.IPlugin;
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
 class PluginManagerClassScanningTest {
 
+    /** The duplicate-copy warning's catalogue key (UltiTools-Dev-Doc#96); its English text is in en.json. */
+    private static final String DUPLICATE_MAIN_CLASS =
+            "以下 JAR 文件都声明了同一个模块主类 %s：%s。该模块的类只从 %s 加载，其余副本不会加载；请只保留其中一个。";
+
     @TempDir
     File tempDir;
 
@@ -259,10 +263,6 @@ class PluginManagerClassScanningTest {
         }
     }
 
-    /** The duplicate-copy warning's catalogue key (UltiTools-Dev-Doc#96); its English text is in en.json. */
-    private static final String DUPLICATE_MAIN_CLASS =
-            "以下 JAR 文件都声明了同一个模块主类 %s：%s。该模块的类只从 %s 加载，其余副本不会加载；请只保留其中一个。";
-
     /** A module JAR in {@code folder} whose {@code plugin.yml} is {@code pluginYml}, carrying {@code classes}. */
     private File moduleJarIn(File folder, String name, String pluginYml, Class<?>... classes) throws IOException {
         File jar = new File(folder, name);
@@ -301,14 +301,12 @@ class PluginManagerClassScanningTest {
         File a = moduleJarIn(modules, "A.jar", "name: Fixture\nmain: " + main + "\n", ConcretePlugin.class);
         File b = moduleJarIn(modules, "B.jar", "name: RenamedFixture\nmain: " + main + "\n", ConcretePlugin.class);
         // The module class loader's URLs are in file-name order (#476), so A.jar supplies the class.
-        URLClassLoader loader = new ChildFirstClassLoader(new URL[]{a.toURI().toURL(), b.toURI().toURL()},
-                Thread.currentThread().getContextClassLoader(), main);
-        injectUltiToolsClassLoader(loader);
-        try {
+        try (URLClassLoader loader = new ChildFirstClassLoader(new URL[]{a.toURI().toURL(), b.toURI().toURL()},
+                Thread.currentThread().getContextClassLoader(), main)) {
+            injectUltiToolsClassLoader(loader);
             assertThat(pluginManager.discoverModuleClasses(modules)).isTrue();
         } finally {
             injectUltiToolsClassLoader(null);
-            loader.close();
         }
 
         assertThat(logsNaming(Level.WARNING, "A.jar", "B.jar"))
@@ -331,14 +329,12 @@ class PluginManagerClassScanningTest {
                 ConcretePlugin.class);
         File b = moduleJarIn(modules, "B.jar", "name: Other\nmain: " + OtherConcretePlugin.class.getName() + "\n",
                 OtherConcretePlugin.class);
-        URLClassLoader loader = new ChildFirstClassLoader(new URL[]{a.toURI().toURL(), b.toURI().toURL()},
-                Thread.currentThread().getContextClassLoader(), ConcretePlugin.class.getName());
-        injectUltiToolsClassLoader(loader);
-        try {
+        try (URLClassLoader loader = new ChildFirstClassLoader(new URL[]{a.toURI().toURL(), b.toURI().toURL()},
+                Thread.currentThread().getContextClassLoader(), ConcretePlugin.class.getName())) {
+            injectUltiToolsClassLoader(loader);
             assertThat(pluginManager.discoverModuleClasses(modules)).isTrue();
         } finally {
             injectUltiToolsClassLoader(null);
-            loader.close();
         }
 
         assertThat(logsNaming(Level.WARNING, "A.jar")).isEmpty();

@@ -94,24 +94,27 @@ class UninstallStrayEntriesRegressionTest {
             return open;
         }
         String prefix = modules.getCanonicalPath();
+        List<Path> descriptors;
         try (Stream<Path> entries = Files.list(fds)) {
-            entries.forEach(fd -> {
-                try {
-                    String target = Files.readSymbolicLink(fd).toString();
-                    if (target.startsWith(prefix)) {
-                        open.add(target);
-                    }
-                } catch (IOException | UnsupportedOperationException gone) {
-                    // the descriptor closed while listing
-                }
-            });
+            descriptors = entries.collect(java.util.stream.Collectors.toList());
+        }
+        for (Path fd : descriptors) {
+            String target;
+            try {
+                target = Files.readSymbolicLink(fd).toString();
+            } catch (IOException | UnsupportedOperationException closedWhileListing) {
+                continue;
+            }
+            if (target.startsWith(prefix)) {
+                open.add(target);
+            }
         }
         return open;
     }
 
     @Test
     @DisplayName("#504: stray entries are skipped, the module's JAR is deleted, every archive is closed")
-    void strayEntries_areSkipped_andTheModuleJarIsDeleted() throws IOException {
+    void strayEntriesAreSkipped_andTheModuleJarIsDeleted() throws IOException {
         assertThat(modules.getAbsolutePath()).contains("server root");
         File module = jar("Fixture-1.0.jar", "name: Fixture\nmain: com.example.Fixture\n");
         File subfolder = new File(modules, "config");

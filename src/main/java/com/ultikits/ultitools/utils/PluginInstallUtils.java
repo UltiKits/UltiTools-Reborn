@@ -1288,6 +1288,17 @@ public class PluginInstallUtils {
         }
 
         /**
+         * Notes the entries the folder scan identified as this module's, before anything is deleted.
+         *
+         * @param jars the entries
+         */
+        private void noteRemoved(List<File> jars) {
+            for (File jar : jars) {
+                removedJarNames.add(jar.getName());
+            }
+        }
+
+        /**
          * The uninstalled module in every form an update transaction can name it by, for the
          * cancellation (round-10 review): the unloaded instances' identify-strings and runtime
          * names, the name keys, the JARs they were loaded from, the JARs the start-up scan recorded
@@ -1645,9 +1656,7 @@ public class PluginInstallUtils {
                     undeterminedPaths, Collections.<String>emptyList());
         }
         refuseToTouchAnotherModulesJar(identity, matchingJars);
-        for (File jar : matchingJars) {
-            identity.removedJarNames.add(jar.getName());
-        }
+        identity.noteRemoved(matchingJars);
         List<String> deleted = absolutePathsOf(matchingJars);
         try {
             deleteAllOrThrow(matchingJars);
