@@ -246,6 +246,32 @@ class UninstallCancelsByIdentityTest {
     }
 
     @Test
+    @DisplayName("gate 1 A-P2: a runtime name another loaded module also answers to never cancels that module's update")
+    void sharedRuntimeName_doesNotCancelTheOtherModulesUpdate() throws IOException {
+        // Two loaded modules both built with the runtime name "Shared" (it is a constructor argument,
+        // not metadata). Target's JAR declares "TargetDeclared", so an uninstall by that name selects
+        // Target alone; Other's staged update must survive it, exactly as Other's names are not keys.
+        File targetJar = moduleJar(new File(modules, "target-1.0.jar"), "TargetDeclared", "1.0", "target");
+        UltiToolsPlugin target = loaded("Shared", "target");
+        codeSources.with(target, targetJar);
+        File otherJar = moduleJar(new File(modules, "other-1.0.jar"), "OtherDeclared", "1.0", "other");
+        UltiToolsPlugin other = loaded("Shared", "other");
+        codeSources.with(other, otherJar);
+        ModuleFileTransactions.StageResult staged = new ModuleFileTransactions(dataFolder).stageUpdate("other",
+                Collections.singletonList(other), codeSources, catalogue("other", "1.1"),
+                downloading("OtherDeclared", "1.1", "other"));
+        assertThat(staged.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.STAGED);
+        List<String> cancelled = new ArrayList<>();
+
+        PluginInstallUtils.uninstallPluginReporting("TargetDeclared", codeSources, cancelled);
+
+        assertThat(targetJar).doesNotExist();
+        assertThat(pluginManager.getPluginList()).contains(other).doesNotContain(target);
+        assertThat(cancelled).isEmpty();
+        assertThat(treeOf(transactions)).isNotEmpty();
+    }
+
+    @Test
     @DisplayName("round 10 control: uninstalling another module leaves this module's staged update alone")
     void uninstallingAnotherModule_leavesTheUpdate() throws IOException {
         File otherJar = moduleJar(new File(modules, "other-1.0.jar"), "Other", "1.0", "other");
