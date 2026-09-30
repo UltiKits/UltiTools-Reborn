@@ -375,20 +375,24 @@ This section governs the third kind.
   levels (`my` -> `rule`), and quoting it does not change that - but it is no longer silent: a start
   or reload that finds such a key in the file, and every framework write that is about to write one
   (a save, a first-boot default, a panel write), logs one WARNING per key naming the file, the
-  entry, the map's nested path and the module and asking for a rename (maintainer decision of
-  2026-09-30: warn only, the write path stays as in 6.2). The check never changes a value or the
-  file. A map that is a list element is plain data the file keeps whole and is not warned about; a
-  map written by a module's own `parser` is not checked. A module that compensated for the old text
-  elements by parsing them itself keeps working (an `Integer` still prints as its number), but a
-  list with one bad element is now used without that element rather than reaching the module whole.
-  With the default parser a `Set` field is written as a YAML list and an enum field or collection
-  element by its name, both of which used to produce a file the loader refused; every other value,
-  maps and objects included, is written exactly as in 6.2, and a module's own `parser` serializes
-  exactly as before. A value the framework still writes with a Java-class tag - a top-level `UUID`
-  or unregistered `ConfigurationSerializable` default, an enum or unregistered
-  `ConfigurationSerializable` inside a map default - is tracked as UltiKits/UltiTools-Reborn#560.
-  `DefaultConfigParser#parse` returns a sequence's elements as they are instead of as text, and a
-  value that is neither a sequence nor a section as it is instead of failing a cast.
+  entry, the map's nested path and the module, saying the key will be split into nested levels the
+  next time the file is loaded and asking for a rename (maintainer decision of 2026-09-30: warn
+  only, the write path stays as in 6.2). Only entries declared as a `Map` are checked, and maps
+  nested in them as far as the declared type says `Map`; maps inside other objects, list elements
+  (which the file keeps whole) and maps written by a module's own `parser` are not. The check never
+  changes a value or the file. A null value in such a map, which `save()` leaves out as it always
+  has, is named in a warning too. A module that compensated for the old text elements by parsing
+  them itself keeps working (an `Integer` still prints as its number), but a list with one bad
+  element is now used without that element rather than reaching the module whole. With the default
+  parser a `Set` field is written as a YAML list and an enum field or collection element by its
+  name, both of which used to produce a file the loader refused; every other value, maps and objects
+  included, is written exactly as in 6.2, and a module's own `parser` serializes exactly as before.
+  A value the framework still writes with a Java-class tag - a top-level `UUID` or unregistered
+  `ConfigurationSerializable` default, an enum or unregistered `ConfigurationSerializable` inside a
+  map default - and `UUID` text in a file not binding to a `UUID` field are tracked as
+  UltiKits/UltiTools-Reborn#560. `DefaultConfigParser#parse` returns a sequence's elements as they
+  are instead of as text, and a value that is neither a sequence nor a section as it is instead of
+  failing a cast.
 - A `@ConfigEntry` comment that is exactly one language key is rewritten on every framework write,
   including the first start after an upgrade (#542, maintainer decision of 2026-09-29): a comment
   such as `comment = "{config.demo.limit}"` is resolved from the module's catalogue in the server's
@@ -406,7 +410,7 @@ This section governs the third kind.
   comment - anything that is not exactly one `{key}` - behaves as before. No element was added to
   `@ConfigEntry`, so no module has to recompile.
 
-  中文：`@ConfigEntry` 的值现在按字段声明的类型绑定（列表元素、映射的键和值），无法转换的元素被跳过、形状不对的值保留默认值，并各记一条警告（文件、键、声明类型、原值；键名像密钥时原值打码），其余配置照常加载。`float` 字段里的小数，只要按 float 读回来一样就接受（`0.1`、`0.3`、`1.5`），位数超过 float 能保存的值保留默认值并警告。含点的映射键仍按 6.2 的方式写入和读取（配置文件用点作路径分隔符，这样的键会被拆成嵌套的几层），但不再无声：启动或重载时在文件里发现、以及框架每次写入前发现这样的键，都会记一条警告，写明文件、配置项、嵌套路径和模块，请服主改名；检查只读，不改任何值和文件。列表元素里的映射和模块自带解析器的映射不检查。仍会写出 Java 类标签的几种默认值见 #560。注释恰好是一个 `{key}` 时，框架每次写这个配置文件都按服务器当前语言从模块语言文件取注释重写（升级后第一次启动也会），服主在这些项上手写的注释会被覆盖，没有变化时不写文件。**注意：重写不只改注释行。**与框架的每一次写文件一样，整个文件会重新输出：服主加的引号会被去掉，行内列表 `[a, b]` 变成多行，`yes` 变成 `true`，`1.50` 变成 `1.5`，写在列表项旁的注释会丢失；值的含义不变。维护者 2026-09-30 接受了这一点；此前说「只改注释行」的描述是错的。
+  中文：`@ConfigEntry` 的值现在按字段声明的类型绑定（列表元素、映射的键和值），无法转换的元素被跳过、形状不对的值保留默认值，并各记一条警告（文件、键、声明类型、原值；键名像密钥时原值打码），其余配置照常加载。`float` 字段里的小数，只要按 float 读回来一样就接受（`0.1`、`0.3`、`1.5`），位数超过 float 能保存的值保留默认值并警告。含点的映射键仍按 6.2 的方式写入和读取（配置文件用点作路径分隔符，这样的键会被拆成嵌套的几层），但不再无声：启动或重载时在文件里发现、以及框架每次写入前发现这样的键，都会记一条警告，写明文件、配置项、嵌套路径和模块，说明这个键下次读取时会被拆成嵌套的几层，请服主改名；检查只读，不改任何值和文件。只检查声明为 `Map` 的配置项及其中声明为映射的嵌套映射；其他对象里的映射、列表元素和模块自带解析器的映射不检查。`save()` 本来就不写的 null 值也会记一条警告。仍会写出 Java 类标签的几种默认值见 #560。注释恰好是一个 `{key}` 时，框架每次写这个配置文件都按服务器当前语言从模块语言文件取注释重写（升级后第一次启动也会），服主在这些项上手写的注释会被覆盖，没有变化时不写文件。**注意：重写不只改注释行。**与框架的每一次写文件一样，整个文件会重新输出：服主加的引号会被去掉，行内列表 `[a, b]` 变成多行，`yes` 变成 `true`，`1.50` 变成 `1.5`，写在列表项旁的注释会丢失；值的含义不变。维护者 2026-09-30 接受了这一点；此前说「只改注释行」的描述是错的。
 - Changes in performance, memory footprint, log wording, or exception message text.
 - Security fixes. These may land in a PATCH without prior notice.
 - Refreshing an extracted resource file nobody has customised. Before 6.3.0, `saveResources()`
