@@ -748,7 +748,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         if (pluginDir == null || !pluginDir.exists()) {
             return urls;
         }
-        File[] pluginFiles = pluginDir.listFiles((f) -> f.getName().endsWith(".jar"));
+        File[] pluginFiles = ModuleFileTransactions.moduleJars(pluginDir);
         if (pluginFiles == null) {
             return urls;
         }

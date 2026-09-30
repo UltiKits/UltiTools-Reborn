@@ -189,6 +189,18 @@ public final class ModuleFileTransactions {
     }
 
     /**
+     * The module JARs of a modules folder: the entries whose names end in {@code .jar}, the test the
+     * module loader applies. The start-up scan and the module class loader both read this one
+     * listing (#476).
+     *
+     * @param modulesFolder the modules folder
+     * @return the JARs, or {@code null} when the folder cannot be listed
+     */
+    public static File[] moduleJars(File modulesFolder) {
+        return modulesFolder.listFiles(file -> file.getName().endsWith(".jar"));
+    }
+
+    /**
      * The folder transaction records and staged JARs live in:
      * {@code <server root>/.ultikits/upm-transactions}, beside the credential store. It is outside
      * {@code plugins/}, so the module loader never reads anything in it and the panel's file

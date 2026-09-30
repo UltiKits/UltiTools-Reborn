@@ -174,19 +174,8 @@ public class PluginManager {
         // computes it -- not the JVM's working directory, which a launcher may set anywhere.
         File pluginFolder = com.ultikits.ultitools.utils.ModuleFileTransactions.modulesFolder(
                 UltiTools.getInstance().getDataFolder());
-        File[] plugins = pluginFolder.listFiles((file) -> file.getName().endsWith(".jar"));
-
-        if (plugins == null) {
+        if (!discoverModuleClasses(pluginFolder)) {
             return;
-        }
-
-        Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Found " + plugins.length + " file(s):");
-
-        for (File file : plugins) {
-            Class<? extends UltiToolsPlugin> pluginClass = loadPluginMainClass(classLoader, file);
-            if (pluginClass != null) {
-                pluginClassList.add(pluginClass);
-            }
         }
         int success = 0;
         if (pluginClassList.isEmpty()) {
@@ -208,6 +197,31 @@ public class PluginManager {
                 Level.INFO,
                 String.format("[UltiTools-API] Succeeded loaded %d, Failed %d.", success, sortedPlugins.size() - success)
         );
+    }
+
+    /**
+     * Lists the modules folder once and reads each module JAR's declared main class, adding every
+     * class that loads to {@code pluginClassList}. Package-private so a test can drive the scan over
+     * a folder of its own.
+     *
+     * @param pluginFolder the modules folder
+     * @return {@code false} when the folder could not be listed
+     */
+    boolean discoverModuleClasses(File pluginFolder) {
+        File[] plugins = com.ultikits.ultitools.utils.ModuleFileTransactions.moduleJars(pluginFolder);
+        if (plugins == null) {
+            return false;
+        }
+
+        Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Found " + plugins.length + " file(s):");
+
+        for (File file : plugins) {
+            Class<? extends UltiToolsPlugin> pluginClass = loadPluginMainClass(classLoader, file);
+            if (pluginClass != null) {
+                pluginClassList.add(pluginClass);
+            }
+        }
+        return true;
     }
 
     /**
