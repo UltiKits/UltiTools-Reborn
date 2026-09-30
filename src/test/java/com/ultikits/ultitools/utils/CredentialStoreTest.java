@@ -56,7 +56,11 @@ class CredentialStoreTest {
      */
     private static final int BULK_CHARS = 64 * 1024;
 
-    /** #569: bounds one thread-state transition, never a throughput -- a hang detector only. */
+    /**
+     * #569: bounds one thread-state transition, never a throughput -- a hang detector only. The
+     * class-level {@code @Timeout} stays the overall budget; this bound only gives a single hung
+     * transition a readable message.
+     */
     private static final long HANG_BOUND_MILLIS = 20_000L;
 
     private static final Gson GSON = new Gson();
@@ -426,11 +430,14 @@ class CredentialStoreTest {
     // that lock -- yet an in-place write is exactly what a crash mid-write would expose on disk.
     // This version pauses ONE real write at the instant the risk exists (partial bytes already on
     // disk) and checks every observable view at that instant, so its running time no longer scales
-    // with 400 x scheduler delay. Every thread is released, stopped and joined in the finally. ----
+    // with 400 x scheduler delay. Every thread is released, interrupted and awaited in the finally,
+    // and the pool's termination is asserted. The pause sits in the serialization step, so this
+    // proves that a write never goes to the credential path in place; the final replace step (the
+    // atomic move itself) is outside what a caller-side pause can reach. ----
 
     @Test
     @DisplayName("a read() overlapping an in-flight write never observes a partial document, and the "
-            + "credential path keeps the previous complete document until the write lands (#569)")
+            + "credential path keeps the previous complete document while the new one is being written (#569)")
     void concurrentReadNeverObservesPartialWrite() throws Exception {
         // Pin migrate()'s old-location lookup to a path that does not exist, so migrate() is a no-op
         // here whatever UltiTools instance an earlier test class in the same fork left behind.
@@ -454,7 +461,7 @@ class CredentialStoreTest {
             Future<?> writer = pool.submit(() -> CredentialStore.write(next));
             awaitPause(writerPaused, writer);
             // The write is now in flight: CredentialStore.write(next) has not returned, and is
-            // part-way through serializing `next` with its first entry already flushed to disk.
+            // part-way through serializing `next`, with most of its first entry already flushed to disk.
             // Every violated view is collected, so one run reports all of them.
             List<String> violations = new ArrayList<>();
 
@@ -463,7 +470,9 @@ class CredentialStoreTest {
             if (filesHoldingAPartialDocument(dataFile.getParent()).isEmpty()) {
                 violations.add("control: while the write is paused, no file in the credential directory "
                         + "holds an unparseable prefix of the in-flight document, so this test no longer "
-                        + "exercises a write in progress and proves nothing");
+                        + "exercises a write in progress and proves nothing (if the store now serializes "
+                        + "into memory before writing, the pause point has to move, the store is not "
+                        + "necessarily broken)");
             }
 
             // (2) On-disk view -- what a crash at this instant, or any other process reading the
@@ -474,7 +483,8 @@ class CredentialStoreTest {
                 String onDisk = new String(Files.readAllBytes(dataFile), StandardCharsets.UTF_8);
                 if (!parses(onDisk)) {
                     violations.add("on disk: while a write was in flight the credential path held a "
-                            + "partial document (atomic temp-file-plus-move broken)");
+                            + "partial document -- the write went to the credential path in place instead "
+                            + "of to a temporary file");
                 }
                 if (!onDisk.contains("previous-complete-document")) {
                     violations.add("on disk: while a write was in flight the credential path no longer "
@@ -484,7 +494,10 @@ class CredentialStoreTest {
 
             // (3) In-process view: a read() issued now, while the write is in flight. It either
             // returns straight away or blocks on the store lock; the write is released only after
-            // one of the two has happened, so the read genuinely overlaps the write.
+            // one of the two has happened, so the read genuinely overlaps the write. This check can
+            // only tell apart a read path that takes no store lock at all (migrate() included): any
+            // lock on the way in holds the reader until the write is done. An in-place write is
+            // caught by (2) whatever the read path does.
             AtomicReference<Thread> readerThread = new AtomicReference<>();
             Future<CredentialStore.ReadResult> reader = pool.submit(() -> {
                 readerThread.set(Thread.currentThread());
@@ -516,6 +529,9 @@ class CredentialStoreTest {
             pool.shutdownNow();
             pool.awaitTermination(HANG_BOUND_MILLIS, TimeUnit.MILLISECONDS);
         }
+        assertThat(pool.isTerminated())
+                .as("no worker thread may outlive this test in the shared surefire fork")
+                .isTrue();
 
         // After the write lands, the paused document is there in full, not truncated by the pause.
         CredentialStore.ReadResult after = CredentialStore.read();
@@ -586,9 +602,11 @@ class CredentialStoreTest {
     /**
      * A credential document whose serialization pauses before its second entry: it holds the
      * caller inside {@link CredentialStore#write(Map)} -- after the first (bulk) entry has been
-     * handed to the writer and flushed to disk -- until the test releases it. Any serializer has to
-     * iterate the entries, so this needs no hook in the store. It must be a static nested class:
-     * Gson excludes anonymous and local classes and would serialize them as {@code null}.
+     * handed to the writer and mostly flushed to disk -- until the test releases it. Gson's map
+     * adapter serializes a map by iterating {@link #entrySet()} once, so this needs no hook in the
+     * store; a store that serialized some other way, or copied the map first, would pause elsewhere
+     * or not at all, and the test then fails with a message saying so. It must not be an anonymous
+     * or local class: Gson excludes those and would serialize them as {@code null}.
      */
     private static final class PausingDocument extends LinkedHashMap<String, Object> {
 
