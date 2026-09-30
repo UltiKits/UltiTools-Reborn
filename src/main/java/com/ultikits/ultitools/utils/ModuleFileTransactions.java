@@ -115,8 +115,17 @@ public final class ModuleFileTransactions {
      */
     private static final Object LOCK = new Object();
 
-    /** The modules (by identify-string) whose update is being downloaded right now; guarded by {@link #LOCK}. */
-    private static final java.util.Set<String> STAGING = new java.util.HashSet<>();
+    /**
+     * The modules (by identify-string) whose update is being downloaded right now, each with the
+     * module's name and old JAR file name an uninstall matches on; guarded by {@link #LOCK}.
+     */
+    private static final java.util.Map<String, String[]> STAGING = new java.util.HashMap<>();
+
+    /**
+     * The downloads in {@link #STAGING} an uninstall cancelled while they ran: their record is never
+     * written (round-9 review); guarded by {@link #LOCK}.
+     */
+    private static final java.util.Set<String> CANCELLED = new java.util.HashSet<>();
 
     private final File modulesFolder;
     private final File transactionsFolder;
@@ -257,7 +266,7 @@ public final class ModuleFileTransactions {
             if (reservation.refusal != null) {
                 return reservation.refusal;
             }
-            STAGING.add(key);
+            STAGING.put(key, new String[]{reservation.module.getPluginName(), reservation.oldJar.getName()});
         }
         record.oldSha256 = reservation.oldSha256;
         try {
@@ -266,6 +275,7 @@ public final class ModuleFileTransactions {
         } finally {
             synchronized (LOCK) {
                 STAGING.remove(key);
+                CANCELLED.remove(key);
             }
         }
     }
@@ -276,7 +286,7 @@ public final class ModuleFileTransactions {
      */
     private Reservation reserve(Record record, File work, String identifyString, List<UltiToolsPlugin> loaded,
                                 Function<UltiToolsPlugin, File> codeSource) {
-        if (STAGING.contains(record.key)) {
+        if (STAGING.containsKey(record.key)) {
             return Reservation.refused(StageResult.of(StageResult.Outcome.BUSY, null, null, null, null));
         }
         StageResult refusal = checkExisting(record);
@@ -460,6 +470,11 @@ public final class ModuleFileTransactions {
     /** Writes the {@code PENDING} record of a staged JAR, under the lock; the staging is discarded when it cannot be. */
     private StageResult writeStaged(Record record, File work, String previousFailure) {
         synchronized (LOCK) {
+            if (CANCELLED.contains(record.key)) {
+                // An uninstall of this module ran while it downloaded: the record is never written.
+                discardStaging(work);
+                return StageResult.failed(previousFailure, Keys.REASON_CANCELLED_WHILE_DOWNLOADING);
+            }
             try {
                 writeRecord(record);
             } catch (IOException e) {
@@ -531,6 +546,22 @@ public final class ModuleFileTransactions {
     }
 
     /**
+     * Marks the downloads running now that an uninstall matches -- by the module's name, or by the
+     * old JAR it removed -- so staging discards them instead of writing their record. Their version
+     * is not known yet, so they are not among the versions a cancellation returns; staging's own
+     * reply says it was cancelled. Called under {@link #LOCK}.
+     */
+    private static void cancelDownloads(String moduleName, java.util.Collection<String> removedJarNames) {
+        for (java.util.Map.Entry<String, String[]> download : STAGING.entrySet()) {
+            boolean byName = moduleName != null && moduleName.equals(download.getValue()[0]);
+            boolean byJar = removedJarNames != null && removedJarNames.contains(download.getValue()[1]);
+            if (byName || byJar) {
+                CANCELLED.add(download.getKey());
+            }
+        }
+    }
+
+    /**
      * {@link #cancelStagedUpdates(String, java.util.Collection)} by the runtime name alone.
      *
      * @param moduleName the module's runtime name
@@ -556,6 +587,7 @@ public final class ModuleFileTransactions {
      */
     public List<String> cancelStagedUpdates(String moduleName, java.util.Collection<String> removedJarNames) {
         synchronized (LOCK) {
+            cancelDownloads(moduleName, removedJarNames);
             List<String> cancelled = new ArrayList<>();
             List<File> recordFiles;
             try {
@@ -1986,6 +2018,7 @@ public final class ModuleFileTransactions {
         public static final String REASON_INVALID_JAR = "下载的文件 %s 不是有效的模块 JAR";
         public static final String REASON_WRONG_IDENTITY = "下载的 %s 没有声明 identify-string %s 和版本号";
         public static final String REASON_WRONG_VERSION = "下载的 %s 声明的版本是 %s，不是云端给出的最新版本 %s";
+        public static final String REASON_CANCELLED_WHILE_DOWNLOADING = "下载期间该模块已被卸载，本次更新已取消";
         public static final String REASON_RECORD_FAILED = "更新记录无法写入：%s";
         public static final String REASON_RECORD_UNREADABLE = "该模块已有的更新记录 %s 无法读取：%s";
         public static final String REASON_LEFTOVER_BACKUP = "%s 中有上一次更新留下、没有记录的旧版本 JAR；请先检查并移走它";
