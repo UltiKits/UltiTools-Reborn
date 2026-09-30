@@ -550,6 +550,33 @@ Each corrects behaviour that contradicted the documentation or left state held b
   annotation; an override without `@Scheduled` is not scheduled. A method that previously never ran
   because an abstract base declared it now runs; none of the fifteen UltiKits modules declares one.
 
+### Panel log stream and panel reply changes (6.3.0) that need no migration period
+
+Each corrects a declared behaviour the stream did not deliver. The panel protocol is unchanged.
+
+- **`ultipanel.logging.excluded-loggers` ships empty** (#485). The six defaults before 6.3.0
+  (`com.mojang.authlib`, `net.minecraft.network`, `org.apache.http`, `com.zaxxer.hikari`,
+  `org.eclipse.jetty`, `ErrorReportCollector`) could never match: the stream receives only
+  `java.util.logging` records, whose logger names are `Minecraft` (everything logged through
+  `Bukkit.getLogger()`), a plugin's own name, or `com.ultikits.ultitools.*`; those libraries log
+  through Log4j or SLF4J, and `ErrorReportCollector` never logs through JUL. A configured list is now
+  used as given. Nothing that reached the stream before is filtered differently.
+- **A log batch whose send fails is held and sent first** (#486), on the transmitter's own sender and
+  on the `batch_update` drain; no newer record is drained while one is held. Delivery stays best
+  effort: a batch whose connection drops just after it was written may arrive twice. Records the
+  full queue (1000 records) discards are counted and reported by one WARNING at most once a minute,
+  in the server log only. `UltiPanelLogTransmitter#holdUndelivered(JsonArray)` is added to that
+  internal class.
+- **Records logged before the stream starts reach it** (#487). From `onLoad` until the panel
+  connection opens, records are kept in a start-up buffer (2000 records, an estimated 512 KiB, five
+  minutes) and sent first, oldest first, when the stream starts. The buffer applies the stream's
+  filters as records arrive and is released without sending anything when there is no cloud login,
+  when the `logs` capability is off, or when its time is up.
+- **The `server.properties` refusal for a key the file does not hold** now reads `This key is not in
+  this server's server.properties` instead of `This server version has no such key` (#473): nothing
+  tells a key the running version lacks from one the file omits. A panel or tool that matched on the
+  old text must match the new one; the UltiPanel worker and frontend do not match on it.
+
 ## Binary incompatibilities the removal list cannot cover
 
 The removal list only covers changes where somebody knew they were changing an API. Both of its
