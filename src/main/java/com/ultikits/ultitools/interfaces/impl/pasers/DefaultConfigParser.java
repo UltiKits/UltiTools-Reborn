@@ -5,8 +5,6 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.MemoryConfiguration;
 import org.bukkit.configuration.MemorySection;
-import org.bukkit.configuration.serialization.ConfigurationSerializable;
-import org.bukkit.configuration.serialization.ConfigurationSerialization;
 import org.jetbrains.annotations.ApiStatus;
 
 import java.lang.reflect.Field;
@@ -19,10 +17,7 @@ import java.util.Map;
 import java.util.Set;
 
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Config binder serializes private fields to YAML -- see 08-GATE05-TRIAGE.md
-public class DefaultConfigParser extends ConfigParser<Object> implements DottedMapKeyRefusal {
-
-    private static final java.util.logging.Logger LOGGER =
-            java.util.logging.Logger.getLogger(DefaultConfigParser.class.getName());
+public class DefaultConfigParser extends ConfigParser<Object> {
 
 
     /**
@@ -90,42 +85,43 @@ public class DefaultConfigParser extends ConfigParser<Object> implements DottedM
      */
     @Override
     public MemorySection serializeToMemorySection(Object object) {
-        DottedMapKeyRefusal.Context context = DottedMapKeyRefusal.Context.current();
-        String path = context.path;
-        java.util.function.BiConsumer<String, String> refused = context.refused;
-        if (object instanceof Map) {
-            MemorySection mapSection = new MemoryConfiguration();
-            for (Map.Entry<?, ?> entry : ((Map<?, ?>) object).entrySet()) {
-                String name = keyName(entry.getKey());
-                // #553: the one refusal point - this map becomes a section, where '.' is the separator.
-                if (DottedMapKeyRefusal.storable(name, path, refused, LOGGER)) {
-                    mapSection.set(name, fileForm(entry.getValue(), DottedMapKeyRefusal.child(path, name), refused));
-                }
-            }
-            return mapSection;
-        }
         MemorySection memorySection = new MemoryConfiguration();
-        if (object instanceof Collection) {
-            int index = 0;
-            for (Object element : (Collection<?>) object) {
-                memorySection.set(String.valueOf(index++), plainForm(element));
+        if (object instanceof Map) {
+            for (Map.Entry<?, ?> entry : ((Map<?, ?>) object).entrySet()) {
+                // #523: an enum key by its name, the form the binder reads back (Enum#toString may differ).
+                memorySection.set(keyName(entry.getKey()), fileForm(entry.getValue()));
             }
             return memorySection;
         }
-        for (Map.Entry<String, Object> field : fieldsOf(object).entrySet()) {
-            memorySection.set(field.getKey(),
-                    fileForm(field.getValue(), DottedMapKeyRefusal.child(path, field.getKey()), refused));
+        if (object instanceof Collection) {
+            int index = 0;
+            for (Object element : (Collection<?>) object) {
+                memorySection.set(String.valueOf(index++), fileForm(element));
+            }
+            return memorySection;
+        }
+        for (Field field : ReflectionUtil.getFields(object.getClass())) {
+            int modifiers = field.getModifiers();
+            if (Modifier.isStatic(modifiers) || Modifier.isTransient(modifiers) || field.isSynthetic()) {
+                continue;
+            }
+            field.setAccessible(true);
+            Object fieldValue = ReflectionUtil.getFieldValue(object, field);
+            memorySection.set(field.getName(), fileForm(fieldValue));
         }
         return memorySection;
     }
 
     /**
-     * The form in which the framework writes a value this parser binds (#523), with no warning sink:
-     * a refused dotted key is reported to this class's logger. See {@link #fileForm(Object, String,
-     * java.util.function.BiConsumer)}.
+     * The form in which the framework writes a value this parser binds (#523): an enum constant by
+     * its name, a collection (a {@code List} or a {@code Set}) as a YAML list of {@linkplain #plainForm
+     * plain} elements, and everything else through {@link #serialize(Object)} exactly as 6.2 writes it.
+     * SnakeYAML would otherwise tag an enum with its Java class and write a {@code Set} as a tagged
+     * mapping, both of which the configuration loader refuses, and the binder could not read a typed
+     * collection back.
      * <p>
-     * Framework-internal: {@code public} only because the configuration entity lives in another
-     * package. Module code should not call it.
+     * Framework-internal: {@code public} only because the configuration entity that calls it lives in
+     * another package. Module code should not call it.
      *
      * @param value the value, possibly {@code null}
      * @return the value to put into the configuration
@@ -133,74 +129,28 @@ public class DefaultConfigParser extends ConfigParser<Object> implements DottedM
      */
     @ApiStatus.Internal
     public Object fileForm(Object value) {
-        return fileForm(value, "", null);
-    }
-
-    /**
-     * The form in which the framework writes a value this parser binds (#523): an enum constant by its
-     * name, a {@code UUID} as its text, a {@code ConfigurationSerializable} whose class is registered
-     * with Bukkit (a {@code Location}, an {@code ItemStack}) unchanged - Bukkit's own writer and loader
-     * handle it - a collection (a {@code List} or a {@code Set}) as a YAML list of {@linkplain #plainForm
-     * plain} elements, and a map or any other object through {@link #serializeToMemorySection(Object)},
-     * where a dotted map key is refused (#553) and reported to {@code refused} with the map's nested
-     * path. SnakeYAML would otherwise tag an enum or a {@code UUID} with its Java class, and write a
-     * {@code Set} as a tagged mapping, which the loader refuses; an unregistered {@code
-     * ConfigurationSerializable} is written as its fields, as before 6.3.0, because its {@code ==} class
-     * tag would make the file unloadable.
-     * <p>
-     * Framework-internal: {@code public} only because the configuration entity lives in another
-     * package. Module code should not call it.
-     *
-     * @param value   the value, possibly {@code null}
-     * @param path    the entry's path
-     * @param refused receives (nested path, refused key), or {@code null} for this class's logger
-     * @return the value to put into the configuration
-     * @since 6.3.0
-     */
-    @Override
-    @ApiStatus.Internal
-    public Object fileForm(Object value, String path, java.util.function.BiConsumer<String, String> refused) {
-        if (value == null || value instanceof String || BasicTypeUtil.isBasicType(value)) {
-            return value;
-        }
         if (value instanceof Enum) {
             return ((Enum<?>) value).name();
-        }
-        if (value instanceof java.util.UUID) {
-            return value.toString();
-        }
-        if (isRegisteredSerializable(value)) {
-            return value;
         }
         if (value instanceof Collection) {
             return plainForm(value);
         }
-        return DottedMapKeyRefusal.Context.with(path, refused, () -> serialize(value));
+        return value == null ? null : serialize(value);
     }
 
     /**
-     * The form of a value inside a list: plain YAML data, never a configuration section - a list
-     * element that is a section reads back as an empty {@code getMapList} entry. Bukkit keeps a list
-     * element's map whole, so a dotted key is kept too (#553 applies to sections only). An enum becomes
-     * its name, a {@code UUID} its text, a registered {@code ConfigurationSerializable} stays for Bukkit,
-     * a collection a list, a map or a section a map with plain values, and any other object the plain
-     * map of its fields.
+     * The form of a value inside a list, where 6.2 put every element into the file as it was: an enum
+     * becomes its name and a collection a list (#523), a map a map of such values - a map inside a list
+     * is plain data the file keeps whole, dotted keys included - and every other element is left as it
+     * is, exactly as 6.2 left it (a Bukkit {@code ConfigurationSerializable} such as an item, a section,
+     * any other object).
      *
      * @param value the value, possibly {@code null}
      * @return the plain form
      */
     private Object plainForm(Object value) {
-        if (value == null || value instanceof String || BasicTypeUtil.isBasicType(value)) {
-            return value;
-        }
         if (value instanceof Enum) {
             return ((Enum<?>) value).name();
-        }
-        if (value instanceof java.util.UUID) {
-            return value.toString();
-        }
-        if (isRegisteredSerializable(value)) {
-            return value;
         }
         if (value instanceof Collection) {
             List<Object> list = new ArrayList<>();
@@ -209,72 +159,18 @@ public class DefaultConfigParser extends ConfigParser<Object> implements DottedM
             }
             return list;
         }
-        Map<?, ?> entries = value instanceof Map ? (Map<?, ?>) value
-                : value instanceof ConfigurationSection ? ((ConfigurationSection) value).getValues(false)
-                : fieldsOf(value);
-        Map<String, Object> map = new LinkedHashMap<>();
-        for (Map.Entry<?, ?> entry : entries.entrySet()) {
-            map.put(keyName(entry.getKey()), plainForm(entry.getValue()));
+        if (value instanceof Map) {
+            Map<String, Object> map = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : ((Map<?, ?>) value).entrySet()) {
+                map.put(keyName(entry.getKey()), plainForm(entry.getValue()));
+            }
+            return map;
         }
-        return map;
+        return value;
     }
 
     /** A map key as written: an enum by its name (the form the binder reads back), anything else as text. */
     private static String keyName(Object key) {
         return key instanceof Enum ? ((Enum<?>) key).name() : String.valueOf(key);
-    }
-
-    /**
-     * The persistable fields of an object, by name, in declaration order: not {@code static}, not
-     * {@code transient}, not synthetic.
-     */
-    private static Map<String, Object> fieldsOf(Object object) {
-        Map<String, Object> fields = new LinkedHashMap<>();
-        for (Field field : ReflectionUtil.getFields(object.getClass())) {
-            int modifiers = field.getModifiers();
-            if (Modifier.isStatic(modifiers) || Modifier.isTransient(modifiers) || field.isSynthetic()) {
-                continue;
-            }
-            field.setAccessible(true);
-            fields.put(field.getName(), ReflectionUtil.getFieldValue(object, field));
-        }
-        return fields;
-    }
-
-    /**
-     * Whether Bukkit itself can write and read back {@code value}: a {@code ConfigurationSerializable}
-     * whose class is registered under the alias it is written with. Looked up on every call, because a
-     * module may register its class after an earlier write.
-     */
-    private static boolean isRegisteredSerializable(Object value) {
-        if (!(value instanceof ConfigurationSerializable)) {
-            return false;
-        }
-        Class<? extends ConfigurationSerializable> type = ((ConfigurationSerializable) value).getClass();
-        return ConfigurationSerialization.getClassByAlias(ConfigurationSerialization.getAlias(type)) == type;
-    }
-
-    /**
-     * Replaces every configuration section in {@code value} by an insertion-ordered map of its plain
-     * values - the form of a map inside a list, and of a map the configuration entity places into a
-     * file as data, as 6.2 did for a first-boot map default.
-     * <p>
-     * Framework-internal: {@code public} only because the configuration entity lives in another
-     * package.
-     *
-     * @param value a value, possibly a section
-     * @return the value with every section replaced by a map
-     * @since 6.3.0
-     */
-    @ApiStatus.Internal
-    public static Object plainData(Object value) {
-        if (!(value instanceof ConfigurationSection)) {
-            return value;
-        }
-        Map<String, Object> map = new LinkedHashMap<>();
-        for (Map.Entry<String, Object> entry : ((ConfigurationSection) value).getValues(false).entrySet()) {
-            map.put(entry.getKey(), plainData(entry.getValue()));
-        }
-        return map;
     }
 }

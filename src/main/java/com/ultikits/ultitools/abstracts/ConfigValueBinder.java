@@ -285,17 +285,6 @@ final class ConfigValueBinder {
             }
             return UNBOUND;
         }
-        if (target == java.util.UUID.class) {
-            // Written as its text by the default parser (a Java-class tag would make the file unreadable).
-            if (value instanceof String) {
-                try {
-                    return java.util.UUID.fromString(((String) value).trim());
-                } catch (IllegalArgumentException e) {
-                    return UNBOUND;
-                }
-            }
-            return UNBOUND;
-        }
         if (target == Character.class) {
             if (value instanceof String && ((String) value).length() == 1) {
                 return ((String) value).charAt(0);
@@ -518,7 +507,7 @@ final class ConfigValueBinder {
 
     static boolean isSimple(Class<?> type) {
         return type.isPrimitive() || type == String.class || type == Boolean.class || type == Character.class
-                || type == java.util.UUID.class || type.isEnum() || (Number.class.isAssignableFrom(type) && type.getName().startsWith("java.lang."));
+                || type.isEnum() || (Number.class.isAssignableFrom(type) && type.getName().startsWith("java.lang."));
     }
 
     static Class<?> boxed(Class<?> type) {
