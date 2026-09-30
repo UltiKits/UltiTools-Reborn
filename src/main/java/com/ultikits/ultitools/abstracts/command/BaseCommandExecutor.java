@@ -303,6 +303,12 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     /**
      * Executes the command method.
      * Supports both synchronous and asynchronous execution via @AsyncCommand or @RunAsync.
+     * <p>
+     * A synchronous body runs at once, inside the dispatch, when this is called on the server's
+     * primary thread -- which is where Bukkit dispatches every command a player, the console, a
+     * command block or the panel sends -- and is handed to {@code runTask} only when it is not
+     * (as of 6.3.0, #541; before, every synchronous body was deferred one tick). An
+     * {@code @AsyncCommand}/{@code @RunAsync} body always runs asynchronously.
      *
      * @param context          the command context
      * @param method           the method to execute
@@ -351,7 +357,16 @@ public abstract class BaseCommandExecutor implements TabExecutor {
 
         if (isAsync) {
             dispatchAsyncCommand(context, asyncCommand, runnable, reported);
+        } else if (Bukkit.isPrimaryThread()) {
+            // #541 (maintainer's answer of 2026-09-29): on the server thread the body runs now,
+            // inside the dispatch, as Bukkit's own commands do -- so a command block, a command
+            // minecart, the panel's remote command and RCON receive its replies while their
+            // output capture is still open, and a @CmdCD cooldown is recorded before the
+            // dispatch returns. Applies to every sender; no sender-type branch.
+            runnable.run();
         } else {
+            // Off the server thread the body must not touch the Bukkit API directly, so it is
+            // handed to the main thread, exactly as before 6.3.0.
             runnable.runTask(UltiTools.getInstance());
         }
     }
