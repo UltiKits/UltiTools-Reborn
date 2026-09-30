@@ -115,7 +115,14 @@ public class PluginManager {
 
     /** Framework i18n key: the {@code /ul reload} summary naming the modules that failed (#509). */
     static final String RELOAD_SUMMARY_FAILED_KEY =
-            "Failed to reload %d of %d modules: %s. The others reloaded; see the console for each failure.";
+            "Failed to reload %d of %d modules: %s. See the console for each failure.";
+
+    /**
+     * Framework i18n key: the line after {@link #RELOAD_SUMMARY_FAILED_KEY} when, besides the failed
+     * modules, some reloaded only partly; the partial modules' own lines follow it (#529; Codex
+     * review of #564, round 2).
+     */
+    static final String RELOAD_SUMMARY_MIXED_PARTIAL_KEY = "%d of the others reloaded only partially:";
 
     /** Framework i18n key: the {@code /ul reload} summary when no module failed but some reloaded only partly (#529). */
     static final String RELOAD_SUMMARY_PARTIAL_KEY = "Reloaded %d modules; %d only partially:";
@@ -1034,6 +1041,10 @@ public class PluginManager {
         if (!failed.isEmpty()) {
             summary.add(String.format(UltiTools.getInstance().i18n(RELOAD_SUMMARY_FAILED_KEY),
                     failed.size(), modules.size(), String.join(", ", failed)));
+            if (!partialLines.isEmpty()) {
+                summary.add(String.format(UltiTools.getInstance().i18n(RELOAD_SUMMARY_MIXED_PARTIAL_KEY),
+                        partialLines.size()));
+            }
         } else if (!partialLines.isEmpty()) {
             summary.add(String.format(UltiTools.getInstance().i18n(RELOAD_SUMMARY_PARTIAL_KEY),
                     modules.size(), partialLines.size()));
