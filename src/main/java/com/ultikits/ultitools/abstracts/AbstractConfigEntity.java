@@ -5,7 +5,6 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -16,7 +15,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
@@ -120,14 +118,6 @@ public abstract class AbstractConfigEntity {
     private static final Logger LOGGER = Logger.getLogger(AbstractConfigEntity.class.getName());
 
     /**
-     * Path separator of the view the framework reads a file through only to find map keys that
-     * contain {@code '.'} (#553), so that it can tell the operator to rename them. The configuration
-     * a module sees, and every value the framework binds, keep {@code '.'} as in 6.2. NUL cannot
-     * appear in a YAML key an operator writes.
-     */
-    private static final char MAP_KEY_SEPARATOR = '\u0000';
-
-    /**
      * A {@code @ConfigEntry} comment that is exactly one language key (#542): after trimming, the
      * whole comment is {@code {key}} with an ASCII key of letters, digits, {@code .}, {@code _} and
      * {@code -}. Any other comment - including one that merely contains {@code {player}} in its text -
@@ -229,12 +219,7 @@ public abstract class AbstractConfigEntity {
      */
     public void save() throws IOException {
         synchronized (this) {
-            for (Field field : configEntryFields()) {
-                ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
-                checkMapKeysBeforeWrite(field, annotation, entryPath(field, annotation),
-                        ReflectionUtil.getFieldValue(this, field), true);
-            }
-            applyFieldsTo(config);
+            applyFieldsTo(config, true);
             config.save(new File(ultiToolsPlugin.getConfigFolder() + File.separator + configFilePath));
             // #510: an explicit save is a caller's deliberate act and always writes, so the file now
             // holds what the framework just wrote - whatever state it was in before.
@@ -251,8 +236,19 @@ public abstract class AbstractConfigEntity {
      *
      * @param target the configuration to write the serialized field values into
      */
-    @SuppressWarnings("unchecked")
     private void applyFieldsTo(YamlConfiguration target) {
+        applyFieldsTo(target, false);
+    }
+
+    /**
+     * {@link #applyFieldsTo(YamlConfiguration)}, and, when {@code reportLeftOut} is set - only for
+     * {@link #save()} - one warning for each {@code null} value inside a map or an object that the
+     * default parser leaves out of the file ({@link #NULL_VALUE_WARNING}).
+     *
+     * @param target        the configuration to write the serialized field values into
+     * @param reportLeftOut whether to warn about each value left out
+     */
+    private void applyFieldsTo(YamlConfiguration target, boolean reportLeftOut) {
         for (Field field : ReflectionUtil.getFields(this.getClass())) {
             if (!field.isAnnotationPresent(ConfigEntry.class)) {
                 continue;
@@ -267,7 +263,13 @@ public abstract class AbstractConfigEntity {
             if (fieldValue == null) {
                 continue;
             }
-            target.set(path, serializeForFile(annotation, fieldValue));
+            List<String> leftOut = reportLeftOut ? new ArrayList<>() : null;
+            target.set(path, serializeForFile(annotation, fieldValue, leftOut));
+            if (leftOut != null) {
+                for (String nested : leftOut) {
+                    warnBinding(String.format(NULL_VALUE_WARNING, configFilePath, path, nested));
+                }
+            }
         }
         // #542: every framework write carries the one-token comments in the server's language, and
         // the shutdown comparison renders the same text.
@@ -666,11 +668,8 @@ public abstract class AbstractConfigEntity {
             // prevent. Explicit, not inherited from the system-property default.
             config.options().parseComments(true);
             lastLoadUnparseable = false;
-            String fileText = null;
             try {
-                // Read once: the check for dotted map keys (#553) looks at the same text.
-                fileText = readConfigText(file);
-                config.loadFromString(fileText);
+                config.load(file);
             } catch (FileNotFoundException ignored) {
                 // Mirrors the bare static factory's own behaviour for a missing file: a missing
                 // file is the normal "first run" case, not an error - config stays empty and every
@@ -683,7 +682,6 @@ public abstract class AbstractConfigEntity {
             }
             boolean upToDate = true;
             AbstractConfigEntity declaredDefaults = null;
-            YamlConfiguration keyView = lastLoadUnparseable ? null : keyPreservingView(fileText);
             tokenComments = resolveTokenComments(true);
             for (Field field : ReflectionUtil.getFields(this.getClass())) {
                 if (field.isAnnotationPresent(ConfigEntry.class)) {
@@ -699,8 +697,7 @@ public abstract class AbstractConfigEntity {
                     } else {
                         upToDate = false;
                         Object defaultValue = ReflectionUtil.getFieldValue(this, field);
-                        checkMapKeysBeforeWrite(field, annotation, path, defaultValue, false);
-                        config.set(path, fileFormOfDefault(annotation, defaultValue));
+                        config.set(path, defaultParserForm(annotation, defaultValue));
                         // D-07/D-09: the key never existed in the operator's file, so writing its
                         // @ConfigEntry comment alongside the value discloses nothing of theirs - this
                         // is D-01's first sanctioned exception, widened from "silently add a value" to
@@ -714,7 +711,6 @@ public abstract class AbstractConfigEntity {
                     }
                 }
             }
-            warnDottedMapKeys(keyView);
             // #542 (maintainer 2026-09-29, "rewrite in the current language on every save"): D-01's
             // second sanctioned exception. A one-token comment on a key already in the file is
             // rewritten when it differs from the text resolved in the server's current language - the
@@ -844,258 +840,65 @@ public abstract class AbstractConfigEntity {
     }
 
     /**
-     * The form in which a missing key's declared default is written into the file: a collection or an
-     * enum constant goes through the entry's parser, the form {@link #save()} writes - a {@code Set} as
-     * a YAML sequence, an enum by its name (#523), which is what {@link ConfigValueBinder} reads back;
-     * everything else, a map included, is written exactly as 6.2 writes it (#553, maintainer answer of
-     * 2026-09-30: warn only, the write path stays as in 6.2).
+     * Whether an entry's value is written in the #523 form - an enum constant by its name, a collection
+     * as a YAML list. Only an entry whose parser is exactly the framework's {@link DefaultConfigParser}
+     * is; a module's own parser, including one that extends the default, is written exactly as 6.2
+     * writes it on every path (raw on a first-boot write and a panel write, through its own {@code
+     * serialize} on {@link #save()}).
      *
-     * @param annotation   the entry's {@code @ConfigEntry}
-     * @param defaultValue the field's declared default, possibly {@code null}
-     * @return the value to put into the configuration
+     * @param annotation the entry's {@code @ConfigEntry}
+     * @return {@code true} if the entry uses the default parser itself
      */
-    private static Object fileFormOfDefault(ConfigEntry annotation, Object defaultValue) {
-        return defaultParserForm(annotation, defaultValue);
+    private static boolean usesDefaultParser(ConfigEntry annotation) {
+        return annotation.parser() == DefaultConfigParser.class;
     }
 
     /**
-     * The value a first-boot default or a panel write puts into the file: with the default parser, an
-     * enum constant by its name and a collection as a YAML list (#523, read back by {@link
-     * ConfigValueBinder}); anything else - and every value of a module's own parser, which 6.2 wrote raw
-     * on these two paths and still does - exactly as it is.
+     * The value a first-boot default or a panel write puts into the file. With the default parser an
+     * enum constant is written by its name and a collection as a YAML list (#523), the forms {@link
+     * ConfigValueBinder} reads back; everything else - and every value of a module's own parser ({@link
+     * #usesDefaultParser}) - is written exactly as 6.2 writes it on these two paths, as it is.
      *
      * @param annotation the entry's {@code @ConfigEntry}
      * @param value      the value, possibly {@code null}
      * @return the value to put into the configuration
      */
     private static Object defaultParserForm(ConfigEntry annotation, Object value) {
-        if ((value instanceof java.util.Collection || value instanceof Enum)
-                && DefaultConfigParser.class.isAssignableFrom(annotation.parser())) {
-            return serializeForFile(annotation, value);
+        if ((value instanceof java.util.Collection || value instanceof Enum) && usesDefaultParser(annotation)) {
+            return new DefaultConfigParser().fileForm(value);
         }
         return value;
     }
 
     /**
-     * Serializes a field value through its entry's parser, the form {@link #save()} writes. With the
-     * default parser a collection is written as a YAML list and an enum constant by its name (#523)
-     * ({@code DefaultConfigParser#fileForm}); everything else - maps, objects - is written exactly as
-     * 6.2 writes it. A module's own parser serializes exactly as it always did.
+     * Serializes a field value the way {@link #save()} writes it. With the default parser ({@link
+     * #usesDefaultParser}) that is {@code DefaultConfigParser#fileForm}: a collection as a YAML list, an
+     * enum constant by its name (#523), everything else - maps, objects - as 6.2 writes it, except that a
+     * {@code null} value inside a map or an object is left out (6.2 stopped the save with a {@code
+     * NullPointerException}). A module's own parser serializes exactly as it always did.
      *
      * @param annotation the entry's {@code @ConfigEntry}
      * @param value      the value, never {@code null}
+     * @param leftOut    receives the nested path of each {@code null} value left out, or {@code null}
      * @return the value to put into the configuration
      */
     @SuppressWarnings("unchecked")
-    private static Object serializeForFile(ConfigEntry annotation, Object value) {
+    private static Object serializeForFile(ConfigEntry annotation, Object value, List<String> leftOut) {
+        if (usesDefaultParser(annotation)) {
+            return new DefaultConfigParser().fileForm(value, leftOut);
+        }
         com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser<Object> parser =
                 ReflectionUtil.newInstance(annotation.parser());
-        if (parser instanceof DefaultConfigParser) {
-            return ((DefaultConfigParser) parser).fileForm(value);
-        }
         return parser.serialize(value);
     }
 
     /**
-     * The one warning about a dotted map key (#553; maintainer answer of 2026-09-30: warn only, the
-     * write path stays as in 6.2). Arguments: the file, the entry, the key, the nested path of the map
-     * holding it, and the nested levels it becomes.
+     * The warning {@link #save()} gives for a {@code null} value inside a map or an object, which it
+     * leaves out of the file. Arguments: the file, the entry, and the nested path of the value.
      */
-    private static final String DOTTED_KEY_WARNING = "Config file '%s', entry '%s': map key '%s' in '%s' contains"
-            + " '.', which the configuration file uses as its path separator, so it will be split into nested levels"
-            + " (%s) the next time this file is loaded; rename it (for example with '-' or '_')";
-
-    /** The warning about a null map value that {@link #save()} leaves out, as it always has. */
-    private static final String NULL_MAP_VALUE_WARNING = "Config file '%s', entry '%s': map key '%s' in '%s' has no"
-            + " value (null), so it is not written; give it a value or remove it";
-
-    /**
-     * The one scope rule of the dotted-key check (#553; orchestrator ruling of 2026-09-30): an entry is
-     * checked when its declared type is a {@code Map} and it is written by one of the two built-in
-     * parsers. A module's own parser decides its keys itself.
-     */
-    private static boolean checksMapKeys(Field field, ConfigEntry annotation) {
-        Class<?> parser = annotation.parser();
-        return Map.class.isAssignableFrom(field.getType())
-                && (DefaultConfigParser.class.isAssignableFrom(parser)
-                || com.ultikits.ultitools.interfaces.impl.pasers.StringHashMapParser.class.isAssignableFrom(parser));
-    }
-
-    private static String entryPath(Field field, ConfigEntry annotation) {
-        return annotation.path().isEmpty() ? field.getName() : annotation.path();
-    }
-
-    /** Receives one map entry reached by {@link #walkDeclaredMaps}. */
-    private interface MapEntryVisitor {
-        void visit(String mapPath, String key, Object value);
-    }
-
-    /**
-     * The one walk both checks share (#553): the entries of {@code value} - a {@code Map} in memory or a
-     * section of the file - and, as far as the declared type says the values are maps too, the entries
-     * of those maps, each with the nested path of its map. Never reflects into an object, never enters a
-     * value the declared type does not call a map ({@code ConfigurationSerializable} and list values
-     * included), keeps no identity state, so a map shared by two keys is visited on each path. The depth
-     * is bounded by the declared type.
-     */
-    private static void walkDeclaredMaps(Object value, java.lang.reflect.Type declared, String path,
-                                         MapEntryVisitor visitor) {
-        Map<?, ?> entries = value instanceof ConfigurationSection
-                ? ((ConfigurationSection) value).getValues(false)
-                : value instanceof Map ? (Map<?, ?>) value : null;
-        if (entries == null) {
-            return;
-        }
-        java.lang.reflect.Type valueType = declared instanceof java.lang.reflect.ParameterizedType
-                && ((java.lang.reflect.ParameterizedType) declared).getActualTypeArguments().length == 2
-                ? ((java.lang.reflect.ParameterizedType) declared).getActualTypeArguments()[1] : Object.class;
-        boolean valuesAreMaps = Map.class.isAssignableFrom(ConfigValueBinder.rawClass(valueType));
-        for (Map.Entry<?, ?> entry : entries.entrySet()) {
-            Object rawKey = entry.getKey();
-            String key = rawKey instanceof Enum ? ((Enum<?>) rawKey).name() : String.valueOf(rawKey);
-            visitor.visit(path, key, entry.getValue());
-            if (valuesAreMaps) {
-                walkDeclaredMaps(entry.getValue(), valueType, path + "." + key, visitor);
-            }
-        }
-    }
-
-    /**
-     * Runs the shared walk for one entry, naming each dotted key once per (entry, nested path, key) and,
-     * when {@code reportNulls} is set, each null value; any failure inside - a {@code RuntimeException},
-     * a {@code LinkageError} from a class a missing plugin would provide, a {@code StackOverflowError} -
-     * is logged once and never leaves the caller.
-     */
-    private void checkMapKeys(Field field, String entry, Object value, boolean reportNulls) {
-        Set<String> reported = new java.util.HashSet<>();
-        try {
-            walkDeclaredMaps(value, field.getGenericType(), entry, (mapPath, key, child) -> {
-                if (key.indexOf('.') >= 0 && reported.add(mapPath + '\u0000' + key)) {
-                    warnBinding(String.format(DOTTED_KEY_WARNING, configFilePath, entry, key, mapPath,
-                            key.replace(".", " -> ")));
-                }
-                if (reportNulls && child == null && reported.add("null\u0000" + mapPath + '\u0000' + key)) {
-                    warnBinding(String.format(NULL_MAP_VALUE_WARNING, configFilePath, entry, key, mapPath));
-                }
-            });
-        } catch (RuntimeException | LinkageError | StackOverflowError e) {
-            String moduleName = ultiToolsPlugin != null ? ultiToolsPlugin.getPluginName() : null;
-            LOGGER.log(Level.WARNING, (moduleName != null ? "[" + moduleName + "] " : "") + String.format(
-                    "Config file '%s', entry '%s': could not check its map keys for '.'; nothing else changes",
-                    configFilePath, entry), e);
-        }
-    }
-
-    /**
-     * Read-only check before a framework write of one entry (#553): see {@link #checksMapKeys} for the
-     * scope and {@link #walkDeclaredMaps} for the walk. Never changes a value or the file. {@code
-     * reportNulls} is set for {@link #save()}, whose serializer leaves a null map value out; a first-boot
-     * default and a panel write put the map in raw, null values included, as 6.2 does.
-     */
-    private void checkMapKeysBeforeWrite(Field field, ConfigEntry annotation, String entry, Object value,
-                                         boolean reportNulls) {
-        if (value != null && checksMapKeys(field, annotation)) {
-            checkMapKeys(field, entry, value, reportNulls);
-        }
-    }
-
-    /**
-     * Warns, once per load, about every map key in the file that contains a dot (#553): the loader
-     * reads it as a nested path ({@code my.rule} as {@code my} -> {@code rule}), exactly as in 6.2, and
-     * the operator is asked to rename it. Same scope and walk as the check before a write ({@link
-     * #checksMapKeys}, {@link #walkDeclaredMaps}), over the text this load already read.
-     *
-     * @param keyView the file read with a separator no key contains, or {@code null}
-     */
-    private void warnDottedMapKeys(YamlConfiguration keyView) {
-        if (keyView == null) {
-            return;
-        }
-        for (Field field : configEntryFields()) {
-            ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
-            if (!checksMapKeys(field, annotation)) {
-                continue;
-            }
-            String path = entryPath(field, annotation);
-            Object section;
-            try {
-                section = keyView.get(path.replace('.', MAP_KEY_SEPARATOR));
-            } catch (RuntimeException e) {
-                continue;
-            }
-            if (section instanceof ConfigurationSection) {
-                checkMapKeys(field, path, section, false);
-            }
-        }
-    }
-
-    /**
-     * Reads a configuration file's text exactly as {@code YamlConfiguration#load(File)} does - UTF-8,
-     * line by line, each line ended by {@code \n} - so that loading it with {@code loadFromString}
-     * gives the same configuration, and the check for dotted map keys (#553) looks at the same text
-     * instead of a second read.
-     *
-     * @param file the configuration file
-     * @return its text
-     * @throws FileNotFoundException if it does not exist or is not a regular file, as {@code load} does
-     * @throws IOException           if it cannot be read
-     */
-    private static String readConfigText(File file) throws IOException {
-        StringBuilder text = new StringBuilder();
-        try (java.io.BufferedReader reader = new java.io.BufferedReader(
-                new java.io.InputStreamReader(new java.io.FileInputStream(file), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                text.append(line).append('\n');
-            }
-        }
-        return text.toString();
-    }
-
-    private static boolean hasCheckedField(List<Field> configFields) {
-        for (Field field : configFields) {
-            if (checksMapKeys(field, ReflectionUtil.getAnnotation(field, ConfigEntry.class))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * The view {@link #warnDottedMapKeys} reads a text this entity read through, or {@code null} when
-     * no entry of this class is checked or there is no text.
-     *
-     * @param text the file's text as read, or {@code null}
-     * @return the view, or {@code null}
-     */
-    private YamlConfiguration keyPreservingView(String text) {
-        if (text == null || !hasCheckedField(configEntryFields())) {
-            return null;
-        }
-        return parseKeyPreserving(text);
-    }
-
-    /**
-     * @param text a YAML text
-     * @return {@code text} parsed with {@link #MAP_KEY_SEPARATOR} as its path separator, comments
-     *         kept, or {@code null} if it cannot be parsed
-     */
-    private static YamlConfiguration parseKeyPreserving(String text) {
-        if (text == null) {
-            return null;
-        }
-        YamlConfiguration view = new YamlConfiguration();
-        view.options().parseComments(true);
-        view.options().pathSeparator(MAP_KEY_SEPARATOR);
-        try {
-            view.loadFromString(text);
-        } catch (InvalidConfigurationException | RuntimeException e) {
-            // Only used to warn about dotted keys: a text this view cannot read (a key ending in NUL)
-            // simply gets no such warning.
-            return null;
-        }
-        return view;
-    }
+    private static final String NULL_VALUE_WARNING = "Config file '%s', entry '%s': '%s' has no value (null), so it"
+            + " is left out of the file (6.2 stopped this save with a NullPointerException and left the file"
+            + " unchanged); give it a value or remove it";
 
     /**
      * Gives a boxed numeric field exactly the widening conversions its primitive already gets.
@@ -1313,7 +1116,6 @@ public abstract class AbstractConfigEntity {
                     path = field.getName();
                 }
                 Object value = ReflectionUtil.getFieldValue(this, field);
-                checkMapKeysBeforeWrite(field, annotation, path, value, false);
                 // With the default parser an enum or a collection is written in the form the loader reads
                 // back (#523); every other value, and every value of a module's own parser, is written as
                 // it always was (the raw Gson value).
@@ -1746,10 +1548,8 @@ public abstract class AbstractConfigEntity {
             config = new YamlConfiguration();
             config.options().parseComments(true);
             lastLoadUnparseable = false;
-            String fileText = null;
             try {
-                fileText = readConfigText(file);
-                config.loadFromString(fileText);
+                config.load(file);
             } catch (FileNotFoundException ignored) {
                 // Mirrors init()'s own handling above: a missing file is the normal case, not an
                 // error - config stays empty and every field below simply keeps its current value.
@@ -1761,7 +1561,6 @@ public abstract class AbstractConfigEntity {
 
             // Update field values
             AbstractConfigEntity declaredDefaults = null;
-            YamlConfiguration keyView = lastLoadUnparseable ? null : keyPreservingView(fileText);
             for (Field field : ReflectionUtil.getFields(this.getClass())) {
                 if (field.isAnnotationPresent(ConfigEntry.class)) {
                     field.setAccessible(true);
@@ -1776,7 +1575,6 @@ public abstract class AbstractConfigEntity {
                     }
                 }
             }
-            warnDottedMapKeys(keyView);
             // #510: same snapshot point as init(). A field whose key is absent from the file keeps its
             // in-memory value above, but the snapshot is taken from the file's text, so that value is
             // still seen as unsaved if it differs from what the file implies.

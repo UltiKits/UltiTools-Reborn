@@ -9,8 +9,10 @@ import org.jetbrains.annotations.ApiStatus;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,6 +21,14 @@ import java.util.Set;
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Config binder serializes private fields to YAML -- see 08-GATE05-TRIAGE.md
 public class DefaultConfigParser extends ConfigParser<Object> {
 
+    /**
+     * While {@link #fileForm(Object, List)} runs: receives the nested path of each {@code null} value
+     * left out of a section. {@code null} otherwise, so an instance a module shares keeps no state.
+     */
+    private List<String> leftOutNulls;
+
+    /** While {@link #fileForm(Object, List)} runs: the keys from the value's root to the current section. */
+    private Deque<String> path;
 
     /**
      * Turns a raw YAML value into plain Java values: a section becomes a {@link LinkedHashMap}
@@ -88,15 +98,14 @@ public class DefaultConfigParser extends ConfigParser<Object> {
         MemorySection memorySection = new MemoryConfiguration();
         if (object instanceof Map) {
             for (Map.Entry<?, ?> entry : ((Map<?, ?>) object).entrySet()) {
-                // #523: an enum key by its name, the form the binder reads back (Enum#toString may differ).
-                memorySection.set(keyName(entry.getKey()), fileForm(entry.getValue()));
+                put(memorySection, String.valueOf(keyForm(entry.getKey())), entry.getValue());
             }
             return memorySection;
         }
         if (object instanceof Collection) {
             int index = 0;
             for (Object element : (Collection<?>) object) {
-                memorySection.set(String.valueOf(index++), fileForm(element));
+                put(memorySection, String.valueOf(index++), element);
             }
             return memorySection;
         }
@@ -107,9 +116,34 @@ public class DefaultConfigParser extends ConfigParser<Object> {
             }
             field.setAccessible(true);
             Object fieldValue = ReflectionUtil.getFieldValue(object, field);
-            memorySection.set(field.getName(), fileForm(fieldValue));
+            put(memorySection, field.getName(), fieldValue);
         }
         return memorySection;
+    }
+
+    /**
+     * Sets {@code key} in {@code section} to the file form of {@code value}. A {@code null} value is
+     * left out - the section never holds it, as {@code MemorySection#set(key, null)} would leave it -
+     * and, while {@link #fileForm(Object, List)} runs, its nested path is recorded. (6.2 stopped here
+     * with a {@code NullPointerException}.)
+     */
+    private void put(MemorySection section, String key, Object value) {
+        if (value == null) {
+            if (leftOutNulls != null) {
+                leftOutNulls.add(path.isEmpty() ? key : String.join(" -> ", path) + " -> " + key);
+            }
+            return;
+        }
+        if (leftOutNulls == null) {
+            section.set(key, fileForm(value));
+            return;
+        }
+        path.addLast(key);
+        try {
+            section.set(key, fileForm(value));
+        } finally {
+            path.removeLast();
+        }
     }
 
     /**
@@ -139,6 +173,35 @@ public class DefaultConfigParser extends ConfigParser<Object> {
     }
 
     /**
+     * {@link #fileForm(Object)}, recording in {@code leftOutNulls} the nested path of each {@code null}
+     * value inside a map or an object that is left out of the file ({@code key -> key}, relative to
+     * {@code value}), so that the caller can name it.
+     * <p>
+     * Framework-internal, like {@link #fileForm(Object)}.
+     *
+     * @param value        the value, possibly {@code null}
+     * @param leftOutNulls receives the paths, or {@code null} to record nothing
+     * @return the value to put into the configuration
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public Object fileForm(Object value, List<String> leftOutNulls) {
+        if (leftOutNulls == null) {
+            return fileForm(value);
+        }
+        List<String> previousNulls = this.leftOutNulls;
+        Deque<String> previousPath = this.path;
+        this.leftOutNulls = leftOutNulls;
+        this.path = new ArrayDeque<>();
+        try {
+            return fileForm(value);
+        } finally {
+            this.leftOutNulls = previousNulls;
+            this.path = previousPath;
+        }
+    }
+
+    /**
      * The form of a value inside a list, where 6.2 put every element into the file as it was: an enum
      * becomes its name and a collection a list (#523), a map a map of such values whose enum keys become
      * their names and whose other keys stay as they are - a map inside a list is plain data the file
@@ -160,20 +223,25 @@ public class DefaultConfigParser extends ConfigParser<Object> {
             return list;
         }
         if (value instanceof Map) {
-            // Only an enum key changes (to its name); every other key stays the object it is, so an
-            // integer key is written as the integer 6.2 wrote (`1: a`), not as text.
             Map<Object, Object> map = new LinkedHashMap<>();
             for (Map.Entry<?, ?> entry : ((Map<?, ?>) value).entrySet()) {
-                Object key = entry.getKey();
-                map.put(key instanceof Enum ? ((Enum<?>) key).name() : key, plainForm(entry.getValue()));
+                map.put(keyForm(entry.getKey()), plainForm(entry.getValue()));
             }
             return map;
         }
         return value;
     }
 
-    /** A map key as written: an enum by its name (the form the binder reads back), anything else as text. */
-    private static String keyName(Object key) {
-        return key instanceof Enum ? ((Enum<?>) key).name() : String.valueOf(key);
+    /**
+     * The one rule for a map key the framework writes (#523): an enum constant by its name, the form the
+     * binder reads back ({@code Enum#toString} may differ); any other key stays the object it is. A
+     * section key is its text ({@code String.valueOf}); a map inside a list keeps the key itself, so an
+     * integer key is written as the integer 6.2 wrote ({@code 1: a}).
+     *
+     * @param key the key
+     * @return the key as written
+     */
+    private static Object keyForm(Object key) {
+        return key instanceof Enum ? ((Enum<?>) key).name() : key;
     }
 }
