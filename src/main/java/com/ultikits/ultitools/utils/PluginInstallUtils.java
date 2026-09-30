@@ -381,7 +381,7 @@ public class PluginInstallUtils {
         try {
             HttpDownloadUtils.download(pluginVersionDownloadLink,
                     fileName,
-                    UltiTools.getInstance().getDataFolder() + "/plugins");
+                    modulesFolder().getPath());
             return true;
         } catch (IOException e) {
             UltiTools.getInstance().getLogger().severe("Failed to download plugin: " + e.getMessage());
@@ -410,7 +410,7 @@ public class PluginInstallUtils {
         try {
             HttpDownloadUtils.download(pluginVersionDownloadLink,
                     fileName,
-                    UltiTools.getInstance().getDataFolder() + "/plugins");
+                    modulesFolder().getPath());
             return true;
         } catch (IOException e) {
             UltiTools.getInstance().getLogger().severe("Failed to download plugin: " + e.getMessage());
@@ -1525,18 +1525,15 @@ public class PluginInstallUtils {
     }
 
     /**
-     * The folder the uninstall acts on.
-     *
-     * <p>{@code PluginManager#init} scans {@code System.getProperty("user.dir")} +
-     * {@code /plugins/UltiTools/plugins} while this reads the framework's own data folder. On a
-     * server started from its own root the two are one path and can diverge when it is not; that
-     * they are computed twice is gate 1's IN-05, filed as its own issue. This side uses the data
-     * folder because every other file the uninstall touches is relative to it.
+     * The modules folder install and uninstall act on: the one {@code PluginManager#init} scans and
+     * the module class loader reads, from the one method that computes it (#517). Before 6.3.0 the
+     * scan read {@code System.getProperty("user.dir")} + {@code /plugins/UltiTools/plugins} while
+     * this read the data folder, and the two diverged on a server started from another directory.
      *
      * @return the modules folder
      */
     private static File modulesFolder() {
-        return new File(UltiTools.getInstance().getDataFolder() + "/plugins");
+        return ModuleFileTransactions.modulesFolder(UltiTools.getInstance().getDataFolder());
     }
 
     /** The state-D failure: the folder is there, and what it holds is unknown. */

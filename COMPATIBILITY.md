@@ -485,6 +485,12 @@ This section governs the third kind.
   `PluginInstallUtils.RemovalDeferredException` (`@ApiStatus.Internal`), a
   `java.nio.file.FileSystemException` that names every recorded file as before. Only when the
   record cannot be written does the plain `FileSystemException` leave as it did.
+- The modules folder is computed in one place, `<plugin data folder>/plugins` (#517). Before 6.3.0
+  the start-up scan read `System.getProperty("user.dir")` + `/plugins/UltiTools/plugins` while the
+  module class loader, install, update and uninstall read the data folder; on a server whose JVM was
+  started from another working directory the scan found JARs the class loader did not hold, and
+  `/upm` acted on a folder the scan did not read. The data folder follows Bukkit's own plugin
+  directory, so a server started from its root is unaffected.
 
 ### Behavioral changes that do need one
 

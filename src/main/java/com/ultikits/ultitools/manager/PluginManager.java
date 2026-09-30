@@ -170,9 +170,10 @@ public class PluginManager {
         registerFrameworkScheduledOwners();
         registerPlayerQuitListener();
         registerPluginDisableListener();
-        String currentPath = System.getProperty("user.dir");
-        String path = currentPath + File.separator + "plugins" + File.separator + "UltiTools" + File.separator + "plugins";
-        File pluginFolder = new File(path);
+        // #517: the same folder the module class loader was built over, from the one method that
+        // computes it -- not the JVM's working directory, which a launcher may set anywhere.
+        File pluginFolder = com.ultikits.ultitools.utils.ModuleFileTransactions.modulesFolder(
+                UltiTools.getInstance().getDataFolder());
         File[] plugins = pluginFolder.listFiles((file) -> file.getName().endsWith(".jar"));
 
         if (plugins == null) {

@@ -261,7 +261,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             sendUnreadableEntriesOf(sender, e);
         } catch (IOException e) {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("删除失败！文件访问错误！请手动删除！"));
-            sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"));
+            sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), modulesFolderPath()));
         }
         if (!refused) {
             // An uninstall that went ahead, whatever it could delete, also cancels any update of the
@@ -284,6 +284,11 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
                 "以下模块 JAR 暂时无法删除（被占用或不可写：%s），已记录，将在下次启动、加载模块之前删除：%s"),
                 deferred.getReason(), String.join(", ", deferred.deferredFiles())));
+    }
+
+    /** The modules folder, as the uninstall replies name it -- the one the loader reads (#517). */
+    private static String modulesFolderPath() {
+        return ModuleFileTransactions.modulesFolder(UltiTools.getInstance().getDataFolder()).getAbsolutePath();
     }
 
     /**
@@ -357,7 +362,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             }
             if (jarFailure instanceof IOException) {
                 sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("删除失败！文件访问错误！请手动删除！"));
-                sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"));
+                sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), modulesFolderPath()));
                 return;
             }
         }
@@ -411,7 +416,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         files.removeAll(undeterminedOf(failure));
         sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("卸载失败！以下模块 JAR 文件无法删除，重启后模块会再次加载，请手动删除：%s"),
                 files.isEmpty()
-                        ? UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"
+                        ? modulesFolderPath()
                         : String.join(", ", files)));
     }
 

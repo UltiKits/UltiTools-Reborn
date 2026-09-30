@@ -352,7 +352,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     private void initPluginModules() {
         pluginManager = new PluginManager();
-        File file = new File(getDataFolder() + File.separator + "plugins");
+        File file = ModuleFileTransactions.modulesFolder(getDataFolder());
         if (!file.exists()) {
             //noinspection ResultOfMethodCallIgnored
             file.mkdirs();
