@@ -488,10 +488,13 @@ This section governs the third kind.
   is logged against the older copy's name and version while the incoming copy goes on loading. As in
   `PluginManager#close()`, every `Exception` or `Error` the older copy throws counts as its own
   failure. Because both copies share a module name,
-  `TabCompletionManager`, `EventBus` and `PanelResponderRegistry` now also record the registering
-  module instance, and `unregister` releases by instance first; a registration filed under the
-  module's name only is released by name as before, except while another loaded copy shares that
-  name, when it stays until the last copy of the name is unloaded. Added, all `@since 6.3.0`:
+  `TabCompletionManager`, `EventBus` and `PanelResponderRegistry` can now also record the registering
+  module instance, and `unregister` releases by instance first. The framework records it for every
+  completer a module registers while it loads and for every `@ModuleEventHandler` method; a panel
+  responder or a programmatic EventBus subscription records it only when registered through the new
+  overload that takes the instance. A registration filed under the module's name only is released by
+  name as before, except while another loaded copy shares that name, when it stays until the last
+  copy of the name is unloaded. Added, all `@since 6.3.0`:
   `TabCompletionManager#beginRegistrationScope(String, UltiToolsPlugin)` and
   `#unregisterByOwnerInstance(UltiToolsPlugin)`; `EventBus#register(...)` with an owner-instance
   parameter and `#unregisterByOwnerInstance(UltiToolsPlugin)`; `PanelResponderRegistry#registerResponder(...)`
