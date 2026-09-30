@@ -62,6 +62,27 @@ class AuditReachesPluginLoggerTest {
         lenient().when(ultiTools.getLogger()).thenReturn(pluginLogger);
         ultiToolsMock = mockStatic(UltiTools.class);
         ultiToolsMock.when(UltiTools::getInstance).thenReturn(ultiTools);
+
+        // Both classes attach their bridge in a static initializer, once per JVM. Initialize them here,
+        // then restore the bridge if an earlier test in the same JVM stripped the logger's handlers
+        // (the handler list of a named JUL logger is global state; MockBukkit-based tests are known to
+        // leave it empty). That the initializers do attach a bridge is asserted on the source text in
+        // ClassloadAuditQuietStartTest, which does not depend on this state.
+        ClassloadFilterAudit.classify(null);
+        ModuleScanDiagnostics.emitSummary(null);
+        ensureBridge(Logger.getLogger(ClassloadFilterAudit.class.getName()), ClassloadFilterAudit.FORWARD_LEVEL);
+        ensureBridge(Logger.getLogger(ModuleScanDiagnostics.class.getName()), Level.ALL);
+    }
+
+    private static void ensureBridge(Logger logger, Level level) {
+        logger.setLevel(Level.ALL);
+        logger.setUseParentHandlers(false);
+        for (Handler handler : logger.getHandlers()) {
+            if (handler instanceof PluginLoggerBridge) {
+                return;
+            }
+        }
+        logger.addHandler(new PluginLoggerBridge(level));
     }
 
     @AfterEach

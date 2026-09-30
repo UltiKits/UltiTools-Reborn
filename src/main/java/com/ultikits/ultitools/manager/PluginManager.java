@@ -893,13 +893,10 @@ public class PluginManager {
         }
 
         try {
-            // GEN-07 (D-14): records what the removed classload filter layers would have refused
-            // for mainClassName, independent of whether loadClass below succeeds, throws
-            // ClassNotFoundException, or throws SecurityException -- classify() is a pure function
-            // of the name alone. Purely observational; never refuses. Kept for parity with every
-            // other class-load call site in this class even though there is now exactly one class
-            // to evaluate per module.
-            ClassLoaderUtils.recordClassloadFilterAudit(pluginJar.getName(), mainClassName);
+            // No class-load audit here (#557): this step used to record the main class and emit a
+            // summary for the jar, and the entity scan then emitted a second summary for the same jar,
+            // so every module was reported twice. The entity scan visits every class of the jar,
+            // including this one, so it is the single audit per module.
             // Use security-validated class loading (checks dangerous classes/packages)
             // but NOT loadPluginClass() which rejects non-UltiToolsPlugin classes
             Class<?> aClass = ClassLoaderUtils.loadClass(mainClassName);
@@ -947,10 +944,6 @@ public class PluginManager {
                 "[UltiTools-API] Security violation while loading declared main class '"
                     + mainClassName + "' for module '" + pluginJar.getName() + "': " + e.getMessage());
             return null;
-        } finally {
-            // GEN-07 (D-14): the audit summary, for parity with every other call site -- see
-            // recordClassloadFilterAudit's own comment above.
-            ClassLoaderUtils.emitClassloadFilterAuditSummary(pluginJar.getName());
         }
     }
 
@@ -1013,14 +1006,11 @@ public class PluginManager {
         } finally {
             // D-19: fires after the entity scan loop finishes, whether it completed normally or
             // the jar itself could not be read -- exactly once per call, naming pluginJar as the
-            // module. Independent of loadPluginMainClass's own emitSummary call above: the two
-            // scan the same jar for different purposes and may run at different times, so each
-            // owns its own accumulator lifecycle for the classes it individually recorded.
+            // module.
             ModuleScanDiagnostics.emitSummary(pluginJar.getName());
-            // GEN-07 (D-14): the audit summary lands at the same point, so the two diagnostics
-            // read as one pattern rather than two. Same independence rationale as
-            // ModuleScanDiagnostics above -- this scan owns its own ClassloadFilterAudit
-            // accumulator lifecycle, separate from loadPluginMainClass's.
+            // GEN-07 (D-14): the class-load audit summary lands at the same point, so the two
+            // diagnostics read as one pattern. This is the only place a jar's audit is emitted
+            // (#557): the scan records every class of the jar, the main class included.
             ClassLoaderUtils.emitClassloadFilterAuditSummary(pluginJar.getName());
         }
         return entities;

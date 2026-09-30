@@ -170,6 +170,7 @@ class ClassloadAuditQuietStartTest {
             assertThat(source.length()).as("control: %s was read", file).isGreaterThan(1000);
             assertThat(source).as("%s must not attach its own console handler", file).doesNotContain("ConsoleHandler");
             assertThat(source).as("%s must not write to System.err", file).doesNotContain("System.err");
+            assertThat(source).as("%s forwards to the plugin logger", file).contains("new PluginLoggerBridge(");
         }
     }
 
