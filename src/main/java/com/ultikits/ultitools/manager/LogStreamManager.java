@@ -87,7 +87,7 @@ public class LogStreamManager implements Listener {
         // old object. Its shutdown flush first sends what the old connection still can (the same
         // client reconnecting); after a reconnect on a fresh client that flush fails and the records
         // are still here.
-        com.google.gson.JsonArray unsent = null;
+        JsonArray unsent = null;
         if (logTransmitter != null) {
             try {
                 logTransmitter.shutdown();

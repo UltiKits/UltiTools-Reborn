@@ -362,6 +362,33 @@ public class UltiPanelLogTransmitter {
         return webSocketClient.isConnected();
     }
 
+    /** Pulls up to {@link #batchSize} records off the queue, oldest first. */
+    private JsonArray pollBatch() {
+        JsonArray logs = new JsonArray();
+        for (int i = 0; i < batchSize && !logQueue.isEmpty(); i++) {
+            JsonObject log = logQueue.poll();
+            if (log != null) {
+                logs.add(log);
+            }
+        }
+        return logs;
+    }
+
+    /**
+     * Sends the batch held from a failed send, if there is one (#486).
+     *
+     * @return {@code true} when nothing is held any more (none was, or it went out), {@code false}
+     *         when the held batch could not be sent and is still held
+     */
+    private boolean sendHeldBatch() {
+        JsonArray held = heldBatch.getAndSet(null);
+        if (held != null && !deliverBatch(held)) {
+            heldBatch.set(held);
+            return false;
+        }
+        return true;
+    }
+
     private boolean deliverBatch(JsonArray logs) {
         JsonObject batchMessage = new JsonObject();
         batchMessage.addProperty("type", "log_batch");
@@ -513,43 +540,30 @@ public class UltiPanelLogTransmitter {
             try {
                 // #486: a batch held from a failed send goes first; while it cannot be sent,
                 // nothing newer is drained.
-                JsonArray held = heldBatch.getAndSet(null);
-                if (held != null && !deliverBatch(held)) {
-                    heldBatch.set(held);
+                if (!sendHeldBatch()) {
                     return;
                 }
 
-                JsonArray logs = new JsonArray();
+                JsonArray logs = pollBatch();
 
-                // Pull logs out of the queue
-                for (int i = 0; i < batchSize && !logQueue.isEmpty(); i++) {
-                    JsonObject log = logQueue.poll();
-                    if (log != null) {
-                        logs.add(log);
-                    }
+                // Send the batched-log message; keep it if the send failed (#486)
+                if (logs.size() > 0 && !deliverBatch(logs)) {
+                    heldBatch.set(logs);
                 }
-
-                if (logs.size() > 0) {
-                    // Send the batched-log message; keep it if the send failed (#486)
-                    if (!deliverBatch(logs)) {
-                        heldBatch.set(logs);
-                    }
-
-                    // Gate-2 finding (round 6): this diagnostic USED to log via
-                    // UltiTools.getInstance().getLogger() at Level.FINE. That logger is the shared
-                    // PLUGIN logger (Bukkit's JavaPlugin#getLogger()), not a per-class logger named
-                    // after this class -- so SystemLogHandler#shouldProcessRecord's class-name-based
-                    // loop-prevention check (which matches on loggerName.contains("...")) could never
-                    // catch it. Before this plan, that was harmless because the handler's own JUL
-                    // level floor stayed at Level.INFO, silently dropping this FINE record before it
-                    // ever reached shouldProcessRecord. #433/CR-02 (this same PR) made "debug"
-                    // genuinely lower that floor to Level.FINEST -- so this record became reachable
-                    // for the first time, and with batchConfig.size:1 it recursively re-triggered
-                    // this very method (send -> log FINE -> SystemLogHandler -> sendLog -> addToBatch
-                    // -> threshold reached -> sendBatch -> log FINE -> ...) until StackOverflowError.
-                    // Removed rather than routed around the loop guard -- this line's information
-                    // value (a batch-size count) does not justify carrying a self-recursion hazard.
-                }
+                // Gate-2 finding (round 6): this diagnostic USED to log via
+                // UltiTools.getInstance().getLogger() at Level.FINE. That logger is the shared
+                // PLUGIN logger (Bukkit's JavaPlugin#getLogger()), not a per-class logger named
+                // after this class -- so SystemLogHandler#shouldProcessRecord's class-name-based
+                // loop-prevention check (which matches on loggerName.contains("...")) could never
+                // catch it. Before this plan, that was harmless because the handler's own JUL
+                // level floor stayed at Level.INFO, silently dropping this FINE record before it
+                // ever reached shouldProcessRecord. #433/CR-02 (this same PR) made "debug"
+                // genuinely lower that floor to Level.FINEST -- so this record became reachable
+                // for the first time, and with batchConfig.size:1 it recursively re-triggered
+                // this very method (send -> log FINE -> SystemLogHandler -> sendLog -> addToBatch
+                // -> threshold reached -> sendBatch -> log FINE -> ...) until StackOverflowError.
+                // Removed rather than routed around the loop guard -- this line's information
+                // value (a batch-size count) does not justify carrying a self-recursion hazard.
 
             } catch (Exception e) {
                 System.err.println("[UltiPanel] 发送批量日志失败: " + e.getMessage());

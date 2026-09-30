@@ -36,6 +36,9 @@ import org.mockbukkit.mockbukkit.MockBukkit;
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class ClosingSocketLogHoldTest {
 
+    private ClosingClient client;
+    private UltiPanelLogTransmitter transmitter;
+
     /** The real client with a controllable socket state and a recording wire. */
     static final class ClosingClient extends UltiPanelWebSocketClient {
         volatile boolean socketOpen = true;
@@ -55,9 +58,6 @@ class ClosingSocketLogHoldTest {
             wire.add(text);
         }
     }
-
-    private ClosingClient client;
-    private UltiPanelLogTransmitter transmitter;
 
     @BeforeEach
     @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // onOpen's flag, without opening a socket
