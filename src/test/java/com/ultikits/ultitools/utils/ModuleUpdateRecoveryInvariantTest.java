@@ -1,0 +1,282 @@
+package com.ultikits.ultitools.utils;
+
+import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.catalogue;
+import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.downloading;
+import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.loadedModule;
+import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.moduleJar;
+import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.treeOf;
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.io.File;
+import java.io.IOException;
+import java.io.Reader;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonObject;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+
+/**
+ * The recovery invariant of a module update transaction (#505, #513; Codex round 14 on #561, swept
+ * by defect class).
+ *
+ * <p><b>Invariant.</b> After any start, for every transaction record, the modules folder holds exactly
+ * one JAR for that module (the old or the new, never both, never neither unless the record is a
+ * removal), and a JAR not in the modules folder is either staged or in the kept-old location,
+ * identified by its recorded hash. "Unless the record is a removal" covers the one update that ends
+ * with neither: an uninstall took the old JAR before the update was applied, and the update is
+ * abandoned rather than bringing back a module the operator removed. A JAR outside the modules folder
+ * exists only while its record does: a finished transaction leaves no stray copy.
+ *
+ * <p><b>How this is checked.</b> Each case builds, on disk, one combination of record state and file
+ * placement that a crash or a failed file operation can leave -- the old JAR in the modules folder,
+ * kept aside, or (for a commit being cleaned up, or an uninstall) gone; the new JAR staged, in the
+ * modules folder, or gone -- then runs one start (the before-load recovery, then the observation, with
+ * the new version loading or not) with file operations that succeed, and asserts the invariant. A
+ * second family does the same for {@code /upm update} discarding a {@code FAILED} record while the
+ * server runs, the other place a failed apply is undone. Each file is identified by its recorded
+ * SHA-256, never by its name, as the recovery identifies it. The reachability of every combination,
+ * and what the next start does with it, is tabled under Codex round 14 in the phase review file.
+ *
+ * <p>A start whose file operations fail keeps the record for the next start and reports it; the
+ * invariant is re-established by the first start whose operations succeed, which is what is run here.
+ */
+@DisplayName("Module update recovery keeps exactly one JAR of the module in the modules folder (Codex round 14, #561)")
+@Timeout(value = 60, unit = TimeUnit.SECONDS)
+class ModuleUpdateRecoveryInvariantTest {
+
+    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
+
+    /** Where the old JAR is: in the modules folder, kept aside, or gone. */
+    enum Old { MODULES, KEPT, GONE }
+
+    /** Where the new JAR is: staged, in the modules folder, or gone. */
+    enum New { STAGED, MODULES, GONE }
+
+    @TempDir
+    File serverRoot;
+
+    /**
+     * Every record state with every placement a crash or a failure can leave it in (the table under
+     * Codex round 14 gives the path to each), crossed with the old JAR sharing the new JAR's file name
+     * or not, and the new version loading or not.
+     */
+    static Stream<Arguments> reachable() {
+        Object[][] rows = {
+            // PENDING: staged; crash after the old JAR moved; crash after the new JAR moved (or APPLIED
+            // could not be written); an after-load rollback whose record writes failed, ending after or
+            // before the old JAR went back (or the staged JAR removed by hand); an uninstall.
+            {"PENDING", Old.MODULES, New.STAGED}, {"PENDING", Old.KEPT, New.STAGED},
+            {"PENDING", Old.KEPT, New.MODULES}, {"PENDING", Old.MODULES, New.GONE},
+            {"PENDING", Old.KEPT, New.GONE}, {"PENDING", Old.GONE, New.STAGED},
+            // APPLIED: swapped, not decided; a rollback whose ROLLING_BACK could not be written, ending
+            // before or after the old JAR went back.
+            {"APPLIED", Old.KEPT, New.MODULES}, {"APPLIED", Old.KEPT, New.GONE}, {"APPLIED", Old.MODULES, New.GONE},
+            // COMMITTING: decided; the kept JAR deleted before the record.
+            {"COMMITTING", Old.KEPT, New.MODULES}, {"COMMITTING", Old.GONE, New.MODULES},
+            // ROLLING_BACK: decided; the new JAR removed; the old JAR back before the record was deleted.
+            {"ROLLING_BACK", Old.KEPT, New.MODULES}, {"ROLLING_BACK", Old.KEPT, New.GONE},
+            {"ROLLING_BACK", Old.MODULES, New.GONE},
+            // FAILED: undone; the old JAR could not go back; the new JAR could not go back (round 14);
+            // the staged JAR was missing, with the old JAR back or not.
+            {"FAILED", Old.MODULES, New.STAGED}, {"FAILED", Old.KEPT, New.STAGED}, {"FAILED", Old.KEPT, New.MODULES},
+            {"FAILED", Old.MODULES, New.GONE}, {"FAILED", Old.KEPT, New.GONE},
+        };
+        List<Arguments> cases = new ArrayList<>();
+        for (Object[] row : rows) {
+            for (boolean sameName : new boolean[]{false, true}) {
+                for (boolean newLoads : new boolean[]{true, false}) {
+                    cases.add(Arguments.of(row[0], row[1], row[2], sameName, newLoads));
+                }
+            }
+        }
+        return cases.stream();
+    }
+
+    /** The {@code FAILED} placements, crossed with the old JAR sharing the new JAR's name or not. */
+    static Stream<Arguments> failed() {
+        return reachable().filter(arguments -> "FAILED".equals(arguments.get()[0]) && (Boolean) arguments.get()[4])
+                .map(arguments -> Arguments.of(arguments.get()[1], arguments.get()[2], arguments.get()[3]));
+    }
+
+    @ParameterizedTest(name = "{0}, old {1}, new {2}, same name {3}, new loads {4}")
+    @MethodSource("reachable")
+    @DisplayName("after a start, the modules folder holds exactly one JAR of the module and nothing is stray")
+    void afterAStart_theInvariantHolds(String state, Old old, New neu, boolean sameName, boolean newLoads)
+            throws IOException {
+        Scenario scenario = new Scenario(sameName).build(state, old, neu);
+
+        ModuleFileTransactions start = scenario.transactions();
+        start.applyBeforeLoad();
+        List<UltiToolsPlugin> loaded = new ArrayList<>();
+        ModuleUpdateFixtures.CodeSources sources = scenario.load(newLoads, loaded);
+        start.observeAfterLoad(loaded, sources);
+
+        scenario.assertInvariant(old == Old.GONE && "PENDING".equals(state));
+    }
+
+    @ParameterizedTest(name = "FAILED, old {0}, new {1}, same name {2}")
+    @MethodSource("failed")
+    @DisplayName("after /upm update discards a FAILED record, the modules folder holds exactly one JAR and nothing is stray")
+    void afterDiscardingAFailedRecord_theInvariantHolds(Old old, New neu, boolean sameName) throws IOException {
+        Scenario scenario = new Scenario(sameName).build("FAILED", old, neu);
+
+        // The catalogue offers nothing, so staging stops after it has dealt with the FAILED record.
+        scenario.transactions().stageUpdate("demo", Collections.singletonList(scenario.loadedOld),
+                new ModuleUpdateFixtures.CodeSources().with(scenario.loadedOld, scenario.oldJar),
+                catalogue("other", "9.9"), downloading("Demo", "1.1", "demo"));
+
+        scenario.assertInvariant(false);
+    }
+
+    /** One server layout with one staged update of {@code demo} from 1.0 to 1.1. */
+    private final class Scenario {
+        private final File modules;
+        private final File transactions;
+        private final File oldJar;
+        private final UltiToolsPlugin loadedOld;
+        private final String oldHash;
+        private String newHash;
+        private File recordFile;
+        private File backup;
+        private File staged;
+        private File target;
+
+        Scenario(boolean sameName) throws IOException {
+            File dataFolder = ModuleUpdateFixtures.dataFolderIn(serverRoot);
+            modules = ModuleFileTransactions.modulesFolder(dataFolder);
+            transactions = ModuleFileTransactions.transactionsFolder(dataFolder);
+            // With the same name, the old JAR already has the file name the new one is staged under.
+            oldJar = moduleJar(new File(modules, sameName ? "demo-1.1.jar" : "demo-1.0.jar"), "Demo", "1.0", "demo");
+            oldHash = ModuleFileTransactions.sha256Of(oldJar);
+            loadedOld = loadedModule("Demo", "1.0", "demo");
+        }
+
+        ModuleFileTransactions transactions() {
+            return new ModuleFileTransactions(modules, transactions, ModuleFileTransactions.FileOps.DEFAULT,
+                    ModuleFileTransactions.CrashPoints.NONE);
+        }
+
+        /** Stages the update for real, then moves the files and sets the state a crash or failure leaves. */
+        Scenario build(String state, Old old, New neu) throws IOException {
+            ModuleFileTransactions.StageResult result = transactions().stageUpdate("demo",
+                    Collections.singletonList(loadedOld), new ModuleUpdateFixtures.CodeSources().with(loadedOld, oldJar),
+                    catalogue("demo", "1.1"), downloading("Demo", "1.1", "demo"));
+            assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.STAGED);
+            recordFile = onlyRecord();
+            File work = new File(transactions, recordFile.getName().replace(".json", ""));
+            JsonObject record = readRecord();
+            backup = new File(new File(work, "backup"), record.get("oldName").getAsString());
+            staged = new File(new File(work, "staged"), record.get("stagedName").getAsString());
+            target = new File(modules, record.get("targetName").getAsString());
+            newHash = ModuleFileTransactions.sha256Of(staged);
+
+            if (old == Old.KEPT) {
+                Files.createDirectories(backup.getParentFile().toPath());
+                Files.move(oldJar.toPath(), backup.toPath());
+            } else if (old == Old.GONE) {
+                Files.delete(oldJar.toPath());
+            }
+            if (neu == New.MODULES) {
+                Files.move(staged.toPath(), target.toPath());
+            } else if (neu == New.GONE) {
+                Files.delete(staged.toPath());
+            }
+            record.addProperty("state", state);
+            if ("FAILED".equals(state)) {
+                record.addProperty("failure", "injected failure");
+            }
+            try (Writer writer = Files.newBufferedWriter(recordFile.toPath(), StandardCharsets.UTF_8)) {
+                GSON.toJson(record, writer);
+            }
+            return this;
+        }
+
+        /**
+         * What the module loader does at this start: the first JAR of the module in file-name order
+         * supplies it; the new version loads only when {@code newLoads}.
+         */
+        ModuleUpdateFixtures.CodeSources load(boolean newLoads, List<UltiToolsPlugin> loaded) throws IOException {
+            ModuleUpdateFixtures.CodeSources sources = new ModuleUpdateFixtures.CodeSources();
+            List<File> jars = jarsOfTheModuleIn(modules);
+            if (jars.isEmpty()) {
+                return sources;
+            }
+            File first = jars.get(0);
+            boolean isNew = newHash.equals(ModuleFileTransactions.sha256Of(first));
+            if (isNew && !newLoads) {
+                return sources;
+            }
+            UltiToolsPlugin plugin = loadedModule("Demo", isNew ? "1.1" : "1.0", "demo");
+            loaded.add(plugin);
+            sources.with(plugin, first);
+            return sources;
+        }
+
+        void assertInvariant(boolean removed) throws IOException {
+            List<File> inModules = jarsOfTheModuleIn(modules);
+            if (removed) {
+                assertThat(inModules).as("the module was removed: no JAR of it comes back").isEmpty();
+            } else {
+                assertThat(inModules).as("exactly one JAR of the module in the modules folder").hasSize(1);
+            }
+            boolean recordLeft = recordFile.exists();
+            for (String path : treeOf(transactions)) {
+                // The path comes from listing this test's own temporary folder.
+                // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
+                File file = new File(transactions, path);
+                String hash = ModuleFileTransactions.sha256Of(file);
+                if (oldHash.equals(hash)) {
+                    assertThat(file).as("the old JAR outside the modules folder is in the kept-old location")
+                            .isEqualTo(backup);
+                    assertThat(recordLeft).as("a kept old JAR exists only while its record does").isTrue();
+                } else if (newHash.equals(hash)) {
+                    assertThat(file).as("the new JAR outside the modules folder is staged").isEqualTo(staged);
+                    assertThat(recordLeft).as("a staged JAR exists only while its record does").isTrue();
+                }
+            }
+        }
+
+        private List<File> jarsOfTheModuleIn(File folder) throws IOException {
+            List<File> jars = new ArrayList<>();
+            File[] files = ModuleFileTransactions.moduleJars(folder);
+            if (files == null) {
+                return jars;
+            }
+            for (File file : files) {
+                String hash = ModuleFileTransactions.sha256Of(file);
+                if (oldHash.equals(hash) || newHash.equals(hash)) {
+                    jars.add(file);
+                }
+            }
+            return jars;
+        }
+
+        private File onlyRecord() {
+            File[] records = transactions.listFiles((dir, name) -> name.endsWith(".json"));
+            assertThat(records).hasSize(1);
+            return records[0];
+        }
+
+        private JsonObject readRecord() throws IOException {
+            try (Reader reader = Files.newBufferedReader(recordFile.toPath(), StandardCharsets.UTF_8)) {
+                return GSON.fromJson(reader, JsonObject.class);
+            }
+        }
+    }
+}
