@@ -257,7 +257,7 @@ class ModuleUpdateStagingTest {
     @Test
     @DisplayName("an update held for the operator refuses /upm update of the module, and nothing changes (round 19)")
     void updateHeldForTheOperator_refusesStaging() throws IOException {
-        assertThat(stage(ModuleUpdateFixtures.downloading("Demo", "1.1", "demo")).getOutcome())
+        assertThat(stage(downloading("Demo", "1.1", "demo")).getOutcome())
                 .isEqualTo(ModuleFileTransactions.StageResult.Outcome.STAGED);
         File[] records = transactions.listFiles((dir, name) -> name.endsWith(".json"));
         assertThat(records).hasSize(1);
@@ -266,7 +266,7 @@ class ModuleUpdateStagingTest {
         Files.write(records[0].toPath(), text.getBytes(StandardCharsets.UTF_8));
         Map<String, String> before = snapshot();
 
-        ModuleFileTransactions.StageResult result = stage(ModuleUpdateFixtures.downloading("Demo", "1.1", "demo"));
+        ModuleFileTransactions.StageResult result = stage(downloading("Demo", "1.1", "demo"));
 
         assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
         assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_NEEDS_OPERATOR);
