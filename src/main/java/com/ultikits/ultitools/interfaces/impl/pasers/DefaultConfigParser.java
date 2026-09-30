@@ -17,11 +17,20 @@ import java.util.Map;
 import java.util.Set;
 
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Config binder serializes private fields to YAML -- see 08-GATE05-TRIAGE.md
-public class DefaultConfigParser extends ConfigParser<Object> {
+public class DefaultConfigParser extends ConfigParser<Object> implements DottedMapKeyRefusal {
 
-    /** The configuration binder's logger, where every #553 refusal is reported. */
-    private static final java.util.logging.Logger REFUSALS =
-            java.util.logging.Logger.getLogger("com.ultikits.ultitools.abstracts.AbstractConfigEntity");
+    private static final java.util.logging.Logger LOGGER =
+            java.util.logging.Logger.getLogger(DefaultConfigParser.class.getName());
+
+    /** Where a refused dotted map key is reported (#553); {@code null} means this class's logger. */
+    private transient java.util.function.Consumer<String> refusedKeys;
+
+    /** {@inheritDoc} */
+    @Override
+    @ApiStatus.Internal
+    public void reportRefusedKeysTo(java.util.function.Consumer<String> sink) {
+        this.refusedKeys = sink;
+    }
 
     /**
      * Turns a raw YAML value into plain Java values: a section becomes a {@link LinkedHashMap}
@@ -94,16 +103,10 @@ public class DefaultConfigParser extends ConfigParser<Object> {
                 Object key = entry.getKey();
                 // An enum key by its name, the form the binder reads back (Enum#toString may differ).
                 String name = key instanceof Enum ? ((Enum<?>) key).name() : String.valueOf(key);
-                if (name.indexOf('.') >= 0) {
-                    // #553: the configuration file reads '.' as its path separator, so the key cannot be
-                    // stored as one key. The configuration entity leaves such keys out of the maps it
-                    // writes, with the file and entry named; this catches one nested inside an object.
-                    REFUSALS.warning("Map key '" + name + "' contains '.', which the configuration file reads"
-                            + " as a path separator, so it cannot be stored as one key; the entry was not written"
-                            + " - rename the key (for example with '-' or '_')");
-                    continue;
+                // #553: the one refusal point for a dotted map key, whatever the map's depth.
+                if (DottedMapKeyRefusal.storable(name, refusedKeys, LOGGER)) {
+                    mapSection.set(name, fileForm(entry.getValue()));
                 }
-                mapSection.set(name, fileForm(entry.getValue()));
             }
             return mapSection;
         }
@@ -129,10 +132,12 @@ public class DefaultConfigParser extends ConfigParser<Object> {
 
     /**
      * The form in which the framework writes a value this parser binds (#523): an enum constant by
-     * its name, a collection (a {@code List} or a {@code Set}) as a YAML list of {@linkplain
-     * #plainForm plain} elements, and everything else through {@link #serialize(Object)}. SnakeYAML
-     * would otherwise tag an enum with its Java class and write a {@code Set} as a tagged mapping, both
-     * of which the configuration loader refuses.
+     * its name, a {@code UUID} as its text, a collection (a {@code List} or a {@code Set}) as a YAML
+     * list of {@linkplain #plainForm plain} elements, a {@code ConfigurationSerializable} value (a
+     * {@code Location}, an {@code ItemStack}) unchanged - Bukkit's own writer and loader handle it - and
+     * everything else through {@link #serialize(Object)}. SnakeYAML would otherwise tag an enum or a
+     * {@code UUID} with its Java class and write a {@code Set} as a tagged mapping, all of which the
+     * configuration loader refuses.
      * <p>
      * Framework-internal: {@code public} only because the configuration entity that calls it lives in
      * another package. Module code should not call it.
@@ -145,6 +150,12 @@ public class DefaultConfigParser extends ConfigParser<Object> {
     public Object fileForm(Object value) {
         if (value instanceof Enum) {
             return ((Enum<?>) value).name();
+        }
+        if (value instanceof java.util.UUID) {
+            return value.toString();
+        }
+        if (value instanceof org.bukkit.configuration.serialization.ConfigurationSerializable) {
+            return value;
         }
         if (value instanceof Collection) {
             return plainForm(value);
@@ -162,12 +173,6 @@ public class DefaultConfigParser extends ConfigParser<Object> {
      * @return the plain form
      */
     private Object plainForm(Object value) {
-        if (value == null || value instanceof String || BasicTypeUtil.isBasicType(value)) {
-            return value;
-        }
-        if (value instanceof Enum) {
-            return ((Enum<?>) value).name();
-        }
         if (value instanceof Collection) {
             List<Object> list = new ArrayList<>();
             for (Object element : (Collection<?>) value) {
@@ -175,13 +180,35 @@ public class DefaultConfigParser extends ConfigParser<Object> {
             }
             return list;
         }
-        Map<?, ?> entries = value instanceof Map ? (Map<?, ?>) value
-                : value instanceof ConfigurationSection ? ((ConfigurationSection) value).getValues(false)
-                : serializeToMemorySection(value).getValues(false);
+        if (value instanceof ConfigurationSection) {
+            return plainData(serializeToMemorySection(((ConfigurationSection) value).getValues(false)));
+        }
+        Object form = fileForm(value);
+        // A map or an object became a section through serializeToMemorySection - the one refusal point
+        // for its dotted keys (#553); inside a list it is written as plain data.
+        return plainData(form);
+    }
+
+    /**
+     * Replaces every configuration section in {@code value} by an insertion-ordered map of its plain
+     * values - the form of a map inside a list, and of a map the configuration entity places into a
+     * file as data, as 6.2 did for a first-boot map default.
+     * <p>
+     * Framework-internal: {@code public} only because the configuration entity lives in another
+     * package.
+     *
+     * @param value a value, possibly a section
+     * @return the value with every section replaced by a map
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public static Object plainData(Object value) {
+        if (!(value instanceof ConfigurationSection)) {
+            return value;
+        }
         Map<String, Object> map = new LinkedHashMap<>();
-        for (Map.Entry<?, ?> entry : entries.entrySet()) {
-            Object key = entry.getKey();
-            map.put(key instanceof Enum ? ((Enum<?>) key).name() : String.valueOf(key), plainForm(entry.getValue()));
+        for (Map.Entry<String, Object> entry : ((ConfigurationSection) value).getValues(false).entrySet()) {
+            map.put(entry.getKey(), plainData(entry.getValue()));
         }
         return map;
     }
