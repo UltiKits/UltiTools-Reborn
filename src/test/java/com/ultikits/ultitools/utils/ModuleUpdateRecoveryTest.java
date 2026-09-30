@@ -413,6 +413,39 @@ class ModuleUpdateRecoveryTest {
     }
 
     @Nested
+    @DisplayName("a decision that cannot be recorded")
+    class UnrecordableDecision {
+
+        @Test
+        @DisplayName("a commit whose decision cannot be written keeps both versions, and the next start restores the old one")
+        void commitThatCannotBeRecorded_keepsBothVersions() throws IOException {
+            Assumptions.assumeTrue(Files.getFileStore(transactions.toPath().getParent()).supportsFileAttributeView("posix"));
+            stage(transactions());
+            ModuleFileTransactions start = transactions();
+            start.applyBeforeLoad();
+            Files.setPosixFilePermissions(transactions.toPath(), PosixFilePermissions.fromString("r-xr-xr-x"));
+            try {
+                Assumptions.assumeFalse(Files.isWritable(transactions.toPath()), "running as a user that ignores permissions");
+
+                observeLoaded(start);
+
+                assertThat(start.pendingReports()).extracting(ModuleFileTransactions.Report::getKey)
+                        .doesNotContain(ModuleFileTransactions.Keys.COMMITTED)
+                        .contains(ModuleFileTransactions.Keys.RECORD_WRITE_FAILED);
+                assertThat(treeOf(transactions)).anyMatch(p -> p.endsWith("/backup/demo-1.0.jar"));
+            } finally {
+                Files.setPosixFilePermissions(transactions.toPath(), PosixFilePermissions.fromString("rwxr-xr-x"));
+            }
+
+            ModuleFileTransactions next = transactions();
+            next.applyBeforeLoad();
+
+            assertOnlyTheOldVersionIsInstalled();
+            assertThat(onlyReport(next).getKey()).isEqualTo(ModuleFileTransactions.Keys.UNCONFIRMED_ROLLED_BACK);
+        }
+    }
+
+    @Nested
     @DisplayName("confinement of record paths")
     class Confinement {
 
