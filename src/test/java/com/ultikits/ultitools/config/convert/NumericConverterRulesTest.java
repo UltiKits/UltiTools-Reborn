@@ -90,7 +90,7 @@ class NumericConverterRulesTest {
         assertThat(result.failures().get(0).raw()).isEqualTo("bad");
         assertThat(result.failures().get(1).path()).containsExactly("o.O", "3");
         bad.put("changed", true);
-        assertThat((Map<?, ?>) result.failures().get(1).raw()).doesNotContainKey("changed");
+        assertThat(((Map<?, ?>) result.failures().get(1).raw()).containsKey("changed")).isFalse();
         assertThatThrownBy(() -> result.failures().clear()).isInstanceOf(UnsupportedOperationException.class);
         assertThatThrownBy(() -> result.failures().get(0).path().clear()).isInstanceOf(UnsupportedOperationException.class);
     }
