@@ -95,6 +95,14 @@ final class SourceSplicer {
                 visit(old.getValueNode(), now.getValueNode(), old.getKeyNode().getStartMark().getColumn(), edits);
             }
         }
+        if (!top && current.isEmpty() && !original.tuples.isEmpty()) {
+            int first = lineStart(start(original.tuples.get(0).getKeyNode()));
+            int line = first;
+            while (line > 0 && (source.charAt(line - 1) == '\n' || source.charAt(line - 1) == '\r')) {
+                line--;
+            }
+            edits.add(new Edit(line, line, " {}"));
+        }
         List<NodeTuple> added = new ArrayList<>();
         for (NodeTuple tuple : current) {
             if (!originals.containsKey(tuple.getKeyNode())) {
@@ -134,6 +142,13 @@ final class SourceSplicer {
         if (isBlockCollection(old)) {
             // Collection marks end at the following key, not at the last byte of their own value.
             end = contentEnd(old);
+            if (isBlockCollection(current) && start > lineStart(start)
+                    && !source.substring(lineStart(start), start).trim().isEmpty()) {
+                while (start > 0 && source.charAt(start - 1) == ' ') {
+                    start--;
+                }
+                text = style.lineBreak() + spaces(keyColumn + style.dumperOptions().getIndent()) + text;
+            }
             if (!isBlockCollection(current)) {
                 text += style.lineBreak();
             }

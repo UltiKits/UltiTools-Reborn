@@ -129,21 +129,32 @@ public final class PlainData {
      * @return the copy
      */
     public static Object copy(Object value) {
-        if (value instanceof Map) {
-            Map<String, Object> result = new LinkedHashMap<>();
-            for (Map.Entry<?, ?> entry : ((Map<?, ?>) value).entrySet()) {
-                result.put(String.valueOf(entry.getKey()), copy(entry.getValue()));
-            }
-            return result;
+        return copy(value, newVisited());
+    }
+
+    private static Object copy(Object value, Set<Object> visiting) {
+        if (!(value instanceof Map) && !(value instanceof List)) {
+            return value;
         }
-        if (value instanceof List) {
+        if (!visiting.add(value)) {
+            throw new IllegalArgumentException("Config value contains itself; only plain data without cycles can be copied");
+        }
+        try {
+            if (value instanceof Map) {
+                Map<Object, Object> result = new LinkedHashMap<>();
+                for (Map.Entry<?, ?> entry : ((Map<?, ?>) value).entrySet()) {
+                    result.put(entry.getKey(), copy(entry.getValue(), visiting));
+                }
+                return result;
+            }
             List<Object> result = new ArrayList<>();
             for (Object element : (List<?>) value) {
-                result.add(copy(element));
+                result.add(copy(element, visiting));
             }
             return result;
+        } finally {
+            visiting.remove(value);
         }
-        return value;
     }
 
     /**

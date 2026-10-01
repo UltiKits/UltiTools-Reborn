@@ -250,19 +250,19 @@ public final class ConfigDocument {
      */
     public void set(List<String> path, Object value) {
         requireKeys(path);
-        PlainData.requirePlain(path, value);
-        if (path.size() + PlainData.depth(value) > NESTING_DEPTH_LIMIT) {
+        Object copy = PlainData.copy(value);
+        PlainData.requirePlain(path, copy);
+        if (path.size() + PlainData.depth(copy) > NESTING_DEPTH_LIMIT) {
             throw new IllegalArgumentException("Config value at key path " + PlainData.describePath(path) + " would nest"
                     + " deeper than " + NESTING_DEPTH_LIMIT + " levels, which no config file may (the next load refuses it)");
         }
-        Object copy = PlainData.copy(value);
         if (root == null) {
             root = new MappingNode(Tag.MAP, new ArrayList<NodeTuple>(), DumperOptions.FlowStyle.BLOCK);
         }
         MappingNode mapping = root;
         Map<String, Object> plainMapping = plain;
         for (int i = 0; i < path.size() - 1; i++) {
-            mapping = childMapping(mapping, path.get(i));
+            mapping = childMapping(mapping, path.get(i), plainMapping.get(path.get(i)));
             plainMapping = childPlainMapping(plainMapping, path.get(i));
         }
         String last = path.get(path.size() - 1);
@@ -456,14 +456,15 @@ public final class ConfigDocument {
         return representer().represent(PlainData.copy(plainValue));
     }
 
-    private MappingNode childMapping(MappingNode mapping, String key) {
+    private MappingNode childMapping(MappingNode mapping, String key, Object child) {
         int index = indexOf(mapping, key);
         if (index >= 0) {
             NodeTuple tuple = mapping.getValue().get(index);
             if (tuple.getValueNode() instanceof MappingNode && Tag.MAP.equals(tuple.getValueNode().getTag())) {
                 return (MappingNode) tuple.getValueNode();
             }
-            MappingNode created = new MappingNode(Tag.MAP, new ArrayList<NodeTuple>(), DumperOptions.FlowStyle.BLOCK);
+            MappingNode created = child instanceof Map ? (MappingNode) newNode(child)
+                    : new MappingNode(Tag.MAP, new ArrayList<NodeTuple>(), DumperOptions.FlowStyle.BLOCK);
             carryComments(tuple.getValueNode(), created);
             mapping.getValue().set(index, new NodeTuple(tuple.getKeyNode(), created));
             modified = true;
@@ -547,9 +548,25 @@ public final class ConfigDocument {
             NodeTuple original = from.getValue().get(index);
             tuple.getKeyNode().setBlockComments(original.getKeyNode().getBlockComments());
             tuple.getValueNode().setInLineComments(original.getValueNode().getInLineComments());
+            tuple.getValueNode().setEndComments(original.getValueNode().getEndComments());
+            transplantListComments(original.getValueNode(), tuple.getValueNode());
             if (original.getValueNode() instanceof MappingNode && tuple.getValueNode() instanceof MappingNode) {
                 tuple.getValueNode().setEndComments(original.getValueNode().getEndComments());
                 transplantComments((MappingNode) original.getValueNode(), (MappingNode) tuple.getValueNode());
+            }
+        }
+    }
+
+    private void transplantListComments(Node from, Node to) {
+        if (from instanceof SequenceNode && to instanceof SequenceNode) {
+            List<Node> old = ((SequenceNode) from).getValue();
+            List<Node> fresh = ((SequenceNode) to).getValue();
+            for (int i = 0; i < Math.min(old.size(), fresh.size()); i++) {
+                carryComments(old.get(i), fresh.get(i));
+                if (old.get(i) instanceof MappingNode && fresh.get(i) instanceof MappingNode) {
+                    transplantComments((MappingNode) old.get(i), (MappingNode) fresh.get(i));
+                }
+                transplantListComments(old.get(i), fresh.get(i));
             }
         }
     }
