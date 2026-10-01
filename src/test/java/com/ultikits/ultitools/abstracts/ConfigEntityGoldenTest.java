@@ -253,7 +253,7 @@ class ConfigEntityGoldenTest {
         if (current.equals(target)) { return; }
         if (expected instanceof Map<?, ?>) {
             Map<?, ?> a = (Map<?, ?>) actual; Map<?, ?> e = (Map<?, ?>) expected;
-            assertThat(new ArrayList<>(a.keySet())).containsExactlyElementsOf(new ArrayList<>(e.keySet()));
+            assertThat(new ArrayList<Object>(a.keySet())).containsExactlyElementsOf(new ArrayList<Object>(e.keySet()));
             for (Object key : e.keySet()) {
                 List<String> next = new ArrayList<>(current); next.add((String) key);
                 assertOrderOutsideTarget(a.get(key), e.get(key), next, target);
