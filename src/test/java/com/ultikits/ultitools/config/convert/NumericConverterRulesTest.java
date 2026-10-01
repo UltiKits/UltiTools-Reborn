@@ -184,8 +184,18 @@ class NumericConverterRulesTest {
     }
 
     @Test
-    void enumConstantBodiesAndMapKeyFailuresKeepEntryLocationsAndFirstValue() throws Exception {
+    void enumConstantBodiesUseNamesAndCustomHierarchyStillWins() throws Exception {
         assertThat(registry.toPlain(BodyEnum.FIRST, Object.class, "f", Collections.emptyList())).isEqualTo("FIRST");
+        ConverterRegistry child = new ConverterRegistry(registry);
+        child.register(BodyEnum.class, new ConfigConverter<BodyEnum>() {
+            @Override public Object toPlain(BodyEnum value, ConversionContext ctx) { return "custom-enum"; }
+            @Override public BodyEnum fromPlain(Object plain, ConversionContext ctx) { return BodyEnum.FIRST; }
+        }, false);
+        assertThat(child.toPlain(BodyEnum.FIRST, Object.class, "f", Collections.emptyList())).isEqualTo("custom-enum");
+    }
+
+    @Test
+    void mapKeyFailuresKeepRawKeyAndConvertedCollisionsKeepFirstValue() throws Exception {
         ConverterRegistry child = new ConverterRegistry(registry);
         child.register(Mode.class, new ConfigConverter<Mode>() {
             @Override public Object toPlain(Mode value, ConversionContext ctx) { return value.name(); }
@@ -206,6 +216,38 @@ class NumericConverterRulesTest {
     }
 
     @Test
+    void mapKeyRefusalRecordsKeyRatherThanValue() throws Exception {
+        Type type = Shapes.class.getDeclaredField("byMode").getGenericType();
+        ConversionResult<Map<Mode, Integer>> result = registry.fromPlainResult(
+                Collections.singletonMap("bad", 3), type, "f", Collections.singletonList("root"));
+        assertThat(result.failures()).hasSize(1);
+        assertThat(result.failures().get(0).raw()).isEqualTo("bad");
+        assertThat(result.failures().get(0).declaredType()).isEqualTo(Mode.class);
+        assertThat(result.failures().get(0).path()).containsExactly("root", "bad");
+    }
+
+    @Test
+    void mapWriteKeyRefusalIncludesWholeEntryPath() {
+        assertThatThrownBy(() -> registry.toPlain(Collections.singletonMap("not-a-number", 1),
+                Shapes.class.getDeclaredField("integerKeys").getGenericType(), "f", Collections.singletonList("root")))
+                .isInstanceOfSatisfying(ConversionException.class,
+                        failure -> assertThat(failure.path()).containsExactly("root", "not-a-number"));
+    }
+
+    @Test
+    void ownerRawAndRecursiveDeclarationsResolveWithoutCustomTypeWrappers() throws Exception {
+        Type owner = Shapes.class.getDeclaredField("owned").getGenericType();
+        assertThat(com.ultikits.ultitools.config.convert.builtin.ConversionTypes.argument(
+                owner, java.util.Collection.class, 0)).isEqualTo(UUID.class);
+        assertThat(com.ultikits.ultitools.config.convert.builtin.ConversionTypes.raw(
+                com.ultikits.ultitools.config.convert.builtin.ConversionTypes.argument(
+                        List.class, java.util.Collection.class, 0))).isEqualTo(Object.class);
+        Type recursive = com.ultikits.ultitools.config.convert.builtin.ConversionTypes.argument(
+                RecursiveList.class, java.util.Collection.class, 0);
+        assertThat(com.ultikits.ultitools.config.convert.builtin.ConversionTypes.raw(recursive)).isEqualTo(Comparable.class);
+    }
+
+    @Test
     void nestedGenericArrayAndWildcardArgumentsSubstituteConcreteAncestors() throws Exception {
         UUID uuid = new UUID(0, 1);
         Type nested = com.ultikits.ultitools.config.convert.builtin.ConversionTypes.argument(
@@ -217,10 +259,21 @@ class NumericConverterRulesTest {
                 UuidNested.class, "f", Collections.emptyList());
         assertThat(result.failures()).isEmpty();
         assertThat(result.value().get(0).get(0)).containsExactly(uuid);
+    }
+
+    @Test
+    void wildcardArgumentsSubstituteConcreteAncestors() {
         Type wildcard = com.ultikits.ultitools.config.convert.builtin.ConversionTypes.argument(
                 UuidWildcard.class, java.util.Collection.class, 0);
         Type inner = ((java.lang.reflect.ParameterizedType) wildcard).getActualTypeArguments()[0];
         assertThat(com.ultikits.ultitools.config.convert.builtin.ConversionTypes.raw(inner)).isEqualTo(UUID.class);
+    }
+
+    public static class Owner<T> {
+        public class Owned extends java.util.ArrayList<T> { private static final long serialVersionUID = 1L; }
+    }
+    public static class RecursiveList<T extends Comparable<T>> extends java.util.ArrayList<T> {
+        private static final long serialVersionUID = 1L;
     }
 
     enum BodyEnum { FIRST { @Override public String toString() { return "not-name"; } }, SECOND }
@@ -243,6 +296,8 @@ class NumericConverterRulesTest {
     }
     enum Mode { FIRST, SECOND }
     static class Shapes {
+        Owner<UUID>.Owned owned;
+        Map<Integer, Integer> integerKeys;
         List<Integer> integers;
         List<UUID> ids;
         Map<Mode, Integer> byMode;

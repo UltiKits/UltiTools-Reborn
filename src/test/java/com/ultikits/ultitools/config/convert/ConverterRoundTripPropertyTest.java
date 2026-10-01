@@ -115,6 +115,12 @@ class ConverterRoundTripPropertyTest {
             for (int i = 0; i < Array.getLength(value); i++) { result.add(semantic(Array.get(value, i))); }
             return result;
         }
+        if (value instanceof Set<?> && !(value instanceof LinkedHashSet<?>)
+                && !(value instanceof SortedSet<?>) && !(value instanceof EnumSet<?>)) {
+            Set<Object> result = new java.util.HashSet<>();
+            for (Object item : (Set<?>) value) { result.add(semantic(item)); }
+            return result;
+        }
         if (value instanceof Collection<?>) {
             List<Object> result = new ArrayList<>();
             for (Object item : (Collection<?>) value) { result.add(semantic(item)); }
