@@ -198,6 +198,42 @@ class ConfigLoadResultTest {
         assertThat(ConfigDocument.load(write(aliasChain(99))).state()).isEqualTo(ConfigLoadResult.State.LOADED);
     }
 
+    @Test
+    void eligibleMoveFollowedByTemporaryReadFailureLogsExactlyOnceWithoutBackup() throws IOException {
+        Path target = write("a: 1\n");
+        java.util.List<java.util.logging.LogRecord> warnings = new java.util.ArrayList<>();
+        java.util.logging.Logger logger = java.util.logging.Logger.getLogger(AtomicConfigWriter.class.getName());
+        java.util.logging.Handler capture = new java.util.logging.Handler() {
+            @Override public void publish(java.util.logging.LogRecord record) {
+                if (record.getLevel() == java.util.logging.Level.WARNING) { warnings.add(record); }
+            }
+            @Override public void flush() { }
+            @Override public void close() { }
+        };
+        AtomicConfigWriter.FileOperations files = new AtomicConfigWriter.FileOperations() {
+            @Override public void move(Path source, Path destination, java.nio.file.CopyOption... options) throws IOException {
+                throw new java.nio.file.AtomicMoveNotSupportedException(source.toString(), destination.toString(), "injected refusal");
+            }
+            @Override public byte[] read(Path file) throws IOException {
+                if (file.getFileName().toString().contains(".tmp-")) {
+                    throw new IOException("injected temporary read failure");
+                }
+                return AtomicConfigWriter.FileOperations.super.read(file);
+            }
+        };
+        logger.addHandler(capture);
+        try {
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> AtomicConfigWriter.write(target, "a: 2\n", files))
+                    .isInstanceOf(IOException.class).hasMessageContaining("temporary read failure");
+            assertThat(new String(Files.readAllBytes(target), StandardCharsets.UTF_8)).isEqualTo("a: 1\n");
+            assertThat(Files.exists(target.resolveSibling(target.getFileName() + ".bak"))).isFalse();
+            assertThat(warnings).hasSize(1);
+            assertThat(warnings.get(0).getMessage()).contains(target.toString(), "in-place", "failed", "injected refusal");
+        } finally {
+            logger.removeHandler(capture);
+        }
+    }
+
     private static String aliasChain(int levels) {
         StringBuilder text = new StringBuilder("a0: &a0 [leaf]\n");
         for (int i = 1; i < levels; i++) {
