@@ -121,6 +121,9 @@ class ConfigUnreadableFileTest {
         // A directory deterministically makes the actual file read fail, independent of chmod/root.
         Files.createDirectory(file());
         Files.write(file().resolve("operator-data"), new byte[]{1, 2, 3});
+        // Registration discovers under the resource root, but the config file can live under its
+        // independently configured root. Do not let the directory-config expansion bypass init.
+        lenient().when(plugin.getResourceFolderPath()).thenReturn(tempDir.resolve("resources").toString());
         ConfigManager manager = new ConfigManager();
         Values config = new Values(PATH);
         try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
