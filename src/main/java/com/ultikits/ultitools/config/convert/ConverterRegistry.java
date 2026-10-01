@@ -30,6 +30,9 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.config.document.PlainData;
+import com.ultikits.ultitools.config.convert.builtin.ConversionTypes;
+import com.ultikits.ultitools.config.convert.builtin.GenericConverters;
+import com.ultikits.ultitools.config.convert.builtin.ScalarConverter;
 import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser;
 import com.ultikits.ultitools.utils.PackageScanUtils;
@@ -54,17 +57,6 @@ public final class ConverterRegistry {
             throw new ConversionException("Built-in conversion is not installed yet", ctx.file(), ctx.path(), ctx.declaredType());
         }
     };
-    private static final ConfigConverter<Object> PLAIN_SCALAR = new ConfigConverter<Object>() {
-        @Override
-        public Object toPlain(Object value, ConversionContext ctx) { return value; }
-        @Override
-        public Object fromPlain(Object plain, ConversionContext ctx) throws ConversionException {
-            if (plain != null && !boxed(rawClass(ctx.declaredType())).isInstance(plain)) {
-                throw new ConversionException("Value does not have the declared scalar type", ctx.file(), ctx.path(), ctx.declaredType());
-            }
-            return plain;
-        }
-    };
     private static final ConverterRegistry FRAMEWORK = createFramework();
     private final ConverterRegistry parent;
     private final Map<Class<?>, Registration> registrations = new LinkedHashMap<>();
@@ -76,15 +68,19 @@ public final class ConverterRegistry {
     /** @return the shared framework registry */
     public static ConverterRegistry framework() { return FRAMEWORK; }
 
+    /** @return actual scalar registrations and implementation-owned generic factory categories */
+    public Set<Class<?>> registeredTypes() {
+        Set<Class<?>> types = new LinkedHashSet<>(registrations.keySet());
+        types.addAll(GenericConverters.registeredTypes());
+        return Collections.unmodifiableSet(types);
+    }
+
     private static ConverterRegistry createFramework() {
         ConverterRegistry registry = new ConverterRegistry(null);
-        for (Class<?> type : Arrays.asList(String.class, boolean.class, Boolean.class, int.class, Integer.class,
-                long.class, Long.class, double.class, Double.class, BigInteger.class)) {
-            registry.register(type, PLAIN_SCALAR, true);
-        }
-        for (Class<?> type : Arrays.asList(byte.class, Byte.class, short.class, Short.class, float.class,
-                Float.class, char.class, Character.class, BigDecimal.class, UUID.class)) {
-            registry.register(type, PENDING, true);
+        for (Class<?> type : Arrays.asList(String.class, boolean.class, Boolean.class, byte.class, Byte.class,
+                short.class, Short.class, int.class, Integer.class, long.class, Long.class, float.class, Float.class,
+                double.class, Double.class, char.class, Character.class, BigInteger.class, BigDecimal.class, UUID.class)) {
+            registry.register(type, new ScalarConverter(type), true);
         }
         registry.sealed = true;
         return registry;
@@ -115,10 +111,8 @@ public final class ConverterRegistry {
         Class<?> raw = rawClass(type);
         ConfigConverter<?> found = registered(raw);
         if (found != null) { return found; }
-        if (raw == Object.class || raw.isArray() || type instanceof GenericArrayType || raw.isEnum()
-                || raw == Enum.class || Collection.class.isAssignableFrom(raw) || Map.class.isAssignableFrom(raw)) {
-            return PENDING;
-        }
+        ConfigConverter<?> generic = GenericConverters.resolve(type);
+        if (generic != null) { return generic; }
         return ConfigurationSerializable.class.isAssignableFrom(raw) ? PENDING : null;
     }
 
@@ -276,22 +270,7 @@ public final class ConverterRegistry {
         return type.getTypeName();
     }
 
-    static Class<?> rawClass(Type type) {
-        if (type instanceof Class<?>) { return (Class<?>) type; }
-        if (type instanceof ParameterizedType) { return rawClass(((ParameterizedType) type).getRawType()); }
-        if (type instanceof GenericArrayType) { return Object[].class; }
-        if (type instanceof TypeVariable<?>) { return rawClass(((TypeVariable<?>) type).getBounds()[0]); }
-        if (type instanceof WildcardType) { return rawClass(((WildcardType) type).getUpperBounds()[0]); }
-        throw new IllegalArgumentException("Unsupported Java type: " + type);
-    }
-
-    private static Class<?> boxed(Class<?> type) {
-        if (type == boolean.class) { return Boolean.class; }
-        if (type == int.class) { return Integer.class; }
-        if (type == long.class) { return Long.class; }
-        if (type == double.class) { return Double.class; }
-        return type;
-    }
+    static Class<?> rawClass(Type type) { return ConversionTypes.raw(type); }
 
     /**
      * Converts a Java value and enforces the storage plain-data boundary even for custom output.
@@ -340,7 +319,9 @@ public final class ConverterRegistry {
     @SuppressWarnings("unchecked")
     private Object write(Object value, Context ctx) throws ConversionException {
         if (value == null) { return null; }
-        ConfigConverter<Object> converter = (ConfigConverter<Object>) resolve(ctx.declaredType());
+        ConfigConverter<Object> converter = (ConfigConverter<Object>) registered(rawClass(ctx.declaredType()));
+        if (converter == null) { converter = (ConfigConverter<Object>) GenericConverters.resolveWrite(ctx.declaredType()); }
+        if (converter == null) { converter = (ConfigConverter<Object>) resolve(ctx.declaredType()); }
         if (converter == null) { throw ctx.failure("No config converter for " + ctx.declaredType().getTypeName(), null); }
         try {
             Object result = converter.toPlain(value, ctx);
@@ -351,7 +332,10 @@ public final class ConverterRegistry {
 
     @SuppressWarnings("unchecked")
     private <T> T read(Object plain, Context ctx) throws ConversionException {
-        if (plain == null) { return null; }
+        if (plain == null) {
+            if (rawClass(ctx.declaredType()).isPrimitive()) { throw ctx.failure("Null cannot be assigned to a primitive", null); }
+            return null;
+        }
         ConfigConverter<Object> converter = (ConfigConverter<Object>) resolve(ctx.declaredType());
         if (converter == null) { throw ctx.failure("No config converter for " + ctx.declaredType().getTypeName(), null); }
         try { return (T) converter.fromPlain(plain, ctx); }
@@ -376,7 +360,8 @@ public final class ConverterRegistry {
         }
     }
 
-    static final class Context implements ConversionContext {
+    @ApiStatus.Internal
+    public static final class Context implements ConversionContext {
         private final ConverterRegistry registry;
         private final String file;
         private final List<String> path;
@@ -400,13 +385,24 @@ public final class ConverterRegistry {
         @Override public <V> V fromPlain(Object nested, Type declared) throws ConversionException {
             return registry.read(nested, new Context(registry, file, path, declared, failures));
         }
-        Context child(String segment, Type declared) {
+        /** @param value nested Java value @param declared nested type @return plain data @throws ConversionException on failure */
+        public Object writeTyped(Object value, Type declared) throws ConversionException {
+            return registry.write(value, new Context(registry, file, path, declared, failures));
+        }
+        /** @param value nested plain value @param declared nested type @param <V> result type @return converted value @throws ConversionException on failure */
+        public <V> V readTyped(Object value, Type declared) throws ConversionException {
+            return registry.read(value, new Context(registry, file, path, declared, failures));
+        }
+        /** @param segment whole key or index @param declared nested type @return nested context */
+        public Context child(String segment, Type declared) {
             List<String> childPath = new ArrayList<>(path);
             childPath.add(segment);
             return new Context(registry, file, childPath, declared, failures);
         }
-        void record(Object raw, ConversionException cause) { failures.add(new ConversionFailure(raw, cause)); }
-        ConversionException failure(String reason, Throwable cause) {
+        /** @param raw refused input @param cause failure at its original nested location */
+        public void record(Object raw, ConversionException cause) { failures.add(new ConversionFailure(raw, cause)); }
+        /** @param reason failure description @param cause underlying failure @return checked located failure */
+        public ConversionException failure(String reason, Throwable cause) {
             return new ConversionException(reason, file, path, type, cause);
         }
     }
