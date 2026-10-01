@@ -19,6 +19,8 @@ class ConfigDocumentStyleTest {
 
     static java.util.stream.Stream<org.junit.jupiter.params.provider.Arguments> commentShapeInventory() {
         return java.util.stream.Stream.of(
+                org.junit.jupiter.params.provider.Arguments.of("shared-alias-positions", "x: &shared\n  # key block\n  a: 1 # inline\n  # end\nreference: *shared\ny: 2\n"),
+                org.junit.jupiter.params.provider.Arguments.of("shared-alias-distinct-notes", "x: &shared\n  a: 1\n  # note\nreference: *shared\nother:\n  a: 1\n  # note\ny: 2\n"),
                 org.junit.jupiter.params.provider.Arguments.of("empty-root-inline", "{} # inline\n"),
                 org.junit.jupiter.params.provider.Arguments.of("empty-root-all", "# block\n{} # inline\n# end\n"),
                 org.junit.jupiter.params.provider.Arguments.of("comments-only", "# bare\n\n# tail\n"),

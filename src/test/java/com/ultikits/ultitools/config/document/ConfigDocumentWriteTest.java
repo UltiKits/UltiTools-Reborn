@@ -30,7 +30,8 @@ class ConfigDocumentWriteTest {
     @org.junit.jupiter.params.provider.ValueSource(strings = {"remove-section", "remove-last", "smaller-map",
             "empty-map", "scalar", "list", "null", "nested-smaller", "same-size-list", "shorter-list",
             "deeper-path-sequence", "deeper-path-set", "inherited-deep", "inherited-smaller", "anchored-remove",
-            "anchored-unrelated", "clear-root", "duplicate-notes"})
+            "anchored-unrelated", "clear-root", "duplicate-notes", "alias-remove-original", "alias-remove-reference",
+            "alias-empty-original", "alias-scalar-original", "alias-list-original", "alias-clear-all", "alias-distinct-notes"})
     void everyDeletionPathPreservesSectionEnds(String action) throws Exception {
         String text = "s:\n  nested:\n    a: 1\n    # deep-end\n  # section-end\nnext: 2\n";
         if (action.contains("list") || "deeper-path-sequence".equals(action)) {
@@ -48,8 +49,26 @@ class ConfigDocumentWriteTest {
         } else if ("duplicate-notes".equals(action)) {
             text = "s:\n  a: 1\n  # section-end\n  # section-end\nnext: 2\n";
         }
+        if (action.startsWith("alias-")) {
+            text = "s: &shared\n  a: 1\n  # shared-end\nreference: *shared\nnext: 2\n";
+            if ("alias-distinct-notes".equals(action)) {
+                text += "other:\n  a: 1\n  # shared-end\nlast: 3\n";
+            }
+        }
         ConfigDocument document = ConfigDocument.parse(text);
-        if ("remove-section".equals(action) || "anchored-remove".equals(action)
+        if ("alias-remove-original".equals(action) || "alias-distinct-notes".equals(action)) {
+            document.remove(path("s"));
+        } else if ("alias-remove-reference".equals(action)) {
+            document.remove(path("reference"));
+        } else if ("alias-empty-original".equals(action)) {
+            document.set(path("s"), Collections.emptyMap());
+        } else if ("alias-scalar-original".equals(action)) {
+            document.set(path("s"), 3);
+        } else if ("alias-list-original".equals(action)) {
+            document.set(path("s"), Collections.singletonList(3));
+        } else if ("alias-clear-all".equals(action)) {
+            document.remove(path("s")); document.remove(path("reference"));
+        } else if ("remove-section".equals(action) || "anchored-remove".equals(action)
                 || "clear-root".equals(action) || "duplicate-notes".equals(action)) {
             assertThat(document.remove(path("s"))).isTrue();
         } else if ("remove-last".equals(action)) {
@@ -369,7 +388,8 @@ class ConfigDocumentWriteTest {
             document.remove(path("k"));
 
             assertThat(withKey).isEqualTo("# only a comment\n\n# second\nk: v\n");
-            assertThat(document.render()).isEqualTo("# only a comment\n\n# second\n");
+            assertThat(ConfigDocument.parse(document.render()).toPlain()).isEmpty();
+            assertThat(GoldenCorpus.comments(document.render())).containsExactly(" only a comment", " second");
         }
 
         @Test
@@ -379,7 +399,8 @@ class ConfigDocumentWriteTest {
 
             document.remove(path("a"));
 
-            assertThat(document.render()).isEqualTo("# header\n\n");
+            assertThat(ConfigDocument.parse(document.render()).toPlain()).isEmpty();
+            assertThat(GoldenCorpus.comments(document.render())).containsExactly(" header");
         }
 
         @Test

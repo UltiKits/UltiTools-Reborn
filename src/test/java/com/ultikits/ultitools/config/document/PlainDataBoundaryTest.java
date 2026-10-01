@@ -38,7 +38,7 @@ class PlainDataBoundaryTest {
         return Stream.of(
                 Arguments.of("a UUID", UUID.fromString("00000000-0000-0000-0000-000000000001"), "[s, v]", "java.util.UUID"),
                 Arguments.of("an enum", TimeUnit.SECONDS, "[s, v]", "java.util.concurrent.TimeUnit"),
-                Arguments.of("a Set", new HashSet<>(Collections.singleton("a")), "[s, v]", "java.util.HashSet"),
+                Arguments.of("a Set", new HashSet<>(Collections.singleton("a")), "[s, v]", "java.util.LinkedHashSet"),
                 Arguments.of("an ItemStack", Mockito.mock(ItemStack.class), "[s, v]", "org.bukkit.inventory.ItemStack"),
                 Arguments.of("a Location", new Location(null, 1, 2, 3), "[s, v]", "org.bukkit.Location"),
                 Arguments.of("a Float", 1.5f, "[s, v]", "java.lang.Float"),
