@@ -273,9 +273,13 @@ class ConfigBoundLongRoundTripTest {
             }
         };
         Bukkit.getLogger().addHandler(capture);
-        assertTrue(file.toFile().setWritable(false));
-        try {
-            assumeFalse(Files.isWritable(file), "needs a non-root user so the write-back really fails");
+        // Target-only chmod cannot force failure of an atomic replacement in a writable parent.
+        try (org.mockito.MockedStatic<com.ultikits.ultitools.config.document.AtomicConfigWriter> writer =
+                org.mockito.Mockito.mockStatic(com.ultikits.ultitools.config.document.AtomicConfigWriter.class,
+                        org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.write(
+                    org.mockito.Mockito.eq(file), org.mockito.Mockito.anyString()))
+                    .thenThrow(new IOException("injected write failure"));
 
             assertDoesNotThrow(module::reloadSelf);
 
@@ -292,7 +296,6 @@ class ConfigBoundLongRoundTripTest {
                     "a WARNING names the module and the config whose reload failed: " + warnings);
         } finally {
             Bukkit.getLogger().removeHandler(capture);
-            assertTrue(file.toFile().setWritable(true));
         }
     }
 
@@ -314,9 +317,13 @@ class ConfigBoundLongRoundTripTest {
             }
         }
         Files.write(file, edited.toString().getBytes(StandardCharsets.UTF_8));
-        assertTrue(file.toFile().setWritable(false));
-        try {
-            assumeFalse(Files.isWritable(file), "needs a non-root user so the write-back really fails");
+        // Target-only chmod cannot force failure of an atomic replacement in a writable parent.
+        try (org.mockito.MockedStatic<com.ultikits.ultitools.config.document.AtomicConfigWriter> writer =
+                org.mockito.Mockito.mockStatic(com.ultikits.ultitools.config.document.AtomicConfigWriter.class,
+                        org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.write(
+                    org.mockito.Mockito.eq(file), org.mockito.Mockito.anyString()))
+                    .thenThrow(new IOException("injected write failure"));
             ConfigManager secondBoot = boot();
             assertDoesNotThrow(() -> secondBoot.register(module, new InterestConfig(PATH)),
                     "ConfigManager itself logs the failed write-back and continues, as before");
@@ -328,8 +335,6 @@ class ConfigBoundLongRoundTripTest {
 
             assertTrue(refused.getMessage().contains(PATH), refused.getMessage());
             assertTrue(refused.getMessage().contains("interest.interval"), refused.getMessage());
-        } finally {
-            assertTrue(file.toFile().setWritable(true));
         }
     }
 
