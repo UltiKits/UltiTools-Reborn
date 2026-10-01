@@ -110,6 +110,17 @@ class ConfigDocumentWriteTest {
         assertThat(ConfigDocument.parse(rendered).toPlain()).isEqualTo(expected);
     }
 
+    @Test
+    void taggedContainersUpdatePlainAndNodeViewsTogether() throws Exception {
+        ConfigDocument ordered = ConfigDocument.parse("o: !!omap\n- a: 1\n- b: 2\n");
+        ordered.set(path("o", "c"), 3);
+        assertThat(ConfigDocument.parse(ordered.render()).toPlain()).isEqualTo(ordered.toPlain());
+        assertThat(ordered.get(path("o", "a"))).isEqualTo(1);
+        ConfigDocument set = ConfigDocument.parse("s: !!set {a: null, b: null}\n");
+        set.set(path("s", "c"), 3);
+        assertThat(ConfigDocument.parse(set.render()).toPlain()).isEqualTo(set.toPlain());
+    }
+
     static Stream<GoldenCorpus.Fixture> spliceFixtures() throws IOException {
         return GoldenCorpus.fixtures().stream().filter(f -> f.name.endsWith("/splice-layout.yml"));
     }

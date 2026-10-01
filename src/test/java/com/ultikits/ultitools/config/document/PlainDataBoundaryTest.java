@@ -65,6 +65,24 @@ class PlainDataBoundaryTest {
     }
 
     @Test
+    void copiedSnapshotIsCheckedRatherThanEarlierIteration() throws Exception {
+        ConfigDocument document = ConfigDocument.parse("a: 1\n");
+        List<Object> shifting = new java.util.AbstractList<Object>() {
+            private int reads;
+            @Override public int size() { return 1; }
+            @Override public Object get(int index) { return ++reads < 3 ? "safe" : UUID.randomUUID(); }
+        };
+        try {
+            document.set(path("a"), shifting);
+            assertThat(ConfigDocument.parse(document.render()).toPlain()).isEqualTo(document.toPlain());
+            assertThat(PlainData.isPlain(document.get(path("a")))).isTrue();
+        } catch (IllegalArgumentException expected) {
+            assertThat(expected).hasMessageContaining("java.util.UUID");
+            assertThat(document.render()).isEqualTo("a: 1\n");
+        }
+    }
+
+    @Test
     @DisplayName("every plain type is accepted and reads back equal, null included")
     void plainValuesAreAccepted() throws Exception {
         Map<String, Object> nested = new LinkedHashMap<>();

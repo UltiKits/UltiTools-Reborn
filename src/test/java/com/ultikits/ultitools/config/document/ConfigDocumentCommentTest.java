@@ -42,6 +42,23 @@ class ConfigDocumentCommentTest {
             + "# end of file comment\n";
 
     @Test
+    void removingLastSectionKeyKeepsTrailingComment() throws Exception {
+        ConfigDocument document = ConfigDocument.parse("chat:\n  last: true\n  # operator note\neconomy: 1\n");
+        document.remove(path("chat", "last"));
+        assertThat(document.render()).isEqualTo("chat: {}\n  # operator note\neconomy: 1\n");
+        assertThat(ConfigDocument.parse(document.render()).get(path("chat"))).isEqualTo(Collections.emptyMap());
+    }
+
+    @Test
+    void anchoredFallbackKeepsScalarAndListEndComments() throws Exception {
+        String text = "section: &s\n  list:\n  - first # item\n  # list end\n  scalar: value\n  # scalar end\nnext: 1\ncopy: *s\n";
+        ConfigDocument document = ConfigDocument.parse(text);
+        document.set(path("next"), 2);
+        assertThat(document.render()).contains("# item", "# list end", "# scalar end");
+        assertThat(ConfigDocument.parse(document.render()).get(path("next"))).isEqualTo(2);
+    }
+
+    @Test
     @DisplayName("header, block, inline, list-item, end-of-section and end-of-file comments survive value changes")
     void commentsSurviveValueChanges() throws Exception {
         ConfigDocument document = ConfigDocument.parse(COMMENTED);
