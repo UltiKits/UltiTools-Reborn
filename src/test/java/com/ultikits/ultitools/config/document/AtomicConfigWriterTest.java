@@ -220,6 +220,45 @@ class AtomicConfigWriterTest {
         assertThat(AtomicConfigWriter.isTemporaryOf("config.yml", "xconfig.yml.tmp-0123456789abcdef")).isFalse();
     }
 
+    @Test
+    void loadDoesNotDeleteLiveStagedWrite() throws IOException {
+        AtomicConfigWriter.StagedWrite staged = AtomicConfigWriter.stage(target, NEW);
+        assertThat(ConfigDocument.load(target).state()).isEqualTo(ConfigLoadResult.State.LOADED);
+        assertThat(Files.exists(staged.temporary())).isTrue();
+        staged.commit();
+        assertThat(content(target)).isEqualTo(NEW);
+        assertThat(siblings()).containsExactly("config.yml");
+    }
+
+    @Test
+    void temporaryHasTargetPermissionsBeforeFirstWrite() throws IOException {
+        assumeTrue(Files.getFileStore(tempDir).supportsFileAttributeView("posix"));
+        Files.setPosixFilePermissions(target, PosixFilePermissions.fromString("rw-------"));
+        AtomicConfigWriter.FileOperations inspect = new AtomicConfigWriter.FileOperations() {
+            @Override public FileChannel open(Path temporary) throws IOException {
+                FileChannel channel = AtomicConfigWriter.FileOperations.super.open(temporary);
+                try {
+                    assertThat(PosixFilePermissions.toString(Files.getPosixFilePermissions(temporary))).isEqualTo("rw-------");
+                } catch (AssertionError failure) {
+                    channel.close();
+                    throw failure;
+                }
+                return channel;
+            }
+        };
+        AtomicConfigWriter.write(target, NEW, inspect);
+        assertThat(content(target)).isEqualTo(NEW);
+    }
+
+    @Test
+    void danglingSymbolicLinkIsNeverReplaced() throws IOException {
+        Path link = tempDir.resolve("dangling.yml");
+        Files.createSymbolicLink(link, tempDir.resolve("missing.yml"));
+        assertThatThrownBy(() -> AtomicConfigWriter.write(link, NEW)).isInstanceOf(IOException.class);
+        assertThat(Files.isSymbolicLink(link)).isTrue();
+        assertThat(Files.readSymbolicLink(link)).isEqualTo(tempDir.resolve("missing.yml"));
+    }
+
     private static AtomicConfigWriter.FileOperations failingAt(String step, IOException failure) {
         return new AtomicConfigWriter.FileOperations() {
             @Override

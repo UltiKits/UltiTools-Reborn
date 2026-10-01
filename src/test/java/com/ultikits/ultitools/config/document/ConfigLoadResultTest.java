@@ -171,6 +171,41 @@ class ConfigLoadResultTest {
         }
     }
 
+    @Test
+    void cleanupRuntimeFailureNeverEscapesLoad() throws IOException {
+        Path file = write("a: 1\n");
+        try (org.mockito.MockedStatic<Files> mocked = org.mockito.Mockito.mockStatic(Files.class,
+                org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            mocked.when(() -> Files.newDirectoryStream(org.mockito.ArgumentMatchers.any(Path.class),
+                    org.mockito.ArgumentMatchers.any( java.nio.file.DirectoryStream.Filter.class)))
+                    .thenThrow(new java.nio.file.DirectoryIteratorException(new IOException("iteration failed")));
+            assertThat(ConfigDocument.load(file).state()).isEqualTo(ConfigLoadResult.State.LOADED);
+        }
+    }
+
+    @Test
+    void deepAliasChainIsUnparseableRatherThanStackOverflow() throws IOException {
+        ConfigLoadResult result = ConfigDocument.load(write(aliasChain(12000)));
+        assertThat(result.state()).isEqualTo(ConfigLoadResult.State.UNPARSEABLE);
+        assertThat(result.parserMessage()).containsIgnoringCase("depth");
+    }
+
+    @Test
+    void aliasExpansionObeysHundredLevelLimit() throws IOException {
+        ConfigLoadResult result = ConfigDocument.load(write(aliasChain(101)));
+        assertThat(result.state()).isEqualTo(ConfigLoadResult.State.UNPARSEABLE);
+        assertThat(result.parserMessage()).contains("100");
+        assertThat(ConfigDocument.load(write(aliasChain(99))).state()).isEqualTo(ConfigLoadResult.State.LOADED);
+    }
+
+    private static String aliasChain(int levels) {
+        StringBuilder text = new StringBuilder("a0: &a0 [leaf]\n");
+        for (int i = 1; i < levels; i++) {
+            text.append('a').append(i).append(": &a").append(i).append(" [*a").append(i - 1).append("]\n");
+        }
+        return text.toString();
+    }
+
     private Path write(String text) throws IOException {
         Path file = Files.createTempFile(tempDir, "config", ".yml");
         Files.write(file, text.getBytes(StandardCharsets.UTF_8));

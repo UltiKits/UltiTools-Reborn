@@ -65,6 +65,18 @@ class PlainDataBoundaryTest {
     }
 
     @Test
+    void mutableYamlLeavesAreDefensivelyCopied() throws Exception {
+        ConfigDocument document = ConfigDocument.parse("date: 2020-01-01\nbinary: !!binary YWI=\n");
+        java.util.Date original = (java.util.Date) document.get(path("date"));
+        long timestamp = original.getTime();
+        original.setTime(0);
+        byte[] binary = (byte[]) document.get(path("binary"));
+        binary[0] = 0;
+        assertThat(((java.util.Date) document.get(path("date"))).getTime()).isEqualTo(timestamp);
+        assertThat((byte[]) document.get(path("binary"))).containsExactly((byte) 'a', (byte) 'b');
+    }
+
+    @Test
     void copiedSnapshotIsCheckedRatherThanEarlierIteration() throws Exception {
         ConfigDocument document = ConfigDocument.parse("a: 1\n");
         List<Object> shifting = new java.util.AbstractList<Object>() {

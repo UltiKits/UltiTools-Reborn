@@ -18,6 +18,16 @@ import org.junit.jupiter.api.Test;
 class ConfigDocumentStyleTest {
 
     @Test
+    void emitterIndentClampMatchesStrictBytecodeBounds() throws Exception {
+        for (int indent : new int[]{1, 10}) {
+            String text = "a:\n" + String.join("", Collections.nCopies(indent, " ")) + "b: 1\n";
+            org.yaml.snakeyaml.nodes.MappingNode root = (org.yaml.snakeyaml.nodes.MappingNode)
+                    new org.yaml.snakeyaml.Yaml(ConfigDocument.loaderOptions()).compose(new java.io.StringReader(text));
+            assertThat(DocumentStyle.detect(text, root).dumperOptions().getIndent()).isEqualTo(2);
+        }
+    }
+
+    @Test
     @DisplayName("a CRLF file stays CRLF, for changed and added lines alike")
     void crlfStaysCrlf() throws Exception {
         String text = "# Economy\r\n\r\neconomy:\r\n  start: 100.0 # dollars\r\n  banks:\r\n    - central\r\n";
