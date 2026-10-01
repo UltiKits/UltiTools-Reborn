@@ -204,13 +204,13 @@ class ConfigNumericWideningTest {
         assertThat(config.isLastInitIncomplete()).as("a completed first boot").isFalse();
 
         writeFile("limits:\n  boxed-long: 30\n");
-        assertThat(file().toFile().setWritable(false)).isTrue();
-        try {
-            assumeFalse(Files.isWritable(file()), "needs a non-root user so the write-back really fails");
+        // Atomic replacement can replace a read-only target in a writable parent; inject real I/O failure.
+        try (org.mockito.MockedStatic<com.ultikits.ultitools.config.document.AtomicConfigWriter> writer =
+                Mockito.mockStatic(com.ultikits.ultitools.config.document.AtomicConfigWriter.class)) {
+            writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.write(
+                    Mockito.eq(file()), Mockito.anyString())).thenThrow(new IOException("injected write failure"));
             assertThatThrownBy(() -> config.init(plugin)).isInstanceOf(IOException.class);
             assertThat(config.isLastInitIncomplete()).as("after a failed write-back").isTrue();
-        } finally {
-            assertThat(file().toFile().setWritable(true)).isTrue();
         }
 
         config.init(plugin);

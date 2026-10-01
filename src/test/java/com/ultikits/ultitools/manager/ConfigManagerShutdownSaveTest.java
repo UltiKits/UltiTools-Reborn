@@ -373,12 +373,12 @@ class ConfigManagerShutdownSaveTest {
         configManager.register(plugin, control);
 
         config.setValue("set-by-code");
-        assumeThat(scalarFile.setWritable(false)).as("file permissions are enforceable here").isTrue();
-        try {
-            assumeThat(scalarFile.canWrite()).as("not running with permission-bypassing privileges").isFalse();
+        // Read-only target mode is not a failure for atomic replacement in a writable parent.
+        try (org.mockito.MockedStatic<com.ultikits.ultitools.config.document.AtomicConfigWriter> writer =
+                Mockito.mockStatic(com.ultikits.ultitools.config.document.AtomicConfigWriter.class)) {
+            writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.write(
+                    Mockito.eq(scalarFile.toPath()), Mockito.anyString())).thenThrow(new IOException("injected write failure"));
             assertThatThrownBy(config::save).isInstanceOf(IOException.class);
-        } finally {
-            assertThat(scalarFile.setWritable(true)).isTrue();
         }
         assertThat(read(scalarFile)).isEqualTo("value: original\n");
         String controlEdit = "value: control-operator-edit\n";
@@ -566,12 +566,11 @@ class ConfigManagerShutdownSaveTest {
 
         config.setValue("set-by-code");
         write(scalarFile, "value: operator-edit\n");
-        assumeThat(scalarFile.setWritable(false)).as("file permissions are enforceable here").isTrue();
-        try {
-            assumeThat(scalarFile.canWrite()).as("not running with permission-bypassing privileges").isFalse();
+        try (org.mockito.MockedStatic<com.ultikits.ultitools.config.document.AtomicConfigWriter> writer =
+                Mockito.mockStatic(com.ultikits.ultitools.config.document.AtomicConfigWriter.class)) {
+            writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.write(
+                    Mockito.eq(scalarFile.toPath()), Mockito.anyString())).thenThrow(new IOException("injected write failure"));
             configManager.saveAll();
-        } finally {
-            assertThat(scalarFile.setWritable(true)).isTrue();
         }
 
         assertThat(read(scalarFile)).isEqualTo("value: operator-edit\n");
