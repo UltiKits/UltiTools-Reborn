@@ -119,6 +119,61 @@ class BukkitConverterTest {
         }
     }
 
+    @Test
+    void objectSectionUsesRuntimeRegisteredConverter() throws Exception {
+        sectionShadow("value");
+    }
+
+    @Test
+    void objectListSectionUsesRuntimeRegisteredConverter() throws Exception {
+        sectionShadow("list");
+    }
+
+    @Test
+    void objectMapSectionUsesRuntimeRegisteredConverter() throws Exception {
+        sectionShadow("map");
+    }
+
+    @Test
+    void declaredObjectConverterStillPrecedesSectionRuntimeConverter() throws Exception {
+        ConverterRegistry custom = new ConverterRegistry(registry);
+        custom.register(Object.class, marker("declared"), true);
+        custom.register(org.bukkit.configuration.ConfigurationSection.class, marker("runtime"), false);
+        assertThat(custom.toPlain(new org.bukkit.configuration.MemoryConfiguration(), Object.class,
+                "f", Collections.emptyList())).isEqualTo("declared");
+    }
+
+    private void sectionShadow(String field) throws Exception {
+        for (Class<?> target : Arrays.asList(org.bukkit.configuration.ConfigurationSection.class,
+                org.bukkit.configuration.MemoryConfiguration.class)) {
+            ConverterRegistry custom = new ConverterRegistry(registry);
+            custom.register(target, marker("custom-section"), target == org.bukkit.configuration.MemoryConfiguration.class);
+            org.bukkit.configuration.MemoryConfiguration section = new org.bukkit.configuration.MemoryConfiguration();
+            section.set("number", 5);
+            Object input = "list".equals(field) ? Collections.singletonList(section)
+                    : "map".equals(field) ? Collections.singletonMap("entry", section) : section;
+            Object expected = "list".equals(field) ? Collections.singletonList("custom-section")
+                    : "map".equals(field) ? Collections.singletonMap("entry", "custom-section") : "custom-section";
+            assertThat(custom.toPlain(input, SectionShapes.class.getDeclaredField(field).getGenericType(),
+                    "f", Collections.emptyList())).isEqualTo(expected);
+        }
+        assertThat(registry.<Object>fromPlain(Collections.singletonMap("number", 5), Object.class,
+                "f", Collections.emptyList())).isEqualTo(Collections.singletonMap("number", 5));
+    }
+
+    private static ConfigConverter<Object> marker(String text) {
+        return new ConfigConverter<Object>() {
+            @Override public Object toPlain(Object value, ConversionContext ctx) { return text; }
+            @Override public Object fromPlain(Object plain, ConversionContext ctx) { return text; }
+        };
+    }
+
+    static class SectionShapes {
+        Object value;
+        java.util.List<Object> list;
+        Map<String, Object> map;
+    }
+
     @SerializableAs("ConfigTestHolder")
     public static class Holder implements ConfigurationSerializable {
         final Object value;
