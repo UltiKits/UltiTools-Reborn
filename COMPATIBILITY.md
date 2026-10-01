@@ -59,6 +59,20 @@ normalization. A failed write never acknowledges the pending effective values as
 Unreadable, unparseable and non-UTF-8 files are protected on every entity write path. Initial load
 keeps declared defaults; failed reload keeps running fields. One SEVERE names the file and safe cause.
 Explicit save does not clear protection; only a later successful load permits writes again.
+Parser diagnostics expose only numeric line/column metadata, never source snippets or scalar values.
+
+Exactly one `{key}` annotation comment (surrounding whitespace ignored) is framework-owned. Every
+load and write refreshes existing token comments from the module catalogue in the current language;
+operator block comments on token entries are replaced, while literal-entry comments are kept.
+Catalogue lookup failure keeps the literal token and warns once per entry per load. Comment text
+uses the document's YAML line-break/control-character sanitation, including the panel payload.
+A failed comment-only rewrite does not fail load or discard bound values: the entity stays dirty
+until persistence succeeds. No-op comparison includes these authoritative comments.
+
+A successful entity write that replaces an operator-edited value warns once, naming the file and
+only the keys actually replaced, never values. Explicit saves, partial panel writes and shutdown
+share this reporting. Comment/layout-only edits, equal candidate values and failed writes do not
+claim an overwrite. The check and write run under the same entity monitor.
 
 ### Removed mutable configuration accessor
 
@@ -440,21 +454,18 @@ This section governs the third kind.
   only that a value set from code without calling `save()` is saved on disable, and that contract
   is unchanged. As of 6.3.0 each configuration entity keeps a snapshot of what its file held when
   the framework last read or wrote it (taken after `init()`, after every reload, and after every
-  successful `save()` or panel write, and derived from the file's text plus the configuration
-  class's declared defaults for keys the file does not contain, never from the live fields), and
+  successful `save()` or panel write, with bound effective values tracked separately from raw
+  file data and declared defaults for missing keys), and
   the shutdown save writes only the entities whose current state differs from it. A value the file
   does not hold therefore stays unsaved until it is written: a panel write that changes only some
   keys, or a reload of a file from which a key was removed, does not hide an unsaved in-memory change
   to another key. What an operator sees:
   - an edit made to a file while the server runs survives a restart, provided no module code
     changed that configuration in memory;
-  - a file the YAML parser rejects is never written at shutdown, whether or not module code changed
-    that configuration, because the framework does not know what the file holds; one WARNING names
-    the file and says the in-memory changes were not saved. (A file that fails to parse while the
-    module is *loading* is still overwritten with defaults at that moment, by `init()` itself —
-    a separate, pre-existing defect tracked as
-    [#511](https://github.com/UltiKits/UltiTools-Reborn/issues/511).) An explicit `save()` call
-    still writes, since that is the caller's deliberate act;
+  - unreadable, unparseable and non-UTF-8 files are never written by initial load, reload,
+    explicit save, panel writes or shutdown. Initial failure uses defaults; failed reload retains
+    running values. A safe SEVERE diagnostic names the file and cause, and shutdown reports that
+    the protected file was left alone. Only a successful later load clears this state;
   - an unchanged file is no longer rewritten at shutdown at all, so its cosmetic rewrites — values
     re-quoted (a list of integers such as UltiCleaner's `item.warn-times` coming back as `'60'`),
     comments re-emitted in the serializer's own layout — no longer happen then;
@@ -462,7 +473,7 @@ This section governs the third kind.
     as before;
   - if module code did change a configuration in memory **and** its file was also changed or removed
     on disk since the snapshot, the in-memory state still wins and is written, and one WARNING per
-    file names the file and says the changes made while the server ran were overwritten;
+    file names the file and only the operator-edited keys actually overwritten;
   - if that shutdown write fails (for example, the file was replaced by a directory, or is not
     writable), the existing `Configuration save failed` WARNING is logged and no overwrite WARNING
     is; an I/O error or an unchecked exception in one configuration does not stop the others from
@@ -479,9 +490,10 @@ This section governs the third kind.
   value never reaches the file. Module code that changes a configuration from its own
   asynchronous tasks is not covered by this lock.
 
-  An explicit `save()` call still writes unconditionally. A module that relied on the shutdown save
-  to reformat an untouched file should call `save()` itself (see `ultitools.config.shutdown-keeps-operator-edit`
-  and `ultitools.config.shutdown-saves-code-change` in `FEATURES.md`).
+  An explicit `save()` still compares against the current file and can replace changed operator
+  values, but semantic no-ops perform no write. It is not an unconditional formatting operation
+  (see `ultitools.config.shutdown-keeps-operator-edit` and
+  `ultitools.config.shutdown-saves-code-change` in `FEATURES.md`).
 
 - `PluginInstallUtils.uninstallPlugin(String)` unloading through the framework's one full unload
   path, and reporting the outcome it documents (#503, #501). It used to call
