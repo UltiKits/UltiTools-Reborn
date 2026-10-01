@@ -12,6 +12,9 @@ import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.lang.reflect.Field;
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadInfo;
+import java.lang.management.ThreadMXBean;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -20,6 +23,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
@@ -556,6 +563,261 @@ class DataStoreManagerTest {
             assertThat(dataMap.keySet())
                     .as("the registered set must be exactly what was registered -- no entry lost or duplicated")
                     .containsExactlyInAnyOrderElementsOf(expectedTypes);
+        }
+    }
+
+    @Nested
+    @DisplayName("Registry concurrency regression tests")
+    class RegistryConcurrencyRegressionTests {
+
+        @Test
+        void registeredReadsUseTheRegistrationMonitor() throws Exception {
+            DataStore target = mock(DataStore.class);
+            when(target.getStoreType()).thenReturn("target");
+            DataStoreManager.register(target);
+            CountDownLatch entered = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            List<Throwable> failures = new CopyOnWriteArrayList<>();
+            List<DataStore> results = new CopyOnWriteArrayList<>();
+            DataStore writerStore = mock(DataStore.class);
+            when(writerStore.getStoreType()).thenAnswer(invocation -> {
+                entered.countDown();
+                if (!release.await(10, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("registration probe was not released");
+                }
+                return "writer";
+            });
+            Thread writer = capturedThread(() -> DataStoreManager.register(writerStore), failures);
+            Thread reader = capturedThread(() -> results.add(DataStoreManager.getDatastore("target")), failures);
+            boolean blocked = false;
+            writer.start();
+            try {
+                assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+                reader.start();
+                blocked = waitsForRegistryMonitor(reader, writer);
+            } finally {
+                release.countDown();
+                joinWorkers(Arrays.asList(writer, reader));
+            }
+            assertThat(failures).isEmpty();
+            assertThat(results).containsExactly(target);
+            assertThat(blocked).as("registered reads must use the same monitor as registration").isTrue();
+        }
+
+        @Test
+        void closeUsesTheRegistrationMonitorForCallbacksAndClear() throws Exception {
+            CountDownLatch entered = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            List<Throwable> failures = new CopyOnWriteArrayList<>();
+            DataStore closingStore = mock(DataStore.class);
+            when(closingStore.getStoreType()).thenReturn("closing");
+            org.mockito.Mockito.doAnswer(invocation -> {
+                entered.countDown();
+                if (!release.await(10, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("close probe was not released");
+                }
+                return null;
+            }).when(closingStore).destroyAllOperators();
+            DataStoreManager.register(closingStore);
+            DataStore later = mock(DataStore.class);
+            when(later.getStoreType()).thenReturn("later");
+            Thread closer = capturedThread(DataStoreManager::close, failures);
+            Thread reader = capturedThread(() -> DataStoreManager.getDatastore("closing"), failures);
+            Thread writer = capturedThread(() -> DataStoreManager.register(later), failures);
+            boolean readerBlocked = false;
+            boolean writerBlocked = false;
+            closer.start();
+            try {
+                assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+                reader.start();
+                writer.start();
+                readerBlocked = waitsForRegistryMonitor(reader, closer);
+                writerBlocked = waitsForRegistryMonitor(writer, closer);
+            } finally {
+                release.countDown();
+                joinWorkers(Arrays.asList(closer, reader, writer));
+            }
+            assertThat(failures).isEmpty();
+            assertThat(readerBlocked).as("close must exclude registry reads while destroying stores").isTrue();
+            assertThat(writerBlocked).as("close must exclude registration until its clear completes").isTrue();
+            assertThat(DataStoreManager.getDatastore("later")).isSameAs(later);
+        }
+
+        @Test
+        @Timeout(value = 120, unit = TimeUnit.SECONDS)
+        void repeatedResizesNeverLoseAnAlreadyRegisteredStore() throws Exception {
+            int rounds = 12;
+            int writesPerRound = 32768;
+            int readerCount = 8;
+            AtomicLong reads = new AtomicLong();
+            AtomicLong nullReads = new AtomicLong();
+            AtomicLong wrongReads = new AtomicLong();
+            List<Throwable> failures = new CopyOnWriteArrayList<>();
+            for (int round = 0; round < rounds; round++) {
+                DataStore target = new RegistryTestStore("init-type-0");
+                DataStoreManager.register(target);
+                CountDownLatch ready = new CountDownLatch(readerCount + 1);
+                CountDownLatch start = new CountDownLatch(1);
+                AtomicBoolean finished = new AtomicBoolean();
+                AtomicInteger activeReaders = new AtomicInteger(readerCount);
+                int roundIndex = round;
+                List<Thread> workers = new ArrayList<>();
+                workers.add(capturedThread(() -> {
+                    ready.countDown();
+                    awaitStart(start);
+                    try {
+                        for (int index = 0; index < writesPerRound; index++) {
+                            DataStoreManager.register(new RegistryTestStore("resize-" + roundIndex + "-" + index));
+                        }
+                    } finally {
+                        finished.set(true);
+                    }
+                }, failures));
+                for (int reader = 0; reader < readerCount; reader++) {
+                    workers.add(capturedThread(() -> {
+                        ready.countDown();
+                        awaitStart(start);
+                        long localReads = 0;
+                        long localNulls = 0;
+                        long localWrong = 0;
+                        try {
+                            do {
+                                DataStore result = DataStoreManager.getDatastore("init-type-0");
+                                localReads++;
+                                if (result == null) {
+                                    localNulls++;
+                                } else if (result != target) {
+                                    localWrong++;
+                                }
+                            } while (!finished.get());
+                        } finally {
+                            reads.addAndGet(localReads);
+                            nullReads.addAndGet(localNulls);
+                            wrongReads.addAndGet(localWrong);
+                            activeReaders.decrementAndGet();
+                        }
+                    }, failures));
+                }
+                workers.forEach(Thread::start);
+                try {
+                    assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+                    start.countDown();
+                    joinWorkers(workers);
+                } finally {
+                    start.countDown();
+                    finished.set(true);
+                    joinWorkers(workers);
+                }
+                assertThat(activeReaders.get()).isZero();
+            }
+            DataStoreManager.close();
+            System.out.println("Registry resize specimens: reads=" + reads.get()
+                    + ", nulls=" + nullReads.get() + ", wrong=" + wrongReads.get());
+            assertThat(failures).isEmpty();
+            assertThat(reads.get()).isGreaterThanOrEqualTo((long) rounds * readerCount);
+            assertThat(nullReads.get()).as("actual null reads during genuine registry growth").isZero();
+            assertThat(wrongReads.get()).isZero();
+        }
+
+        @Test
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+        void nullTypeRegistrationRetainsItsExistingLifecycle() throws Exception {
+            DataStore store = mock(DataStore.class);
+            when(store.getStoreType()).thenReturn(null);
+            // The internal registry is inspected only to pin its existing accepted null-key contract.
+            Field field = DataStoreManager.class.getDeclaredField("dataMap");
+            field.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Map<String, DataStore> registry = (Map<String, DataStore>) field.get(null);
+            DataStoreManager.register(store);
+            assertThat(registry).containsEntry(null, store);
+            DataStoreManager.unregister(store);
+            assertThat(registry).doesNotContainKey(null);
+            verify(store).destroyAllOperators();
+            DataStoreManager.register(store);
+            DataStoreManager.close();
+            assertThat(registry).isEmpty();
+            verify(store, org.mockito.Mockito.times(2)).destroyAllOperators();
+        }
+
+        @Test
+        void nullRequestSelectsJsonRatherThanTheNullTypeEntry() {
+            DataStore nullType = mock(DataStore.class);
+            when(nullType.getStoreType()).thenReturn(null);
+            DataStore json = mock(DataStore.class);
+            when(json.getStoreType()).thenReturn("json");
+            DataStoreManager.register(nullType);
+            DataStoreManager.register(json);
+            assertThat(DataStoreManager.getDatastore(null)).isSameAs(json);
+        }
+
+        private Thread capturedThread(Runnable action, List<Throwable> failures) {
+            return new Thread(() -> {
+                try {
+                    action.run();
+                } catch (Throwable failure) {
+                    failures.add(failure);
+                }
+            });
+        }
+
+        private boolean waitsForRegistryMonitor(Thread contender, Thread owner) {
+            ThreadMXBean bean = ManagementFactory.getThreadMXBean();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (contender.isAlive() && System.nanoTime() < deadline) {
+                ThreadInfo info = bean.getThreadInfo(contender.getId());
+                if (info != null && info.getThreadState() == Thread.State.BLOCKED
+                        && info.getLockOwnerId() == owner.getId() && info.getLockInfo() != null
+                        && info.getLockInfo().getIdentityHashCode() == System.identityHashCode(DataStoreManager.class)) {
+                    return true;
+                }
+                Thread.yield();
+            }
+            return false;
+        }
+
+        private void awaitStart(CountDownLatch start) {
+            try {
+                if (!start.await(5, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("resize workers did not start");
+                }
+            } catch (InterruptedException failure) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("resize worker interrupted", failure);
+            }
+        }
+
+        private void joinWorkers(List<Thread> workers) throws InterruptedException {
+            for (Thread worker : workers) {
+                worker.join(TimeUnit.SECONDS.toMillis(10));
+            }
+            assertThat(workers).allSatisfy(worker -> assertThat(worker.isAlive()).isFalse());
+        }
+    }
+
+    private static final class RegistryTestStore implements DataStore {
+        private final String type;
+
+        private RegistryTestStore(String type) {
+            this.type = type;
+        }
+
+        @Override
+        public String getStoreType() {
+            return type;
+        }
+
+        @Override
+        @SuppressWarnings("removal")
+        public <T extends com.ultikits.ultitools.abstracts.data.BaseDataEntity<String>>
+                com.ultikits.ultitools.interfaces.DataOperator<T> getOperator(
+                        com.ultikits.ultitools.abstracts.UltiToolsPlugin plugin, Class<T> entity) {
+            throw new UnsupportedOperationException("registry-only test store");
+        }
+
+        @Override
+        public void destroyAllOperators() {
+            // The registry-only fixture has no operators to destroy.
         }
     }
 
