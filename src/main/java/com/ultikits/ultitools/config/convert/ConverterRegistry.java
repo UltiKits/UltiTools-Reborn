@@ -24,6 +24,10 @@ import java.util.UUID;
 import java.util.WeakHashMap;
 
 import org.bukkit.configuration.serialization.ConfigurationSerializable;
+import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.World;
+import com.ultikits.ultitools.config.convert.builtin.BukkitConverters;
+import com.ultikits.ultitools.config.convert.builtin.PlainNormalizer;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
@@ -47,16 +51,6 @@ import com.ultikits.ultitools.utils.PackageScanUtils;
 @ApiStatus.Internal
 public final class ConverterRegistry {
     private static final Map<UltiToolsPlugin, Prepared> MODULES = new WeakHashMap<>();
-    private static final ConfigConverter<Object> PENDING = new ConfigConverter<Object>() {
-        @Override
-        public Object toPlain(Object value, ConversionContext ctx) throws ConversionException {
-            throw new ConversionException("Built-in conversion is not installed yet", ctx.file(), ctx.path(), ctx.declaredType());
-        }
-        @Override
-        public Object fromPlain(Object plain, ConversionContext ctx) throws ConversionException {
-            throw new ConversionException("Built-in conversion is not installed yet", ctx.file(), ctx.path(), ctx.declaredType());
-        }
-    };
     private static final ConverterRegistry FRAMEWORK = createFramework();
     private final ConverterRegistry parent;
     private final Map<Class<?>, Registration> registrations = new LinkedHashMap<>();
@@ -72,6 +66,8 @@ public final class ConverterRegistry {
     public Set<Class<?>> registeredTypes() {
         Set<Class<?>> types = new LinkedHashSet<>(registrations.keySet());
         types.addAll(GenericConverters.registeredTypes());
+        types.add(ConfigurationSerializable.class);
+        types.add(ConfigurationSection.class);
         return Collections.unmodifiableSet(types);
     }
 
@@ -82,6 +78,7 @@ public final class ConverterRegistry {
                 double.class, Double.class, char.class, Character.class, BigInteger.class, BigDecimal.class, UUID.class)) {
             registry.register(type, new ScalarConverter(type), true);
         }
+        registry.register(World.class, BukkitConverters.WORLD, false);
         registry.sealed = true;
         return registry;
     }
@@ -113,7 +110,7 @@ public final class ConverterRegistry {
         if (found != null) { return found; }
         ConfigConverter<?> generic = GenericConverters.resolve(type);
         if (generic != null) { return generic; }
-        return ConfigurationSerializable.class.isAssignableFrom(raw) ? PENDING : null;
+        return ConfigurationSerializable.class.isAssignableFrom(raw) ? BukkitConverters.SERIALIZABLE : null;
     }
 
     private ConfigConverter<?> registered(Class<?> raw) {
@@ -220,6 +217,8 @@ public final class ConverterRegistry {
      * @param module the module name
      * @param file the module-relative config file
      */
+    // Nondefault legacy parsers retain ownership of their annotated fields.
+    @SuppressWarnings("removal")
     public void checkEntityFields(Class<?> entity, String module, String file) {
         for (Class<?> level = entity; level != null && level != Object.class; level = level.getSuperclass()) {
             for (Field field : level.getDeclaredFields()) {
@@ -294,7 +293,7 @@ public final class ConverterRegistry {
      * @throws ConversionException when conversion or plain-data validation fails
      */
     public Object toPlain(Object value, Type type, String file, List<String> path) throws ConversionException {
-        return write(value, new Context(this, file, path, type, new ArrayList<>()));
+        return toPlain(value, type, file, path, null);
     }
 
     /**
@@ -323,8 +322,47 @@ public final class ConverterRegistry {
      */
     public <T> ConversionResult<T> fromPlainResult(Object plain, Type type, String file, List<String> path)
             throws ConversionException {
+        return fromPlainResult(plain, type, file, path, null);
+    }
+
+    /**
+     * Selects an explicitly declared legacy parser before registry conversion.
+     * @param value Java value
+     * @param type declared type
+     * @param file configuration file
+     * @param path whole keys
+     * @param entry annotation, or null for registry conversion
+     * @return plain data
+     * @throws ConversionException on conversion failure
+     */
+    // Explicit legacy parsers remain supported through this compatibility adapter.
+    @SuppressWarnings("removal")
+    public Object toPlain(Object value, Type type, String file, List<String> path, ConfigEntry entry)
+            throws ConversionException {
+        Context ctx = new Context(this, file, path, type, new ArrayList<>());
+        if (entry == null || entry.parser() == DefaultConfigParser.class) { return write(value, ctx); }
+        return invokeWrite(new LegacyParserAdapter(entry.parser()), value, ctx);
+    }
+
+    /**
+     * Selects an explicitly declared legacy parser before registry conversion.
+     * @param plain document value
+     * @param type declared type
+     * @param file configuration file
+     * @param path whole keys
+     * @param entry annotation, or null for registry conversion
+     * @param <T> result type
+     * @return converted value and failures
+     * @throws ConversionException on conversion failure
+     */
+    // Explicit legacy parsers remain supported through this compatibility adapter.
+    @SuppressWarnings("removal")
+    public <T> ConversionResult<T> fromPlainResult(Object plain, Type type, String file, List<String> path, ConfigEntry entry)
+            throws ConversionException {
         List<ConversionFailure> failures = new ArrayList<>();
-        T value = read(plain, new Context(this, file, path, type, failures));
+        Context ctx = new Context(this, file, path, type, failures);
+        T value = entry == null || entry.parser() == DefaultConfigParser.class
+                ? read(plain, ctx) : invokeRead(new LegacyParserAdapter(entry.parser()), plain, ctx);
         return new ConversionResult<>(value, failures);
     }
 
@@ -332,9 +370,23 @@ public final class ConverterRegistry {
     private Object write(Object value, Context ctx) throws ConversionException {
         if (value == null) { return null; }
         ConfigConverter<Object> converter = (ConfigConverter<Object>) registered(rawClass(ctx.declaredType()));
+        if (converter == null && value instanceof ConfigurationSection && rawClass(ctx.declaredType()) == Object.class) {
+            return ctx.writeTyped(value, value.getClass());
+        }
+        if (converter == null && value instanceof ConfigurationSection) {
+            try {
+                Object result = PlainNormalizer.normalize(value, ctx);
+                PlainData.requirePlain(ctx.path(), result);
+                return result;
+            } catch (RuntimeException failure) { throw ctx.failure(failure.getMessage(), failure); }
+        }
         if (converter == null) { converter = (ConfigConverter<Object>) GenericConverters.resolveWrite(ctx.declaredType()); }
         if (converter == null) { converter = (ConfigConverter<Object>) resolve(ctx.declaredType()); }
         if (converter == null) { throw ctx.failure("No config converter for " + ctx.declaredType().getTypeName(), null); }
+        return invokeWrite(converter, value, ctx);
+    }
+
+    private Object invokeWrite(ConfigConverter<Object> converter, Object value, Context ctx) throws ConversionException {
         try {
             Object result = converter.toPlain(value, ctx);
             PlainData.requirePlain(ctx.path(), result);
@@ -350,8 +402,21 @@ public final class ConverterRegistry {
         }
         ConfigConverter<Object> converter = (ConfigConverter<Object>) resolve(ctx.declaredType());
         if (converter == null) { throw ctx.failure("No config converter for " + ctx.declaredType().getTypeName(), null); }
+        return invokeRead(converter, plain, ctx);
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T> T invokeRead(ConfigConverter<?> converter, Object plain, Context ctx) throws ConversionException {
         try { return (T) converter.fromPlain(plain, ctx); }
         catch (RuntimeException e) { throw ctx.failure(e.getMessage(), e); }
+    }
+
+    private Object readSerializable(Object plain, Class<? extends ConfigurationSerializable> factory, Context ctx)
+            throws ConversionException {
+        ConfigConverter<?> custom = registered(factory);
+        Type declared = custom == null ? ConfigurationSerializable.class : factory;
+        Context located = new Context(this, ctx.file, ctx.path, declared, ctx.failures);
+        return invokeRead(custom == null ? BukkitConverters.SERIALIZABLE : custom, plain, located);
     }
 
     private static final class Registration {
@@ -387,6 +452,18 @@ public final class ConverterRegistry {
             this.type = type;
             this.failures = failures;
         }
+        /**
+         * Applies the ordinary registered hierarchy before delegate-aware Bukkit fallback.
+         * @param plain nested tagged map
+         * @param factory registered alias factory
+         * @return hydrated value
+         * @throws ConversionException on alias conversion failure
+         */
+        public Object readSerializable(Object plain, Class<? extends ConfigurationSerializable> factory)
+                throws ConversionException {
+            return registry.readSerializable(plain, factory, this);
+        }
+
         @Override public String file() { return file; }
         @Override public List<String> path() { return path; }
         @Override public Type declaredType() { return type; }

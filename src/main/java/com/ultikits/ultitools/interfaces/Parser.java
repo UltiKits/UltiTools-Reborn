@@ -37,7 +37,11 @@ package com.ultikits.ultitools.interfaces;
  * @see com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser
  * @see com.ultikits.ultitools.interfaces.impl.pasers.StringHashMapParser
  * @since 6.0.0
+ * @deprecated Use {@link com.ultikits.ultitools.config.convert.ConfigConverter} and
+ * {@link com.ultikits.ultitools.config.convert.ConfigConverterFor}; removed in the next version.
+ * @removeIn 6.4.0
  */
+@Deprecated(since = "6.3.0", forRemoval = true)
 public interface Parser<T> {
     /**
      * Parses a raw object into the target type.

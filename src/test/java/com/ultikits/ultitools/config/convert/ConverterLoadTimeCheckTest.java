@@ -14,7 +14,6 @@ import org.junit.jupiter.api.io.TempDir;
 
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.exceptions.ConfigurationException;
-import com.ultikits.ultitools.interfaces.impl.pasers.StringHashMapParser;
 
 class ConverterLoadTimeCheckTest {
     @TempDir
@@ -93,7 +92,9 @@ class ConverterLoadTimeCheckTest {
         @ConfigEntry List<U> enums;
     }
     static class Legacy {
-        @ConfigEntry(parser = StringHashMapParser.class)
+        // Deliberately verifies that a legacy override owns its unknown value type.
+        @SuppressWarnings("removal")
+        @ConfigEntry(parser = com.ultikits.ultitools.interfaces.impl.pasers.StringHashMapParser.class)
         Map<String, RecipeDefinitionLike> value;
     }
     enum TestEnum { FIRST, SECOND }

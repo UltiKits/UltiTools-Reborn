@@ -201,7 +201,8 @@ public abstract class AbstractConfigEntity {
      *
      * @param target the configuration to write the serialized field values into
      */
-    @SuppressWarnings("unchecked")
+    // Frozen 6.2 parser path kept for compatibility until removal.
+    @SuppressWarnings({"unchecked", "removal"})
     private void applyFieldsTo(YamlConfiguration target) {
         for (Field field : ReflectionUtil.getFields(this.getClass())) {
             if (!field.isAnnotationPresent(ConfigEntry.class)) {
@@ -642,6 +643,8 @@ public abstract class AbstractConfigEntity {
      * @param raw        the value SnakeYAML returned for the entry's path, never {@code null}
      * @return the value to store in {@code field}
      */
+    // Frozen 6.2 parser path kept for compatibility until removal.
+    @SuppressWarnings("removal")
     private static Object readConfigValue(Field field, ConfigEntry annotation, Object raw) {
         Object parsed = ReflectionUtil.newInstance(annotation.parser()).parse(raw);
         return widenToFieldType(field.getType(), parsed);

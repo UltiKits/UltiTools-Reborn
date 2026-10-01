@@ -17,9 +17,6 @@ import org.bukkit.configuration.MemoryConfiguration;
 import org.bukkit.configuration.MemorySection;
 import org.junit.jupiter.api.Test;
 import com.ultikits.ultitools.annotations.ConfigEntry;
-import com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser;
-import com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser;
-import com.ultikits.ultitools.interfaces.impl.pasers.StringHashMapParser;
 
 class LegacyParserAdapterTest {
     private final ConverterRegistry registry = ConverterRegistry.framework();
@@ -91,12 +88,18 @@ class LegacyParserAdapterTest {
     private static ConfigEntry entry(String name) throws NoSuchFieldException {
         return Shapes.class.getDeclaredField(name).getAnnotation(ConfigEntry.class);
     }
-    public static class Extending extends DefaultConfigParser { }
-    public static class Plain extends ConfigParser<Object> {
-        @Override public Object parse(Object object) { return new DefaultConfigParser().parse(object); }
-        @Override public MemorySection serializeToMemorySection(Object value) { return new DefaultConfigParser().serializeToMemorySection(value); }
+    // Deliberately exercises the deprecated legacy parser compatibility contract.
+    @SuppressWarnings("removal")
+    public static class Extending extends com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser { }
+    // Deliberately exercises the deprecated legacy parser compatibility contract.
+    @SuppressWarnings("removal")
+    public static class Plain extends com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser<Object> {
+        @Override public Object parse(Object object) { return new com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser().parse(object); }
+        @Override public MemorySection serializeToMemorySection(Object value) { return new com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser().serializeToMemorySection(value); }
     }
-    public static class Joined extends ConfigParser<Set<String>> {
+    // Deliberately exercises the deprecated legacy parser compatibility contract.
+    @SuppressWarnings("removal")
+    public static class Joined extends com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser<Set<String>> {
         @Override public Set<String> parse(Object object) {
             return new LinkedHashSet<>(Arrays.asList(((ConfigurationSection) object).getString("joined").split(",")));
         }
@@ -123,13 +126,29 @@ class LegacyParserAdapterTest {
         @Override public Object parse(Object value) { return ++calls == 1 ? "first" : "shared"; }
     }
     static class Shapes {
+        // Deliberately selects a legacy parser to verify compatibility dispatch.
+        @SuppressWarnings("removal")
         @ConfigEntry(parser = Extending.class) Object extending;
+        // Deliberately selects a legacy parser to verify compatibility dispatch.
+        @SuppressWarnings("removal")
         @ConfigEntry(parser = Plain.class) Object plain;
-        @ConfigEntry(parser = StringHashMapParser.class) Object stringMap;
+        // Deliberately selects a legacy parser to verify compatibility dispatch.
+        @SuppressWarnings("removal")
+        @ConfigEntry(parser = com.ultikits.ultitools.interfaces.impl.pasers.StringHashMapParser.class) Object stringMap;
+        // Deliberately selects a legacy parser to verify compatibility dispatch.
+        @SuppressWarnings("removal")
         @ConfigEntry(parser = Joined.class) Object joined;
+        // Deliberately selects a legacy parser to verify compatibility dispatch.
+        @SuppressWarnings("removal")
         @ConfigEntry(parser = UuidOutput.class) Object uuid;
+        // Deliberately selects a legacy parser to verify compatibility dispatch.
+        @SuppressWarnings("removal")
         @ConfigEntry(parser = UnknownOutput.class) Object unknown;
+        // Deliberately selects a legacy parser to verify compatibility dispatch.
+        @SuppressWarnings("removal")
         @ConfigEntry(parser = BadConstructor.class) Object constructor;
+        // Deliberately selects a legacy parser to verify compatibility dispatch.
+        @SuppressWarnings("removal")
         @ConfigEntry(parser = Stateful.class) Object stateful;
     }
 }

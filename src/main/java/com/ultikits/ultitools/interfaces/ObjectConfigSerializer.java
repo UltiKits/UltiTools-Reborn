@@ -23,7 +23,11 @@ import org.bukkit.configuration.MemorySection;
  * @param <T> the type of object to serialize
  * @author wisdomme
  * @since 6.0.0
+ * @deprecated Use {@link com.ultikits.ultitools.config.convert.ConfigConverter} and
+ * {@link com.ultikits.ultitools.config.convert.ConfigConverterFor}; removed in the next version.
+ * @removeIn 6.4.0
  */
+@Deprecated(since = "6.3.0", forRemoval = true)
 public interface ObjectConfigSerializer<T> {
     /**
      * Serializes an object to a Bukkit MemorySection.
