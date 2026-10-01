@@ -45,8 +45,31 @@ class ConfigDocumentCommentTest {
     void removingLastSectionKeyKeepsTrailingComment() throws Exception {
         ConfigDocument document = ConfigDocument.parse("chat:\n  last: true\n  # operator note\neconomy: 1\n");
         document.remove(path("chat", "last"));
-        assertThat(document.render()).isEqualTo("chat: {}\n  # operator note\neconomy: 1\n");
-        assertThat(ConfigDocument.parse(document.render()).get(path("chat"))).isEqualTo(Collections.emptyMap());
+        assertCommentContract(document.render(), "chat: {}\n# operator note\neconomy: 1\n");
+    }
+
+    @Test
+    void removingLastSectionKeyAtEofKeepsTrailingComment() throws Exception {
+        ConfigDocument document = ConfigDocument.parse("chat:\n  last: true\n  # operator note\n");
+        document.remove(path("chat", "last"));
+        assertCommentContract(document.render(), "chat: {}\n# operator note\n");
+    }
+
+    @Test
+    void removingLastOfTwoKeysTransfersTrailingCommentToRemainingValue() throws Exception {
+        ConfigDocument document = ConfigDocument.parse(
+                "chat:\n  first: 0\n  last: true\n  # operator note\neconomy: 1\n");
+        document.remove(path("chat", "last"));
+        assertCommentContract(document.render(), "chat:\n  first: 0\n  # operator note\neconomy: 1\n");
+    }
+
+    @Test
+    void removingLastOfTwoKeysAtEofPreservesSectionAndFileCommentOrder() throws Exception {
+        ConfigDocument document = ConfigDocument.parse(
+                "chat:\n  first: 0\n  last: true\n  # section end\n# file end\n");
+        document.remove(path("chat", "last"));
+        assertCommentContract(document.render(), "chat:\n  first: 0\n  # section end\n# file end\n");
+        assertThat(document.render().indexOf("# section end")).isLessThan(document.render().indexOf("# file end"));
     }
 
     @Test
