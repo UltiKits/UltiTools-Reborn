@@ -191,14 +191,40 @@ class ConfigEntityGoldenTest {
         assertFields(config, expected);
         unchanged(file, bytes, time);
         assertThat(config.isModifiedSinceSnapshot()).isFalse();
+        // Capture defaults equal captured values; mutate first so reload must actually bind every field.
+        for (Field field : entries(config)) {
+            if (field.getType().isPrimitive()) {
+                Object value = field.get(config);
+                if (value instanceof Boolean) { field.set(config, !((Boolean) value)); }
+                else if (value instanceof Integer) { field.set(config, ((Integer) value) - 1); }
+                else if (value instanceof Long) { field.set(config, ((Long) value) - 1L); }
+                else if (value instanceof Double) { field.set(config, ((Double) value) + 7.0); }
+                else { throw new IllegalStateException("Uncovered capture primitive: " + field); }
+            } else { field.set(config, null); }
+        }
+        assertThat(config.isModifiedSinceSnapshot()).isTrue();
         config.reload();
         assertFields(config, expected);
         unchanged(file, bytes, time);
         assertThat(config.isModifiedSinceSnapshot()).isFalse();
         manager.saveAll();
         unchanged(file, bytes, time);
+        Map<String, Object> serialized = read(new String(bytes, StandardCharsets.UTF_8));
+        for (Map.Entry<Field, Object> entry : expected.entrySet()) { put(serialized, path(entry.getKey()), entry.getValue()); }
+        boolean semanticNoOp = PlainData.plainEquals(disk, serialized);
+        if (!semanticNoOp) {
+            assertThat(fixture).as("the sole accepted raw/effective difference").isEqualTo("written-by-6.2/10-dotted-keys-save.yml");
+            assertThat(new ArrayList<Object>(((Map<?, ?>) at(disk, Arrays.asList("emojis", "mappings"))).keySet()))
+                    .contains("o", "g");
+        }
         config.save();
-        unchanged(file, bytes, time);
+        if (semanticNoOp) { unchanged(file, bytes, time); }
+        else {
+            // Explicit save replaces the old split raw data with the already accepted typed binding.
+            assertThat(read(new String(Files.readAllBytes(file), StandardCharsets.UTF_8))).isEqualTo(serialized);
+            assertThat(comments(new String(Files.readAllBytes(file), StandardCharsets.UTF_8)))
+                    .containsExactlyInAnyOrderElementsOf(comments(new String(bytes, StandardCharsets.UTF_8)));
+        }
         assertThat(config.isModifiedSinceSnapshot()).isFalse();
     }
 
