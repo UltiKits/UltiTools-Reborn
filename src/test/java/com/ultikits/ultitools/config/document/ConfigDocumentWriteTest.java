@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.config.document;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 import java.math.BigInteger;
@@ -223,6 +224,29 @@ class ConfigDocumentWriteTest {
         }
 
         @Test
+        @DisplayName("a write that would nest deeper than the load limit (100) is refused, so no file the next load refuses is made")
+        void nestingBeyondTheLoadLimitIsRefused() throws Exception {
+            ConfigDocument document = ConfigDocument.parse("a: 1\n");
+            List<String> deepPath = new ArrayList<>();
+            for (int i = 0; i < 100; i++) {
+                deepPath.add("k" + i);
+            }
+            Object nested = "leaf";
+            for (int i = 0; i < 100; i++) {
+                nested = Collections.singletonMap("k", nested);
+            }
+            Object deepValue = nested;
+
+            assertThatThrownBy(() -> document.set(deepPath, Collections.singletonMap("x", 1)))
+                    .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("100");
+            assertThatThrownBy(() -> document.set(path("b"), deepValue))
+                    .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("100");
+            document.set(deepPath, "leaf");
+
+            assertThat(ConfigDocument.load(writeTemp(document.render())).state()).isEqualTo(ConfigLoadResult.State.LOADED);
+        }
+
+        @Test
         @DisplayName("a file holding only comments keeps them above the keys set into it")
         void commentOnlyDocument() throws Exception {
             ConfigDocument document = ConfigDocument.parse("# only a comment\n\n# second\n");
@@ -334,6 +358,13 @@ class ConfigDocumentWriteTest {
             assertThat(rendered).doesNotContain("&").doesNotContain("*").doesNotContain("<<");
             assertThat(ConfigDocument.parse(rendered).toPlain()).isEqualTo(expected);
         }
+    }
+
+    private static java.nio.file.Path writeTemp(String text) throws IOException {
+        java.nio.file.Path file = java.nio.file.Files.createTempFile("config-document", ".yml");
+        file.toFile().deleteOnExit();
+        java.nio.file.Files.write(file, text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        return file;
     }
 
     static List<String> path(String... keys) {

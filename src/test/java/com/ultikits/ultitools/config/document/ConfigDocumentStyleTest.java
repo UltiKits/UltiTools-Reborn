@@ -117,6 +117,17 @@ class ConfigDocumentStyleTest {
     }
 
     @Test
+    @DisplayName("an indentation SnakeYAML cannot emit (more than 10 columns) falls back to the default instead of failing")
+    void unsupportedIndentationFallsBack() throws Exception {
+        ConfigDocument document = ConfigDocument.parse("a:\n            b: 1\nlist:\n            - x\n");
+
+        document.set(path("a", "c"), 2);
+
+        assertThat(ConfigDocument.parse(document.render()).get(path("a", "c"))).isEqualTo(2);
+        assertThat(ConfigDocument.parse(document.render()).get(path("list"))).isEqualTo(Collections.singletonList("x"));
+    }
+
+    @Test
     @DisplayName("a blank line inside a nested mapping is written empty, not as indentation")
     void blankLinesCarryNoIndentation() throws Exception {
         String text = "menu:\n  items:\n    a: 1\n\n    b: 2\n";
