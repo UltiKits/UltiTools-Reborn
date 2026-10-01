@@ -2,6 +2,7 @@ package com.ultikits.ultitools.config.convert;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
@@ -26,6 +27,8 @@ import com.ultikits.ultitools.abstracts.ConfigFileStubs;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
+import com.ultikits.ultitools.annotations.EnableAutoRegister;
+import org.bukkit.configuration.file.YamlConfiguration;
 import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.utils.PackageScanUtils;
@@ -36,6 +39,8 @@ class ConverterDiscoveryTest {
     private static final String SECOND = "fixture.second";
     private static UltiToolsPlugin constructingPlugin;
     private static boolean constructed;
+    private static int manualCalls;
+    private static boolean languageReady;
 
     @TempDir
     Path directory;
@@ -50,6 +55,15 @@ class ConverterDiscoveryTest {
         ConfigFileStubs.stubConfigFolder(plugin, directory.toFile());
         constructingPlugin = plugin;
         constructed = false;
+        manualCalls = 0;
+        languageReady = false;
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
+            YamlConfiguration config = new YamlConfiguration();
+            config.set("language", "en");
+            lenient().when(ultiTools.getConfig()).thenReturn(config);
+            lenient().when(ultiTools.getLogger()).thenReturn(java.util.logging.Logger.getAnonymousLogger());
+            lenient().when(ultiTools.getConfigManager()).thenReturn(new ConfigManager());
+        });
     }
 
     @Test
@@ -75,7 +89,7 @@ class ConverterDiscoveryTest {
                     .hasMessageContaining(Value.class.getName());
             assertThat(constructed).isFalse();
             assertThat(Files.exists(directory.resolve("config/bad.yml"))).isFalse();
-            assertThat(ConverterRegistry.hasModule(plugin)).isFalse();
+            assertThat(ConverterRegistry.hasModule(plugin)).isTrue();
         }
     }
 
@@ -126,6 +140,67 @@ class ConverterDiscoveryTest {
                     .hasMessageContaining(Value.class.getName());
             assertThat(constructed).isFalse();
             assertThat(Files.exists(directory.resolve("config/bad.yml"))).isFalse();
+        }
+    }
+
+    @Test
+    void disabledAutoRegistrationIgnoresUnusedEntitiesButDiscoversConverters() {
+        try (MockedStatic<PackageScanUtils> scanner = scanner(ValidConverter.class, BadConfig.class)) {
+            scanner.when(() -> PackageScanUtils.scanAnnotatedClasses(any(), anyString(), any()))
+                    .thenAnswer(call -> call.getArgument(0) == ConfigConverterFor.class
+                            ? Collections.singleton(ValidConverter.class) : Collections.singleton(BadConfig.class));
+            ManualConnector connector = new ManualConnector(directory.toString());
+            assertThat(ConverterRegistry.forModule(connector).resolve(Value.class)).isInstanceOf(ValidConverter.class);
+            assertThat(constructed).isFalse();
+            assertThat(manualCalls).isEqualTo(1);
+            assertThat(languageReady).isTrue();
+        }
+    }
+
+    @Test
+    void absentAutoAnnotationIgnoresUnusedEntitiesAtOriginalManualCallPoint() {
+        try (MockedStatic<PackageScanUtils> scanner = scanner(null, BadConfig.class)) {
+            assertThatCode(() -> new UnannotatedConnector(directory.toString())).doesNotThrowAnyException();
+            assertThat(constructed).isFalse();
+            assertThat(manualCalls).isEqualTo(1);
+            assertThat(languageReady).isTrue();
+        }
+    }
+
+    @Test
+    void cachedDiscoveryDoesNotBypassExplicitManualWholeBatchValidation() {
+        try (MockedStatic<PackageScanUtils> scanner = scanner(null, null)) {
+            ConverterRegistry.prepareModule(plugin, new String[]{FIRST, SECOND}, getClass().getClassLoader());
+            scanner.when(() -> PackageScanUtils.scanAnnotatedClasses(any(), anyString(), any()))
+                    .thenAnswer(call -> call.getArgument(0) != ConfigEntity.class ? Collections.emptySet()
+                            : FIRST.equals(call.getArgument(1)) ? Collections.singleton(PlainConfig.class)
+                            : Collections.singleton(BadConfig.class));
+            assertThatThrownBy(() -> new ConfigManager().registerAll(plugin,
+                    new String[]{FIRST, SECOND}, getClass().getClassLoader()))
+                    .isInstanceOf(ConfigurationException.class).hasMessageContaining(Value.class.getName());
+            assertThat(constructed).isFalse();
+            assertThat(directory.resolve("config/plain.yml")).doesNotExist();
+        }
+    }
+
+    @Test
+    void directRegistrationValidatesOnlyActualEntityNotUnusedScanClasses() throws Exception {
+        PlainConfig selected = new PlainConfig("config/plain.yml");
+        try (MockedStatic<PackageScanUtils> scanner = scanner(null, BadConfig.class)) {
+            ConfigManager manager = new ConfigManager();
+            manager.register(plugin, selected);
+            assertThat(manager.getAllConfigEntities(plugin)).containsEntry("config/plain.yml", selected);
+        }
+    }
+
+    @Test
+    void emptyConfigAnnotationIsStillIgnoredWithoutValidatingItsFields() {
+        try (MockedStatic<PackageScanUtils> scanner = scanner(null, EmptyConfig.class)) {
+            ConfigManager manager = new ConfigManager();
+            assertThatCode(() -> manager.registerAll(plugin, FIRST, getClass().getClassLoader()))
+                    .doesNotThrowAnyException();
+            assertThat(constructed).isFalse();
+            assertThat(manager.getAllConfigEntities(plugin)).isNull();
         }
     }
 
@@ -188,6 +263,36 @@ class ConverterDiscoveryTest {
         }
     }
 
+    @ConfigEntity("config/plain.yml")
+    public static class PlainConfig extends AbstractConfigEntity {
+        @ConfigEntry private String value = "ready";
+        public PlainConfig(String path) { super(path); constructed = true; }
+    }
+
+    @ConfigEntity("")
+    public static class EmptyConfig extends BadConfig {
+        public EmptyConfig(String path) { super(path); }
+    }
+
+    public static class UnannotatedConnector extends UltiToolsPlugin {
+        public UnannotatedConnector(String directory) {
+            super("FixtureModule", "1.0", Collections.emptyList(), Collections.emptyList(),
+                    630, UnannotatedConnector.class.getName(), directory);
+        }
+        @Override public List<AbstractConfigEntity> getAllConfigs() {
+            manualCalls++;
+            languageReady = getLanguage() != null;
+            return Collections.emptyList();
+        }
+        @Override public boolean registerSelf() { return true; }
+    }
+
+    @EnableAutoRegister(config = false)
+    public static class ManualConnector extends UnannotatedConnector {
+        public ManualConnector(String directory) { super(directory); }
+    }
+
+    @EnableAutoRegister
     public static class Connector extends UltiToolsPlugin {
         public Connector(String directory) {
             super("FixtureModule", "1.0", Collections.emptyList(), Collections.emptyList(),

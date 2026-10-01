@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -85,6 +87,45 @@ class LegacyParserAdapterTest {
         CompletableFuture.allOf(calls).join();
     }
 
+    @Test
+    void rootListInputRemainsIntactAfterMutatingParserAndRetry() throws Exception {
+        List<Object> input = new ArrayList<>(Arrays.asList("first", "second"));
+        for (int attempt = 0; attempt < 3; attempt++) {
+            Object size = registry.fromPlainResult(input, Object.class, "f", Collections.emptyList(), entry("mutating")).value();
+            assertThat(size).isEqualTo(2);
+            assertThat(input).containsExactly("first", "second");
+        }
+    }
+
+    @Test
+    void rootMapNestedListsAndMapsRemainDetached() throws Exception {
+        List<Object> list = new ArrayList<>();
+        Map<String, Object> nested = new LinkedHashMap<>(); nested.put("kept", "value");
+        list.add(nested);
+        Map<String, Object> input = new LinkedHashMap<>(); input.put("items", list);
+        registry.fromPlainResult(input, Object.class, "f", Collections.emptyList(), entry("mutating"));
+        assertThat(input).containsKey("items");
+        assertThat(list).containsExactly(nested);
+        assertThat(nested).containsEntry("kept", "value");
+    }
+
+    @Test
+    void sharedInputIsStableAcrossParallelMutatingParsers() throws Exception {
+        List<Object> input = new ArrayList<>(Arrays.asList("first", "second"));
+        ConfigEntry annotation = entry("mutating");
+        CompletableFuture<?>[] calls = new CompletableFuture<?>[20];
+        for (int i = 0; i < calls.length; i++) {
+            calls[i] = CompletableFuture.runAsync(() -> {
+                try {
+                    Object size = registry.fromPlainResult(input, Object.class, "f", Collections.emptyList(), annotation).value();
+                    assertThat(size).isEqualTo(2);
+                } catch (Exception failure) { throw new AssertionError(failure); }
+            });
+        }
+        CompletableFuture.allOf(calls).join();
+        assertThat(input).containsExactly("first", "second");
+    }
+
     private static ConfigEntry entry(String name) throws NoSuchFieldException {
         return Shapes.class.getDeclaredField(name).getAnnotation(ConfigEntry.class);
     }
@@ -121,11 +162,35 @@ class LegacyParserAdapterTest {
     public static class BadConstructor extends Plain {
         public BadConstructor() { throw new IllegalArgumentException("constructor failed"); }
     }
+    public static class Mutating extends Plain {
+        @Override public Object parse(Object value) {
+            if (value instanceof ConfigurationSection) {
+                ConfigurationSection section = (ConfigurationSection) value;
+                List<?> items = section.getList("items");
+                if (items != null) { mutate(items); }
+                section.set("items", null);
+                return 1;
+            }
+            List<?> list = (List<?>) value;
+            int size = list.size(); mutate(list); return size;
+        }
+        private static void mutate(List<?> list) {
+            for (Object element : list) {
+                if (element instanceof Map<?, ?>) { ((Map<?, ?>) element).clear(); }
+                if (element instanceof List<?>) { mutate((List<?>) element); }
+            }
+            list.clear();
+        }
+    }
+
     public static class Stateful extends Plain {
         private int calls;
         @Override public Object parse(Object value) { return ++calls == 1 ? "first" : "shared"; }
     }
     static class Shapes {
+        // Deliberately selects a mutating legacy parser to verify input isolation.
+        @SuppressWarnings("removal")
+        @ConfigEntry(parser = Mutating.class) Object mutating;
         // Deliberately selects a legacy parser to verify compatibility dispatch.
         @SuppressWarnings("removal")
         @ConfigEntry(parser = Extending.class) Object extending;

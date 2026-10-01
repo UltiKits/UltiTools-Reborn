@@ -7,6 +7,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.UUID;
+import java.util.stream.Stream;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
@@ -66,6 +72,66 @@ class ConverterLoadTimeCheckTest {
                 Legacy.class, "FixtureModule", "config/legacy.yml"))
                 .doesNotThrowAnyException();
     }
+
+    @ParameterizedTest
+    @MethodSource("unsupportedInheritedShapes")
+    void concreteEntityAndContainerArgumentsFailIndependently(Class<?> entity) {
+        assertThatThrownBy(() -> ConverterRegistry.framework().checkEntityFields(entity, "FixtureModule", "config/generic.yml"))
+                .isInstanceOf(ConfigurationException.class).hasMessageContaining(RecipeDefinitionLike.class.getName());
+        assertThat(directory.resolve("config/generic.yml")).doesNotExist();
+    }
+
+    static Stream<Class<?>> unsupportedInheritedShapes() {
+        return Stream.of(UnknownChild.class, UnknownListChild.class, UnknownArrayChild.class,
+                UnknownNestedChild.class, ConcreteListField.class, ConcreteMapKeyField.class,
+                ConcreteMapValueField.class, ConcreteNestedField.class, ConcreteWildcardField.class);
+    }
+
+    @Test
+    void boundedInheritedStringUsesConcreteArgumentRatherThanComparableBound() {
+        assertThatCode(() -> ConverterRegistry.framework().checkEntityFields(StringChild.class, "FixtureModule", "config/string.yml"))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void inheritedUnknownDiagnosticDescribesResolvedDeclaredType() {
+        assertThatThrownBy(() -> ConverterRegistry.framework().checkEntityFields(UnknownListChild.class, "FixtureModule", "config/list.yml"))
+                .hasMessageContaining("declared as List<RecipeDefinitionLike>");
+    }
+
+    @Test
+    void supportedConcreteContainersAndRegisteredContainerOwnershipRemainValid() {
+        assertThatCode(() -> ConverterRegistry.framework().checkEntityFields(SupportedConcrete.class, "FixtureModule", "config/concrete.yml"))
+                .doesNotThrowAnyException();
+        ConverterRegistry registry = new ConverterRegistry(ConverterRegistry.framework());
+        registry.register(UnknownList.class, new ConverterRegistryLookupTest.MarkerConverter<UnknownList>(), true);
+        assertThatCode(() -> registry.checkEntityFields(ConcreteListField.class, "FixtureModule", "config/custom.yml"))
+                .doesNotThrowAnyException();
+    }
+
+    static class GenericBase<T> { @ConfigEntry T value; }
+    static class GenericListBase<T> { @ConfigEntry List<T> values; }
+    static class GenericArrayBase<T> { @ConfigEntry T[] values; }
+    static class GenericNestedBase<T> { @ConfigEntry Map<String, List<T[]>> values; }
+    static class UnknownChild extends GenericBase<RecipeDefinitionLike> { }
+    static class UnknownListChild extends GenericListBase<RecipeDefinitionLike> { }
+    static class UnknownArrayChild extends GenericArrayBase<RecipeDefinitionLike> { }
+    static class UnknownNestedChild extends GenericNestedBase<RecipeDefinitionLike> { }
+    static class BoundedBase<T extends Comparable<T>> { @ConfigEntry T value; }
+    static class StringChild extends BoundedBase<String> { }
+    public static class UnknownList extends ArrayList<RecipeDefinitionLike> { }
+    public static class UnknownKeyMap extends LinkedHashMap<RecipeDefinitionLike, String> { }
+    public static class UnknownValueMap extends LinkedHashMap<String, RecipeDefinitionLike> { }
+    public static class NestedList extends ArrayList<Map<String, RecipeDefinitionLike[]>> { }
+    public static class WildcardList extends ArrayList<List<? extends RecipeDefinitionLike>> { }
+    public static class StringList extends ArrayList<String> { }
+    public static class UuidMap extends LinkedHashMap<String, UUID> { }
+    static class ConcreteListField { @ConfigEntry UnknownList values; }
+    static class ConcreteMapKeyField { @ConfigEntry UnknownKeyMap values; }
+    static class ConcreteMapValueField { @ConfigEntry UnknownValueMap values; }
+    static class ConcreteNestedField { @ConfigEntry NestedList values; }
+    static class ConcreteWildcardField { @ConfigEntry WildcardList values; }
+    static class SupportedConcrete { @ConfigEntry StringList texts; @ConfigEntry UuidMap ids; }
 
     static class RecipeDefinitionLike { }
     static class Recipes {
