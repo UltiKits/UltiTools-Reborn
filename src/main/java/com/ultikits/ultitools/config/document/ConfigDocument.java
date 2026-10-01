@@ -294,8 +294,31 @@ public final class ConfigDocument {
             return false;
         }
         String keyText = last;
-        mapping.getValue().removeIf(tuple -> !Tag.MERGE.equals(tuple.getKeyNode().getTag())
-                && keyText.equals(keyIdentity(tuple.getKeyNode())));
+        List<CommentLine> retained = new ArrayList<>();
+        Set<Node> seen = Collections.newSetFromMap(new IdentityHashMap<Node, Boolean>());
+        mapping.getValue().removeIf(tuple -> {
+            if (Tag.MERGE.equals(tuple.getKeyNode().getTag()) || !keyText.equals(keyIdentity(tuple.getKeyNode()))) {
+                return false;
+            }
+            Node value = tuple.getValueNode();
+            if (seen.add(value) && value.getEndComments() != null) {
+                retained.addAll(value.getEndComments());
+            }
+            return true;
+        });
+        if (!retained.isEmpty()) {
+            Node recipient = mapping.getValue().isEmpty() ? mapping
+                    : mapping.getValue().get(mapping.getValue().size() - 1).getValueNode();
+            List<CommentLine> comments = new ArrayList<>();
+            if (recipient != mapping && recipient.getEndComments() != null) {
+                comments.addAll(recipient.getEndComments());
+            }
+            comments.addAll(retained);
+            if (recipient == mapping && mapping.getEndComments() != null) {
+                comments.addAll(mapping.getEndComments());
+            }
+            recipient.setEndComments(comments);
+        }
         plainMapping.remove(last);
         modified = true;
         return true;
