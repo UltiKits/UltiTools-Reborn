@@ -79,6 +79,40 @@ class AtomicConfigWriterTest {
         logger.setLevel(previousLevel);
     }
 
+    @ParameterizedTest(name = "temporary identity: {0}")
+    @ValueSource(strings = {"normal", "parent-link", "target-link", "missing-parent"})
+    void stagedIdentitySurvivesEveryPathSpelling(String shape) throws Exception {
+        Path spelled = target;
+        if ("parent-link".equals(shape)) {
+            Path alias = tempDir.resolve("alias");
+            Files.createSymbolicLink(alias, tempDir);
+            spelled = alias.resolve(target.getFileName());
+        } else if ("target-link".equals(shape)) {
+            spelled = tempDir.resolve("linked.yml");
+            Files.createSymbolicLink(spelled, target);
+        } else if ("missing-parent".equals(shape)) {
+            Path absent = tempDir.resolve("missing/deeper/config.yml");
+            assertThatThrownBy(() -> AtomicConfigWriter.stage(absent, NEW)).isInstanceOf(IOException.class);
+            assertThat(ConfigDocument.load(absent).state()).isEqualTo(ConfigLoadResult.State.ABSENT);
+            assertThat(Files.exists(absent.getParent())).isFalse();
+            return;
+        }
+        AtomicConfigWriter.StagedWrite staged = AtomicConfigWriter.stage(spelled, NEW);
+        try {
+            assertThat(ConfigDocument.load(target).state()).isEqualTo(ConfigLoadResult.State.LOADED);
+            assertThat(ConfigDocument.load(spelled).state()).isEqualTo(ConfigLoadResult.State.LOADED);
+            assertThat(Files.exists(staged.temporary())).isTrue();
+            staged.commit();
+            assertThat(content(target)).isEqualTo(NEW);
+            assertThat(Files.exists(staged.temporary())).isFalse();
+            AtomicConfigWriter.StagedWrite discarded = AtomicConfigWriter.stage(spelled, OLD);
+            assertThat(discarded.discard()).isTrue();
+            assertThat(content(target)).isEqualTo(NEW);
+        } finally {
+            staged.discard();
+        }
+    }
+
     @Test
     @DisplayName("a write replaces the file and leaves nothing beside it; a missing target is created")
     void writeReplacesTheFile() throws IOException {

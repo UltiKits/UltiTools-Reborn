@@ -17,6 +17,69 @@ import org.junit.jupiter.api.Test;
 @DisplayName("ConfigDocument - per-document style")
 class ConfigDocumentStyleTest {
 
+    static java.util.stream.Stream<org.junit.jupiter.params.provider.Arguments> commentShapeInventory() {
+        return java.util.stream.Stream.of(
+                org.junit.jupiter.params.provider.Arguments.of("empty-root-inline", "{} # inline\n"),
+                org.junit.jupiter.params.provider.Arguments.of("empty-root-all", "# block\n{} # inline\n# end\n"),
+                org.junit.jupiter.params.provider.Arguments.of("comments-only", "# bare\n\n# tail\n"),
+                org.junit.jupiter.params.provider.Arguments.of("empty-map", "# block\nx: {} # inline\n# end\n"),
+                org.junit.jupiter.params.provider.Arguments.of("empty-sequence", "# block\nx: [] # inline\n# end\n"),
+                org.junit.jupiter.params.provider.Arguments.of("flow-map", "x: {a: 1} # inline\n# end\n"),
+                org.junit.jupiter.params.provider.Arguments.of("flow-sequence", "x: [a, b] # inline\n# end\n"),
+                org.junit.jupiter.params.provider.Arguments.of("block-map", "x:\n  # block\n  a: 1 # inline\n  # section end\ny: 2\n"),
+                org.junit.jupiter.params.provider.Arguments.of("block-sequence", "x:\n  # block\n  - a # inline\n  # sequence end\ny: 2\n"),
+                org.junit.jupiter.params.provider.Arguments.of("key-inline-map", "x: # key inline\n  a: 1\ny: 2\n"),
+                org.junit.jupiter.params.provider.Arguments.of("key-inline-sequence", "x: # key inline\n  - a\ny: 2\n"),
+                org.junit.jupiter.params.provider.Arguments.of("null-scalar", "x: # null inline\n# end\n"),
+                org.junit.jupiter.params.provider.Arguments.of("literal-scalar", "x: | # scalar inline\n  a\n# end\n"),
+                org.junit.jupiter.params.provider.Arguments.of("plain-scalar", "# scalar block\nx: a # scalar inline\n# scalar end\n"),
+                org.junit.jupiter.params.provider.Arguments.of("value-block-empty", "x:\n  # value block\n  [] # value inline\ny: 2\n"),
+                org.junit.jupiter.params.provider.Arguments.of("empty-map-block-node", "x: {}\n"),
+                org.junit.jupiter.params.provider.Arguments.of("empty-map-flow-node", "x: {}\n"),
+                org.junit.jupiter.params.provider.Arguments.of("empty-sequence-block-node", "x: []\n"),
+                org.junit.jupiter.params.provider.Arguments.of("empty-sequence-flow-node", "x: []\n"));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest(name = "comment shape: {0}")
+    @org.junit.jupiter.params.provider.MethodSource("commentShapeInventory")
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+    void everyLegitimateCommentPositionSurvivesRendering(String shape, String text) throws Exception {
+        ConfigDocument document = ConfigDocument.parse(text);
+        java.util.List<String> expected = GoldenCorpus.comments(text);
+        if (shape.endsWith("-node")) {
+            java.lang.reflect.Field field = ConfigDocument.class.getDeclaredField("root");
+            field.setAccessible(true);
+            org.yaml.snakeyaml.nodes.MappingNode root = (org.yaml.snakeyaml.nodes.MappingNode) field.get(document);
+            org.yaml.snakeyaml.nodes.Node value = root.getValue().get(0).getValueNode();
+            ((org.yaml.snakeyaml.nodes.CollectionNode<?>) value).setFlowStyle(shape.contains("-flow-")
+                    ? org.yaml.snakeyaml.DumperOptions.FlowStyle.FLOW : org.yaml.snakeyaml.DumperOptions.FlowStyle.BLOCK);
+            value.setBlockComments(Collections.singletonList(new org.yaml.snakeyaml.comments.CommentLine(null, null,
+                    " block", org.yaml.snakeyaml.comments.CommentType.BLOCK)));
+            value.setInLineComments(Collections.singletonList(new org.yaml.snakeyaml.comments.CommentLine(null, null,
+                    " inline", org.yaml.snakeyaml.comments.CommentType.IN_LINE)));
+            value.setEndComments(Collections.singletonList(new org.yaml.snakeyaml.comments.CommentLine(null, null,
+                    " end", org.yaml.snakeyaml.comments.CommentType.BLOCK)));
+            expected.addAll(Arrays.asList(" block", " inline", " end"));
+        }
+        String noop = document.render();
+        assertThat(GoldenCorpus.comments(noop)).containsExactlyInAnyOrderElementsOf(expected);
+        assertThat(ConfigDocument.parse(noop).toPlain()).isEqualTo(document.toPlain());
+        assertThat(document.render()).isEqualTo(noop);
+        document.set(path("unrelated"), 3);
+        String written = document.render();
+        assertThat(GoldenCorpus.comments(written)).containsExactlyInAnyOrderElementsOf(expected);
+        assertThat(ConfigDocument.parse(written).toPlain()).isEqualTo(document.toPlain());
+        assertThat(document.render()).isEqualTo(written);
+        if (!shape.endsWith("-node") && !shape.startsWith("empty-root") && !"comments-only".equals(shape)) {
+            ConfigDocument anchored = ConfigDocument.parse("base: &base {a: 1}\n" + text);
+            anchored.set(path("unrelated"), 3);
+            String expanded = anchored.render();
+            assertThat(GoldenCorpus.comments(expanded)).containsExactlyInAnyOrderElementsOf(expected);
+            assertThat(ConfigDocument.parse(expanded).toPlain()).isEqualTo(anchored.toPlain());
+            assertThat(anchored.render()).isEqualTo(expanded);
+        }
+    }
+
     @Test
     void emitterIndentClampMatchesStrictBytecodeBounds() throws Exception {
         for (int indent : new int[]{1, 10}) {

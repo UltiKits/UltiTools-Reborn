@@ -26,6 +26,61 @@ import org.junit.jupiter.params.provider.MethodSource;
 @DisplayName("ConfigDocument - diff-aware writes")
 class ConfigDocumentWriteTest {
 
+    @ParameterizedTest(name = "section ends: {0}")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"remove-section", "remove-last", "smaller-map",
+            "empty-map", "scalar", "list", "null", "nested-smaller", "same-size-list", "shorter-list",
+            "deeper-path-sequence", "deeper-path-set", "inherited-deep", "inherited-smaller", "anchored-remove",
+            "anchored-unrelated", "clear-root", "duplicate-notes"})
+    void everyDeletionPathPreservesSectionEnds(String action) throws Exception {
+        String text = "s:\n  nested:\n    a: 1\n    # deep-end\n  # section-end\nnext: 2\n";
+        if (action.contains("list") || "deeper-path-sequence".equals(action)) {
+            text = "s:\n  - nested:\n      a: 1\n      # deep-end\n    # section-end\nnext: 2\n";
+        }
+        if ("deeper-path-set".equals(action)) {
+            text = "s: !!set\n  a: null\n  # deep-end\n  # section-end\nnext: 2\n";
+        }
+        if (action.startsWith("inherited-")) {
+            text = "defaults: &base\n  nested:\n    a: 1\n    # deep-end\n  # section-end\ns:\n  <<: *base\nnext: 2\n";
+        } else if (action.startsWith("anchored-")) {
+            text = "base: &base {a: 1}\n" + text;
+        } else if ("clear-root".equals(action)) {
+            text = "s:\n  a: 1\n  # deep-end\n  # section-end\n";
+        } else if ("duplicate-notes".equals(action)) {
+            text = "s:\n  a: 1\n  # section-end\n  # section-end\nnext: 2\n";
+        }
+        ConfigDocument document = ConfigDocument.parse(text);
+        if ("remove-section".equals(action) || "anchored-remove".equals(action)
+                || "clear-root".equals(action) || "duplicate-notes".equals(action)) {
+            assertThat(document.remove(path("s"))).isTrue();
+        } else if ("remove-last".equals(action)) {
+            assertThat(document.remove(path("s", "nested"))).isTrue();
+        } else if ("empty-map".equals(action) || "inherited-smaller".equals(action)) {
+            document.set(path("s"), Collections.emptyMap());
+        } else if ("smaller-map".equals(action)) {
+            document.set(path("s"), Collections.singletonMap("other", 3));
+        } else if ("nested-smaller".equals(action)) {
+            document.set(path("s", "nested"), Collections.emptyMap());
+        } else if ("scalar".equals(action)) {
+            document.set(path("s"), "replacement");
+        } else if ("null".equals(action)) {
+            document.set(path("s"), null);
+        } else if (action.startsWith("deeper-path-")) {
+            document.set(path("s", "added"), 3);
+        } else if ("inherited-deep".equals(action)) {
+            assertThat(document.remove(path("s", "nested", "a"))).isTrue();
+        } else if ("anchored-unrelated".equals(action)) {
+            document.set(path("next"), 3);
+        } else if ("shorter-list".equals(action)) {
+            document.set(path("s"), Collections.emptyList());
+        } else {
+            document.set(path("s"), Collections.singletonList(3));
+        }
+        String rendered = document.render();
+        assertThat(GoldenCorpus.comments(rendered)).containsExactlyInAnyOrderElementsOf(GoldenCorpus.comments(text));
+        assertThat(document.render()).isEqualTo(rendered);
+        assertThat(ConfigDocument.parse(rendered).toPlain()).isEqualTo(document.toPlain());
+    }
+
     /** Every fixture except the anchored one, whose writes fall back to a re-render (tested below). */
     static Stream<GoldenCorpus.Fixture> writableFixtures() throws IOException {
         List<GoldenCorpus.Fixture> result = new ArrayList<>();

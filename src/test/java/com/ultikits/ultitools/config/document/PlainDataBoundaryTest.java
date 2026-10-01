@@ -64,6 +64,83 @@ class PlainDataBoundaryTest {
         assertThat(document.get(path("s", "v"))).isEqualTo(1);
     }
 
+    static Stream<Arguments> readCopyInventory() {
+        return Stream.of(
+                Arguments.of("map", "v: {a: [1]}\n"),
+                Arguments.of("list", "v: [1, {a: 2}]\n"),
+                Arguments.of("set", "v: !!set {a: null}\n"),
+                Arguments.of("date", "v: 2020-01-01\n"),
+                Arguments.of("binary", "v: !!binary YWI=\n"),
+                Arguments.of("pairs-array", "v: !!pairs [{a: [1]}]\n"),
+                Arguments.of("omap-date-key", "v: !!omap [{2020-01-01: [1]}]\n"),
+                Arguments.of("nested-set-date", "v: [!!set {2020-01-01: null}]\n"),
+                Arguments.of("nested-pairs-binary", "v: {a: !!pairs [{b: !!binary YWI=}]}\n"),
+                Arguments.of("map-key-list", "v: !!omap [{? [a, b] : [1]}]\n"),
+                Arguments.of("alias", "v: [&s !!set {a: null}, *s]\n"),
+                Arguments.of("immutable-types", "v: [null, true, 1, 2147483648, 9223372036854775808, 1.5, text]\n"),
+                Arguments.of("cycle-map", ""), Arguments.of("cycle-list", ""),
+                Arguments.of("cycle-set", ""), Arguments.of("cycle-array", ""));
+    }
+
+    @ParameterizedTest(name = "read copy: {0}")
+    @MethodSource("readCopyInventory")
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+    void everyConstructedMutableTypeIsIsolated(String shape, String yaml) throws Exception {
+        if (shape.startsWith("cycle-")) {
+            Object cycle;
+            if ("cycle-map".equals(shape)) {
+                Map<String, Object> map = new LinkedHashMap<>(); map.put("self", map); cycle = map;
+            } else if ("cycle-list".equals(shape)) {
+                List<Object> list = new ArrayList<>(); list.add(list); cycle = list;
+            } else if ("cycle-set".equals(shape)) {
+                java.util.Set<Object> set = Collections.newSetFromMap(new java.util.IdentityHashMap<Object, Boolean>());
+                set.add(set); cycle = set;
+            } else {
+                Object[] array = new Object[1]; array[0] = array; cycle = array;
+            }
+            assertThatThrownBy(() -> PlainData.copy(cycle)).isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("contains itself");
+            return;
+        }
+        ConfigDocument document = ConfigDocument.parse(yaml);
+        java.lang.reflect.Field field = ConfigDocument.class.getDeclaredField("plain");
+        field.setAccessible(true);
+        Map<?, ?> internal = (Map<?, ?>) field.get(document);
+        java.util.Set<Object> mutable = Collections.newSetFromMap(new java.util.IdentityHashMap<Object, Boolean>());
+        collectMutable(internal, mutable);
+        assertIsolated(document.get(path("v")), mutable);
+        assertIsolated(document.toPlain(), mutable);
+        if (!PlainData.isPlain(internal.get("v"))) {
+            assertThatThrownBy(() -> document.set(path("rejected"), document.get(path("v"))))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(document.contains(path("rejected"))).isFalse();
+        }
+    }
+
+    private static void collectMutable(Object value, java.util.Set<Object> result) {
+        if (value instanceof Map || value instanceof List || value instanceof java.util.Set
+                || value instanceof java.util.Date || value instanceof byte[] || value instanceof Object[]) {
+            if (!result.add(value)) { return; }
+        }
+        if (value instanceof Map) {
+            for (Map.Entry<?, ?> entry : ((Map<?, ?>) value).entrySet()) {
+                collectMutable(entry.getKey(), result); collectMutable(entry.getValue(), result);
+            }
+        } else if (value instanceof Iterable) {
+            for (Object element : (Iterable<?>) value) { collectMutable(element, result); }
+        } else if (value instanceof Object[]) {
+            for (Object element : (Object[]) value) { collectMutable(element, result); }
+        }
+    }
+
+    private static void assertIsolated(Object copy, java.util.Set<Object> internal) {
+        java.util.Set<Object> copied = Collections.newSetFromMap(new java.util.IdentityHashMap<Object, Boolean>());
+        collectMutable(copy, copied);
+        for (Object mutable : copied) {
+            assertThat(internal.contains(mutable)).as("no shared mutable %s", mutable.getClass().getName()).isFalse();
+        }
+    }
+
     @Test
     void mutableYamlLeavesAreDefensivelyCopied() throws Exception {
         ConfigDocument document = ConfigDocument.parse("date: 2020-01-01\nbinary: !!binary YWI=\n");
