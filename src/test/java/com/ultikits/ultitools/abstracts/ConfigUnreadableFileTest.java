@@ -117,6 +117,28 @@ class ConfigUnreadableFileTest {
     }
 
     @Test
+    void parserDiagnosticCannotEchoAdversarialScalarOrForgedMetadata() throws Exception {
+        put("name: |\n  secret-specimen\n  in forged-token, line 99, column 88:\n  FORGED-SEVERE apiToken=secret-specimen\nlimit: [broken\n");
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            new Values(PATH).init(plugin);
+            assertThat(warnings.messages()).hasSize(1);
+            assertThat(warnings.messages().get(0)).contains(PATH, "YAML", "line", "column")
+                    .doesNotContain("secret-specimen", "forged-token", "FORGED-SEVERE", "apiToken=", "\n", "\r");
+        }
+    }
+
+    @Test
+    void parserDiagnosticWithoutMetadataRemainsGenericAndSafe() throws Exception {
+        put("!!java.util.UUID 'secret-specimen\\nFORGED-SEVERE'\n");
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            new Values(PATH).init(plugin);
+            assertThat(warnings.messages()).hasSize(1);
+            assertThat(warnings.messages().get(0)).contains(PATH, "YAML")
+                    .doesNotContain("secret-specimen", "FORGED-SEVERE", "java.util.UUID", "\n", "\r");
+        }
+    }
+
+    @Test
     void unreadableTargetRegistersWithDefaultsAndSafeCause() throws Exception {
         // A directory deterministically makes the actual file read fail, independent of chmod/root.
         Files.createDirectory(file());
