@@ -16,17 +16,17 @@ match the file on disk, so a checkout that converts line endings fails the test 
   and dotted keys, anchors with merge keys, CRLF, `\u` escapes, four-space indentation, long lines, block scalars, a byte order
   mark, and a file without a final line break.
 
-## Known limits of byte preservation (recorded, not fixtures)
+## Known limits of byte preservation
 
-SnakeYAML's emitter decides these, and no option reaches them. Each changes layout only, never a value, and none occurs in a bundled
-or 6.2-written file:
+Unchanged documents return their exact source, including anchors. For a changed document without anchors, source spans are
+spliced: changed scalars only, new keys at their mapping's end, removed keys and their own comments, framework-owned comment lines.
+Untouched bytes are not emitted again. `splice-layout.yml` pins aligned inline comments, flow spacing, extra spaces after a colon,
+a leading document marker, two indentation widths and trailing spaces, both unchanged and while another key is set, added or removed.
 
-- A comment after the last item of a block list whose items are indented under their key (`    - x`) is written at the key's
-  indentation (`comments-everywhere.yml` therefore has its end-of-list comment there). The emitter writes comments that follow a
-  list's last item only when the enclosing mapping continues.
-- A comment indented less than the key below it is written at that key's indentation.
-- A folded block scalar (`>`) is re-folded at the line width; a whitespace-only line is written empty; an anchor that no alias
-  uses loses its name.
+Only changed documents with anchors, aliases or merge keys use the recorded full-render fallback. Their values remain equal, but
+SnakeYAML regenerates layout: inline-comment alignment, flow spacing, extra colon spacing, document markers, mixed indentation,
+trailing spaces, folded scalars and unused anchor names need not survive. The fallback expands aliases and merge keys. It does not
+promise byte preservation of untouched lines. Unchanged anchored files remain byte-identical.
 
 Bundled module config files: 14 (control: 29 resource files listed, `plugin.yml` in all 15 listings)
 

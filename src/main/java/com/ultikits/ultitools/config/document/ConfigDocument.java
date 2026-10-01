@@ -59,7 +59,7 @@ import org.yaml.snakeyaml.representer.Representer;
  * <b>Writing.</b> {@link #set(List, Object)} accepts plain data only (see {@link PlainData}) and changes
  * only what differs: an equal value keeps its node and text, a changed map is merged key by key, a
  * same-size list element by element, a changed string keeps its quote style, and every replaced node keeps
- * its comments. {@link #render()} serializes the node tree in the file's own {@link DocumentStyle}, so every
+ * its comments. {@link #render()} splices changed spans into the original source, so every
  * other line keeps its bytes. The only exception is a document holding an anchor, an alias or a merge key:
  * once it is changed it is re-rendered from its plain data (every value equal, anchors expanded, the
  * comments of keys that still exist carried over), as Bukkit renders every file.
@@ -91,6 +91,7 @@ public final class ConfigDocument {
     private final NodeConstructor keyConstructor = new NodeConstructor();
     private MappingNode root;
     private boolean modified;
+    private final SourceSplicer splicer;
 
     private ConfigDocument(String source, MappingNode root, Map<String, Object> plain, DocumentStyle style, boolean anchored) {
         this.source = source;
@@ -98,6 +99,7 @@ public final class ConfigDocument {
         this.plain = plain;
         this.style = style;
         this.anchored = anchored;
+        this.splicer = new SourceSplicer(source, root, style);
     }
 
     /**
@@ -365,7 +367,13 @@ public final class ConfigDocument {
      * @return the file text
      */
     public String render() {
-        MappingNode out = anchored && modified ? reRenderFromPlain() : root;
+        if (!modified) {
+            return source;
+        }
+        if (!anchored) {
+            return splicer.render(root);
+        }
+        MappingNode out = reRenderFromPlain();
         if (out == null) {
             return modified ? "" : source;
         }
@@ -627,7 +635,7 @@ public final class ConfigDocument {
      * Rewrites the escapes inside every double-quoted scalar into the file's own form: {@code \}{@code xHH}
      * as {@code \}{@code u00HH} when {@code latin1AsU}, and hex digits in upper case when {@code upper}.
      */
-    private static String normalizeEscapes(String text, boolean upper, boolean latin1AsU) {
+    static String normalizeEscapes(String text, boolean upper, boolean latin1AsU) {
         StringBuilder result = new StringBuilder(text.length() + 16);
         int copied = 0;
         for (Event event : new Yaml(loaderOptions()).parse(new StringReader(text))) {
