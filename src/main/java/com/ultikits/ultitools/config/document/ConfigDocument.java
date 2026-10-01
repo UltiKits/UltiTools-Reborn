@@ -60,11 +60,11 @@ import org.yaml.snakeyaml.representer.Representer;
  * returned as they are; the binding layer reports them.
  * <p>
  * <b>Writing.</b> {@link #set(List, Object)} accepts plain data only (see {@link PlainData}) and changes
- * only what differs: an equal value keeps its node and text, a changed map is merged key by key, a
+ * only what differs: an equal value keeps its node, a changed map is merged key by key, a
  * same-size list element by element, a changed string keeps its quote style, and every replaced node keeps
- * its comments. {@link #render()} splices changed spans into the original source, so every
- * other line keeps its bytes. The only exception is a document holding an anchor, an alias or a merge key:
- * once it is changed it is re-rendered from its plain data (every value equal, anchors expanded, the
+ * its comments. {@link #render()} serializes the whole node tree through SnakeYAML, preserving content,
+ * comments and document style while normalizing operator spacing. A document holding an anchor, an alias
+ * or a merge key is re-rendered from its plain data once changed (every value equal, anchors expanded, the
  * comments of keys that still exist carried over), as Bukkit renders every file.
  * <p>
  * <b>Comments.</b> SnakeYAML attaches a comment to the node after it. Two placements are adjusted when the
@@ -94,7 +94,6 @@ public final class ConfigDocument {
     private final NodeConstructor keyConstructor = new NodeConstructor();
     private MappingNode root;
     private boolean modified;
-    private final SourceSplicer splicer;
 
     private ConfigDocument(String source, MappingNode root, Map<String, Object> plain, DocumentStyle style, boolean anchored) {
         this.source = source;
@@ -102,7 +101,6 @@ public final class ConfigDocument {
         this.plain = plain;
         this.style = style;
         this.anchored = anchored;
-        this.splicer = new SourceSplicer(source, root, style);
     }
 
     /**
@@ -376,13 +374,7 @@ public final class ConfigDocument {
      * @return the file text
      */
     public String render() {
-        if (!modified) {
-            return source;
-        }
-        if (!anchored) {
-            return splicer.render(root);
-        }
-        MappingNode out = reRenderFromPlain();
+        MappingNode out = anchored && modified ? reRenderFromPlain() : root;
         if (out == null) {
             return modified ? "" : source;
         }
