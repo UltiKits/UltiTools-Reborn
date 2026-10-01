@@ -7,6 +7,8 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.ConfigEntity;
+import com.ultikits.ultitools.config.convert.ConverterRegistry;
+import com.ultikits.ultitools.utils.DependencyUtils;
 import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.utils.PackageScanUtils;
 import com.ultikits.ultitools.utils.ReflectionUtil;
@@ -41,6 +43,8 @@ public class ConfigManager {
         if (annotation.value().isEmpty()) {
             return;
         }
+        ConverterRegistry registry = prepareConverters(ultiToolsPlugin);
+        registry.checkEntityFields(configEntity.getClass(), ultiToolsPlugin.getPluginName(), annotation.value());
         File file = new File(ultiToolsPlugin.getResourceFolderPath(), annotation.value());
         if (file.isDirectory()) {
             if (!file.exists()) {
@@ -77,7 +81,17 @@ public class ConfigManager {
         }
     }
 
+    private ConverterRegistry prepareConverters(UltiToolsPlugin plugin) {
+        if (ConverterRegistry.hasModule(plugin)) {
+            return ConverterRegistry.forModule(plugin);
+        }
+        return ConverterRegistry.prepareModule(plugin, DependencyUtils.getPluginPackages(plugin),
+                plugin.getClass().getClassLoader());
+    }
+
     private void addConfigEntity(UltiToolsPlugin ultiToolsPlugin, AbstractConfigEntity configEntity) {
+        prepareConverters(ultiToolsPlugin).checkEntityFields(configEntity.getClass(),
+                ultiToolsPlugin.getPluginName(), configEntity.getConfigFilePath());
         try {
             configEntity.init(ultiToolsPlugin);
         } catch (IOException e) {
@@ -144,6 +158,7 @@ public class ConfigManager {
      * @param classLoader Class loader
      */
     public void registerAll(UltiToolsPlugin plugin, String packageName, ClassLoader classLoader) {
+        ConverterRegistry.prepareModule(plugin, new String[]{packageName}, classLoader);
         Set<Class<?>> classes = PackageScanUtils.scanAnnotatedClasses(
                 ConfigEntity.class,
                 packageName,
@@ -224,6 +239,7 @@ public class ConfigManager {
      * @param classLoader  Class loader
      */
     public void registerAll(UltiToolsPlugin plugin, String[] packageNames, ClassLoader classLoader) {
+        ConverterRegistry.prepareModule(plugin, packageNames, classLoader);
         Map<String, AbstractConfigEntity> registeredBeforeThisPlugin = snapshotRegisteredEntities(plugin);
         try {
             for (String packageName : packageNames) {
