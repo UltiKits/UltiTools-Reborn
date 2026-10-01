@@ -47,6 +47,36 @@ class ConfigPresentInFileTest {
         assertThat(AbstractConfigEntity.class.getDeclaredMethods()).noneMatch(
                 method -> method.getReturnType().getName().equals("org.bukkit.configuration.file.YamlConfiguration"));
     }
+    @Test void initialDefaultWriteDoesNotInventPresenceBeforeTheNextLoad() throws Exception {
+        Path file = directory.resolve("values.yml");
+        Files.write(file, "unknown: null\n".getBytes(StandardCharsets.UTF_8));
+        Values value = new Values("values.yml"); value.init(plugin);
+        assertThat(Files.readAllBytes(file)).isNotEmpty();
+        assertThat(present(value, "unknown")).isTrue();
+        assertThat(present(value, "values")).isFalse();
+        value.save();
+        assertThat(present(value, "values")).isFalse();
+        value.reload();
+        assertThat(present(value, "values.first")).isTrue();
+    }
+    @Test void saveAndPanelReadsNeverAdvanceLastLoadedUnknownPresence() throws Exception {
+        Path file = directory.resolve("values.yml");
+        Files.write(file, "values: {}\nold: null\n".getBytes(StandardCharsets.UTF_8));
+        Values value = new Values("values.yml"); value.init(plugin);
+        Files.write(file, "values: {}\nexternal: null\n".getBytes(StandardCharsets.UTF_8));
+        value.save();
+        assertThat(value.toJsonObject().has("external")).isTrue();
+        assertThat(present(value, "external")).isFalse();
+        assertThat(present(value, "old")).isTrue();
+        com.google.gson.JsonObject panel = new com.google.gson.JsonObject();
+        panel.add("values", new com.google.gson.JsonObject());
+        value.updateProperties(panel);
+        assertThat(present(value, "external")).isFalse();
+        assertThat(present(value, "old")).isTrue();
+        value.reload();
+        assertThat(present(value, "external")).isTrue();
+        assertThat(present(value, "old")).isFalse();
+    }
     @Test void unreadableAndUnparseableFilesHaveNoPresence() throws Exception {
         Path unreadable = directory.resolve("directory.yml"); Files.createDirectory(unreadable);
         Values value = new Values("directory.yml"); value.init(plugin);

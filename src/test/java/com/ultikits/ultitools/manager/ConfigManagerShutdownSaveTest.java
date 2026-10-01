@@ -535,6 +535,32 @@ class ConfigManagerShutdownSaveTest {
         assertThat(read(twoFile)).contains("a: a-by-code").contains("b: b1");
     }
 
+    @Test
+    void managerReloadRetainsMissingLiveValueAgainstDeclaredDefaultWithoutWriting() throws IOException {
+        File twoFile = file("config/two.yml");
+        write(twoFile, "a: a1\nb: b1\n");
+        TwoKeyConfig config = new TwoKeyConfig("config/two.yml");
+        configManager.register(plugin, config);
+        config.setA("a-by-code");
+        int[] notifications = {0};
+        config.addChangeListener(changed -> notifications[0]++);
+        write(twoFile, "# operator\nb: b2\n");
+        java.nio.file.attribute.FileTime time = Files.getLastModifiedTime(twoFile.toPath());
+        configManager.reloadConfigs(plugin);
+        assertThat(config.a).isEqualTo("a-by-code");
+        assertThat(config.b).isEqualTo("b2");
+        assertThat(read(twoFile)).isEqualTo("# operator\nb: b2\n");
+        assertThat(Files.getLastModifiedTime(twoFile.toPath())).isEqualTo(time);
+        assertThat(notifications[0]).isEqualTo(1);
+        assertThat(config.isPresentInFile("a")).isFalse();
+        assertThat(config.isModifiedSinceSnapshot()).isTrue();
+        config.setA("a-default");
+        assertThat(config.isModifiedSinceSnapshot()).isFalse();
+        config.setA("a-by-code");
+        configManager.saveAll();
+        assertThat(read(twoFile)).contains("a: a-by-code", "b: b2", "# operator");
+    }
+
     // ==================== 11. the comparison never touches the live configuration ====================
 
     @Test

@@ -228,6 +228,55 @@ class ConfigEntityGoldenTest {
         assertThat(config.isModifiedSinceSnapshot()).isFalse();
     }
 
+    public static class MergedToken extends AbstractConfigEntity {
+        @ConfigEntry(path = "group.setting", comment = "{setting.note}") String setting = "default";
+        public MergedToken(String path) { super(path); }
+    }
+
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"init", "reload", "save", "panel"})
+    void mergedTokenOwnsOnlyItsEntryAndSubsequentSavesAreByteNoOps(String operation) throws Exception {
+        Path file = directory.resolve("merge.yml");
+        Mockito.when(plugin.i18n("setting.note")).thenReturn("Owned setting note");
+        MergedToken config = new MergedToken("merge.yml");
+        if (!operation.equals("init")) {
+            Files.write(file, "group:\n  setting: inherited\n".getBytes(StandardCharsets.UTF_8));
+            config.init(plugin);
+        }
+        String original = "# Operator header\ndefaults: &defaults\n  # Anchor setting note\n  setting: inherited\n"
+                + "  # Anchor sibling note\n  sibling: kept\ngroup:\n  <<: *defaults\n  # Local note\n  local: retained\n"
+                + "# Tail note\ntail: intact\n";
+        Files.write(file, original.getBytes(StandardCharsets.UTF_8));
+        Map<String, Object> expected = read(original);
+        if (operation.equals("init")) { config.init(plugin); }
+        else if (operation.equals("reload")) { config.reload(); }
+        else if (operation.equals("save")) { config.save(); }
+        else {
+            com.google.gson.JsonObject panel = new com.google.gson.JsonObject();
+            panel.addProperty("group.setting", "inherited");
+            config.updateProperties(panel);
+        }
+        assertThat(config.setting).isEqualTo("inherited");
+        String rendered = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
+        assertThat(PlainData.plainEquals(read(rendered), expected)).isTrue();
+        assertOrderOutsideTarget(read(rendered), expected, new ArrayList<>(), Arrays.asList("group", "setting"));
+        assertThat(comments(rendered)).containsAll(comments(original));
+        com.ultikits.ultitools.config.document.ConfigDocument document =
+                com.ultikits.ultitools.config.document.ConfigDocument.load(file).document();
+        assertThat(document.blockComment(Arrays.asList("group", "setting"))).containsExactly("Owned setting note");
+        assertThat(document.blockComment(Arrays.asList("defaults", "setting"))).containsExactly("Anchor setting note");
+        assertThat(document.blockComment(Arrays.asList("defaults", "sibling"))).containsExactly("Anchor sibling note");
+        byte[] bytes = Files.readAllBytes(file);
+        Files.setLastModifiedTime(file, FileTime.fromMillis(946684800000L));
+        FileTime time = Files.getLastModifiedTime(file);
+        config.save(); unchanged(file, bytes, time);
+        config.reload(); unchanged(file, bytes, time);
+        com.google.gson.JsonObject panel = new com.google.gson.JsonObject();
+        panel.addProperty("group.setting", "inherited");
+        config.updateProperties(panel); unchanged(file, bytes, time);
+        assertThat(config.isModifiedSinceSnapshot()).isFalse();
+    }
+
     private static void assertFields(AbstractConfigEntity config, Map<Field, Object> expected) throws Exception {
         for (Map.Entry<Field, Object> entry : expected.entrySet()) {
             assertThat(plain(entry.getKey().get(config))).as(entry.getKey().getName()).isEqualTo(entry.getValue());

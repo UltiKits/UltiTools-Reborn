@@ -158,6 +158,52 @@ class ConfigOverwriteWarningTest {
         assertThat(new String(Files.readAllBytes(file()), StandardCharsets.UTF_8)).contains("a: operator-a");
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"b: operator-b\n", "b: null\n", ""})
+    void partialPanelWriteDoesNotAcknowledgeUntouchedOperatorValueOrPresence(String operatorB) throws Exception {
+        Values config = registered();
+        put("# Operator header\na: original\n" + operatorB + "apiToken: original-token\nunknown: kept\n");
+        JsonObject panel = new JsonObject(); panel.addProperty("a", "panel-a");
+        config.updateProperties(panel);
+        assertThat(warnings()).isEmpty();
+        assertThat(new String(Files.readAllBytes(file()), StandardCharsets.UTF_8))
+                .contains("# Operator header", "unknown: kept");
+        assertThat(config.isFileModifiedSinceSnapshot()).isFalse();
+        config.b = "code-b";
+        config.save();
+        assertThat(warnings()).hasSize(1);
+        assertThat(warnings().get(0)).contains("'b'").doesNotContain("'a'", "operator-b", "code-b");
+        config.b = "later-code-b";
+        config.save();
+        assertThat(warnings()).hasSize(1);
+        assertThat(config.isModifiedSinceSnapshot()).isFalse();
+    }
+
+    @Test
+    void reloadAcknowledgesUntouchedOperatorValueAfterPartialPanelSave() throws Exception {
+        Values config = registered();
+        put("a: original\nb: operator-b\napiToken: original-token\n");
+        JsonObject panel = new JsonObject(); panel.addProperty("a", "panel-a");
+        config.updateProperties(panel);
+        config.reload();
+        assertThat(config.b).isEqualTo("operator-b");
+        config.b = "code-b";
+        config.save();
+        assertThat(warnings()).isEmpty();
+    }
+
+    @Test
+    void shutdownReportsUntouchedOperatorEditAfterPartialPanelSave() throws Exception {
+        Values config = registered();
+        put("a: original\nb: operator-b\napiToken: original-token\n");
+        JsonObject panel = new JsonObject(); panel.addProperty("a", "panel-a");
+        config.updateProperties(panel);
+        config.b = "code-b";
+        manager.saveAll();
+        assertThat(warnings()).hasSize(1);
+        assertThat(warnings().get(0)).contains("'b'").doesNotContain("'a'");
+    }
+
     @Test
     void externalEditAlreadyEqualToCandidateDoesNotWarn() throws Exception {
         Values config = registered();
