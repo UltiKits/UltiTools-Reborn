@@ -309,32 +309,8 @@ public final class ConfigDocument {
             modified = true;
             return true;
         }
-        String keyText = last;
-        List<CommentLine> retained = new ArrayList<>();
-        Set<Node> seen = Collections.newSetFromMap(new IdentityHashMap<Node, Boolean>());
-        mapping.getValue().removeIf(tuple -> {
-            if (Tag.MERGE.equals(tuple.getKeyNode().getTag()) || !keyText.equals(keyIdentity(tuple.getKeyNode()))) {
-                return false;
-            }
-            Node value = tuple.getValueNode();
-            if (seen.add(value) && value.getEndComments() != null) {
-                retained.addAll(value.getEndComments());
-            }
-            return true;
-        });
-        if (!retained.isEmpty()) {
-            Node recipient = mapping.getValue().isEmpty() ? mapping
-                    : mapping.getValue().get(mapping.getValue().size() - 1).getValueNode();
-            List<CommentLine> comments = new ArrayList<>();
-            if (recipient != mapping && recipient.getEndComments() != null) {
-                comments.addAll(recipient.getEndComments());
-            }
-            comments.addAll(retained);
-            if (recipient == mapping && mapping.getEndComments() != null) {
-                comments.addAll(mapping.getEndComments());
-            }
-            recipient.setEndComments(comments);
-        }
+        removeTuples(mapping, tuple -> !Tag.MERGE.equals(tuple.getKeyNode().getTag())
+                && last.equals(keyIdentity(tuple.getKeyNode())));
         plainMapping.remove(last);
         modified = true;
         return true;
@@ -417,17 +393,12 @@ public final class ConfigDocument {
         if (out == null) {
             return modified ? "" : source;
         }
-        String text;
-        if (out.getValue().isEmpty()) {
-            text = commentsOnly(out);
-        } else {
-            StringWriter writer = new StringWriter();
-            if (!style.finalLineBreak()) {
-                normalizeMultilineStrings(out, new IdentityHashMap<Node, Node>());
-            }
-            dumper(style).serialize(out, writer);
-            text = WHITESPACE_ONLY_LINE.matcher(writer.toString()).replaceAll("");
+        StringWriter writer = new StringWriter();
+        if (!style.finalLineBreak()) {
+            normalizeMultilineStrings(out, new IdentityHashMap<Node, Node>());
         }
+        dumper(style).serialize(out, writer);
+        String text = WHITESPACE_ONLY_LINE.matcher(writer.toString()).replaceAll("");
         if (style.upperCaseHex() || style.latin1AsUnicodeEscape()) {
             text = normalizeEscapes(text, style.upperCaseHex(), style.latin1AsUnicodeEscape());
         }
@@ -521,12 +492,13 @@ public final class ConfigDocument {
             created = new ScalarNode(scalar.getTag(), scalar.getValue(), null, null, ((ScalarNode) old).getScalarStyle());
         }
         carryComments(old, created);
+        retainDescendantEnds(old, created);
         return created;
     }
 
     private void merge(MappingNode old, Map<?, ?> oldPlain, Map<?, ?> value) {
         List<NodeTuple> tuples = old.getValue();
-        tuples.removeIf(tuple -> !Tag.MERGE.equals(tuple.getKeyNode().getTag())
+        removeTuples(old, tuple -> !Tag.MERGE.equals(tuple.getKeyNode().getTag())
                 && !value.containsKey(keyIdentity(tuple.getKeyNode())));
         for (Map.Entry<?, ?> entry : value.entrySet()) {
             String key = (String) entry.getKey();
@@ -554,6 +526,7 @@ public final class ConfigDocument {
             MappingNode created = child instanceof Map ? (MappingNode) newNode(child)
                     : new MappingNode(Tag.MAP, new ArrayList<NodeTuple>(), DumperOptions.FlowStyle.BLOCK);
             carryComments(tuple.getValueNode(), created);
+            retainDescendantEnds(tuple.getValueNode(), created);
             mapping.getValue().set(index, new NodeTuple(tuple.getKeyNode(), created));
             modified = true;
             return created;
@@ -620,62 +593,171 @@ public final class ConfigDocument {
     private MappingNode reRenderFromPlain() {
         MappingNode fresh = (MappingNode) newNode(plain);
         if (root != null) {
-            carryComments(root, fresh);
-            transplantComments(root, fresh);
+            transplantNode(root, fresh, Collections.newSetFromMap(new IdentityHashMap<Node, Boolean>()));
+            claimCommentOccurrences(fresh, Collections.newSetFromMap(new IdentityHashMap<Node, Boolean>()),
+                    Collections.newSetFromMap(new IdentityHashMap<CommentLine, Boolean>()));
         }
         return fresh;
     }
 
-    /** Carries key and value comments from the original tree onto a re-rendered one, key by key. */
-    private void transplantComments(MappingNode from, MappingNode to) {
+    /** Carries all comment positions and the collection presentation that makes them emit correctly. */
+    private void transplantNode(Node from, Node to, Set<Node> retained) {
+        carryComments(from, to);
+        retained.add(from);
+        if (from instanceof MappingNode && to instanceof MappingNode) {
+            ((MappingNode) to).setFlowStyle(((MappingNode) from).getFlowStyle());
+            transplantComments((MappingNode) from, (MappingNode) to, retained);
+        } else if (from instanceof SequenceNode && to instanceof SequenceNode) {
+            ((SequenceNode) to).setFlowStyle(((SequenceNode) from).getFlowStyle());
+            List<Node> old = ((SequenceNode) from).getValue();
+            List<Node> fresh = ((SequenceNode) to).getValue();
+            for (int i = 0; i < Math.min(old.size(), fresh.size()); i++) {
+                transplantNode(old.get(i), fresh.get(i), retained);
+            }
+            List<CommentLine> ends = new ArrayList<>();
+            for (int i = fresh.size(); i < old.size(); i++) {
+                collectEnds(old.get(i), ends, retained);
+            }
+            prependEnds(to, ends);
+        } else {
+            List<CommentLine> ends = new ArrayList<>();
+            collectDescendantEnds(from, ends, retained);
+            prependEnds(to, ends);
+        }
+    }
+
+    private void transplantComments(MappingNode from, MappingNode to, Set<Node> retained) {
+        Set<NodeTuple> matched = Collections.newSetFromMap(new IdentityHashMap<NodeTuple, Boolean>());
         for (NodeTuple tuple : to.getValue()) {
             int index = indexOf(from, keyIdentity(tuple.getKeyNode()));
             if (index < 0) {
                 continue;
             }
             NodeTuple original = from.getValue().get(index);
-            tuple.getKeyNode().setBlockComments(original.getKeyNode().getBlockComments());
-            tuple.getValueNode().setInLineComments(original.getValueNode().getInLineComments());
-            tuple.getValueNode().setEndComments(original.getValueNode().getEndComments());
-            transplantListComments(original.getValueNode(), tuple.getValueNode());
-            if (original.getValueNode() instanceof MappingNode && tuple.getValueNode() instanceof MappingNode) {
-                tuple.getValueNode().setEndComments(original.getValueNode().getEndComments());
-                transplantComments((MappingNode) original.getValueNode(), (MappingNode) tuple.getValueNode());
+            matched.add(original);
+            transplantNode(original.getKeyNode(), tuple.getKeyNode(), retained);
+            transplantNode(original.getValueNode(), tuple.getValueNode(), retained);
+        }
+        List<CommentLine> ends = new ArrayList<>();
+        for (NodeTuple tuple : from.getValue()) {
+            if (!matched.contains(tuple)) {
+                collectEnds(tuple.getKeyNode(), ends, retained);
+                collectEnds(tuple.getValueNode(), ends, retained);
             }
+        }
+        appendMappingEnds(to, ends);
+    }
+
+    /** Every tuple deletion uses the same post-order preservation of section end comments. */
+    private static void removeTuples(MappingNode mapping, java.util.function.Predicate<NodeTuple> removed) {
+        List<NodeTuple> dropped = new ArrayList<>();
+        mapping.getValue().removeIf(tuple -> {
+            if (!removed.test(tuple)) {
+                return false;
+            }
+            dropped.add(tuple);
+            return true;
+        });
+        List<CommentLine> ends = new ArrayList<>();
+        Set<Node> seen = Collections.newSetFromMap(new IdentityHashMap<Node, Boolean>());
+        for (NodeTuple tuple : dropped) {
+            collectEnds(tuple.getKeyNode(), ends, seen);
+            collectEnds(tuple.getValueNode(), ends, seen);
+        }
+        appendMappingEnds(mapping, ends);
+    }
+
+    private static void retainDescendantEnds(Node from, Node to) {
+        List<CommentLine> ends = new ArrayList<>();
+        Set<Node> seen = Collections.newSetFromMap(new IdentityHashMap<Node, Boolean>());
+        seen.add(from);
+        collectDescendantEnds(from, ends, seen);
+        prependEnds(to, ends);
+    }
+
+    private static void collectDescendantEnds(Node node, List<CommentLine> ends, Set<Node> seen) {
+        if (node instanceof MappingNode) {
+            for (NodeTuple tuple : ((MappingNode) node).getValue()) {
+                collectEnds(tuple.getKeyNode(), ends, seen);
+                collectEnds(tuple.getValueNode(), ends, seen);
+            }
+        } else if (node instanceof SequenceNode) {
+            for (Node element : ((SequenceNode) node).getValue()) {
+                collectEnds(element, ends, seen);
+            }
+        } else if (node instanceof AnchorNode) {
+            collectEnds(((AnchorNode) node).getRealNode(), ends, seen);
         }
     }
 
-    private void transplantListComments(Node from, Node to) {
-        if (from instanceof SequenceNode && to instanceof SequenceNode) {
-            List<Node> old = ((SequenceNode) from).getValue();
-            List<Node> fresh = ((SequenceNode) to).getValue();
-            for (int i = 0; i < Math.min(old.size(), fresh.size()); i++) {
-                carryComments(old.get(i), fresh.get(i));
-                if (old.get(i) instanceof MappingNode && fresh.get(i) instanceof MappingNode) {
-                    transplantComments((MappingNode) old.get(i), (MappingNode) fresh.get(i));
-                }
-                transplantListComments(old.get(i), fresh.get(i));
-            }
-        }
-    }
-
-    private static String commentsOnly(MappingNode mapping) {
-        StringBuilder text = new StringBuilder();
-        appendComments(text, mapping.getBlockComments());
-        appendComments(text, mapping.getEndComments());
-        return text.toString();
-    }
-
-    private static void appendComments(StringBuilder text, List<CommentLine> lines) {
-        if (lines == null) {
+    private static void collectEnds(Node node, List<CommentLine> ends, Set<Node> seen) {
+        if (!seen.add(node)) {
             return;
         }
-        for (CommentLine line : lines) {
-            if (line.getCommentType() != CommentType.BLANK_LINE) {
-                text.append('#').append(line.getValue());
-            }
-            text.append('\n');
+        collectDescendantEnds(node, ends, seen);
+        if (node.getEndComments() != null) {
+            ends.addAll(node.getEndComments());
         }
+    }
+
+    private static void appendMappingEnds(MappingNode mapping, List<CommentLine> ends) {
+        if (ends.isEmpty()) {
+            return;
+        }
+        if (mapping.getValue().isEmpty()) {
+            prependEnds(mapping, ends);
+        } else {
+            Node recipient = mapping.getValue().get(mapping.getValue().size() - 1).getValueNode();
+            List<CommentLine> comments = recipient.getEndComments() == null
+                    ? new ArrayList<CommentLine>() : new ArrayList<>(recipient.getEndComments());
+            comments.addAll(ends);
+            recipient.setEndComments(comments);
+        }
+    }
+
+    private static void prependEnds(Node recipient, List<CommentLine> ends) {
+        if (!ends.isEmpty()) {
+            List<CommentLine> comments = new ArrayList<>(ends);
+            if (recipient.getEndComments() != null) {
+                comments.addAll(recipient.getEndComments());
+            }
+            recipient.setEndComments(comments);
+        }
+    }
+
+    /** An expanded alias may carry the same physical comment object to several fresh nodes. */
+    private static void claimCommentOccurrences(Node node, Set<Node> seen, Set<CommentLine> claimed) {
+        if (!seen.add(node)) {
+            return;
+        }
+        node.setBlockComments(unclaimedComments(node.getBlockComments(), claimed));
+        node.setInLineComments(unclaimedComments(node.getInLineComments(), claimed));
+        if (node instanceof MappingNode) {
+            for (NodeTuple tuple : ((MappingNode) node).getValue()) {
+                claimCommentOccurrences(tuple.getKeyNode(), seen, claimed);
+                claimCommentOccurrences(tuple.getValueNode(), seen, claimed);
+            }
+        } else if (node instanceof SequenceNode) {
+            for (Node element : ((SequenceNode) node).getValue()) {
+                claimCommentOccurrences(element, seen, claimed);
+            }
+        } else if (node instanceof AnchorNode) {
+            claimCommentOccurrences(((AnchorNode) node).getRealNode(), seen, claimed);
+        }
+        node.setEndComments(unclaimedComments(node.getEndComments(), claimed));
+    }
+
+    private static List<CommentLine> unclaimedComments(List<CommentLine> comments, Set<CommentLine> claimed) {
+        if (comments == null) {
+            return null;
+        }
+        List<CommentLine> result = new ArrayList<>();
+        for (CommentLine line : comments) {
+            if (claimed.add(line)) {
+                result.add(line);
+            }
+        }
+        return result.isEmpty() ? null : result;
     }
 
     private static boolean sameComments(List<CommentLine> a, List<CommentLine> b) {

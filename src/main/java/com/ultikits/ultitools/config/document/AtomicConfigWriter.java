@@ -11,6 +11,7 @@ import java.nio.file.CopyOption;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFileAttributeView;
@@ -99,9 +100,10 @@ public final class AtomicConfigWriter {
     static StagedWrite stage(Path target, String text, FileOperations files) throws IOException {
         Path destination = resolve(target);
         Path temporary = destination.resolveSibling(temporaryName(destination.getFileName().toString()));
+        Path identity = temporaryIdentity(temporary);
         boolean staged = false;
         synchronized (LIVE_TEMPORARIES) {
-            LIVE_TEMPORARIES.add(temporary.toAbsolutePath().normalize());
+            LIVE_TEMPORARIES.add(identity);
         }
         try {
             byte[] data = text.getBytes(StandardCharsets.UTF_8);
@@ -116,7 +118,7 @@ public final class AtomicConfigWriter {
                 // An open implementation may have created a partial file before reporting refusal.
                 files.delete(temporary);
                 staged = true;
-                return new StagedWrite(destination, temporary, files, data, failure);
+                return new StagedWrite(destination, temporary, identity, files, data, failure);
             }
             try (FileChannel channel = opened) {
                 writeAll(files, channel, data);
@@ -126,11 +128,11 @@ public final class AtomicConfigWriter {
                 files.copyAttributes(destination, temporary);
             }
             staged = true;
-            return new StagedWrite(destination, temporary, files, null, null);
+            return new StagedWrite(destination, temporary, identity, files, null, null);
         } finally {
             if (!staged) {
                 deleteQuietly(temporary);
-                release(temporary);
+                release(identity);
             }
         }
     }
@@ -154,7 +156,7 @@ public final class AtomicConfigWriter {
                     entry -> isTemporaryOf(name, entry.getFileName().toString()))) {
                 for (Path stale : candidates) {
                     synchronized (LIVE_TEMPORARIES) {
-                        if (!LIVE_TEMPORARIES.contains(stale.toAbsolutePath().normalize()) && Files.deleteIfExists(stale)) {
+                        if (!LIVE_TEMPORARIES.contains(temporaryIdentity(stale)) && Files.deleteIfExists(stale)) {
                             LOGGER.fine("Removed " + stale + ", a temporary file an interrupted config write left behind");
                         }
                     }
@@ -165,10 +167,26 @@ public final class AtomicConfigWriter {
         }
     }
 
-    private static void release(Path temporary) {
+    private static void release(Path identity) {
         synchronized (LIVE_TEMPORARIES) {
-            LIVE_TEMPORARIES.remove(temporary.toAbsolutePath().normalize());
+            LIVE_TEMPORARIES.remove(identity);
         }
+    }
+
+    /** Identifies a reserved file through its real parent, even before the file exists. */
+    private static Path temporaryIdentity(Path path) throws IOException {
+        Path absolute = path.toAbsolutePath().normalize();
+        Path parent = absolute.getParent();
+        Path ancestor = parent;
+        while (ancestor != null) {
+            try {
+                Path real = ancestor.toRealPath();
+                return real.resolve(ancestor.relativize(parent)).resolve(absolute.getFileName());
+            } catch (NoSuchFileException missing) {
+                ancestor = ancestor.getParent();
+            }
+        }
+        throw new NoSuchFileException(absolute.toString());
     }
 
     static boolean isTemporaryOf(String fileName, String candidate) {
@@ -253,13 +271,15 @@ public final class AtomicConfigWriter {
 
         private final Path target;
         private final Path temporary;
+        private final Path identity;
         private final FileOperations files;
         private final byte[] data;
         private final IOException deferredCause;
 
-        private StagedWrite(Path target, Path temporary, FileOperations files, byte[] data, IOException deferredCause) {
+        private StagedWrite(Path target, Path temporary, Path identity, FileOperations files, byte[] data, IOException deferredCause) {
             this.target = target;
             this.temporary = temporary;
+            this.identity = identity;
             this.files = files;
             this.data = data;
             this.deferredCause = deferredCause;
@@ -306,7 +326,7 @@ public final class AtomicConfigWriter {
                     }
                 } finally {
                     deleteQuietly(temporary);
-                    release(temporary);
+                    release(identity);
                 }
                 syncDirectory(target.getParent());
             }
@@ -349,7 +369,7 @@ public final class AtomicConfigWriter {
          */
         public boolean discard() {
             deleteQuietly(temporary);
-            release(temporary);
+            release(identity);
             return !Files.exists(temporary);
         }
     }

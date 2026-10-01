@@ -6,6 +6,7 @@ import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -120,9 +121,10 @@ public final class PlainData {
     }
 
     /**
-     * Deep-copies a plain value into fresh {@link LinkedHashMap}s and {@link ArrayList}s, so the caller can
-     * neither change the copy's source nor share one container between two places of a document.
-     * Mutable YAML leaves (Date and byte[]) are cloned; other non-container leaves are immutable.
+     * Deep-copies plain values and every mutable value SafeConstructor can return: maps (including keys),
+     * lists, sets, pair arrays, dates and binary arrays. Copies never share mutable data with their source.
+     * Shared aliases are independently copied, and recursive containers are refused.
+     * Other safe YAML leaves are immutable.
      *
      * @param value a plain value (or a value read from a file, which may hold non-plain leaves such as a
      *              {@code java.util.Date} for a YAML timestamp)
@@ -139,7 +141,8 @@ public final class PlainData {
         if (value instanceof byte[]) {
             return ((byte[]) value).clone();
         }
-        if (!(value instanceof Map) && !(value instanceof List)) {
+        if (!(value instanceof Map) && !(value instanceof List) && !(value instanceof Set)
+                && !(value instanceof Object[])) {
             return value;
         }
         if (!visiting.add(value)) {
@@ -149,7 +152,22 @@ public final class PlainData {
             if (value instanceof Map) {
                 Map<Object, Object> result = new LinkedHashMap<>();
                 for (Map.Entry<?, ?> entry : ((Map<?, ?>) value).entrySet()) {
-                    result.put(entry.getKey(), copy(entry.getValue(), visiting));
+                    result.put(copy(entry.getKey(), visiting), copy(entry.getValue(), visiting));
+                }
+                return result;
+            }
+            if (value instanceof Set) {
+                Set<Object> result = new LinkedHashSet<>();
+                for (Object element : (Set<?>) value) {
+                    result.add(copy(element, visiting));
+                }
+                return result;
+            }
+            if (value instanceof Object[]) {
+                Object[] original = (Object[]) value;
+                Object[] result = new Object[original.length];
+                for (int i = 0; i < original.length; i++) {
+                    result[i] = copy(original[i], visiting);
                 }
                 return result;
             }
