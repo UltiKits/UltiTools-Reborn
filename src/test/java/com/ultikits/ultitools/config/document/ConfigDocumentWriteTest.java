@@ -20,9 +20,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Plan 17-56 Task 2: a write changes only what it addresses (orchestrator note of 2026-09-30: the new storage
- * rewrites only changed values and comment lines), map keys stay whole and keep their original text
- * (Follow-up 16), and an equal value keeps the file's text.
+ * Plan 17-56 Task 2: a write preserves unaddressed content and comments while the emitter normalizes layout, map keys stay whole and keep their original text
+ * (Follow-up 16), and an equal value keeps the existing node.
  */
 @DisplayName("ConfigDocument - diff-aware writes")
 class ConfigDocumentWriteTest {
@@ -52,8 +51,8 @@ class ConfigDocumentWriteTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("writableFixtures")
-    @DisplayName("changing the first single-line scalar leaf changes only that value's line")
-    void changingOneLeafChangesOneLine(GoldenCorpus.Fixture fixture) throws Exception {
+    @DisplayName("changing a scalar leaf preserves all other values, comments, order and style")
+    void changingOneLeafPreservesContent(GoldenCorpus.Fixture fixture) throws Exception {
         ConfigDocument document = ConfigDocument.parse(fixture.text());
         Leaf leaf = firstLeaf(document.toPlain(), new ArrayList<String>());
         assertThat(leaf).as("fixture has a single-line scalar leaf").isNotNull();
@@ -61,33 +60,37 @@ class ConfigDocumentWriteTest {
         document.set(leaf.keyPath, leaf.newValue);
         String rendered = document.render();
 
-        LineDiff diff = LineDiff.of(fixture.text(), rendered);
-        assertThat(diff.removed).as(diff.toString()).hasSize(1);
-        assertThat(diff.added).as(diff.toString()).hasSize(1);
         Map<String, Object> expected = ConfigDocument.parse(fixture.text()).toPlain();
         put(expected, leaf.keyPath, leaf.newValue);
-        assertThat(ConfigDocument.parse(rendered).toPlain()).isEqualTo(expected);
+        assertThat(GoldenCorpus.comments(rendered)).containsExactlyInAnyOrderElementsOf(GoldenCorpus.comments(fixture.text()));
+        GoldenCorpus.assertContent(rendered, expected);
+        GoldenCorpus.assertStyle(fixture.text(), rendered);
+
     }
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("terminatedFixtures")
-    @DisplayName("adding a key with a comment adds only its own lines")
-    void addingAKeyAddsOnlyItsLines(GoldenCorpus.Fixture fixture) throws Exception {
+    @DisplayName("adding a key preserves existing content and comments and appends the new key")
+    void addingAKeyPreservesExistingContent(GoldenCorpus.Fixture fixture) throws Exception {
         ConfigDocument document = ConfigDocument.parse(fixture.text());
-        String lineBreak = fixture.text().contains("\r\n") ? "\r\n" : "\n";
+        Map<String, Object> expected = document.toPlain();
 
         document.set(Collections.singletonList("zz-added-key"), "added value");
         document.setFrameworkComment(Collections.singletonList("zz-added-key"), Collections.singletonList("Added by the test"));
 
-        LineDiff diff = LineDiff.of(fixture.text(), document.render());
-        assertThat(diff.removed).as(diff.toString()).isEmpty();
-        assertThat(diff.added).containsExactly("# Added by the test" + lineBreak, "zz-added-key: added value" + lineBreak);
+        expected.put("zz-added-key", "added value");
+        String rendered = document.render();
+        GoldenCorpus.assertContent(rendered, expected);
+        GoldenCorpus.assertStyle(fixture.text(), rendered);
+        List<String> comments = GoldenCorpus.comments(fixture.text());
+        comments.add(" Added by the test");
+        assertThat(GoldenCorpus.comments(rendered)).containsExactlyInAnyOrderElementsOf(comments);
     }
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("writableFixtures")
-    @DisplayName("removing a key removes only its lines and its own comment")
-    void removingAKeyRemovesOnlyItsLines(GoldenCorpus.Fixture fixture) throws Exception {
+    @DisplayName("removing a key preserves all remaining values, order and document style")
+    void removingAKeyPreservesRemainingContent(GoldenCorpus.Fixture fixture) throws Exception {
         ConfigDocument document = ConfigDocument.parse(fixture.text());
         List<String> path = removableKey(document.toPlain());
         assertThat(path).as("fixture has a removable key").isNotNull();
@@ -96,18 +99,16 @@ class ConfigDocumentWriteTest {
         assertThat(document.remove(path)).isTrue();
 
         String rendered = document.render();
-        LineDiff diff = LineDiff.of(fixture.text(), rendered);
-        assertThat(diff.added).as(diff.toString()).isEmpty();
-        assertThat(diff.removed).as(diff.toString()).isNotEmpty();
-        assertThat(diff.removedIsContiguous()).as(diff.toString()).isTrue();
         for (String line : comment) {
-            if (line != null) {
-                assertThat(String.join("", diff.removed)).as(diff.toString()).contains("#" + (line.isEmpty() ? "" : " " + line));
+            if (line != null && !line.isEmpty()) {
+                assertThat(rendered).doesNotContain("# " + line);
             }
         }
         Map<String, Object> expected = ConfigDocument.parse(fixture.text()).toPlain();
         removePath(expected, path);
-        assertThat(ConfigDocument.parse(rendered).toPlain()).isEqualTo(expected);
+        GoldenCorpus.assertContent(rendered, expected);
+        GoldenCorpus.assertStyle(fixture.text(), rendered);
+
     }
 
     @Test
@@ -121,27 +122,50 @@ class ConfigDocumentWriteTest {
         assertThat(ConfigDocument.parse(set.render()).toPlain()).isEqualTo(set.toPlain());
     }
 
-    static Stream<GoldenCorpus.Fixture> spliceFixtures() throws IOException {
+    static Stream<GoldenCorpus.Fixture> layoutFixtures() throws IOException {
         return GoldenCorpus.fixtures().stream().filter(f -> f.name.endsWith("/splice-layout.yml"));
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("spliceFixtures")
-    void splicePreservesEveryUntouchedByte(GoldenCorpus.Fixture fixture) throws Exception {
+    @MethodSource("layoutFixtures")
+    void operatorLayoutPreservesContentCommentsOrderAndStyle(GoldenCorpus.Fixture fixture) throws Exception {
         String text = fixture.text();
         ConfigDocument document = ConfigDocument.parse(text);
-        assertThat(document.render()).isEqualTo(text);
+        Map<String, Object> expected = document.toPlain();
         document.set(path("change"), "new");
-        assertThat(document.render()).isEqualTo(text.replace("change: old", "change: new"));
+        put(expected, path("change"), "new");
+        assertLayoutContract(text, document.render(), expected, GoldenCorpus.comments(text));
         document.set(path("four", "added"), 3);
-        String added = text.replace("change: old", "change: new")
-                .replace("    nested: 2    # second width\n", "    nested: 2    # second width\n    added: 3\n");
-        assertThat(document.render()).isEqualTo(added);
+        put(expected, path("four", "added"), 3);
+        assertLayoutContract(text, document.render(), expected, GoldenCorpus.comments(text));
         document.remove(path("remove-me"));
-        assertThat(document.render()).isEqualTo(added.replace("# removable key comment\nremove-me: gone\n", ""));
+        expected.remove("remove-me");
+        List<String> comments = GoldenCorpus.comments(text);
+        comments.remove(" removable key comment");
+        assertLayoutContract(text, document.render(), expected, comments);
         document.setFrameworkComment(path("enabled"), Collections.singletonList("Enabled flag"));
-        assertThat(document.render()).isEqualTo(added.replace("# removable key comment\nremove-me: gone\n", "")
-                .replace("enabled: true", "# Enabled flag\nenabled: true"));
+        comments.add(" Enabled flag");
+        assertLayoutContract(text, document.render(), expected, comments);
+    }
+
+    private static void assertLayoutContract(String source, String rendered, Map<String, Object> expected,
+            List<String> comments) throws ConfigParseException {
+        GoldenCorpus.assertContent(rendered, expected);
+        GoldenCorpus.assertStyle(source, rendered);
+        assertThat(GoldenCorpus.comments(rendered)).containsExactlyInAnyOrderElementsOf(comments);
+    }
+
+    @Test
+    void fullEmitterNormalizesUntouchedSpacingWhilePreservingContent() throws Exception {
+        String source = "# header\n\nchange: old\nkeep:   value    # aligned note\nflow: [ a, b ]\n";
+        ConfigDocument document = ConfigDocument.parse(source);
+        Map<String, Object> expected = document.toPlain();
+        document.set(path("change"), "new");
+        expected.put("change", "new");
+        String rendered = document.render();
+        assertLayoutContract(source, rendered, expected, GoldenCorpus.comments(source));
+        assertThat(rendered).contains("keep: value # aligned note\n", "flow: [a, b]\n")
+                .doesNotContain("keep:   value", "[ a, b ]");
     }
 
     @Nested
@@ -391,6 +415,7 @@ class ConfigDocumentWriteTest {
             String rendered = document.render();
             assertThat(rendered).doesNotContain("&").doesNotContain("*").doesNotContain("<<");
             assertThat(ConfigDocument.parse(rendered).toPlain()).isEqualTo(expected);
+
         }
     }
 

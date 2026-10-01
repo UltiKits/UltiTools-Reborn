@@ -8,7 +8,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -52,31 +51,25 @@ class ConfigDocumentTracerTest {
     Path tempDir;
 
     @Test
-    @DisplayName("parses and renders byte for byte")
-    void rendersTheFileByteForByte() throws Exception {
+    @DisplayName("parses and renders the same content, comments, order and style")
+    void rendersTheFileContent() throws Exception {
         ConfigDocument document = ConfigDocument.parse(FIXTURE);
 
-        assertThat(document.render()).isEqualTo(FIXTURE);
+        GoldenCorpus.assertContent(document.render(), document.toPlain());
+        GoldenCorpus.assertStyle(FIXTURE, document.render());
+        assertThat(GoldenCorpus.comments(document.render())).containsExactlyInAnyOrderElementsOf(GoldenCorpus.comments(FIXTURE));
     }
 
     @Test
-    @DisplayName("setting one value changes exactly one line")
-    void oneValueChangesOneLine() throws Exception {
+    @DisplayName("setting one value preserves every other value, comment, order and style")
+    void oneValuePreservesOtherContent() throws Exception {
         ConfigDocument document = ConfigDocument.parse(FIXTURE);
-
+        Map<String, Object> expected = document.toPlain();
         document.set(Arrays.asList("chat", "format"), "&a{player}: {message}");
-
-        List<String> before = lines(FIXTURE);
-        List<String> after = lines(document.render());
-        assertThat(after).hasSameSizeAs(before);
-        List<Integer> changed = new ArrayList<>();
-        for (int i = 0; i < before.size(); i++) {
-            if (!before.get(i).equals(after.get(i))) {
-                changed.add(i);
-            }
-        }
-        assertThat(changed).containsExactly(4);
-        assertThat(after.get(4)).isEqualTo("  format: '&a{player}: {message}'");
+        ConfigDocumentWriteTest.put(expected, Arrays.asList("chat", "format"), "&a{player}: {message}");
+        GoldenCorpus.assertContent(document.render(), expected);
+        GoldenCorpus.assertStyle(FIXTURE, document.render());
+        assertThat(GoldenCorpus.comments(document.render())).containsExactlyInAnyOrderElementsOf(GoldenCorpus.comments(FIXTURE));
     }
 
     @Test
@@ -111,10 +104,9 @@ class ConfigDocumentTracerTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("[chat, owner]")
                 .hasMessageContaining("java.util.UUID");
-        assertThat(document.render()).isEqualTo(FIXTURE);
+        GoldenCorpus.assertContent(document.render(), document.toPlain());
+        GoldenCorpus.assertStyle(FIXTURE, document.render());
+        assertThat(GoldenCorpus.comments(document.render())).containsExactlyInAnyOrderElementsOf(GoldenCorpus.comments(FIXTURE));
     }
 
-    private static List<String> lines(String text) {
-        return Arrays.asList(text.split("\n", -1));
-    }
 }

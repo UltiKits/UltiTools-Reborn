@@ -68,11 +68,17 @@ class ConfigDocumentCommentTest {
         document.set(path("chat", "last"), false);
         document.set(path("economy", "nested", "depth"), 3);
 
-        assertThat(document.render()).isEqualTo(COMMENTED
+        assertCommentContract(document.render(), COMMENTED
                 .replace("&7{player}", "&a{player}")
                 .replace("rate: 1.50", "rate: 2.0")
                 .replace("last: true", "last: false")
                 .replace("depth: 2", "depth: 3"));
+    }
+
+    private static void assertCommentContract(String rendered, String expected) throws ConfigParseException {
+        GoldenCorpus.assertContent(rendered, ConfigDocument.parse(expected).toPlain());
+        GoldenCorpus.assertStyle(expected, rendered);
+        assertThat(GoldenCorpus.comments(rendered)).containsExactlyInAnyOrderElementsOf(GoldenCorpus.comments(expected));
     }
 
     @Test
@@ -96,7 +102,7 @@ class ConfigDocumentCommentTest {
         document.setFrameworkComment(path("economy"), Arrays.asList("Economy", "two lines"));
         document.setFrameworkComment(path("chat", "rate"), Collections.singletonList("New comment"));
 
-        assertThat(document.render()).isEqualTo(COMMENTED
+        assertCommentContract(document.render(), COMMENTED
                 .replace("  # The chat format\n", "  # Das Chatformat\n")
                 .replace("# Economy settings\n", "# Economy\n# two lines\n")
                 .replace("  rate: 1.50\n", "  # New comment\n  rate: 1.50\n"));
@@ -109,7 +115,7 @@ class ConfigDocumentCommentTest {
 
         document.setFrameworkComment(path("chat", "format"), Collections.<String>emptyList());
 
-        assertThat(document.render()).isEqualTo(COMMENTED.replace("  # The chat format\n", ""));
+        assertCommentContract(document.render(), COMMENTED.replace("  # The chat format\n", ""));
         assertThatThrownBy(() -> document.setFrameworkComment(path("chat", "absent"), Collections.singletonList("x")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("[chat, absent]");

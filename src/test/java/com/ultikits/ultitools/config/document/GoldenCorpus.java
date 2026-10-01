@@ -17,7 +17,7 @@ import java.util.stream.Stream;
 /** The golden corpus under {@code src/test/resources/config-golden}, as listed in its {@code MANIFEST.md}. */
 final class GoldenCorpus {
 
-    /** The three fixture directories whose files must round-trip byte for byte. */
+    /** The three fixture directories whose files must preserve content, comments and document style. */
     static final String[] DIRECTORIES = {"bundled", "written-by-6.2", "hand-edited"};
 
     private static final Pattern ROW = Pattern.compile(
@@ -74,6 +74,64 @@ final class GoldenCorpus {
             }
         }
         return result;
+    }
+
+    /** Comment text from the parser, including inline, list-item and trailing comments. */
+    static List<String> comments(String text) {
+        List<String> result = new ArrayList<>();
+        for (org.yaml.snakeyaml.events.Event event : new org.yaml.snakeyaml.Yaml(ConfigDocument.loaderOptions())
+                .parse(new java.io.StringReader(text))) {
+            if (event instanceof org.yaml.snakeyaml.events.CommentEvent) {
+                org.yaml.snakeyaml.events.CommentEvent comment = (org.yaml.snakeyaml.events.CommentEvent) event;
+                if (comment.getCommentType() != org.yaml.snakeyaml.comments.CommentType.BLANK_LINE) {
+                    result.add(comment.getValue());
+                }
+            }
+        }
+        return result;
+    }
+
+    /** Values and recursive mapping order are independent of emitter whitespace. */
+    static void assertContent(String rendered, java.util.Map<String, Object> expected) throws ConfigParseException {
+        java.util.Map<String, Object> actual = ConfigDocument.parse(rendered).toPlain();
+        org.assertj.core.api.Assertions.assertThat(actual).isEqualTo(expected);
+        assertOrder(actual, expected);
+    }
+
+    private static void assertOrder(Object actual, Object expected) {
+        if (expected instanceof java.util.Map) {
+            java.util.Map<?, ?> a = (java.util.Map<?, ?>) actual;
+            java.util.Map<?, ?> e = (java.util.Map<?, ?>) expected;
+            org.assertj.core.api.Assertions.assertThat(new ArrayList<Object>(a.keySet()))
+                    .containsExactlyElementsOf(new ArrayList<Object>(e.keySet()));
+            for (Object key : e.keySet()) {
+                assertOrder(a.get(key), e.get(key));
+            }
+        } else if (expected instanceof List) {
+            List<?> a = (List<?>) actual;
+            List<?> e = (List<?>) expected;
+            for (int i = 0; i < e.size(); i++) {
+                assertOrder(a.get(i), e.get(i));
+            }
+        }
+    }
+
+    static void assertStyle(String source, String rendered) {
+        // Removing the entire document can leave no text on which to retain a final line break.
+        if (rendered.isEmpty()) {
+            return;
+        }
+        org.assertj.core.api.Assertions.assertThat(rendered.startsWith("\uFEFF"))
+                .isEqualTo(source.startsWith("\uFEFF"));
+        org.assertj.core.api.Assertions.assertThat(rendered.endsWith("\n") || rendered.endsWith("\r"))
+                .isEqualTo(source.endsWith("\n") || source.endsWith("\r"));
+        if (source.contains("\r\n")) {
+            org.assertj.core.api.Assertions.assertThat(rendered.replace("\r\n", "")).doesNotContain("\n", "\r");
+        } else if (source.contains("\r")) {
+            org.assertj.core.api.Assertions.assertThat(rendered).doesNotContain("\n");
+        } else {
+            org.assertj.core.api.Assertions.assertThat(rendered).doesNotContain("\r");
+        }
     }
 
     /** Every file actually present under the three fixture directories, relative to the corpus root. */

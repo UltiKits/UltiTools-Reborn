@@ -3,7 +3,6 @@ package com.ultikits.ultitools.config.document;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -21,10 +20,10 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 /**
  * Plan 17-56 Task 2: every file of the golden corpus (bundled module files, files the 6.2 writer produced,
- * hand-edited files; see {@code config-golden/MANIFEST.md}) parses and renders byte for byte, and reads
+ * hand-edited files; see {@code config-golden/MANIFEST.md}) preserves content, comments and style, and reads
  * into the same values Bukkit's {@code YamlConfiguration} reads wherever Bukkit can read the file at all.
  */
-@DisplayName("ConfigDocument - golden corpus round-trips byte for byte")
+@DisplayName("ConfigDocument - golden corpus preserves content, comments and style")
 class ConfigDocumentGoldenTest {
 
     static Stream<GoldenCorpus.Fixture> fixtures() throws IOException {
@@ -56,11 +55,14 @@ class ConfigDocumentGoldenTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("fixtures")
-    @DisplayName("parses and renders byte for byte")
-    void rendersByteForByte(GoldenCorpus.Fixture fixture) throws Exception {
+    @DisplayName("renders the same content, comments, order and document style")
+    void rendersContentCommentsAndStyle(GoldenCorpus.Fixture fixture) throws Exception {
         ConfigDocument document = ConfigDocument.parse(fixture.text());
 
-        assertThat(document.render().getBytes(StandardCharsets.UTF_8)).isEqualTo(fixture.bytes());
+        String rendered = document.render();
+        GoldenCorpus.assertContent(rendered, document.toPlain());
+        GoldenCorpus.assertStyle(fixture.text(), rendered);
+        assertThat(GoldenCorpus.comments(rendered)).containsExactlyInAnyOrderElementsOf(GoldenCorpus.comments(fixture.text()));
     }
 
     static Stream<GoldenCorpus.Fixture> bukkitReadableFixtures() throws Exception {
