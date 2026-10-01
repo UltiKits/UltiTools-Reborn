@@ -138,6 +138,48 @@ class ConfigDocumentStyleTest {
     }
 
     @Test
+    void noFinalNewlinePreservesLiteralAndFoldedStringContent() throws Exception {
+        for (String scalarStyle : new String[]{"|-", ">-"}) {
+            for (String value : new String[]{"hello\n", "hello\n\n", "hello\r\n", "hello\r"}) {
+                ConfigDocument document = ConfigDocument.parse("x: " + scalarStyle + "\n  a");
+                document.set(path("x"), value);
+                String rendered = document.render();
+                assertThat(ConfigDocument.parse(rendered).get(path("x"))).isEqualTo(value);
+                assertThat(rendered).doesNotEndWith("\n").doesNotEndWith("\r");
+                assertThat(document.render()).isEqualTo(rendered);
+            }
+        }
+    }
+
+    @Test
+    void noFinalNewlinePreservesNestedListAndSharedAnchorStringsAndComments() throws Exception {
+        String source = "# Header\n\nshared: &text |+\n  hello\n\n"
+                + "# Alias\nmirror: *text\nnested:\n  # List\n  values:\n  - *text\nlast: x";
+        ConfigDocument document = ConfigDocument.parse(source);
+        String rendered = document.render();
+        assertThat(ConfigDocument.parse(rendered).toPlain()).isEqualTo(document.toPlain());
+        assertThat(GoldenCorpus.comments(rendered)).containsExactlyInAnyOrderElementsOf(GoldenCorpus.comments(source));
+        assertThat(rendered).contains("&text", "*text").doesNotEndWith("\n");
+        assertThat(document.render()).isEqualTo(rendered);
+        document.set(path("last"), "changed\n\n");
+        rendered = document.render();
+        assertThat(ConfigDocument.parse(rendered).toPlain()).isEqualTo(document.toPlain());
+        assertThat(GoldenCorpus.comments(rendered)).containsExactlyInAnyOrderElementsOf(GoldenCorpus.comments(source));
+    }
+
+    @Test
+    void bomAndCrlfWithoutFinalNewlinePreserveNewMultilineListAndScalarValues() throws Exception {
+        ConfigDocument document = ConfigDocument.parse("﻿nested:\r\n  value: old\r\nlast: x");
+        document.set(path("nested", "value"), "hello\r\n\n");
+        document.set(path("nested", "list"), Arrays.asList("first\n", "second\r\n"));
+        String rendered = document.render();
+        assertThat(rendered).startsWith("﻿").doesNotEndWith("\n").doesNotEndWith("\r");
+        assertThat(rendered.replace("\r\n", "")).doesNotContain("\n", "\r");
+        assertThat(ConfigDocument.parse(rendered).toPlain()).isEqualTo(document.toPlain());
+        assertThat(document.render()).isEqualTo(rendered);
+    }
+
+    @Test
     @DisplayName("a blank line inside a nested mapping is written empty, not as indentation")
     void blankLinesCarryNoIndentation() throws Exception {
         String text = "menu:\n  items:\n    a: 1\n\n    b: 2\n";

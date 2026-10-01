@@ -122,6 +122,25 @@ class AtomicConfigWriterTest {
         assertThat(warnings()).hasSize(2);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"atomic", "temp-denied"})
+    void backupHasTargetPermissionsBeforeFirstWrite(String trigger) throws IOException {
+        assumeTrue(Files.getFileStore(tempDir).supportsFileAttributeView("posix"));
+        Files.setPosixFilePermissions(target, PosixFilePermissions.fromString("rw-------"));
+        ObservedFallback files = new ObservedFallback(trigger) {
+            @Override public void write(FileChannel channel, ByteBuffer data) throws IOException {
+                if (Files.exists(backup())) {
+                    assertThat(PosixFilePermissions.toString(Files.getPosixFilePermissions(backup())))
+                            .isEqualTo("rw-------");
+                }
+                super.write(channel, data);
+            }
+        };
+        AtomicConfigWriter.write(target, NEW, files);
+        assertThat(content(backup())).isEqualTo(OLD);
+        assertThat(PosixFilePermissions.toString(Files.getPosixFilePermissions(target))).isEqualTo("rw-------");
+    }
+
     @Test
     void existingBackupRefusesWithoutOverwritingEitherFile() throws IOException {
         Files.write(backup(), "operator backup\n".getBytes(StandardCharsets.UTF_8));

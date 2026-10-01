@@ -404,6 +404,30 @@ class ConfigDocumentWriteTest {
         }
 
         @Test
+        void removeInheritedNestedAndDirectKeysUsesExpandedPlainView() throws Exception {
+            String source = "defaults: &d\n  nested:\n    deeper:\n      x: 1\n      y: 2\n  direct: 3\n"
+                    + "target:\n  <<: *d\n  own: 4\nother: 5\n";
+            for (List<String> removed : Arrays.asList(path("target", "nested", "deeper", "x"),
+                    path("target", "nested", "deeper"), path("target", "direct"))) {
+                ConfigDocument document = ConfigDocument.parse(source);
+                Map<String, Object> expected = document.toPlain();
+                removePath(expected, removed);
+                assertThat(document.contains(removed)).isTrue();
+                assertThat(document.remove(removed)).isTrue();
+                assertThat(document.contains(removed)).isFalse();
+                assertThat(document.toPlain()).isEqualTo(expected);
+                assertThat(document.get(path("defaults", "nested", "deeper", "x"))).isEqualTo(1);
+                assertThat(document.get(path("target", "own"))).isEqualTo(4);
+                GoldenCorpus.assertContent(document.render(), expected);
+                assertThat(ConfigDocument.parse(document.render()).contains(removed)).isFalse();
+            }
+            ConfigDocument unchanged = ConfigDocument.parse(source);
+            String before = unchanged.render();
+            assertThat(unchanged.remove(path("target", "nested", "absent"))).isFalse();
+            assertThat(unchanged.render()).isEqualTo(before);
+        }
+
+        @Test
         @DisplayName("a write re-renders from plain data with every value equal")
         void writeReRendersFromPlainData() throws Exception {
             ConfigDocument document = ConfigDocument.parse(ANCHORED);
