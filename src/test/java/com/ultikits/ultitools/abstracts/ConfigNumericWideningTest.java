@@ -39,9 +39,9 @@ import com.ultikits.ultitools.annotations.ConfigEntry;
  * boot again from that file, edit the file, reload.
  * <p>
  * The fix is JLS widening only, the conversions the matching primitive field already accepts. A
- * narrowing value is still refused exactly as before. ({@code float}/{@code Float} fields are not
- * covered: YAML hands back a {@code Double} for a decimal, and {@code double} to {@code float} is
- * narrowing, so they cannot load a decimal before or after this change -- #534.)
+ * narrowing value is still not narrowed. ({@code float}/{@code Float} decimals are covered separately
+ * by {@code ConfigFloatDecimalTest}: as of #534 a decimal loads when its float reading prints back
+ * the same.)
  */
 @DisplayName("AbstractConfigEntity numeric widening from YAML (#531 CR-01)")
 class ConfigNumericWideningTest {
@@ -217,12 +217,22 @@ class ConfigNumericWideningTest {
         assertThat(config.isLastInitIncomplete()).as("after the next complete init").isFalse();
     }
 
+    /**
+     * #526 (maintainer 2026-09-29): a value that does not fit the field is still never narrowed into
+     * it, but it no longer throws out of {@code init()} and takes the module down -- the field keeps
+     * its declared default and one warning names the key and the value.
+     */
     @Test
-    @DisplayName("a value too large for an Integer field is still refused -- widening only, never narrowing")
+    @DisplayName("a value too large for an Integer field is not narrowed: the default is kept, with a warning")
     void narrowingIsStillRefused() throws IOException {
         writeFile("small: 3000000000\n");
+        NarrowConfig config = new NarrowConfig(PATH);
 
-        assertThatThrownBy(() -> new NarrowConfig(PATH).init(plugin))
-                .isInstanceOf(IllegalArgumentException.class);
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            assertThatCode(() -> config.init(plugin)).doesNotThrowAnyException();
+            assertThat(config.small).isEqualTo(1);
+            assertThat(warnings.messagesContaining("'small'")).hasSize(1)
+                    .allSatisfy(message -> assertThat(message).contains("3000000000"));
+        }
     }
 }
