@@ -97,6 +97,10 @@ public abstract class AbstractConfigEntity {
     private volatile boolean lastInitIncomplete;
     @Getter(AccessLevel.NONE)
     private boolean defaultsCaptured;
+    @Getter(AccessLevel.NONE)
+    private boolean pendingCommentWrite;
+    @Getter(AccessLevel.NONE)
+    private final Set<String> warnedCommentKeys = ConcurrentHashMap.newKeySet();
 
     /**
      * The value ranges a config binding (#531) imposes on this entity's keys, by {@code @ConfigEntry}
@@ -184,9 +188,11 @@ public abstract class AbstractConfigEntity {
             if (missing || !PlainData.plainEquals(candidate.get(path), entry.getValue())) {
                 candidate.set(path, entry.getValue()); changed = true;
             }
-            if (missing) { changed |= addEntryComment(candidate, entry.getKey()); }
+            if (missing && !isTokenComment(entry.getKey())) { changed |= addEntryComment(candidate, entry.getKey()); }
         }
+        changed |= updateTokenComments(candidate);
         if (changed) { write(candidate); }
+        pendingCommentWrite = false;
         document = candidate;
         if (savedSnapshot == null) { savedSnapshot = new LinkedHashMap<>(declaredDefaults); }
         savedSnapshot.putAll(values);
@@ -199,15 +205,52 @@ public abstract class AbstractConfigEntity {
         AtomicConfigWriter.write(file.toPath(), candidate.render());
     }
 
-    private boolean addEntryComment(ConfigDocument target, Field field) {
-        String comment = field.getAnnotation(ConfigEntry.class).comment();
-        if (comment.isEmpty()) { return false; }
-        if (comment.matches("\\{[^{}]+\\}")) {
-            comment = ultiToolsPlugin.i18n(comment.substring(1, comment.length() - 1));
+    private boolean isTokenComment(Field field) {
+        return field.getAnnotation(ConfigEntry.class).comment().trim().matches("\\{[^{}]+\\}");
+    }
+
+    private String resolvedComment(Field field) {
+        String literal = field.getAnnotation(ConfigEntry.class).comment();
+        if (!isTokenComment(field)) { return literal; }
+        String token = literal.trim();
+        String key = token.substring(1, token.length() - 1);
+        String resolved = null;
+        try { resolved = ultiToolsPlugin.i18n(key); }
+        catch (RuntimeException unavailable) {
+            // Catalogue failure must not prevent configuration values from loading.
         }
+        if (resolved != null && !resolved.equals(key)) { return resolved; }
+        if (warnedCommentKeys.add(fieldPath(field))) {
+            LOGGER.warning("Module " + ultiToolsPlugin.getPluginName() + ", file " + configFilePath
+                    + ", path '" + fieldPath(field) + "': missing comment catalogue key '" + key + "'");
+        }
+        return token;
+    }
+
+    private boolean addEntryComment(ConfigDocument target, Field field) {
+        String comment = resolvedComment(field);
+        if (comment.isEmpty()) { return false; }
         List<String> before = target.blockComment(keys(field));
-        target.setFrameworkComment(keys(field), splitComment(comment));
+        target.setFrameworkComment(keys(field), Collections.singletonList(comment));
         return !before.equals(target.blockComment(keys(field)));
+    }
+
+    private boolean updateTokenComments(ConfigDocument target) {
+        boolean changed = false;
+        for (Field field : configEntryFields()) {
+            if (isTokenComment(field) && target.contains(keys(field))) {
+                changed |= addEntryComment(target, field);
+            }
+        }
+        return changed;
+    }
+
+    private String panelComment(Field field) {
+        // Reuse the storage boundary's sole sanitation policy, including every YAML line break.
+        ConfigDocument presentation = ConfigDocument.empty();
+        presentation.set(keys(field), null);
+        presentation.setFrameworkComment(keys(field), Collections.singletonList(resolvedComment(field)));
+        return String.join("\n", presentation.blockComment(keys(field)));
     }
 
     private boolean protectFailedLoad(ConfigLoadResult loaded) {
@@ -247,7 +290,7 @@ public abstract class AbstractConfigEntity {
     public final boolean isModifiedSinceSnapshot() {
         synchronized (this) {
             if (document == null || ultiToolsPlugin == null || lastLoadUnparseable) { return false; }
-            if (savedSnapshot == null) { return true; }
+            if (savedSnapshot == null || pendingCommentWrite) { return true; }
             try { return !orderedEquals(savedSnapshot, currentPlain(configEntryFields())); }
             catch (RuntimeException failure) {
                 LOGGER.warning("Cannot compare the state of " + configFilePath + "; treating it as changed");
@@ -433,6 +476,7 @@ public abstract class AbstractConfigEntity {
     }
 
     private void load(boolean initialize) throws IOException {
+        warnedCommentKeys.clear();
         ConfigLoadResult loaded = ConfigDocument.load(ultiToolsPlugin.getConfigFile(configFilePath).toPath());
         if (protectFailedLoad(loaded)) {
             if (document == null) { document = ConfigDocument.empty(); }
@@ -478,7 +522,17 @@ public abstract class AbstractConfigEntity {
                 baseline.put(field, value); changed = true;
             }
         }
+        boolean commentsChanged = updateTokenComments(next);
+        pendingCommentWrite = false;
         if (changed) { write(next); }
+        else if (commentsChanged) {
+            try { write(next); }
+            catch (IOException failure) {
+                pendingCommentWrite = true;
+                LOGGER.warning("Cannot rewrite comments in " + configFilePath + ": "
+                        + failure.getClass().getSimpleName() + "; pending for retry");
+            }
+        }
         savedSnapshot = baseline;
         savedFileFingerprint = fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath));
     }
@@ -803,7 +857,7 @@ public abstract class AbstractConfigEntity {
                 if (path.isEmpty()) {
                     path = field.getName();
                 }
-                jsonObject.addProperty(path, annotation.comment());
+                jsonObject.addProperty(path, panelComment(field));
             }
         }
         return jsonObject;
