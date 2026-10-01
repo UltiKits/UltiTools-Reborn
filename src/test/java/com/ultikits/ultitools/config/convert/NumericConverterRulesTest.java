@@ -183,6 +183,56 @@ class NumericConverterRulesTest {
         assertThat(converted.failures()).hasSize(1);
     }
 
+    @Test
+    void enumConstantBodiesAndMapKeyFailuresKeepEntryLocationsAndFirstValue() throws Exception {
+        assertThat(registry.toPlain(BodyEnum.FIRST, Object.class, "f", Collections.emptyList())).isEqualTo("FIRST");
+        ConverterRegistry child = new ConverterRegistry(registry);
+        child.register(Mode.class, new ConfigConverter<Mode>() {
+            @Override public Object toPlain(Mode value, ConversionContext ctx) { return value.name(); }
+            @Override public Mode fromPlain(Object plain, ConversionContext ctx) throws ConversionException {
+                if ("bad".equals(plain)) { throw new ConversionException("bad key", ctx.file(), ctx.path(), ctx.declaredType()); }
+                return Mode.FIRST;
+            }
+        }, false);
+        Map<String, Object> input = new java.util.LinkedHashMap<>();
+        input.put("first", 1); input.put("second", 2); input.put("bad", 3);
+        ConversionResult<Map<Mode, Integer>> result = child.fromPlainResult(input,
+                Shapes.class.getDeclaredField("byMode").getGenericType(), "f", Collections.singletonList("root"));
+        assertThat(result.value()).containsEntry(Mode.FIRST, 1).hasSize(1);
+        assertThat(result.failures()).hasSize(2);
+        assertThat(result.failures().get(1).raw()).isEqualTo("bad");
+        assertThat(result.failures().get(1).declaredType()).isEqualTo(Mode.class);
+        assertThat(result.failures().get(1).path()).containsExactly("root", "bad");
+    }
+
+    @Test
+    void nestedGenericArrayAndWildcardArgumentsSubstituteConcreteAncestors() throws Exception {
+        UUID uuid = new UUID(0, 1);
+        Type nested = com.ultikits.ultitools.config.convert.builtin.ConversionTypes.argument(
+                UuidNested.class, java.util.Collection.class, 0);
+        Type component = ((java.lang.reflect.ParameterizedType) nested).getActualTypeArguments()[0];
+        assertThat(com.ultikits.ultitools.config.convert.builtin.ConversionTypes.raw(component)).isEqualTo(UUID[].class);
+        ConversionResult<UuidNested> result = registry.fromPlainResult(
+                Collections.singletonList(Collections.singletonList(Collections.singletonList(uuid.toString()))),
+                UuidNested.class, "f", Collections.emptyList());
+        assertThat(result.failures()).isEmpty();
+        assertThat(result.value().get(0).get(0)).containsExactly(uuid);
+        Type wildcard = com.ultikits.ultitools.config.convert.builtin.ConversionTypes.argument(
+                UuidWildcard.class, java.util.Collection.class, 0);
+        Type inner = ((java.lang.reflect.ParameterizedType) wildcard).getActualTypeArguments()[0];
+        assertThat(com.ultikits.ultitools.config.convert.builtin.ConversionTypes.raw(inner)).isEqualTo(UUID.class);
+    }
+
+    enum BodyEnum { FIRST { @Override public String toString() { return "not-name"; } }, SECOND }
+    public static class NestedParent<T> extends java.util.ArrayList<List<T[]>> {
+        private static final long serialVersionUID = 1L;
+    }
+    public static class UuidNested extends NestedParent<UUID> { private static final long serialVersionUID = 1L; }
+    public static class WildcardParent<T> extends java.util.ArrayList<List<? extends T>> {
+        private static final long serialVersionUID = 1L;
+    }
+    public static class UuidWildcard extends WildcardParent<UUID> { private static final long serialVersionUID = 1L; }
+
     public static class IntegerList extends java.util.ArrayList<Integer> {
         private static final long serialVersionUID = 1L;
     }
