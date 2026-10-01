@@ -95,4 +95,51 @@ class ConfigClassTagFreeTest {
                 .hasMessageContaining("object.yml").hasMessageContaining("value").hasMessageContaining("java.lang.Object");
         assertThat(Files.readAllBytes(directory.resolve("object.yml"))).isEqualTo(before);
     }
+    static class NestedUnknown extends AbstractConfigEntity {
+        @ConfigEntry Map<String, java.util.List<Unknown>> nested = new LinkedHashMap<>();
+        public NestedUnknown(String path) { super(path); }
+    }
+    @org.bukkit.configuration.serialization.DelegateDeserialization(Holder.class)
+    public static class Delegate extends Holder {
+        public Delegate(String value) { super(value); }
+    }
+    static class Delegated extends AbstractConfigEntity {
+        @ConfigEntry Holder holder = new Delegate("delegated");
+        public Delegated(String path) { super(path); }
+    }
+    static class DeclaredDelegate extends AbstractConfigEntity {
+        @ConfigEntry Delegate holder = new Delegate("delegated");
+        public DeclaredDelegate(String path) { super(path); }
+    }
+    @Test void nestedUnregisteredDeclaredTypeFailsBeforeFileCreation() {
+        assertThatThrownBy(() -> new NestedUnknown("nested.yml").init(plugin))
+                .isInstanceOf(ConfigurationException.class).hasMessageContaining("nested.yml")
+                .hasMessageContaining("nested").hasMessageContaining("Unknown").hasMessageContaining("ConfigConverterFor");
+        assertThat(directory.resolve("nested.yml")).doesNotExist();
+    }
+    @Test void registeredCustomConverterOwnsUnregisteredSerializableType() {
+        com.ultikits.ultitools.config.convert.ConverterRegistry registry =
+                new com.ultikits.ultitools.config.convert.ConverterRegistry(
+                        com.ultikits.ultitools.config.convert.ConverterRegistry.framework());
+        registry.register(Unknown.class, new com.ultikits.ultitools.config.convert.ConfigConverter<Unknown>() {
+            @Override public Object toPlain(Unknown value, com.ultikits.ultitools.config.convert.ConversionContext context) {
+                return "custom";
+            }
+            @Override public Unknown fromPlain(Object value, com.ultikits.ultitools.config.convert.ConversionContext context) {
+                return new Unknown();
+            }
+        }, true);
+        org.assertj.core.api.Assertions.assertThatCode(() -> registry.checkEntityFields(
+                NestedUnknown.class, "TagModule", "nested.yml")).doesNotThrowAnyException();
+    }
+    @Test void delegateAliasCanResolveToRegisteredParentFactory() throws Exception {
+        com.ultikits.ultitools.config.convert.ConverterRegistry.framework().checkEntityFields(
+                DeclaredDelegate.class, "TagModule", "delegate.yml");
+        Delegated first = new Delegated("delegate.yml"); first.init(plugin); first.save();
+        Delegated next = new Delegated("delegate.yml"); next.init(plugin);
+        assertThat(next.holder.value).isEqualTo("delegated");
+        assertThat(new String(Files.readAllBytes(directory.resolve("delegate.yml")), StandardCharsets.UTF_8))
+                .contains("ConfigEntityHolder").doesNotContain("!!").doesNotContain(Delegate.class.getName());
+    }
+
 }
