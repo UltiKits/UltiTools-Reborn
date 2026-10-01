@@ -320,7 +320,8 @@ public final class AtomicConfigWriter {
             try {
                 byte[] content = replacement == null ? files.read(temporary) : replacement;
                 byte[] original = files.read(target);
-                try (FileChannel channel = files.openBackup(backup)) {
+                FileAttribute<?>[] attributes = files.temporaryAttributes(target);
+                try (FileChannel channel = files.openBackup(backup, attributes)) {
                     created = true;
                     writeAll(files, channel, original);
                     files.force(channel);
@@ -372,8 +373,10 @@ public final class AtomicConfigWriter {
             return FileChannel.open(temporary, options, attributes);
         }
 
-        default FileChannel openBackup(Path backup) throws IOException {
-            return FileChannel.open(backup, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+        default FileChannel openBackup(Path backup, FileAttribute<?>... attributes) throws IOException {
+            Set<StandardOpenOption> options = new HashSet<>();
+            Collections.addAll(options, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+            return FileChannel.open(backup, options, attributes);
         }
 
         default FileChannel openTarget(Path target) throws IOException {

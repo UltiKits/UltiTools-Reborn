@@ -34,6 +34,7 @@ import org.yaml.snakeyaml.constructor.SafeConstructor;
 import org.yaml.snakeyaml.error.YAMLException;
 import org.yaml.snakeyaml.events.Event;
 import org.yaml.snakeyaml.events.ScalarEvent;
+import org.yaml.snakeyaml.nodes.AnchorNode;
 import org.yaml.snakeyaml.nodes.MappingNode;
 import org.yaml.snakeyaml.nodes.Node;
 import org.yaml.snakeyaml.nodes.NodeTuple;
@@ -300,8 +301,13 @@ public final class ConfigDocument {
         MappingNode mapping = findMapping(path);
         Map<String, Object> plainMapping = findPlainMapping(path);
         String last = path.get(path.size() - 1);
-        if (mapping == null || plainMapping == null || !plainMapping.containsKey(last)) {
+        if (plainMapping == null || !plainMapping.containsKey(last)) {
             return false;
+        }
+        if (mapping == null) {
+            plainMapping.remove(last);
+            modified = true;
+            return true;
         }
         String keyText = last;
         List<CommentLine> retained = new ArrayList<>();
@@ -416,6 +422,9 @@ public final class ConfigDocument {
             text = commentsOnly(out);
         } else {
             StringWriter writer = new StringWriter();
+            if (!style.finalLineBreak()) {
+                normalizeMultilineStrings(out, new IdentityHashMap<Node, Node>());
+            }
             dumper(style).serialize(out, writer);
             text = WHITESPACE_ONLY_LINE.matcher(writer.toString()).replaceAll("");
         }
@@ -429,6 +438,58 @@ public final class ConfigDocument {
             text = text.replace("\n", style.lineBreak());
         }
         return style.byteOrderMark() ? "\uFEFF" + text : text;
+    }
+
+    /** Escaped strings keep their content independent of the document's missing terminal line break. */
+    private static Node normalizeMultilineStrings(Node node, Map<Node, Node> normalized) {
+        Node previous = normalized.get(node);
+        if (previous != null) {
+            return previous;
+        }
+        normalized.put(node, node);
+        if (node instanceof ScalarNode && Tag.STR.equals(node.getTag())) {
+            ScalarNode scalar = (ScalarNode) node;
+            if ((scalar.getValue().indexOf('\r') >= 0 || scalar.getValue().indexOf('\n') >= 0)
+                    && scalar.getScalarStyle() != DumperOptions.ScalarStyle.DOUBLE_QUOTED) {
+                ScalarNode replacement = new ScalarNode(scalar.getTag(), scalar.getValue(), scalar.getStartMark(),
+                        scalar.getEndMark(), DumperOptions.ScalarStyle.DOUBLE_QUOTED);
+                carryPresentation(node, replacement);
+                normalized.put(node, replacement);
+                return replacement;
+            }
+        } else if (node instanceof MappingNode) {
+            List<NodeTuple> tuples = ((MappingNode) node).getValue();
+            for (int i = 0; i < tuples.size(); i++) {
+                NodeTuple tuple = tuples.get(i);
+                Node key = normalizeMultilineStrings(tuple.getKeyNode(), normalized);
+                Node value = normalizeMultilineStrings(tuple.getValueNode(), normalized);
+                if (key != tuple.getKeyNode() || value != tuple.getValueNode()) {
+                    tuples.set(i, new NodeTuple(key, value));
+                }
+            }
+        } else if (node instanceof SequenceNode) {
+            List<Node> elements = ((SequenceNode) node).getValue();
+            for (int i = 0; i < elements.size(); i++) {
+                elements.set(i, normalizeMultilineStrings(elements.get(i), normalized));
+            }
+        } else if (node instanceof AnchorNode) {
+            Node real = ((AnchorNode) node).getRealNode();
+            Node replacement = normalizeMultilineStrings(real, normalized);
+            if (replacement != real) {
+                AnchorNode anchor = new AnchorNode(replacement);
+                carryPresentation(node, anchor);
+                normalized.put(node, anchor);
+                return anchor;
+            }
+        }
+        return node;
+    }
+
+    private static void carryPresentation(Node from, Node to) {
+        to.setAnchor(from.getAnchor());
+        to.setType(from.getType());
+        to.setTwoStepsConstruction(from.isTwoStepsConstruction());
+        carryComments(from, to);
     }
 
     private Node update(Node old, Object oldPlain, Object value) {
