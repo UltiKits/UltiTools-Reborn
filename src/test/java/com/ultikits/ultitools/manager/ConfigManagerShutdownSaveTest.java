@@ -665,8 +665,8 @@ class ConfigManagerShutdownSaveTest {
     }
 
     @Test
-    @DisplayName("14d. An explicit save() still writes while the file is unparseable")
-    void save_explicitCallStillWritesOverAnUnparseableFile() throws IOException {
+    @DisplayName("14d. An explicit save protects an unparseable file until a successful load")
+    void save_explicitCallProtectsUnparseableFileUntilSuccessfulLoad() throws IOException {
         File scalarFile = file("config/scalar.yml");
         write(scalarFile, "value: on-disk\n");
         ScalarConfig config = new ScalarConfig("config/scalar.yml");
@@ -675,10 +675,21 @@ class ConfigManagerShutdownSaveTest {
         write(scalarFile, "value: [unclosed\n  bad: : :\n");
         config.reload();
         config.setValue("set-by-code");
+        String broken = read(scalarFile);
         config.save();
 
+        // Plan 17-58/#511 part 2: no explicit write may clear the protection latch.
+        assertThat(read(scalarFile)).isEqualTo(broken);
+        assertThat(config.isLastLoadUnparseable()).isTrue();
+        write(scalarFile, "value: repaired\n");
+        config.save();
+        assertThat(read(scalarFile)).isEqualTo("value: repaired\n");
+        assertThat(config.isLastLoadUnparseable()).isTrue();
+        config.reload();
+        assertThat(config.isLastLoadUnparseable()).isFalse();
+        config.setValue("set-by-code");
+        config.save();
         assertThat(read(scalarFile)).contains("value: set-by-code");
-        // And the successful write cleared the unparseable state, so shutdown behaves normally.
         configManager.saveAll();
         assertThat(unparseableWarnings()).isEmpty();
     }
