@@ -156,6 +156,21 @@ class ConfigLoadResultTest {
         assertThat(first.fingerprint()).isEqualTo(sha256("a: 1\n"));
     }
 
+    @Test
+    void nonUtf8FilesAreUnparseableAndUnchanged() throws IOException {
+        byte[][] inputs = {"name: \u6d4b\u8bd5\n".getBytes(java.nio.charset.Charset.forName("GBK")),
+                new byte[]{'k', ':', ' ', (byte) 0xC3, (byte) 0x28, '\n'}};
+        for (byte[] bytes : inputs) {
+            Path file = Files.createTempFile(tempDir, "non-utf8", ".yml");
+            Files.write(file, bytes);
+            ConfigLoadResult result = ConfigDocument.load(file);
+            assertThat(result.state()).isEqualTo(ConfigLoadResult.State.UNPARSEABLE);
+            assertThat(result.document()).isNull();
+            assertThat(result.parserMessage()).contains("UTF-8");
+            assertThat(Files.readAllBytes(file)).isEqualTo(bytes);
+        }
+    }
+
     private Path write(String text) throws IOException {
         Path file = Files.createTempFile(tempDir, "config", ".yml");
         Files.write(file, text.getBytes(StandardCharsets.UTF_8));
