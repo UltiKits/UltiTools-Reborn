@@ -332,7 +332,7 @@ public class ConfigManager {
         }
         for (AbstractConfigEntity configEntity : configMap.values()) {
             try {
-                configEntity.init(plugin);
+                configEntity.reload();
             } catch (IOException e) {
                 UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration initialization failed！File path：" + configEntity.getConfigFilePath());
             }

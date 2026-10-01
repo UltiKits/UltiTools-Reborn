@@ -87,6 +87,26 @@ public abstract class AbstractConfigEntity {
     @Getter(AccessLevel.NONE)
     private ConfigDocument document;
     @Getter(AccessLevel.NONE)
+    private Map<String, Object> lastLoadedPresence;
+    @Getter(AccessLevel.NONE)
+    private final Map<Field, RawEntry> acknowledgedRaw = new LinkedHashMap<>();
+
+    /** A detached raw entry acknowledgment; absent and explicit null are different states. */
+    private static final class RawEntry {
+        private final boolean present;
+        private final Object value;
+
+        private RawEntry(ConfigDocument source, List<String> path) {
+            present = source.contains(path);
+            value = source.get(path);
+        }
+
+        private boolean matches(ConfigDocument source, List<String> path) {
+            return present == source.contains(path) && PlainData.plainEquals(value, source.get(path));
+        }
+    }
+
+    @Getter(AccessLevel.NONE)
     private final Map<Field, Object> declaredDefaults = new LinkedHashMap<>();
     @Getter(AccessLevel.NONE)
     private Map<Field, Object> savedSnapshot;
@@ -188,8 +208,8 @@ public abstract class AbstractConfigEntity {
             List<String> path = keys(entry.getKey());
             boolean missing = !candidate.contains(path);
             if (missing || !PlainData.plainEquals(candidate.get(path), entry.getValue())) {
-                if (document != null && (document.contains(path) != candidate.contains(path)
-                        || !PlainData.plainEquals(document.get(path), candidate.get(path)))) {
+                RawEntry previous = acknowledgedRaw.get(entry.getKey());
+                if (previous != null && !previous.matches(candidate, path)) {
                     overwritten.add("'" + fieldPath(entry.getKey()) + "'");
                 }
                 candidate.set(path, entry.getValue()); changed = true;
@@ -205,7 +225,12 @@ public abstract class AbstractConfigEntity {
         document = candidate;
         if (savedSnapshot == null) { savedSnapshot = new LinkedHashMap<>(declaredDefaults); }
         savedSnapshot.putAll(values);
+        acknowledgeRaw(candidate, fields);
         savedFileFingerprint = fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath));
+    }
+
+    private void acknowledgeRaw(ConfigDocument source, List<Field> fields) {
+        for (Field field : fields) { acknowledgedRaw.put(field, new RawEntry(source, keys(field))); }
     }
 
     private void warnOverwritten(List<String> paths) {
@@ -247,6 +272,8 @@ public abstract class AbstractConfigEntity {
         String comment = resolvedComment(field);
         if (comment.isEmpty()) { return false; }
         List<String> before = target.blockComment(keys(field));
+        // Merge-inherited entries exist in the plain view but need their own explicit comment owner.
+        target.set(keys(field), target.get(keys(field)));
         target.setFrameworkComment(keys(field), Collections.singletonList(comment));
         return !before.equals(target.blockComment(keys(field)));
     }
@@ -361,8 +388,13 @@ public abstract class AbstractConfigEntity {
      */
     public final boolean isPresentInFile(String path) {
         synchronized (this) {
-            return document != null && !lastLoadUnparseable
-                    && document.contains(Arrays.asList(path.split("\\.", -1)));
+            if (lastLoadedPresence == null || lastLoadUnparseable) { return false; }
+            Object current = lastLoadedPresence;
+            for (String key : path.split("\\.", -1)) {
+                if (!(current instanceof Map) || !((Map<?, ?>) current).containsKey(key)) { return false; }
+                current = ((Map<?, ?>) current).get(key);
+            }
+            return true;
         }
     }
 
@@ -515,6 +547,8 @@ public abstract class AbstractConfigEntity {
         lastLoadUnparseable = false;
         ConfigDocument next = loaded.state() == ConfigLoadResult.State.LOADED
                 ? loaded.document() : ConfigDocument.empty();
+        // Presence describes the load input, never defaults/comment writes or a later save read.
+        Map<String, Object> loadedPresence = next.toPlain();
         Map<Field, Object> baseline = new LinkedHashMap<>(declaredDefaults);
         List<Field> missing = new ArrayList<>();
         for (Field field : configEntryFields()) {
@@ -562,7 +596,9 @@ public abstract class AbstractConfigEntity {
                         + failure.getClass().getSimpleName() + "; pending for retry");
             }
         }
+        lastLoadedPresence = loadedPresence;
         savedSnapshot = baseline;
+        acknowledgeRaw(next, configEntryFields());
         savedFileFingerprint = fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath));
     }
 
