@@ -195,7 +195,5 @@ class ConverterDiscoveryTest {
         }
         @Override
         public boolean registerSelf() { return true; }
-        @Override
-        public void unregisterSelf() { }
     }
 }

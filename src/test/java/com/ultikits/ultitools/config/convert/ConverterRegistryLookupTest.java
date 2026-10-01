@@ -78,13 +78,13 @@ class ConverterRegistryLookupTest {
 
             @Override
             public Leaf fromPlain(Object plain, ConversionContext ctx) throws ConversionException {
-                assertThat(ctx.fromPlain(plain, String.class)).isEqualTo("leaf");
+                assertThat(ctx.<String>fromPlain(plain, String.class)).isEqualTo("leaf");
                 return new Leaf();
             }
         }, false);
         assertThat(registry.toPlain(new Leaf(), Leaf.class, "config/test.yml", Arrays.asList("items", "o.O")))
                 .isEqualTo("leaf");
-        assertThat(registry.fromPlain("leaf", Leaf.class, "config/test.yml", Collections.singletonList("items")))
+        assertThat(registry.<Leaf>fromPlain("leaf", Leaf.class, "config/test.yml", Collections.singletonList("items")))
                 .isInstanceOf(Leaf.class);
     }
 
