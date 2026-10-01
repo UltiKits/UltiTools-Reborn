@@ -375,7 +375,7 @@ class ConfigManagerShutdownSaveTest {
         config.setValue("set-by-code");
         // Read-only target mode is not a failure for atomic replacement in a writable parent.
         try (org.mockito.MockedStatic<com.ultikits.ultitools.config.document.AtomicConfigWriter> writer =
-                Mockito.mockStatic(com.ultikits.ultitools.config.document.AtomicConfigWriter.class)) {
+                Mockito.mockStatic(com.ultikits.ultitools.config.document.AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
             writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.write(
                     Mockito.eq(scalarFile.toPath()), Mockito.anyString())).thenThrow(new IOException("injected write failure"));
             assertThatThrownBy(config::save).isInstanceOf(IOException.class);
@@ -567,7 +567,7 @@ class ConfigManagerShutdownSaveTest {
         config.setValue("set-by-code");
         write(scalarFile, "value: operator-edit\n");
         try (org.mockito.MockedStatic<com.ultikits.ultitools.config.document.AtomicConfigWriter> writer =
-                Mockito.mockStatic(com.ultikits.ultitools.config.document.AtomicConfigWriter.class)) {
+                Mockito.mockStatic(com.ultikits.ultitools.config.document.AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
             writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.write(
                     Mockito.eq(scalarFile.toPath()), Mockito.anyString())).thenThrow(new IOException("injected write failure"));
             configManager.saveAll();
