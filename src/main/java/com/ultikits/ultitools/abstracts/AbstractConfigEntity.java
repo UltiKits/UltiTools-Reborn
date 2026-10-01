@@ -274,9 +274,22 @@ public abstract class AbstractConfigEntity {
                 && loaded.state() != ConfigLoadResult.State.UNPARSEABLE) { return false; }
         lastLoadUnparseable = true;
         String cause = loaded.state() == ConfigLoadResult.State.UNREADABLE
-                ? loaded.cause().getClass().getSimpleName() : "invalid YAML or UTF-8";
+                ? loaded.cause().getClass().getSimpleName() : safeParserLocation(loaded.parserMessage());
         LOGGER.severe("Cannot load " + configFilePath + ": " + cause + "; file will not be overwritten");
         return true;
+    }
+
+    private static String safeParserLocation(String message) {
+        if (message != null) {
+            // The storage result discards the typed parser cause. Extract numeric metadata only,
+            // never the filename, parser reason, scalar snippet or throwable message.
+            java.util.regex.Matcher location = java.util.regex.Pattern.compile(
+                    "(?m)^ *in [^\\r\\n]*, line ([0-9]+), column ([0-9]+):? *$").matcher(message);
+            if (location.find()) {
+                return "invalid YAML at line " + location.group(1) + ", column " + location.group(2);
+            }
+        }
+        return "invalid YAML or UTF-8";
     }
 
     /**
