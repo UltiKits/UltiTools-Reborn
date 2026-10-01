@@ -394,9 +394,7 @@ public final class ConfigDocument {
             return modified ? "" : source;
         }
         StringWriter writer = new StringWriter();
-        if (!style.finalLineBreak()) {
-            normalizeMultilineStrings(out, new IdentityHashMap<Node, Node>());
-        }
+        normalizeMultilineStrings(out, new IdentityHashMap<Node, Node>(), !style.finalLineBreak());
         dumper(style).serialize(out, writer);
         String text = WHITESPACE_ONLY_LINE.matcher(writer.toString()).replaceAll("");
         if (style.upperCaseHex() || style.latin1AsUnicodeEscape()) {
@@ -411,8 +409,8 @@ public final class ConfigDocument {
         return style.byteOrderMark() ? "\uFEFF" + text : text;
     }
 
-    /** Escaped strings keep their content independent of the document's missing terminal line break. */
-    private static Node normalizeMultilineStrings(Node node, Map<Node, Node> normalized) {
+    /** Escapes preserve NEL (which the scanner normalizes) and no-EOF multiline string content. */
+    private static Node normalizeMultilineStrings(Node node, Map<Node, Node> normalized, boolean preserveNoEof) {
         Node previous = normalized.get(node);
         if (previous != null) {
             return previous;
@@ -420,7 +418,8 @@ public final class ConfigDocument {
         normalized.put(node, node);
         if (node instanceof ScalarNode && Tag.STR.equals(node.getTag())) {
             ScalarNode scalar = (ScalarNode) node;
-            if ((scalar.getValue().indexOf('\r') >= 0 || scalar.getValue().indexOf('\n') >= 0)
+            if ((scalar.getValue().indexOf('\u0085') >= 0 || preserveNoEof
+                    && (scalar.getValue().indexOf('\r') >= 0 || scalar.getValue().indexOf('\n') >= 0))
                     && scalar.getScalarStyle() != DumperOptions.ScalarStyle.DOUBLE_QUOTED) {
                 ScalarNode replacement = new ScalarNode(scalar.getTag(), scalar.getValue(), scalar.getStartMark(),
                         scalar.getEndMark(), DumperOptions.ScalarStyle.DOUBLE_QUOTED);
@@ -432,8 +431,8 @@ public final class ConfigDocument {
             List<NodeTuple> tuples = ((MappingNode) node).getValue();
             for (int i = 0; i < tuples.size(); i++) {
                 NodeTuple tuple = tuples.get(i);
-                Node key = normalizeMultilineStrings(tuple.getKeyNode(), normalized);
-                Node value = normalizeMultilineStrings(tuple.getValueNode(), normalized);
+                Node key = normalizeMultilineStrings(tuple.getKeyNode(), normalized, preserveNoEof);
+                Node value = normalizeMultilineStrings(tuple.getValueNode(), normalized, preserveNoEof);
                 if (key != tuple.getKeyNode() || value != tuple.getValueNode()) {
                     tuples.set(i, new NodeTuple(key, value));
                 }
@@ -441,11 +440,11 @@ public final class ConfigDocument {
         } else if (node instanceof SequenceNode) {
             List<Node> elements = ((SequenceNode) node).getValue();
             for (int i = 0; i < elements.size(); i++) {
-                elements.set(i, normalizeMultilineStrings(elements.get(i), normalized));
+                elements.set(i, normalizeMultilineStrings(elements.get(i), normalized, preserveNoEof));
             }
         } else if (node instanceof AnchorNode) {
             Node real = ((AnchorNode) node).getRealNode();
-            Node replacement = normalizeMultilineStrings(real, normalized);
+            Node replacement = normalizeMultilineStrings(real, normalized, preserveNoEof);
             if (replacement != real) {
                 AnchorNode anchor = new AnchorNode(replacement);
                 carryPresentation(node, anchor);
