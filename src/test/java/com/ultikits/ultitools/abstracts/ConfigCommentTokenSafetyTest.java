@@ -2,7 +2,6 @@ package com.ultikits.ultitools.abstracts;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
-import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 
@@ -25,7 +24,7 @@ import com.ultikits.ultitools.annotations.ConfigEntry;
  * Gate-1 review of plan 17-41 (#542): a catalogue text must never make the framework write a file
  * its own loader cannot parse; the comment of a one-key entry must not make {@code reload()} report
  * a change the shutdown save would then write; and a comment-only rewrite that cannot be written (a
- * read-only file) must not fail the configuration load.
+ * failed writer) must not fail the configuration load.
  */
 @DisplayName("AbstractConfigEntity - one-key comment rewrite safety (#542)")
 class ConfigCommentTokenSafetyTest {

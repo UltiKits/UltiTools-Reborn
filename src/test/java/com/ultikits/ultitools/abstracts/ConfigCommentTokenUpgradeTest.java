@@ -218,4 +218,30 @@ class ConfigCommentTokenUpgradeTest {
         assertThat(afterPanel.getInt("demo.other")).isEqualTo(4);
         assertThat(afterPanel.getComments("demo.name")).containsExactly("My own note on the name");
     }
+    @Test
+    void bundledLayoutPreservesContentCommentsAndStyleWhenTokenChanges() throws Exception {
+        String text = "\uFEFF# Operator header\r\n\r\ndemo:\r\n"
+                + "    # old token text\r\n    limit: 25 # inline limit\r\n"
+                + "    # Literal operator note\r\n    name: 'Custom'\r\n    other: 3\r\n"
+                + "extra:\r\n    items:\r\n        - 'quoted item' # inline list\r\n        - second";
+        writeFile(text);
+        UpgradeConfig config = new UpgradeConfig(PATH);
+        config.init(plugin);
+        String written = readFile();
+        assertThat(written).startsWith("\uFEFF").doesNotEndWith("\n");
+        assertThat(written.replace("\r\n", "")).doesNotContain("\n", "\r");
+        assertThat(written).contains("    limit:", "# inline limit", "# inline list", "# Operator header");
+        YamlConfiguration parsed = parse();
+        assertThat(parsed.getComments("demo.limit")).containsExactly(EN_LIMIT);
+        assertThat(parsed.getComments("demo.name")).containsExactly("Literal operator note");
+        assertThat(parsed.getStringList("extra.items")).containsExactly("quoted item", "second");
+        assertThat(parsed.getInt("demo.limit")).isEqualTo(25);
+        byte[] before = Files.readAllBytes(file());
+        long mtime = pinModificationTime();
+        config.reload();
+        config.save();
+        assertThat(Files.readAllBytes(file())).isEqualTo(before);
+        assertThat(file().toFile().lastModified()).isEqualTo(mtime);
+    }
+
 }
