@@ -1,8 +1,9 @@
 # Config golden corpus (plan 17-56)
 
-Every file below must parse and render byte for byte through `ConfigDocument` (`ConfigDocumentGoldenTest`), and each SHA-256 must
-match the file on disk, so a checkout that converts line endings fails the test instead of passing on different bytes
-(`.gitattributes` marks this directory `-text`).
+Every file below must preserve content, comment text, recursive key order and document style through `ConfigDocument`
+(`ConfigDocumentGoldenTest`). Rendering uses the full SnakeYAML emitter even without a value change; operator layout may be
+normalized. Each SHA-256 records the exact input bytes and must match the file on disk, so checkout line-ending conversion fails
+provenance verification (`.gitattributes` marks this directory `-text`).
 
 - `bundled/` - every `.yml`/`.yaml` resource the fifteen active modules ship at `origin/master`, excluding `plugin.yml` and `lang/`,
   copied as bytes with `git show <commit>:<path> > <file>`. Measured 2026-10-01 after `git fetch origin master` in each module.
@@ -16,17 +17,21 @@ match the file on disk, so a checkout that converts line endings fails the test 
   and dotted keys, anchors with merge keys, CRLF, `\u` escapes, four-space indentation, long lines, block scalars, a byte order
   mark, and a file without a final line break.
 
-## Known limits of byte preservation
+## Rendering contract and known layout limits
 
-Unchanged documents return their exact source, including anchors. For a changed document without anchors, source spans are
-spliced: changed scalars only, new keys at their mapping's end, removed keys and their own comments, framework-owned comment lines.
-Untouched bytes are not emitted again. `splice-layout.yml` pins aligned inline comments, flow spacing, extra spaces after a colon,
-a leading document marker, two indentation widths and trailing spaces, both unchanged and while another key is set, added or removed.
+Maintainer decision of 2026-10-01: content and comments are preserved; layout may be normalized. The whole node tree is emitted
+through SnakeYAML. Values, recursive mapping order and comment text are checked after reads and writes. Set/add/remove tests preserve
+all unaddressed values and comments; removal drops the removed key's own comment lines while retaining section-end comments.
+The file's line terminator, BOM, final-newline convention, supported indentation width, list-indicator indentation and escape style
+are retained by the existing document-style rules. Removing every key and comment may leave empty text with no final newline.
 
-Only changed documents with anchors, aliases or merge keys use the recorded full-render fallback. Their values remain equal, but
-SnakeYAML regenerates layout: inline-comment alignment, flow spacing, extra colon spacing, document markers, mixed indentation,
-trailing spaces, folded scalars and unused anchor names need not survive. The fallback expands aliases and merge keys. It does not
-promise byte preservation of untouched lines. Unchanged anchored files remain byte-identical.
+Inline-comment alignment, flow spacing, extra colon spacing, a leading document marker, mixed indentation widths and trailing
+spaces may be normalized on any render, including a no-op. `splice-layout.yml` remains an exact input fixture for these shapes,
+now tested for content, comments, order and style rather than byte-equal output. No source-splicing path remains.
+
+A changed document with anchors, aliases or merge keys is rebuilt from plain data: values remain equal, aliases and merge keys
+expand, and comments on surviving keys and list items are carried over. Unchanged anchored documents use their original node tree,
+not their source bytes; their operator layout may also be normalized. Unsupported indentation widths use the documented default.
 
 Bundled module config files: 14 (control: 29 resource files listed, `plugin.yml` in all 15 listings)
 

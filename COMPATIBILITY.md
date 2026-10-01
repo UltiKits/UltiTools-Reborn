@@ -4,6 +4,30 @@ This document explains what the version numbers of `com.ultikits:UltiTools-API` 
 deprecation and removal work, and which removals are currently scheduled. It is written for
 downstream module authors.
 
+## Config storage rendering and save fallback (6.3.0 work in progress)
+
+The internal config storage layer renders the whole YAML document through SnakeYAML, preserving content, comment text and key
+order. Its existing line-terminator, BOM, final-newline and supported indentation-style rules remain in effect. Operator layout
+may be normalized: aligned inline comments, flow spacing, extra spaces after a colon, document markers, mixed indentation and
+trailing spaces are not byte-preservation guarantees. Changed anchored documents expand aliases and merge keys from their plain
+values while retaining comments on surviving keys and list items. The storage API signatures are unchanged.
+
+Saving first attempts a forced same-directory temporary file and atomic replacement. Only an unsupported atomic move, EBUSY,
+EXDEV, or a permission/read-only refusal to create the temporary file allows the narrow fallback: exclusively create `<file>.bak`,
+copy and force the existing target's complete bytes, then overwrite and force the existing target in place. Existing backups are
+never overwritten; a backup creation/write/force failure refuses the save before the target is touched. Other staging or move
+failures refuse the save. A fallback attempt logs one warning identifying the target, backup, cause and outcome. Symbolic links
+remain links, with the backup beside the resolved target.
+
+After an in-place write begins, a failure may leave a partial target, but its complete forced backup remains. That backup is
+removed only after the next successful strict UTF-8 storage load; unreadable or unparseable files keep it. Backup cleanup is best
+effort and cannot turn a successful load into a failure. No automatic restoration policy is introduced.
+
+This is storage-layer work, not a claim that every entity write path already uses it. Non-UTF-8 input is refused as UNPARSEABLE
+by the storage loader without changing the bytes. Entity integration, default-value behavior, the single SEVERE report and
+protection of every entity write path are subsequent integration work. Existing `AbstractConfigEntity` behavior is not changed
+by this storage implementation.
+
 ## What the version number means
 
 **This project's version numbers are a product-stage signal, not a strict semver contract.**
