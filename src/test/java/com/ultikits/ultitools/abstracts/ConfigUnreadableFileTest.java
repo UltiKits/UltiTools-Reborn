@@ -129,7 +129,7 @@ class ConfigUnreadableFileTest {
         try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
             manager.register(plugin, config);
             assertThat(warnings.messagesContaining(PATH)).hasSize(1);
-            assertThat(warnings.messages().get(0)).contains("FileSystemException");
+            assertThat(warnings.messages().get(0)).contains("IOException");
         }
         assertThat(manager.getConfigEntity(plugin, Values.class)).isSameAs(config);
         assertThat(config.limit).isEqualTo(10);
