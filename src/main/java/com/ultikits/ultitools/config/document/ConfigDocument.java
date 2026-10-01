@@ -236,11 +236,16 @@ public final class ConfigDocument {
      * @param path  the key path, at least one key
      * @param value plain data; {@code null} is stored as an explicit YAML {@code null}
      * @throws IllegalArgumentException if {@code value} is not plain data (the message names the key path
-     *                                  and the class) or the path is empty
+     *                                  and the class), the path is empty, or the path and value together nest
+     *                                  deeper than the 100 levels a load accepts
      */
     public void set(List<String> path, Object value) {
         requireKeys(path);
         PlainData.requirePlain(path, value);
+        if (path.size() + PlainData.depth(value) > NESTING_DEPTH_LIMIT) {
+            throw new IllegalArgumentException("Config value at key path " + PlainData.describePath(path) + " would nest"
+                    + " deeper than " + NESTING_DEPTH_LIMIT + " levels, which no config file may (the next load refuses it)");
+        }
         Object copy = PlainData.copy(value);
         if (root == null) {
             root = new MappingNode(Tag.MAP, new ArrayList<NodeTuple>(), DumperOptions.FlowStyle.BLOCK);

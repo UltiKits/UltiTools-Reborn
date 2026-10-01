@@ -146,6 +146,29 @@ public final class PlainData {
         return value;
     }
 
+    /**
+     * The number of nested collections in a plain value: 0 for a scalar, 1 for a flat list or map.
+     *
+     * @param value a plain value (checked by {@link #requirePlain} first, so it has no cycle)
+     * @return the nesting depth
+     */
+    static int depth(Object value) {
+        int deepest = 0;
+        if (value instanceof Map) {
+            for (Object child : ((Map<?, ?>) value).values()) {
+                deepest = Math.max(deepest, depth(child));
+            }
+            return deepest + 1;
+        }
+        if (value instanceof List) {
+            for (Object child : (List<?>) value) {
+                deepest = Math.max(deepest, depth(child));
+            }
+            return deepest + 1;
+        }
+        return 0;
+    }
+
     static boolean isIntegral(Object value) {
         return value instanceof Integer || value instanceof Long || value instanceof BigInteger;
     }
