@@ -255,14 +255,15 @@ class ConfigBindingEdgeCaseTest {
 
     @Test
     @DisplayName("a module's own parser for a Set field keeps writing its own form")
-    void customSetParserKeepsItsSerialization() throws IOException {
+    void customSetParserKeepsItsSerialization() throws Exception {
         CustomParserConfig config = new CustomParserConfig(PATH);
         config.init(plugin);
         config.tags.add("red");
         config.tags.add("blue");
         config.save();
 
-        assertThat(readFile()).contains("joined: red,blue");
+        // Follow-up 21 permits emitter quote normalization, not a different parser value.
+        assertThat(ConfigFileView.read(config).getString("tags.joined")).isEqualTo("red,blue");
         CustomParserConfig second = new CustomParserConfig(PATH);
         second.init(plugin);
         assertThat(second.tags).containsExactly("red", "blue");
