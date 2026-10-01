@@ -25,6 +25,7 @@ import java.util.UUID;
 import java.util.WeakHashMap;
 
 import org.bukkit.configuration.serialization.ConfigurationSerializable;
+import org.bukkit.configuration.serialization.ConfigurationSerialization;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.World;
 import com.ultikits.ultitools.config.convert.builtin.BukkitConverters;
@@ -270,8 +271,10 @@ public final class ConverterRegistry {
                     if (missing != null) { return missing; }
                 }
             } else {
-                if (resolve(type) == null) { return type; }
+                ConfigConverter<?> selected = resolve(type);
+                if (selected == null) { return type; }
                 Class<?> raw = rawClass(type);
+                if (selected == BukkitConverters.SERIALIZABLE && !hasRegisteredAlias(raw)) { return type; }
                 if (registered(raw) == null) {
                     if (Collection.class.isAssignableFrom(raw)) {
                         Type missing = missingType(ConversionTypes.argument(type, Collection.class, 0), visiting);
@@ -296,6 +299,13 @@ public final class ConverterRegistry {
             }
             return null;
         } finally { visiting.remove(type); }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static boolean hasRegisteredAlias(Class<?> raw) {
+        // Delegated aliases may name a parent/factory, not the declared implementation class.
+        String alias = ConfigurationSerialization.getAlias((Class<? extends ConfigurationSerializable>) raw);
+        return ConfigurationSerialization.getClassByAlias(alias) != null;
     }
 
     private static String describe(Type type) {

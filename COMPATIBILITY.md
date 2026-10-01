@@ -23,10 +23,54 @@ After an in-place write begins, a failure may leave a partial target, but its co
 removed only after the next successful strict UTF-8 storage load; unreadable or unparseable files keep it. Backup cleanup is best
 effort and cannot turn a successful load into a failure. No automatic restoration policy is introduced.
 
-This is storage-layer work, not a claim that every entity write path already uses it. Non-UTF-8 input is refused as UNPARSEABLE
-by the storage loader without changing the bytes. Entity integration, default-value behavior, the single SEVERE report and
-protection of every entity write path are subsequent integration work. Existing `AbstractConfigEntity` behavior is not changed
-by this storage implementation.
+## Configuration entities (as of 6.3.0)
+
+`AbstractConfigEntity` uses the document, converter registry and atomic writer for initial defaults,
+explicit saves and panel updates. Typed collections resolve their full inherited generic types:
+convertible values bind, invalid collection/map elements are skipped with a located warning, and an
+invalid field value falls back to its initially declared default. Invalid reload values use that
+default too; a missing reload key instead retains its live field and is not added to the file.
+Warnings name the file, key and failed position/type; secret-shaped values and nested credentials
+are redacted. Unsupported declared types fail preflight before the file is read or created; register
+`@ConfigConverterFor` or declare a supported plain-data shape. The built-in Bukkit serialization
+fallback requires a registered alias; registered custom converters keep ownership of their types.
+
+Whole map keys, including `g.m`, `o.O` and `wave.`, are supported. Legacy 6.2 files in which Bukkit
+split a dotted key into nested mappings are read as they are, never automatically merged or renamed.
+For a `Map<String, String>` the wrongly shaped nested value is skipped with a warning.
+Explicit `null` is stored and binds to reference fields (primitive null is a mismatch). UUIDs, enums,
+sets and registered Bukkit values use converter plain output, not Java class tags. A Bukkit value
+loaded into an `Object` slot remains a plain map. Unknown runtime objects refuse saves without
+changing the file.
+
+Panel JSON uses the same conversion path as file binding and saves: integral numbers become plain
+`Long`, other numbers `Double`, objects ordered maps and arrays lists before typed conversion.
+A panel write persists only touched fields; unrelated unsaved code edits remain dirty. Validation
+runs before any missing-key or panel persistence. Snapshots track successful effective values,
+separately from the raw document and byte fingerprint. Reordering a map is dirty, but an order-only
+save acknowledges its new effective order without changing operator file order, comments or bytes.
+
+An explicit save compares its candidates with the current disk document, not only the saved
+baseline, so it may replace an operator's changed value even when the entity was clean. Semantic
+no-op saves invoke no writer and preserve bytes and modification time. Edited saves use the full
+emitter described above, retaining untargeted data, key order and comment text while allowing layout
+normalization. A failed write never acknowledges the pending effective values as saved.
+
+Unreadable, unparseable and non-UTF-8 files are protected on every entity write path. Initial load
+keeps declared defaults; failed reload keeps running fields. One SEVERE names the file and safe cause.
+Explicit save does not clear protection; only a later successful load permits writes again.
+
+### Removed mutable configuration accessor
+
+`AbstractConfigEntity#getConfig()` is removed under the **6.3.0 one-time carve-out**.
+Use `isPresentInFile(String)` for presence in the last successfully loaded document: undeclared keys
+and explicit null count as present; unreadable/unparseable loads report false. Paths split at every
+dot like `@ConfigEntry.path`, so a whole map key containing a dot is not addressable through this
+method. Read or mutate declared fields and call `save()` instead of mutating Bukkit storage.
+Official callers measured in UltiEssentials `RemovedConfigKeys.java:83` and UltiRemoteBag
+`RemovedConfigKeys.java:91` migrate in the module batch; third-party usage is unknown.
+An unrecompiled caller invoking the removed accessor sees `NoSuchMethodError`. See the removal
+record in `compatibility/records/6.3.0.md`; all other public/protected entity signatures are retained.
 
 ## What the version number means
 
