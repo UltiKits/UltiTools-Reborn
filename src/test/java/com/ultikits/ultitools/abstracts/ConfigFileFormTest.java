@@ -2,7 +2,6 @@ package com.ultikits.ultitools.abstracts;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
-import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 
@@ -148,15 +147,15 @@ class ConfigFileFormTest {
     void failedCommentRewriteIsNotACleanSnapshot() throws IOException {
         Files.createDirectories(file().getParent());
         Files.write(file(), "# old\nlimit: 25\n".getBytes(StandardCharsets.UTF_8));
-        assertThat(file().toFile().setWritable(false)).isTrue();
-        try {
-            assumeFalse(Files.isWritable(file()), "needs a non-root user so the write really fails");
+        // Atomic replacement may succeed for a read-only target; force the actual writer failure.
+        try (org.mockito.MockedStatic<com.ultikits.ultitools.config.document.AtomicConfigWriter> writer =
+                Mockito.mockStatic(com.ultikits.ultitools.config.document.AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
+            writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.write(
+                    Mockito.eq(file()), Mockito.anyString())).thenThrow(new IOException("injected write failure"));
             CommentConfig config = new CommentConfig(PATH);
             config.init(plugin);
             assertThat(config.limit).isEqualTo(25);
             assertThat(config.isModifiedSinceSnapshot()).isTrue();
-        } finally {
-            assertThat(file().toFile().setWritable(true)).isTrue();
         }
     }
 }
