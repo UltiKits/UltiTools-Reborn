@@ -111,7 +111,7 @@ class AtomicConfigWriterTest {
         AtomicConfigWriter.write(target, NEW, files);
         assertThat(content(target)).isEqualTo(NEW);
         assertThat(content(backup())).isEqualTo(OLD);
-        assertThat(files.events).containsSubsequence("backup-write", "backup-force", "target-write", "target-force");
+        assertThat(files.events).containsSubsequence("backup-write", "backup-force", "target-open", "target-write", "target-force");
         assertThat(warnings()).hasSize(1);
         assertThat(warnings().get(0).getMessage()).contains(target.toString(), "in-place", ".bak", files.failure.getMessage());
         assertThat(siblings()).containsExactlyInAnyOrder("config.yml", "config.yml.bak");
@@ -228,12 +228,15 @@ class AtomicConfigWriterTest {
     @Test
     void successfulLoadDeletesBackupOnlyAfterParsingAndCleanupFailureKeepsLoaded() throws IOException {
         Files.write(backup(), OLD.getBytes(StandardCharsets.UTF_8));
-        try (org.mockito.MockedStatic<Files> mocked = org.mockito.Mockito.mockStatic(Files.class,
-                org.mockito.Mockito.CALLS_REAL_METHODS)) {
-            mocked.when(() -> Files.deleteIfExists(backup())).thenThrow(new IOException("cleanup denied"));
-            assertThat(ConfigDocument.load(target).state()).isEqualTo(ConfigLoadResult.State.LOADED);
-            mocked.verify(() -> Files.deleteIfExists(backup()));
-        }
+        List<Path> deletions = new ArrayList<>();
+        AtomicConfigWriter.FileOperations denied = new AtomicConfigWriter.FileOperations() {
+            @Override public void delete(Path file) throws IOException {
+                deletions.add(file);
+                throw new IOException("cleanup denied");
+            }
+        };
+        assertThat(ConfigDocument.load(target, denied).state()).isEqualTo(ConfigLoadResult.State.LOADED);
+        assertThat(deletions).containsExactly(backup());
         assertThat(Files.exists(backup())).isTrue();
         assertThat(ConfigDocument.load(target).state()).isEqualTo(ConfigLoadResult.State.LOADED);
         assertThat(Files.exists(backup())).isFalse();
@@ -272,6 +275,89 @@ class AtomicConfigWriterTest {
         assertThat(Files.exists(real.resolveSibling("real.yml.bak"))).isFalse();
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"open", "runtime-cleanup"})
+    void completeBackupSurvivesTargetOpenFailureAndCleanupRuntimeFailure(String step) throws IOException {
+        if ("runtime-cleanup".equals(step)) {
+            Files.write(backup(), OLD.getBytes(StandardCharsets.UTF_8));
+            AtomicConfigWriter.FileOperations files = new AtomicConfigWriter.FileOperations() {
+                @Override public void delete(Path file) { throw new SecurityException("cleanup denied"); }
+            };
+            assertThat(ConfigDocument.load(target, files).state()).isEqualTo(ConfigLoadResult.State.LOADED);
+        } else {
+            ObservedFallback files = new ObservedFallback("atomic") {
+                @Override public FileChannel openTarget(Path file) throws IOException {
+                    throw new java.nio.file.AccessDeniedException(file.toString());
+                }
+            };
+            assertThatThrownBy(() -> AtomicConfigWriter.write(target, NEW, files)).isInstanceOf(IOException.class);
+            assertThat(content(target)).isEqualTo(OLD);
+            assertThat(warnings()).hasSize(1);
+        }
+        assertThat(content(backup())).isEqualTo(OLD);
+    }
+
+    @Test
+    void temporaryCreateRefusalWithUnremovablePartialFileRefusesRatherThanStaging() throws IOException {
+        AtomicConfigWriter.FileOperations files = new AtomicConfigWriter.FileOperations() {
+            @Override public FileChannel open(Path file, java.nio.file.attribute.FileAttribute<?>... attributes) throws IOException {
+                Files.write(file, "partial".getBytes(StandardCharsets.UTF_8));
+                throw new java.nio.file.AccessDeniedException(file.toString());
+            }
+            @Override public void delete(Path file) throws IOException { throw new IOException("cannot clean partial temp"); }
+        };
+        assertThatThrownBy(() -> AtomicConfigWriter.stage(target, NEW, files)).isInstanceOf(IOException.class)
+                .hasMessageContaining("cannot clean partial temp");
+        assertThat(content(target)).isEqualTo(OLD);
+        assertThat(Files.exists(backup())).isFalse();
+    }
+
+    @Test
+    void loadCannotRemoveBackupWhileInPlaceCommitHasNotFinished() throws Exception {
+        java.util.concurrent.CountDownLatch targetOpening = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch loading = new java.util.concurrent.CountDownLatch(1);
+        ObservedFallback files = new ObservedFallback("atomic") {
+            @Override public FileChannel openTarget(Path file) throws IOException {
+                assertThat(content(backup())).isEqualTo(OLD);
+                targetOpening.countDown();
+                try {
+                    if (!release.await(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                        throw new IOException("test release timed out");
+                    }
+                } catch (InterruptedException failure) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException(failure);
+                }
+                return super.openTarget(file);
+            }
+        };
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            java.util.concurrent.Future<?> writing = pool.submit(() -> {
+                try { AtomicConfigWriter.write(target, NEW, files); }
+                catch (IOException failure) { throw new java.io.UncheckedIOException(failure); }
+            });
+            assertThat(targetOpening.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            java.util.concurrent.Future<ConfigLoadResult> load = pool.submit(() -> {
+                loading.countDown();
+                return ConfigDocument.load(target);
+            });
+            assertThat(loading.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(() -> load.get(150, java.util.concurrent.TimeUnit.MILLISECONDS))
+                    .isInstanceOf(java.util.concurrent.TimeoutException.class);
+            assertThat(content(backup())).isEqualTo(OLD);
+            release.countDown();
+            writing.get(5, java.util.concurrent.TimeUnit.SECONDS);
+            assertThat(load.get(5, java.util.concurrent.TimeUnit.SECONDS).document().get(java.util.Arrays.asList("new")))
+                    .isEqualTo("content");
+            assertThat(Files.exists(backup())).isFalse();
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
+    }
+
     private Path backup() {
         return target.resolveSibling(target.getFileName() + ".bak");
     }
@@ -281,7 +367,7 @@ class AtomicConfigWriterTest {
     }
 
     /** Counts the writer's existing write/force operations across temp, backup and target channels. */
-    private final class ObservedFallback implements AtomicConfigWriter.FileOperations {
+    private class ObservedFallback implements AtomicConfigWriter.FileOperations {
         private final String trigger;
         private final IOException failure;
         private final List<String> events = new ArrayList<>();
@@ -300,13 +386,19 @@ class AtomicConfigWriterTest {
                             "temp-read-only".equals(trigger) ? "Read-only file system" : reason);
         }
 
-        @Override public FileChannel open(Path temporary) throws IOException {
+        @Override public FileChannel open(Path temporary, java.nio.file.attribute.FileAttribute<?>... attributes) throws IOException {
             if (trigger.startsWith("temp-")) { throw failure; }
-            return AtomicConfigWriter.FileOperations.super.open(temporary);
+            return AtomicConfigWriter.FileOperations.super.open(temporary, attributes);
         }
 
         @Override public void move(Path source, Path destination, CopyOption... options) throws IOException {
             throw failure;
+        }
+
+        @Override public FileChannel openTarget(Path file) throws IOException {
+            assertThat(events).contains("backup-force");
+            events.add("target-open");
+            return AtomicConfigWriter.FileOperations.super.openTarget(file);
         }
 
         @Override public void write(FileChannel channel, ByteBuffer data) throws IOException {
@@ -443,8 +535,8 @@ class AtomicConfigWriterTest {
         assumeTrue(Files.getFileStore(tempDir).supportsFileAttributeView("posix"));
         Files.setPosixFilePermissions(target, PosixFilePermissions.fromString("rw-------"));
         AtomicConfigWriter.FileOperations inspect = new AtomicConfigWriter.FileOperations() {
-            @Override public FileChannel open(Path temporary) throws IOException {
-                FileChannel channel = AtomicConfigWriter.FileOperations.super.open(temporary);
+            @Override public FileChannel open(Path temporary, java.nio.file.attribute.FileAttribute<?>... attributes) throws IOException {
+                FileChannel channel = AtomicConfigWriter.FileOperations.super.open(temporary, attributes);
                 try {
                     assertThat(PosixFilePermissions.toString(Files.getPosixFilePermissions(temporary))).isEqualTo("rw-------");
                 } catch (AssertionError failure) {
@@ -470,8 +562,8 @@ class AtomicConfigWriterTest {
     private static AtomicConfigWriter.FileOperations failingAt(String step, IOException failure) {
         return new AtomicConfigWriter.FileOperations() {
             @Override
-            public FileChannel open(Path temporary) throws IOException {
-                FileChannel channel = AtomicConfigWriter.FileOperations.super.open(temporary);
+            public FileChannel open(Path temporary, java.nio.file.attribute.FileAttribute<?>... attributes) throws IOException {
+                FileChannel channel = AtomicConfigWriter.FileOperations.super.open(temporary, attributes);
                 if ("create".equals(step)) {
                     channel.close();
                     throw failure;

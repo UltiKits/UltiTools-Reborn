@@ -167,10 +167,18 @@ public final class ConfigDocument {
     }
 
     static ConfigLoadResult load(Path file, AtomicConfigWriter.FileOperations files) {
+        synchronized (AtomicConfigWriter.WRITE_LOAD_LOCK) {
+            return loadLocked(file, files);
+        }
+    }
+
+    private static ConfigLoadResult loadLocked(Path file, AtomicConfigWriter.FileOperations files) {
         AtomicConfigWriter.deleteStaleTemporaries(file);
         byte[] bytes;
+        Path destination;
         try {
-            bytes = files.read(file);
+            destination = AtomicConfigWriter.resolve(file);
+            bytes = files.read(destination);
         } catch (NoSuchFileException e) {
             return ConfigLoadResult.absent(file);
         } catch (IOException e) {
@@ -179,9 +187,11 @@ public final class ConfigDocument {
             return ConfigLoadResult.unreadable(file, new IOException(e.getMessage(), e));
         }
         try {
-            return ConfigLoadResult.loaded(file, parse(StandardCharsets.UTF_8.newDecoder()
+            ConfigLoadResult loaded = ConfigLoadResult.loaded(file, parse(StandardCharsets.UTF_8.newDecoder()
                     .onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
                     .decode(ByteBuffer.wrap(bytes)).toString()), sha256(bytes));
+            AtomicConfigWriter.deleteBackupAfterLoad(destination, files);
+            return loaded;
         } catch (CharacterCodingException e) {
             return ConfigLoadResult.unparseable(file, "Config file is not valid UTF-8: " + e.getMessage());
         } catch (ConfigParseException e) {

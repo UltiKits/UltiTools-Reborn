@@ -5,6 +5,8 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.AccessDeniedException;
+import java.nio.file.FileSystemException;
 import java.nio.file.CopyOption;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
@@ -18,7 +20,6 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 import java.security.SecureRandom;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
@@ -28,24 +29,18 @@ import org.jetbrains.annotations.ApiStatus;
 /**
  * The only way the config storage layer replaces a file.
  * <p>
- * The new text is written to a temporary file in the target's own directory, named
- * {@code <file name>.tmp-<16 lower-case hex digits>}, created with the target's POSIX permissions, forced to disk, and
- * moved over the target with {@link StandardCopyOption#ATOMIC_MOVE}. A reader therefore sees either the old file
- * or the complete new one, never an empty or half-written file, and a failure at any step leaves the target
- * byte-identical and removes the temporary file. This replaces Bukkit's {@code FileConfiguration#save(File)},
- * which truncates the target before writing it (UltiKits/UltiTools-Reborn#574).
+ * Normally the new UTF-8 text is written to a same-directory temporary file with the target's POSIX
+ * permissions, forced to disk, and atomically moved over the target. Eligible atomic-replace failures
+ * (unsupported atomic moves, EBUSY or EXDEV) and temporary-creation permission/read-only refusals use a
+ * narrow fallback: exclusively create {@code <file>.bak}, copy and force the old content, then overwrite
+ * and force the existing target in place. Existing backups are never overwritten. A complete forced backup
+ * remains until the next successful strict UTF-8 load. Each fallback attempt logs its path, cause and outcome.
  * <p>
- * Details:
- * <ul>
- *     <li>Where the file system refuses an atomic move, the temporary file is moved with
- *     {@link StandardCopyOption#REPLACE_EXISTING} only; a warning says so once per JVM.</li>
- *     <li>A target that is a symbolic link stays a link: the file it points to is replaced, beside itself.</li>
- *     <li>Replacing a file creates a new one, so its owner, group, access-control list and extended attributes
- *     are those of a new file the server process creates; only the POSIX permission bits are copied.</li>
- *     <li>A temporary file left behind by a crash is deleted by {@link #deleteStaleTemporaries(Path)} when the
- *     target is next loaded; nothing else in the directory is touched.</li>
- *     <li>After the move, the directory is forced to disk where the platform allows it (best effort).</li>
- * </ul>
+ * Before the in-place target is opened, failures leave its bytes unchanged. Once that open is attempted,
+ * an I/O failure may leave a partial target, but its complete forced backup is retained. No automatic
+ * restoration is attempted. A symbolic link stays a link: writes and backup cleanup use its resolved target.
+ * Stale temporary files are cleaned on load; live staged writes are protected. The atomic path copies only
+ * POSIX permission bits, not ownership, ACLs or extended attributes. Directory syncing is best effort.
  * This is a framework-internal writer for config files; crash-safe writes of a module's own files are a
  * separate, later feature (UltiKits/UltiTools-Reborn#545).
  *
@@ -59,7 +54,8 @@ public final class AtomicConfigWriter {
     private static final String TEMPORARY_INFIX = ".tmp-";
     private static final Pattern TEMPORARY_SUFFIX = Pattern.compile("[0-9a-f]{16}");
     private static final Set<Path> LIVE_TEMPORARIES = new HashSet<>();
-    private static final AtomicBoolean FALLBACK_WARNED = new AtomicBoolean();
+    /** Serializes replacement and successful-load backup cleanup within this JVM. */
+    static final Object WRITE_LOAD_LOCK = new Object();
     private static final FileOperations FILES = new FileOperations() {
     };
     /** The real file operations, for {@link ConfigDocument#load(Path)}. */
@@ -73,7 +69,7 @@ public final class AtomicConfigWriter {
      *
      * @param target the file to replace; its parent directory must exist
      * @param text   the complete new content
-     * @throws IOException if any step fails; the target is then unchanged and no temporary file remains
+     * @throws IOException if a step fails; before in-place open the target is unchanged, otherwise a complete backup remains
      */
     public static void write(Path target, String text) throws IOException {
         write(target, text, FILES);
@@ -87,6 +83,9 @@ public final class AtomicConfigWriter {
      * Writes {@code text} to a temporary file beside {@code target} without touching the target, so several
      * files can be prepared before any of them is replaced. The caller must {@link StagedWrite#commit() commit}
      * or {@link StagedWrite#discard() discard} it, and may load the target in between; in-process staged files are protected from stale cleanup.
+     *
+     * If temporary creation is refused for permissions or a read-only file system, staging keeps the UTF-8
+     * bytes in memory without touching the target or backup. Commit attempts the backed in-place path.
      *
      * @param target the file to replace later; its parent directory must exist
      * @param text   the complete new content
@@ -105,18 +104,29 @@ public final class AtomicConfigWriter {
             LIVE_TEMPORARIES.add(temporary.toAbsolutePath().normalize());
         }
         try {
-            try (FileChannel channel = files.open(temporary)) {
-                ByteBuffer buffer = ByteBuffer.wrap(text.getBytes(StandardCharsets.UTF_8));
-                while (buffer.hasRemaining()) {
-                    files.write(channel, buffer);
+            byte[] data = text.getBytes(StandardCharsets.UTF_8);
+            FileAttribute<?>[] attributes = files.temporaryAttributes(destination);
+            FileChannel opened;
+            try {
+                opened = files.open(temporary, attributes);
+            } catch (IOException failure) {
+                if (!temporaryCreationRefused(failure)) {
+                    throw failure;
                 }
+                // An open implementation may have created a partial file before reporting refusal.
+                files.delete(temporary);
+                staged = true;
+                return new StagedWrite(destination, temporary, files, data, failure);
+            }
+            try (FileChannel channel = opened) {
+                writeAll(files, channel, data);
                 files.force(channel);
             }
             if (Files.exists(destination)) {
                 files.copyAttributes(destination, temporary);
             }
             staged = true;
-            return new StagedWrite(destination, temporary, files);
+            return new StagedWrite(destination, temporary, files, null, null);
         } finally {
             if (!staged) {
                 deleteQuietly(temporary);
@@ -176,13 +186,44 @@ public final class AtomicConfigWriter {
         return name.append(hex).toString();
     }
 
-    /** Test hook: forget that the atomic-move fallback was already reported in this JVM. */
-    static void resetFallbackWarning() {
-        FALLBACK_WARNED.set(false);
+    private static boolean temporaryCreationRefused(IOException failure) {
+        return failure instanceof AccessDeniedException || failure instanceof FileSystemException
+                && "Read-only file system".equals(((FileSystemException) failure).getReason());
+    }
+
+    private static boolean atomicReplacementRefused(IOException failure) {
+        if (failure instanceof AtomicMoveNotSupportedException) {
+            return true;
+        }
+        if (!(failure instanceof FileSystemException)) {
+            return false;
+        }
+        String reason = ((FileSystemException) failure).getReason();
+        return "EBUSY".equals(reason) || "EXDEV".equals(reason) || "Device or resource busy".equals(reason)
+                || "Invalid cross-device link".equals(reason);
+    }
+
+    private static void writeAll(FileOperations files, FileChannel channel, byte[] data) throws IOException {
+        ByteBuffer buffer = ByteBuffer.wrap(data);
+        while (buffer.hasRemaining()) {
+            files.write(channel, buffer);
+        }
+    }
+
+    static Path backupOf(Path target) {
+        return target.resolveSibling(target.getFileName() + ".bak");
+    }
+
+    static void deleteBackupAfterLoad(Path destination, FileOperations files) {
+        try {
+            files.delete(backupOf(destination));
+        } catch (IOException | RuntimeException failure) {
+            LOGGER.log(Level.FINE, "Could not delete loaded config backup beside " + destination, failure);
+        }
     }
 
     /** The file actually replaced: the target itself, or the file an existing symbolic link points to. */
-    private static Path resolve(Path target) throws IOException {
+    static Path resolve(Path target) throws IOException {
         Path absolute = target.toAbsolutePath();
         return Files.isSymbolicLink(absolute) ? absolute.toRealPath() : absolute;
     }
@@ -213,11 +254,15 @@ public final class AtomicConfigWriter {
         private final Path target;
         private final Path temporary;
         private final FileOperations files;
+        private final byte[] data;
+        private final IOException deferredCause;
 
-        private StagedWrite(Path target, Path temporary, FileOperations files) {
+        private StagedWrite(Path target, Path temporary, FileOperations files, byte[] data, IOException deferredCause) {
             this.target = target;
             this.temporary = temporary;
             this.files = files;
+            this.data = data;
+            this.deferredCause = deferredCause;
         }
 
         /**
@@ -230,7 +275,8 @@ public final class AtomicConfigWriter {
         }
 
         /**
-         * The temporary file holding the new content.
+         * The temporary file holding the new content on the normal path. After an eligible temporary-create
+         * refusal, this is a reserved same-directory path that may not exist; the bytes remain in memory.
          *
          * @return the temporary file
          */
@@ -239,30 +285,60 @@ public final class AtomicConfigWriter {
         }
 
         /**
-         * Moves the temporary file over the target.
+         * Atomically replaces the target, or uses the backed in-place path on an eligible refusal.
          *
-         * @throws IOException if the move fails; the target is then unchanged and the temporary file removed
+         * @throws IOException if replacement fails; a failed in-place attempt retains a complete forced backup
          */
         public void commit() throws IOException {
-            boolean moved = false;
-            try {
+            synchronized (WRITE_LOAD_LOCK) {
                 try {
-                    files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-                } catch (AtomicMoveNotSupportedException e) {
-                    if (FALLBACK_WARNED.compareAndSet(false, true)) {
-                        LOGGER.warning("The file system holding " + target + " cannot replace a file atomically; config"
-                                + " files are replaced with an ordinary move (" + e.getMessage() + ")");
+                    if (data != null) {
+                        replaceInPlace(data, deferredCause);
+                    } else {
+                        try {
+                            files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                        } catch (IOException failure) {
+                            if (!atomicReplacementRefused(failure)) {
+                                throw failure;
+                            }
+                            replaceInPlace(null, failure);
+                        }
                     }
-                    files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
-                }
-                moved = true;
-            } finally {
-                if (!moved) {
+                } finally {
                     deleteQuietly(temporary);
+                    release(temporary);
                 }
-                release(temporary);
+                syncDirectory(target.getParent());
             }
-            syncDirectory(target.getParent());
+        }
+
+        private void replaceInPlace(byte[] replacement, IOException cause) throws IOException {
+            Path backup = backupOf(target);
+            boolean created = false;
+            boolean forced = false;
+            boolean success = false;
+            try {
+                byte[] content = replacement == null ? files.read(temporary) : replacement;
+                byte[] original = files.read(target);
+                try (FileChannel channel = files.openBackup(backup)) {
+                    created = true;
+                    writeAll(files, channel, original);
+                    files.force(channel);
+                    forced = true;
+                }
+                syncDirectory(target.getParent());
+                try (FileChannel channel = files.openTarget(target)) {
+                    writeAll(files, channel, content);
+                    files.force(channel);
+                }
+                success = true;
+            } finally {
+                if (created && !forced) {
+                    deleteQuietly(backup);
+                }
+                LOGGER.warning("Config " + target + " in-place replacement with backup " + backup
+                        + (success ? " succeeded" : " failed") + "; cause: " + cause.getMessage());
+            }
         }
 
         /**
@@ -283,16 +359,29 @@ public final class AtomicConfigWriter {
      */
     interface FileOperations {
 
-        default FileChannel open(Path temporary) throws IOException {
-            String name = temporary.getFileName().toString();
-            Path target = temporary.resolveSibling(name.substring(0, name.length() - TEMPORARY_INFIX.length() - 16));
+        default FileAttribute<?>[] temporaryAttributes(Path target) throws IOException {
             PosixFileAttributeView view = Files.getFileAttributeView(target, PosixFileAttributeView.class);
-            FileAttribute<?>[] attributes = view != null && Files.exists(target)
+            return view != null && Files.exists(target)
                     ? new FileAttribute<?>[]{PosixFilePermissions.asFileAttribute(view.readAttributes().permissions())}
                     : new FileAttribute<?>[0];
+        }
+
+        default FileChannel open(Path temporary, FileAttribute<?>... attributes) throws IOException {
             Set<StandardOpenOption> options = new HashSet<>();
             Collections.addAll(options, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
             return FileChannel.open(temporary, options, attributes);
+        }
+
+        default FileChannel openBackup(Path backup) throws IOException {
+            return FileChannel.open(backup, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+        }
+
+        default FileChannel openTarget(Path target) throws IOException {
+            return FileChannel.open(target, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING);
+        }
+
+        default void delete(Path file) throws IOException {
+            Files.deleteIfExists(file);
         }
 
         default void write(FileChannel channel, ByteBuffer data) throws IOException {
