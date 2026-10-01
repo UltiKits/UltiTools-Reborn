@@ -89,9 +89,9 @@ public final class DocumentStyle {
         if (root != null) {
             layout.walk(root);
         }
-        // SnakeYAML's emitter accepts an indentation of 1 to 10 and an indicator indentation of 0 to 9; a file
+        // SnakeYAML's emitter keeps an indentation only when 1 < indent < 10 and an indicator indentation of 0 to 9; a file
         // indented otherwise is written with the default rather than failing.
-        int indent = layout.indent >= 1 && layout.indent <= MAX_INDENT ? layout.indent : DEFAULT_INDENT;
+        int indent = layout.indent > 1 && layout.indent < MAX_INDENT ? layout.indent : DEFAULT_INDENT;
         int indicatorIndent = layout.indicatorIndent >= 0 && layout.indicatorIndent < MAX_INDENT ? layout.indicatorIndent : 0;
         return new DocumentStyle(detectLineBreak(body),
                 indent,

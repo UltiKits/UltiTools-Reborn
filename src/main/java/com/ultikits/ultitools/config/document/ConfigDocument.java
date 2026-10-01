@@ -188,6 +188,8 @@ public final class ConfigDocument {
             return ConfigLoadResult.unparseable(file, "Config file is not valid UTF-8: " + e.getMessage());
         } catch (ConfigParseException e) {
             return ConfigLoadResult.unparseable(file, e.getMessage());
+        } catch (StackOverflowError e) {
+            return ConfigLoadResult.unparseable(file, "Config nesting depth exceeds " + NESTING_DEPTH_LIMIT);
         } catch (RuntimeException e) {
             return ConfigLoadResult.unparseable(file, e.getClass().getName() + ": " + e.getMessage());
         }
@@ -805,6 +807,9 @@ public final class ConfigDocument {
         }
 
         private void enter(Node node) {
+            if (path.size() >= NESTING_DEPTH_LIMIT) {
+                throw new YAMLException("Config nesting depth exceeds " + NESTING_DEPTH_LIMIT + " after alias expansion");
+            }
             if (!path.add(node)) {
                 throw new YAMLException("A recursive alias refers to its own collection " + node.getStartMark());
             }

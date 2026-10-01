@@ -122,7 +122,7 @@ public final class PlainData {
     /**
      * Deep-copies a plain value into fresh {@link LinkedHashMap}s and {@link ArrayList}s, so the caller can
      * neither change the copy's source nor share one container between two places of a document.
-     * Leaves that are not containers are returned as they are (they are immutable).
+     * Mutable YAML leaves (Date and byte[]) are cloned; other non-container leaves are immutable.
      *
      * @param value a plain value (or a value read from a file, which may hold non-plain leaves such as a
      *              {@code java.util.Date} for a YAML timestamp)
@@ -133,6 +133,12 @@ public final class PlainData {
     }
 
     private static Object copy(Object value, Set<Object> visiting) {
+        if (value instanceof java.util.Date) {
+            return new java.util.Date(((java.util.Date) value).getTime());
+        }
+        if (value instanceof byte[]) {
+            return ((byte[]) value).clone();
+        }
         if (!(value instanceof Map) && !(value instanceof List)) {
             return value;
         }

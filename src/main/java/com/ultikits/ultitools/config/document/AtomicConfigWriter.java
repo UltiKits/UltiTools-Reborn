@@ -12,6 +12,11 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.FileAttribute;
+import java.nio.file.attribute.PosixFilePermissions;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 import java.security.SecureRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
@@ -24,7 +29,7 @@ import org.jetbrains.annotations.ApiStatus;
  * The only way the config storage layer replaces a file.
  * <p>
  * The new text is written to a temporary file in the target's own directory, named
- * {@code <file name>.tmp-<16 lower-case hex digits>}, forced to disk, given the target's POSIX permissions, and
+ * {@code <file name>.tmp-<16 lower-case hex digits>}, created with the target's POSIX permissions, forced to disk, and
  * moved over the target with {@link StandardCopyOption#ATOMIC_MOVE}. A reader therefore sees either the old file
  * or the complete new one, never an empty or half-written file, and a failure at any step leaves the target
  * byte-identical and removes the temporary file. This replaces Bukkit's {@code FileConfiguration#save(File)},
@@ -53,6 +58,7 @@ public final class AtomicConfigWriter {
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final String TEMPORARY_INFIX = ".tmp-";
     private static final Pattern TEMPORARY_SUFFIX = Pattern.compile("[0-9a-f]{16}");
+    private static final Set<Path> LIVE_TEMPORARIES = new HashSet<>();
     private static final AtomicBoolean FALLBACK_WARNED = new AtomicBoolean();
     private static final FileOperations FILES = new FileOperations() {
     };
@@ -80,8 +86,7 @@ public final class AtomicConfigWriter {
     /**
      * Writes {@code text} to a temporary file beside {@code target} without touching the target, so several
      * files can be prepared before any of them is replaced. The caller must {@link StagedWrite#commit() commit}
-     * or {@link StagedWrite#discard() discard} it, and must not load the target in between (loading deletes
-     * the target's temporary files).
+     * or {@link StagedWrite#discard() discard} it, and may load the target in between; in-process staged files are protected from stale cleanup.
      *
      * @param target the file to replace later; its parent directory must exist
      * @param text   the complete new content
@@ -96,6 +101,9 @@ public final class AtomicConfigWriter {
         Path destination = resolve(target);
         Path temporary = destination.resolveSibling(temporaryName(destination.getFileName().toString()));
         boolean staged = false;
+        synchronized (LIVE_TEMPORARIES) {
+            LIVE_TEMPORARIES.add(temporary.toAbsolutePath().normalize());
+        }
         try {
             try (FileChannel channel = files.open(temporary)) {
                 ByteBuffer buffer = ByteBuffer.wrap(text.getBytes(StandardCharsets.UTF_8));
@@ -112,6 +120,7 @@ public final class AtomicConfigWriter {
         } finally {
             if (!staged) {
                 deleteQuietly(temporary);
+                release(temporary);
             }
         }
     }
@@ -124,25 +133,31 @@ public final class AtomicConfigWriter {
      * @param target the config file about to be loaded
      */
     static void deleteStaleTemporaries(Path target) {
-        Path destination;
         try {
-            destination = resolve(target);
-        } catch (IOException e) {
-            return;
-        }
-        Path directory = destination.getParent();
-        String name = destination.getFileName().toString();
-        if (directory == null || !Files.isDirectory(directory)) {
-            return;
-        }
-        try (DirectoryStream<Path> candidates = Files.newDirectoryStream(directory, entry -> isTemporaryOf(name, entry.getFileName().toString()))) {
-            for (Path stale : candidates) {
-                if (Files.deleteIfExists(stale)) {
-                    LOGGER.fine("Removed " + stale + ", a temporary file an interrupted config write left behind");
+            Path destination = resolve(target);
+            Path directory = destination.getParent();
+            String name = destination.getFileName().toString();
+            if (directory == null || !Files.isDirectory(directory)) {
+                return;
+            }
+            try (DirectoryStream<Path> candidates = Files.newDirectoryStream(directory,
+                    entry -> isTemporaryOf(name, entry.getFileName().toString()))) {
+                for (Path stale : candidates) {
+                    synchronized (LIVE_TEMPORARIES) {
+                        if (!LIVE_TEMPORARIES.contains(stale.toAbsolutePath().normalize()) && Files.deleteIfExists(stale)) {
+                            LOGGER.fine("Removed " + stale + ", a temporary file an interrupted config write left behind");
+                        }
+                    }
                 }
             }
-        } catch (IOException e) {
-            LOGGER.log(Level.FINE, "Could not look for stale temporary files beside " + destination, e);
+        } catch (IOException | RuntimeException e) {
+            LOGGER.log(Level.FINE, "Could not look for stale temporary files beside " + target, e);
+        }
+    }
+
+    private static void release(Path temporary) {
+        synchronized (LIVE_TEMPORARIES) {
+            LIVE_TEMPORARIES.remove(temporary.toAbsolutePath().normalize());
         }
     }
 
@@ -169,7 +184,7 @@ public final class AtomicConfigWriter {
     /** The file actually replaced: the target itself, or the file an existing symbolic link points to. */
     private static Path resolve(Path target) throws IOException {
         Path absolute = target.toAbsolutePath();
-        return Files.isSymbolicLink(absolute) && Files.exists(absolute) ? absolute.toRealPath() : absolute;
+        return Files.isSymbolicLink(absolute) ? absolute.toRealPath() : absolute;
     }
 
     private static void deleteQuietly(Path temporary) {
@@ -245,6 +260,7 @@ public final class AtomicConfigWriter {
                 if (!moved) {
                     deleteQuietly(temporary);
                 }
+                release(temporary);
             }
             syncDirectory(target.getParent());
         }
@@ -256,6 +272,7 @@ public final class AtomicConfigWriter {
          */
         public boolean discard() {
             deleteQuietly(temporary);
+            release(temporary);
             return !Files.exists(temporary);
         }
     }
@@ -267,7 +284,15 @@ public final class AtomicConfigWriter {
     interface FileOperations {
 
         default FileChannel open(Path temporary) throws IOException {
-            return FileChannel.open(temporary, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+            String name = temporary.getFileName().toString();
+            Path target = temporary.resolveSibling(name.substring(0, name.length() - TEMPORARY_INFIX.length() - 16));
+            PosixFileAttributeView view = Files.getFileAttributeView(target, PosixFileAttributeView.class);
+            FileAttribute<?>[] attributes = view != null && Files.exists(target)
+                    ? new FileAttribute<?>[]{PosixFilePermissions.asFileAttribute(view.readAttributes().permissions())}
+                    : new FileAttribute<?>[0];
+            Set<StandardOpenOption> options = new HashSet<>();
+            Collections.addAll(options, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+            return FileChannel.open(temporary, options, attributes);
         }
 
         default void write(FileChannel channel, ByteBuffer data) throws IOException {
