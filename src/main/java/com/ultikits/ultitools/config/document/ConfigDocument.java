@@ -5,7 +5,12 @@ import java.io.IOException;
 import java.io.Reader;
 import java.io.StringReader;
 import java.io.StringWriter;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
@@ -142,6 +147,41 @@ public final class ConfigDocument {
             CommentPlacement.adjust(root);
         }
         return new ConfigDocument(text, root, plain, style, anchored);
+    }
+
+    /**
+     * Reads a config file. Never throws: the result is {@link ConfigLoadResult.State#ABSENT ABSENT},
+     * {@link ConfigLoadResult.State#LOADED LOADED} (with the document and the SHA-256 of the bytes read),
+     * {@link ConfigLoadResult.State#UNREADABLE UNREADABLE} (with the I/O failure) or
+     * {@link ConfigLoadResult.State#UNPARSEABLE UNPARSEABLE} (with the parser's message). Temporary files an
+     * interrupted write left beside the file are deleted first (see {@link AtomicConfigWriter}).
+     *
+     * @param file the config file
+     * @return what was found
+     */
+    public static ConfigLoadResult load(Path file) {
+        return load(file, AtomicConfigWriter.FILES_FOR_LOAD);
+    }
+
+    static ConfigLoadResult load(Path file, AtomicConfigWriter.FileOperations files) {
+        AtomicConfigWriter.deleteStaleTemporaries(file);
+        byte[] bytes;
+        try {
+            bytes = files.read(file);
+        } catch (NoSuchFileException e) {
+            return ConfigLoadResult.absent(file);
+        } catch (IOException e) {
+            return ConfigLoadResult.unreadable(file, e);
+        } catch (SecurityException | UncheckedIOException e) {
+            return ConfigLoadResult.unreadable(file, new IOException(e.getMessage(), e));
+        }
+        try {
+            return ConfigLoadResult.loaded(file, parse(new String(bytes, StandardCharsets.UTF_8)), sha256(bytes));
+        } catch (ConfigParseException e) {
+            return ConfigLoadResult.unparseable(file, e.getMessage());
+        } catch (RuntimeException e) {
+            return ConfigLoadResult.unparseable(file, e.getClass().getName() + ": " + e.getMessage());
+        }
     }
 
     /**
@@ -615,6 +655,18 @@ public final class ConfigDocument {
             copied = end;
         }
         return result.append(text, copied, text.length()).toString();
+    }
+
+    private static String sha256(byte[] bytes) {
+        try {
+            StringBuilder hex = new StringBuilder(64);
+            for (byte b : MessageDigest.getInstance("SHA-256").digest(bytes)) {
+                hex.append(Character.forDigit((b >> 4) & 0xF, 16)).append(Character.forDigit(b & 0xF, 16));
+            }
+            return hex.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is required of every Java platform", e);
+        }
     }
 
     private static Node compose(String text) throws ConfigParseException {
