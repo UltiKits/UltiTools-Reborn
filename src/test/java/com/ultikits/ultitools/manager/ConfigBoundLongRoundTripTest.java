@@ -221,14 +221,13 @@ class ConfigBoundLongRoundTripTest {
     }
 
     /**
-     * Codex round 1 on #536: when a reload's write-back fails with an {@code IOException}, {@code
-     * ConfigManager.reloadConfigs} catches it and returns normally, having already put the file's new
-     * values into the fields without running the field's validation. The binding step must not apply
-     * values from that entity; the running timings stay and a WARNING says why.
+     * Plan 17-58's normal manager route uses reload, not init: a missing literal key does not require
+     * write-back under the unchanged #510 reload contract. Valid bound values still apply normally.
+     * The scoped writer failure is a negative control proving no persistence is attempted.
      */
     @Test
-    @DisplayName("a reload whose config write-back failed keeps the running bound values and warns")
-    void aReloadWhoseWriteBackFailedKeepsTheRunningValues() throws Exception {
+    @DisplayName("a reload with a missing literal key applies valid bound values without writing")
+    void aReloadWithMissingLiteralKeyAppliesBoundValuesWithoutWriting() throws Exception {
         ConfigManager configManager = boot();
         configManager.register(module, new InterestConfig(PATH));
         InterestService service = new InterestService();
@@ -242,8 +241,8 @@ class ConfigBoundLongRoundTripTest {
         advanceTo(150);
         assertEquals(Arrays.asList(100), service.fireTicks);
 
-        // The operator edits both bound values and removes an unbound key, so the reload must write
-        // the missing key back -- into a file it may not write.
+        // The operator edits both bound values and removes an unbound literal key.
+        // Reload retains the missing field in memory without adding its key to the file.
         Path file = tempDir.resolve(PATH);
         StringBuilder edited = new StringBuilder();
         for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
@@ -285,15 +284,19 @@ class ConfigBoundLongRoundTripTest {
 
             assertEquals(1, liveTasks());
             advanceTo(300);
-            assertEquals(Arrays.asList(100, 200, 300), service.fireTicks,
-                    "the running 5 s period is kept; the unvalidated 10 s from the failed reload is not applied");
+            assertEquals(Arrays.asList(100, 300), service.fireTicks,
+                    "the valid 10 s period applies even though the unbound literal key is absent");
             String cooldownKey = CooldownValidator.bindingKey(
                     InterestCommand.class.getMethod("claim", Player.class).getAnnotation(CmdCD.class));
-            assertEquals(Integer.valueOf(60),
+            assertEquals(Integer.valueOf(30),
                     ConfigBoundCooldownState.seconds(command).get(cooldownKey),
-                    "the running 60 s cooldown is kept; the unvalidated 30 s is not applied");
-            assertTrue(warnings.stream().anyMatch(w -> w.contains("InterestModule") && w.contains(PATH)),
-                    "a WARNING names the module and the config whose reload failed: " + warnings);
+                    "the valid 30 s cooldown applies without missing-key write-back");
+            writer.verify(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.write(
+                    org.mockito.Mockito.any(java.nio.file.Path.class), org.mockito.Mockito.anyString()),
+                    org.mockito.Mockito.never());
+            assertEquals(edited.toString(), new String(Files.readAllBytes(file), StandardCharsets.UTF_8),
+                    "the absent-note file remains byte-for-byte unchanged");
+            assertTrue(warnings.isEmpty(), "no failed-write warning when reload never writes: " + warnings);
         } finally {
             Bukkit.getLogger().removeHandler(capture);
         }

@@ -779,8 +779,8 @@ class ConfigManagerTest {
     class ReloadConfigsDetailedTests {
 
         @Test
-        @DisplayName("应该为所有配置调用 init")
-        void shouldCallInitForAllConfigs() throws Exception {
+        @DisplayName("Reload every registered config without reinitializing it")
+        void shouldReloadAllRegisteredConfigsWithoutInit() throws Exception {
             // Arrange
             Field mapField = ConfigManager.class.getDeclaredField("pluginConfigMap");
             mapField.setAccessible(true);
@@ -802,9 +802,11 @@ class ConfigManagerTest {
             // Act
             configManager.reloadConfigs(mockPlugin);
 
-            // Assert - 验证 init 被调用
-            verify(mockConfig1).init(mockPlugin);
-            verify(mockConfig2).init(mockPlugin);
+            // Plan 17-58: normal reload uses the entity's missing-key/no-write contract, not init.
+            verify(mockConfig1).reload();
+            verify(mockConfig2).reload();
+            verify(mockConfig1, org.mockito.Mockito.never()).init(mockPlugin);
+            verify(mockConfig2, org.mockito.Mockito.never()).init(mockPlugin);
             assertThat(configMap).as("Config map should contain both configs").hasSize(2);
         }
     }
