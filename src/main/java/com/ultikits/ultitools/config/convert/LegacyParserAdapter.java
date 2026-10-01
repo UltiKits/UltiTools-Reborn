@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.config.convert;
 
 import java.util.Map;
+import com.ultikits.ultitools.config.document.PlainData;
 import org.bukkit.configuration.MemoryConfiguration;
 import org.bukkit.configuration.MemorySection;
 import org.jetbrains.annotations.ApiStatus;
@@ -34,7 +35,8 @@ public final class LegacyParserAdapter implements ConfigConverter<Object> {
     @SuppressWarnings("removal")
     public Object fromPlain(Object plain, ConversionContext context) throws ConversionException {
         Context ctx = (Context) context;
-        return parser(ctx).parse(plain instanceof Map<?, ?> ? section((Map<?, ?>) plain) : plain);
+        Object detached = PlainData.copy(plain);
+        return parser(ctx).parse(detached instanceof Map<?, ?> ? section((Map<?, ?>) detached) : detached);
     }
 
     // Creates a fresh public-noarg legacy parser for every conversion.

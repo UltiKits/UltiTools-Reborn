@@ -10,7 +10,6 @@ import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.config.convert.ConverterRegistry;
 import com.ultikits.ultitools.utils.DependencyUtils;
 import com.ultikits.ultitools.exceptions.ConfigurationException;
-import com.ultikits.ultitools.utils.PackageScanUtils;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
 import java.io.File;
@@ -158,12 +157,8 @@ public class ConfigManager {
      * @param classLoader Class loader
      */
     public void registerAll(UltiToolsPlugin plugin, String packageName, ClassLoader classLoader) {
-        ConverterRegistry.prepareModule(plugin, new String[]{packageName}, classLoader);
-        Set<Class<?>> classes = PackageScanUtils.scanAnnotatedClasses(
-                ConfigEntity.class,
-                packageName,
-                classLoader
-        );
+        Set<Class<?>> classes = ConverterRegistry.prepareSelectedConfigs(
+                plugin, new String[]{packageName}, classLoader);
         // #358 Part 1: a package can carry more than one @ConfigEntity class, and
         // PackageScanUtils.scanAnnotatedClasses returns them in an unspecified (HashSet) order.
         // A validation refusal on any one of them must not leave a sibling that already
@@ -239,7 +234,7 @@ public class ConfigManager {
      * @param classLoader  Class loader
      */
     public void registerAll(UltiToolsPlugin plugin, String[] packageNames, ClassLoader classLoader) {
-        ConverterRegistry.prepareModule(plugin, packageNames, classLoader);
+        ConverterRegistry.prepareSelectedConfigs(plugin, packageNames, classLoader);
         Map<String, AbstractConfigEntity> registeredBeforeThisPlugin = snapshotRegisteredEntities(plugin);
         try {
             for (String packageName : packageNames) {

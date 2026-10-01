@@ -1276,11 +1276,16 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
-     * Prepares converters and validates scanned config types before any resources are extracted.
+     * Prepares converters and checks only enabled auto-config entities before resources are extracted.
      */
     private void prepareConfigConverters() {
-        ConverterRegistry.prepareModule(this, DependencyUtils.getPluginPackages(this),
-                this.getClass().getClassLoader());
+        String[] packages = DependencyUtils.getPluginPackages(this);
+        ClassLoader loader = this.getClass().getClassLoader();
+        ConverterRegistry.prepareModule(this, packages, loader);
+        EnableAutoRegister annotation = MergedAnnotationResolver.find(this.getClass(), EnableAutoRegister.class);
+        if (annotation != null && annotation.config()) {
+            ConverterRegistry.prepareSelectedConfigs(this, packages, loader);
+        }
     }
 
     /**

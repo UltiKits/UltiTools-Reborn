@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.config.convert;
 
+import com.google.common.reflect.TypeToken;
 import java.lang.reflect.Field;
 import java.lang.reflect.GenericArrayType;
 import java.lang.reflect.ParameterizedType;
@@ -43,7 +44,7 @@ import com.ultikits.ultitools.utils.PackageScanUtils;
 
 /**
  * Module-local converter lookup and pre-file type validation.
- * Prepared registries are published only after all packages and entities pass validation.
+ * Prepared registries are published after converter discovery; selected entities are checked separately.
  * No cached value retains the module instance used as its weak key.
  *
  * @since 6.3.0
@@ -136,8 +137,8 @@ public final class ConverterRegistry {
     }
 
     /**
-     * Discovers all converters before checking any config entity or publishing the registry.
-     * Repeating the same package set is idempotent; extending it checks the union atomically.
+     * Discovers all converters before publishing the registry, without selecting config entities.
+     * Repeating the same package set is idempotent; extending it discovers the union atomically.
      * @param plugin the module used only as a weak cache key
      * @param packages the complete package set for this preparation
      * @param loader the module class loader
@@ -152,23 +153,37 @@ public final class ConverterRegistry {
             if (previous != null && previous.packages.containsAll(union)) { return previous.registry; }
             ConverterRegistry candidate = new ConverterRegistry(FRAMEWORK);
             Set<Class<?>> converterClasses = new LinkedHashSet<>();
-            Set<Class<?>> entityClasses = new LinkedHashSet<>();
             for (String scanPackage : union) {
                 converterClasses.addAll(PackageScanUtils.scanAnnotatedClasses(ConfigConverterFor.class, scanPackage, loader));
             }
             List<Class<?>> ordered = new ArrayList<>(converterClasses);
             ordered.sort(java.util.Comparator.comparing(Class::getName));
             for (Class<?> converterClass : ordered) { candidate.discover(converterClass); }
-            for (String scanPackage : union) {
-                entityClasses.addAll(PackageScanUtils.scanAnnotatedClasses(ConfigEntity.class, scanPackage, loader));
-            }
-            for (Class<?> entityClass : entityClasses) {
-                candidate.checkEntityFields(entityClass, plugin.getPluginName(), entityClass.getAnnotation(ConfigEntity.class).value());
-            }
             candidate.sealed = true;
             MODULES.put(plugin, new Prepared(candidate, union));
             return candidate;
         }
+    }
+
+    /**
+     * Checks exactly the requested auto-registration batch before any entity is constructed.
+     * Discovery caching never skips selection or validation; empty config paths remain ignored.
+     * @param plugin the module selecting the batch
+     * @param packages exactly the packages selected for this registration
+     * @param loader the class loader used by the selected scan
+     * @return the selected config classes, all checked before the caller constructs any
+     */
+    public static Set<Class<?>> prepareSelectedConfigs(UltiToolsPlugin plugin, String[] packages, ClassLoader loader) {
+        ConverterRegistry registry = prepareModule(plugin, packages, loader);
+        Set<Class<?>> selected = new LinkedHashSet<>();
+        for (String scanPackage : packages) {
+            selected.addAll(PackageScanUtils.scanAnnotatedClasses(ConfigEntity.class, scanPackage, loader));
+        }
+        selected.removeIf(entity -> entity.getAnnotation(ConfigEntity.class).value().isEmpty());
+        for (Class<?> entity : selected) {
+            registry.checkEntityFields(entity, plugin.getPluginName(), entity.getAnnotation(ConfigEntity.class).value());
+        }
+        return selected;
     }
 
     private void discover(Class<?> converterClass) {
@@ -224,13 +239,14 @@ public final class ConverterRegistry {
             for (Field field : level.getDeclaredFields()) {
                 ConfigEntry entry = field.getAnnotation(ConfigEntry.class);
                 if (entry == null || entry.parser() != DefaultConfigParser.class) { continue; }
-                Type missing = missingType(field.getGenericType(), new HashSet<>());
+                Type declared = TypeToken.of(entity).resolveType(field.getGenericType()).getType();
+                Type missing = missingType(declared, new HashSet<>());
                 if (missing == null) { continue; }
                 Class<?> missingClass = rawClass(missing);
                 String key = entry.path().isEmpty() ? field.getName() : entry.path();
                 throw new ConfigurationException("Module " + module + ", file " + file + ", key \"" + key
                         + "\": no config converter for " + missingClass.getName() + " (declared as "
-                        + describe(field.getGenericType()) + "). Register one with @ConfigConverterFor("
+                        + describe(declared) + "). Register one with @ConfigConverterFor("
                         + missingClass.getSimpleName() + ".class) in the module's scan packages, or declare the value type as Map<String, Object>.");
             }
         }
@@ -255,6 +271,18 @@ public final class ConverterRegistry {
                 }
             } else {
                 if (resolve(type) == null) { return type; }
+                Class<?> raw = rawClass(type);
+                if (registered(raw) == null) {
+                    if (Collection.class.isAssignableFrom(raw)) {
+                        Type missing = missingType(ConversionTypes.argument(type, Collection.class, 0), visiting);
+                        if (missing != null) { return missing; }
+                    } else if (Map.class.isAssignableFrom(raw)) {
+                        for (int index = 0; index < 2; index++) {
+                            Type missing = missingType(ConversionTypes.argument(type, Map.class, index), visiting);
+                            if (missing != null) { return missing; }
+                        }
+                    }
+                }
                 if (type instanceof ParameterizedType) {
                     for (Type argument : ((ParameterizedType) type).getActualTypeArguments()) {
                         Type missing = missingType(argument, visiting);
