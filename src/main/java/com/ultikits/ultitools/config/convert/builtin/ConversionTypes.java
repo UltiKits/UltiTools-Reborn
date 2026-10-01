@@ -16,7 +16,13 @@ import com.google.common.reflect.TypeToken;
 public final class ConversionTypes {
     private ConversionTypes() { }
 
-    /** @param type the declared type @return its erased class after resolving bounds */
+    /**
+
+     * @param type the declared type
+
+     * @return its erased class after resolving bounds
+
+     */
     public static Class<?> raw(Type type) {
         type = bound(type);
         if (type instanceof Class<?>) { return (Class<?>) type; }
@@ -25,7 +31,13 @@ public final class ConversionTypes {
         throw new IllegalArgumentException("Unsupported declared type " + type);
     }
 
-    /** @param type the declared type @return its effective bound */
+    /**
+
+     * @param type the declared type
+
+     * @return its effective bound
+
+     */
     public static Type bound(Type type) {
         Set<Type> visited = new HashSet<>();
         while (visited.add(type)) {
@@ -38,7 +50,13 @@ public final class ConversionTypes {
         return Object.class;
     }
 
-    /** @param type an array declaration @return its full component type */
+    /**
+
+     * @param type an array declaration
+
+     * @return its full component type
+
+     */
     public static Type component(Type type) {
         type = bound(type);
         return type instanceof GenericArrayType ? ((GenericArrayType) type).getGenericComponentType()
@@ -56,7 +74,13 @@ public final class ConversionTypes {
         return TypeToken.of(type).resolveType(ancestor.getTypeParameters()[index]).getType();
     }
 
-    /** @param type primitive or reference class @return its wrapper or itself */
+    /**
+
+     * @param type primitive or reference class
+
+     * @return its wrapper or itself
+
+     */
     public static Class<?> boxed(Class<?> type) {
         if (type == boolean.class) { return Boolean.class; }
         if (type == byte.class) { return Byte.class; }

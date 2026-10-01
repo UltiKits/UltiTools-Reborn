@@ -44,7 +44,13 @@ public final class GenericConverters implements ConfigConverter<Object> {
     /** @return the implementation-owned supported builtin factory categories */
     public static Set<Class<?>> registeredTypes() { return CATALOG; }
 
-    /** @param type the declared type @return a generic converter only when its result can be constructed */
+    /**
+
+     * @param type the declared type
+
+     * @return a generic converter only when its result can be constructed
+
+     */
     public static ConfigConverter<?> resolve(Type type) {
         Class<?> raw = ConversionTypes.raw(type);
         if (raw == Object.class || Enum.class.isAssignableFrom(raw) || raw.isArray()) { return INSTANCE; }
@@ -55,7 +61,13 @@ public final class GenericConverters implements ConfigConverter<Object> {
         catch (NoSuchMethodException e) { return null; }
     }
 
-    /** @param type runtime/declaration type @return constructor-free write converter */
+    /**
+
+     * @param type runtime/declaration type
+
+     * @return constructor-free write converter
+
+     */
     public static ConfigConverter<?> resolveWrite(Type type) {
         Class<?> raw = ConversionTypes.raw(type);
         return raw == Object.class || Enum.class.isAssignableFrom(raw) || raw.isArray()

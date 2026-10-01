@@ -188,12 +188,24 @@ public final class ConverterRegistry {
         }
     }
 
-    /** @param plugin the module @return whether preparation has succeeded for it */
+    /**
+
+     * @param plugin the module
+
+     * @return whether preparation has succeeded for it
+
+     */
     public static boolean hasModule(UltiToolsPlugin plugin) {
         synchronized (MODULES) { return MODULES.containsKey(plugin); }
     }
 
-    /** @param plugin the module @return its prepared registry, or the framework registry */
+    /**
+
+     * @param plugin the module
+
+     * @return its prepared registry, or the framework registry
+
+     */
     public static ConverterRegistry forModule(UltiToolsPlugin plugin) {
         synchronized (MODULES) {
             Prepared prepared = MODULES.get(plugin);
@@ -385,23 +397,45 @@ public final class ConverterRegistry {
         @Override public <V> V fromPlain(Object nested, Type declared) throws ConversionException {
             return registry.read(nested, new Context(registry, file, path, declared, failures));
         }
-        /** @param value nested Java value @param declared nested type @return plain data @throws ConversionException on failure */
+        /**
+         * @param value nested Java value
+         * @param declared nested type
+         * @return plain data
+         * @throws ConversionException on failure
+         */
         public Object writeTyped(Object value, Type declared) throws ConversionException {
             return registry.write(value, new Context(registry, file, path, declared, failures));
         }
-        /** @param value nested plain value @param declared nested type @param <V> result type @return converted value @throws ConversionException on failure */
+        /**
+         * @param value nested plain value
+         * @param declared nested type
+         * @param <V> result type
+         * @return converted value
+         * @throws ConversionException on failure
+         */
         public <V> V readTyped(Object value, Type declared) throws ConversionException {
             return registry.read(value, new Context(registry, file, path, declared, failures));
         }
-        /** @param segment whole key or index @param declared nested type @return nested context */
+        /**
+         * @param segment whole key or index
+         * @param declared nested type
+         * @return nested context
+         */
         public Context child(String segment, Type declared) {
             List<String> childPath = new ArrayList<>(path);
             childPath.add(segment);
             return new Context(registry, file, childPath, declared, failures);
         }
-        /** @param raw refused input @param cause failure at its original nested location */
+        /**
+         * @param raw refused input
+         * @param cause failure at its original nested location
+         */
         public void record(Object raw, ConversionException cause) { failures.add(new ConversionFailure(raw, cause)); }
-        /** @param reason failure description @param cause underlying failure @return checked located failure */
+        /**
+         * @param reason failure description
+         * @param cause underlying failure
+         * @return checked located failure
+         */
         public ConversionException failure(String reason, Throwable cause) {
             return new ConversionException(reason, file, path, type, cause);
         }
