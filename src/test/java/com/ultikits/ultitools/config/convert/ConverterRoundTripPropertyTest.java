@@ -61,7 +61,8 @@ class ConverterRoundTripPropertyTest {
 
     @TestFactory
     Stream<DynamicTest> additionalArrayAndNestedFactoryShapesRoundTrip() {
-        return Stream.of("primitiveArray", "referenceArray", "genericArray", "nested", "listEnum")
+        return Stream.of("primitiveArray", "referenceArray", "genericArray", "nested", "listEnum",
+                "hashMap", "hashSet", "linkedList", "secondEnum")
                 .map(name -> DynamicTest.dynamicTest(name, () -> {
                     Sample sample;
                     switch (name) {
@@ -70,6 +71,10 @@ class ConverterRoundTripPropertyTest {
                         case "genericArray": sample = new Sample(field(name), random -> new List[]{Arrays.asList(random.nextInt(), random.nextInt())}); break;
                         case "nested": sample = new Sample(field(name), random -> Collections.singletonMap("o.O",
                                 Collections.singletonMap("inner", Arrays.asList(random.nextInt(), random.nextInt())))); break;
+                        case "hashMap": sample = new Sample(field(name), random -> new java.util.HashMap<>(Collections.singletonMap("o.O", random.nextInt()))); break;
+                        case "hashSet": sample = new Sample(field(name), random -> new java.util.HashSet<>(Collections.singletonList("x" + random.nextInt()))); break;
+                        case "linkedList": sample = new Sample(field(name), random -> new java.util.LinkedList<>(Arrays.asList("x" + random.nextInt(), "y"))); break;
+                        case "secondEnum": sample = new Sample(SecondMode.class, random -> SecondMode.values()[random.nextInt(2)]); break;
                         default: sample = new Sample(field(name), random -> Arrays.asList(Mode.FIRST, Mode.SECOND));
                     }
                     exercise(sample, name);
@@ -183,6 +188,7 @@ class ConverterRoundTripPropertyTest {
         private Sample(Type type, Function<Random, Object> generate) { this.type = type; this.generate = generate; }
     }
     enum Mode { FIRST, SECOND }
+    enum SecondMode { LEFT, RIGHT }
     @SuppressWarnings("unused")
     static class Shapes {
         Collection<String> collection;
@@ -203,6 +209,9 @@ class ConverterRoundTripPropertyTest {
         EnumMap<Mode, Integer> enumMap;
         SortedMap<String, Integer> sortedMap;
         TreeMap<String, Integer> treeMap;
+        java.util.HashMap<String, Integer> hashMap;
+        java.util.HashSet<String> hashSet;
+        java.util.LinkedList<String> linkedList;
         int[] primitiveArray;
         String[] referenceArray;
         List<Integer>[] genericArray;

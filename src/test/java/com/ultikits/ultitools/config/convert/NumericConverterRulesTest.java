@@ -135,12 +135,66 @@ class NumericConverterRulesTest {
                 .isInstanceOf(ConversionException.class);
     }
 
+    @Test
+    void runtimeContainerWritesUseOperationAwareFactoriesAndRespectCustomConverters() throws Exception {
+        UUID id = UUID.fromString("12345678-1234-5678-9abc-123456789abc");
+        for (Object value : Arrays.asList(Collections.singletonMap("id", id),
+                Collections.unmodifiableMap(Collections.singletonMap("id", id)),
+                Collections.singletonList(id), Collections.unmodifiableList(Collections.singletonList(id)))) {
+            Object plain = registry.toPlain(value, Object.class, "f", Collections.emptyList());
+            assertThat(com.ultikits.ultitools.config.document.PlainData.isPlain(plain)).isTrue();
+            assertThat(plain.toString()).contains(id.toString());
+        }
+        ConverterRegistry child = new ConverterRegistry(registry);
+        child.register(Map.class, new ConfigConverter<Map<?, ?>>() {
+            @Override public Object toPlain(Map<?, ?> value, ConversionContext ctx) { return "custom-map"; }
+            @Override public Map<?, ?> fromPlain(Object plain, ConversionContext ctx) { return Collections.emptyMap(); }
+        }, false);
+        assertThat(child.toPlain(Collections.singletonMap("id", id), Object.class, "f", Collections.emptyList()))
+                .isEqualTo("custom-map");
+        assertThat(registry.resolve(Collections.singletonMap("id", id).getClass())).isNull();
+    }
+
+    @Test
+    void concreteInheritedTypesAndModuleConvertersRemainTypedInsideContainers() throws Exception {
+        ConversionResult<IntegerList> converted = registry.fromPlainResult(Arrays.asList("1", "bad", 3),
+                IntegerList.class, "f", Collections.emptyList());
+        assertThat(converted.value()).containsExactly(1, 3);
+        assertThat(converted.failures()).hasSize(1);
+        ConverterRegistry child = new ConverterRegistry(registry);
+        child.register(UUID.class, new ConfigConverter<UUID>() {
+            @Override public Object toPlain(UUID value, ConversionContext ctx) { return "custom-id"; }
+            @Override public UUID fromPlain(Object plain, ConversionContext ctx) { return new UUID(0, 1); }
+        }, false);
+        Type ids = Shapes.class.getDeclaredField("ids").getGenericType();
+        assertThat(child.toPlain(Collections.singletonList(new UUID(0, 1)), ids, "f", Collections.emptyList()))
+                .isEqualTo(Collections.singletonList("custom-id"));
+        assertThat(registry.resolve(UnsupportedList.class)).isNull();
+    }
+
+    @Test
+    void integralNarrowingAndElementFailuresAreIndependentlyAsserted() throws Exception {
+        assertThatThrownBy(() -> read(3000000000L, int.class)).isInstanceOf(ConversionException.class);
+        assertThatThrownBy(() -> read(1.5D, int.class)).isInstanceOf(ConversionException.class);
+        assertThatThrownBy(() -> read(0.123456789D, float.class)).isInstanceOf(ConversionException.class);
+        Type type = Shapes.class.getDeclaredField("integers").getGenericType();
+        ConversionResult<List<Integer>> converted = registry.fromPlainResult(Arrays.asList("bad", 2), type, "f", Collections.emptyList());
+        assertThat(converted.value()).containsExactly(2);
+        assertThat(converted.failures()).hasSize(1);
+    }
+
+    public static class IntegerList extends java.util.ArrayList<Integer> {
+        private static final long serialVersionUID = 1L;
+    }
+    interface UnsupportedList extends List<String> { }
+
     private Object read(Object plain, Type type) throws ConversionException {
         return registry.fromPlain(plain, type, "config/numeric.yml", Collections.singletonList("value"));
     }
     enum Mode { FIRST, SECOND }
     static class Shapes {
         List<Integer> integers;
+        List<UUID> ids;
         Map<Mode, Integer> byMode;
         Map<String, List<Integer>> nested;
         ConcurrentMap<String, String> concurrent;
