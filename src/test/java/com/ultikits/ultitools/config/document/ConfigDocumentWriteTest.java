@@ -110,6 +110,29 @@ class ConfigDocumentWriteTest {
         assertThat(ConfigDocument.parse(rendered).toPlain()).isEqualTo(expected);
     }
 
+    static Stream<GoldenCorpus.Fixture> spliceFixtures() throws IOException {
+        return GoldenCorpus.fixtures().stream().filter(f -> f.name.endsWith("/splice-layout.yml"));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("spliceFixtures")
+    void splicePreservesEveryUntouchedByte(GoldenCorpus.Fixture fixture) throws Exception {
+        String text = fixture.text();
+        ConfigDocument document = ConfigDocument.parse(text);
+        assertThat(document.render()).isEqualTo(text);
+        document.set(path("change"), "new");
+        assertThat(document.render()).isEqualTo(text.replace("change: old", "change: new"));
+        document.set(path("four", "added"), 3);
+        String added = text.replace("change: old", "change: new")
+                .replace("    nested: 2    # second width\n", "    nested: 2    # second width\n    added: 3\n");
+        assertThat(document.render()).isEqualTo(added);
+        document.remove(path("remove-me"));
+        assertThat(document.render()).isEqualTo(added.replace("# removable key comment\nremove-me: gone\n", ""));
+        document.setFrameworkComment(path("enabled"), Collections.singletonList("Enabled flag"));
+        assertThat(document.render()).isEqualTo(added.replace("# removable key comment\nremove-me: gone\n", "")
+                .replace("enabled: true", "# Enabled flag\nenabled: true"));
+    }
+
     @Nested
     @DisplayName("value rules")
     class ValueRules {

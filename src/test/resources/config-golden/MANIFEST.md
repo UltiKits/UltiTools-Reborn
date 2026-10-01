@@ -71,3 +71,4 @@ Bundled module config files: 14 (control: 29 resource files listed, `plugin.yml`
 | hand-edited/long-lines.yml | hand-written operator-style file (plan 17-56) | - | 8f4b9c55809d48a37ea0657106cf62c5057a64d22ba80124e9735e087791e2f3 |
 | hand-edited/no-final-newline.yml | hand-written operator-style file (plan 17-56) | - | 9c268a86cd3457e0810a4e523fcf9b669e078f58ed18b00fbb2b8d2cc2566dd9 |
 | hand-edited/scalars.yml | hand-written operator-style file (plan 17-56) | - | 0cf5fefd3ecd714d72a62315cd5b54d712b3276ab2534c90988bcd7d98ffdd5c |
+| hand-edited/splice-layout.yml | hand-written review B1/B2 regression shapes (plan 17-56b) | - | bb13ed9c26452d4f01c712f67da07be1da6f97b60bdf74cf5c63ac73ecca4a76 |
