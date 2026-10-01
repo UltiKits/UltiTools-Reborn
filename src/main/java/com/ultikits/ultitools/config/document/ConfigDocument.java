@@ -6,6 +6,9 @@ import java.io.Reader;
 import java.io.StringReader;
 import java.io.StringWriter;
 import java.io.UncheckedIOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
@@ -178,7 +181,11 @@ public final class ConfigDocument {
             return ConfigLoadResult.unreadable(file, new IOException(e.getMessage(), e));
         }
         try {
-            return ConfigLoadResult.loaded(file, parse(new String(bytes, StandardCharsets.UTF_8)), sha256(bytes));
+            return ConfigLoadResult.loaded(file, parse(StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(bytes)).toString()), sha256(bytes));
+        } catch (CharacterCodingException e) {
+            return ConfigLoadResult.unparseable(file, "Config file is not valid UTF-8: " + e.getMessage());
         } catch (ConfigParseException e) {
             return ConfigLoadResult.unparseable(file, e.getMessage());
         } catch (RuntimeException e) {
