@@ -17,7 +17,6 @@ import org.jetbrains.annotations.ApiStatus;
  */
 @ApiStatus.Internal
 public class DataStoreManager {
-    // Every registry access holds the class monitor; HashMap preserves accepted null-type registrations.
     private static final Map<String, DataStore> dataMap = new HashMap<>();
 
     /**
@@ -42,7 +41,7 @@ public class DataStoreManager {
     /**
      * Unregister all data stores.
      */
-    public static synchronized void close() {
+    public static void close() {
         Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Unregistering all data operators...");
         for (DataStore dataStore : dataMap.values()) {
             dataStore.destroyAllOperators();
@@ -56,18 +55,14 @@ public class DataStoreManager {
      * @param type Data store type
      * @return Data store
      */
-    public static synchronized DataStore getDatastore(String type) {
+    public static DataStore getDatastore(String type) {
         if (type == null) {
             type = "json";
         }
-        DataStore selected = dataMap.get(type);
-        if (selected != null) {
-            return selected;
-        }
-        if ("json".equals(type)) {
+        if ("json".equals(type) && dataMap.get(type) == null) {
             return new JsonStore(UltiTools.getInstance().getDataFolder().getAbsolutePath() + File.separator + "data");
         }
-        return dataMap.get("json");
+        return dataMap.get(type) == null ? dataMap.get("json") : dataMap.get(type);
     }
 
     /**
