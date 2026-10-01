@@ -17,6 +17,47 @@ import org.junit.jupiter.api.Test;
 @DisplayName("ConfigDocument - per-document style")
 class ConfigDocumentStyleTest {
 
+    static java.util.stream.Stream<org.junit.jupiter.params.provider.Arguments> scalarLineBreakInventory() {
+        return java.util.stream.Stream.of("LF", "CR", "CRLF", "NEL", "LS", "PS").flatMap(character ->
+                java.util.stream.Stream.of(true, false).flatMap(finalNewline ->
+                        java.util.stream.Stream.of("anchor-unrelated", "new-set", "new-key", "plain-noop")
+                                .map(action -> org.junit.jupiter.params.provider.Arguments.of(character, finalNewline, action))));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest(name = "linebreak {0}, EOF {1}, action {2}")
+    @org.junit.jupiter.params.provider.MethodSource("scalarLineBreakInventory")
+    void everyScalarLineBreakPreservesContent(String character, boolean finalNewline, String action) throws Exception {
+        String separator;
+        String escape;
+        switch (character) {
+            case "LF": separator = "\n"; escape = "\\n"; break;
+            case "CR": separator = "\r"; escape = "\\r"; break;
+            case "CRLF": separator = "\r\n"; escape = "\\r\\n"; break;
+            case "NEL": separator = "\u0085"; escape = "\\N"; break;
+            case "LS": separator = " "; escape = "\\L"; break;
+            case "PS": separator = " "; escape = "\\P"; break;
+            default: throw new IllegalArgumentException(character);
+        }
+        String value = "hello" + separator + "world";
+        String prefix = "anchor-unrelated".equals(action) ? "base: &base [x]\ncopy: *base\n" : "";
+        String text = "# header\n\n" + prefix + "message: \"hello" + escape
+                + "world\" # message comment\nnext: 2 # next comment" + (finalNewline ? "\n" : "");
+        ConfigDocument document = ConfigDocument.parse(text);
+        java.util.Map<String, Object> expected = document.toPlain();
+        if ("anchor-unrelated".equals(action)) {
+            document.set(path("next"), 3); expected.put("next", 3);
+        } else if ("new-set".equals(action)) {
+            document.set(path("added"), value); expected.put("added", value);
+        } else if ("new-key".equals(action)) {
+            document.set(path(value), 3); expected.put(value, 3);
+        }
+        String rendered = document.render();
+        GoldenCorpus.assertContent(rendered, expected);
+        assertThat(GoldenCorpus.comments(rendered)).containsExactlyElementsOf(GoldenCorpus.comments(text));
+        assertThat(rendered.endsWith("\n")).isEqualTo(finalNewline);
+        assertThat(document.render()).isEqualTo(rendered);
+    }
+
     static java.util.stream.Stream<org.junit.jupiter.params.provider.Arguments> commentShapeInventory() {
         return java.util.stream.Stream.of(
                 org.junit.jupiter.params.provider.Arguments.of("shared-alias-positions", "# key block\nx: &shared\n  a: 1 # inline\n  # end\nreference: *shared\ny: 2\n"),
