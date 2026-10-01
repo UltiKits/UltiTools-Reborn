@@ -33,6 +33,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonPrimitive;
 import com.google.common.reflect.TypeToken;
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.config.document.ConfigDocument;
 import com.ultikits.ultitools.config.document.ConfigLoadResult;
 import com.ultikits.ultitools.config.document.AtomicConfigWriter;
@@ -182,21 +183,36 @@ public abstract class AbstractConfigEntity {
         ConfigDocument candidate = loaded.state() == ConfigLoadResult.State.LOADED
                 ? loaded.document() : ConfigDocument.empty();
         boolean changed = false;
+        List<String> overwritten = new ArrayList<>();
         for (Map.Entry<Field, Object> entry : values.entrySet()) {
             List<String> path = keys(entry.getKey());
             boolean missing = !candidate.contains(path);
             if (missing || !PlainData.plainEquals(candidate.get(path), entry.getValue())) {
+                if (document != null && (document.contains(path) != candidate.contains(path)
+                        || !PlainData.plainEquals(document.get(path), candidate.get(path)))) {
+                    overwritten.add("'" + fieldPath(entry.getKey()) + "'");
+                }
                 candidate.set(path, entry.getValue()); changed = true;
             }
             if (missing && !isTokenComment(entry.getKey())) { changed |= addEntryComment(candidate, entry.getKey()); }
         }
         changed |= updateTokenComments(candidate);
-        if (changed) { write(candidate); }
+        if (changed) {
+            write(candidate);
+            if (!overwritten.isEmpty()) { warnOverwritten(overwritten); }
+        }
         pendingCommentWrite = false;
         document = candidate;
         if (savedSnapshot == null) { savedSnapshot = new LinkedHashMap<>(declaredDefaults); }
         savedSnapshot.putAll(values);
         savedFileFingerprint = fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath));
+    }
+
+    private void warnOverwritten(List<String> paths) {
+        // Values are deliberately omitted: even an ordinary field may hold a credential.
+        Logger logger = UltiTools.getInstance() == null ? LOGGER : UltiTools.getInstance().getLogger();
+        logger.log(Level.WARNING, "Configuration file " + ultiToolsPlugin.getConfigFile(configFilePath).getAbsolutePath()
+                + " had operator-edited keys overwritten: " + String.join(", ", paths));
     }
 
     private void write(ConfigDocument candidate) throws IOException {

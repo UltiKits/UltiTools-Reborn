@@ -354,8 +354,8 @@ public class ConfigManager {
      * <p>
      * If an entity was changed in memory and its file was also changed on disk since that snapshot,
      * the in-memory state still wins and is written, and a WARNING names the file whose edits were
-     * overwritten. The only caller is {@code UltiTools#onDisable()}; an explicit {@link
-     * AbstractConfigEntity#save()} is unaffected and always writes.
+     * overwritten by the entity's successful write. The only caller is {@code UltiTools#onDisable()};
+     * explicit {@link AbstractConfigEntity#save()} uses the same semantic overwrite reporting.
      * <p>
      * Each entity's check-then-save runs under that entity's own monitor, the lock its read, write
      * and snapshot paths also hold, so a panel write still in flight on the WebSocket thread is
@@ -375,12 +375,8 @@ public class ConfigManager {
                         if (!config.isModifiedSinceSnapshot()) {
                             continue;
                         }
-                        // Read before save(): a successful save refreshes the file fingerprint.
-                        boolean overwritesOperatorEdit = config.isFileModifiedSinceSnapshot();
+                        // The entity owns semantic overwritten-key reporting after a successful write.
                         config.save();
-                        if (overwritesOperatorEdit) {
-                            warnOperatorEditOverwritten(config);
-                        }
                     }
                 } catch (IOException e) {
                     UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration save failed！File path：" + config.getConfigFilePath());
@@ -405,22 +401,6 @@ public class ConfigManager {
                 + file.getAbsolutePath() + " could not be parsed the last time it was read, so it was left"
                 + " untouched and module " + owner.getPluginName() + "'s in-memory changes to this"
                 + " configuration were not saved. Fix the file, then reload or restart.");
-    }
-
-    /**
-     * Logs that the shutdown save wrote an in-memory change over a file that was changed or removed
-     * on disk while the server was running (#510). The overwrite itself is the documented contract -
-     * a value set from code is saved on disable - but it must not be silent.
-     *
-     * @param config the entity that was just saved
-     */
-    private void warnOperatorEditOverwritten(AbstractConfigEntity config) {
-        UltiToolsPlugin owner = config.getUltiToolsPlugin();
-        File file = new File(owner.getResourceFolderPath(), config.getConfigFilePath());
-        UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration file "
-                + file.getAbsolutePath() + " was changed or removed on disk while the server was running, but module "
-                + owner.getPluginName() + " also changed this configuration in memory. The in-memory"
-                + " configuration was saved, so the changes made to the file while the server ran were overwritten.");
     }
 
     /**
