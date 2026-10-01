@@ -1,0 +1,37 @@
+# Initial cash for new players / 新玩家初始金额
+initial-cash: 1000.0
+
+# Currency display name / 货币显示名称
+currency-name: 'Coins'
+
+# Currency symbol prefix / 货币符号前缀
+currency-symbol: '$'
+
+# Bank settings / 银行设置
+bank:
+  # Enable bank feature / 启用银行功能
+  enabled: true
+  # Minimum deposit amount / 最低存款金额
+  min-deposit: 100.0
+  # Maximum bank balance (-1 = unlimited) / 最大银行余额 (-1 = 无限)
+  max-balance: -1
+
+# Interest settings / 利息设置
+interest:
+  # Pay bank interest (creates money) / 发放银行利息（会凭空产生货币）
+  enabled: false
+  # Interest rate per payment / 每次发放的利率
+  rate: 0.03
+  # Seconds between payments, and before the first one (1 to 107374182); /ul reload applies it
+  # 发放间隔（秒），也是加载后首次发放前的等待（1 到 107374182）；/ul reload 生效
+  interval: 1800
+  # Maximum interest per payment (-1 = unlimited) / 每次最大利息 (-1 = 无限)
+  max-interest: 10000.0
+
+# Leaderboard settings / 排行榜设置
+leaderboard:
+  # Seconds between refreshes (1 to 107374182); /ul reload applies it
+  # 刷新间隔（秒，1 到 107374182）；/ul reload 生效
+  update-interval: 60
+  # Default entries shown / 默认显示数量
+  display-count: 10

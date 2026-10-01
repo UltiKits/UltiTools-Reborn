@@ -1,0 +1,6 @@
+# Symbols written as escapes (pure ASCII file)
+symbols:
+  accent: "caf\u00e9"
+  heart: "\u2764"
+  plain: text
+  tab: "a\tb"

@@ -1,0 +1,127 @@
+package com.ultikits.ultitools.config.document;
+
+import static com.ultikits.ultitools.config.document.ConfigDocumentWriteTest.path;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.util.Arrays;
+import java.util.Collections;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+/**
+ * Plan 17-56 Task 2: comments in every position survive a value change, and the framework writes a comment
+ * only through {@link ConfigDocument#setFrameworkComment}, which replaces only that key's own comment lines
+ * (#542's token comments use it in plan 17-58).
+ */
+@DisplayName("ConfigDocument - comments")
+class ConfigDocumentCommentTest {
+
+    static final String COMMENTED = "# Server configuration\n"
+            + "# edited by the operator\n"
+            + "\n"
+            + "# Chat settings\n"
+            + "chat:\n"
+            + "  # The chat format\n"
+            + "  format: \"&7{player}: {message}\" # inline comment\n"
+            + "  rate: 1.50\n"
+            + "  worlds:\n"
+            + "  - world # the overworld\n"
+            + "  - world_nether\n"
+            + "  # end of the list\n"
+            + "  last: true\n"
+            + "  # comment after the last key of chat\n"
+            + "\n"
+            + "# Economy settings\n"
+            + "economy:\n"
+            + "  start: 100\n"
+            + "  nested:\n"
+            + "    depth: 2\n"
+            + "    # comment after the last key of nested\n"
+            + "# end of file comment\n";
+
+    @Test
+    @DisplayName("header, block, inline, list-item, end-of-section and end-of-file comments survive value changes")
+    void commentsSurviveValueChanges() throws Exception {
+        ConfigDocument document = ConfigDocument.parse(COMMENTED);
+
+        document.set(path("chat", "format"), "&a{player}: {message}");
+        document.set(path("chat", "rate"), 2.0);
+        document.set(path("chat", "last"), false);
+        document.set(path("economy", "nested", "depth"), 3);
+
+        assertThat(document.render()).isEqualTo(COMMENTED
+                .replace("&7{player}", "&a{player}")
+                .replace("rate: 1.50", "rate: 2.0")
+                .replace("last: true", "last: false")
+                .replace("depth: 2", "depth: 3"));
+    }
+
+    @Test
+    @DisplayName("blockComment reads a key's own comment: text after '# ', null for a blank line; the header is the file's")
+    void blockCommentReadsTheKeysComment() throws Exception {
+        ConfigDocument document = ConfigDocument.parse(COMMENTED);
+
+        assertThat(document.blockComment(path("chat"))).containsExactly("Chat settings");
+        assertThat(document.blockComment(path("chat", "format"))).containsExactly("The chat format");
+        assertThat(document.blockComment(path("economy"))).containsExactly(null, "Economy settings");
+        assertThat(document.blockComment(path("chat", "rate"))).isEmpty();
+        assertThat(document.blockComment(path("absent"))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("setFrameworkComment replaces only that key's comment lines, keeping a leading blank line")
+    void setFrameworkCommentReplacesOnlyThatComment() throws Exception {
+        ConfigDocument document = ConfigDocument.parse(COMMENTED);
+
+        document.setFrameworkComment(path("chat", "format"), Collections.singletonList("Das Chatformat"));
+        document.setFrameworkComment(path("economy"), Arrays.asList("Economy", "two lines"));
+        document.setFrameworkComment(path("chat", "rate"), Collections.singletonList("New comment"));
+
+        assertThat(document.render()).isEqualTo(COMMENTED
+                .replace("  # The chat format\n", "  # Das Chatformat\n")
+                .replace("# Economy settings\n", "# Economy\n# two lines\n")
+                .replace("  rate: 1.50\n", "  # New comment\n  rate: 1.50\n"));
+    }
+
+    @Test
+    @DisplayName("an empty comment list removes the comment lines; an absent key is refused")
+    void emptyCommentAndAbsentKey() throws Exception {
+        ConfigDocument document = ConfigDocument.parse(COMMENTED);
+
+        document.setFrameworkComment(path("chat", "format"), Collections.<String>emptyList());
+
+        assertThat(document.render()).isEqualTo(COMMENTED.replace("  # The chat format\n", ""));
+        assertThatThrownBy(() -> document.setFrameworkComment(path("chat", "absent"), Collections.singletonList("x")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("[chat, absent]");
+    }
+
+    @Test
+    @DisplayName("comment text is split at every YAML line break and characters YAML forbids are dropped")
+    void commentTextIsMadeSafe() throws Exception {
+        ConfigDocument document = ConfigDocument.parse("a: 1\n");
+
+        document.setFrameworkComment(path("a"), Collections.singletonList(
+                "one\r\ntwo\rthree\nfour\u0085five\u2028six\u2029seven x\u0000y\u0007z\uFFFE"));
+
+        ConfigDocument reread = ConfigDocument.parse(document.render());
+        assertThat(reread.blockComment(path("a")))
+                .containsExactly("one", "two", "three", "four", "five", "six", "seven xyz");
+        assertThat(reread.get(path("a"))).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("a framework comment written into a new document reads back")
+    void frameworkCommentReadsBack() throws Exception {
+        ConfigDocument document = ConfigDocument.empty();
+        document.set(path("section", "key"), "v");
+
+        document.setFrameworkComment(path("section", "key"), Arrays.asList("First", "Second"));
+
+        String rendered = document.render();
+        assertThat(rendered).isEqualTo("section:\n  # First\n  # Second\n  key: v\n");
+        assertThat(ConfigDocument.parse(rendered).blockComment(path("section", "key"))).containsExactly("First", "Second");
+    }
+}
