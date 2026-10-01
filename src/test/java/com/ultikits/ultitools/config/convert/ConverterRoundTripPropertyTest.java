@@ -45,6 +45,14 @@ class ConverterRoundTripPropertyTest {
     private static final ConverterRegistry REGISTRY = ConverterRegistry.framework();
     private static final Map<Class<?>, Sample> GENERATORS = generators();
 
+    @org.junit.jupiter.api.BeforeAll
+    static void startBukkit() {
+        org.mockbukkit.mockbukkit.MockBukkit.mock().addSimpleWorld("world");
+    }
+
+    @org.junit.jupiter.api.AfterAll
+    static void stopBukkit() { org.mockbukkit.mockbukkit.MockBukkit.unmock(); }
+
     @Test
     void everyFrameworkRegistrationAndFactoryHasAGenerator() {
         assertThat(GENERATORS.keySet()).containsAll(REGISTRY.registeredTypes());
@@ -62,7 +70,7 @@ class ConverterRoundTripPropertyTest {
     @TestFactory
     Stream<DynamicTest> additionalArrayAndNestedFactoryShapesRoundTrip() {
         return Stream.of("primitiveArray", "referenceArray", "genericArray", "nested", "listEnum",
-                "hashMap", "hashSet", "linkedList", "secondEnum")
+                "hashMap", "hashSet", "linkedList", "secondEnum", "item", "delegateItem", "location", "material")
                 .map(name -> DynamicTest.dynamicTest(name, () -> {
                     Sample sample;
                     switch (name) {
@@ -74,6 +82,14 @@ class ConverterRoundTripPropertyTest {
                         case "hashMap": sample = new Sample(field(name), random -> new java.util.HashMap<>(Collections.singletonMap("o.O", random.nextInt()))); break;
                         case "hashSet": sample = new Sample(field(name), random -> new java.util.HashSet<>(Collections.singletonList("x" + random.nextInt()))); break;
                         case "linkedList": sample = new Sample(field(name), random -> new java.util.LinkedList<>(Arrays.asList("x" + random.nextInt(), "y"))); break;
+                        case "item": sample = new Sample(org.bukkit.inventory.ItemStack.class, ConverterRoundTripPropertyTest::randomItem); break;
+                        case "delegateItem": sample = new Sample(org.bukkit.inventory.ItemStack.class,
+                                random -> new DelegatingItemStackDouble(randomItem(random))); break;
+                        case "location": sample = new Sample(org.bukkit.Location.class, random -> new org.bukkit.Location(
+                                org.bukkit.Bukkit.getWorld("world"), random.nextDouble(), random.nextDouble(), random.nextDouble(),
+                                random.nextFloat() * 360, random.nextFloat() * 90)); break;
+                        case "material": sample = new Sample(org.bukkit.Material.class, random -> random.nextBoolean()
+                                ? org.bukkit.Material.STONE : org.bukkit.Material.DIAMOND); break;
                         case "secondEnum": sample = new Sample(SecondMode.class, random -> SecondMode.values()[random.nextInt(2)]); break;
                         default: sample = new Sample(field(name), random -> Arrays.asList(Mode.FIRST, Mode.SECOND));
                     }
@@ -110,6 +126,9 @@ class ConverterRoundTripPropertyTest {
 
     private static Object semantic(Object value) {
         if (value == null) { return null; }
+        if (value instanceof org.bukkit.configuration.ConfigurationSection) {
+            return semantic(((org.bukkit.configuration.ConfigurationSection) value).getValues(false));
+        }
         if (value.getClass().isArray()) {
             List<Object> result = new ArrayList<>();
             for (int i = 0; i < Array.getLength(value); i++) { result.add(semantic(Array.get(value, i))); }
@@ -171,7 +190,21 @@ class ConverterRoundTripPropertyTest {
         shape(result, SortedMap.class, "sortedMap", random -> new TreeMap<>(Collections.singletonMap("key", random.nextInt())));
         shape(result, TreeMap.class, "treeMap", random -> new TreeMap<>(Collections.singletonMap("key", random.nextInt())));
         result.put(Object[].class, new Sample(field("referenceArray"), random -> new String[]{"a" + random.nextInt(), "b"}));
+        result.put(org.bukkit.World.class, new Sample(org.bukkit.World.class, random -> org.bukkit.Bukkit.getWorld("world")));
+        result.put(org.bukkit.configuration.serialization.ConfigurationSerializable.class,
+                new Sample(org.bukkit.inventory.ItemStack.class, ConverterRoundTripPropertyTest::randomItem));
+        result.put(org.bukkit.configuration.ConfigurationSection.class, new Sample(Object.class, random -> {
+            org.bukkit.configuration.MemoryConfiguration section = new org.bukkit.configuration.MemoryConfiguration();
+            section.set("number", random.nextInt());
+            return section;
+        }));
         return result;
+    }
+
+    private static org.bukkit.inventory.ItemStack randomItem(Random random) {
+        org.bukkit.inventory.ItemStack item = BukkitConverterTest.item();
+        item.setAmount(1 + random.nextInt(32));
+        return item;
     }
 
     private static void scalar(Map<Class<?>, Sample> samples, Class<?> type, Function<Random, Object> generator) {
