@@ -243,8 +243,8 @@ class ConfigEntityGoldenTest {
             Files.write(file, "group:\n  setting: inherited\n".getBytes(StandardCharsets.UTF_8));
             config.init(plugin);
         }
-        String original = "# Operator header\ndefaults: &defaults\n  # Anchor setting note\n  setting: inherited\n"
-                + "  # Anchor sibling note\n  sibling: kept\ngroup:\n  <<: *defaults\n  # Local note\n  local: retained\n"
+        String original = "# Operator header\n# Anchor owner note\ndefaults: &defaults\n  setting: inherited\n"
+                + "  sibling: kept\ngroup:\n  <<: *defaults\n  # Local note\n  local: retained\n"
                 + "# Tail note\ntail: intact\n";
         Files.write(file, original.getBytes(StandardCharsets.UTF_8));
         Map<String, Object> expected = read(original);
@@ -264,8 +264,9 @@ class ConfigEntityGoldenTest {
         com.ultikits.ultitools.config.document.ConfigDocument document =
                 com.ultikits.ultitools.config.document.ConfigDocument.load(file).document();
         assertThat(document.blockComment(Arrays.asList("group", "setting"))).containsExactly("Owned setting note");
-        assertThat(document.blockComment(Arrays.asList("defaults", "setting"))).containsExactly("Anchor setting note");
-        assertThat(document.blockComment(Arrays.asList("defaults", "sibling"))).containsExactly("Anchor sibling note");
+        assertThat(document.blockComment(Arrays.asList("defaults"))).contains("Anchor owner note");
+        assertThat(document.blockComment(Arrays.asList("defaults", "setting"))).isEmpty();
+        assertThat(document.blockComment(Arrays.asList("defaults", "sibling"))).isEmpty();
         byte[] bytes = Files.readAllBytes(file);
         Files.setLastModifiedTime(file, FileTime.fromMillis(946684800000L));
         FileTime time = Files.getLastModifiedTime(file);
