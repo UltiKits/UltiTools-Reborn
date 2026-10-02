@@ -267,7 +267,7 @@ class ConfigPanelMapEntryEditTest {
             assertThat(disk.get(target)).isEqualTo(5); assertThat(disk.get(sibling)).isEqualTo(7);
             values.save(); assertThat(values.isModifiedSinceSnapshot()).isFalse();
             assertThat(warnings).containsExactly("Configuration file " + file.toAbsolutePath()
-                    + " had operator-edited keys overwritten: '" + String.join(".", sibling) + "'");
+                    + " had operator-edited keys overwritten: '" + shape + "'");
             disk = ConfigDocument.parse(new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
             assertThat(disk.get(sibling)).isEqualTo(9);
             ShapeValues restarted = new ShapeValues("shapes.yml"); restarted.init(plugin);
