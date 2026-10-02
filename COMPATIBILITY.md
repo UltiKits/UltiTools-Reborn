@@ -95,6 +95,19 @@ failure preserves earlier successful files and protects the failed entity until 
 Standalone registration still writes immediately. Framework-internal initialization bridges are not
 a module transaction API.
 
+### Superseded-copy configuration ordering
+
+As of 6.3.0, before framework construction of an identifiable newer module copy, the framework
+reads its own JAR plugin.yml using the constructor's main/version defaults and existing version
+comparator, and saves the loaded old copy's dirty configurations in sorted file-path order.
+A failed or protected old save refuses incoming construction and retains the old active copy.
+The old copy is not unloaded before incoming activation succeeds. If identity is unavailable
+before construction, or an already-constructed instance is supplied, there is no late old save:
+successful supersede warns once with the dropped file/entry keys (never values), then releases
+old configuration entities. Failed incoming construction, compatibility, assembly or activation
+releases only refused incoming configuration owners; existing owners remain registered.
+No constructor deferral, early unload or public storage/transaction API is introduced.
+
 ### Configuration registry server-thread confinement
 
 As of 6.3.0, all ConfigManager registry operations are server-thread confined while a server

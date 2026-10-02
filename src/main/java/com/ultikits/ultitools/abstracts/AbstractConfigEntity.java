@@ -386,6 +386,22 @@ public abstract class AbstractConfigEntity {
         }
     }
 
+    /** Names unsaved declared entries without exposing their values, for superseded-copy reporting.
+     * @return changed entry paths
+     */
+    @ApiStatus.Internal
+    public final List<String> unsavedEntryPaths() {
+        synchronized (this) {
+            List<String> paths = new ArrayList<>();
+            for (Field field : configEntryFields()) {
+                if (savedSnapshot == null || !orderedEquals(savedSnapshot.get(field), plainValue(field))) {
+                    paths.add(fieldPath(field));
+                }
+            }
+            return paths;
+        }
+    }
+
     private static boolean orderedEquals(Object left, Object right) {
         if (left instanceof Map && right instanceof Map) {
             Map<?, ?> a = (Map<?, ?>) left; Map<?, ?> b = (Map<?, ?>) right;

@@ -365,7 +365,7 @@ public class ConfigManager {
      * @return Config entity
      */
     public <T extends AbstractConfigEntity> T getConfigEntity(UltiToolsPlugin plugin, String path, Class<T> type) {
-        requireConfigThread(plugin, "getConfigEntity " + path + "");
+        requireConfigThread(plugin, "getConfigEntity " + path);
         Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(plugin);
         if (configMap == null) {
             return null;
@@ -419,6 +419,47 @@ public class ConfigManager {
     public void unregisterAll(UltiToolsPlugin plugin) {
         if (!permitsConfigThread(plugin, "unregisterAll")) { return; }
         pluginConfigMap.remove(plugin);
+    }
+
+    Set<UltiToolsPlugin> registeredOwners(Class<?> moduleClass) {
+        requireConfigThread(null, "registeredOwners");
+        Set<UltiToolsPlugin> owners = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (UltiToolsPlugin owner : pluginConfigMap.keySet()) {
+            if (owner.getClass() == moduleClass) { owners.add(owner); }
+        }
+        return owners;
+    }
+
+    void saveBeforeReplacement(UltiToolsPlugin plugin) throws IOException {
+        requireConfigThread(plugin, "saveBeforeReplacement");
+        Map<String, AbstractConfigEntity> entities = pluginConfigMap.get(plugin);
+        if (entities == null) { return; }
+        for (String path : new TreeSet<>(entities.keySet())) {
+            AbstractConfigEntity entity = entities.get(path);
+            synchronized (entity) {
+                if (entity.isLastLoadUnparseable()) {
+                    throw new IOException("Cannot save superseded module " + plugin.getPluginName()
+                            + " configuration " + path + ": file is protected until reload");
+                }
+                if (entity.isModifiedSinceSnapshot()) { entity.save(); }
+                if (entity.isModifiedSinceSnapshot()) {
+                    throw new IOException("Superseded module " + plugin.getPluginName()
+                            + " configuration " + path + " remains unsaved");
+                }
+            }
+        }
+    }
+
+    List<String> unsavedPaths(UltiToolsPlugin plugin) {
+        requireConfigThread(plugin, "unsavedPaths");
+        List<String> paths = new ArrayList<>();
+        Map<String, AbstractConfigEntity> entities = pluginConfigMap.get(plugin);
+        if (entities != null) {
+            for (String path : new TreeSet<>(entities.keySet())) {
+                for (String key : entities.get(path).unsavedEntryPaths()) { paths.add(path + ":" + key); }
+            }
+        }
+        return paths;
     }
 
     /**
