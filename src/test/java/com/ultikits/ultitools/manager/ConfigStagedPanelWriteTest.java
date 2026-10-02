@@ -174,6 +174,55 @@ class ConfigStagedPanelWriteTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"save", "update"})
+    @org.junit.jupiter.api.Timeout(20)
+    void completePanelTransactionSerializesDirectEntityPersistence(String operation) throws Exception {
+        Values entity = entities.get(0);
+        java.util.concurrent.CountDownLatch attempted = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicReference<Throwable> outcome = new java.util.concurrent.atomic.AtomicReference<>();
+        Thread direct = new Thread(() -> {
+            attempted.countDown();
+            try {
+                synchronized (entity) {
+                    if (operation.equals("save")) { entity.other = "direct"; entity.save(); }
+                    else { JsonObject edit = new JsonObject(); edit.addProperty("other", "direct"); entity.updateProperties(edit); }
+                }
+            } catch (Throwable failure) { outcome.set(failure); }
+        }, "direct-config-writer");
+        try (MockedStatic<AtomicConfigWriter> writer = Mockito.mockStatic(
+                AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
+            AtomicInteger staged = new AtomicInteger();
+            writer.when(() -> AtomicConfigWriter.stage(any(Path.class), anyString())).thenAnswer(call -> {
+                AtomicConfigWriter.StagedWrite observed = Mockito.spy(
+                        (AtomicConfigWriter.StagedWrite) call.callRealMethod());
+                if (staged.incrementAndGet() == 1) {
+                    Mockito.doAnswer(commit -> {
+                        direct.start();
+                        assertThat(attempted.await(2, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+                        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+                        while (direct.isAlive() && direct.getState() != Thread.State.BLOCKED
+                                && System.nanoTime() < deadline) { Thread.yield(); }
+                        assertThat(direct.getState()).as("direct writer waits for the complete panel transaction")
+                                .isEqualTo(Thread.State.BLOCKED);
+                        return commit.callRealMethod();
+                    }).when(observed).commit();
+                }
+                return observed;
+            });
+            // A server-lane caller may already hold a different touched entity; reentry must be safe.
+            synchronized (entities.get(2)) { manager.loadFromJson(payload()); }
+        } finally { direct.join(3000); }
+        assertThat(direct.isAlive()).isFalse(); assertThat(outcome.get()).isNull();
+        assertThat(entity.value).isEqualTo(10); assertThat(entity.other).isEqualTo("direct");
+        assertThat(entity.isModifiedSinceSnapshot()).isFalse();
+        ConfigDocument disk = ConfigDocument.parse(new String(Files.readAllBytes(directory.resolve("file1.yml")),
+                StandardCharsets.UTF_8));
+        assertThat(disk.get(Arrays.asList("value"))).isEqualTo(10);
+        assertThat(disk.get(Arrays.asList("other"))).isEqualTo("direct");
+        assertNoTemporaries();
+    }
+
     private String payload() {
         JsonObject files = new JsonObject();
         for (Values entity : entities) {

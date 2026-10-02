@@ -126,6 +126,53 @@ class ConfigPanelMapEntryEditTest {
         assertThat(Files.getLastModifiedTime(directory.resolve("maps.yml"))).isEqualTo(before);
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void leafEditPreservesPendingTypedSiblingAndItsDirtyBaseline(boolean staged) throws Exception {
+        entity.worlds.put("overworld", 3);
+        entity.save();
+        entity.worlds.put("overworld", 9);
+        editWorld(staged);
+        assertThat(entity.worlds).containsEntry("nether", 5).containsEntry("overworld", 9);
+        assertThat(entity.isModifiedSinceSnapshot()).isTrue();
+        assertThat(readWorlds()).containsEntry("nether", 5).containsEntry("overworld", 3);
+        entity.save();
+        assertThat(readWorlds()).containsEntry("overworld", 9);
+        assertThat(entity.isModifiedSinceSnapshot()).isFalse();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+    void leafEditPreservesIndependentDiskSiblingWithoutAcknowledgingIt(boolean staged) throws Exception {
+        entity.worlds.put("overworld", 3); entity.save();
+        Path file = directory.resolve("maps.yml");
+        Files.write(file, new String(Files.readAllBytes(file), StandardCharsets.UTF_8)
+                .replace("overworld: 3", "overworld: 7").getBytes(StandardCharsets.UTF_8));
+        editWorld(staged);
+        assertThat(readWorlds()).containsEntry("nether", 5).containsEntry("overworld", 7);
+        assertThat(entity.worlds).containsEntry("nether", 5).containsEntry("overworld", 3);
+        java.lang.reflect.Field acknowledgments = AbstractConfigEntity.class.getDeclaredField("acknowledgedRaw");
+        acknowledgments.setAccessible(true);
+        Object acknowledgment = ((Map<?, ?>) acknowledgments.get(entity)).get(Values.class.getDeclaredField("worlds"));
+        java.lang.reflect.Field value = acknowledgment.getClass().getDeclaredField("value"); value.setAccessible(true);
+        assertThat((Map<?, ?>) value.get(acknowledgment)).isEqualTo(new LinkedHashMap<String, Integer>() {{
+            put("nether", 5); put("overworld", 3);
+        }});
+    }
+
+    private void editWorld(boolean staged) throws Exception {
+        if (staged) { manager.loadFromJson("{\"MapPanel\":{\"maps.yml\":{\"limits.worlds.nether\":5}}}"); }
+        else { manager.loadFromJson("maps.yml", "{\"limits.worlds.nether\":5}"); }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> readWorlds() throws Exception {
+        ConfigDocument disk = ConfigDocument.parse(new String(Files.readAllBytes(directory.resolve("maps.yml")),
+                StandardCharsets.UTF_8));
+        return (Map<String, Object>) disk.get(Arrays.asList("limits", "worlds"));
+    }
+
     private void assertUnchanged() {
         try { assertThat(Files.readAllBytes(directory.resolve("maps.yml"))).isEqualTo(original); }
         catch (java.io.IOException failure) { throw new AssertionError(failure); }
