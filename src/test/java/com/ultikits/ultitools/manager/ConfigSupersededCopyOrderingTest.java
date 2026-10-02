@@ -74,6 +74,7 @@ class ConfigSupersededCopyOrderingTest {
             lenient().when(core.getDataFolder()).thenReturn(directory.toFile());
             lenient().when(core.getConfig()).thenReturn(new YamlConfiguration());
             lenient().when(core.getLogger()).thenReturn(Logger.getLogger("SupersedeFixture"));
+            lenient().when(core.getTextResource("env.yml")).thenAnswer(call -> new java.io.StringReader("version: 6.3.0\n"));
         });
         old = mock(UltiToolsPlugin.class);
         lenient().when(old.getPluginName()).thenReturn("SupersededModule");
