@@ -23,6 +23,7 @@ import com.ultikits.testfixtures.economyattribution.ownpackage.commands.OwnPacka
 import com.ultikits.testfixtures.economyattribution.unknownfirst.UnknownFirstCaller;
 import com.ultikits.testfixtures.economyattribution.unknownsecond.UnknownSecondCaller;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.manager.PluginListSeeding;
 import com.ultikits.ultitools.manager.PluginManager;
 
 /**
@@ -74,7 +75,7 @@ class EconomyUtilsOwnPackageAttributionTest {
     void callerInOwnPackageOutsideDeclaredRootIsAttributed() {
         UltiToolsPlugin module = mock(OwnPackageModule.class);
         when(module.getPluginName()).thenReturn("OwnPackageModule");
-        pluginManager.getPluginList().add(module);
+        PluginListSeeding.add(pluginManager, module);
 
         OwnPackageCaller.requestEconomy();
 

@@ -86,7 +86,7 @@ class PluginManagerRejectedCandidateLanguageTest {
         when(loaded.getMainClass()).thenReturn(BootLanguageFixture.MAIN_CLASS);
         when(loaded.getPluginName()).thenReturn(BootLanguageFixture.MODULE);
         when(loaded.isNewerVersionThan(any())).thenReturn(true);
-        pluginManager.getPluginList().add(loaded);
+        PluginListSeeding.add(pluginManager, loaded);
     }
 
     private String[] langDirectoryListing() {
