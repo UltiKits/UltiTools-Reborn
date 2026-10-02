@@ -94,6 +94,7 @@ class ConfigBatchBufferingTest {
             registry.when(() -> ConverterRegistry.prepareSelectedConfigs(plugin,
                     new String[]{"bad"}, getClass().getClassLoader()))
                     .thenReturn(new LinkedHashSet<>(Arrays.asList(Refused.class)));
+            registry.clearInvocations(); // Exclude setup from the bad-package control.
             assertThatThrownBy(() -> manager.registerAll(plugin, new String[]{"batch", "bad"},
                     getClass().getClassLoader())).isInstanceOf(ConfigurationException.class);
             assertThat(Files.exists(directory.resolve("first.yml"))).isFalse();
@@ -157,6 +158,7 @@ class ConfigBatchBufferingTest {
         registry.when(() -> ConverterRegistry.prepareSelectedConfigs(plugin,
                 new String[]{"batch"}, getClass().getClassLoader()))
                 .thenReturn(new LinkedHashSet<>(Arrays.asList(types)));
+        registry.clearInvocations(); // Real-method static stubbing is setup, not an operation.
         return registry;
     }
 
