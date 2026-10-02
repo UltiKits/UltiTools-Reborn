@@ -129,6 +129,22 @@ class ConfigStagedPanelWriteTest {
     }
 
     @Test
+    void preparedCandidateNeverPublishesFieldsBeforeAllFilesCommit() throws Exception {
+        Values value = entities.get(0);
+        JsonObject edit = new JsonObject(); edit.addProperty("value", 10);
+        AbstractConfigEntity.PanelWrite pending = value.preparePanelWrite(edit);
+        try {
+            assertThat(value.value).as("pending panel candidate is not live state").isEqualTo(1);
+            assertThat(state(value)).isEqualTo(checkpoints.get(0));
+            pending.commit();
+            assertThat(value.value).as("commit alone does not acknowledge fields").isEqualTo(1);
+            pending.acknowledge();
+            assertThat(value.value).isEqualTo(10);
+            assertThat(value.other).isEqualTo("unsaved");
+        } finally { pending.discard(); }
+    }
+
+    @Test
     void semanticallyUnchangedPayloadWritesNothing() throws Exception {
         JsonObject files = new JsonObject();
         List<java.nio.file.attribute.FileTime> times = new ArrayList<>();
