@@ -150,6 +150,19 @@ class ConfigSupersededCopyOrderingTest {
             assertThat(configs.getAllConfigEntities(old)).containsValue(entity);
         }
     }
+    @Test void throwingActivationReleasesOnlyIncomingRegistry() throws Exception {
+        UltiToolsPlugin incoming = mock(UltiToolsPlugin.class);
+        lenient().when(incoming.getPluginName()).thenReturn("RefusedActivation");
+        lenient().when(incoming.getContext()).thenReturn(new SimpleContainer());
+        lenient().when(incoming.getResourceFolderPath()).thenReturn(directory.toString());
+        ConfigFileStubs.stubConfigFolder(incoming, directory.toFile());
+        configs.register(incoming, new Values("copy.yml"));
+        when(incoming.registerSelf()).thenThrow(new IllegalStateException("activation refusal"));
+        Method method = PluginManager.class.getDeclaredMethod("attemptPluginRegistration", UltiToolsPlugin.class);
+        method.setAccessible(true); assertThat(method.invoke(plugins, incoming)).isEqualTo(false);
+        assertThat(configs.getAllConfigEntities(incoming)).isNull();
+        assertThat(configs.getAllConfigEntities(old)).containsValue(entity);
+    }
     private UltiToolsPlugin activateConstructedCopy(boolean accepted) throws Exception {
         UltiToolsPlugin incoming = mock(UltiToolsPlugin.class);
         lenient().when(incoming.getPluginName()).thenReturn("SupersededModule");
