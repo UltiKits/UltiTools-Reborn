@@ -126,6 +126,27 @@ class LegacyParserAdapterTest {
         assertThat(input).containsExactly("first", "second");
     }
 
+    @Test
+    void explicitLegacyResultsRetainEveryBoxedWideningPairWithoutNarrowing() throws Exception {
+        Class<?>[] types = {Byte.class, Short.class, Integer.class, Long.class, Float.class, Double.class};
+        Number[] numbers = {Byte.valueOf((byte) 7), Short.valueOf((short) 7), Integer.valueOf(7),
+                Long.valueOf(7), Float.valueOf(7), Double.valueOf(7)};
+        for (int from = 0; from < types.length; from++) {
+            for (int to = from; to < types.length; to++) {
+                Object value = registry.fromPlainResult(numbers[from], types[to], "legacy.yml",
+                        Collections.singletonList("value"), entry("plain")).value();
+                assertThat(value).as("%s to %s", types[from], types[to]).isInstanceOf(types[to]);
+                assertThat(((Number) value).doubleValue()).isEqualTo(7.0);
+            }
+            for (int to = 0; to < from; to++) {
+                final Number input = numbers[from]; final Class<?> target = types[to];
+                assertThatThrownBy(() -> registry.fromPlainResult(input, target, "legacy.yml",
+                        Collections.singletonList("value"), entry("plain")))
+                        .isInstanceOf(ConversionException.class).hasMessageContaining("legacy.yml");
+            }
+        }
+    }
+
     private static ConfigEntry entry(String name) throws NoSuchFieldException {
         return Shapes.class.getDeclaredField(name).getAnnotation(ConfigEntry.class);
     }

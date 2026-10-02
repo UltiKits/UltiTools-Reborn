@@ -82,6 +82,39 @@ class ConfigNumericWideningTest {
         }
     }
 
+    // Deliberately verifies the frozen explicit legacy-parser binding contract.
+    @SuppressWarnings("removal")
+    public static class LegacyNumbers extends AbstractConfigEntity {
+        @ConfigEntry(path = "value", parser = LegacyParser.class) Long value = 7L;
+        public LegacyNumbers(String path) { super(path); }
+    }
+
+    // Integer document values exercise the prior boxed widening boundary.
+    @SuppressWarnings("removal")
+    public static class LegacyParser extends com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser { }
+
+    @Test
+    void explicitLegacyParserWidensOnBootReloadDefaultAndEveryPanelRoute() throws Exception {
+        com.ultikits.ultitools.manager.ConfigManager manager = new com.ultikits.ultitools.manager.ConfigManager();
+        LegacyNumbers first = new LegacyNumbers("legacy.yml"); manager.register(plugin, first);
+        assertThat(first.value).isEqualTo(7L);
+        LegacyNumbers second = new LegacyNumbers("legacy.yml"); manager.register(plugin, second);
+        assertThat(second.value).isEqualTo(7L);
+        Path legacy = tempDir.resolve("legacy.yml");
+        Files.write(legacy, "value: 19\n".getBytes(StandardCharsets.UTF_8)); second.reload();
+        assertThat(second.value).isEqualTo(19L);
+        second.value = 25L;
+        Files.write(legacy, "value: 29\n".getBytes(StandardCharsets.UTF_8)); second.reload();
+        assertThat(second.value).as("merged reload retains unsaved value").isEqualTo(25L);
+        manager.loadFromJson("legacy.yml", "{\"value\":31}");
+        assertThat(second.value).isEqualTo(31L);
+        manager.loadFromJson("{\"NumbersModule\":{\"legacy.yml\":{\"value\":33}}}");
+        assertThat(second.value).isEqualTo(33L);
+        assertThat(second.isModifiedSinceSnapshot()).isFalse();
+        Files.write(legacy, "value: invalid\n".getBytes(StandardCharsets.UTF_8)); second.reload();
+        assertThat(second.value).as("invalid load restores and rebinds the declared default").isEqualTo(7L);
+    }
+
     @BeforeEach
     void setUp() {
         plugin = Mockito.mock(UltiToolsPlugin.class);
