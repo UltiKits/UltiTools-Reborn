@@ -74,7 +74,7 @@ class ConfigSupersededCopyOrderingTest {
             lenient().when(core.getDataFolder()).thenReturn(directory.toFile());
             lenient().when(core.getConfig()).thenReturn(new YamlConfiguration());
             lenient().when(core.getLogger()).thenReturn(Logger.getLogger("SupersedeFixture"));
-            lenient().when(core.getTextResource("env.yml")).thenAnswer(call -> new java.io.StringReader("version: 6.3.0\n"));
+            // Framework version is controlled at the static compatibility boundary below.
         });
         old = mock(UltiToolsPlugin.class);
         lenient().when(old.getPluginName()).thenReturn("SupersededModule");
@@ -167,7 +167,12 @@ class ConfigSupersededCopyOrderingTest {
     }
     private void initialize(Class<?> type) throws Exception {
         Method method = PluginManager.class.getDeclaredMethod("initializePlugin", ClassLoader.class, Class.class);
-        method.setAccessible(true); method.invoke(plugins, type.getClassLoader(), type);
+        method.setAccessible(true);
+        try (org.mockito.MockedStatic<com.ultikits.ultitools.UltiTools> core =
+                org.mockito.Mockito.mockStatic(com.ultikits.ultitools.UltiTools.class, CALLS_REAL_METHODS)) {
+            core.when(com.ultikits.ultitools.UltiTools::getPluginVersion).thenReturn(630);
+            method.invoke(plugins, type.getClassLoader(), type);
+        }
     }
     private URLClassLoader incomingJar(boolean identity) throws Exception {
         Path jar = directory.resolve(identity ? "identified.jar" : "unidentified.jar");
