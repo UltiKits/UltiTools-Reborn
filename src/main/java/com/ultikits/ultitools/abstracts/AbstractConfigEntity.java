@@ -171,19 +171,36 @@ public abstract class AbstractConfigEntity {
         return TypeToken.of(getClass()).resolveType(field.getGenericType()).getType();
     }
 
-    private Object plainValue(Field field) {
+    private Object plainValue(Field field) { return plainValue(field, false); }
+
+    private Object plainValue(Field field, boolean writing) {
         field.setAccessible(true);
         try {
-            return PlainData.copy(registry().toPlain(ReflectionUtil.getFieldValue(this, field), declaredType(field),
-                    configFilePath, keys(field), field.getAnnotation(ConfigEntry.class)));
+            ConversionResult<Object> result = registry().toPlainResult(ReflectionUtil.getFieldValue(this, field),
+                    declaredType(field), configFilePath, keys(field), field.getAnnotation(ConfigEntry.class));
+            if (writing && !result.failures().isEmpty()) {
+                List<String> locations = new ArrayList<>();
+                for (ConversionFailure failure : result.failures()) {
+                    List<String> path = failure.path();
+                    List<String> relative = path.subList(keys(field).size(), path.size());
+                    boolean secret = isSecretShapedFieldName(field.getName());
+                    for (String key : path) { secret |= isSecretShapedFieldName(key); }
+                    locations.add(secret ? "<redacted>" : relative.toString());
+                }
+                LOGGER.warning("File " + configFilePath + ", key '" + fieldPath(field)
+                        + "': omitted null collection/array elements at " + String.join(", ", locations));
+            }
+            return PlainData.copy(result.value());
         } catch (ConversionException failure) {
             throw new ConfigurationException(failure.getMessage(), failure);
         }
     }
 
-    private Map<Field, Object> currentPlain(List<Field> fields) {
+    private Map<Field, Object> currentPlain(List<Field> fields) { return currentPlain(fields, false); }
+
+    private Map<Field, Object> currentPlain(List<Field> fields, boolean writing) {
         Map<Field, Object> plain = new LinkedHashMap<>();
-        for (Field field : fields) { plain.put(field, plainValue(field)); }
+        for (Field field : fields) { plain.put(field, plainValue(field, writing)); }
         return plain;
     }
 
@@ -219,7 +236,7 @@ public abstract class AbstractConfigEntity {
 
     private PreparedSave prepareSave(List<Field> fields, Map<Field, List<List<String>>> leaves) throws IOException {
         // Convert every candidate before reading or mutating the presentation document.
-        Map<Field, Object> values = currentPlain(fields);
+        Map<Field, Object> values = currentPlain(fields, true);
         ConfigLoadResult loaded = ConfigDocument.load(ultiToolsPlugin.getConfigFile(configFilePath).toPath());
         if (protectFailedLoad(loaded)) {
             throw new IOException("Cannot save " + configFilePath + ": current file is " + loaded.state());
@@ -678,7 +695,7 @@ public abstract class AbstractConfigEntity {
         boolean changed = false;
         if (initialize) {
             for (Field field : missing) {
-                Object value = plainValue(field);
+                Object value = plainValue(field, true);
                 next.set(keys(field), value); addEntryComment(next, field);
                 baseline.put(field, value); changed = true;
             }

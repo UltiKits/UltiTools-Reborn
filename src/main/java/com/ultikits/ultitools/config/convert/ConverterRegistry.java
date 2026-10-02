@@ -377,9 +377,28 @@ public final class ConverterRegistry {
     @SuppressWarnings("removal")
     public Object toPlain(Object value, Type type, String file, List<String> path, ConfigEntry entry)
             throws ConversionException {
-        Context ctx = new Context(this, file, path, type, new ArrayList<>());
-        if (entry == null || entry.parser() == DefaultConfigParser.class) { return write(value, ctx); }
-        return invokeWrite(new LegacyParserAdapter(entry.parser()), value, ctx);
+        return toPlainResult(value, type, file, path, entry).value();
+    }
+
+    /**
+     * Internal write-planning bridge; inspection callers may discard the located omissions.
+     * @param value Java value
+     * @param type declared type
+     * @param file configuration file
+     * @param path whole keys
+     * @param entry annotation, or null for registry conversion
+     * @return plain value and collected nested omissions
+     * @throws ConversionException on conversion failure
+     */
+    @ApiStatus.Internal
+    @SuppressWarnings("removal")
+    public ConversionResult<Object> toPlainResult(Object value, Type type, String file, List<String> path, ConfigEntry entry)
+            throws ConversionException {
+        List<ConversionFailure> failures = new ArrayList<>();
+        Context ctx = new Context(this, file, path, type, failures);
+        Object plain = entry == null || entry.parser() == DefaultConfigParser.class
+                ? write(value, ctx) : invokeWrite(new LegacyParserAdapter(entry.parser()), value, ctx);
+        return new ConversionResult<>(plain, failures);
     }
 
     /**

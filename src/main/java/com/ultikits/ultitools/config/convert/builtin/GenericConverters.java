@@ -88,7 +88,10 @@ public final class GenericConverters implements ConfigConverter<Object> {
             Type component = ConversionTypes.component(ctx.declaredType());
             List<Object> values = new ArrayList<>();
             for (int index = 0; index < Array.getLength(value); index++) {
-                values.add(ctx.child(Integer.toString(index), component).writeTyped(Array.get(value, index), component));
+                Object nested = Array.get(value, index);
+                Context child = ctx.child(Integer.toString(index), component);
+                if (nested == null) { child.record(null, child.failure("Null reference-array element omitted", null)); }
+                else { values.add(child.writeTyped(nested, component)); }
             }
             return values;
         }
@@ -97,7 +100,9 @@ public final class GenericConverters implements ConfigConverter<Object> {
             List<Object> values = new ArrayList<>();
             int index = 0;
             for (Object nested : (Collection<?>) value) {
-                values.add(ctx.child(Integer.toString(index++), element).writeTyped(nested, element));
+                Context child = ctx.child(Integer.toString(index++), element);
+                if (nested == null) { child.record(null, child.failure("Null typed collection element omitted", null)); }
+                else { values.add(child.writeTyped(nested, element)); }
             }
             return values;
         }
