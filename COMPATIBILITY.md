@@ -211,8 +211,9 @@ not that legacy class. Third-party subclasses retain their old executable behavi
 built-in collection semantics. The six announcements are indexed in
 [`compatibility/DEPRECATIONS.md`](compatibility/DEPRECATIONS.md).
 
-For a custom type, remove `parser = ...` from the field and place a public no-argument converter
-in the module's `@UltiToolsModule.scanBasePackages`. Converters are discovered before configuration
+For a custom type, remove `parser = ...` from the field and place a public top-level converter
+with a public no-argument constructor in the module's `@UltiToolsModule.scanBasePackages`.
+The package scanner discovers top-level classes only, not nested converter classes. Converters are discovered before configuration
 construction and are not IoC beans: do not depend on injected services or constructor side effects.
 Two registrations for the same exact class refuse load naming both converters. Lookup uses an
 explicit non-default legacy parser first; otherwise the module's exact registration, then its
@@ -220,20 +221,16 @@ non-exact superclass/interface registrations, then the framework's registrations
 order, generic collections/arrays/enums/Object, and registered Bukkit serialization fallback.
 `exact = true` prevents a registration from serving subclasses.
 
-Here is a map-shaped value migration. Put these nested classes in a module class named
-`MigrationExample` (with the imports shown); keep `TokenConverter` in a scanned package. `Token`
+Here is a map-shaped value migration. Put the value/parser/field members in a module class named
+`MigrationExample` in package `example.config` (imports go before the outer class). Put the converter
+in its own public top-level `TokenConverter.java` in the same scanned package, as shown separately. `Token`
 must provide semantic `equals`/`hashCode` in production so round-trip comparisons mean value equality.
 The converter deliberately accepts only the one-key shape it can reproduce; accepting extra keys
 and dropping them would violate `toPlain(fromPlain(p)) == p`.
 
 ```java
-import java.util.LinkedHashMap;
 import java.util.Map;
 import com.ultikits.ultitools.annotations.ConfigEntry;
-import com.ultikits.ultitools.config.convert.ConfigConverter;
-import com.ultikits.ultitools.config.convert.ConfigConverterFor;
-import com.ultikits.ultitools.config.convert.ConversionContext;
-import com.ultikits.ultitools.config.convert.ConversionException;
 import com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser;
 
 // Before: inherits the legacy reflective writer and section reader.
@@ -259,8 +256,22 @@ private Token oldToken = new Token("hello");
 @ConfigEntry(path = "token")
 private Token token = new Token("hello");
 
+```
+
+```java
+// TokenConverter.java: a separate top-level source file.
+package example.config;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+import example.config.MigrationExample.Token;
+import com.ultikits.ultitools.config.convert.ConfigConverter;
+import com.ultikits.ultitools.config.convert.ConfigConverterFor;
+import com.ultikits.ultitools.config.convert.ConversionContext;
+import com.ultikits.ultitools.config.convert.ConversionException;
+
 @ConfigConverterFor(Token.class)
-public static class TokenConverter implements ConfigConverter<Token> {
+public class TokenConverter implements ConfigConverter<Token> {
     public TokenConverter() { }
     @Override public Object toPlain(Token value, ConversionContext ctx) {
         if (value == null) { return null; }
@@ -316,7 +327,7 @@ separate crash-safe multi-file transaction limit.
 
 ### 中文补充：6.3.0 配置层迁移
 
-- 新扩展点是 `ConfigConverter<T>` 和 `@ConfigConverterFor`，转换器必须是扫描包内带 public 无参构造器的类，不是 IoC bean。未知声明类型在读取或创建文件前拒绝模块加载；官方 UltiRecipe 的配方对象需要模块自己的转换器。
+- 新扩展点是 `ConfigConverter<T>` 和 `@ConfigConverterFor`，转换器必须是扫描包内带 public 无参构造器的 public 顶层类；扫描器不发现嵌套转换器。它不是 IoC bean。未知声明类型在读取或创建文件前拒绝模块加载；官方 UltiRecipe 的配方对象需要模块自己的转换器。
 - 注解 `path` 中的点仍表示嵌套路径；映射里的 `g.m`、`o.O`、`wave.` 从 6.3.0 起按完整键保存。6.2 已经拆开的文件原样读取，不会自动合并。完整泛型参与绑定；无效集合元素跳过，无效字段用声明默认值，缺失的重载字段保留运行值。允许 null 的引用类型可往返；`Object` 中的 Bukkit 序列化对象读取后仍是普通映射。
 - 保存内容、注释文字、键顺序和支持的文件风格；有修改时整份经过 SnakeYAML 输出，运维排版可以规整。语义无变化不写文件，字节和修改时间不变。浮点数按最短可回读十进制判断，不要求二进制精确。
 - 先临时文件、force、原子替换；仅已允许的原子替换/临时创建拒绝才走备份后原地写。已有 `.bak` 先从当前文件刷新并原子替换，之后才打开目标。失败保留备份，只有成功严格加载当前文件才清理；不自动还原，不保证多文件崩溃事务。
