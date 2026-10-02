@@ -44,7 +44,11 @@ Warnings name the file, key and failed position/type; secret-shaped values and n
 are redacted. Unsupported declared types fail preflight before the file is read or created; register
 `@ConfigConverterFor` or declare a supported plain-data shape. The built-in Bukkit serialization
 fallback requires a registered alias; registered custom converters keep ownership of their types.
-For every value `x` of the declared type, `fromPlain(toPlain(x))` equals `x`. For every canonical
+For every value `x` of the declared type whose collections and arrays contain no null element,
+`fromPlain(toPlain(x))` equals `x`. Typed collections (including `List<Object>`) and reference arrays
+(including `Object[]`) omit null elements on write with one located warning per field. Reading keeps
+its existing skip/warning behavior; plain data in a declared `Object` slot is unchanged.
+Null map values and null whole fields still round-trip. For every canonical
 plain value `p` emitted by the converter (`p = toPlain(x)`), `toPlain(fromPlain(p))` equals `p`.
 A converter may accept noncanonical input `q`; `toPlain(fromPlain(q))` is its canonical form, and
 normalization is stable: `fromPlain(toPlain(fromPlain(q)))` equals `fromPlain(q)`. Approved coercions
@@ -63,8 +67,9 @@ sets and registered Bukkit values use converter plain output, not Java class tag
 loaded into an `Object` slot remains a plain map. Unknown runtime objects refuse saves without
 changing the file.
 
-Panel JSON uses the same conversion path as file binding and saves: integral numbers become plain
-`Long`, other numbers `Double`, objects ordered maps and arrays lists before typed conversion.
+Panel JSON uses the same conversion path as file binding and saves: integral numbers within the long
+range become plain `Long`; integers beyond the long range are kept exactly as `BigInteger`.
+Fractional numbers keep the existing `Double` route, objects ordered maps and arrays lists before typed conversion.
 A panel write persists only touched fields; unrelated unsaved code edits remain dirty. Validation
 runs before any missing-key or panel persistence. Snapshots track successful effective values,
 separately from the raw document and byte fingerprint. Reordering a map is dirty, but an order-only

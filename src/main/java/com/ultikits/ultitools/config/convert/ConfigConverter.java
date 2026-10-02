@@ -3,7 +3,10 @@ package com.ultikits.ultitools.config.convert;
 /**
  * Converts one Java value type to and from the configuration plain-data model.
  * Implementations must return plain data from {@link #toPlain(Object, ConversionContext)}.
- * For every value {@code x} of the declared type, {@code fromPlain(toPlain(x))} equals {@code x}.
+ * For every value {@code x} of the declared type whose collections and arrays contain no null
+ * element, {@code fromPlain(toPlain(x))} equals {@code x}. Typed collection and reference-array
+ * null elements are omitted on write with one located warning per field; read behavior is unchanged.
+ * Null map values and null whole fields remain plain data and round-trip.
  * For every canonical plain value {@code p} emitted by the converter ({@code p = toPlain(x)}),
  * {@code toPlain(fromPlain(p))} equals {@code p}. A converter may also accept noncanonical input
  * {@code q}; its canonical form is {@code toPlain(fromPlain(q))}, and normalization must be stable:
