@@ -222,11 +222,13 @@ class PluginInitiationUtilsConfigUpdateTest {
                     panelMessage("config/lang.yml", "{\"language\":\"zh\"}", "req-5"));
 
             JsonObject response = capturedResponse();
+            assertThat(response.keySet()).containsExactlyInAnyOrder("type", "data", "serverId");
             assertThat(response.get("type").getAsString()).isEqualTo("config_update_response");
             assertThat(response.get("serverId").getAsString()).isEqualTo("srv-1");
             // 嵌套而非扁平：其余所有 插件→Worker 的消息都把载荷放在 data 里。
             JsonObject payload = response.getAsJsonObject("data");
             assertThat(payload.get("requestId").getAsString()).isEqualTo("req-5");
+            assertThat(payload.keySet()).containsExactlyInAnyOrder("requestId", "status");
             assertThat(payload.get("status").getAsString()).isEqualTo("success");
         }
 
@@ -240,6 +242,7 @@ class PluginInitiationUtilsConfigUpdateTest {
 
             JsonObject payload = capturedResponse().getAsJsonObject("data");
             assertThat(payload.get("status").getAsString()).isEqualTo("error");
+            assertThat(payload.keySet()).containsExactlyInAnyOrder("requestId", "status", "error");
             assertThat(payload.get("error").getAsString()).contains("nope.yml");
         }
 
