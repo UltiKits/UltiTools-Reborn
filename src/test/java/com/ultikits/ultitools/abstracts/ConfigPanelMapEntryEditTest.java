@@ -163,22 +163,22 @@ class ConfigPanelMapEntryEditTest {
 
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
-    void fullDeclaredMapConverterNormalizesOnlyTheEditedLeafInPublishedAndPersistedState(boolean staged) throws Exception {
+    void fullDeclaredMapConverterRoundTripsUntouchedSiblings(boolean staged) throws Exception {
         com.ultikits.ultitools.config.convert.ConverterRegistry registry =
                 new com.ultikits.ultitools.config.convert.ConverterRegistry(
                         com.ultikits.ultitools.config.convert.ConverterRegistry.framework());
-        java.util.concurrent.atomic.AtomicBoolean normalize = new java.util.concurrent.atomic.AtomicBoolean();
         registry.register(Map.class, new com.ultikits.ultitools.config.convert.ConfigConverter<Map<String, Integer>>() {
             @Override public Object toPlain(Map<String, Integer> value,
                     com.ultikits.ultitools.config.convert.ConversionContext context) {
-                return new LinkedHashMap<>(value);
+                Map<String, Integer> plain = new LinkedHashMap<>();
+                value.forEach((key, number) -> plain.put(key, number - 10));
+                return plain;
             }
             @Override public Map<String, Integer> fromPlain(Object plain,
                     com.ultikits.ultitools.config.convert.ConversionContext context) {
                 assertThat(context.declaredType().getTypeName()).contains("java.util.Map<java.lang.String, java.lang.Integer>");
                 Map<String, Integer> result = new LinkedHashMap<>();
-                ((Map<?, ?>) plain).forEach((key, value) -> result.put(String.valueOf(key),
-                        ((Number) value).intValue() + (normalize.get() ? 10 : 0)));
+                ((Map<?, ?>) plain).forEach((key, value) -> result.put(String.valueOf(key), ((Number) value).intValue() + 10));
                 return result;
             }
         }, true);
@@ -187,15 +187,130 @@ class ConfigPanelMapEntryEditTest {
             registries.when(() -> com.ultikits.ultitools.config.convert.ConverterRegistry.forModule(plugin)).thenReturn(registry);
             Files.write(directory.resolve("custom.yml"), "limits:\n  nether: 2\n  overworld: 3\n".getBytes(StandardCharsets.UTF_8));
             TypedValues custom = new TypedValues("custom.yml"); manager.register(plugin, custom);
-            custom.limits.put("overworld", 9); normalize.set(true);
+            custom.limits.put("overworld", 19);
             if (staged) { manager.loadFromJson("{\"MapPanel\":{\"custom.yml\":{\"limits.nether\":5}}}"); }
             else { manager.loadFromJson("custom.yml", "{\"limits.nether\":5}"); }
-            assertThat(custom.limits).containsEntry("nether", 15).containsEntry("overworld", 9);
+            assertThat(custom.limits).containsEntry("nether", 15).containsEntry("overworld", 19);
             assertThat(custom.isModifiedSinceSnapshot()).isTrue();
             ConfigDocument disk = ConfigDocument.parse(new String(Files.readAllBytes(directory.resolve("custom.yml")),
                     StandardCharsets.UTF_8));
-            assertThat(disk.get(Arrays.asList("limits", "nether"))).isEqualTo(15);
+            assertThat(disk.get(Arrays.asList("limits", "nether"))).isEqualTo(5);
             assertThat(disk.get(Arrays.asList("limits", "overworld"))).isEqualTo(3);
+            custom.save();
+            TypedValues restarted = new TypedValues("custom.yml"); restarted.init(plugin);
+            assertThat(restarted.limits).isEqualTo(custom.limits);
+            assertThat(restarted.isModifiedSinceSnapshot()).isFalse();
+        }
+    }
+
+    static java.util.stream.Stream<org.junit.jupiter.params.provider.Arguments> roundTripShapes() {
+        return java.util.stream.Stream.of("sorted", "enums", "holders", "nested", "custom")
+                .flatMap(shape -> java.util.stream.Stream.of(false, true)
+                        .map(staged -> org.junit.jupiter.params.provider.Arguments.of(shape, staged)));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.MethodSource("roundTripShapes")
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+    void registryLeafRoutePreservesDeclaredShapesAndIndependentSiblings(String shape, boolean staged) throws Exception {
+        com.ultikits.ultitools.config.convert.ConverterRegistry registry =
+                new com.ultikits.ultitools.config.convert.ConverterRegistry(
+                        com.ultikits.ultitools.config.convert.ConverterRegistry.framework());
+        registry.register(ShiftedMap.class, new ShiftedConverter(), true);
+        org.bukkit.configuration.serialization.ConfigurationSerialization.registerClass(NumericHolder.class);
+        try (org.mockito.MockedStatic<com.ultikits.ultitools.config.convert.ConverterRegistry> registries =
+                Mockito.mockStatic(com.ultikits.ultitools.config.convert.ConverterRegistry.class, Mockito.CALLS_REAL_METHODS)) {
+            registries.when(() -> com.ultikits.ultitools.config.convert.ConverterRegistry.forModule(plugin)).thenReturn(registry);
+            ShapeValues values = new ShapeValues("shapes.yml"); manager.register(plugin, values);
+            java.lang.reflect.Field field = ShapeValues.class.getDeclaredField(shape); field.setAccessible(true);
+            java.lang.reflect.Type type = field.getGenericType();
+            java.util.List<String> target = leafPath(shape, true);
+            java.util.List<String> sibling = leafPath(shape, false);
+            ConfigDocument live = ConfigDocument.empty();
+            live.set(Arrays.asList(shape), registry.toPlain(field.get(values), type, "shapes.yml", Arrays.asList(shape)));
+            live.set(sibling, 9);
+            Object pending = registry.fromPlain(live.get(Arrays.asList(shape)), type, "shapes.yml", Arrays.asList(shape));
+            field.set(values, pending);
+            assertThat(registry.toPlain(registry.fromPlain(live.get(Arrays.asList(shape)), type,
+                    "shapes.yml", Arrays.asList(shape)), type, "shapes.yml", Arrays.asList(shape)))
+                    .isEqualTo(live.get(Arrays.asList(shape)));
+            Path file = directory.resolve("shapes.yml");
+            ConfigDocument disk = ConfigDocument.parse(new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
+            disk.set(sibling, 7); Files.write(file, disk.render().getBytes(StandardCharsets.UTF_8));
+            JsonObject edit = new JsonObject(); edit.addProperty(String.join(".", target), 5);
+            if (staged) {
+                JsonObject files = new JsonObject(); files.add("shapes.yml", edit);
+                JsonObject modules = new JsonObject(); modules.add("MapPanel", files); manager.loadFromJson(modules.toString());
+            } else { manager.loadFromJson("shapes.yml", edit.toString()); }
+            ConfigDocument published = ConfigDocument.empty();
+            published.set(Arrays.asList(shape), registry.toPlain(field.get(values), type, "shapes.yml", Arrays.asList(shape)));
+            assertThat(published.get(target)).isEqualTo(5);
+            assertThat(published.get(sibling)).isEqualTo(9);
+            assertThat(field.get(values)).isInstanceOf(field.getType());
+            if ("enums".equals(shape)) { assertThat(values.enums.keySet()).containsExactly(Mode.FIRST, Mode.SECOND); }
+            if ("holders".equals(shape)) { assertThat(values.holders.get("first")).isInstanceOf(NumericHolder.class); }
+            assertThat(values.isModifiedSinceSnapshot()).isTrue();
+            disk = ConfigDocument.parse(new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
+            assertThat(disk.get(target)).isEqualTo(5); assertThat(disk.get(sibling)).isEqualTo(7);
+            values.save(); assertThat(values.isModifiedSinceSnapshot()).isFalse();
+            disk = ConfigDocument.parse(new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
+            assertThat(disk.get(sibling)).isEqualTo(9);
+            ShapeValues restarted = new ShapeValues("shapes.yml"); restarted.init(plugin);
+            assertThat(registry.toPlain(field.get(restarted), type, "shapes.yml", Arrays.asList(shape)))
+                    .isEqualTo(published.get(Arrays.asList(shape)));
+            assertThat(restarted.isModifiedSinceSnapshot()).isFalse();
+        } finally {
+            org.bukkit.configuration.serialization.ConfigurationSerialization.unregisterClass(NumericHolder.class);
+        }
+    }
+
+    private static java.util.List<String> leafPath(String shape, boolean target) {
+        String key = target ? "first" : "second";
+        if ("enums".equals(shape)) { key = target ? "FIRST" : "SECOND"; }
+        if ("holders".equals(shape)) { return Arrays.asList(shape, key, "value"); }
+        if ("nested".equals(shape)) { return Arrays.asList(shape, "o.O", key); }
+        return Arrays.asList(shape, key);
+    }
+
+    enum Mode { FIRST, SECOND }
+    @org.bukkit.configuration.serialization.SerializableAs("PanelNumericHolder")
+    public static class NumericHolder implements org.bukkit.configuration.serialization.ConfigurationSerializable {
+        final int value;
+        public NumericHolder(int value) { this.value = value; }
+        public static NumericHolder deserialize(Map<String, Object> data) {
+            return new NumericHolder(((Number) data.get("value")).intValue());
+        }
+        @Override public Map<String, Object> serialize() {
+            Map<String, Object> plain = new LinkedHashMap<>(); plain.put("value", value); return plain;
+        }
+    }
+    public static class ShiftedMap extends LinkedHashMap<String, Integer> { }
+    static class ShiftedConverter implements com.ultikits.ultitools.config.convert.ConfigConverter<ShiftedMap> {
+        @Override public Object toPlain(ShiftedMap value, com.ultikits.ultitools.config.convert.ConversionContext context) {
+            Map<String, Integer> plain = new LinkedHashMap<>(); value.forEach((key, number) -> plain.put(key, number - 10));
+            return plain;
+        }
+        @Override public ShiftedMap fromPlain(Object plain, com.ultikits.ultitools.config.convert.ConversionContext context) {
+            ShiftedMap result = new ShiftedMap();
+            ((Map<?, ?>) plain).forEach((key, value) -> result.put((String) key, ((Number) value).intValue() + 10));
+            return result;
+        }
+    }
+    @ConfigEntity("shapes.yml")
+    public static class ShapeValues extends AbstractConfigEntity {
+        @ConfigEntry java.util.SortedMap<String, Integer> sorted = new java.util.TreeMap<>();
+        @ConfigEntry Map<Mode, Integer> enums = new LinkedHashMap<>();
+        @ConfigEntry Map<String, NumericHolder> holders = new LinkedHashMap<>();
+        @ConfigEntry Map<String, Map<String, Integer>> nested = new LinkedHashMap<>();
+        @ConfigEntry ShiftedMap custom = new ShiftedMap();
+        public ShapeValues(String path) {
+            super(path);
+            sorted.put("first", 2); sorted.put("second", 3);
+            enums.put(Mode.FIRST, 2); enums.put(Mode.SECOND, 3);
+            holders.put("first", new NumericHolder(2));
+            holders.put("second", new NumericHolder(3));
+            Map<String, Integer> entries = new LinkedHashMap<>(); entries.put("first", 2); entries.put("second", 3);
+            nested.put("o.O", entries); custom.put("first", 12); custom.put("second", 13);
         }
     }
 

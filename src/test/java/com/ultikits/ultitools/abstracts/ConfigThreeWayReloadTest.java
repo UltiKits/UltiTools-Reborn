@@ -101,6 +101,31 @@ class ConfigThreeWayReloadTest {
         entity.save(); assertThat(new String(Files.readAllBytes(directory.resolve("reload.yml")), StandardCharsets.UTF_8))
                 .isEqualTo("mine: [broken\n");
     }
+    @Test void roundTripCustomConverterKeepsUnchangedReloadEqualAndClean() throws Exception {
+        com.ultikits.ultitools.config.convert.ConverterRegistry registry =
+                new com.ultikits.ultitools.config.convert.ConverterRegistry(
+                        com.ultikits.ultitools.config.convert.ConverterRegistry.framework());
+        registry.register(ConfigPanelMapEntryEditTest.ShiftedMap.class,
+                new ConfigPanelMapEntryEditTest.ShiftedConverter(), true);
+        try (org.mockito.MockedStatic<com.ultikits.ultitools.config.convert.ConverterRegistry> registries =
+                Mockito.mockStatic(com.ultikits.ultitools.config.convert.ConverterRegistry.class, Mockito.CALLS_REAL_METHODS)) {
+            registries.when(() -> com.ultikits.ultitools.config.convert.ConverterRegistry.forModule(plugin)).thenReturn(registry);
+            Files.write(directory.resolve("custom-reload.yml"), "entries:\n  first: 2\n  second: 3\n".getBytes(StandardCharsets.UTF_8));
+            CustomValues custom = new CustomValues("custom-reload.yml"); custom.init(plugin);
+            Map<String, Integer> before = new LinkedHashMap<>(custom.entries);
+            byte[] bytes = Files.readAllBytes(directory.resolve("custom-reload.yml"));
+            assertThat(before).containsEntry("first", 12).containsEntry("second", 13);
+            custom.reload();
+            assertThat(custom.entries).isEqualTo(before); assertThat(custom.isModifiedSinceSnapshot()).isFalse();
+            assertThat(Files.readAllBytes(directory.resolve("custom-reload.yml"))).isEqualTo(bytes);
+            assertThat(warnings).isEmpty();
+        }
+    }
+    @ConfigEntity("custom-reload.yml")
+    public static class CustomValues extends AbstractConfigEntity {
+        @ConfigEntry ConfigPanelMapEntryEditTest.ShiftedMap entries = new ConfigPanelMapEntryEditTest.ShiftedMap();
+        public CustomValues(String path) { super(path); }
+    }
     @ConfigEntity("reload.yml")
     public static class Values extends AbstractConfigEntity {
         @ConfigEntry String mine = "default";
