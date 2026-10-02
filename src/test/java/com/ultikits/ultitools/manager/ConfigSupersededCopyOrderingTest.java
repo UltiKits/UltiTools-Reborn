@@ -51,14 +51,20 @@ class ConfigSupersededCopyOrderingTest {
         public static Path file;
         public static int constructions;
         public static String observed;
+        public static boolean fail;
+        public static UltiToolsPlugin constructedOwner;
     }
     public static class Incoming extends UltiToolsPlugin {
         public Incoming() {
-            Probe.constructions++;
+            Probe.constructions++; Probe.constructedOwner = this;
+            if (Probe.fail) { throw new IllegalStateException("injected subclass constructor failure"); }
             try { Probe.observed = new String(Files.readAllBytes(Probe.file), StandardCharsets.UTF_8); }
             catch (Exception e) { throw new IllegalStateException(e); }
         }
         @Override public boolean registerSelf() { return false; }
+        @Override public List<AbstractConfigEntity> getAllConfigs() {
+            return java.util.Collections.singletonList(new Values("incoming.yml"));
+        }
     }
     @BeforeEach void setup() throws Exception {
         MockBukkitHelper.ensureCleanState(); MockBukkit.mock(); MockBukkit.createMockPlugin();
@@ -67,6 +73,7 @@ class ConfigSupersededCopyOrderingTest {
             lenient().when(core.getConfigManager()).thenReturn(configs);
             lenient().when(core.getDataFolder()).thenReturn(directory.toFile());
             lenient().when(core.getConfig()).thenReturn(new YamlConfiguration());
+            lenient().when(core.getLogger()).thenReturn(Logger.getLogger("SupersedeFixture"));
         });
         old = mock(UltiToolsPlugin.class);
         lenient().when(old.getPluginName()).thenReturn("SupersededModule");
@@ -75,6 +82,7 @@ class ConfigSupersededCopyOrderingTest {
         lenient().when(old.getResourceFolderPath()).thenReturn(directory.toString());
         ConfigFileStubs.stubConfigFolder(old, directory.toFile());
         Probe.file = directory.resolve("copy.yml"); Probe.constructions = 0; Probe.observed = null;
+        Probe.fail = false; Probe.constructedOwner = null;
         Files.write(Probe.file, "value: disk\n".getBytes(StandardCharsets.UTF_8));
         entity = new Values("copy.yml"); configs.register(old, entity); entity.value = "pending";
         plugins.getPluginList().add(old); Bukkit.getLogger().addHandler(capture);
@@ -121,6 +129,25 @@ class ConfigSupersededCopyOrderingTest {
         assertThat(entity.isModifiedSinceSnapshot()).isTrue();
         assertThat(new String(Files.readAllBytes(Probe.file), StandardCharsets.UTF_8)).contains("value: disk");
         verify(old, never()).unregisterSelf();
+    }
+    @Test void subclassConstructorFailureReleasesNewOwnerButRetainsSameClassExistingOwner() throws Exception {
+        try (URLClassLoader loader = incomingJar(false)) {
+            Class<?> type = loader.loadClass(Incoming.class.getName());
+            UltiToolsPlugin prior = (UltiToolsPlugin) type.getDeclaredConstructor().newInstance();
+            assertThat(configs.getAllConfigEntities(prior)).isNotEmpty();
+            Probe.fail = true;
+            assertThatThrownBy(() -> initialize(type)).hasRootCauseMessage("injected subclass constructor failure");
+            assertThat(configs.getAllConfigEntities(Probe.constructedOwner)).isNull();
+            assertThat(configs.getAllConfigEntities(prior)).isNotEmpty();
+            assertThat(configs.getAllConfigEntities(old)).containsValue(entity);
+        }
+    }
+    @Test void compatibilityRefusalReleasesConstructedIncomingOnly() throws Exception {
+        try (URLClassLoader loader = incomingJar(false)) {
+            initialize(loader.loadClass(Incoming.class.getName()));
+            assertThat(configs.getAllConfigEntities(Probe.constructedOwner)).isNull();
+            assertThat(configs.getAllConfigEntities(old)).containsValue(entity);
+        }
     }
     private UltiToolsPlugin activateConstructedCopy(boolean accepted) throws Exception {
         UltiToolsPlugin incoming = mock(UltiToolsPlugin.class);
