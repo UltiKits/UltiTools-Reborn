@@ -911,7 +911,6 @@ public abstract class AbstractConfigEntity {
      */
     public void updateProperties(JsonObject jsonObject) throws IOException {
         synchronized (this) {
-            if (lastLoadUnparseable) { return; }
             List<Field> touchedFields = new ArrayList<>();
             List<Object> previousValues = new ArrayList<>();
             try {
@@ -927,13 +926,12 @@ public abstract class AbstractConfigEntity {
 
     /** Prepares one panel entity without acknowledging or replacing its file.
      * @param properties proposed panel values
-     * @return manager-owned write, or null for a protected entity
+     * @return manager-owned write
      * @throws IOException if reading or staging fails
      */
     @ApiStatus.Internal
     public final PanelWrite preparePanelWrite(JsonObject properties) throws IOException {
         synchronized (this) {
-            if (lastLoadUnparseable) { return null; }
             PanelCheckpoint before = new PanelCheckpoint();
             try {
                 List<Field> touched = new ArrayList<>();
@@ -1078,6 +1076,10 @@ public abstract class AbstractConfigEntity {
      *                                 if the post-update field state violates a constraint
      */
     private Map<Field, List<List<String>>> applyAndValidate(JsonObject jsonObject, List<Field> touchedFieldsOut, List<Object> previousValuesOut) {
+        if (lastLoadUnparseable) {
+            throw new ConfigurationException("Protected configuration file " + configFilePath
+                    + ": its last load was unreadable or unparseable; reload a valid file before editing");
+        }
         Map<Field, Object> proposed = new LinkedHashMap<>();
         Map<Field, List<List<String>>> leaves = new LinkedHashMap<>();
         Set<Field> whole = new java.util.LinkedHashSet<>();
