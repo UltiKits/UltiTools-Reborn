@@ -161,6 +161,50 @@ class ConfigPanelMapEntryEditTest {
         }});
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void fullDeclaredMapConverterNormalizesOnlyTheEditedLeafInPublishedAndPersistedState(boolean staged) throws Exception {
+        com.ultikits.ultitools.config.convert.ConverterRegistry registry =
+                new com.ultikits.ultitools.config.convert.ConverterRegistry(
+                        com.ultikits.ultitools.config.convert.ConverterRegistry.framework());
+        java.util.concurrent.atomic.AtomicBoolean normalize = new java.util.concurrent.atomic.AtomicBoolean();
+        registry.register(Map.class, new com.ultikits.ultitools.config.convert.ConfigConverter<Map<String, Integer>>() {
+            @Override public Object toPlain(Map<String, Integer> value,
+                    com.ultikits.ultitools.config.convert.ConversionContext context) {
+                return new LinkedHashMap<>(value);
+            }
+            @Override public Map<String, Integer> fromPlain(Object plain,
+                    com.ultikits.ultitools.config.convert.ConversionContext context) {
+                assertThat(context.declaredType().getTypeName()).contains("java.util.Map<java.lang.String, java.lang.Integer>");
+                Map<String, Integer> result = new LinkedHashMap<>();
+                ((Map<?, ?>) plain).forEach((key, value) -> result.put(String.valueOf(key),
+                        ((Number) value).intValue() + (normalize.get() ? 10 : 0)));
+                return result;
+            }
+        }, true);
+        try (org.mockito.MockedStatic<com.ultikits.ultitools.config.convert.ConverterRegistry> registries =
+                Mockito.mockStatic(com.ultikits.ultitools.config.convert.ConverterRegistry.class, Mockito.CALLS_REAL_METHODS)) {
+            registries.when(() -> com.ultikits.ultitools.config.convert.ConverterRegistry.forModule(plugin)).thenReturn(registry);
+            Files.write(directory.resolve("custom.yml"), "limits:\n  nether: 2\n  overworld: 3\n".getBytes(StandardCharsets.UTF_8));
+            TypedValues custom = new TypedValues("custom.yml"); manager.register(plugin, custom);
+            custom.limits.put("overworld", 9); normalize.set(true);
+            if (staged) { manager.loadFromJson("{\"MapPanel\":{\"custom.yml\":{\"limits.nether\":5}}}"); }
+            else { manager.loadFromJson("custom.yml", "{\"limits.nether\":5}"); }
+            assertThat(custom.limits).containsEntry("nether", 15).containsEntry("overworld", 9);
+            assertThat(custom.isModifiedSinceSnapshot()).isTrue();
+            ConfigDocument disk = ConfigDocument.parse(new String(Files.readAllBytes(directory.resolve("custom.yml")),
+                    StandardCharsets.UTF_8));
+            assertThat(disk.get(Arrays.asList("limits", "nether"))).isEqualTo(15);
+            assertThat(disk.get(Arrays.asList("limits", "overworld"))).isEqualTo(3);
+        }
+    }
+
+    @ConfigEntity("custom.yml")
+    public static class TypedValues extends AbstractConfigEntity {
+        @ConfigEntry(path = "limits") Map<String, Integer> limits = new LinkedHashMap<>();
+        public TypedValues(String path) { super(path); }
+    }
+
     private void editWorld(boolean staged) throws Exception {
         if (staged) { manager.loadFromJson("{\"MapPanel\":{\"maps.yml\":{\"limits.worlds.nether\":5}}}"); }
         else { manager.loadFromJson("maps.yml", "{\"limits.worlds.nether\":5}"); }
