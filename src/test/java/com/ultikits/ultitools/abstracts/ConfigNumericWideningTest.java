@@ -105,8 +105,10 @@ class ConfigNumericWideningTest {
         Files.write(legacy, "value: 19\n".getBytes(StandardCharsets.UTF_8)); second.reload();
         assertThat(second.value).isEqualTo(19L);
         second.value = 25L;
+        Files.write(legacy, "value: 19\n".getBytes(StandardCharsets.UTF_8)); second.reload();
+        assertThat(second.value).as("merged reload retains unsaved value when disk is unchanged").isEqualTo(25L);
         Files.write(legacy, "value: 29\n".getBytes(StandardCharsets.UTF_8)); second.reload();
-        assertThat(second.value).as("merged reload retains unsaved value").isEqualTo(25L);
+        assertThat(second.value).as("a simultaneous scalar conflict keeps the file value").isEqualTo(29L);
         manager.loadFromJson("legacy.yml", "{\"value\":31}");
         assertThat(second.value).isEqualTo(31L);
         manager.loadFromJson("{\"NumbersModule\":{\"legacy.yml\":{\"value\":33}}}");
