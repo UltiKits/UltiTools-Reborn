@@ -191,7 +191,9 @@ class ConfigEntityGoldenTest {
         assertFields(config, expected);
         unchanged(file, bytes, time);
         assertThat(config.isModifiedSinceSnapshot()).isFalse();
-        // Capture defaults equal captured values; mutate first so reload must actually bind every field.
+        // Capture bound objects, then prove reload preserves unsaved memory-only changes across every corpus field.
+        Map<Field, Object> bound = new LinkedHashMap<>();
+        for (Field field : entries(config)) { bound.put(field, field.get(config)); }
         for (Field field : entries(config)) {
             if (field.getType().isPrimitive()) {
                 Object value = field.get(config);
@@ -203,9 +205,15 @@ class ConfigEntityGoldenTest {
             } else { field.set(config, null); }
         }
         assertThat(config.isModifiedSinceSnapshot()).isTrue();
+        Map<Field, Object> pending = new LinkedHashMap<>();
+        for (Field field : entries(config)) { pending.put(field, plain(field.get(config))); }
         config.reload();
-        assertFields(config, expected);
+        assertFields(config, pending);
         unchanged(file, bytes, time);
+        assertThat(config.isModifiedSinceSnapshot()).isTrue();
+        // Restore the original bound values to independently retain the exact no-op save corpus control.
+        for (Map.Entry<Field, Object> entry : bound.entrySet()) { entry.getKey().set(config, entry.getValue()); }
+        assertFields(config, expected);
         assertThat(config.isModifiedSinceSnapshot()).isFalse();
         manager.saveAll();
         unchanged(file, bytes, time);
