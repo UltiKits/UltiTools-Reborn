@@ -65,11 +65,21 @@ class ConfigUnreadableInitializationTest {
         Values config = new Values(PATH);
         List<String> diagnostics;
         Files.setPosixFilePermissions(file, EnumSet.noneOf(PosixFilePermission.class));
+        java.util.List<java.util.logging.Level> levels = new java.util.ArrayList<>();
+        java.util.logging.Handler capture = new java.util.logging.Handler() {
+            @Override public void publish(java.util.logging.LogRecord record) { levels.add(record.getLevel()); }
+            @Override public void flush() { /* In-memory capture needs no flush. */ }
+            @Override public void close() { /* Removed explicitly in finally. */ }
+        };
+        Logger entityLogger = Logger.getLogger(AbstractConfigEntity.class.getName());
+        entityLogger.addHandler(capture);
         try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
             assertThat(Files.isReadable(file)).as("the real read failure must be active, not skipped").isFalse();
             manager.register(plugin, config);
             diagnostics = warnings.messages();
+            assertThat(levels).containsExactly(java.util.logging.Level.SEVERE);
         } finally {
+            entityLogger.removeHandler(capture);
             Files.setPosixFilePermissions(file, permissions);
         }
         assertThat(manager.getConfigEntity(plugin, Values.class)).isSameAs(config);

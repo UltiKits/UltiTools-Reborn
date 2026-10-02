@@ -147,6 +147,45 @@ class LegacyParserAdapterTest {
         }
     }
 
+    @Test void inheritedParserOutputNormalizesNestedListEnumAndSet() throws Exception {
+        MemoryConfiguration section = new MemoryConfiguration(); section.set("whole", "value");
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("nested", Arrays.asList(section, BoundaryMode.FAST,
+                new LinkedHashSet<>(Arrays.asList("red", "blue"))));
+        Object output = registry.toPlain(input, Object.class, "legacy.yml",
+                Collections.singletonList("value"), entry("extending"));
+        assertThat(output).isEqualTo(Collections.singletonMap("nested", Arrays.asList(
+                Collections.singletonMap("whole", "value"), "FAST", Arrays.asList("red", "blue"))));
+        com.ultikits.ultitools.config.document.PlainData.requirePlain(Collections.singletonList("value"), output);
+    }
+    enum BoundaryMode { FAST }
+    static class DottedObject {
+        final Map<String, String> values;
+        DottedObject(Map<String, String> values) { this.values = values; }
+    }
+    static class DottedShape { List<DottedObject> objects; }
+    @Test void registeredObjectInsideListKeepsItsDottedMapKeys() throws Exception {
+        ConverterRegistry custom = new ConverterRegistry(registry);
+        custom.register(DottedObject.class, new ConfigConverter<DottedObject>() {
+            @Override public Object toPlain(DottedObject value, ConversionContext context) {
+                return new LinkedHashMap<>(value.values);
+            }
+            @Override public DottedObject fromPlain(Object plain, ConversionContext context) throws ConversionException {
+                java.lang.reflect.Type type;
+                try { type = DottedObject.class.getDeclaredField("values").getGenericType(); }
+                catch (NoSuchFieldException failure) { throw new AssertionError(failure); }
+                return new DottedObject(context.fromPlain(plain, type));
+            }
+        }, true);
+        Map<String, String> keys = new LinkedHashMap<>(); keys.put("g.m", "first"); keys.put("wave.", "second");
+        java.lang.reflect.Type type = DottedShape.class.getDeclaredField("objects").getGenericType();
+        Object plain = custom.toPlain(Collections.singletonList(new DottedObject(keys)), type,
+                "objects.yml", Collections.singletonList("objects"));
+        assertThat(plain).isEqualTo(Collections.singletonList(keys));
+        List<DottedObject> rebound = custom.fromPlain(plain, type, "objects.yml", Collections.singletonList("objects"));
+        assertThat(rebound).hasSize(1); assertThat(rebound.get(0).values).isEqualTo(keys);
+    }
+
     private static ConfigEntry entry(String name) throws NoSuchFieldException {
         return Shapes.class.getDeclaredField(name).getAnnotation(ConfigEntry.class);
     }

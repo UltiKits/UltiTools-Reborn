@@ -149,6 +149,58 @@ class ConfigBindingEdgeCaseTest {
         }
     }
 
+    @SuppressWarnings("removal")
+    public static class InheritedMapParser extends com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser { }
+    @SuppressWarnings("removal")
+    public static class SuperMapParser extends InheritedMapParser {
+        @Override public Object parse(Object value) { return super.parse(value); }
+        @Override public MemorySection serializeToMemorySection(Object value) {
+            return super.serializeToMemorySection(value);
+        }
+    }
+    @SuppressWarnings("removal")
+    static class LegacyMaps extends AbstractConfigEntity {
+        @ConfigEntry(parser = InheritedMapParser.class) Map<String, Object> inherited = new LinkedHashMap<>();
+        @ConfigEntry(parser = SuperMapParser.class) Map<String, Object> overridden = new LinkedHashMap<>();
+        public LegacyMaps(String path) {
+            super(path); inherited.put("default", "value"); overridden.put("default", "value");
+        }
+    }
+    static class SharedPaths extends AbstractConfigEntity {
+        @ConfigEntry(path = "first") List<Integer> first = new ArrayList<>();
+        @ConfigEntry(path = "second") List<Integer> second = new ArrayList<>();
+        @ConfigEntry(path = "owner.child") List<Integer> child = new ArrayList<>();
+        @ConfigEntry(path = "owner") Map<String, List<Integer>> owner = new LinkedHashMap<>();
+        public SharedPaths(String path) { super(path); }
+    }
+    @Test void inheritedAndSuperLegacyEntityMapsKeepDefaultSaveLoadAndPanelRoutes() throws Exception {
+        LegacyMaps first = new LegacyMaps(PATH); first.init(plugin);
+        assertThat(first.inherited).containsEntry("default", "value");
+        assertThat(first.overridden).containsEntry("default", "value");
+        first.inherited.put("saved", "yes"); first.overridden.put("saved", "yes"); first.save();
+        LegacyMaps fresh = new LegacyMaps(PATH); fresh.init(plugin);
+        assertThat(fresh.inherited).isEqualTo(first.inherited);
+        assertThat(fresh.overridden).isEqualTo(first.overridden);
+        com.google.gson.JsonObject payload = new com.google.gson.JsonObject();
+        com.google.gson.JsonObject map = new com.google.gson.JsonObject(); map.addProperty("panel", "value");
+        payload.add("inherited", map); payload.add("overridden", map.deepCopy()); fresh.updateProperties(payload);
+        LegacyMaps panel = new LegacyMaps(PATH); panel.init(plugin);
+        assertThat(panel.inherited).containsOnlyKeys("panel").containsEntry("panel", "value");
+        assertThat(panel.overridden).isEqualTo(panel.inherited);
+    }
+    @Test void sharedBadChildAndOverlappingOwnersHaveSeparateLocatedWarnings() throws Exception {
+        writeFile("first: &bad [wrong, 2]\nsecond: *bad\nowner:\n  child: *bad\n");
+        SharedPaths values = new SharedPaths(PATH);
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            values.init(plugin);
+            assertThat(values.first).containsExactly(2); assertThat(values.second).containsExactly(2);
+            assertThat(values.child).containsExactly(2); assertThat(values.owner.get("child")).containsExactly(2);
+            assertThat(warnings.messagesContaining("'first[0]'" )).hasSize(1);
+            assertThat(warnings.messagesContaining("'second[0]'" )).hasSize(1);
+            assertThat(warnings.messagesContaining("'owner.child[0]'" )).hasSize(2);
+        }
+    }
+
     @BeforeEach
     void setUp() {
         plugin = Mockito.mock(UltiToolsPlugin.class);

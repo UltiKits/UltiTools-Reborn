@@ -73,6 +73,33 @@ class ConfigPanelWritePathTest {
         value.ids.put("new", value.id); value.mode = Mode.FAST;
         value.ratio = 0.25F; value.item = item();
     }
+    public static class BukkitMaps extends AbstractConfigEntity {
+        @ConfigEntry Map<String, org.bukkit.Location> locations = new LinkedHashMap<>();
+        @ConfigEntry Map<String, ItemStack> items = new LinkedHashMap<>();
+        @ConfigEntry Map<String, UUID> ids = new LinkedHashMap<>();
+        public BukkitMaps(String path) {
+            super(path);
+            locations.put("g.m", new org.bukkit.Location(org.bukkit.Bukkit.getWorld("world"), 1.25, 2, -3.5, 30, -15));
+            items.put("o.O", item());
+            ids.put("wave.", new UUID(0, 3));
+        }
+    }
+    @Test void bukkitAndUuidMapDefaultsSaveAndFreshLoadThroughEntity() throws Exception {
+        ((org.mockbukkit.mockbukkit.ServerMock) org.bukkit.Bukkit.getServer()).addSimpleWorld("world");
+        BukkitMaps first = new BukkitMaps("bukkit-maps.yml"); first.init(plugin);
+        assertThat(Files.readAllBytes(directory.resolve("bukkit-maps.yml"))).isNotEmpty();
+        first.save();
+        BukkitMaps next = new BukkitMaps("bukkit-maps.yml"); next.init(plugin);
+        assertThat(next.locations).isEqualTo(first.locations);
+        assertThat(next.ids).isEqualTo(first.ids);
+        assertThat(next.items.keySet()).containsExactly("o.O");
+        ItemStack restored = next.items.get("o.O");
+        assertThat(restored.getType()).isEqualTo(Material.DIAMOND_SWORD);
+        assertThat(restored.getAmount()).isEqualTo(2);
+        assertThat(restored.getItemMeta().getDisplayName()).isEqualTo("Panel item");
+        assertThat(restored.getItemMeta().getLore()).containsExactly("first", "second");
+        assertThat(next.isModifiedSinceSnapshot()).isFalse();
+    }
     @Test void panelAndSaveProduceIdenticalLoadableText() throws Exception {
         Values saved = new Values("save.yml"); saved.init(plugin); edit(saved); saved.save();
         Values panel = new Values("panel.yml");
