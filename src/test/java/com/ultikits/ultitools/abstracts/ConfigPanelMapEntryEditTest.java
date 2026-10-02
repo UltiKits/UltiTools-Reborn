@@ -218,8 +218,21 @@ class ConfigPanelMapEntryEditTest {
                         com.ultikits.ultitools.config.convert.ConverterRegistry.framework());
         registry.register(ShiftedMap.class, new ShiftedConverter(), true);
         org.bukkit.configuration.serialization.ConfigurationSerialization.registerClass(NumericHolder.class);
-        try (org.mockito.MockedStatic<com.ultikits.ultitools.config.convert.ConverterRegistry> registries =
+        java.util.List<String> warnings = new java.util.ArrayList<>();
+        java.util.logging.Logger logger = java.util.logging.Logger.getLogger(AbstractConfigEntity.class.getName());
+        java.util.logging.Handler capture = new java.util.logging.Handler() {
+            @Override public void publish(java.util.logging.LogRecord record) {
+                if (record.getLevel() == java.util.logging.Level.WARNING) { warnings.add(record.getMessage()); }
+            }
+            @Override public void flush() { /* No buffered records. */ }
+            @Override public void close() { /* No owned resource. */ }
+        };
+        logger.addHandler(capture);
+        try (org.mockito.MockedStatic<com.ultikits.ultitools.UltiTools> core =
+                Mockito.mockStatic(com.ultikits.ultitools.UltiTools.class, Mockito.CALLS_REAL_METHODS);
+                org.mockito.MockedStatic<com.ultikits.ultitools.config.convert.ConverterRegistry> registries =
                 Mockito.mockStatic(com.ultikits.ultitools.config.convert.ConverterRegistry.class, Mockito.CALLS_REAL_METHODS)) {
+            core.when(com.ultikits.ultitools.UltiTools::getInstance).thenReturn(null);
             registries.when(() -> com.ultikits.ultitools.config.convert.ConverterRegistry.forModule(plugin)).thenReturn(registry);
             ShapeValues values = new ShapeValues("shapes.yml"); manager.register(plugin, values);
             java.lang.reflect.Field field = ShapeValues.class.getDeclaredField(shape); field.setAccessible(true);
@@ -253,6 +266,8 @@ class ConfigPanelMapEntryEditTest {
             disk = ConfigDocument.parse(new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
             assertThat(disk.get(target)).isEqualTo(5); assertThat(disk.get(sibling)).isEqualTo(7);
             values.save(); assertThat(values.isModifiedSinceSnapshot()).isFalse();
+            assertThat(warnings).containsExactly("Configuration file " + file.toAbsolutePath()
+                    + " had operator-edited keys overwritten: '" + String.join(".", sibling) + "'");
             disk = ConfigDocument.parse(new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
             assertThat(disk.get(sibling)).isEqualTo(9);
             ShapeValues restarted = new ShapeValues("shapes.yml"); restarted.init(plugin);
@@ -260,6 +275,7 @@ class ConfigPanelMapEntryEditTest {
                     .isEqualTo(published.get(Arrays.asList(shape)));
             assertThat(restarted.isModifiedSinceSnapshot()).isFalse();
         } finally {
+            logger.removeHandler(capture);
             org.bukkit.configuration.serialization.ConfigurationSerialization.unregisterClass(NumericHolder.class);
         }
     }
