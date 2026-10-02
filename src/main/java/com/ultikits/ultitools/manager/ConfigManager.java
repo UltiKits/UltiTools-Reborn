@@ -398,6 +398,15 @@ public class ConfigManager {
         return pluginConfigMap.get(plugin);
     }
 
+    /** Releases one module's configuration entities after unload.
+     * @param plugin unloaded module instance
+     */
+    @org.jetbrains.annotations.ApiStatus.Internal
+    public void unregisterAll(UltiToolsPlugin plugin) {
+        if (!permitsConfigThread(plugin, "unregisterAll")) { return; }
+        pluginConfigMap.remove(plugin);
+    }
+
     /**
      * Reload all configs.
      *

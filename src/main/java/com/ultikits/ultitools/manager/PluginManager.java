@@ -403,8 +403,15 @@ public class PluginManager {
             // container (SILENT-19, #338). Guard the close the same way the steps above do,
             // and run it even if unregisterSelf() itself throws (Codex review on #457, round
             // 2: "Close the module context when its unload hook throws").
-            if (plugin.getContext() != null) {
-                plugin.getContext().close();
+            try {
+                if (plugin.getContext() != null) {
+                    plugin.getContext().close();
+                }
+            } finally {
+                runUnregisterStep(plugin, "release configuration entities", () -> {
+                    ConfigManager configs = UltiTools.getInstance().getConfigManager();
+                    if (configs != null) { configs.unregisterAll(plugin); }
+                });
             }
         }
     }
@@ -435,6 +442,9 @@ public class PluginManager {
      * Unregister all plugins.
      */
     public void close() {
+        // Save while all module entities are still registered, before any unload can release them.
+        ConfigManager configs = UltiTools.getInstance().getConfigManager();
+        if (configs != null) { configs.saveAll(); }
         // Disconnect all external plugins first
         UltiToolsAPI.disconnectAll();
 

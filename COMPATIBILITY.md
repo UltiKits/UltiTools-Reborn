@@ -95,6 +95,15 @@ failure preserves earlier successful files and protects the failed entity until 
 Standalone registration still writes immediately. Framework-internal initialization bridges are not
 a module transaction API.
 
+### Configuration release and shutdown save
+
+As of 6.3.0, module unload releases that module instance's configuration registry entry even
+when its unload hook or context close throws. Later shutdown saves neither retain nor write
+unloaded entities. PluginManager.close saves all registered dirty configurations before unloading
+any module, rather than saving an emptied registry afterwards. Normal runtime unload itself does
+not save; superseded-copy preparation follows the separate preconstruction rule. Public existing
+signatures are unchanged; no module migration is required.
+
 ### Configuration init and reload thread contract
 
 As of 6.3.0, configuration init, reload, manager reloadConfigs and module reloadSelf refuse
