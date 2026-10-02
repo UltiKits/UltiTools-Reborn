@@ -355,6 +355,73 @@ class ConfigPanelMapEntryEditTest {
         assertThat(entity.worlds.get("nether")).isEqualTo(2);
     }
 
+    static java.util.stream.Stream<org.junit.jupiter.params.provider.Arguments> largePanelNumbers() {
+        return java.util.stream.Stream.of("9223372036854775809", "9223372036854779999", "-9223372036854775809")
+                .flatMap(number -> java.util.stream.Stream.of(false, true)
+                        .map(staged -> org.junit.jupiter.params.provider.Arguments.of(number, staged)));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.MethodSource("largePanelNumbers")
+    void overflowingPanelIntegersStayExactInFieldsMapLeavesAndLists(String number, boolean staged) throws Exception {
+        NumericValues values = new NumericValues("numeric.yml"); manager.register(plugin, values);
+        String payload = "{\"large\":" + number + ",\"numbers.o.O\":" + number
+                + ",\"items\":[" + number + "]}";
+        editNumbers(payload, staged);
+        java.math.BigInteger expected = new java.math.BigInteger(number);
+        assertThat(values.large).isEqualTo(expected);
+        assertThat(values.numbers).containsEntry("o.O", expected);
+        assertThat(values.items).containsExactly(expected);
+        assertThat(values.isModifiedSinceSnapshot()).isFalse();
+        NumericValues fresh = new NumericValues("numeric.yml");
+        fresh.large = java.math.BigInteger.ZERO; fresh.numbers.clear(); fresh.items.clear(); fresh.init(plugin);
+        assertThat(fresh.large).isEqualTo(expected);
+        assertThat(fresh.numbers).containsEntry("o.O", expected);
+        assertThat(fresh.items).containsExactly(expected);
+        assertThat(fresh.isModifiedSinceSnapshot()).isFalse();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void panelNumericNegativeControlsKeepFieldsBytesAndTime(boolean staged) throws Exception {
+        NumericValues values = new NumericValues("numeric.yml"); manager.register(plugin, values);
+        Path file = directory.resolve("numeric.yml");
+        byte[] before = Files.readAllBytes(file);
+        java.nio.file.attribute.FileTime time = Files.getLastModifiedTime(file);
+        editNumbers("{\"large\":9223372036854775808.0}", staged);
+        assertThat(Files.readAllBytes(file)).isEqualTo(before);
+        assertThat(Files.getLastModifiedTime(file)).isEqualTo(time);
+        for (String invalid : Arrays.asList("{\"small\":9223372036854775808}", "{\"large\":1.5}",
+                "{\"large\":\"wrong\"}")) {
+            assertThatThrownBy(() -> editNumbers(invalid, staged)).isInstanceOf(ConfigurationException.class);
+            assertThat(Files.readAllBytes(file)).isEqualTo(before);
+            assertThat(Files.getLastModifiedTime(file)).isEqualTo(time);
+            assertThat(values.large).isEqualTo(new java.math.BigInteger("9223372036854775808"));
+            assertThat(values.small).isEqualTo(2L);
+        }
+        editNumbers("{\"small\":9223372036854775807,\"ratio\":1.5}", staged);
+        assertThat(values.small).isEqualTo(Long.MAX_VALUE); assertThat(values.ratio).isEqualTo(1.5D);
+        editNumbers("{\"small\":\"7\"}", staged);
+        assertThat(values.small).isEqualTo(7L);
+    }
+
+    private void editNumbers(String payload, boolean staged) throws Exception {
+        if (staged) { manager.loadFromJson("{\"MapPanel\":{\"numeric.yml\":" + payload + "}}"); }
+        else { manager.loadFromJson("numeric.yml", payload); }
+    }
+
+    @ConfigEntity("numeric.yml")
+    public static class NumericValues extends AbstractConfigEntity {
+        @ConfigEntry java.math.BigInteger large = new java.math.BigInteger("9223372036854775808");
+        @ConfigEntry Map<String, java.math.BigInteger> numbers = new LinkedHashMap<>();
+        @ConfigEntry java.util.List<java.math.BigInteger> items = new java.util.ArrayList<>();
+        @ConfigEntry long small = 2L;
+        @ConfigEntry double ratio = 0.5D;
+        public NumericValues(String path) {
+            super(path); numbers.put("o.O", large); items.add(large);
+        }
+    }
+
     @ConfigEntity("maps.yml")
     public static class Values extends AbstractConfigEntity {
         @ConfigEntry(path = "autoreply.rules") Map<String, Map<String, Object>> rules = new LinkedHashMap<>();
