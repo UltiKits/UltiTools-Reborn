@@ -84,6 +84,7 @@ class ConfigNumericWideningTest {
 
     // Deliberately verifies the frozen explicit legacy-parser binding contract.
     @SuppressWarnings("removal")
+    @com.ultikits.ultitools.annotations.ConfigEntity("legacy.yml")
     public static class LegacyNumbers extends AbstractConfigEntity {
         @ConfigEntry(path = "value", parser = LegacyParser.class) Long value = 7L;
         public LegacyNumbers(String path) { super(path); }
@@ -120,6 +121,7 @@ class ConfigNumericWideningTest {
         plugin = Mockito.mock(UltiToolsPlugin.class);
         lenient().when(plugin.getPluginName()).thenReturn("NumbersModule");
         lenient().when(plugin.getConfigFolder()).thenReturn(tempDir.toString());
+        lenient().when(plugin.getResourceFolderPath()).thenReturn(tempDir.toString());
         lenient().when(plugin.getConfigFile(anyString())).thenAnswer(
                 invocation -> new File(tempDir.toFile(), invocation.<String>getArgument(0)));
     }
