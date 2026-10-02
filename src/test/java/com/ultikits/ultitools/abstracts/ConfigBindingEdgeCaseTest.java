@@ -256,6 +256,39 @@ class ConfigBindingEdgeCaseTest {
         }
     }
 
+    static class ObjectElements extends AbstractConfigEntity {
+        @ConfigEntry List<Object> objects = new ArrayList<>();
+        @ConfigEntry Set<Object> objectSet = new LinkedHashSet<>();
+        @ConfigEntry Object[] references = new Object[]{"first"};
+        @ConfigEntry Object raw = java.util.Arrays.asList("first", null);
+        public ObjectElements(String path) { super(path); objects.add("first"); objectSet.add("first"); }
+    }
+
+    @Test
+    void explicitObjectContainersOmitNullButDeclaredObjectPlainDataDoesNot() throws Exception {
+        ObjectElements values = new ObjectElements(PATH); values.init(plugin);
+        values.objects = java.util.Arrays.asList("first", null, null);
+        values.objectSet.add(null); values.references = new Object[]{null, "first", null};
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            values.isModifiedSinceSnapshot(); assertThat(warnings.messages()).isEmpty();
+            values.save();
+            assertThat(warnings.messages()).hasSize(3);
+            assertThat(warnings.messagesContaining("'objects")).hasSize(1);
+            assertThat(warnings.messagesContaining("'objectSet")).hasSize(1);
+            assertThat(warnings.messagesContaining("'references")).hasSize(1);
+        }
+        values.reload();
+        assertThat(values.objects).containsExactly("first");
+        assertThat(values.objectSet).containsExactly("first");
+        assertThat(values.references).containsExactly("first");
+        assertThat(values.raw).isEqualTo(java.util.Arrays.asList("first", null));
+        assertThat(values.isModifiedSinceSnapshot()).isFalse();
+        com.ultikits.ultitools.config.convert.ConverterRegistry registry =
+                com.ultikits.ultitools.config.convert.ConverterRegistry.framework();
+        assertThat(registry.fromPlainResult(java.util.Arrays.asList("first", null), Object[].class, PATH,
+                java.util.Collections.singletonList("references")).value()).isEqualTo(new Object[]{"first", null});
+    }
+
     @Test
     void panelNullElementsRemainRefusedAndMapNullValuesStillRoundTrip() throws Exception {
         NullableElements values = new NullableElements(PATH); values.init(plugin);
