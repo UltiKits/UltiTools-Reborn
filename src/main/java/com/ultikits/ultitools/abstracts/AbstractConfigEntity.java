@@ -723,8 +723,8 @@ public abstract class AbstractConfigEntity {
     private static final Object ABSENT_RELOAD_VALUE = new Object();
 
     private Object mergeReload(Object base, Object mine, Object theirs, String path, boolean secret, List<String> conflicts) {
-        if (PlainData.plainEquals(mine, base)) { return theirs; }
-        if (PlainData.plainEquals(theirs, base) || PlainData.plainEquals(mine, theirs)) { return mine; }
+        if (orderedEquals(mine, base)) { return theirs; }
+        if (orderedEquals(theirs, base) || orderedEquals(mine, theirs)) { return mine; }
         if (base instanceof Map && mine instanceof Map && theirs instanceof Map) {
             Map<?, ?> b = (Map<?, ?>) base; Map<?, ?> m = (Map<?, ?>) mine; Map<?, ?> t = (Map<?, ?>) theirs;
             Set<Object> keys = new java.util.LinkedHashSet<>(); keys.addAll(t.keySet()); keys.addAll(m.keySet()); keys.addAll(b.keySet());
