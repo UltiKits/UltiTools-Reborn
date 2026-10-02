@@ -98,23 +98,53 @@ class FrameworkTextCatalogueInvariantTest {
         }
     }
 
-    private static List<JavaLiteralScanner.Literal> cjkLiterals() throws IOException {
-        List<JavaLiteralScanner.Literal> all = new ArrayList<>();
+    /** Every {@code .java} file under {@code src/main/java}, keyed by its path relative to that root. */
+    private static Map<String, String> mainSources() throws IOException {
         List<Path> files;
         try (Stream<Path> walk = Files.walk(MAIN_JAVA)) {
             files = walk.filter(p -> p.toString().endsWith(".java")).sorted().collect(Collectors.toList());
         }
         assertThat(files.size()).as("control: the source tree was found").isGreaterThan(200);
+        Map<String, String> sources = new LinkedHashMap<>();
         for (Path file : files) {
             String relative = MAIN_JAVA.relativize(file).toString().replace('\\', '/');
-            String source = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
-            for (JavaLiteralScanner.Literal literal : JavaLiteralScanner.scan(relative, source)) {
+            sources.put(relative, new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
+        }
+        return sources;
+    }
+
+    private static List<JavaLiteralScanner.Literal> cjkLiterals() throws IOException {
+        return cjkLiterals(mainSources());
+    }
+
+    private static List<JavaLiteralScanner.Literal> cjkLiterals(Map<String, String> sources) {
+        List<JavaLiteralScanner.Literal> all = new ArrayList<>();
+        for (Map.Entry<String, String> source : sources.entrySet()) {
+            for (JavaLiteralScanner.Literal literal : JavaLiteralScanner.scan(source.getKey(), source.getValue())) {
                 if (JavaLiteralScanner.containsCjkOrFullWidth(literal.value)) {
                     all.add(literal);
                 }
             }
         }
         return all;
+    }
+
+    /**
+     * The invariant itself, over any set of sources and catalogues, so the fixtures below exercise the
+     * same code path as the real scan.
+     *
+     * @return one line per Chinese literal that is neither translated, listed, exempt nor accepted
+     */
+    static List<String> findViolations(Map<String, String> sources, JsonObject en, JsonObject zh) {
+        List<String> violations = new ArrayList<>();
+        for (JavaLiteralScanner.Literal literal : cjkLiterals(sources)) {
+            if (isTranslated(literal) || KEYS_VIA_VARIABLE.contains(literal.value)
+                    || exemptionFor(literal) != null) {
+                continue;
+            }
+            violations.add(literal.toString());
+        }
+        return violations;
     }
 
     private static boolean isTranslated(JavaLiteralScanner.Literal literal) {
@@ -149,14 +179,7 @@ class FrameworkTextCatalogueInvariantTest {
                 .as("control: the scan finds literals that are direct arguments of a translator call")
                 .isGreaterThan(50);
 
-        List<String> violations = new ArrayList<>();
-        for (JavaLiteralScanner.Literal literal : literals) {
-            if (isTranslated(literal) || KEYS_VIA_VARIABLE.contains(literal.value)
-                    || exemptionFor(literal) != null) {
-                continue;
-            }
-            violations.add(literal.toString());
-        }
+        List<String> violations = findViolations(mainSources(), catalogue("en"), catalogue("zh"));
         assertThat(violations)
                 .as("Chinese string literals that are neither catalogue keys nor named exemptions")
                 .isEmpty();
@@ -237,6 +260,138 @@ class FrameworkTextCatalogueInvariantTest {
             found.add(matcher.group());
         }
         return found;
+    }
+
+    // ---- fixtures for the invariant: a catalogue-key holder class (#561 integration) ----
+
+    private static final String HOLDER_KEY = "夹具键：模块 %s 已更新";
+    private static final String EN_ONLY_KEY = "夹具键：只在英文目录里";
+
+    private static JsonObject fixtureCatalogue(boolean chinese) {
+        JsonObject catalogue = new JsonObject();
+        catalogue.addProperty(HOLDER_KEY, chinese ? HOLDER_KEY : "Fixture key: module %s updated");
+        catalogue.addProperty("夹具键：直接翻译", chinese ? "夹具键：直接翻译" : "Fixture key: translated directly");
+        if (!chinese) {
+            catalogue.addProperty(EN_ONLY_KEY, "Fixture key: English catalogue only");
+        }
+        return catalogue;
+    }
+
+    private static List<String> fixtureViolations(String holderUse) {
+        String source = String.join("\n",
+                "package fixture;",
+                "public final class Holder {",
+                "    void use(java.util.logging.Logger logger, boolean flag) {",
+                "        " + holderUse,
+                "    }",
+                "    static String pick(boolean flag) {",
+                "        return flag ? Keys.UPDATED : Keys.UPDATED;",
+                "    }",
+                "    public static final class Keys {",
+                "        public static final String UPDATED = \"" + HOLDER_KEY + "\";",
+                "        private Keys() {",
+                "        }",
+                "        static java.lang.reflect.Field[] all() {",
+                "            return Keys.class.getFields();",
+                "        }",
+                "    }",
+                "}");
+        Map<String, String> sources = new LinkedHashMap<>();
+        sources.put("fixture/Holder.java", source);
+        return findViolations(sources, fixtureCatalogue(false), fixtureCatalogue(true));
+    }
+
+    @Test
+    @DisplayName("fixture: a Keys holder constant used only as a whole value is accepted")
+    void holderConstantUsedAsWholeValueIsAccepted() {
+        assertThat(fixtureViolations("report(java.util.logging.Level.INFO, Keys.UPDATED, \"m\");")).isEmpty();
+        assertThat(fixtureViolations("Object r = failed(null, flag ? Keys.UPDATED\n : Keys.UPDATED, 1);"))
+                .as("a ternary branch spread over two lines").isEmpty();
+        assertThat(fixtureViolations("report(null, fixture.Holder.Keys.UPDATED);"))
+                .as("a fully qualified reference").isEmpty();
+    }
+
+    @Test
+    @DisplayName("fixture: a Keys holder constant concatenated anywhere is a violation")
+    void holderConstantConcatenatedIsAViolation() {
+        assertThat(fixtureViolations("logger.info(\"x\" + Keys.UPDATED);")).hasSize(1);
+        assertThat(fixtureViolations("logger.info(Keys.UPDATED + \"x\");")).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("fixture: a Keys holder constant used as a method receiver is a violation")
+    void holderConstantAsReceiverIsAViolation() {
+        assertThat(fixtureViolations("logger.info(Keys.UPDATED.trim());")).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("fixture: a Keys holder constant assigned to a variable or statically imported is a violation")
+    void holderConstantAssignedIsAViolation() {
+        assertThat(fixtureViolations("String raw = Keys.UPDATED;")).hasSize(1);
+        Map<String, String> sources = new LinkedHashMap<>();
+        sources.put("fixture/Holder.java", String.join("\n",
+                "class Holder {",
+                "    void use() { report(Keys.UPDATED); }",
+                "    static final class Keys {",
+                "        static final String UPDATED = \"" + HOLDER_KEY + "\";",
+                "    }",
+                "}"));
+        sources.put("fixture/Other.java", String.join("\n",
+                "import static fixture.Holder.Keys.UPDATED;",
+                "class Other {",
+                "}"));
+        assertThat(findViolations(sources, fixtureCatalogue(false), fixtureCatalogue(true)))
+                .as("a static import opens an unqualified, unchecked use").hasSize(1);
+    }
+
+    @Test
+    @DisplayName("fixture: a Keys holder literal missing from either catalogue is a violation")
+    void holderLiteralMissingFromACatalogueIsAViolation() {
+        String source = String.join("\n",
+                "class Holder {",
+                "    void use() { report(Keys.EN_ONLY); report(Keys.NOWHERE); }",
+                "    static final class Keys {",
+                "        static final String EN_ONLY = \"" + EN_ONLY_KEY + "\";",
+                "        static final String NOWHERE = \"夹具键：两个目录都没有\";",
+                "    }",
+                "}");
+        Map<String, String> sources = new LinkedHashMap<>();
+        sources.put("fixture/Holder.java", source);
+        assertThat(findViolations(sources, fixtureCatalogue(false), fixtureCatalogue(true))).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("fixture: the same constant outside a class named Keys is a violation")
+    void constantOutsideAKeysHolderIsAViolation() {
+        String source = String.join("\n",
+                "class Holder {",
+                "    void use() { report(Messages.UPDATED); report(UPDATED_TOO); }",
+                "    static final String UPDATED_TOO = \"" + HOLDER_KEY + "\";",
+                "    static final class Messages {",
+                "        static final String UPDATED = \"" + HOLDER_KEY + "\";",
+                "    }",
+                "}");
+        Map<String, String> sources = new LinkedHashMap<>();
+        sources.put("fixture/Holder.java", source);
+        assertThat(findViolations(sources, fixtureCatalogue(false), fixtureCatalogue(true))).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("fixture: direct translator calls and listed keys stay accepted; a raw literal stays a violation")
+    void existingRulesAreUnchanged() {
+        String source = String.join("\n",
+                "class Plain {",
+                "    void use() {",
+                "        i18n(\"夹具键：直接翻译\");",
+                "        FrameworkText.format(\"夹具键：直接翻译\", 1);",
+                "        String back = \"上一页\";",
+                "        player.sendMessage(\"夹具：原样发给玩家\");",
+                "    }",
+                "}");
+        Map<String, String> sources = new LinkedHashMap<>();
+        sources.put("fixture/Plain.java", source);
+        assertThat(findViolations(sources, fixtureCatalogue(false), fixtureCatalogue(true)))
+                .containsExactly("fixture/Plain.java:6 \"夹具：原样发给玩家\"");
     }
 
     // ---- controls for the scanner itself ----
