@@ -49,6 +49,12 @@ public class ConfigManager {
         return false;
     }
 
+    private static void requireConfigThread(UltiToolsPlugin plugin, String operation) {
+        if (!permitsConfigThread(plugin, operation)) {
+            throw new IllegalStateException("Configuration " + operation + " requires the server thread");
+        }
+    }
+
     private void beginBatch(UltiToolsPlugin plugin) {
         InitializationBatch batch = initializationBatch.get();
         if (batch == null) { batch = new InitializationBatch(); initializationBatch.set(batch); }
@@ -84,6 +90,7 @@ public class ConfigManager {
      * @param configEntity    Config entity
      */
     public void register(UltiToolsPlugin ultiToolsPlugin, AbstractConfigEntity configEntity) throws IOException {
+        if (!permitsConfigThread(ultiToolsPlugin, "register")) { return; }
         ConfigEntity annotation = ReflectionUtil.getAnnotation(configEntity.getClass(), ConfigEntity.class);
         boolean directory = annotation != null && new File(ultiToolsPlugin.getResourceFolderPath(), annotation.value()).isDirectory();
         if (!directory) { registerImmediate(ultiToolsPlugin, configEntity); return; }
@@ -221,6 +228,7 @@ public class ConfigManager {
      * @param classLoader Class loader
      */
     public void registerAll(UltiToolsPlugin plugin, String packageName, ClassLoader classLoader) {
+        if (!permitsConfigThread(plugin, "registerAll")) { return; }
         beginBatch(plugin);
         boolean accepted = false;
         try { registerAllImmediate(plugin, packageName, classLoader); accepted = true; }
@@ -305,6 +313,7 @@ public class ConfigManager {
      * @param classLoader  Class loader
      */
     public void registerAll(UltiToolsPlugin plugin, String[] packageNames, ClassLoader classLoader) {
+        if (!permitsConfigThread(plugin, "registerAll")) { return; }
         beginBatch(plugin);
         boolean accepted = false;
         try { registerAllPackages(plugin, packageNames, classLoader); accepted = true; }
@@ -333,6 +342,7 @@ public class ConfigManager {
      * @return Config entity
      */
     public <T extends AbstractConfigEntity> T getConfigEntity(UltiToolsPlugin plugin, Class<T> type) {
+        requireConfigThread(plugin, "getConfigEntity");
         Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(plugin);
         if (configMap == null) {
             return null;
@@ -355,6 +365,7 @@ public class ConfigManager {
      * @return Config entity
      */
     public <T extends AbstractConfigEntity> T getConfigEntity(UltiToolsPlugin plugin, String path, Class<T> type) {
+        requireConfigThread(plugin, "getConfigEntity " + path + "");
         Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(plugin);
         if (configMap == null) {
             return null;
@@ -375,6 +386,7 @@ public class ConfigManager {
      * @return Config entity list
      */
     public <T extends AbstractConfigEntity> List<T> getConfigEntities(UltiToolsPlugin plugin, Class<T> type) {
+        requireConfigThread(plugin, "getConfigEntities");
         Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(plugin);
         if (configMap == null) {
             return Collections.emptyList();
@@ -395,7 +407,9 @@ public class ConfigManager {
      * @return All config entities
      */
     public Map<String, AbstractConfigEntity> getAllConfigEntities(UltiToolsPlugin plugin) {
-        return pluginConfigMap.get(plugin);
+        requireConfigThread(plugin, "getAllConfigEntities");
+        Map<String, AbstractConfigEntity> registered = pluginConfigMap.get(plugin);
+        return registered == null ? null : Collections.unmodifiableMap(new LinkedHashMap<>(registered));
     }
 
     /** Releases one module's configuration entities after unload.
@@ -445,13 +459,13 @@ public class ConfigManager {
      * overwritten by the entity's successful write. The only caller is {@code UltiTools#onDisable()};
      * explicit {@link AbstractConfigEntity#save()} uses the same semantic overwrite reporting.
      * <p>
-     * Each entity's check-then-save runs under that entity's own monitor, the lock its read, write
-     * and snapshot paths also hold, so a panel write still in flight on the WebSocket thread is
-     * applied either wholly before or wholly after this entity's shutdown save. A save failure, or
+     * Registry access and whole panel callbacks run on the server thread; the guard runs before
+     * any entity monitor. Each entity's check-then-save also retains its own monitor. A save failure, or
      * any unchecked exception from one entity, is logged and does not stop the remaining entities
      * from being saved.
      */
     public void saveAll() {
+        if (!permitsConfigThread(null, "saveAll")) { return; }
         for (Map<String, AbstractConfigEntity> configMap : pluginConfigMap.values()) {
             for (AbstractConfigEntity config : configMap.values()) {
                 try {
@@ -516,6 +530,7 @@ public class ConfigManager {
      * @return all comments
      */
     public final String getComments() {
+        requireConfigThread(null, "getComments");
         return buildJsonFromConfigs(AbstractConfigEntity::getComments);
     }
 
@@ -525,6 +540,7 @@ public class ConfigManager {
      * @return config in JSON format
      */
     public final String toJson() {
+        requireConfigThread(null, "toJson");
         return buildJsonFromConfigs(AbstractConfigEntity::toJsonObject);
     }
 
@@ -553,6 +569,7 @@ public class ConfigManager {
      *                                 completion across the whole batch before persistence starts
      */
     public final void loadFromJson(String json) throws IOException {
+        requireConfigThread(null, "loadFromJson");
         Gson gson = new Gson();
         Type mapType = new TypeToken<Map<String, Map<String, JsonObject>>>() {}.getType();
         Map<String, Map<String, JsonObject>> parseObject = gson.fromJson(json, mapType);
@@ -630,6 +647,7 @@ public class ConfigManager {
      * @since 6.2.5
      */
     public final void loadFromJson(String configFilePath, String json) throws IOException {
+        requireConfigThread(null, "loadFromJson");
         if (configFilePath == null || configFilePath.trim().isEmpty()) {
             throw new IOException("Config file path is required");
         }

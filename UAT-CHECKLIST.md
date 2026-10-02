@@ -176,6 +176,7 @@ proves the framework's own shutdown sequence, which ends with the shutdown save,
 
 | ultitools.config.three-way-reload | Refactor checkout, JDK21 and Maven | Run `mvn test -Dtest=ConfigThreeWayReloadTest` | Seven tests pass: independent memory/disk edits merge, conflicts warn with secrets redacted, numeric equality avoids false conflict, removed map keys differ from null, malformed files retain live values | unit | |
 
+| ultitools.config.registry-thread | Refactor checkout, JDK21 and Maven | Run `mvn test -Dtest=ConfigRegistryThreadConfinementTest,ConfigPanelThreadConfinementTest` | Seventeen tests pass: thirteen direct entries refuse before entity access, map snapshot cannot mutate/observe registry changes, and three callbacks perform no operation/reply until their queued task runs | unit | |
 | ultitools.config.registry-release | Refactor checkout, JDK21 and Maven | Run `mvn test -Dtest=ConfigRegistryReleaseTest` | Three tests pass: runtime unload removes entities without a later write; throwing unload still removes them; close saves pending values before unload and a later save cannot rewrite them | unit | |
 | ultitools.config.main-thread-reload | Refactor checkout, JDK21 and Maven | Run `mvn test -Dtest=ConfigMainThreadGuardTest` | Six tests pass: four off-thread entries refuse with one warning and no changes; a held entity monitor cannot block the guard; no-server and server-thread reloads apply disk values | unit | |
 

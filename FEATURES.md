@@ -256,6 +256,7 @@ not written at shutdown by either the old or the new code.
 
 | ultitools.config.three-way-reload | Reload retains memory-only edits, adopts disk-only edits and resolves conflicts to disk with located redacted warnings; maps merge whole keys, lists remain atomic | persistence | ConfigManager#reloadConfigs | n/a | n/a | admin | none | AbstractConfigEntity#mergeReload |
 
+| ultitools.config.registry-thread | All registry access is server-thread confined; async panel callbacks queue complete operations; direct getters/writes refuse explicitly and returned maps are detached | thread contract | async registry caller or panel config request | n/a | n/a | developer | none | ConfigManager; PluginInitiationUtils configuration callbacks |
 | ultitools.config.registry-release | Unload releases owner configuration entities; close saves registered dirty values before any release and never writes unloaded entities afterwards | lifecycle | module unload or framework shutdown | n/a | n/a | developer | none | ConfigManager#unregisterAll; PluginManager#close/unregister |
 | ultitools.config.main-thread-reload | Config init/reload and module reload refuse off-server-thread calls before monitors with one located warning; no-server harnesses remain allowed | gate | async caller of init/reload/reloadConfigs/reloadSelf | n/a | n/a | developer | none | ConfigManager#permitsConfigThread |
 

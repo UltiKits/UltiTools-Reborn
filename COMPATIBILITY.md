@@ -95,6 +95,19 @@ failure preserves earlier successful files and protects the failed entity until 
 Standalone registration still writes immediately. Framework-internal initialization bridges are not
 a module transaction API.
 
+### Configuration registry server-thread confinement
+
+As of 6.3.0, all ConfigManager registry operations are server-thread confined while a server
+runs. Direct off-thread register/registerAll/saveAll/unregisterAll/reloadConfigs calls warn once
+and do no work. Getters, toJson/getComments and both loadFromJson overloads warn once and throw
+IllegalStateException, rather than returning a misleading empty result or successful write.
+The no-server case remains supported. getAllConfigEntities preserves null for an unregistered
+module and otherwise returns an unmodifiable detached map; its entities are not copied.
+Panel update, upload-write and reconnect upload-read callbacks queue their whole operation and
+return immediately off-thread, responding only after the queued operation runs. No blocking wait
+or manager/entity lock ordering is introduced. Async direct callers must schedule on the server
+thread. Existing public method signatures and panel response fields/types are unchanged.
+
 ### Configuration release and shutdown save
 
 As of 6.3.0, module unload releases that module instance's configuration registry entry even
