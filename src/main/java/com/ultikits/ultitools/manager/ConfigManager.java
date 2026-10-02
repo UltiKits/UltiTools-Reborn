@@ -631,7 +631,6 @@ public class ConfigManager {
                     if (pluginParseData.containsKey(configPath)) {
                         AbstractConfigEntity config = configEntityMap.get(configPath);
                         JsonObject payload = pluginParseData.get(configPath);
-                        config.validateProposedProperties(payload);
                         touchedEntities.add(config);
                         touchedPayloads.add(payload);
                     }
@@ -639,6 +638,25 @@ public class ConfigManager {
             }
         }
 
+        List<AbstractConfigEntity> monitors = new ArrayList<>(new LinkedHashSet<>(touchedEntities));
+        monitors.sort(Comparator.comparing((AbstractConfigEntity entity) -> entity.getUltiToolsPlugin().getPluginName())
+                .thenComparing(AbstractConfigEntity::getConfigFilePath));
+        withPanelMonitors(monitors, 0, touchedEntities, touchedPayloads);
+    }
+
+    private void withPanelMonitors(List<AbstractConfigEntity> monitors, int index,
+            List<AbstractConfigEntity> entities, List<JsonObject> payloads) throws IOException {
+        if (index < monitors.size()) {
+            synchronized (monitors.get(index)) { withPanelMonitors(monitors, index + 1, entities, payloads); }
+            return;
+        }
+        persistPanelBatch(entities, payloads);
+    }
+
+    private void persistPanelBatch(List<AbstractConfigEntity> touchedEntities, List<JsonObject> touchedPayloads) throws IOException {
+        for (int i = 0; i < touchedEntities.size(); i++) {
+            touchedEntities.get(i).validateProposedProperties(touchedPayloads.get(i));
+        }
         List<AbstractConfigEntity.PanelWrite> writes = new ArrayList<>();
         try {
             for (int i = 0; i < touchedEntities.size(); i++) {

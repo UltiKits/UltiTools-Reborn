@@ -97,8 +97,11 @@ public abstract class AbstractConfigEntity {
         private final Object value;
 
         private RawEntry(ConfigDocument source, List<String> path) {
-            present = source.contains(path);
-            value = source.get(path);
+            this(source.contains(path), source.get(path));
+        }
+
+        private RawEntry(boolean present, Object value) {
+            this.present = present; this.value = PlainData.copy(value);
         }
 
         private boolean matches(ConfigDocument source, List<String> path) {
@@ -216,6 +219,7 @@ public abstract class AbstractConfigEntity {
         private final Map<Field, Object> values;
         private final List<String> overwritten;
         private final boolean changed;
+        private Map<Field, RawEntry> raw;
         private PreparedSave(ConfigDocument candidate, Map<Field, Object> values,
                 List<String> overwritten, boolean changed) {
             this.candidate = candidate; this.values = values;
@@ -224,6 +228,10 @@ public abstract class AbstractConfigEntity {
     }
 
     private PreparedSave prepareSave(List<Field> fields) throws IOException {
+        return prepareSave(fields, Collections.emptyMap());
+    }
+
+    private PreparedSave prepareSave(List<Field> fields, Map<Field, List<List<String>>> leaves) throws IOException {
         // Convert every candidate before reading or mutating the presentation document.
         Map<Field, Object> values = currentPlain(fields);
         ConfigLoadResult loaded = ConfigDocument.load(ultiToolsPlugin.getConfigFile(configFilePath).toPath());
@@ -234,8 +242,32 @@ public abstract class AbstractConfigEntity {
                 ? loaded.document() : ConfigDocument.empty();
         boolean changed = false;
         List<String> overwritten = new ArrayList<>();
+        Map<Field, RawEntry> raw = new LinkedHashMap<>();
         for (Map.Entry<Field, Object> entry : values.entrySet()) {
-            List<String> path = keys(entry.getKey());
+            Field field = entry.getKey();
+            List<String> path = keys(field);
+            if (leaves.containsKey(field)) {
+                Object baseline = savedSnapshot == null ? declaredDefaults.get(field) : savedSnapshot.get(field);
+                RawEntry previous = acknowledgedRaw.get(field);
+                Object rawBaseline = previous == null ? null : previous.value;
+                for (List<String> leaf : leaves.get(field)) {
+                    List<String> diskPath = new ArrayList<>(path); diskPath.addAll(leaf);
+                    Object next = mapLeaf(entry.getValue(), leaf);
+                    boolean existed = candidate.contains(diskPath);
+                    if (!existed || !PlainData.plainEquals(candidate.get(diskPath), next)) {
+                        if (previous != null && (mapContains(previous.value, leaf) != existed
+                                || !PlainData.plainEquals(mapLeaf(previous.value, leaf), candidate.get(diskPath)))) {
+                            overwritten.add("'" + String.join(".", diskPath) + "'");
+                        }
+                        candidate.set(diskPath, next); changed = true;
+                    }
+                    baseline = patchedMap(baseline, leaf, next);
+                    rawBaseline = patchedMap(rawBaseline, leaf, next);
+                }
+                entry.setValue(baseline);
+                raw.put(field, new RawEntry(true, rawBaseline));
+                continue;
+            }
             boolean missing = !candidate.contains(path);
             if (missing || !PlainData.plainEquals(candidate.get(path), entry.getValue())) {
                 RawEntry previous = acknowledgedRaw.get(entry.getKey());
@@ -247,7 +279,9 @@ public abstract class AbstractConfigEntity {
             if (missing && !isTokenComment(entry.getKey())) { changed |= addEntryComment(candidate, entry.getKey()); }
         }
         changed |= updateTokenComments(candidate);
-        return new PreparedSave(candidate, values, overwritten, changed);
+        PreparedSave prepared = new PreparedSave(candidate, values, overwritten, changed);
+        prepared.raw = raw;
+        return prepared;
     }
 
     private void acknowledgeSave(PreparedSave prepared) {
@@ -256,7 +290,10 @@ public abstract class AbstractConfigEntity {
         document = prepared.candidate;
         if (savedSnapshot == null) { savedSnapshot = new LinkedHashMap<>(declaredDefaults); }
         savedSnapshot.putAll(prepared.values);
-        acknowledgeRaw(prepared.candidate, new ArrayList<>(prepared.values.keySet()));
+        for (Field field : prepared.values.keySet()) {
+            RawEntry raw = prepared.raw == null ? null : prepared.raw.get(field);
+            acknowledgedRaw.put(field, raw == null ? new RawEntry(prepared.candidate, keys(field)) : raw);
+        }
         savedFileFingerprint = fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath));
     }
 
@@ -878,8 +915,10 @@ public abstract class AbstractConfigEntity {
             List<Field> touchedFields = new ArrayList<>();
             List<Object> previousValues = new ArrayList<>();
             try {
-                applyAndValidate(jsonObject, touchedFields, previousValues);
-                persist(touchedFields);
+                Map<Field, List<List<String>>> leaves = applyAndValidate(jsonObject, touchedFields, previousValues);
+                PreparedSave prepared = prepareSave(touchedFields, leaves);
+                if (prepared.changed) { write(prepared.candidate); }
+                acknowledgeSave(prepared);
             } catch (RuntimeException failure) {
                 restoreFields(touchedFields, previousValues); throw failure;
             }
@@ -898,8 +937,8 @@ public abstract class AbstractConfigEntity {
             PanelCheckpoint before = new PanelCheckpoint();
             try {
                 List<Field> touched = new ArrayList<>();
-                applyAndValidate(properties, touched, new ArrayList<>());
-                PreparedSave prepared = prepareSave(touched);
+                Map<Field, List<List<String>>> leaves = applyAndValidate(properties, touched, new ArrayList<>());
+                PreparedSave prepared = prepareSave(touched, leaves);
                 java.nio.file.Path target = ultiToolsPlugin.getConfigFile(configFilePath).toPath();
                 byte[] original = Files.exists(target) ? Files.readAllBytes(target) : null;
                 AtomicConfigWriter.StagedWrite staged = null;
@@ -1038,8 +1077,10 @@ public abstract class AbstractConfigEntity {
      * @throws ConfigurationException with {@link com.ultikits.ultitools.exceptions.ErrorCode#CONFIG_VALIDATION_FAILED}
      *                                 if the post-update field state violates a constraint
      */
-    private void applyAndValidate(JsonObject jsonObject, List<Field> touchedFieldsOut, List<Object> previousValuesOut) {
+    private Map<Field, List<List<String>>> applyAndValidate(JsonObject jsonObject, List<Field> touchedFieldsOut, List<Object> previousValuesOut) {
         Map<Field, Object> proposed = new LinkedHashMap<>();
+        Map<Field, List<List<String>>> leaves = new LinkedHashMap<>();
+        Set<Field> whole = new java.util.LinkedHashSet<>();
         List<String> refused = new ArrayList<>();
         JsonObject displayed = toJsonObject();
         for (Map.Entry<String, JsonElement> edit : jsonObject.entrySet()) {
@@ -1055,7 +1096,9 @@ public abstract class AbstractConfigEntity {
                 }
             }
             if (owner == null) { refused.add("'" + path + "': no declared entry"); continue; }
-            if (path.equals(fieldPath(owner))) { proposed.put(owner, raw); continue; }
+            if (path.equals(fieldPath(owner))) {
+                proposed.put(owner, raw); leaves.remove(owner); whole.add(owner); continue;
+            }
             Object source = document == null ? null : document.get(keys(owner));
             List<List<String>> matches = new ArrayList<>();
             matchMapPaths(source, path.substring(fieldPath(owner).length() + 1), new ArrayList<>(), matches);
@@ -1063,10 +1106,11 @@ public abstract class AbstractConfigEntity {
                 refused.add("'" + path + "': " + (matches.isEmpty() ? "not found" : "ambiguous " + matches));
                 continue;
             }
-            Object tree = proposed.containsKey(owner) ? proposed.get(owner) : PlainData.copy(source);
+            Object tree = proposed.containsKey(owner) ? proposed.get(owner) : plainValue(owner);
             if (!(tree instanceof Map)) { refused.add("'" + path + "': not a map entry"); continue; }
             replaceMapLeaf(tree, matches.get(0), raw);
             proposed.put(owner, tree);
+            if (!whole.contains(owner)) { leaves.computeIfAbsent(owner, ignored -> new ArrayList<>()).add(matches.get(0)); }
         }
         Map<Field, Object> converted = new LinkedHashMap<>();
         for (Map.Entry<Field, Object> proposal : proposed.entrySet()) {
@@ -1079,7 +1123,15 @@ public abstract class AbstractConfigEntity {
                         refused.add("'" + String.join(".", failure.path()) + "': invalid panel value for "
                                 + typeName(failure.declaredType()));
                     }
-                } else { converted.put(field, result.value()); }
+                } else {
+                    Object bound = result.value();
+                    if (leaves.containsKey(field)) {
+                        Object current = ReflectionUtil.getFieldValue(this, field);
+                        for (List<String> leaf : leaves.get(field)) { current = patchedMap(current, leaf, mapLeaf(bound, leaf)); }
+                        bound = current;
+                    }
+                    converted.put(field, bound);
+                }
             } catch (ConversionException failure) {
                 refused.add("'" + String.join(".", failure.path()) + "': invalid panel value for "
                         + typeName(failure.declaredType()));
@@ -1093,6 +1145,37 @@ public abstract class AbstractConfigEntity {
         }
         validateFields();
         validateBindingRanges(touchedFieldsOut);
+        return leaves;
+    }
+
+    private static Object mapLeaf(Object tree, List<String> path) {
+        Object value = tree;
+        for (String key : path) {
+            if (!(value instanceof Map)) { return null; }
+            value = ((Map<?, ?>) value).get(key);
+        }
+        return value;
+    }
+
+    private static boolean mapContains(Object tree, List<String> path) {
+        Object value = tree;
+        for (String key : path) {
+            if (!(value instanceof Map) || !((Map<?, ?>) value).containsKey(key)) { return false; }
+            value = ((Map<?, ?>) value).get(key);
+        }
+        return true;
+    }
+
+    private static Object patchedMap(Object tree, List<String> path, Object value) {
+        Map<String, Object> copy = new LinkedHashMap<>();
+        if (tree instanceof Map) {
+            for (Map.Entry<?, ?> entry : ((Map<?, ?>) tree).entrySet()) {
+                copy.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+        String key = path.get(0);
+        copy.put(key, path.size() == 1 ? value : patchedMap(copy.get(key), path.subList(1, path.size()), value));
+        return copy;
     }
 
     private static void matchMapPaths(Object node, String remaining, List<String> prefix, List<List<String>> matches) {
