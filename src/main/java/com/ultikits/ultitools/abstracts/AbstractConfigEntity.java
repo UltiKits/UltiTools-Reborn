@@ -976,29 +976,79 @@ public abstract class AbstractConfigEntity {
      *                                 if the post-update field state violates a constraint
      */
     private void applyAndValidate(JsonObject jsonObject, List<Field> touchedFieldsOut, List<Object> previousValuesOut) {
-        for (Field field : configEntryFields()) {
-            String path = fieldPath(field);
-            if (!jsonObject.has(path)) { continue; }
-            field.setAccessible(true);
-            Object raw = jsonToPlain(jsonObject.get(path));
-            Object value;
+        Map<Field, Object> proposed = new LinkedHashMap<>();
+        List<String> refused = new ArrayList<>();
+        JsonObject displayed = toJsonObject();
+        for (Map.Entry<String, JsonElement> edit : jsonObject.entrySet()) {
+            String path = edit.getKey();
+            Object raw = jsonToPlain(edit.getValue());
+            if (displayed.has(path) && PlainData.plainEquals(jsonToPlain(displayed.get(path)), raw)) { continue; }
+            Field owner = null;
+            for (Field field : configEntryFields()) {
+                String entry = fieldPath(field);
+                if (path.equals(entry)) { owner = field; break; }
+                if (path.startsWith(entry + ".") && (owner == null || entry.length() > fieldPath(owner).length())) {
+                    owner = field;
+                }
+            }
+            if (owner == null) { refused.add("'" + path + "': no declared entry"); continue; }
+            if (path.equals(fieldPath(owner))) { proposed.put(owner, raw); continue; }
+            Object source = document == null ? null : document.get(keys(owner));
+            List<List<String>> matches = new ArrayList<>();
+            matchMapPaths(source, path.substring(fieldPath(owner).length() + 1), new ArrayList<>(), matches);
+            if (matches.size() != 1) {
+                refused.add("'" + path + "': " + (matches.isEmpty() ? "not found" : "ambiguous " + matches));
+                continue;
+            }
+            Object tree = proposed.containsKey(owner) ? proposed.get(owner) : PlainData.copy(source);
+            if (!(tree instanceof Map)) { refused.add("'" + path + "': not a map entry"); continue; }
+            replaceMapLeaf(tree, matches.get(0), raw);
+            proposed.put(owner, tree);
+        }
+        Map<Field, Object> converted = new LinkedHashMap<>();
+        for (Map.Entry<Field, Object> proposal : proposed.entrySet()) {
+            Field field = proposal.getKey();
             try {
-                ConversionResult<Object> result = registry().fromPlainResult(raw, declaredType(field),
+                ConversionResult<Object> result = registry().fromPlainResult(proposal.getValue(), declaredType(field),
                         configFilePath, keys(field), field.getAnnotation(ConfigEntry.class));
                 if (!result.failures().isEmpty()) {
-                    throw new ConfigurationException("File " + configFilePath + ", key '" + path + "': invalid panel value");
-                }
-                value = result.value();
+                    for (ConversionFailure failure : result.failures()) {
+                        refused.add("'" + String.join(".", failure.path()) + "': invalid panel value for "
+                                + typeName(failure.declaredType()));
+                    }
+                } else { converted.put(field, result.value()); }
             } catch (ConversionException failure) {
-                throw new ConfigurationException("File " + configFilePath + ", key '" + path
-                        + "': invalid panel value for " + typeName(declaredType(field)));
+                refused.add("'" + String.join(".", failure.path()) + "': invalid panel value for "
+                        + typeName(failure.declaredType()));
             }
-            touchedFieldsOut.add(field);
-            previousValuesOut.add(ReflectionUtil.getFieldValue(this, field));
-            ReflectionUtil.setFieldValue(this, field, value);
+        }
+        if (!refused.isEmpty()) { throw new ConfigurationException("File " + configFilePath + ": " + String.join("; ", refused)); }
+        for (Map.Entry<Field, Object> entry : converted.entrySet()) {
+            Field field = entry.getKey(); field.setAccessible(true);
+            touchedFieldsOut.add(field); previousValuesOut.add(ReflectionUtil.getFieldValue(this, field));
+            ReflectionUtil.setFieldValue(this, field, entry.getValue());
         }
         validateFields();
         validateBindingRanges(touchedFieldsOut);
+    }
+
+    private static void matchMapPaths(Object node, String remaining, List<String> prefix, List<List<String>> matches) {
+        if (!(node instanceof Map)) { return; }
+        for (Map.Entry<?, ?> entry : ((Map<?, ?>) node).entrySet()) {
+            String key = String.valueOf(entry.getKey());
+            List<String> path = new ArrayList<>(prefix); path.add(key);
+            if (remaining.equals(key)) { matches.add(path); }
+            else if (remaining.startsWith(key + ".")) {
+                matchMapPaths(entry.getValue(), remaining.substring(key.length() + 1), path, matches);
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked") // Plain-data maps have String keys, enforced by the converter boundary.
+    private static void replaceMapLeaf(Object tree, List<String> path, Object value) {
+        Map<String, Object> parent = (Map<String, Object>) tree;
+        for (int i = 0; i < path.size() - 1; i++) { parent = (Map<String, Object>) parent.get(path.get(i)); }
+        parent.put(path.get(path.size() - 1), PlainData.copy(value));
     }
 
     private static Object jsonToPlain(JsonElement element) {

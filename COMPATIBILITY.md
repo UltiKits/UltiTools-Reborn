@@ -95,6 +95,15 @@ failure preserves earlier successful files and protects the failed entity until 
 Standalone registration still writes immediately. Framework-internal initialization bridges are not
 a module transaction API.
 
+### Panel edits inside map entries
+
+As of 6.3.0, a changed panel leaf inside a declared map setting is applied through that field's
+full declared-type converter. Real whole keys containing dots remain whole. A path with multiple
+readings refuses with every reading named; an unknown changed key is explicitly refused. Any refused
+changed key refuses the whole payload, naming all refused paths. Unchanged displayed leaves are not
+edits, including undeclared operator keys and ambiguous paths. Previously these map-entry edits were
+silently ignored. The existing `config_update_response` shape is unchanged.
+
 ### Multi-file panel persistence
 
 As of 6.3.0, `ConfigManager#loadFromJson(String)` validates every touched configuration, stages
