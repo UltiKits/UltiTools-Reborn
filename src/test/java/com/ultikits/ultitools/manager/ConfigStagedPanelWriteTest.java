@@ -90,6 +90,60 @@ class ConfigStagedPanelWriteTest {
     }
 
     @Test
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+    void fallbackRollbackRefreshesRetainedBackupAndRestoresOriginalCheckpoint() throws Exception {
+        Class<?> operations = Class.forName(AtomicConfigWriter.class.getName() + "$FileOperations");
+        AtomicInteger opens = new AtomicInteger();
+        Object files = Mockito.mock(operations, invocation -> {
+            if ("move".equals(invocation.getMethod().getName())) {
+                Path destination = invocation.getArgument(1);
+                if (!destination.getFileName().toString().endsWith(".bak")) {
+                    throw new java.nio.file.AtomicMoveNotSupportedException("source", destination.toString(), "injected fallback");
+                }
+            }
+            if ("openTarget".equals(invocation.getMethod().getName()) && opens.incrementAndGet() == 2) {
+                throw new IOException("one transient target-open failure");
+            }
+            return invocation.callRealMethod();
+        });
+        java.lang.reflect.Method stage = AtomicConfigWriter.class.getDeclaredMethod("stage", Path.class, String.class, operations);
+        java.lang.reflect.Method write = AtomicConfigWriter.class.getDeclaredMethod("write", Path.class, String.class, operations);
+        stage.setAccessible(true); write.setAccessible(true);
+        try (MockedStatic<AtomicConfigWriter> writer = Mockito.mockStatic(AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
+            writer.when(() -> AtomicConfigWriter.stage(any(Path.class), anyString()))
+                    .thenAnswer(call -> invokeWriter(stage, call.getArgument(0), call.getArgument(1), files));
+            writer.when(() -> AtomicConfigWriter.write(any(Path.class), anyString()))
+                    .thenAnswer(call -> invokeWriter(write, call.getArgument(0), call.getArgument(1), files));
+            assertThatThrownBy(() -> manager.loadFromJson(payload()))
+                    .isInstanceOf(IOException.class).hasMessage("one transient target-open failure")
+                    .satisfies(failure -> assertThat(failure.getSuppressed()).isEmpty());
+        }
+        assertThat(opens.get()).as("two commits attempted and both attempted files restored").isEqualTo(4);
+        for (int i = 0; i < entities.size(); i++) {
+            Values value = entities.get(i);
+            assertThat(Files.readAllBytes(directory.resolve(value.getConfigFilePath()))).isEqualTo(originals.get(i));
+            assertThat(state(value)).isEqualTo(checkpoints.get(i));
+            assertThat(value.value).isEqualTo(i + 1); assertThat(value.other).isEqualTo("unsaved");
+        }
+        try (java.util.stream.Stream<Path> paths = Files.list(directory)) {
+            List<Path> backups = paths.filter(path -> path.getFileName().toString().endsWith(".bak")).collect(Collectors.toList());
+            assertThat(backups).hasSize(2);
+            for (Path backup : backups) {
+                Path target = backup.resolveSibling(backup.getFileName().toString().replace(".bak", ""));
+                assertThat(ConfigDocument.load(target).state())
+                        .isEqualTo(com.ultikits.ultitools.config.document.ConfigLoadResult.State.LOADED);
+                assertThat(Files.exists(backup)).isFalse();
+            }
+        }
+        assertNoTemporaries();
+    }
+
+    private static Object invokeWriter(java.lang.reflect.Method method, Path target, String text, Object files) throws Throwable {
+        try { return method.invoke(null, target, text, files); }
+        catch (java.lang.reflect.InvocationTargetException failure) { throw failure.getCause(); }
+    }
+
+    @Test
     void successStagesEveryFileBeforeCommittingAndAcknowledgesOnlyTouchedFields() throws Exception {
         AtomicInteger staged = new AtomicInteger();
         AtomicInteger moved = new AtomicInteger();

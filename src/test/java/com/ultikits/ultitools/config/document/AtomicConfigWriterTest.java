@@ -176,13 +176,91 @@ class AtomicConfigWriterTest {
     }
 
     @Test
-    void existingBackupRefusesWithoutOverwritingEitherFile() throws IOException {
-        Files.write(backup(), "operator backup\n".getBytes(StandardCharsets.UTF_8));
-        assertThatThrownBy(() -> AtomicConfigWriter.write(target, NEW, new ObservedFallback("atomic")))
-                .isInstanceOf(IOException.class);
+    void repeatedFallbackRefreshesBackupBeforeOverwritingTarget() throws IOException {
+        AtomicConfigWriter.write(target, NEW, new RotatingFallback(null));
+        assertThat(content(backup())).isEqualTo(OLD);
+        RotatingFallback second = new RotatingFallback(null);
+        AtomicConfigWriter.write(target, NEW + "third: line\n", second);
+        assertThat(content(target)).isEqualTo(NEW + "third: line\n");
+        assertThat(content(backup())).isEqualTo(NEW);
+        assertThat(second.events).containsSubsequence("copy-write", "copy-force", "backup-move", "target-open");
+        assertThat(siblings()).containsExactlyInAnyOrder("config.yml", "config.yml.bak");
+        assertThat(ConfigDocument.load(target).state()).isEqualTo(ConfigLoadResult.State.LOADED);
+        assertThat(Files.exists(backup())).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"create", "write", "force", "move"})
+    void backupRefreshRefusalKeepsExistingBackupAndTarget(String fault) throws IOException {
+        Files.write(backup(), "earlier backup\n".getBytes(StandardCharsets.UTF_8));
+        RotatingFallback files = new RotatingFallback(fault);
+        assertThatThrownBy(() -> AtomicConfigWriter.write(target, NEW, files)).isInstanceOf(IOException.class);
         assertThat(content(target)).isEqualTo(OLD);
-        assertThat(content(backup())).isEqualTo("operator backup\n");
-        assertThat(warnings()).hasSize(1);
+        assertThat(content(backup())).isEqualTo("earlier backup\n");
+        assertThat(files.events).doesNotContain("target-open");
+        assertThat(siblings()).containsExactlyInAnyOrder("config.yml", "config.yml.bak");
+    }
+
+    @Test
+    void refreshedBackupSurvivesTargetFailureWithTargetPermissions() throws IOException {
+        assumeTrue(Files.getFileStore(tempDir).supportsFileAttributeView("posix"));
+        Files.setPosixFilePermissions(target, PosixFilePermissions.fromString("rw-------"));
+        Files.write(backup(), "earlier backup\n".getBytes(StandardCharsets.UTF_8));
+        RotatingFallback files = new RotatingFallback("target");
+        assertThatThrownBy(() -> AtomicConfigWriter.write(target, NEW, files)).isInstanceOf(IOException.class);
+        assertThat(content(backup())).isEqualTo(OLD);
+        assertThat(content(target)).isEqualTo(OLD);
+        assertThat(PosixFilePermissions.toString(Files.getPosixFilePermissions(backup()))).isEqualTo("rw-------");
+        assertThat(files.events).containsSubsequence("copy-force", "backup-move", "target-open");
+        assertThat(siblings()).containsExactlyInAnyOrder("config.yml", "config.yml.bak");
+    }
+
+    private class RotatingFallback implements AtomicConfigWriter.FileOperations {
+        private final String fault;
+        private final List<String> events = new ArrayList<>();
+        private FileChannel copy;
+        private String priorBackup;
+        RotatingFallback(String fault) { this.fault = fault; }
+        @Override public FileChannel open(Path temporary, java.nio.file.attribute.FileAttribute<?>... attributes) throws IOException {
+            if (temporary.getFileName().toString().startsWith("config.yml.bak.tmp-")) {
+                if ("create".equals(fault)) { throw new IOException("injected copy create"); }
+                priorBackup = content(backup());
+                copy = AtomicConfigWriter.FileOperations.super.open(temporary, attributes);
+                return copy;
+            }
+            return AtomicConfigWriter.FileOperations.super.open(temporary, attributes);
+        }
+        @Override public void write(FileChannel channel, ByteBuffer data) throws IOException {
+            if (channel == copy) {
+                events.add("copy-write");
+                if ("write".equals(fault)) { throw new IOException("injected copy write"); }
+            }
+            AtomicConfigWriter.FileOperations.super.write(channel, data);
+        }
+        @Override public void force(FileChannel channel) throws IOException {
+            if (channel == copy) {
+                events.add("copy-force");
+                if ("force".equals(fault)) { throw new IOException("injected copy force"); }
+            }
+            AtomicConfigWriter.FileOperations.super.force(channel);
+        }
+        @Override public void move(Path source, Path destination, CopyOption... options) throws IOException {
+            if (!destination.equals(backup())) {
+                throw new AtomicMoveNotSupportedException(source.toString(), destination.toString(), "injected fallback");
+            }
+            events.add("backup-move");
+            assertThat(content(backup())).isEqualTo(priorBackup);
+            assertThat(events).contains("copy-force");
+            if ("move".equals(fault)) { throw new IOException("injected copy move"); }
+            assertThat(java.util.Arrays.asList(options)).contains(StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            AtomicConfigWriter.FileOperations.super.move(source, destination, options);
+        }
+        @Override public FileChannel openTarget(Path file) throws IOException {
+            events.add("target-open");
+            if (copy != null) { assertThat(events).contains("backup-move"); }
+            if ("target".equals(fault)) { throw new IOException("injected target open"); }
+            return AtomicConfigWriter.FileOperations.super.openTarget(file);
+        }
     }
 
     @ParameterizedTest
