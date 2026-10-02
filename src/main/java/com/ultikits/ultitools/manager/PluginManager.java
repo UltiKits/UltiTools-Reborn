@@ -335,6 +335,10 @@ public class PluginManager {
      * @param plugin UltiTools plugin instance
      */
     public void unregister(UltiToolsPlugin plugin) {
+        unregister(plugin, false);
+    }
+
+    private void unregister(UltiToolsPlugin plugin, boolean shutdown) {
         // Each registry-cleanup step below is isolated from every other step's failure
         // (Codex review on #457, round 4: "Run all registry cleanup after an earlier
         // failure") -- an Error from one owner registry (e.g. TaskManager.cancelAll() not
@@ -410,10 +414,19 @@ public class PluginManager {
                     plugin.getContext().close();
                 }
             } finally {
-                runUnregisterStep(plugin, "release configuration entities", () -> {
-                    ConfigManager configs = UltiTools.getInstance().getConfigManager();
-                    if (configs != null) { configs.unregisterAll(plugin); }
-                });
+                try {
+                    if (shutdown) {
+                        runUnregisterStep(plugin, "save shutdown teardown configuration", () -> {
+                            ConfigManager configs = UltiTools.getInstance().getConfigManager();
+                            if (configs != null) { configs.saveForShutdown(plugin); }
+                        });
+                    }
+                } finally {
+                    runUnregisterStep(plugin, "release configuration entities", () -> {
+                        ConfigManager configs = UltiTools.getInstance().getConfigManager();
+                        if (configs != null) { configs.unregisterAll(plugin); }
+                    });
+                }
             }
         }
     }
@@ -459,7 +472,7 @@ public class PluginManager {
             // UltiTools.onDisable() and skip configManager.saveAll() (WR-01,
             // 16-REVIEW-lifecycle.md) -- mirrors the register() convention above.
             try {
-                unregister(plugin);
+                unregister(plugin, true);
             } catch (Exception | Error e) {
                 logPluginUnregistrationFailure(plugin.getPluginName(), e);
             }

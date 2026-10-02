@@ -508,24 +508,35 @@ public class ConfigManager {
     public void saveAll() {
         if (!permitsConfigThread(null, "saveAll")) { return; }
         for (Map<String, AbstractConfigEntity> configMap : pluginConfigMap.values()) {
-            for (AbstractConfigEntity config : configMap.values()) {
-                try {
-                    synchronized (config) {
-                        if (config.isLastLoadUnparseable()) {
-                            warnUnparseableFileLeftAlone(config);
-                            continue;
-                        }
-                        if (!config.isModifiedSinceSnapshot()) {
-                            continue;
-                        }
-                        // The entity owns semantic overwritten-key reporting after a successful write.
-                        config.save();
+            saveRegisteredEntities(configMap);
+        }
+    }
+
+    // Shutdown only: persist this exact owner's post-hook state before releasing its registry entry.
+    void saveForShutdown(UltiToolsPlugin plugin) {
+        if (!permitsConfigThread(plugin, "saveForShutdown")) { return; }
+        Map<String, AbstractConfigEntity> entities = pluginConfigMap.get(plugin);
+        if (entities != null) { saveRegisteredEntities(entities); }
+    }
+
+    private void saveRegisteredEntities(Map<String, AbstractConfigEntity> configMap) {
+        for (AbstractConfigEntity config : configMap.values()) {
+            try {
+                synchronized (config) {
+                    if (config.isLastLoadUnparseable()) {
+                        warnUnparseableFileLeftAlone(config);
+                        continue;
                     }
-                } catch (IOException e) {
-                    UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration save failed！File path：" + config.getConfigFilePath());
-                } catch (RuntimeException e) {
-                    UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration save failed！File path：" + config.getConfigFilePath(), e);
+                    if (!config.isModifiedSinceSnapshot()) {
+                        continue;
+                    }
+                    // The entity owns semantic overwritten-key reporting after a successful write.
+                    config.save();
                 }
+            } catch (IOException e) {
+                UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration save failed！File path：" + config.getConfigFilePath());
+            } catch (RuntimeException e) {
+                UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration save failed！File path：" + config.getConfigFilePath(), e);
             }
         }
     }
