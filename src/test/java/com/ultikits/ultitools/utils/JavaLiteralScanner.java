@@ -101,24 +101,23 @@ final class JavaLiteralScanner {
     /** The name of the {@code static final String} field whose whole initializer starts here, or null. */
     private String constantNameBeforeLiteral() {
         int size = tokens.size();
-        if (size < 3 || !"=".equals(tokens.get(size - 1)) || !isIdentifier(tokens.get(size - 2))
-                || !"String".equals(tokens.get(size - 3)) || nextSignificantChar() != ';') {
-            return null;
+        boolean stringField = size >= 3 && "=".equals(tokens.get(size - 1)) && isIdentifier(tokens.get(size - 2))
+                && "String".equals(tokens.get(size - 3));
+        return stringField && nextSignificantChar() == ';' && isStaticFinal(size - 4) ? tokens.get(size - 2) : null;
+    }
+
+    /** Whether the modifiers ending at token {@code last}, back to the previous statement, hold static and final. */
+    private boolean isStaticFinal(int last) {
+        int start = last;
+        while (start >= 0 && !isStatementBoundary(tokens.get(start))) {
+            start--;
         }
-        boolean isStatic = false;
-        boolean isFinal = false;
-        for (int i = size - 4; i >= 0; i--) {
-            String token = tokens.get(i);
-            if (";".equals(token) || "{".equals(token) || "}".equals(token)) {
-                break;
-            }
-            if ("static".equals(token)) {
-                isStatic = true;
-            } else if ("final".equals(token)) {
-                isFinal = true;
-            }
-        }
-        return isStatic && isFinal ? tokens.get(size - 2) : null;
+        List<String> modifiers = tokens.subList(start + 1, last + 1);
+        return modifiers.contains("static") && modifiers.contains("final");
+    }
+
+    private static boolean isStatementBoundary(String token) {
+        return ";".equals(token) || "{".equals(token) || "}".equals(token);
     }
 
     /** The next character after {@code pos} that is not whitespace or inside a comment. */

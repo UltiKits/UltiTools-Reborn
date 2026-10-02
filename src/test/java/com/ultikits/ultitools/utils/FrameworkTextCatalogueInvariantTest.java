@@ -70,6 +70,12 @@ class FrameworkTextCatalogueInvariantTest {
     /** Tokens that may directly follow a qualified holder reference: end of argument, branch or statement. */
     private static final Set<String> HOLDER_NEXT = new HashSet<>(Arrays.asList(")", ",", ":", ";"));
 
+    /** Fixture catalogue key held by a fixture {@code Keys} class, present in both fixture catalogues. */
+    private static final String HOLDER_KEY = "夹具键：模块 %s 已更新";
+
+    /** Fixture catalogue key present in the English fixture catalogue only. */
+    private static final String EN_ONLY_KEY = "夹具键：只在英文目录里";
+
     private static final List<Exemption> EXEMPTIONS = Arrays.asList(
             new Exemption("com/ultikits/ultitools/UltiTools.java", 4,
                     "the four bilingual config.yml comment constants: English first, Chinese supplement, "
@@ -211,13 +217,20 @@ class FrameworkTextCatalogueInvariantTest {
         if (!constants.contains(name)) {
             return null;
         }
-        String before = text(tokens, i - 1);
+        return ".".equals(text(tokens, i - 1)) ? qualifiedMisuseAt(tokens, i) : unqualifiedMisuseAt(tokens, i);
+    }
+
+    /** An unqualified name can reach a holder constant only inside the holder; there it is not a whole value. */
+    private static String unqualifiedMisuseAt(List<JavaLiteralScanner.Token> tokens, int i) {
+        boolean declaration = "String".equals(text(tokens, i - 1)) && "=".equals(text(tokens, i + 1));
+        boolean insideHolder = HOLDER.equals(tokens.get(i).enclosingType);
+        return insideHolder && !declaration ? "an unqualified name" : null;
+    }
+
+    /** A {@code Keys.NAME} reference, possibly further qualified, must sit in an accepted whole-value position. */
+    private static String qualifiedMisuseAt(List<JavaLiteralScanner.Token> tokens, int i) {
+        String name = tokens.get(i).text;
         String after = text(tokens, i + 1);
-        if (!".".equals(before)) {
-            boolean declaration = "String".equals(before) && "=".equals(after);
-            boolean insideHolder = HOLDER.equals(tokens.get(i).enclosingType);
-            return insideHolder && !declaration ? "an unqualified name" : null;
-        }
         if (!HOLDER.equals(text(tokens, i - 2))) {
             return null;
         }
@@ -355,9 +368,6 @@ class FrameworkTextCatalogueInvariantTest {
     }
 
     // ---- fixtures for the invariant: a catalogue-key holder class (#561 integration) ----
-
-    private static final String HOLDER_KEY = "夹具键：模块 %s 已更新";
-    private static final String EN_ONLY_KEY = "夹具键：只在英文目录里";
 
     private static JsonObject fixtureCatalogue(boolean chinese) {
         JsonObject catalogue = new JsonObject();
