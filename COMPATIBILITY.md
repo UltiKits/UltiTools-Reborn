@@ -117,9 +117,12 @@ IllegalStateException, rather than returning a misleading empty result or succes
 The no-server case remains supported. getAllConfigEntities preserves null for an unregistered
 module and otherwise returns an unmodifiable detached map; its entities are not copied.
 Panel update, upload-write and reconnect upload-read callbacks queue their whole operation and
-return immediately off-thread, responding only after the queued operation runs. No blocking wait
-or manager/entity lock ordering is introduced. Async direct callers must schedule on the server
-thread. Existing public method signatures and panel response fields/types are unchanged.
+return immediately off-thread, responding only after the queued operation runs. Registry guards
+precede entity monitors. Multi-file panel transactions retain deterministically ordered touched-entity
+monitors through validation, preparation, commit and acknowledgment or rollback; direct single-entity
+persistence uses its existing monitor. No separate manager lock or blocking scheduler wait is added.
+Async registry callers must schedule on the server thread. Existing public method signatures and
+panel response fields/types are unchanged.
 
 ### Configuration release and shutdown save
 
@@ -155,7 +158,10 @@ full declared-type converter. Real whole keys containing dots remain whole. A pa
 readings refuses with every reading named; an unknown changed key is explicitly refused. Any refused
 changed key refuses the whole payload, naming all refused paths. Unchanged displayed leaves are not
 edits, including undeclared operator keys and ambiguous paths. Previously these map-entry edits were
-silently ignored. The existing `config_update_response` shape is unchanged.
+silently ignored. Leaf edits preserve unrelated pending in-memory siblings and their dirty state,
+and preserve independently edited disk siblings without acknowledging them. Full declared-field
+conversion and validation still run, but only targeted leaves are published and persisted.
+The existing `config_update_response` shape is unchanged.
 
 ### Multi-file panel persistence
 
