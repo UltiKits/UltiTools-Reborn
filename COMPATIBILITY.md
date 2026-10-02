@@ -157,7 +157,9 @@ panel response fields/types are unchanged.
 As of 6.3.0, module unload releases that module instance's configuration registry entry even
 when its unload hook or context close throws. Later shutdown saves neither retain nor write
 unloaded entities. PluginManager.close saves all registered dirty configurations before unloading
-any module, rather than saving an emptied registry afterwards. Normal runtime unload itself does
+any module. After each module's unload hook and container `@PreDestroy` callbacks, shutdown saves
+that same owner's dirty configurations again before releasing the owner, even when cleanup throws.
+The final save retains protected-file refusal and per-entity failure isolation. Normal runtime unload itself does
 not save; superseded-copy preparation follows the separate preconstruction rule. Public existing
 signatures are unchanged; no module migration is required.
 
@@ -212,9 +214,13 @@ The six deprecated announcements are `ConfigEntry#parser()`, `interfaces.Parser`
 `DefaultConfigParser`, `StringHashMapParser` (the published package spelling `pasers` is retained).
 Their first release carrying `@Deprecated(since = "6.3.0", forRemoval = true)` is 6.3.0; the next
 MINOR, 6.4.0, is the announced removal version. They are retained in 6.3.0, not deleted now.
-An explicit non-default `parser = X.class` still selects the frozen legacy adapter: maps become
-detached Bukkit sections with the old dotted-key splitting, and legacy output must cross the
-plain-data boundary. Leaving `parser` at `DefaultConfigParser.class` selects the new registry,
+An explicit non-default `parser = X.class` still selects the frozen legacy adapter. Its detached
+input is emitted under one key and loaded by a fresh Bukkit `YamlConfiguration#get`, retaining
+6.2 section-based dotted-key splitting and Bukkit `==` alias deserialization at the root and inside
+lists/maps, including explicitly parsed `Object` fields. Registry converters do not hydrate these
+legacy inputs; legacy output still crosses the plain-data boundary and retains boxed widening.
+Bukkit's own alias restrictions remain: integral Vector coordinates deserialize to null, whereas
+fractional coordinates deserialize normally. Leaving `parser` at `DefaultConfigParser.class` selects the new registry,
 not that legacy class. Third-party subclasses retain their old executable behavior, not the new
 built-in collection semantics. The six announcements are indexed in
 [`compatibility/DEPRECATIONS.md`](compatibility/DEPRECATIONS.md).
