@@ -111,6 +111,46 @@ class ConfigBatchBufferingTest {
         assertThat(manager.getAllConfigEntities(plugin)).containsKey("first.yml");
     }
 
+    @Test
+    void acceptedBatchKeepsEarlierWriteAndProtectsFailedSecondFile() throws Exception {
+        byte[] original = "# old translation\nvalue: existing\n".getBytes(StandardCharsets.UTF_8);
+        Files.write(directory.resolve("second.yml"), original);
+        Observer.directory = directory;
+        try (MockedStatic<ConverterRegistry> registry = selected(First.class, Second.class, Observer.class);
+                MockedStatic<com.ultikits.ultitools.config.document.AtomicConfigWriter> writer =
+                        Mockito.mockStatic(com.ultikits.ultitools.config.document.AtomicConfigWriter.class,
+                                Mockito.CALLS_REAL_METHODS)) {
+            writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.write(
+                    Mockito.eq(directory.resolve("second.yml")), anyString()))
+                    .thenThrow(new java.io.IOException("injected second-file refusal"));
+            manager.registerAll(plugin, "batch", getClass().getClassLoader());
+            assertThat(Files.exists(directory.resolve("first.yml"))).isTrue();
+            assertThat(Files.readAllBytes(directory.resolve("second.yml"))).isEqualTo(original);
+            assertThat(Files.exists(directory.resolve("observer.yml"))).isTrue();
+            Second failed = manager.getConfigEntity(plugin, Second.class);
+            assertThat(failed).isNotNull();
+            assertThat(failed.isModifiedSinceSnapshot()).isFalse();
+            failed.save();
+            writer.verify(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.write(
+                    Mockito.eq(directory.resolve("second.yml")), anyString()), Mockito.times(1));
+            registry.verify(() -> ConverterRegistry.prepareSelectedConfigs(plugin,
+                    new String[]{"batch"}, getClass().getClassLoader()));
+        }
+    }
+
+    @Test
+    void protectedInputNeverBecomesPendingWrite() throws Exception {
+        byte[] invalid = "value: [broken\n".getBytes(StandardCharsets.UTF_8);
+        Files.write(directory.resolve("first.yml"), invalid);
+        try (MockedStatic<ConverterRegistry> registry = selected(First.class)) {
+            manager.registerAll(plugin, "batch", getClass().getClassLoader());
+            assertThat(Files.readAllBytes(directory.resolve("first.yml"))).isEqualTo(invalid);
+            assertThat(manager.getConfigEntity(plugin, First.class).isModifiedSinceSnapshot()).isFalse();
+            registry.verify(() -> ConverterRegistry.prepareSelectedConfigs(plugin,
+                    new String[]{"batch"}, getClass().getClassLoader()));
+        }
+    }
+
     private MockedStatic<ConverterRegistry> selected(Class<?>... types) {
         MockedStatic<ConverterRegistry> registry = Mockito.mockStatic(ConverterRegistry.class,
                 Mockito.CALLS_REAL_METHODS);
