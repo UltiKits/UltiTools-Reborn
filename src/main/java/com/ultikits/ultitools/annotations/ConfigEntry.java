@@ -27,6 +27,8 @@ public @interface ConfigEntry {
      * A single trimmed {@code {key}} token resolves through the module catalogue on every
      * load and write. That entry's block comment is framework-owned; literal comments are
      * only supplied for new entries and existing operator comments are retained.
+     * Comments on individual list items are kept only while the list keeps its length
+     * - the same as Bukkit, which keeps none.
      * @return the literal comment or single catalogue-key token
      */
     String comment() default "";

@@ -18,7 +18,7 @@ The internal config storage layer renders the whole YAML document through SnakeY
 order. Its existing line-terminator, BOM, final-newline and supported indentation-style rules remain in effect. Operator layout
 may be normalized: aligned inline comments, flow spacing, extra spaces after a colon, document markers, mixed indentation and
 trailing spaces are not byte-preservation guarantees. Changed anchored documents expand aliases and merge keys from their plain
-values while retaining comments on surviving keys and list items. The storage API signatures are unchanged.
+values while retaining comments on surviving keys. Comments on individual list items are kept only while the list keeps its length — the same as Bukkit, which keeps none. The storage API signatures are unchanged.
 
 Saving first attempts a forced same-directory temporary file and atomic replacement. Only an unsupported atomic move, EBUSY,
 EXDEV, or a permission/read-only refusal to create the temporary file allows the narrow fallback: exclusively create `<file>.bak`,
@@ -73,8 +73,8 @@ save acknowledges its new effective order without changing operator file order, 
 An explicit save compares its candidates with the current disk document, not only the saved
 baseline, so it may replace an operator's changed value even when the entity was clean. Semantic
 no-op saves invoke no writer and preserve bytes and modification time. Edited saves use the full
-emitter described above, retaining untargeted data, key order and comment text while allowing layout
-normalization. A failed write never acknowledges the pending effective values as saved.
+emitter described above, retaining untargeted data, key order and comment text subject to the list-item
+length limit above, while allowing layout normalization. A failed write never acknowledges the pending effective values as saved.
 
 Unreadable, unparseable and non-UTF-8 files are protected on every entity write path. Initial load
 keeps declared defaults; failed reload keeps running fields. One SEVERE names the file and safe cause.
