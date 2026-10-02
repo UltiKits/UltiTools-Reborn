@@ -1165,6 +1165,8 @@ public abstract class AbstractConfigEntity {
         parent.put(path.get(path.size() - 1), PlainData.copy(value));
     }
 
+    // Recursive JSON shape dispatch preserves exact integral overflow before typed conversion.
+    @SuppressWarnings("PMD.NPathComplexity")
     private static Object jsonToPlain(JsonElement element) {
         if (element.isJsonNull()) { return null; }
         if (element.isJsonObject()) {
