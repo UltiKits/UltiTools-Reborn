@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.abstracts;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 
@@ -89,16 +90,67 @@ class ConfigPanelWritePathTest {
         BukkitMaps first = new BukkitMaps("bukkit-maps.yml"); first.init(plugin);
         assertThat(Files.readAllBytes(directory.resolve("bukkit-maps.yml"))).isNotEmpty();
         first.save();
-        BukkitMaps next = new BukkitMaps("bukkit-maps.yml"); next.init(plugin);
-        assertThat(next.locations).isEqualTo(first.locations);
-        assertThat(next.ids).isEqualTo(first.ids);
-        assertThat(next.items.keySet()).containsExactly("o.O");
-        ItemStack restored = next.items.get("o.O");
+        Path file = directory.resolve("bukkit-maps.yml");
+        String text = new String(Files.readAllBytes(file), java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(text).doesNotContain("!!", UUID.class.getName());
+        com.ultikits.ultitools.config.document.ConfigLoadResult raw =
+                com.ultikits.ultitools.config.document.ConfigDocument.load(file);
+        assertThat(raw.state()).isEqualTo(com.ultikits.ultitools.config.document.ConfigLoadResult.State.LOADED);
+        assertThat(raw.document().get(Arrays.asList("locations"))).isInstanceOf(Map.class);
+        assertThat(raw.document().get(Arrays.asList("items"))).isInstanceOf(Map.class);
+        assertThat(raw.document().get(Arrays.asList("ids"))).isInstanceOf(Map.class);
+        assertThat(raw.document().contains(Arrays.asList("locations", "g.m"))).isTrue();
+        assertThat(raw.document().contains(Arrays.asList("items", "o.O"))).isTrue();
+        assertThat(raw.document().contains(Arrays.asList("ids", "wave."))).isTrue();
+        BukkitMaps next = new BukkitMaps("bukkit-maps.yml");
+        next.locations.put("g.m", new org.bukkit.Location(org.bukkit.Bukkit.getWorld("world"), 99, 99, 99));
+        next.items.put("o.O", new ItemStack(Material.STONE));
+        next.ids.put("wave.", new UUID(0, 99));
+        assertThat(next.locations).isNotEqualTo(first.locations);
+        assertThat(next.items).isNotEqualTo(first.items);
+        assertThat(next.ids).isNotEqualTo(first.ids);
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            next.init(plugin);
+            assertThat(warnings.messages()).isEmpty();
+        }
+        assertBukkitMapsLoaded(next, first);
+    }
+    private static void assertBukkitMapsLoaded(BukkitMaps actual, BukkitMaps expected) {
+        assertThat(actual.isLastLoadUnparseable()).as("fresh entity must not be protected").isFalse();
+        assertThat(actual.isPresentInFile("locations")).isTrue();
+        assertThat(actual.isPresentInFile("items")).isTrue();
+        assertThat(actual.isPresentInFile("ids")).isTrue();
+        assertThat(actual.locations).isEqualTo(expected.locations);
+        assertThat(actual.ids).isEqualTo(expected.ids);
+        assertThat(actual.items.keySet()).containsExactly("o.O");
+        ItemStack restored = actual.items.get("o.O");
         assertThat(restored.getType()).isEqualTo(Material.DIAMOND_SWORD);
         assertThat(restored.getAmount()).isEqualTo(2);
         assertThat(restored.getItemMeta().getDisplayName()).isEqualTo("Panel item");
         assertThat(restored.getItemMeta().getLore()).containsExactly("first", "second");
-        assertThat(next.isModifiedSinceSnapshot()).isFalse();
+        assertThat(actual.isModifiedSinceSnapshot()).isFalse();
+    }
+    @Test void malformedNonemptyFileCannotPassBukkitMapLoadOracle() throws Exception {
+        ((org.mockbukkit.mockbukkit.ServerMock) org.bukkit.Bukkit.getServer()).addSimpleWorld("world");
+        BukkitMaps expected = new BukkitMaps("malformed-bukkit-maps.yml");
+        Path file = directory.resolve("malformed-bukkit-maps.yml");
+        byte[] malformed = "locations: [\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        Files.write(file, malformed);
+        assertThat(malformed).isNotEmpty();
+        assertThat(com.ultikits.ultitools.config.document.ConfigDocument.load(file).state())
+                .isEqualTo(com.ultikits.ultitools.config.document.ConfigLoadResult.State.UNPARSEABLE);
+        BukkitMaps fresh = new BukkitMaps("malformed-bukkit-maps.yml");
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            fresh.init(plugin);
+            assertThat(warnings.messages()).hasSize(1);
+            assertThat(warnings.messages().get(0)).contains("malformed-bukkit-maps.yml", "will not be overwritten");
+        }
+        assertThat(fresh.isLastLoadUnparseable()).isTrue();
+        assertThat(fresh.isPresentInFile("locations")).isFalse();
+        assertThat(fresh.isPresentInFile("items")).isFalse();
+        assertThat(fresh.isPresentInFile("ids")).isFalse();
+        assertThat(Files.readAllBytes(file)).isEqualTo(malformed);
+        assertThatThrownBy(() -> assertBukkitMapsLoaded(fresh, expected)).isInstanceOf(AssertionError.class);
     }
     @Test void panelAndSaveProduceIdenticalLoadableText() throws Exception {
         Values saved = new Values("save.yml"); saved.init(plugin); edit(saved); saved.save();
