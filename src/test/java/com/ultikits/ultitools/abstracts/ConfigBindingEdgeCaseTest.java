@@ -201,6 +201,82 @@ class ConfigBindingEdgeCaseTest {
         }
     }
 
+    static class NullableElements extends AbstractConfigEntity {
+        @ConfigEntry List<String> strings = new ArrayList<>();
+        @ConfigEntry Integer[] array = new Integer[]{1};
+        @ConfigEntry Set<String> tags = new LinkedHashSet<>();
+        @ConfigEntry Map<String, List<Integer>> nested = new LinkedHashMap<>();
+        @ConfigEntry Map<String, String> map = new LinkedHashMap<>();
+        @ConfigEntry int[] primitive = new int[]{1, 3};
+        @ConfigEntry String whole = null;
+        public NullableElements(String path) { super(path); strings.add("first"); tags.add("first"); }
+    }
+
+    @Test
+    void savingTypedNullElementsOmitsThemWithOneLocatedWarningPerField() throws Exception {
+        NullableElements values = new NullableElements(PATH); values.init(plugin);
+        values.strings = java.util.Arrays.asList(null, "first", null, null);
+        values.array = new Integer[]{null, 1, null, 3};
+        values.tags.add(null);
+        values.nested.put("o.O", java.util.Arrays.asList(null, 1, null));
+        values.nested.put("other", java.util.Arrays.asList(2, null));
+        values.map.put("empty", null);
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            values.isModifiedSinceSnapshot();
+            assertThat(warnings.messages()).isEmpty();
+            values.save();
+            assertThat(warnings.messagesContaining("'strings")).hasSize(1);
+            assertThat(warnings.messagesContaining("'array")).hasSize(1);
+            assertThat(warnings.messagesContaining("'tags")).hasSize(1);
+            assertThat(warnings.messagesContaining("'nested")).hasSize(1);
+            assertThat(warnings.messages()).hasSize(4).allSatisfy(message -> assertThat(message).contains(PATH));
+            assertThat(warnings.messagesContaining("'nested").get(0)).contains("o.O", "other");
+        }
+        com.ultikits.ultitools.config.document.ConfigDocument disk =
+                com.ultikits.ultitools.config.document.ConfigDocument.parse(
+                        new String(Files.readAllBytes(tempDir.resolve(PATH)), StandardCharsets.UTF_8));
+        assertThat(disk.get(java.util.Collections.singletonList("strings"))).isEqualTo(java.util.Collections.singletonList("first"));
+        assertThat(disk.get(java.util.Collections.singletonList("array"))).isEqualTo(java.util.Arrays.asList(1, 3));
+        assertThat(disk.get(java.util.Collections.singletonList("tags"))).isEqualTo(java.util.Collections.singletonList("first"));
+        assertThat(disk.get(java.util.Arrays.asList("nested", "o.O"))).isEqualTo(java.util.Collections.singletonList(1));
+        assertThat(disk.contains(java.util.Arrays.asList("map", "empty"))).isTrue();
+        assertThat(disk.get(java.util.Arrays.asList("map", "empty"))).isNull();
+        assertThat(disk.contains(java.util.Collections.singletonList("whole"))).isTrue();
+        assertThat(disk.get(java.util.Collections.singletonList("whole"))).isNull();
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            values.reload();
+            assertThat(values.strings).containsExactly("first"); assertThat(values.array).containsExactly(1, 3);
+            assertThat(values.tags).containsExactly("first");
+            assertThat(values.nested.get("o.O")).containsExactly(1);
+            assertThat(values.nested.get("other")).containsExactly(2);
+            assertThat(values.map).containsEntry("empty", null);
+            assertThat(values.whole).isNull(); assertThat(values.primitive).containsExactly(1, 3);
+            assertThat(values.isModifiedSinceSnapshot()).isFalse();
+            assertThat(warnings.messages()).isEmpty();
+        }
+    }
+
+    @Test
+    void panelNullElementsRemainRefusedAndMapNullValuesStillRoundTrip() throws Exception {
+        NullableElements values = new NullableElements(PATH); values.init(plugin);
+        byte[] before = Files.readAllBytes(tempDir.resolve(PATH));
+        com.google.gson.JsonObject invalid = new com.google.gson.JsonObject();
+        invalid.add("strings", com.google.gson.JsonParser.parseString("[\"first\",null]"));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> values.updateProperties(invalid))
+                .isInstanceOf(com.ultikits.ultitools.exceptions.ConfigurationException.class);
+        assertThat(Files.readAllBytes(tempDir.resolve(PATH))).isEqualTo(before);
+        com.google.gson.JsonObject valid = new com.google.gson.JsonObject();
+        valid.add("map", com.google.gson.JsonParser.parseString("{\"empty\":null}"));
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            values.updateProperties(valid);
+            values.reload();
+            assertThat(values.map).containsEntry("empty", null);
+            assertThat(values.strings).containsExactly("first");
+            assertThat(values.isModifiedSinceSnapshot()).isFalse();
+            assertThat(warnings.messages()).isEmpty();
+        }
+    }
+
     @BeforeEach
     void setUp() {
         plugin = Mockito.mock(UltiToolsPlugin.class);
