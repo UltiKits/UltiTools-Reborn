@@ -95,6 +95,18 @@ failure preserves earlier successful files and protects the failed entity until 
 Standalone registration still writes immediately. Framework-internal initialization bridges are not
 a module transaction API.
 
+### Multi-file panel persistence
+
+As of 6.3.0, `ConfigManager#loadFromJson(String)` validates every touched configuration, stages
+all changed files, and only then replaces them. Entity baselines and raw acknowledgments advance
+after every commit succeeds. An in-process staging/replacement refusal restores attempted targets
+and the complete prior entity state, removes staged temporaries, and rethrows the original error.
+Recovery errors are attached as suppressed exceptions; persistently unavailable storage can prevent
+restoration and is not falsely reported as a successful rollback. Semantic no-ops write nothing.
+This is not a crash-safe multi-file transaction: a JVM crash between moves remains deferred to #545.
+The panel message shape and public `loadFromJson` signatures are unchanged. Internal staged-entity
+coordination bridges are not a module transaction API.
+
 ## What the version number means
 
 **This project's version numbers are a product-stage signal, not a strict semver contract.**

@@ -513,31 +513,16 @@ public class ConfigManager {
      * instead of being written - the operator's file is not modified for that config entity
      * (SILENT-14).
      * <p>
-     * Since gate-1 CR-02 (#358 Part 2), the WHOLE batch this call touches - potentially several
-     * config entities across several plugins in one JSON payload - is VALIDATED before any of
-     * them is persisted: a first pass calls {@link AbstractConfigEntity#validateProposedProperties}
-     * on every touched entity (applying nothing to disk, restoring every field it touched
-     * regardless of outcome), and only once every entity in the batch has passed does a second
-     * pass call {@link AbstractConfigEntity#updateProperties} on each to actually apply and
-     * persist. A validation refusal on entity N therefore leaves entities 1..N-1 exactly as they
-     * were before this call - none of them written to disk - rather than the pre-CR-02 behaviour
-     * where files 1..N-1 were already applied and persisted by the time entity N's refusal was
-     * discovered.
-     * <p>
-     * This guarantee covers VALIDATION refusals only, not a physical I/O failure during the
-     * second pass's own persist step (gate-1 review, line 425): if entity K's own {@code
-     * config.save(File)} throws {@link IOException} - a disk-full or permissions failure, not a
-     * validation constraint - entities 1..K-1 have already been applied and persisted by that
-     * point, and this call still throws, leaving a partially-applied batch. Making the persist
-     * phase itself durable against a physical write failure across N independent files would
-     * need staged writes (temp file + atomic rename) or a byte-level undo log for every touched
-     * file, which is a materially larger change than this fix's scope (see the follow-up issue
-     * filed for it). This is the same shape as #469 (WR-01): the registry-level guarantee this
-     * class makes is not a filesystem-durability guarantee.
+     * Every touched entity is validated before persistence. All changed files are staged before
+     * any replacement; effective and raw acknowledgments advance only after every commit succeeds.
+     * An I/O or preparation refusal restores attempted files and every entity checkpoint, discards
+     * temporaries, and rethrows the original failure. Recovery failures are attached as suppressed
+     * exceptions: persistently unavailable storage can prevent restoration and is not reported as success.
+     * This is in-process recovery, not crash-safe multi-file storage; a JVM crash between moves remains
+     * outside this guarantee (UltiKits/UltiTools-Reborn#545).
      *
      * @param json JSON string
-     * @throws IOException              if an I/O error occurs while persisting - entities already
-     *                                 persisted earlier in this batch are NOT rolled back
+     * @throws IOException              if staging or replacement fails; recovery failures are suppressed
      * @throws com.ultikits.ultitools.exceptions.ConfigurationException if a value violates its
      *                                 validation constraint - nothing in this call's batch is
      *                                 persisted when this is thrown, since validation runs to
@@ -572,15 +557,23 @@ public class ConfigManager {
             }
         }
 
-        // Phase two: every entity in this batch passed validation - apply and persist each for
-        // real. updateProperties() re-validates (cheap on the documented construction idiom,
-        // per #363) before it writes, so this is never the first validation an entity sees.
-        // NOT covered here: a physical IOException from an individual save() partway through
-        // this loop still leaves entities already processed persisted - see this method's own
-        // javadoc and #469's sibling finding (WR-01) for why that is out of this fix's scope.
-        for (int i = 0; i < touchedEntities.size(); i++) {
-            touchedEntities.get(i).updateProperties(touchedPayloads.get(i));
+        List<AbstractConfigEntity.PanelWrite> writes = new ArrayList<>();
+        try {
+            for (int i = 0; i < touchedEntities.size(); i++) {
+                AbstractConfigEntity.PanelWrite write = touchedEntities.get(i).preparePanelWrite(touchedPayloads.get(i));
+                if (write != null) { writes.add(write); }
+            }
+            for (AbstractConfigEntity.PanelWrite write : writes) { write.commit(); }
+        } catch (IOException | RuntimeException failure) {
+            for (int i = writes.size() - 1; i >= 0; i--) {
+                try { writes.get(i).rollback(); }
+                catch (IOException | RuntimeException recovery) { failure.addSuppressed(recovery); }
+            }
+            throw failure;
+        } finally {
+            for (AbstractConfigEntity.PanelWrite write : writes) { write.discard(); }
         }
+        for (AbstractConfigEntity.PanelWrite write : writes) { write.acknowledge(); }
     }
 
     /**

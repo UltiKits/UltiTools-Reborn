@@ -206,6 +206,24 @@ public abstract class AbstractConfigEntity {
     }
 
     private void persist(List<Field> fields) throws IOException {
+        PreparedSave prepared = prepareSave(fields);
+        if (prepared.changed) { write(prepared.candidate); }
+        acknowledgeSave(prepared);
+    }
+
+    private static final class PreparedSave {
+        private final ConfigDocument candidate;
+        private final Map<Field, Object> values;
+        private final List<String> overwritten;
+        private final boolean changed;
+        private PreparedSave(ConfigDocument candidate, Map<Field, Object> values,
+                List<String> overwritten, boolean changed) {
+            this.candidate = candidate; this.values = values;
+            this.overwritten = overwritten; this.changed = changed;
+        }
+    }
+
+    private PreparedSave prepareSave(List<Field> fields) throws IOException {
         // Convert every candidate before reading or mutating the presentation document.
         Map<Field, Object> values = currentPlain(fields);
         ConfigLoadResult loaded = ConfigDocument.load(ultiToolsPlugin.getConfigFile(configFilePath).toPath());
@@ -229,15 +247,16 @@ public abstract class AbstractConfigEntity {
             if (missing && !isTokenComment(entry.getKey())) { changed |= addEntryComment(candidate, entry.getKey()); }
         }
         changed |= updateTokenComments(candidate);
-        if (changed) {
-            write(candidate);
-            if (!overwritten.isEmpty()) { warnOverwritten(overwritten); }
-        }
+        return new PreparedSave(candidate, values, overwritten, changed);
+    }
+
+    private void acknowledgeSave(PreparedSave prepared) {
+        if (prepared.changed && !prepared.overwritten.isEmpty()) { warnOverwritten(prepared.overwritten); }
         pendingCommentWrite = false;
-        document = candidate;
+        document = prepared.candidate;
         if (savedSnapshot == null) { savedSnapshot = new LinkedHashMap<>(declaredDefaults); }
-        savedSnapshot.putAll(values);
-        acknowledgeRaw(candidate, fields);
+        savedSnapshot.putAll(prepared.values);
+        acknowledgeRaw(prepared.candidate, new ArrayList<>(prepared.values.keySet()));
         savedFileFingerprint = fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath));
     }
 
@@ -813,6 +832,107 @@ public abstract class AbstractConfigEntity {
         }
     }
 
+    /** Prepares one panel entity without acknowledging or replacing its file.
+     * @param properties proposed panel values
+     * @return manager-owned write, or null for a protected entity
+     * @throws IOException if reading or staging fails
+     */
+    @ApiStatus.Internal
+    public final PanelWrite preparePanelWrite(JsonObject properties) throws IOException {
+        synchronized (this) {
+            if (lastLoadUnparseable) { return null; }
+            PanelCheckpoint before = new PanelCheckpoint();
+            try {
+                List<Field> touched = new ArrayList<>();
+                applyAndValidate(properties, touched, new ArrayList<>());
+                PreparedSave prepared = prepareSave(touched);
+                java.nio.file.Path target = ultiToolsPlugin.getConfigFile(configFilePath).toPath();
+                byte[] original = Files.exists(target) ? Files.readAllBytes(target) : null;
+                AtomicConfigWriter.StagedWrite staged = null;
+                if (prepared.changed) {
+                    Files.createDirectories(target.toAbsolutePath().getParent());
+                    staged = AtomicConfigWriter.stage(target, prepared.candidate.render());
+                }
+                return new PanelWrite(before, prepared, target, original, staged);
+            } catch (IOException | RuntimeException failure) {
+                before.restore(); throw failure;
+            }
+        }
+    }
+
+    /** Complete entity state before a panel candidate, including raw and effective acknowledgments. */
+    private final class PanelCheckpoint {
+        private final List<Field> fields = configEntryFields();
+        private final List<Object> values = new ArrayList<>();
+        private final ConfigDocument oldDocument = document;
+        private final Map<Field, Object> baseline = savedSnapshot == null ? null : new LinkedHashMap<>(savedSnapshot);
+        private final Map<String, Object> presence = lastLoadedPresence;
+        private final Map<Field, RawEntry> raw = new LinkedHashMap<>(acknowledgedRaw);
+        private final String fingerprint = savedFileFingerprint;
+        private final boolean protectedFile = lastLoadUnparseable;
+        private final boolean incomplete = lastInitIncomplete;
+        private final boolean comments = pendingCommentWrite;
+        private final boolean deferred = deferInitialization;
+        private final PendingInitialization initialization = pendingInitialization;
+        private final Set<String> warningKeys = new java.util.LinkedHashSet<>(warnedCommentKeys);
+        private PanelCheckpoint() {
+            for (Field field : fields) { values.add(ReflectionUtil.getFieldValue(AbstractConfigEntity.this, field)); }
+        }
+        private void restore() {
+            restoreFields(fields, values);
+            document = oldDocument; savedSnapshot = baseline; lastLoadedPresence = presence;
+            acknowledgedRaw.clear(); acknowledgedRaw.putAll(raw); savedFileFingerprint = fingerprint;
+            lastLoadUnparseable = protectedFile; lastInitIncomplete = incomplete;
+            pendingCommentWrite = comments; deferInitialization = deferred; pendingInitialization = initialization;
+            warnedCommentKeys.clear(); warnedCommentKeys.addAll(warningKeys);
+        }
+    }
+
+    /** Narrow manager coordination for one staged entity; not a module transaction API. */
+    @ApiStatus.Internal
+    public final class PanelWrite {
+        private final PanelCheckpoint before;
+        private final PreparedSave prepared;
+        private final java.nio.file.Path target;
+        private final byte[] original;
+        private final AtomicConfigWriter.StagedWrite staged;
+        private boolean attempted;
+        private PanelWrite(PanelCheckpoint before, PreparedSave prepared, java.nio.file.Path target,
+                byte[] original, AtomicConfigWriter.StagedWrite staged) {
+            this.before = before; this.prepared = prepared; this.target = target;
+            this.original = original; this.staged = staged;
+        }
+        /** @throws IOException if the existing atomic writer cannot replace this file */
+        public void commit() throws IOException {
+            if (staged != null) { attempted = true; staged.commit(); }
+        }
+        /** Acknowledges only after every manager-owned replacement succeeds. */
+        public void acknowledge() {
+            synchronized (AbstractConfigEntity.this) { acknowledgeSave(prepared); }
+        }
+        /** Restores an attempted target and all entity state; always discards its staged file.
+         * @throws IOException if physical recovery fails
+         */
+        public void rollback() throws IOException {
+            synchronized (AbstractConfigEntity.this) {
+                try {
+                    if (attempted) {
+                        if (original == null) { Files.deleteIfExists(target); }
+                        else { AtomicConfigWriter.write(target, new String(original, java.nio.charset.StandardCharsets.UTF_8)); }
+                    }
+                } finally {
+                    before.restore(); discard();
+                }
+            }
+        }
+        /** Releases a staged file that has not been committed. */
+        public void discard() {
+            if (staged != null && !staged.discard()) {
+                LOGGER.warning("Could not remove staged configuration file for " + configFilePath);
+            }
+        }
+    }
+
     private void restoreFields(List<Field> fields, List<Object> values) {
         for (int i = 0; i < fields.size(); i++) { ReflectionUtil.setFieldValue(this, fields.get(i), values.get(i)); }
     }
@@ -835,18 +955,10 @@ public abstract class AbstractConfigEntity {
      *                                 validation constraint
      */
     public void validateProposedProperties(JsonObject jsonObject) {
-        // #510: under the entity monitor, so a concurrent shutdown save never writes a proposed
-        // value that this call is about to restore.
         synchronized (this) {
-            List<Field> touchedFields = new ArrayList<>();
-            List<Object> previousValues = new ArrayList<>();
-            try {
-                applyAndValidate(jsonObject, touchedFields, previousValues);
-            } finally {
-                for (int i = 0; i < touchedFields.size(); i++) {
-                    ReflectionUtil.setFieldValue(this, touchedFields.get(i), previousValues.get(i));
-                }
-            }
+            PanelCheckpoint before = new PanelCheckpoint();
+            try { applyAndValidate(jsonObject, new ArrayList<>(), new ArrayList<>()); }
+            finally { before.restore(); }
         }
     }
 

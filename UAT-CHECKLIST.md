@@ -266,6 +266,7 @@ before the next login re-runs `wireManagers`.
 | ID | Preconditions | Steps | Expected | Layer | Covers |
 |---|---|---|---|---|---|
 | ultitools.config.batch-buffering | Checkout at the refactor head; JDK 21 and Maven dependencies available | Run `mvn test -Dtest=ConfigBatchBufferingTest`; inspect its refused-new-files, refused-existing-bytes, validation-before-write, outer-package-refusal, accepted-write-failure, protected-input and standalone controls | Seven tests pass: refused batches create/change no file; validation observes no pending file; an accepted second-file I/O failure preserves the first successful write and original second bytes, protects the failed entity and writes later files; standalone registration writes immediately | unit | |
+| ultitools.config.staged-panel-batch | Checkout at the refactor head; JDK 21 and Maven dependencies available | Run `mvn test -Dtest=ConfigStagedPanelWriteTest`; inspect stage-second, move-second, move-third, accepted, no-op and validation-refusal controls | Six tests pass: all stages precede any move; each injected failure restores all original bytes, fields, raw/effective baselines, presence, fingerprint and protection state with no temporary; success persists touched keys only, unrelated edits stay dirty; no-op bytes and modification time unchanged | unit | |
 
 One row per shipped yml file (D-06's config-per-file rule), not per key: `config.yml` (44 keys)
 and `env.yml` (2 operator-relevant keys, `api-url` and `version`). Each row confirms every key in the file is present at
