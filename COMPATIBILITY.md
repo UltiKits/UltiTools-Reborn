@@ -14,8 +14,10 @@ values while retaining comments on surviving keys and list items. The storage AP
 
 Saving first attempts a forced same-directory temporary file and atomic replacement. Only an unsupported atomic move, EBUSY,
 EXDEV, or a permission/read-only refusal to create the temporary file allows the narrow fallback: exclusively create `<file>.bak`,
-copy and force the existing target's complete bytes, then overwrite and force the existing target in place. Existing backups are
-never overwritten; a backup creation/write/force failure refuses the save before the target is touched. Other staging or move
+copy and force the existing target's bytes, then overwrite and force the existing target in place. If a backup already exists,
+it is refreshed from the current target through a forced same-directory temporary and atomic replacement before the target is
+opened. A backup creation/write/force or refresh rename failure refuses the save before the target is touched and preserves the
+previous backup. No old-backup restoration or validation of the current target is implied by this refresh. Other staging or move
 failures refuse the save. A fallback attempt logs one warning identifying the target, backup, cause and outcome. Symbolic links
 remain links, with the backup beside the resolved target.
 

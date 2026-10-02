@@ -34,7 +34,8 @@ import org.jetbrains.annotations.ApiStatus;
  * permissions, forced to disk, and atomically moved over the target. Eligible atomic-replace failures
  * (unsupported atomic moves, EBUSY or EXDEV) and temporary-creation permission/read-only refusals use a
  * narrow fallback: exclusively create {@code <file>.bak}, copy and force the old content, then overwrite
- * and force the existing target in place. Existing backups are never overwritten. A complete forced backup
+ * and force the existing target in place. An existing backup is refreshed through a forced same-directory
+ * temporary and atomic replacement before the target is opened. A complete forced backup
  * remains until the next successful strict UTF-8 load. Each fallback attempt logs its path, cause and outcome.
  * <p>
  * Before the in-place target is opened, failures leave its bytes unchanged. Once that open is attempted,
@@ -341,11 +342,16 @@ public final class AtomicConfigWriter {
                 byte[] content = replacement == null ? files.read(temporary) : replacement;
                 byte[] original = files.read(target);
                 FileAttribute<?>[] attributes = files.temporaryAttributes(target);
-                try (FileChannel channel = files.openBackup(backup, attributes)) {
-                    created = true;
-                    writeAll(files, channel, original);
-                    files.force(channel);
+                if (Files.exists(backup)) {
+                    refreshBackup(backup, original, attributes);
                     forced = true;
+                } else {
+                    try (FileChannel channel = files.openBackup(backup, attributes)) {
+                        created = true;
+                        writeAll(files, channel, original);
+                        files.force(channel);
+                        forced = true;
+                    }
                 }
                 syncDirectory(target.getParent());
                 try (FileChannel channel = files.openTarget(target)) {
@@ -359,6 +365,20 @@ public final class AtomicConfigWriter {
                 }
                 LOGGER.warning("Config " + target + " in-place replacement with backup " + backup
                         + (success ? " succeeded" : " failed") + "; cause: " + cause.getMessage());
+            }
+        }
+
+        /** Refreshes a retained backup without exposing a partial replacement. */
+        private void refreshBackup(Path backup, byte[] original, FileAttribute<?>[] attributes) throws IOException {
+            Path copy = backup.resolveSibling(temporaryName(backup.getFileName().toString()));
+            try {
+                try (FileChannel channel = files.open(copy, attributes)) {
+                    writeAll(files, channel, original);
+                    files.force(channel);
+                }
+                files.move(copy, backup, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } finally {
+                deleteQuietly(copy);
             }
         }
 
