@@ -102,6 +102,15 @@ class ConfigEntityLockConcurrencyTest {
         com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
     }
 
+    private void registerOnControlledServerThread(LimitConfig config) throws IOException {
+        try (org.mockito.MockedStatic<org.bukkit.Bukkit> bukkit = org.mockito.Mockito.mockStatic(
+                org.bukkit.Bukkit.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            when(org.bukkit.Bukkit.isPrimaryThread()).thenReturn(true);
+            configManager.register(plugin, config);
+            assertThat(configManager.getConfigEntity(plugin, LimitConfig.class)).isSameAs(config);
+        }
+    }
+
     private void saveOnControlledServerThread() {
         // The separate-thread timeout fixture is not MockBukkit's server thread; control only that predicate.
         try (org.mockito.MockedStatic<org.bukkit.Bukkit> bukkit = org.mockito.Mockito.mockStatic(
@@ -118,7 +127,7 @@ class ConfigEntityLockConcurrencyTest {
         Files.createDirectories(limitFile.getParentFile().toPath());
         Files.write(limitFile.toPath(), "limit: 1\n".getBytes(StandardCharsets.UTF_8));
         LimitConfig config = new LimitConfig("config/limit.yml");
-        configManager.register(plugin, config);
+        registerOnControlledServerThread(config);
 
         // Module code changes the value in memory without saving.
         config.setLimit(5);
