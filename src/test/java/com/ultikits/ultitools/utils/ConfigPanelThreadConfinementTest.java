@@ -83,7 +83,7 @@ class ConfigPanelThreadConfinementTest {
             verify(client).sendMessage(response.capture());
             JsonObject reply = response.getValue();
             if (operation.equals("update")) {
-                assertThat(reply.get("success").getAsBoolean()).isFalse();
+                assertThat(reply.getAsJsonObject("data").get("status").getAsString()).isEqualTo("error");
             } else {
                 assertThat(reply.get("type").getAsString()).isEqualTo("error");
             }
