@@ -1018,7 +1018,8 @@ class ConfigManagerTest {
             configManager.loadFromJson(json);
 
             // Assert - verify is an assertion
-            verify(mockConfig).updateProperties(any(com.google.gson.JsonObject.class));
+            verify(mockConfig).preparePanelWrite(any(com.google.gson.JsonObject.class));
+            verify(mockConfig, never()).updateProperties(any(com.google.gson.JsonObject.class));
             assertThat(json).as("JSON should be valid").isNotEmpty();
         }
 
@@ -1044,6 +1045,7 @@ class ConfigManagerTest {
             configManager.loadFromJson(json);
 
             // Assert - updateProperties 不应该被调用
+            verify(mockConfig, never()).preparePanelWrite(any(com.google.gson.JsonObject.class));
             verify(mockConfig, never()).updateProperties(any(com.google.gson.JsonObject.class));
             assertThat(json).as("JSON should contain non-matching path").contains("other.yml");
         }
