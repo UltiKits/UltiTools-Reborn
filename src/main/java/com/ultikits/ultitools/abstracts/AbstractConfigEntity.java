@@ -853,7 +853,10 @@ public abstract class AbstractConfigEntity {
                     Files.createDirectories(target.toAbsolutePath().getParent());
                     staged = AtomicConfigWriter.stage(target, prepared.candidate.render());
                 }
-                return new PanelWrite(before, prepared, target, original, staged);
+                Map<Field, Object> bound = new LinkedHashMap<>();
+                for (Field field : touched) { bound.put(field, ReflectionUtil.getFieldValue(this, field)); }
+                before.restore();
+                return new PanelWrite(before, prepared, target, original, staged, bound);
             } catch (IOException | RuntimeException failure) {
                 before.restore(); throw failure;
             }
@@ -897,10 +900,11 @@ public abstract class AbstractConfigEntity {
         private final byte[] original;
         private final AtomicConfigWriter.StagedWrite staged;
         private boolean attempted;
+        private final Map<Field, Object> bound;
         private PanelWrite(PanelCheckpoint before, PreparedSave prepared, java.nio.file.Path target,
-                byte[] original, AtomicConfigWriter.StagedWrite staged) {
+                byte[] original, AtomicConfigWriter.StagedWrite staged, Map<Field, Object> bound) {
             this.before = before; this.prepared = prepared; this.target = target;
-            this.original = original; this.staged = staged;
+            this.original = original; this.staged = staged; this.bound = bound;
         }
         /** @throws IOException if the existing atomic writer cannot replace this file */
         public void commit() throws IOException {
@@ -908,7 +912,12 @@ public abstract class AbstractConfigEntity {
         }
         /** Acknowledges only after every manager-owned replacement succeeds. */
         public void acknowledge() {
-            synchronized (AbstractConfigEntity.this) { acknowledgeSave(prepared); }
+            synchronized (AbstractConfigEntity.this) {
+                for (Map.Entry<Field, Object> entry : bound.entrySet()) {
+                    ReflectionUtil.setFieldValue(AbstractConfigEntity.this, entry.getKey(), entry.getValue());
+                }
+                acknowledgeSave(prepared);
+            }
         }
         /** Restores an attempted target and all entity state; always discards its staged file.
          * @throws IOException if physical recovery fails
