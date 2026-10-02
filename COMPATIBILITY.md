@@ -86,6 +86,15 @@ Official callers measured in UltiEssentials `RemovedConfigKeys.java:83` and Ulti
 An unrecompiled caller invoking the removed accessor sees `NoSuchMethodError`. See the removal
 record in `compatibility/records/6.3.0.md`; all other public/protected entity signatures are retained.
 
+### Registration batches
+
+As of 6.3.0, package/directory configuration registration buffers initialization writes until every
+entity binds and validates. A refused batch creates no file and changes no existing file, including
+missing-key and language-token comment rewrites. Once accepted, files persist independently; an I/O
+failure preserves earlier successful files and protects the failed entity until a successful reload.
+Standalone registration still writes immediately. Framework-internal initialization bridges are not
+a module transaction API.
+
 ## What the version number means
 
 **This project's version numbers are a product-stage signal, not a strict semver contract.**

@@ -320,6 +320,10 @@ unlisted `server.properties` key.
 
 ## Configuration
 
+| ID | Feature | Kind | Entry point | Permission | Aliases | Audience | Interaction | Source |
+|---|---|---|---|---|---|---|---|---|
+| ultitools.config.batch-buffering | Registration batches defer new-file, missing-key and token-comment writes until every entity validates. Refused batches leave disk unchanged; accepted files persist independently, with failed writes protected until reload. Standalone registration remains immediate. | gate | ConfigManager#registerAll and directory registration | n/a | n/a | developer | none | ConfigManager#endBatch, AbstractConfigEntity#initForBatch |
+
 Every leaf key in `src/main/resources/config.yml` (47 keys, counted with
 `grep -nE '^[[:space:]]*[a-zA-Z][a-zA-Z0-9_-]*:[[:space:]]*[^[:space:]#]' src/main/resources/config.yml | wc -l`
 — 44 plus the three `ultipanel.logging.batch.*` keys added in this same pull request, see the

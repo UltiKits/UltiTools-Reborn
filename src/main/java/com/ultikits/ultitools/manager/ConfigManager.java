@@ -27,6 +27,41 @@ import java.util.logging.Level;
 public class ConfigManager {
 
     private final Map<UltiToolsPlugin, Map<String, AbstractConfigEntity>> pluginConfigMap = new HashMap<>();
+    private final ThreadLocal<InitializationBatch> initializationBatch = new ThreadLocal<>();
+
+    private static final class InitializationBatch {
+        private int depth;
+        private final Map<UltiToolsPlugin, Map<String, AbstractConfigEntity>> before = new LinkedHashMap<>();
+        private final Set<AbstractConfigEntity> entities = new LinkedHashSet<>();
+    }
+
+    private void beginBatch(UltiToolsPlugin plugin) {
+        InitializationBatch batch = initializationBatch.get();
+        if (batch == null) { batch = new InitializationBatch(); initializationBatch.set(batch); }
+        batch.depth++;
+        batch.before.computeIfAbsent(plugin, this::snapshotRegisteredEntities);
+    }
+
+    private void endBatch(boolean accepted) {
+        InitializationBatch batch = initializationBatch.get();
+        if (batch == null) { return; }
+        if (!accepted) {
+            initializationBatch.remove();
+            batch.entities.forEach(AbstractConfigEntity::discardInitializationWrite);
+            batch.before.forEach(this::rollBackRegisteredEntities);
+            return;
+        }
+        if (--batch.depth != 0) { return; }
+        initializationBatch.remove();
+        for (AbstractConfigEntity entity : batch.entities) {
+            try { entity.flushInitializationWrite(); }
+            catch (IOException failure) {
+                java.util.logging.Logger.getLogger(ConfigManager.class.getName()).warning(
+                        "Configuration initialization write failed: " + entity.getConfigFilePath()
+                        + "; file will not be overwritten until reload: " + failure.getClass().getSimpleName());
+            }
+        }
+    }
 
     /**
      * Register config entity.
@@ -35,6 +70,16 @@ public class ConfigManager {
      * @param configEntity    Config entity
      */
     public void register(UltiToolsPlugin ultiToolsPlugin, AbstractConfigEntity configEntity) throws IOException {
+        ConfigEntity annotation = ReflectionUtil.getAnnotation(configEntity.getClass(), ConfigEntity.class);
+        boolean directory = annotation != null && new File(ultiToolsPlugin.getResourceFolderPath(), annotation.value()).isDirectory();
+        if (!directory) { registerImmediate(ultiToolsPlugin, configEntity); return; }
+        beginBatch(ultiToolsPlugin);
+        boolean accepted = false;
+        try { registerImmediate(ultiToolsPlugin, configEntity); accepted = true; }
+        finally { endBatch(accepted); }
+    }
+
+    private void registerImmediate(UltiToolsPlugin ultiToolsPlugin, AbstractConfigEntity configEntity) throws IOException {
         ConfigEntity annotation = ReflectionUtil.getAnnotation(configEntity.getClass(), ConfigEntity.class);
         if (annotation == null) {
             return;
@@ -92,7 +137,12 @@ public class ConfigManager {
         prepareConverters(ultiToolsPlugin).checkEntityFields(configEntity.getClass(),
                 ultiToolsPlugin.getPluginName(), configEntity.getConfigFilePath());
         try {
-            configEntity.init(ultiToolsPlugin);
+            InitializationBatch batch = initializationBatch.get();
+            if (batch == null) { configEntity.init(ultiToolsPlugin); }
+            else {
+                batch.entities.add(configEntity);
+                configEntity.initForBatch(ultiToolsPlugin);
+            }
         } catch (IOException e) {
             UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration initialization failed！File path：" + configEntity.getConfigFilePath());
         }
@@ -157,6 +207,13 @@ public class ConfigManager {
      * @param classLoader Class loader
      */
     public void registerAll(UltiToolsPlugin plugin, String packageName, ClassLoader classLoader) {
+        beginBatch(plugin);
+        boolean accepted = false;
+        try { registerAllImmediate(plugin, packageName, classLoader); accepted = true; }
+        finally { endBatch(accepted); }
+    }
+
+    private void registerAllImmediate(UltiToolsPlugin plugin, String packageName, ClassLoader classLoader) {
         Set<Class<?>> classes = ConverterRegistry.prepareSelectedConfigs(
                 plugin, new String[]{packageName}, classLoader);
         // #358 Part 1: a package can carry more than one @ConfigEntity class, and
@@ -234,6 +291,13 @@ public class ConfigManager {
      * @param classLoader  Class loader
      */
     public void registerAll(UltiToolsPlugin plugin, String[] packageNames, ClassLoader classLoader) {
+        beginBatch(plugin);
+        boolean accepted = false;
+        try { registerAllPackages(plugin, packageNames, classLoader); accepted = true; }
+        finally { endBatch(accepted); }
+    }
+
+    private void registerAllPackages(UltiToolsPlugin plugin, String[] packageNames, ClassLoader classLoader) {
         ConverterRegistry.prepareSelectedConfigs(plugin, packageNames, classLoader);
         Map<String, AbstractConfigEntity> registeredBeforeThisPlugin = snapshotRegisteredEntities(plugin);
         try {

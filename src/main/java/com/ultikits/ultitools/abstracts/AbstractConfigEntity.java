@@ -121,6 +121,18 @@ public abstract class AbstractConfigEntity {
     @Getter(AccessLevel.NONE)
     private boolean pendingCommentWrite;
     @Getter(AccessLevel.NONE)
+    private boolean deferInitialization;
+    @Getter(AccessLevel.NONE)
+    private PendingInitialization pendingInitialization;
+
+    private static final class PendingInitialization {
+        private final ConfigDocument candidate;
+        private final Map<Field, Object> baseline;
+        private PendingInitialization(ConfigDocument candidate, Map<Field, Object> baseline) {
+            this.candidate = candidate; this.baseline = baseline;
+        }
+    }
+    @Getter(AccessLevel.NONE)
     private final Set<String> warnedCommentKeys = ConcurrentHashMap.newKeySet();
 
     /**
@@ -525,12 +537,27 @@ public abstract class AbstractConfigEntity {
      * @throws IOException if an I/O error occurs
      */
     public final void init(UltiToolsPlugin ultiToolsPlugin) throws IOException {
+        initialize(ultiToolsPlugin, false);
+    }
+
+    /** Framework manager bridge; binds without flushing initialization writes.
+     * @param plugin owning module
+     * @throws IOException on load failure
+     */
+    @ApiStatus.Internal
+    public final void initForBatch(UltiToolsPlugin plugin) throws IOException {
+        initialize(plugin, true);
+    }
+
+    private void initialize(UltiToolsPlugin ultiToolsPlugin, boolean deferred) throws IOException {
         synchronized (this) {
+            deferInitialization = deferred;
             lastInitIncomplete = true;
             this.ultiToolsPlugin = ultiToolsPlugin;
             registry().checkEntityFields(getClass(), ultiToolsPlugin.getPluginName(), configFilePath);
             captureDefaults();
-            load(true);
+            try { load(true); }
+            finally { deferInitialization = false; }
             lastInitIncomplete = false;
         }
         notifyChangeListeners();
@@ -587,6 +614,11 @@ public abstract class AbstractConfigEntity {
         }
         boolean commentsChanged = updateTokenComments(next);
         pendingCommentWrite = false;
+        if (deferInitialization && (changed || commentsChanged)) {
+            pendingInitialization = new PendingInitialization(next, baseline);
+            lastLoadedPresence = loadedPresence;
+            return;
+        }
         if (changed) { write(next); }
         else if (commentsChanged) {
             try { write(next); }
@@ -600,6 +632,38 @@ public abstract class AbstractConfigEntity {
         savedSnapshot = baseline;
         acknowledgeRaw(next, configEntryFields());
         savedFileFingerprint = fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath));
+    }
+
+    /** Flushes only a validated manager batch's initialization candidate.
+     * @throws IOException when replacement fails; the entity is then protected until reload
+     */
+    @ApiStatus.Internal
+    public final void flushInitializationWrite() throws IOException {
+        synchronized (this) {
+            PendingInitialization pending = pendingInitialization;
+            pendingInitialization = null;
+            if (pending == null || lastLoadUnparseable) { return; }
+            try { write(pending.candidate); }
+            catch (IOException failure) { lastLoadUnparseable = true; throw failure; }
+            document = pending.candidate;
+            savedSnapshot = pending.baseline;
+            acknowledgeRaw(document, configEntryFields());
+            savedFileFingerprint = fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath));
+        }
+    }
+
+    /** Clears an uncommitted initialization belonging to a refused manager batch. */
+    @ApiStatus.Internal
+    public final void discardInitializationWrite() {
+        synchronized (this) {
+            if (pendingInitialization == null) { return; }
+            pendingInitialization = null;
+            document = null;
+            savedSnapshot = null;
+            acknowledgedRaw.clear();
+            savedFileFingerprint = null;
+            lastLoadedPresence = new LinkedHashMap<>();
+        }
     }
 
     private void warnConversion(Field field, List<String> path, Type type, Object raw, Object fieldRaw) {
