@@ -210,7 +210,7 @@ class LegacyParserAdapterTest {
                 "legacy.yml", Collections.singletonList("value"), entry("identity")).value();
         assertThat(actual.getList("list")).isEqualTo(expected.getList("list"));
         assertThat(actual.get("map.child")).isEqualTo(expected.get("map.child"));
-        assertThat(actual.getList("list")).containsExactly(new org.bukkit.util.Vector(4, 2, 3));
+        assertThat(actual.getList("list")).isEqualTo(Collections.singletonList(new org.bukkit.util.Vector(4, 2, 3)));
         assertThat(actual.get("map.child")).isEqualTo(new org.bukkit.util.Vector(7, 2, 3));
         assertThat(input.get("list")).isEqualTo(Collections.singletonList(vectorPlain(4)));
     }
