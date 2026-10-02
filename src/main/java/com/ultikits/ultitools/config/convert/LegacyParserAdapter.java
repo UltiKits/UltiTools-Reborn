@@ -1,13 +1,13 @@
 package com.ultikits.ultitools.config.convert;
 
-import java.util.Map;
+import org.bukkit.configuration.InvalidConfigurationException;
+import org.bukkit.configuration.file.YamlConfiguration;
+import org.yaml.snakeyaml.Yaml;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.function.Function;
 import com.ultikits.ultitools.config.document.PlainData;
-import org.bukkit.configuration.MemoryConfiguration;
-import org.bukkit.configuration.MemorySection;
 import org.jetbrains.annotations.ApiStatus;
 import com.ultikits.ultitools.config.convert.builtin.PlainNormalizer;
 import com.ultikits.ultitools.config.convert.ConverterRegistry.Context;
@@ -53,8 +53,7 @@ public final class LegacyParserAdapter implements ConfigConverter<Object> {
     @SuppressWarnings("removal")
     public Object fromPlain(Object plain, ConversionContext context) throws ConversionException {
         Context ctx = (Context) context;
-        Object detached = PlainData.copy(plain);
-        Object parsed = parser(ctx).parse(detached instanceof Map<?, ?> ? section((Map<?, ?>) detached) : detached);
+        Object parsed = parser(ctx).parse(legacyInput(plain, ctx));
         Class<?> declared = ConverterRegistry.rawClass(ctx.declaredType());
         Class<?> target = boxed(declared);
         Object value = widenToFieldType(target, parsed);
@@ -122,12 +121,15 @@ public final class LegacyParserAdapter implements ConfigConverter<Object> {
         return type;
     }
 
-    private static MemorySection section(Map<?, ?> plain) {
-        MemoryConfiguration section = new MemoryConfiguration();
-        for (Map.Entry<?, ?> entry : plain.entrySet()) {
-            Object value = entry.getValue();
-            section.set(String.valueOf(entry.getKey()), value instanceof Map<?, ?> ? section((Map<?, ?>) value) : value);
+    private static Object legacyInput(Object plain, Context ctx) throws ConversionException {
+        // Let Bukkit reproduce its own 6.2 input semantics, including nested serialization aliases.
+        // A fresh configuration prevents parser mutations from changing the document or another call.
+        YamlConfiguration configuration = new YamlConfiguration();
+        try {
+            configuration.loadFromString(new Yaml().dump(Collections.singletonMap("value", PlainData.copy(plain))));
+            return configuration.get("value");
+        } catch (InvalidConfigurationException failure) {
+            throw ctx.failure("Cannot reconstruct legacy Bukkit parser input", failure);
         }
-        return section;
     }
 }
