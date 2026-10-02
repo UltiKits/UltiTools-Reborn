@@ -148,9 +148,9 @@ class ConfigNumericWideningTest {
         assertThat(entity.vec).as("merged reload retains an unsaved live value").isEqualTo(bukkitVector(vectorYaml(7)));
         Files.write(path, vectorYaml(9).getBytes(StandardCharsets.UTF_8)); entity.reload();
         assertThat(entity.vec).isEqualTo(bukkitVector(vectorYaml(9)));
-        manager.loadFromJson("legacy-vector.yml", "{\"vec\":{\"==\":\"Vector\",\"x\":11,\"y\":2,\"z\":3}}");
+        manager.loadFromJson("legacy-vector.yml", "{\"vec\":{\"==\":\"Vector\",\"x\":11.0,\"y\":2.0,\"z\":3.0}}");
         assertThat(entity.vec).isEqualTo(bukkitVector(vectorYaml(11)));
-        manager.loadFromJson("{\"NumbersModule\":{\"legacy-vector.yml\":{\"vec\":{\"==\":\"Vector\",\"x\":13,\"y\":2,\"z\":3}}}}");
+        manager.loadFromJson("{\"NumbersModule\":{\"legacy-vector.yml\":{\"vec\":{\"==\":\"Vector\",\"x\":13.0,\"y\":2.0,\"z\":3.0}}}}");
         assertThat(entity.vec).isEqualTo(bukkitVector(vectorYaml(13)));
         Files.write(path, "vec: invalid\n".getBytes(StandardCharsets.UTF_8)); entity.reload();
         assertThat(entity.vec).as("invalid whole value restores the serialized declared default")
@@ -158,7 +158,7 @@ class ConfigNumericWideningTest {
     }
 
     private static String vectorYaml(int x) {
-        return "vec: {==: Vector, x: " + x + ", y: 2, z: 3}\n";
+        return "vec: {==: Vector, x: " + x + ".0, y: 2.0, z: 3.0}\n";
     }
     private static org.bukkit.util.Vector bukkitVector(String text) throws Exception {
         org.bukkit.configuration.file.YamlConfiguration yaml = new org.bukkit.configuration.file.YamlConfiguration();

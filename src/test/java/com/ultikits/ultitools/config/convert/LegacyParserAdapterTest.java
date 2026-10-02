@@ -217,7 +217,7 @@ class LegacyParserAdapterTest {
 
     private static Map<String, Object> vectorPlain(int x) {
         Map<String, Object> value = new LinkedHashMap<>();
-        value.put("==", "Vector"); value.put("x", x); value.put("y", 2); value.put("z", 3);
+        value.put("==", "Vector"); value.put("x", (double) x); value.put("y", 2.0); value.put("z", 3.0);
         return value;
     }
 
