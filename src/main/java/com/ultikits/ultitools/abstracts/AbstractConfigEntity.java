@@ -1160,8 +1160,11 @@ public abstract class AbstractConfigEntity {
         JsonPrimitive primitive = element.getAsJsonPrimitive();
         if (primitive.isBoolean()) { return primitive.getAsBoolean(); }
         if (primitive.isString()) { return primitive.getAsString(); }
-        try { return primitive.getAsBigDecimal().longValueExact(); }
-        catch (ArithmeticException failure) { return primitive.getAsDouble(); }
+        try {
+            java.math.BigInteger integer = primitive.getAsBigDecimal().toBigIntegerExact();
+            try { return integer.longValueExact(); }
+            catch (ArithmeticException overflow) { return integer; }
+        } catch (ArithmeticException fractional) { return primitive.getAsDouble(); }
     }
 
     /**
