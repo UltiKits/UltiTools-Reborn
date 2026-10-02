@@ -38,7 +38,14 @@ import com.google.gson.JsonParser;
  *   <li>a catalogue key reached through a variable, listed in {@link #KEYS_VIA_VARIABLE} and present in
  *       both catalogues;</li>
  *   <li>a named exemption in {@link #EXEMPTIONS}, each with its reason and its exact literal count,
- *       so a new literal in an exempt file still fails.</li>
+ *       so a new literal in an exempt file still fails;</li>
+ *   <li>the whole initializer of a {@code static final String} declared in a nested class named
+ *       {@code Keys} (a catalogue-key holder), when the literal is a key of both catalogues and every
+ *       reference to the constant in {@code src/main/java} is a qualified whole value: a call argument,
+ *       a ternary branch or a return value, never concatenated, assigned, statically imported or used
+ *       as a method receiver. {@code Keys.class} (a reflective read of the holder) is not a reference.
+ *       Known weakness: a {@code Keys.X} passed straight to a raw output call would pass, because the
+ *       holder's own catalogue test proves completeness, not translation at the point of use.</li>
  * </ol>
  * The scan is Java-aware ({@link JavaLiteralScanner}), not a same-line grep.
  */
@@ -53,6 +60,15 @@ class FrameworkTextCatalogueInvariantTest {
 
     /** The helper class added by #556; its calls are checked against both catalogues. */
     private static final String HELPER = "FrameworkText";
+
+    /** Simple name of a nested class whose {@code static final String} constants are catalogue keys. */
+    private static final String HOLDER = "Keys";
+
+    /** Tokens that may directly precede a qualified holder reference: argument, ternary branch, return. */
+    private static final Set<String> HOLDER_PREV = new HashSet<>(Arrays.asList("(", ",", "?", ":", "return"));
+
+    /** Tokens that may directly follow a qualified holder reference: end of argument, branch or statement. */
+    private static final Set<String> HOLDER_NEXT = new HashSet<>(Arrays.asList(")", ",", ":", ";"));
 
     private static final List<Exemption> EXEMPTIONS = Arrays.asList(
             new Exemption("com/ultikits/ultitools/UltiTools.java", 4,
@@ -136,15 +152,91 @@ class FrameworkTextCatalogueInvariantTest {
      * @return one line per Chinese literal that is neither translated, listed, exempt nor accepted
      */
     static List<String> findViolations(Map<String, String> sources, JsonObject en, JsonObject zh) {
+        List<JavaLiteralScanner.Literal> literals = cjkLiterals(sources);
+        Set<String> holderConstants = new HashSet<>();
+        for (JavaLiteralScanner.Literal literal : literals) {
+            if (isHolderConstant(literal)) {
+                holderConstants.add(literal.constantName);
+            }
+        }
+        Map<String, String> misused = holderMisuses(sources, holderConstants);
         List<String> violations = new ArrayList<>();
-        for (JavaLiteralScanner.Literal literal : cjkLiterals(sources)) {
+        for (JavaLiteralScanner.Literal literal : literals) {
             if (isTranslated(literal) || KEYS_VIA_VARIABLE.contains(literal.value)
                     || exemptionFor(literal) != null) {
                 continue;
             }
-            violations.add(literal.toString());
+            if (!isHolderConstant(literal)) {
+                violations.add(literal.toString());
+            } else if (!en.has(literal.value) || !zh.has(literal.value)) {
+                violations.add(literal + " (a " + HOLDER + " constant that is not a key of both catalogues)");
+            } else if (misused.containsKey(literal.constantName)) {
+                violations.add(literal + " (" + HOLDER + "." + literal.constantName + " used as "
+                        + misused.get(literal.constantName) + ")");
+            }
         }
         return violations;
+    }
+
+    private static boolean isHolderConstant(JavaLiteralScanner.Literal literal) {
+        return literal.constantName != null && HOLDER.equals(literal.enclosingType);
+    }
+
+    /**
+     * Finds every reference to a holder constant that is not a qualified whole value.
+     *
+     * @return constant name to the first offending reference, as {@code file:line prev Keys.NAME next}
+     */
+    private static Map<String, String> holderMisuses(Map<String, String> sources, Set<String> constants) {
+        Map<String, String> misused = new LinkedHashMap<>();
+        if (constants.isEmpty()) {
+            return misused;
+        }
+        for (Map.Entry<String, String> source : sources.entrySet()) {
+            List<JavaLiteralScanner.Token> tokens = JavaLiteralScanner.tokens(source.getKey(), source.getValue());
+            for (int i = 0; i < tokens.size(); i++) {
+                String misuse = holderMisuseAt(tokens, i, constants);
+                if (misuse != null) {
+                    misused.putIfAbsent(tokens.get(i).text,
+                            source.getKey() + ":" + tokens.get(i).line + " " + misuse);
+                }
+            }
+        }
+        return misused;
+    }
+
+    /** Describes the misuse when token {@code i} names a holder constant outside the accepted shapes, else null. */
+    private static String holderMisuseAt(List<JavaLiteralScanner.Token> tokens, int i, Set<String> constants) {
+        String name = tokens.get(i).text;
+        if (!constants.contains(name)) {
+            return null;
+        }
+        String before = text(tokens, i - 1);
+        String after = text(tokens, i + 1);
+        if (!".".equals(before)) {
+            boolean declaration = "String".equals(before) && "=".equals(after);
+            boolean insideHolder = HOLDER.equals(tokens.get(i).enclosingType);
+            return insideHolder && !declaration ? "an unqualified name" : null;
+        }
+        if (!HOLDER.equals(text(tokens, i - 2))) {
+            return null;
+        }
+        int start = i - 2;
+        while (".".equals(text(tokens, start - 1)) && isName(text(tokens, start - 2))) {
+            start -= 2;
+        }
+        String prev = text(tokens, start - 1);
+        return HOLDER_PREV.contains(prev) && HOLDER_NEXT.contains(after)
+                ? null
+                : "'" + prev + " " + HOLDER + "." + name + " " + after + "'";
+    }
+
+    private static String text(List<JavaLiteralScanner.Token> tokens, int index) {
+        return index >= 0 && index < tokens.size() ? tokens.get(index).text : "";
+    }
+
+    private static boolean isName(String token) {
+        return !token.isEmpty() && Character.isJavaIdentifierStart(token.charAt(0));
     }
 
     private static boolean isTranslated(JavaLiteralScanner.Literal literal) {
