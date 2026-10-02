@@ -325,10 +325,6 @@ class ConfigBindingEdgeCaseTest {
         Files.write(file, yaml.getBytes(StandardCharsets.UTF_8));
     }
 
-    private String readFile() throws IOException {
-        return new String(Files.readAllBytes(tempDir.resolve(PATH)), StandardCharsets.UTF_8);
-    }
-
     @Test
     @DisplayName("a secret nested inside a reported list element or map is never printed")
     void nestedSecretsAreNotPrinted() throws IOException {

@@ -115,6 +115,7 @@ public final class ConverterRegistry {
         return ConfigurationSerializable.class.isAssignableFrom(raw) ? BukkitConverters.SERIALIZABLE : null;
     }
 
+    @SuppressWarnings("PMD.NPathComplexity") // Exact, superclass, interface and parent lookup precedence is deliberately explicit.
     private ConfigConverter<?> registered(Class<?> raw) {
         Registration own = registrations.get(raw);
         if (own != null) { return own.converter; }
@@ -253,6 +254,7 @@ public final class ConverterRegistry {
         }
     }
 
+    @SuppressWarnings("PMD.NPathComplexity") // Recursive preflight checks generic bounds and container arguments without constructing a value.
     private Type missingType(Type type, Set<Type> visiting) {
         if (!visiting.add(type)) { return null; }
         try {
@@ -423,7 +425,8 @@ public final class ConverterRegistry {
         return new ConversionResult<>(value, failures);
     }
 
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "PMD.NPathComplexity"})
+    // Registered, section, generic and serializable write precedence must stay explicit.
     private Object write(Object value, Context ctx) throws ConversionException {
         if (value == null) { return null; }
         ConfigConverter<Object> converter = (ConfigConverter<Object>) registered(rawClass(ctx.declaredType()));

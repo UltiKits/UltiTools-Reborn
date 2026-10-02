@@ -3,6 +3,7 @@ package com.ultikits.ultitools.config.convert;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.ultikits.ultitools.config.convert.builtin.ConversionTypes;
 import java.lang.reflect.Type;
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -237,23 +238,23 @@ class NumericConverterRulesTest {
     @Test
     void ownerRawAndRecursiveDeclarationsResolveWithoutCustomTypeWrappers() throws Exception {
         Type owner = Shapes.class.getDeclaredField("owned").getGenericType();
-        assertThat(com.ultikits.ultitools.config.convert.builtin.ConversionTypes.argument(
+        assertThat(ConversionTypes.argument(
                 owner, java.util.Collection.class, 0)).isEqualTo(UUID.class);
-        assertThat(com.ultikits.ultitools.config.convert.builtin.ConversionTypes.raw(
-                com.ultikits.ultitools.config.convert.builtin.ConversionTypes.argument(
+        assertThat(ConversionTypes.raw(
+                ConversionTypes.argument(
                         List.class, java.util.Collection.class, 0))).isEqualTo(Object.class);
-        Type recursive = com.ultikits.ultitools.config.convert.builtin.ConversionTypes.argument(
+        Type recursive = ConversionTypes.argument(
                 RecursiveList.class, java.util.Collection.class, 0);
-        assertThat(com.ultikits.ultitools.config.convert.builtin.ConversionTypes.raw(recursive)).isEqualTo(Comparable.class);
+        assertThat(ConversionTypes.raw(recursive)).isEqualTo(Comparable.class);
     }
 
     @Test
     void nestedGenericArrayAndWildcardArgumentsSubstituteConcreteAncestors() throws Exception {
         UUID uuid = new UUID(0, 1);
-        Type nested = com.ultikits.ultitools.config.convert.builtin.ConversionTypes.argument(
+        Type nested = ConversionTypes.argument(
                 UuidNested.class, java.util.Collection.class, 0);
         Type component = ((java.lang.reflect.ParameterizedType) nested).getActualTypeArguments()[0];
-        assertThat(com.ultikits.ultitools.config.convert.builtin.ConversionTypes.raw(component)).isEqualTo(UUID[].class);
+        assertThat(ConversionTypes.raw(component)).isEqualTo(UUID[].class);
         ConversionResult<UuidNested> result = registry.fromPlainResult(
                 Collections.singletonList(Collections.singletonList(Collections.singletonList(uuid.toString()))),
                 UuidNested.class, "f", Collections.emptyList());
@@ -263,10 +264,10 @@ class NumericConverterRulesTest {
 
     @Test
     void wildcardArgumentsSubstituteConcreteAncestors() {
-        Type wildcard = com.ultikits.ultitools.config.convert.builtin.ConversionTypes.argument(
+        Type wildcard = ConversionTypes.argument(
                 UuidWildcard.class, java.util.Collection.class, 0);
         Type inner = ((java.lang.reflect.ParameterizedType) wildcard).getActualTypeArguments()[0];
-        assertThat(com.ultikits.ultitools.config.convert.builtin.ConversionTypes.raw(inner)).isEqualTo(UUID.class);
+        assertThat(ConversionTypes.raw(inner)).isEqualTo(UUID.class);
     }
 
     public static class Owner<T> {

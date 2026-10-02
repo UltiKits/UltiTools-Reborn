@@ -222,7 +222,7 @@ class ConfigPanelMapEntryEditTest {
         java.util.logging.Logger logger = java.util.logging.Logger.getLogger(AbstractConfigEntity.class.getName());
         java.util.logging.Handler capture = new java.util.logging.Handler() {
             @Override public void publish(java.util.logging.LogRecord record) {
-                if (record.getLevel() == java.util.logging.Level.WARNING) { warnings.add(record.getMessage()); }
+                if (java.util.logging.Level.WARNING.equals(record.getLevel())) { warnings.add(record.getMessage()); }
             }
             @Override public void flush() { /* No buffered records. */ }
             @Override public void close() { /* No owned resource. */ }

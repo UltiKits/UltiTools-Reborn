@@ -245,6 +245,7 @@ class ConverterDiscoveryTest {
 
     @ConfigEntity("config/good.yml")
     public static class GoodConfig extends AbstractConfigEntity {
+    @SuppressWarnings("PMD.AssignmentToNonFinalStatic") // Test-only constructor probe is reset and asserted by each discovery scenario.
         public GoodConfig(String path) {
             super(path);
             assertThat(ConverterRegistry.forModule(constructingPlugin).resolve(Value.class))
@@ -257,6 +258,7 @@ class ConverterDiscoveryTest {
     public static class BadConfig extends AbstractConfigEntity {
         @ConfigEntry(path = "values")
         private List<Value> values;
+    @SuppressWarnings("PMD.AssignmentToNonFinalStatic") // Test-only constructor probe is reset and asserted by each discovery scenario.
         public BadConfig(String path) {
             super(path);
             constructed = true;
@@ -266,6 +268,7 @@ class ConverterDiscoveryTest {
     @ConfigEntity("config/plain.yml")
     public static class PlainConfig extends AbstractConfigEntity {
         @ConfigEntry private String value = "ready";
+    @SuppressWarnings("PMD.AssignmentToNonFinalStatic") // Test-only constructor probe is reset and asserted by each discovery scenario.
         public PlainConfig(String path) { super(path); constructed = true; }
     }
 

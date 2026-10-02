@@ -805,8 +805,8 @@ class ConfigManagerTest {
             // Plan 17-58: normal reload uses the entity's missing-key/no-write contract, not init.
             verify(mockConfig1).reload();
             verify(mockConfig2).reload();
-            verify(mockConfig1, org.mockito.Mockito.never()).init(mockPlugin);
-            verify(mockConfig2, org.mockito.Mockito.never()).init(mockPlugin);
+            verify(mockConfig1, never()).init(mockPlugin);
+            verify(mockConfig2, never()).init(mockPlugin);
             assertThat(configMap).as("Config map should contain both configs").hasSize(2);
         }
     }

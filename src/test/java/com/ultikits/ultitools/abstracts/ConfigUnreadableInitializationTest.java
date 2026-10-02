@@ -65,7 +65,7 @@ class ConfigUnreadableInitializationTest {
         Values config = new Values(PATH);
         List<String> diagnostics;
         Files.setPosixFilePermissions(file, EnumSet.noneOf(PosixFilePermission.class));
-        java.util.List<java.util.logging.Level> levels = new java.util.ArrayList<>();
+        List<java.util.logging.Level> levels = new java.util.ArrayList<>();
         java.util.logging.Handler capture = new java.util.logging.Handler() {
             @Override public void publish(java.util.logging.LogRecord record) { levels.add(record.getLevel()); }
             @Override public void flush() { /* In-memory capture needs no flush. */ }

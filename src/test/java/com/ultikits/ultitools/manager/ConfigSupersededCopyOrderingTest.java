@@ -55,6 +55,7 @@ class ConfigSupersededCopyOrderingTest {
         public static UltiToolsPlugin constructedOwner;
     }
     public static class Incoming extends UltiToolsPlugin {
+    @SuppressWarnings("PMD.AssignmentToNonFinalStatic") // Reset test probes observe construction count, owner and file contents before replacement.
         public Incoming() {
             Probe.constructions++; Probe.constructedOwner = this;
             if (Probe.fail) { throw new IllegalStateException("injected subclass constructor failure"); }
@@ -182,7 +183,7 @@ class ConfigSupersededCopyOrderingTest {
         Method method = PluginManager.class.getDeclaredMethod("initializePlugin", ClassLoader.class, Class.class);
         method.setAccessible(true);
         try (org.mockito.MockedStatic<com.ultikits.ultitools.UltiTools> core =
-                org.mockito.Mockito.mockStatic(com.ultikits.ultitools.UltiTools.class, CALLS_REAL_METHODS)) {
+                mockStatic(com.ultikits.ultitools.UltiTools.class, CALLS_REAL_METHODS)) {
             core.when(com.ultikits.ultitools.UltiTools::getPluginVersion).thenReturn(630);
             method.invoke(plugins, type.getClassLoader(), type);
         }

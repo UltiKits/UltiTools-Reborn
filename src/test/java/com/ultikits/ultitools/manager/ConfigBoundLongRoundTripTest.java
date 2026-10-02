@@ -292,7 +292,7 @@ class ConfigBoundLongRoundTripTest {
                     ConfigBoundCooldownState.seconds(command).get(cooldownKey),
                     "the valid 30 s cooldown applies without missing-key write-back");
             writer.verify(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.write(
-                    org.mockito.Mockito.any(java.nio.file.Path.class), org.mockito.Mockito.anyString()),
+                    org.mockito.Mockito.any(Path.class), org.mockito.Mockito.anyString()),
                     org.mockito.Mockito.never());
             assertEquals(edited.toString(), new String(Files.readAllBytes(file), StandardCharsets.UTF_8),
                     "the absent-note file remains byte-for-byte unchanged");

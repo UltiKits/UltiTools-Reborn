@@ -24,6 +24,7 @@ public final class PlainNormalizer {
      * @return plain data
      * @throws ConversionException when a leaf or key cannot be represented
      */
+    @SuppressWarnings("PMD.NPathComplexity") // Normalize only known legacy containers and delegate non-plain leaves through the registry.
     public static Object normalize(Object value, Context ctx) throws ConversionException {
         if (value == null || PlainData.isPlain(value)) { return PlainData.copy(value); }
         if (value instanceof ConfigurationSection) {

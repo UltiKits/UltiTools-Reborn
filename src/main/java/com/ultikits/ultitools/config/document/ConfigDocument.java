@@ -390,6 +390,7 @@ public final class ConfigDocument {
      *
      * @return the file text
      */
+    @SuppressWarnings("PMD.NPathComplexity") // Presentation options are independent and retain the existing emitter configuration order.
     public String render() {
         MappingNode out = anchored && modified ? reRenderFromPlain() : root;
         if (out == null) {
@@ -464,6 +465,7 @@ public final class ConfigDocument {
         carryComments(from, to);
     }
 
+    @SuppressWarnings("PMD.NPathComplexity") // Node updates preserve type, whole-key order, aliases and comment ownership independently.
     private Node update(Node old, Object oldPlain, Object value) {
         if (value instanceof Map && oldPlain instanceof Map && old instanceof MappingNode && Tag.MAP.equals(old.getTag())) {
             merge((MappingNode) old, (Map<?, ?>) oldPlain, (Map<?, ?>) value);
@@ -830,6 +832,7 @@ public final class ConfigDocument {
      * Rewrites the escapes inside every double-quoted scalar into the file's own form: {@code \}{@code xHH}
      * as {@code \}{@code u00HH} when {@code latin1AsU}, and hex digits in upper case when {@code upper}.
      */
+    @SuppressWarnings("PMD.NPathComplexity") // Independent escape-style options are applied in the existing scan order.
     static String normalizeEscapes(String text, boolean upper, boolean latin1AsU) {
         StringBuilder result = new StringBuilder(text.length() + 16);
         int copied = 0;
@@ -988,6 +991,7 @@ public final class ConfigDocument {
     /** The two comment placements adjusted on read (see the class description). */
     private static final class CommentPlacement {
 
+        @SuppressWarnings("PMD.UnnecessaryConstructor") // Static-only utility must not expose construction.
         private CommentPlacement() {
         }
 

@@ -117,6 +117,7 @@ class ConfigClassTagFreeTest {
                 .hasMessageContaining("nested").hasMessageContaining("Unknown").hasMessageContaining("ConfigConverterFor");
         assertThat(directory.resolve("nested.yml")).doesNotExist();
     }
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // Assertions run in the invoked helper, generated test or joined asynchronous task.
     @Test void registeredCustomConverterOwnsUnregisteredSerializableType() {
         com.ultikits.ultitools.config.convert.ConverterRegistry registry =
                 new com.ultikits.ultitools.config.convert.ConverterRegistry(

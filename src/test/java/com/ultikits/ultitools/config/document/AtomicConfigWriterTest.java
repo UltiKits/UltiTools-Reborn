@@ -56,10 +56,12 @@ class AtomicConfigWriterTest {
 
         @Override
         public void flush() {
+            // Records are stored directly; there is no output buffer.
         }
 
         @Override
         public void close() {
+            // The capture owns no resource; its handler is removed by cleanup.
         }
     };
     private Level previousLevel;
@@ -230,14 +232,16 @@ class AtomicConfigWriterTest {
             }
             return AtomicConfigWriter.FileOperations.super.open(temporary, attributes);
         }
-        @Override public void write(FileChannel channel, ByteBuffer data) throws IOException {
+        @Override @SuppressWarnings("PMD.CompareObjectsWithEquals") // Inject only on this exact backup-copy channel instance.
+        public void write(FileChannel channel, ByteBuffer data) throws IOException {
             if (channel == copy) {
                 events.add("copy-write");
                 if ("write".equals(fault)) { throw new IOException("injected copy write"); }
             }
             AtomicConfigWriter.FileOperations.super.write(channel, data);
         }
-        @Override public void force(FileChannel channel) throws IOException {
+        @Override @SuppressWarnings("PMD.CompareObjectsWithEquals") // Inject only on this exact backup-copy channel instance.
+        public void force(FileChannel channel) throws IOException {
             if (channel == copy) {
                 events.add("copy-force");
                 if ("force".equals(fault)) { throw new IOException("injected copy force"); }
@@ -494,7 +498,7 @@ class AtomicConfigWriterTest {
     }
 
     private List<LogRecord> warnings() {
-        return records.stream().filter(r -> r.getLevel() == Level.WARNING).collect(Collectors.toList());
+        return records.stream().filter(r -> Level.WARNING.equals(r.getLevel())).collect(Collectors.toList());
     }
 
     /** Counts the writer's existing write/force operations across temp, backup and target channels. */
@@ -638,7 +642,7 @@ class AtomicConfigWriterTest {
         assertThat(Files.exists(shortSuffix)).isTrue();
         assertThat(Files.exists(otherFile)).isTrue();
         assertThat(Files.exists(operatorBackup)).isTrue();
-        assertThat(records.stream().filter(r -> r.getLevel() == Level.FINE).collect(Collectors.toList())).hasSize(1);
+        assertThat(records.stream().filter(r -> Level.FINE.equals(r.getLevel())).collect(Collectors.toList())).hasSize(1);
     }
 
     @Test

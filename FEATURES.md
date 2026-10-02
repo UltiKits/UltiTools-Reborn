@@ -288,8 +288,6 @@ They are not executed by unit regression controls above. Back up and restore all
 | ultitools.language.file-refresh | An `UltiToolsPlugin` module's extracted `lang/<code><ext>` file that has never been modified since extraction (its bytes still match the recorded provenance hash, or no provenance was recorded but its bytes already equal the jar's) is silently replaced by the current module jar's bundled copy on the next start, with one informative log line naming the file (D-05/D-06/D-07, #441) | gate | any loaded module's `plugins/UltiTools/pluginConfig/<module>/lang/<code><ext>` file, left untouched since extraction, with the module jar upgraded to a version shipping different `lang/<code><ext>` content — observed on the module's next start | n/a | n/a | admin | brief | UltiToolsPlugin#resolveLanguageWithProvenance |
 | ultitools.language.select | Choose the framework's message language (`zh` or `en`) via `config.yml`, applied on next start or `/ul reload` | gate | `language` in `plugins/UltiTools/config.yml`, applied on next start or `/ul reload` — unlike `datasource.type` above, `UltiTools#reloadPlugins` runs `reloadConfig()` then `initLanguage()`, so a reload alone is sufficient | n/a | n/a | admin | brief | UltiTools#initLanguage |
 
-
-
 ## Panel capabilities
 
 Eight independently-switchable panel-facing capabilities, each with its own

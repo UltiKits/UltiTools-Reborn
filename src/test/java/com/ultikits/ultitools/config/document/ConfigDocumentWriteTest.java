@@ -32,6 +32,7 @@ class ConfigDocumentWriteTest {
             "deeper-path-sequence", "deeper-path-set", "inherited-deep", "inherited-smaller", "anchored-remove",
             "anchored-unrelated", "clear-root", "duplicate-notes", "alias-remove-original", "alias-remove-reference",
             "alias-empty-original", "alias-scalar-original", "alias-list-original", "alias-clear-all", "alias-distinct-notes"})
+    @SuppressWarnings("PMD.NPathComplexity") // One deletion matrix pins each independent subtree and parent comment boundary.
     void everyDeletionPathPreservesSectionEnds(String action) throws Exception {
         String text = "s:\n  nested:\n    a: 1\n    # deep-end\n  # section-end\nnext: 2\n";
         if (action.contains("list") || "deeper-path-sequence".equals(action)) {

@@ -20,7 +20,6 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockedStatic;
-import org.mockito.Mockito;
 
 /** Every public registry entry refuses before accessing live registry structure off the server thread. */
 class ConfigRegistryThreadConfinementTest {
@@ -84,7 +83,7 @@ class ConfigRegistryThreadConfinementTest {
         assertThat(manager.getAllConfigEntities(owner)).isNull();
     }
     private MockedStatic<Bukkit> offThread(Logger logger) {
-        MockedStatic<Bukkit> bukkit = Mockito.mockStatic(Bukkit.class);
+        MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class);
         when(Bukkit.getServer()).thenReturn(mock(Server.class));
         when(Bukkit.isPrimaryThread()).thenReturn(false); when(Bukkit.getLogger()).thenReturn(logger);
         return bukkit;

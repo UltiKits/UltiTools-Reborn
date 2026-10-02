@@ -205,10 +205,10 @@ class ConfigLoadResultTest {
         java.util.logging.Logger logger = java.util.logging.Logger.getLogger(AtomicConfigWriter.class.getName());
         java.util.logging.Handler capture = new java.util.logging.Handler() {
             @Override public void publish(java.util.logging.LogRecord record) {
-                if (record.getLevel() == java.util.logging.Level.WARNING) { warnings.add(record); }
+                if (java.util.logging.Level.WARNING.equals(record.getLevel())) { warnings.add(record); }
             }
-            @Override public void flush() { }
-            @Override public void close() { }
+            @Override public void flush() { /* Records are stored directly without a buffer. */ }
+            @Override public void close() { /* Capture owns no resource; cleanup removes its handler. */ }
         };
         AtomicConfigWriter.FileOperations files = new AtomicConfigWriter.FileOperations() {
             @Override public void move(Path source, Path destination, java.nio.file.CopyOption... options) throws IOException {

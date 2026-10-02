@@ -24,11 +24,11 @@ public final class ConversionTypes {
 
      */
     public static Class<?> raw(Type type) {
-        type = bound(type);
-        if (type instanceof Class<?>) { return (Class<?>) type; }
-        if (type instanceof ParameterizedType) { return raw(((ParameterizedType) type).getRawType()); }
-        if (type instanceof GenericArrayType) { return Array.newInstance(raw(component(type)), 0).getClass(); }
-        throw new IllegalArgumentException("Unsupported declared type " + type);
+        Type effective = bound(type);
+        if (effective instanceof Class<?>) { return (Class<?>) effective; }
+        if (effective instanceof ParameterizedType) { return raw(((ParameterizedType) effective).getRawType()); }
+        if (effective instanceof GenericArrayType) { return Array.newInstance(raw(component(effective)), 0).getClass(); }
+        throw new IllegalArgumentException("Unsupported declared type " + effective);
     }
 
     /**
@@ -39,13 +39,14 @@ public final class ConversionTypes {
 
      */
     public static Type bound(Type type) {
+        Type effective = type;
         Set<Type> visited = new HashSet<>();
-        while (visited.add(type)) {
-            if (type instanceof TypeVariable<?>) { type = ((TypeVariable<?>) type).getBounds()[0]; }
-            else if (type instanceof WildcardType) {
-                WildcardType wildcard = (WildcardType) type;
-                type = wildcard.getLowerBounds().length == 0 ? wildcard.getUpperBounds()[0] : wildcard.getLowerBounds()[0];
-            } else { return type; }
+        while (visited.add(effective)) {
+            if (effective instanceof TypeVariable<?>) { effective = ((TypeVariable<?>) effective).getBounds()[0]; }
+            else if (effective instanceof WildcardType) {
+                WildcardType wildcard = (WildcardType) effective;
+                effective = wildcard.getLowerBounds().length == 0 ? wildcard.getUpperBounds()[0] : wildcard.getLowerBounds()[0];
+            } else { return effective; }
         }
         return Object.class;
     }
@@ -58,9 +59,9 @@ public final class ConversionTypes {
 
      */
     public static Type component(Type type) {
-        type = bound(type);
-        return type instanceof GenericArrayType ? ((GenericArrayType) type).getGenericComponentType()
-                : ((Class<?>) type).getComponentType();
+        Type effective = bound(type);
+        return effective instanceof GenericArrayType ? ((GenericArrayType) effective).getGenericComponentType()
+                : ((Class<?>) effective).getComponentType();
     }
 
     /**
@@ -81,6 +82,7 @@ public final class ConversionTypes {
      * @return its wrapper or itself
 
      */
+    @SuppressWarnings("PMD.NPathComplexity") // Enumerate each primitive wrapper without changing primitive/reference identity.
     public static Class<?> boxed(Class<?> type) {
         if (type == boolean.class) { return Boolean.class; }
         if (type == byte.class) { return Byte.class; }

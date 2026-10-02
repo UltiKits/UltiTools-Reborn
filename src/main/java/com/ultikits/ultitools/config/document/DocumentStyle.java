@@ -83,6 +83,7 @@ public final class DocumentStyle {
      * @param root the composed top-level mapping, or {@code null} for a file without content
      * @return the file's style
      */
+    @SuppressWarnings("PMD.NPathComplexity") // Detect independent presentation styles without changing their precedence.
     static DocumentStyle detect(String text, MappingNode root) {
         String body = text.startsWith("\uFEFF") ? text.substring(1) : text;
         Layout layout = new Layout(body);
@@ -274,6 +275,7 @@ public final class DocumentStyle {
          * The column of the first item's {@code -}: the indentation of the line the first item starts on (the
          * sequence's own start mark may be an anchor on the key's line).
          */
+    @SuppressWarnings("PMD.NPathComplexity") // Inspect block and flow placement while retaining tracked source-column decisions.
         private int dashColumn(SequenceNode sequence) {
             if (sequence.getValue().isEmpty() || sequence.getValue().get(0).getStartMark() == null) {
                 return -1;

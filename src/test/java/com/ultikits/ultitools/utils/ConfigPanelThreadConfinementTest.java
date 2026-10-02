@@ -22,7 +22,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockedStatic;
-import org.mockito.Mockito;
 
 /** Panel callbacks queue the entire operation without a reply or registry access on the socket thread. */
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
@@ -56,7 +55,7 @@ class ConfigPanelThreadConfinementTest {
         AtomicBoolean primary = new AtomicBoolean(false);
         doAnswer(call -> { queued.set(call.getArgument(1)); return null; })
                 .when(scheduler).runTask(any(Plugin.class), any(Runnable.class));
-        try (MockedStatic<Bukkit> bukkit = Mockito.mockStatic(Bukkit.class)) {
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
             when(Bukkit.getServer()).thenReturn(mock(Server.class));
             when(Bukkit.isPrimaryThread()).thenAnswer(call -> primary.get());
             when(Bukkit.getScheduler()).thenReturn(scheduler);
@@ -76,7 +75,7 @@ class ConfigPanelThreadConfinementTest {
     void refusedProtectedEditReportsFailureWithoutSuccess(String operation) throws Exception {
         doThrow(new com.ultikits.ultitools.exceptions.ConfigurationException(
                 "Protected configuration file values.yml")).when(manager).loadFromJson("{}");
-        try (MockedStatic<Bukkit> bukkit = Mockito.mockStatic(Bukkit.class)) {
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
             when(Bukkit.isPrimaryThread()).thenReturn(true);
             invoke(operation);
             org.mockito.ArgumentCaptor<JsonObject> response = org.mockito.ArgumentCaptor.forClass(JsonObject.class);

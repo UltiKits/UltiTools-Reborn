@@ -109,6 +109,7 @@ public final class LegacyParserAdapter implements ConfigConverter<Object> {
     }
 
 
+    @SuppressWarnings("PMD.NPathComplexity") // Enumerate each primitive wrapper without changing primitive/reference identity.
     private static Class<?> boxed(Class<?> type) {
         if (type == byte.class) { return Byte.class; }
         if (type == short.class) { return Short.class; }

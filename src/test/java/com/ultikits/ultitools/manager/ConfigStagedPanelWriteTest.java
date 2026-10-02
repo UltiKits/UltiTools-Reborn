@@ -92,6 +92,8 @@ class ConfigStagedPanelWriteTest {
     @Test
     @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     void fallbackRollbackRefreshesRetainedBackupAndRestoresOriginalCheckpoint() throws Exception {
+        // Constant framework nested-interface lookup; no user-controlled class name.
+        // nosemgrep: java_lang_security_audit_unsafe-reflection_unsafe-reflection
         Class<?> operations = Class.forName(AtomicConfigWriter.class.getName() + "$FileOperations");
         AtomicInteger opens = new AtomicInteger();
         Object files = Mockito.mock(operations, invocation -> {

@@ -120,16 +120,19 @@ class BukkitConverterTest {
     }
 
     @Test
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // Assertions run in the invoked helper, generated test or joined asynchronous task.
     void objectSectionUsesRuntimeRegisteredConverter() throws Exception {
         sectionShadow("value");
     }
 
     @Test
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // Assertions run in the invoked helper, generated test or joined asynchronous task.
     void objectListSectionUsesRuntimeRegisteredConverter() throws Exception {
         sectionShadow("list");
     }
 
     @Test
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // Assertions run in the invoked helper, generated test or joined asynchronous task.
     void objectMapSectionUsesRuntimeRegisteredConverter() throws Exception {
         sectionShadow("map");
     }

@@ -26,6 +26,7 @@ public final class ScalarConverter implements ConfigConverter<Object> {
     }
 
     @Override
+    @SuppressWarnings("PMD.NPathComplexity") // Dispatch declared shapes and exact scalar policies with located failure boundaries.
     public Object fromPlain(Object plain, ConversionContext ctx) throws ConversionException {
         if (target == String.class) {
             if (plain instanceof String || plain instanceof Number || plain instanceof Boolean || plain instanceof Character) {

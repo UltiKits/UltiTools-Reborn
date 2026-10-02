@@ -68,6 +68,7 @@ class ConverterRoundTripPropertyTest {
     }
 
     @TestFactory
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // Assertions run in the invoked helper, generated test or joined asynchronous task.
     Stream<DynamicTest> additionalArrayAndNestedFactoryShapesRoundTrip() {
         return Stream.of("primitiveArray", "referenceArray", "genericArray", "nested", "listEnum",
                 "hashMap", "hashSet", "linkedList", "secondEnum", "item", "delegateItem", "location", "material")
@@ -174,6 +175,7 @@ class ConverterRoundTripPropertyTest {
         assertThat(REGISTRY.fromPlainResult(null, Integer.class, "f", Collections.emptyList()).value()).isNull();
     }
 
+    @SuppressWarnings("PMD.NPathComplexity") // Generate each approved coercion by type without broadening accepted runtime inputs.
     private static Object noncanonical(Class<?> type, Object canonical, Random random) {
         if (type == String.class) { return random.nextInt(); }
         if (type == boolean.class || type == Boolean.class) { return canonical.toString(); }
@@ -233,6 +235,7 @@ class ConverterRoundTripPropertyTest {
         }
     }
 
+    @SuppressWarnings("PMD.NPathComplexity") // Compare generated Java shapes without losing array, set or Bukkit distinctions.
     private static Object semantic(Object value) {
         if (value == null) { return null; }
         if (value instanceof org.bukkit.configuration.ConfigurationSection) {

@@ -69,6 +69,7 @@ class LegacyParserAdapterTest {
     }
 
     @Test
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // Assertions run in the invoked helper, generated test or joined asynchronous task.
     void eachParallelConversionGetsFreshParserAndLegacySelectionPrecedesRegistry() throws Exception {
         ConverterRegistry custom = new ConverterRegistry(registry);
         custom.register(String.class, new ConfigConverter<String>() {

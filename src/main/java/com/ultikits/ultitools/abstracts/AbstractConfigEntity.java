@@ -65,6 +65,7 @@ import lombok.Getter;
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Config binder writes/reads private @ConfigEntry fields -- see 08-GATE05-TRIAGE.md
 @Getter
 public abstract class AbstractConfigEntity {
+    private static final Object ABSENT_RELOAD_VALUE = new Object();
     private static final Logger LOGGER = Logger.getLogger(AbstractConfigEntity.class.getName());
 
     private final String configFilePath;
@@ -76,24 +77,6 @@ public abstract class AbstractConfigEntity {
     private Map<String, Object> lastLoadedPresence;
     @Getter(AccessLevel.NONE)
     private final Map<Field, RawEntry> acknowledgedRaw = new LinkedHashMap<>();
-
-    /** A detached raw entry acknowledgment; absent and explicit null are different states. */
-    private static final class RawEntry {
-        private final boolean present;
-        private final Object value;
-
-        private RawEntry(ConfigDocument source, List<String> path) {
-            this(source.contains(path), source.get(path));
-        }
-
-        private RawEntry(boolean present, Object value) {
-            this.present = present; this.value = PlainData.copy(value);
-        }
-
-        private boolean matches(ConfigDocument source, List<String> path) {
-            return present == source.contains(path) && PlainData.plainEquals(value, source.get(path));
-        }
-    }
 
     @Getter(AccessLevel.NONE)
     private final Map<Field, Object> declaredDefaults = new LinkedHashMap<>();
@@ -114,13 +97,6 @@ public abstract class AbstractConfigEntity {
     @Getter(AccessLevel.NONE)
     private PendingInitialization pendingInitialization;
 
-    private static final class PendingInitialization {
-        private final ConfigDocument candidate;
-        private final Map<Field, Object> baseline;
-        private PendingInitialization(ConfigDocument candidate, Map<Field, Object> baseline) {
-            this.candidate = candidate; this.baseline = baseline;
-        }
-    }
     @Getter(AccessLevel.NONE)
     private final Set<String> warnedCommentKeys = ConcurrentHashMap.newKeySet();
 
@@ -134,6 +110,32 @@ public abstract class AbstractConfigEntity {
      */
     @Getter(AccessLevel.NONE)
     private final Map<String, Map<String, Predicate<Long>>> bindingRanges = new ConcurrentHashMap<>();
+
+    /** A detached raw entry acknowledgment; absent and explicit null are different states. */
+    private static final class RawEntry {
+        private final boolean present;
+        private final Object value;
+
+        private RawEntry(ConfigDocument source, List<String> path) {
+            this(source.contains(path), source.get(path));
+        }
+
+        private RawEntry(boolean present, Object value) {
+            this.present = present; this.value = PlainData.copy(value);
+        }
+
+        private boolean matches(ConfigDocument source, List<String> path) {
+            return present == source.contains(path) && PlainData.plainEquals(value, source.get(path));
+        }
+    }
+
+    private static final class PendingInitialization {
+        private final ConfigDocument candidate;
+        private final Map<Field, Object> baseline;
+        private PendingInitialization(ConfigDocument candidate, Map<Field, Object> baseline) {
+            this.candidate = candidate; this.baseline = baseline;
+        }
+    }
 
     /**
      * Constructor for AbstractConfigEntity.
@@ -234,6 +236,7 @@ public abstract class AbstractConfigEntity {
         return prepareSave(fields, Collections.emptyMap());
     }
 
+    @SuppressWarnings("PMD.NPathComplexity") // Keep candidate conversion, leaf ownership and disk comparison in their established order.
     private PreparedSave prepareSave(List<Field> fields, Map<Field, List<List<String>>> leaves) throws IOException {
         // Convert every candidate before reading or mutating the presentation document.
         Map<Field, Object> values = currentPlain(fields, true);
@@ -639,6 +642,7 @@ public abstract class AbstractConfigEntity {
         notifyChangeListeners();
     }
 
+    @SuppressWarnings("PMD.NPathComplexity") // Keep protected load, binding, three-way merge and initialization persistence under one monitor.
     private void load(boolean initialize) throws IOException {
         warnedCommentKeys.clear();
         ConfigLoadResult loaded = ConfigDocument.load(ultiToolsPlugin.getConfigFile(configFilePath).toPath());
@@ -723,8 +727,7 @@ public abstract class AbstractConfigEntity {
         for (String conflict : conflicts) { LOGGER.warning("Configuration " + configFilePath + ": " + conflict); }
     }
 
-    private static final Object ABSENT_RELOAD_VALUE = new Object();
-
+    @SuppressWarnings("PMD.NPathComplexity") // The recursive three-way merge explicitly distinguishes absence, order and secret-valued conflicts.
     private Object mergeReload(Object base, Object mine, Object theirs, String path, boolean secret, List<String> conflicts) {
         if (orderedEquals(mine, base)) { return theirs; }
         if (orderedEquals(theirs, base) || orderedEquals(mine, theirs)) { return mine; }
@@ -779,6 +782,7 @@ public abstract class AbstractConfigEntity {
         }
     }
 
+    @SuppressWarnings("PMD.NPathComplexity") // Diagnostic traversal distinguishes list positions, whole keys and inherited secret boundaries.
     private void warnConversion(Field field, List<String> path, Type type, Object raw, Object fieldRaw) {
         StringBuilder located = new StringBuilder(fieldPath(field));
         Object cursor = fieldRaw;
@@ -1042,6 +1046,7 @@ public abstract class AbstractConfigEntity {
      * @throws ConfigurationException with {@link com.ultikits.ultitools.exceptions.ErrorCode#CONFIG_VALIDATION_FAILED}
      *                                 if the post-update field state violates a constraint
      */
+    @SuppressWarnings("PMD.NPathComplexity") // Resolve every panel owner and validate every candidate before publishing any field.
     private Map<Field, List<List<String>>> applyAndValidate(JsonObject jsonObject, List<Field> touchedFieldsOut, List<Object> previousValuesOut) {
         if (lastLoadUnparseable) {
             throw new ConfigurationException("Protected configuration file " + configFilePath

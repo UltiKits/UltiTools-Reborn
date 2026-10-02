@@ -75,6 +75,7 @@ public final class GenericConverters implements ConfigConverter<Object> {
     }
 
     @Override
+    @SuppressWarnings("PMD.NPathComplexity") // Dispatch enum, array, collection and map output with declared nested types.
     public Object toPlain(Object value, ConversionContext context) throws ConversionException {
         Context ctx = (Context) context;
         Class<?> raw = ConversionTypes.raw(ctx.declaredType());
@@ -124,6 +125,7 @@ public final class GenericConverters implements ConfigConverter<Object> {
     }
 
     @Override
+    @SuppressWarnings("PMD.NPathComplexity") // Dispatch declared shapes and exact scalar policies with located failure boundaries.
     public Object fromPlain(Object plain, ConversionContext context) throws ConversionException {
         Context ctx = (Context) context;
         Class<?> raw = ConversionTypes.raw(ctx.declaredType());
@@ -200,7 +202,8 @@ public final class GenericConverters implements ConfigConverter<Object> {
         catch (IllegalArgumentException e) { throw ctx.failure("Unknown enum name " + plain, e); }
     }
 
-    @SuppressWarnings({"unchecked", "rawtypes"})
+    @SuppressWarnings({"unchecked", "rawtypes", "PMD.NPathComplexity"})
+    // Each supported collection category has a distinct construction and insertion policy.
     private static Collection<Object> newCollection(Class<?> raw, Type element, Context ctx) throws ConversionException {
         if (raw == Collection.class || raw == List.class || raw == ArrayList.class) { return new ArrayList<>(); }
         if (raw == Set.class || raw == LinkedHashSet.class) { return new LinkedHashSet<>(); }

@@ -169,6 +169,7 @@ class ConfigEntityGoldenTest {
 
     @ParameterizedTest(name = "unchanged {0}")
     @MethodSource("fixtures")
+    @SuppressWarnings("PMD.NPathComplexity") // One fixture lifecycle verifies independent init, reload, explicit and shutdown byte invariants.
     void initReloadExplicitAndShutdownNoOpKeepEveryByteAndMtime(String fixture) throws Exception {
         byte[] bytes = Files.readAllBytes(corpus().resolve(fixture));
         Path file = directory.resolve("golden.yml"); Files.write(file, bytes);

@@ -118,10 +118,9 @@ class PlainDataBoundaryTest {
     }
 
     private static void collectMutable(Object value, java.util.Set<Object> result) {
-        if (value instanceof Map || value instanceof List || value instanceof java.util.Set
-                || value instanceof java.util.Date || value instanceof byte[] || value instanceof Object[]) {
-            if (!result.add(value)) { return; }
-        }
+        if ((value instanceof Map || value instanceof List || value instanceof java.util.Set
+                || value instanceof java.util.Date || value instanceof byte[] || value instanceof Object[])
+                && !result.add(value)) { return; }
         if (value instanceof Map) {
             for (Map.Entry<?, ?> entry : ((Map<?, ?>) value).entrySet()) {
                 collectMutable(entry.getKey(), result); collectMutable(entry.getValue(), result);

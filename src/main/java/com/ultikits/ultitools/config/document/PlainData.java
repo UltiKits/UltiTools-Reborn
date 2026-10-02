@@ -76,6 +76,8 @@ public final class PlainData {
      * @param b another plain value
      * @return whether writing {@code b} over {@code a} would change nothing a reader can observe
      */
+    @SuppressWarnings({"PMD.NPathComplexity", "PMD.CompareObjectsWithEquals"}) // Semantic equality distinguishes exact integral values, doubles, ordered lists and maps.
+    // Identity is a deliberate null-safe fast path before recursive semantic comparison.
     public static boolean plainEquals(Object a, Object b) {
         if (a == b) {
             return true;
@@ -134,6 +136,7 @@ public final class PlainData {
         return copy(value, newVisited());
     }
 
+    @SuppressWarnings("PMD.NPathComplexity") // Copy safe mutable YAML shapes while preserving cycle detection and alias detachment.
     private static Object copy(Object value, Set<Object> visiting) {
         if (value instanceof java.util.Date) {
             return new java.util.Date(((java.util.Date) value).getTime());
