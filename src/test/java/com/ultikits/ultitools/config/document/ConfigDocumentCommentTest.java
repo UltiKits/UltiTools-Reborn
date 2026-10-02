@@ -81,6 +81,39 @@ class ConfigDocumentCommentTest {
         assertThat(ConfigDocument.parse(document.render()).get(path("next"))).isEqualTo(2);
     }
 
+    @org.junit.jupiter.params.ParameterizedTest(name = "list comments: {0}")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"leaf-equal", "leaf-append", "leaf-shrink",
+            "map-equal", "map-append", "map-shrink", "anchored-leaf-equal", "anchored-leaf-append",
+            "anchored-leaf-shrink", "anchored-map-equal", "anchored-map-append", "anchored-map-shrink"})
+    void listItemCommentsRequireUnchangedLength(String action) throws Exception {
+        String text = "section:\n  # list key\n  items:\n  - first # first inline\n"
+                + "  # second block\n  - second # second inline\n  # list end\n"
+                + "  # sibling key\n  sibling: true # sibling inline\n";
+        if (action.startsWith("anchored-")) {
+            text = "anchor: &base {value: 1}\nreference: *base\n" + text;
+        }
+        java.util.List<String> values = action.endsWith("append") ? Arrays.asList("first", "second", "third")
+                : action.endsWith("shrink") ? Collections.singletonList("second") : Arrays.asList("first", "changed");
+        ConfigDocument document = ConfigDocument.parse(text);
+        if (action.contains("map-")) {
+            java.util.Map<String, Object> section = new java.util.LinkedHashMap<>();
+            section.put("items", values);
+            section.put("sibling", true);
+            document.set(path("section"), section);
+        } else {
+            document.set(path("section", "items"), values);
+        }
+        String rendered = document.render();
+        assertThat(rendered).contains("# list key", "# sibling key", "# sibling inline", "# list end");
+        if (action.endsWith("equal")) {
+            assertThat(rendered).contains("# first inline", "# second block", "# second inline");
+        } else {
+            assertThat(rendered).doesNotContain("# first inline", "# second block", "# second inline");
+        }
+        assertThat(ConfigDocument.parse(rendered).get(path("section", "items"))).isEqualTo(values);
+        assertThat(document.render()).isEqualTo(rendered);
+    }
+
     @Test
     @DisplayName("header, block, inline, list-item, end-of-section and end-of-file comments survive value changes")
     void commentsSurviveValueChanges() throws Exception {
