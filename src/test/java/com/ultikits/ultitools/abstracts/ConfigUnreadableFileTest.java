@@ -22,6 +22,7 @@ import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.config.document.AtomicConfigWriter;
 import com.ultikits.ultitools.config.document.ConfigDocument;
+import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.manager.ConfigManager;
 
 /** Entity-level protection across every write entry point (#511, #470, #574). */
@@ -70,7 +71,8 @@ class ConfigUnreadableFileTest {
         assertThat(config.isLastInitIncomplete()).isFalse();
         assertThat(config.isPresentInFile("limit")).isFalse();
         config.save();
-        config.updateProperties(panel());
+        assertThatThrownBy(() -> config.updateProperties(panel()))
+                .isInstanceOf(ConfigurationException.class).hasMessageContaining(PATH);
         assertThat(Files.readAllBytes(file())).isEqualTo(broken);
         assertThat(config.limit).isEqualTo(10);
 
@@ -86,7 +88,8 @@ class ConfigUnreadableFileTest {
         config.reload();
         assertThat(config.limit).isEqualTo(35);
         config.save();
-        config.updateProperties(panel());
+        assertThatThrownBy(() -> config.updateProperties(panel()))
+                .isInstanceOf(ConfigurationException.class).hasMessageContaining(PATH);
         assertThat(Files.readAllBytes(file())).isEqualTo(broken);
     }
 
@@ -156,7 +159,8 @@ class ConfigUnreadableFileTest {
         assertThat(manager.getConfigEntity(plugin, Values.class)).isSameAs(config);
         assertThat(config.limit).isEqualTo(10);
         config.save();
-        config.updateProperties(panel());
+        assertThatThrownBy(() -> config.updateProperties(panel()))
+                .isInstanceOf(ConfigurationException.class).hasMessageContaining(PATH);
         assertThat(Files.readAllBytes(file().resolve("operator-data"))).containsExactly(1, 2, 3);
         assertThat(Files.isDirectory(file())).isTrue();
     }
