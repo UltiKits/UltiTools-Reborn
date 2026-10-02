@@ -254,6 +254,8 @@ not written at shutdown by either the old or the new code.
 | ultitools.config.staged-panel-batch | Multi-file panel updates stage every changed file before replacement and acknowledge only after all commits. Ordinary injected write failures restore original files and complete entity state, remove temporaries and return the failure; persistent recovery failures are suppressed on the original error. JVM crash recovery is not guaranteed. | persistence | ConfigManager#loadFromJson(String) | n/a | n/a | developer | none | ConfigManager#loadFromJson, AbstractConfigEntity#preparePanelWrite |
 | ultitools.config.panel-map-entry | Panel map leaves use real whole keys and typed conversion. Changed ambiguous or unknown paths refuse the entire payload by name; unchanged displayed leaves are ignored. Existing reply shape is unchanged. | persistence | panel edit to a map leaf | n/a | n/a | admin | none | AbstractConfigEntity#applyAndValidate, PluginInitiationUtils#handleConfigUpdate |
 
+| ultitools.config.three-way-reload | Reload retains memory-only edits, adopts disk-only edits and resolves conflicts to disk with located redacted warnings; maps merge whole keys, lists remain atomic | persistence | ConfigManager#reloadConfigs | n/a | n/a | admin | none | AbstractConfigEntity#mergeReload |
+
 ## Language
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |

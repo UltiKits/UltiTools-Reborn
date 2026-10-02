@@ -596,6 +596,8 @@ public abstract class AbstractConfigEntity {
         // Presence describes the load input, never defaults/comment writes or a later save read.
         Map<String, Object> loadedPresence = next.toPlain();
         Map<Field, Object> baseline = new LinkedHashMap<>(declaredDefaults);
+        Map<Field, Object> mine = initialize ? Collections.emptyMap() : currentPlain(configEntryFields());
+        List<String> conflicts = new ArrayList<>();
         List<Field> missing = new ArrayList<>();
         for (Field field : configEntryFields()) {
             field.setAccessible(true);
@@ -619,7 +621,17 @@ public abstract class AbstractConfigEntity {
                     throw new ConfigurationException(invalidDefault.getMessage(), invalidDefault);
                 }
             }
-            baseline.put(field, plainValue(field));
+            Object theirs = plainValue(field);
+            baseline.put(field, theirs);
+            if (!initialize && savedSnapshot != null && savedSnapshot.containsKey(field)) {
+                Object merged = mergeReload(savedSnapshot.get(field), mine.get(field), theirs,
+                        fieldPath(field), isSecretShapedFieldName(field.getName()), conflicts);
+                try {
+                    Object value = registry().fromPlainResult(merged, declaredType(field), configFilePath,
+                            keys(field), field.getAnnotation(ConfigEntry.class)).value();
+                    ReflectionUtil.setFieldValue(this, field, value);
+                } catch (ConversionException failure) { throw new ConfigurationException(failure.getMessage(), failure); }
+            }
         }
         validateFields();
         document = next;
@@ -651,6 +663,31 @@ public abstract class AbstractConfigEntity {
         savedSnapshot = baseline;
         acknowledgeRaw(next, configEntryFields());
         savedFileFingerprint = fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath));
+        for (String conflict : conflicts) { LOGGER.warning("Configuration " + configFilePath + ": " + conflict); }
+    }
+
+    private static final Object ABSENT_RELOAD_VALUE = new Object();
+
+    private Object mergeReload(Object base, Object mine, Object theirs, String path, boolean secret, List<String> conflicts) {
+        if (PlainData.plainEquals(mine, base)) { return theirs; }
+        if (PlainData.plainEquals(theirs, base) || PlainData.plainEquals(mine, theirs)) { return mine; }
+        if (base instanceof Map && mine instanceof Map && theirs instanceof Map) {
+            Map<?, ?> b = (Map<?, ?>) base; Map<?, ?> m = (Map<?, ?>) mine; Map<?, ?> t = (Map<?, ?>) theirs;
+            Set<Object> keys = new java.util.LinkedHashSet<>(); keys.addAll(t.keySet()); keys.addAll(m.keySet()); keys.addAll(b.keySet());
+            Map<String, Object> merged = new LinkedHashMap<>();
+            for (Object key : keys) {
+                Object value = mergeReload(b.containsKey(key) ? b.get(key) : ABSENT_RELOAD_VALUE,
+                        m.containsKey(key) ? m.get(key) : ABSENT_RELOAD_VALUE,
+                        t.containsKey(key) ? t.get(key) : ABSENT_RELOAD_VALUE,
+                        path + "." + key, secret || isSecretShapedFieldName(String.valueOf(key)), conflicts);
+                if (value != ABSENT_RELOAD_VALUE) { merged.put(String.valueOf(key), value); }
+            }
+            return merged;
+        }
+        String value = secret || isSecretShapedFieldName(path) || containsSecret(mine) ? "<redacted>"
+                : mine == ABSENT_RELOAD_VALUE ? "<absent>" : String.valueOf(mine);
+        conflicts.add("reload conflict at '" + path + "': discarded in-memory value " + value + "; file wins");
+        return theirs;
     }
 
     /** Flushes only a validated manager batch's initialization candidate.

@@ -95,6 +95,16 @@ failure preserves earlier successful files and protects the failed entity until 
 Standalone registration still writes immediately. Framework-internal initialization bridges are not
 a module transaction API.
 
+### Reload merge rule
+
+As of 6.3.0, reload compares the last effective disk baseline, current serialized fields, and
+incoming disk values. Memory-only changes survive and stay dirty; disk-only changes are adopted.
+Maps merge recursively by whole keys; lists and scalars are atomic. Conflicts take the file's value
+and warn with the located key and discarded value, redacting secret-shaped values. Absent map keys
+and explicit null differ. Missing whole declared fields retain their live values with the inherited
+declared-default baseline. This planner-selected file-wins policy can be overturned by the maintainer.
+Unreadable/unparseable reloads keep live values and protect the file as before.
+
 ### Panel edits inside map entries
 
 As of 6.3.0, a changed panel leaf inside a declared map setting is applied through that field's
