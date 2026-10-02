@@ -17,17 +17,24 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 public @interface ConfigEntry {
     /**
-     * @return config entry path
+     * Declares a nested entry path split at every dot. Dots inside keys of a bound map are
+     * whole map keys instead; they are not interpreted as annotation path separators.
+     * @return the nested config entry path
      */
     String path() default "";
 
     /**
-     * @return config entry comment
+     * A single trimmed {@code {key}} token resolves through the module catalogue on every
+     * load and write. That entry's block comment is framework-owned; literal comments are
+     * only supplied for new entries and existing operator comments are retained.
+     * @return the literal comment or single catalogue-key token
      */
     String comment() default "";
 
     /**
-     * @return config entry parser
+     * The default selects the declared-type converter registry. An explicit non-default
+     * parser selects the frozen legacy adapter, including its old dotted-key behavior.
+     * @return the legacy parser override, or the registry-selecting default
      * @see DefaultConfigParser
      * @deprecated Use ConfigConverter with ConfigConverterFor; removed in the next version.
      * @removeIn 6.4.0
