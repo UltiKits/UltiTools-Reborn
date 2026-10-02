@@ -126,6 +126,80 @@ class ConverterRoundTripPropertyTest {
         }));
     }
 
+    @TestFactory
+    Stream<DynamicTest> acceptedNoncanonicalInputsNormalizeStablyPerRegisteredType() {
+        return REGISTRY.registeredTypes().stream().map(type -> DynamicTest.dynamicTest(
+                "noncanonical " + type.getTypeName(), () -> {
+            Sample sample = GENERATORS.get(type);
+            Random random = new Random(SEED);
+            for (int iteration = 0; iteration < VALUES; iteration++) {
+                Object canonical = REGISTRY.toPlain(sample.generate.apply(random), sample.type,
+                        "config/property.yml", Collections.singletonList("o.O"));
+                Object input = noncanonical(type, canonical, random);
+                if (input == null) {
+                    // No alternative acceptance shape is asserted for this generator; canonical coverage remains mandatory.
+                    assertThat(PlainData.isPlain(canonical)).isTrue();
+                    continue;
+                }
+                assertThat(PlainData.plainEquals(input, canonical)).as("distinct input for %s", type).isFalse();
+                ConversionResult<Object> accepted = REGISTRY.fromPlainResult(input, sample.type,
+                        "config/property.yml", Collections.singletonList("o.O"));
+                assertThat(accepted.failures()).as("accepted, not a skipped invalid element").isEmpty();
+                Object normalized = REGISTRY.toPlain(accepted.value(), sample.type,
+                        "config/property.yml", Collections.singletonList("o.O"));
+                ConversionResult<Object> rebound = REGISTRY.fromPlainResult(normalized, sample.type,
+                        "config/property.yml", Collections.singletonList("o.O"));
+                assertThat(rebound.failures()).isEmpty();
+                assertThat(semantic(rebound.value())).isEqualTo(semantic(accepted.value()));
+                assertThat(PlainData.plainEquals(REGISTRY.toPlain(rebound.value(), sample.type,
+                        "config/property.yml", Collections.singletonList("o.O")), normalized)).isTrue();
+            }
+        }));
+    }
+
+    @Test
+    void strictShapesHavePositiveAndNegativeAcceptanceControls() throws Exception {
+        assertThat(REGISTRY.fromPlainResult("a", Character.class, "f", Collections.emptyList()).value()).isEqualTo('a');
+        assertThat(REGISTRY.fromPlainResult("FIRST", Mode.class, "f", Collections.emptyList()).value()).isEqualTo(Mode.FIRST);
+        assertThat(REGISTRY.fromPlainResult("world", org.bukkit.World.class, "f", Collections.emptyList()).value())
+                .isEqualTo(org.bukkit.Bukkit.getWorld("world"));
+        for (Class<?> type : Arrays.asList(Character.class, Mode.class, org.bukkit.World.class)) {
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> REGISTRY.fromPlainResult(
+                    "not-a-valid-name", type, "f", Collections.emptyList())).isInstanceOf(ConversionException.class);
+        }
+        Map<String, Object> plain = Collections.singletonMap("o.O", Arrays.asList(42, "false"));
+        assertThat(REGISTRY.fromPlainResult(plain, Object.class, "f", Collections.emptyList()).value()).isEqualTo(plain);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> REGISTRY.fromPlainResult(
+                null, int.class, "f", Collections.emptyList())).isInstanceOf(ConversionException.class);
+        assertThat(REGISTRY.fromPlainResult(null, Integer.class, "f", Collections.emptyList()).value()).isNull();
+    }
+
+    private static Object noncanonical(Class<?> type, Object canonical, Random random) {
+        if (type == String.class) { return random.nextInt(); }
+        if (type == boolean.class || type == Boolean.class) { return canonical.toString(); }
+        if (type == UUID.class) { return canonical.toString().toUpperCase(java.util.Locale.ROOT); }
+        if (Number.class.isAssignableFrom(type) || type.isPrimitive() && type != char.class) {
+            return type == BigDecimal.class ? random.nextInt() : canonical.toString();
+        }
+        if (canonical instanceof List<?>) {
+            List<Object> values = new ArrayList<>((List<?>) canonical);
+            if (Set.class.isAssignableFrom(type)) { values.add(values.get(0)); return values; }
+            if (type != List.class) { values.set(0, random.nextInt()); return values; }
+        }
+        if (canonical instanceof Map<?, ?> && Map.class.isAssignableFrom(type)) {
+            Map<String, Object> values = new LinkedHashMap<>();
+            ((Map<?, ?>) canonical).forEach((key, value) -> values.put(String.valueOf(key),
+                    value instanceof Number ? value.toString() : value.toString().toUpperCase(java.util.Locale.ROOT)));
+            return values;
+        }
+        if (type == org.bukkit.configuration.serialization.ConfigurationSerializable.class) {
+            Map<String, Object> values = new LinkedHashMap<>();
+            ((Map<?, ?>) canonical).forEach((key, value) -> values.put(String.valueOf(key), value));
+            values.put("operator-extra", random.nextInt()); return values;
+        }
+        return null;
+    }
+
     private static void exercise(Sample sample, String label) throws Exception {
         Random random = new Random(SEED);
         for (int iteration = 0; iteration < VALUES; iteration++) {
@@ -142,6 +216,12 @@ class ConverterRoundTripPropertyTest {
                         "config/property.yml", Collections.singletonList("o.O"));
                 assertThat(result.failures()).isEmpty();
                 assertThat(semantic(result.value())).isEqualTo(semantic(input));
+                Object canonical = REGISTRY.toPlain(result.value(), sample.type,
+                        "config/property.yml", Collections.singletonList("o.O"));
+                assertThat(PlainData.plainEquals(canonical, plain)).as("canonical reverse equality").isTrue();
+                Object rebound = REGISTRY.fromPlainResult(canonical, sample.type,
+                        "config/property.yml", Collections.singletonList("o.O")).value();
+                assertThat(semantic(rebound)).as("normalization stability").isEqualTo(semantic(result.value()));
                 Class<?> raw = sample.type instanceof Class<?> ? (Class<?>) sample.type
                         : sample.type instanceof java.lang.reflect.ParameterizedType
                         ? (Class<?>) ((java.lang.reflect.ParameterizedType) sample.type).getRawType() : Object[].class;

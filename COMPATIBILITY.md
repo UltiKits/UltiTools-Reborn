@@ -44,11 +44,14 @@ Warnings name the file, key and failed position/type; secret-shaped values and n
 are redacted. Unsupported declared types fail preflight before the file is read or created; register
 `@ConfigConverterFor` or declare a supported plain-data shape. The built-in Bukkit serialization
 fallback requires a registered alias; registered custom converters keep ownership of their types.
-A registered converter must satisfy both round-trip equations: `fromPlain(toPlain(x))` equals `x`,
-and `toPlain(fromPlain(p))` equals `p` for plain values it accepts. Equality is semantic value
-comparison, not object identity; numeric plain values compare by value. Reload merges and panel
-leaf edits rely on this contract. A converter that adds a value during reading without undoing
-that change during writing violates the contract; it cannot preserve unchanged siblings or reloads.
+For every value `x` of the declared type, `fromPlain(toPlain(x))` equals `x`. For every canonical
+plain value `p` emitted by the converter (`p = toPlain(x)`), `toPlain(fromPlain(p))` equals `p`.
+A converter may accept noncanonical input `q`; `toPlain(fromPlain(q))` is its canonical form, and
+normalization is stable: `fromPlain(toPlain(fromPlain(q)))` equals `fromPlain(q)`. Approved coercions
+(number to String, numeric text to int/float, `"false"` to boolean and duplicate elements to a Set)
+remain unchanged. Equality is semantic value comparison, not object identity; numeric plain values
+compare by value. Reload merges and panel leaf edits rely on forward equality. A converter that adds
+a value during reading without undoing that change during writing violates this contract.
 
 Whole map keys, including `g.m`, `o.O` and `wave.`, are supported as of 6.3.0.
 `@ConfigEntry.path` still splits at every dot: `chat.aliases` selects nested settings, whereas a

@@ -3,11 +3,15 @@ package com.ultikits.ultitools.config.convert;
 /**
  * Converts one Java value type to and from the configuration plain-data model.
  * Implementations must return plain data from {@link #toPlain(Object, ConversionContext)}.
- * Registered converters must satisfy both round-trip equations: {@code fromPlain(toPlain(x))}
- * equals {@code x}, and {@code toPlain(fromPlain(p))} equals {@code p} for every plain value
- * {@code p} they accept. Equality is semantic value equality, not object identity; numeric
- * plain values compare by value. The framework relies on this contract for reload merges and
- * leaf edits, including preservation of untouched in-memory siblings.
+ * For every value {@code x} of the declared type, {@code fromPlain(toPlain(x))} equals {@code x}.
+ * For every canonical plain value {@code p} emitted by the converter ({@code p = toPlain(x)}),
+ * {@code toPlain(fromPlain(p))} equals {@code p}. A converter may also accept noncanonical input
+ * {@code q}; its canonical form is {@code toPlain(fromPlain(q))}, and normalization must be stable:
+ * {@code fromPlain(toPlain(fromPlain(q)))} equals {@code fromPlain(q)}.
+ * Equality is semantic value equality, not object identity; numeric plain values compare by value.
+ * Accepted coercions, such as numeric text to a number or duplicate list elements to a set, do not
+ * require preserving the noncanonical input representation. The framework relies on forward equality
+ * for reload merges and leaf edits, including preservation of untouched in-memory siblings.
  *
  * @param <T> the Java value type
  * @since 6.3.0
