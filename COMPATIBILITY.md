@@ -34,6 +34,11 @@ Warnings name the file, key and failed position/type; secret-shaped values and n
 are redacted. Unsupported declared types fail preflight before the file is read or created; register
 `@ConfigConverterFor` or declare a supported plain-data shape. The built-in Bukkit serialization
 fallback requires a registered alias; registered custom converters keep ownership of their types.
+A registered converter must satisfy both round-trip equations: `fromPlain(toPlain(x))` equals `x`,
+and `toPlain(fromPlain(p))` equals `p` for plain values it accepts. Equality is semantic value
+comparison, not object identity; numeric plain values compare by value. Reload merges and panel
+leaf edits rely on this contract. A converter that adds a value during reading without undoing
+that change during writing violates the contract; it cannot preserve unchanged siblings or reloads.
 
 Whole map keys, including `g.m`, `o.O` and `wave.`, are supported. Legacy 6.2 files in which Bukkit
 split a dotted key into nested mappings are read as they are, never automatically merged or renamed.
@@ -160,7 +165,9 @@ changed key refuses the whole payload, naming all refused paths. Unchanged displ
 edits, including undeclared operator keys and ambiguous paths. Previously these map-entry edits were
 silently ignored. Leaf edits preserve unrelated pending in-memory siblings and their dirty state,
 and preserve independently edited disk siblings without acknowledging them. Full declared-field
-conversion and validation still run, but only targeted leaves are published and persisted.
+conversion and validation still run: the live field is serialized, only targeted plain leaves are
+patched, and the registry binds that candidate once. The round-trip contract preserves untouched
+bound siblings without any type-specific map/object merging. Only targeted leaves are persisted.
 The existing `config_update_response` shape is unchanged.
 
 ### Multi-file panel persistence

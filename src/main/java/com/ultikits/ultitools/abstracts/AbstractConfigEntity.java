@@ -1124,13 +1124,7 @@ public abstract class AbstractConfigEntity {
                                 + typeName(failure.declaredType()));
                     }
                 } else {
-                    Object bound = result.value();
-                    if (leaves.containsKey(field)) {
-                        Object current = ReflectionUtil.getFieldValue(this, field);
-                        for (List<String> leaf : leaves.get(field)) { current = patchedMap(current, leaf, mapLeaf(bound, leaf)); }
-                        bound = current;
-                    }
-                    converted.put(field, bound);
+                    converted.put(field, result.value());
                 }
             } catch (ConversionException failure) {
                 refused.add("'" + String.join(".", failure.path()) + "': invalid panel value for "
