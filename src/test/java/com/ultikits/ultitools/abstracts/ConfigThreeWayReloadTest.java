@@ -101,6 +101,47 @@ class ConfigThreeWayReloadTest {
         entity.save(); assertThat(new String(Files.readAllBytes(directory.resolve("reload.yml")), StandardCharsets.UTF_8))
                 .isEqualTo("mine: [broken\n");
     }
+    @Test void memoryOnlyMapOrderSurvivesReloadAndRemainsDirtyWithoutWriting() throws Exception {
+        String keep = entity.entries.remove("keep"); entity.entries.put("keep", keep);
+        byte[] before = Files.readAllBytes(directory.resolve("reload.yml"));
+        java.nio.file.attribute.FileTime time = Files.getLastModifiedTime(directory.resolve("reload.yml"));
+        assertThat(entity.isModifiedSinceSnapshot()).isTrue();
+        entity.reload();
+        assertThat(entity.entries.keySet()).containsExactly("remove", "keep");
+        assertThat(entity.isModifiedSinceSnapshot()).isTrue(); assertThat(warnings).isEmpty();
+        assertThat(Files.readAllBytes(directory.resolve("reload.yml"))).isEqualTo(before);
+        assertThat(Files.getLastModifiedTime(directory.resolve("reload.yml"))).isEqualTo(time);
+    }
+    @Test void nestedMemoryOnlyMapOrderSurvivesUnchangedDiskAndNumericEquality() throws Exception {
+        Path file = directory.resolve("nested.yml");
+        Files.write(file, "entries:\n  o.O:\n    first: 1.50\n    second: 2.0\n".getBytes(StandardCharsets.UTF_8));
+        NestedValues nested = new NestedValues("nested.yml"); nested.init(plugin);
+        Map<String, Double> inner = nested.entries.get("o.O");
+        Double first = inner.remove("first"); inner.put("first", first);
+        byte[] before = Files.readAllBytes(file); java.nio.file.attribute.FileTime time = Files.getLastModifiedTime(file);
+        nested.reload();
+        assertThat(nested.entries.keySet()).containsExactly("o.O");
+        assertThat(nested.entries.get("o.O").keySet()).containsExactly("second", "first");
+        assertThat(nested.entries.get("o.O")).containsEntry("first", 1.5).containsEntry("second", 2.0);
+        assertThat(nested.isModifiedSinceSnapshot()).isTrue(); assertThat(warnings).isEmpty();
+        assertThat(Files.readAllBytes(file)).isEqualTo(before); assertThat(Files.getLastModifiedTime(file)).isEqualTo(time);
+    }
+    @Test void diskOnlyMapOrderIsAdoptedAndUnchangedReloadRemainsClean() throws Exception {
+        write("mine: base\ntheirs: base\nrate: 1.5\nsecret: original\nentries:\n  remove: base\n  keep: base\n");
+        byte[] before = Files.readAllBytes(directory.resolve("reload.yml"));
+        entity.reload();
+        assertThat(entity.entries.keySet()).containsExactly("remove", "keep");
+        assertThat(entity.isModifiedSinceSnapshot()).isFalse(); assertThat(warnings).isEmpty();
+        entity.reload();
+        assertThat(entity.entries.keySet()).containsExactly("remove", "keep");
+        assertThat(entity.isModifiedSinceSnapshot()).isFalse();
+        assertThat(Files.readAllBytes(directory.resolve("reload.yml"))).isEqualTo(before);
+    }
+    @ConfigEntity("nested.yml")
+    public static class NestedValues extends AbstractConfigEntity {
+        @ConfigEntry Map<String, Map<String, Double>> entries = new LinkedHashMap<>();
+        public NestedValues(String path) { super(path); }
+    }
     @Test void roundTripCustomConverterKeepsUnchangedReloadEqualAndClean() throws Exception {
         com.ultikits.ultitools.config.convert.ConverterRegistry registry =
                 new com.ultikits.ultitools.config.convert.ConverterRegistry(
