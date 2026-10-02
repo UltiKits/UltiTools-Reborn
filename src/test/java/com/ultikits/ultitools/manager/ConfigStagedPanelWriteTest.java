@@ -217,6 +217,46 @@ class ConfigStagedPanelWriteTest {
         assertNoTemporaries();
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"update", "prepare", "validate", "named", "batch"})
+    void protectedTargetRefusesEveryPanelBoundaryAndRecoversAfterLoad(String route) throws Exception {
+        Values protectedValue = entities.get(1);
+        Path target = directory.resolve(protectedValue.getConfigFilePath());
+        byte[] malformed = "value: [unterminated\n".getBytes(StandardCharsets.UTF_8);
+        Files.write(target, malformed);
+        protectedValue.reload();
+        Map<String, Object> protectedState = state(protectedValue);
+        JsonObject edit = new JsonObject(); edit.addProperty("value", 10);
+        try (MockedStatic<AtomicConfigWriter> writer = Mockito.mockStatic(
+                AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
+            assertThatThrownBy(() -> applyPanelRoute(route, protectedValue, edit))
+                    .isInstanceOf(ConfigurationException.class).hasMessageContaining("file2.yml");
+            writer.verify(() -> AtomicConfigWriter.stage(any(Path.class), anyString()), Mockito.never());
+            assertThat(Files.readAllBytes(target)).isEqualTo(malformed);
+            assertThat(state(protectedValue)).isEqualTo(protectedState);
+            for (int i : new int[] {0, 2}) {
+                assertThat(Files.readAllBytes(directory.resolve(entities.get(i).getConfigFilePath())))
+                        .isEqualTo(originals.get(i));
+                assertThat(state(entities.get(i))).isEqualTo(checkpoints.get(i));
+                assertThat(entities.get(i).value).isEqualTo(i + 1);
+            }
+        }
+        Files.write(target, originals.get(1)); protectedValue.reload();
+        manager.loadFromJson(payload());
+        for (Values entity : entities) { assertThat(entity.value).isEqualTo(10); }
+        assertNoTemporaries();
+    }
+
+    private void applyPanelRoute(String route, Values entity, JsonObject edit) throws IOException {
+        if (route.equals("update")) { entity.updateProperties(edit); }
+        else if (route.equals("prepare")) {
+            AbstractConfigEntity.PanelWrite write = entity.preparePanelWrite(edit);
+            if (write != null) { write.discard(); }
+        } else if (route.equals("validate")) { entity.validateProposedProperties(edit); }
+        else if (route.equals("named")) { manager.loadFromJson("file2.yml", edit.toString()); }
+        else { manager.loadFromJson(payload()); }
+    }
+
     @Test
     void validationRefusalNeverStagesAnyFile() throws Exception {
         entities.get(1).refuse = true;

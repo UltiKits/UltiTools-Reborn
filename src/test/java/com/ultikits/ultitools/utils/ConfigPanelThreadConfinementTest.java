@@ -71,6 +71,26 @@ class ConfigPanelThreadConfinementTest {
             verify(client).sendMessage(any(JsonObject.class));
         }
     }
+    @ParameterizedTest
+    @ValueSource(strings = {"update", "upload-write"})
+    void refusedProtectedEditReportsFailureWithoutSuccess(String operation) throws Exception {
+        doThrow(new com.ultikits.ultitools.exceptions.ConfigurationException(
+                "Protected configuration file values.yml")).when(manager).loadFromJson("{}");
+        try (MockedStatic<Bukkit> bukkit = Mockito.mockStatic(Bukkit.class)) {
+            when(Bukkit.isPrimaryThread()).thenReturn(true);
+            invoke(operation);
+            org.mockito.ArgumentCaptor<JsonObject> response = org.mockito.ArgumentCaptor.forClass(JsonObject.class);
+            verify(client).sendMessage(response.capture());
+            JsonObject reply = response.getValue();
+            if (operation.equals("update")) {
+                assertThat(reply.get("success").getAsBoolean()).isFalse();
+            } else {
+                assertThat(reply.get("type").getAsString()).isEqualTo("error");
+            }
+            assertThat(reply.toString()).contains("values.yml").doesNotContain("\"status\":\"success\"");
+        }
+    }
+
     private void invoke(String operation) throws Exception {
         if (operation.equals("update")) {
             JsonObject data = new JsonObject(); data.addProperty("requestId", "thread-request");
