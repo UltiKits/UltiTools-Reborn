@@ -256,6 +256,8 @@ not written at shutdown by either the old or the new code.
 
 | ultitools.config.three-way-reload | Reload retains memory-only edits, adopts disk-only edits and resolves conflicts to disk with located redacted warnings; maps merge whole keys, lists remain atomic | persistence | ConfigManager#reloadConfigs | n/a | n/a | admin | none | AbstractConfigEntity#mergeReload |
 
+| ultitools.config.main-thread-reload | Config init/reload and module reload refuse off-server-thread calls before monitors with one located warning; no-server harnesses remain allowed | gate | async caller of init/reload/reloadConfigs/reloadSelf | n/a | n/a | developer | none | ConfigManager#permitsConfigThread |
+
 ## Language
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |

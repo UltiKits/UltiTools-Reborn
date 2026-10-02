@@ -35,6 +35,20 @@ public class ConfigManager {
         private final Set<AbstractConfigEntity> entities = new LinkedHashSet<>();
     }
 
+    /** Shared refusal guard, checked before any configuration monitor or registry access.
+     * @param plugin module, possibly absent for an uninitialized entity
+     * @param operation operation name or entity path
+     * @return whether the current caller may perform the operation
+     */
+    @org.jetbrains.annotations.ApiStatus.Internal
+    public static boolean permitsConfigThread(UltiToolsPlugin plugin, String operation) {
+        if (org.bukkit.Bukkit.getServer() == null || org.bukkit.Bukkit.isPrimaryThread()) { return true; }
+        org.bukkit.Bukkit.getLogger().log(Level.WARNING, "Configuration " + operation + " for module "
+                + (plugin == null ? "<uninitialized>" : plugin.getPluginName()) + " called off the server thread ("
+                + Thread.currentThread().getName() + "); operation refused");
+        return false;
+    }
+
     private void beginBatch(UltiToolsPlugin plugin) {
         InitializationBatch batch = initializationBatch.get();
         if (batch == null) { batch = new InitializationBatch(); initializationBatch.set(batch); }
@@ -390,6 +404,7 @@ public class ConfigManager {
      * @param plugin UltiTools module
      */
     public void reloadConfigs(UltiToolsPlugin plugin) {
+        if (!permitsConfigThread(plugin, "reloadConfigs")) { return; }
         Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(plugin);
         if (configMap == null) {
             return;

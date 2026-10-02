@@ -569,6 +569,7 @@ public abstract class AbstractConfigEntity {
     }
 
     private void initialize(UltiToolsPlugin ultiToolsPlugin, boolean deferred) throws IOException {
+        if (!com.ultikits.ultitools.manager.ConfigManager.permitsConfigThread(ultiToolsPlugin, "init " + configFilePath)) { return; }
         synchronized (this) {
             deferInitialization = deferred;
             lastInitIncomplete = true;
@@ -1425,6 +1426,7 @@ public abstract class AbstractConfigEntity {
      * @throws IOException if an I/O error occurs
      */
     public void reload() throws IOException {
+        if (!com.ultikits.ultitools.manager.ConfigManager.permitsConfigThread(ultiToolsPlugin, "reload " + configFilePath)) { return; }
         if (ultiToolsPlugin == null) { throw new IllegalStateException("Config not initialized. Call init() first."); }
         synchronized (this) {
             registry().checkEntityFields(getClass(), ultiToolsPlugin.getPluginName(), configFilePath);

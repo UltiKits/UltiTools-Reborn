@@ -95,6 +95,14 @@ failure preserves earlier successful files and protects the failed entity until 
 Standalone registration still writes immediately. Framework-internal initialization bridges are not
 a module transaction API.
 
+### Configuration init and reload thread contract
+
+As of 6.3.0, configuration init, reload, manager reloadConfigs and module reloadSelf refuse
+calls off the server thread while a server runs. One warning names the module, entity path when
+applicable and caller thread; no field/file/lifecycle action occurs. Checks precede entity monitors.
+The no-server test harness case remains allowed. Public signatures, including final reloadSelf,
+are unchanged; async third-party callers must schedule their reload on the server thread.
+
 ### Reload merge rule
 
 As of 6.3.0, reload compares the last effective disk baseline, current serialized fields, and

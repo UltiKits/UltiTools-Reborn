@@ -176,6 +176,8 @@ proves the framework's own shutdown sequence, which ends with the shutdown save,
 
 | ultitools.config.three-way-reload | Refactor checkout, JDK21 and Maven | Run `mvn test -Dtest=ConfigThreeWayReloadTest` | Seven tests pass: independent memory/disk edits merge, conflicts warn with secrets redacted, numeric equality avoids false conflict, removed map keys differ from null, malformed files retain live values | unit | |
 
+| ultitools.config.main-thread-reload | Refactor checkout, JDK21 and Maven | Run `mvn test -Dtest=ConfigMainThreadGuardTest` | Six tests pass: four off-thread entries refuse with one warning and no changes; a held entity monitor cannot block the guard; no-server and server-thread reloads apply disk values | unit | |
+
 ## Language
 
 | ID | Preconditions | Steps | Expected | Layer | Covers |

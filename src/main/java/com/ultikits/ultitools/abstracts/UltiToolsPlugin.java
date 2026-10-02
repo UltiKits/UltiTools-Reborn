@@ -1694,6 +1694,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      */
     @Override
     public final void reloadSelf() {
+        if (!ConfigManager.permitsConfigThread(this, "reloadSelf")) { return; }
         getConfigManager().reloadConfigs(this);
         // #531: apply the reloaded values to config-bound @Scheduled/@CmdCD. Only reached when
         // reloadConfigs did not throw, so a refused reload leaves the running timings alone.
