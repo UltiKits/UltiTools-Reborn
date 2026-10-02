@@ -118,6 +118,53 @@ class ConfigNumericWideningTest {
         assertThat(second.value).as("invalid load restores and rebinds the declared default").isEqualTo(7L);
     }
 
+    @SuppressWarnings("removal")
+    @com.ultikits.ultitools.annotations.ConfigEntity("legacy-vector.yml")
+    public static class LegacyVector extends AbstractConfigEntity {
+        @ConfigEntry(path = "vec", parser = VectorParser.class)
+        org.bukkit.util.Vector vec = new org.bukkit.util.Vector(1, 2, 3);
+        public LegacyVector(String path) { super(path); }
+    }
+
+    @SuppressWarnings("removal")
+    public static class VectorParser extends com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser<org.bukkit.util.Vector> {
+        @Override public org.bukkit.util.Vector parse(Object raw) { return (org.bukkit.util.Vector) raw; }
+        @Override public org.bukkit.configuration.MemorySection serializeToMemorySection(org.bukkit.util.Vector value) {
+            org.bukkit.configuration.MemoryConfiguration section = new org.bukkit.configuration.MemoryConfiguration();
+            section.set("==", "Vector"); section.set("x", value.getX());
+            section.set("y", value.getY()); section.set("z", value.getZ()); return section;
+        }
+    }
+
+    @Test
+    void explicitAliasParserWorksOnRawDefaultMergedReloadAndPanelProposal() throws Exception {
+        Path path = tempDir.resolve("legacy-vector.yml");
+        Files.write(path, vectorYaml(4).getBytes(StandardCharsets.UTF_8));
+        com.ultikits.ultitools.manager.ConfigManager manager = new com.ultikits.ultitools.manager.ConfigManager();
+        LegacyVector entity = new LegacyVector("legacy-vector.yml"); manager.register(plugin, entity);
+        assertThat(entity.vec).isEqualTo(bukkitVector(vectorYaml(4)));
+        entity.vec = new org.bukkit.util.Vector(7, 2, 3);
+        entity.reload();
+        assertThat(entity.vec).as("merged reload retains an unsaved live value").isEqualTo(bukkitVector(vectorYaml(7)));
+        Files.write(path, vectorYaml(9).getBytes(StandardCharsets.UTF_8)); entity.reload();
+        assertThat(entity.vec).isEqualTo(bukkitVector(vectorYaml(9)));
+        manager.loadFromJson("legacy-vector.yml", "{\"vec\":{\"==\":\"Vector\",\"x\":11,\"y\":2,\"z\":3}}");
+        assertThat(entity.vec).isEqualTo(bukkitVector(vectorYaml(11)));
+        manager.loadFromJson("{\"NumbersModule\":{\"legacy-vector.yml\":{\"vec\":{\"==\":\"Vector\",\"x\":13,\"y\":2,\"z\":3}}}}");
+        assertThat(entity.vec).isEqualTo(bukkitVector(vectorYaml(13)));
+        Files.write(path, "vec: invalid\n".getBytes(StandardCharsets.UTF_8)); entity.reload();
+        assertThat(entity.vec).as("invalid whole value restores the serialized declared default")
+                .isEqualTo(bukkitVector(vectorYaml(1)));
+    }
+
+    private static String vectorYaml(int x) {
+        return "vec: {==: Vector, x: " + x + ", y: 2, z: 3}\n";
+    }
+    private static org.bukkit.util.Vector bukkitVector(String text) throws Exception {
+        org.bukkit.configuration.file.YamlConfiguration yaml = new org.bukkit.configuration.file.YamlConfiguration();
+        yaml.loadFromString(text); return (org.bukkit.util.Vector) yaml.get("vec");
+    }
+
     @BeforeEach
     void setUp() {
         plugin = Mockito.mock(UltiToolsPlugin.class);

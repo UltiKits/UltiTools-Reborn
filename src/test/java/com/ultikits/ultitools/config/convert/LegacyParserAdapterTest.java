@@ -187,6 +187,65 @@ class LegacyParserAdapterTest {
         assertThat(rebound).hasSize(1); assertThat(rebound.get(0).values).isEqualTo(keys);
     }
 
+    @Test
+    void explicitVectorAndObjectParsersReceiveBukkitAliasObjects() throws Exception {
+        Map<String, Object> vector = vectorPlain(1);
+        Object expected = bukkitInput(vector);
+        assertThat(expected).isEqualTo(new org.bukkit.util.Vector(1, 2, 3));
+        assertThat(registry.fromPlainResult(vector, org.bukkit.util.Vector.class, "legacy.yml",
+                Collections.singletonList("vec"), entry("vector")).value()).isEqualTo(expected);
+        assertThat(registry.fromPlainResult(vector, Object.class, "legacy.yml",
+                Collections.singletonList("vec"), entry("identity")).value()).isEqualTo(expected);
+        assertThat(registry.fromPlainResult(vector, Object.class, "legacy.yml",
+                Collections.singletonList("vec")).value()).isEqualTo(vector);
+    }
+
+    @Test
+    void explicitParserReceivesBukkitAliasesInsideListsAndMaps() throws Exception {
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("list", Collections.singletonList(vectorPlain(4)));
+        input.put("map", Collections.singletonMap("child", vectorPlain(7)));
+        ConfigurationSection expected = (ConfigurationSection) bukkitInput(input);
+        ConfigurationSection actual = (ConfigurationSection) registry.fromPlainResult(input, Object.class,
+                "legacy.yml", Collections.singletonList("value"), entry("identity")).value();
+        assertThat(actual.getList("list")).isEqualTo(expected.getList("list"));
+        assertThat(actual.get("map.child")).isEqualTo(expected.get("map.child"));
+        assertThat(actual.getList("list")).containsExactly(new org.bukkit.util.Vector(4, 2, 3));
+        assertThat(actual.get("map.child")).isEqualTo(new org.bukkit.util.Vector(7, 2, 3));
+        assertThat(input.get("list")).isEqualTo(Collections.singletonList(vectorPlain(4)));
+    }
+
+    private static Map<String, Object> vectorPlain(int x) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("==", "Vector"); value.put("x", x); value.put("y", 2); value.put("z", 3);
+        return value;
+    }
+
+    private static Object bukkitInput(Object plain) throws Exception {
+        org.bukkit.configuration.file.YamlConfiguration yaml = new org.bukkit.configuration.file.YamlConfiguration();
+        yaml.loadFromString(new org.yaml.snakeyaml.Yaml().dump(Collections.singletonMap("value", plain)));
+        return yaml.get("value");
+    }
+
+    // Explicit parsers deliberately observe Bukkit's historical input, not registry conversion.
+    @SuppressWarnings("removal")
+    public static class IdentityParser extends com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser<Object> {
+        @Override public Object parse(Object value) { return value; }
+        @Override public MemorySection serializeToMemorySection(Object value) {
+            return new com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser().serializeToMemorySection(value);
+        }
+    }
+    @SuppressWarnings("removal")
+    public static class VectorParser extends com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser<org.bukkit.util.Vector> {
+        @Override public org.bukkit.util.Vector parse(Object value) { return (org.bukkit.util.Vector) value; }
+        @Override public MemorySection serializeToMemorySection(org.bukkit.util.Vector value) {
+            MemoryConfiguration section = new MemoryConfiguration();
+            section.set("==", "Vector"); section.set("x", value.getX());
+            section.set("y", value.getY()); section.set("z", value.getZ());
+            return section;
+        }
+    }
+
     private static ConfigEntry entry(String name) throws NoSuchFieldException {
         return Shapes.class.getDeclaredField(name).getAnnotation(ConfigEntry.class);
     }
@@ -249,6 +308,10 @@ class LegacyParserAdapterTest {
         @Override public Object parse(Object value) { return ++calls == 1 ? "first" : "shared"; }
     }
     static class Shapes {
+        @SuppressWarnings("removal")
+        @ConfigEntry(parser = VectorParser.class) org.bukkit.util.Vector vector;
+        @SuppressWarnings("removal")
+        @ConfigEntry(parser = IdentityParser.class) Object identity;
         // Deliberately selects a mutating legacy parser to verify input isolation.
         @SuppressWarnings("removal")
         @ConfigEntry(parser = Mutating.class) Object mutating;
