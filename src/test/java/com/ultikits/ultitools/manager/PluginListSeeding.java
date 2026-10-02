@@ -35,4 +35,21 @@ public final class PluginListSeeding {
             throw new IllegalStateException("PluginManager.pluginList is not reachable", e);
         }
     }
+
+    /**
+     * Empties {@code manager}'s internal loaded-module list, which {@code getPluginList().clear()}
+     * can no longer do since #507.
+     *
+     * @param manager the plugin manager to clear
+     */
+    @SuppressWarnings({"unchecked", "PMD.AvoidAccessibilityAlteration"}) // test seam: the list is private by design
+    public static void clear(PluginManager manager) {
+        try {
+            Field field = PluginManager.class.getDeclaredField("pluginList");
+            field.setAccessible(true);
+            ((List<UltiToolsPlugin>) field.get(manager)).clear();
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("PluginManager.pluginList is not reachable", e);
+        }
+    }
 }

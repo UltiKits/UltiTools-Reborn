@@ -87,7 +87,7 @@ class ConfigSupersededCopyOrderingTest {
         Probe.fail = false; Probe.constructedOwner = null;
         Files.write(Probe.file, "value: disk\n".getBytes(StandardCharsets.UTF_8));
         entity = new Values("copy.yml"); configs.register(old, entity); entity.value = "pending";
-        plugins.getPluginList().add(old); Bukkit.getLogger().addHandler(capture);
+        PluginListSeeding.add(plugins, old); Bukkit.getLogger().addHandler(capture);
     }
     @AfterEach void cleanup() { Bukkit.getLogger().removeHandler(capture); MockBukkitHelper.safeUnmock(); }
     @Test void ownMetadataSavePrecedesIncomingConstructorAndOldStaysActiveOnRefusal() throws Exception {
