@@ -148,10 +148,10 @@ class ConfigNumericWideningTest {
         assertThat(entity.vec).as("merged reload retains an unsaved live value").isEqualTo(bukkitVector(vectorYaml(7)));
         Files.write(path, vectorYaml(9).getBytes(StandardCharsets.UTF_8)); entity.reload();
         assertThat(entity.vec).isEqualTo(bukkitVector(vectorYaml(9)));
-        manager.loadFromJson("legacy-vector.yml", "{\"vec\":{\"==\":\"Vector\",\"x\":11.0,\"y\":2.0,\"z\":3.0}}");
-        assertThat(entity.vec).isEqualTo(bukkitVector(vectorYaml(11)));
-        manager.loadFromJson("{\"NumbersModule\":{\"legacy-vector.yml\":{\"vec\":{\"==\":\"Vector\",\"x\":13.0,\"y\":2.0,\"z\":3.0}}}}");
-        assertThat(entity.vec).isEqualTo(bukkitVector(vectorYaml(13)));
+        manager.loadFromJson("legacy-vector.yml", "{\"vec\":{\"==\":\"Vector\",\"x\":11.5,\"y\":2.5,\"z\":3.5}}");
+        assertThat(entity.vec).isEqualTo(bukkitVector("vec: {==: Vector, x: 11.5, y: 2.5, z: 3.5}"));
+        manager.loadFromJson("{\"NumbersModule\":{\"legacy-vector.yml\":{\"vec\":{\"==\":\"Vector\",\"x\":13.5,\"y\":2.5,\"z\":3.5}}}}");
+        assertThat(entity.vec).isEqualTo(bukkitVector("vec: {==: Vector, x: 13.5, y: 2.5, z: 3.5}"));
         Files.write(path, "vec: invalid\n".getBytes(StandardCharsets.UTF_8)); entity.reload();
         assertThat(entity.vec).as("invalid whole value restores the serialized declared default")
                 .isEqualTo(bukkitVector(vectorYaml(1)));

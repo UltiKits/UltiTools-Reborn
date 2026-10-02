@@ -134,15 +134,19 @@ class LegacyParserAdapterTest {
                 Long.valueOf(7), Float.valueOf(7), Double.valueOf(7)};
         for (int from = 0; from < types.length; from++) {
             for (int to = from; to < types.length; to++) {
-                Object value = registry.fromPlainResult(numbers[from], types[to], "legacy.yml",
-                        Collections.singletonList("value"), entry("plain")).value();
+                Object widened = LegacyParserAdapter.widenToFieldType(types[to], numbers[from]);
+                assertThat(widened).isInstanceOf(types[to]);
+                Object value = registry.fromPlainResult(types[from].getSimpleName(), types[to], "legacy.yml",
+                        Collections.singletonList("value"), entry("wrappers")).value();
                 assertThat(value).as("%s to %s", types[from], types[to]).isInstanceOf(types[to]);
                 assertThat(((Number) value).doubleValue()).isEqualTo(7.0);
             }
             for (int to = 0; to < from; to++) {
                 final Number input = numbers[from]; final Class<?> target = types[to];
-                assertThatThrownBy(() -> registry.fromPlainResult(input, target, "legacy.yml",
-                        Collections.singletonList("value"), entry("plain")))
+                assertThat(LegacyParserAdapter.widenToFieldType(target, input)).isSameAs(input);
+                final String wrapper = types[from].getSimpleName();
+                assertThatThrownBy(() -> registry.fromPlainResult(wrapper, target, "legacy.yml",
+                        Collections.singletonList("value"), entry("wrappers")))
                         .isInstanceOf(ConversionException.class).hasMessageContaining("legacy.yml");
             }
         }
@@ -213,6 +217,39 @@ class LegacyParserAdapterTest {
         assertThat(actual.getList("list")).isEqualTo(Collections.singletonList(new org.bukkit.util.Vector(4, 2, 3)));
         assertThat(actual.get("map.child")).isEqualTo(new org.bukkit.util.Vector(7, 2, 3));
         assertThat(input.get("list")).isEqualTo(Collections.singletonList(vectorPlain(4)));
+    }
+
+    @Test
+    void legacyInputNumberTypesAndIntegralAliasMatchBukkitOracle() throws Exception {
+        Number[] values = {Byte.valueOf((byte) 7), Short.valueOf((short) 7), Integer.valueOf(7),
+                Long.valueOf(7), Float.valueOf(7), Double.valueOf(7)};
+        for (Number value : values) {
+            Object expected = bukkitInput(value);
+            Object actual = registry.fromPlainResult(value, Object.class, "legacy.yml",
+                    Collections.singletonList("value"), entry("identity")).value();
+            assertThat(actual).isEqualTo(expected).isInstanceOf(expected.getClass());
+        }
+        Map<String, Object> integral = vectorPlain(1);
+        integral.put("x", 1); integral.put("y", 2); integral.put("z", 3);
+        assertThat(bukkitInput(integral)).as("Bukkit itself refuses integral Vector coordinates").isNull();
+        assertThat(registry.fromPlainResult(integral, Object.class, "legacy.yml",
+                Collections.singletonList("vec"), entry("identity")).value()).isNull();
+    }
+
+    // The parser's return type, unlike its YAML input type, controls the JLS widening boundary.
+    @SuppressWarnings("removal")
+    public static class WrapperParser extends Plain {
+        @Override public Object parse(Object value) {
+            switch ((String) value) {
+                case "Byte": return Byte.valueOf((byte) 7);
+                case "Short": return Short.valueOf((short) 7);
+                case "Integer": return Integer.valueOf(7);
+                case "Long": return Long.valueOf(7);
+                case "Float": return Float.valueOf(7);
+                case "Double": return Double.valueOf(7);
+                default: throw new IllegalArgumentException("Unknown test wrapper");
+            }
+        }
     }
 
     private static Map<String, Object> vectorPlain(int x) {
@@ -308,6 +345,8 @@ class LegacyParserAdapterTest {
         @Override public Object parse(Object value) { return ++calls == 1 ? "first" : "shared"; }
     }
     static class Shapes {
+        @SuppressWarnings("removal")
+        @ConfigEntry(parser = WrapperParser.class) Object wrappers;
         @SuppressWarnings("removal")
         @ConfigEntry(parser = VectorParser.class) org.bukkit.util.Vector vector;
         @SuppressWarnings("removal")
