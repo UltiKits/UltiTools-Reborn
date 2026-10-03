@@ -149,22 +149,18 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
      */
     public void sendMessage(JsonObject message) {
         if (!isOpen()) {
-            // Gate-2 finding (review round 13, #467): this used to log via
-            // UltiTools.getInstance().getLogger() -- the shared plugin logger SystemLogHandler
-            // captures. This method is the sole chokepoint every drain path routes through, and
-            // two of those callers hold a lock across this exact call:
-            // ServerMonitorManager#sendBatchUpdate/#drainAndSendLogsOnly hold logDrainLock;
-            // UltiPanelLogTransmitter#sendLog/#sendBatch hold batchModeLock before reaching this
-            // method. If the socket closes between a caller's own isConnected() check and this
-            // isOpen() check, logging through the shared logger here re-enters the transmitter
-            // pipeline and acquires the OTHER lock in the opposite order from the size-triggered
-            // drain path -- an AB-BA deadlock. Write straight to System.err instead, the same
-            // pattern UltiPanelLogTransmitter#sendLog's own catch block already uses for the
-            // identical reason ("do not use the logger, to avoid the loop"). Regression test:
-            // UltiPanelWebSocketClientTest$ClosedSocketSendDiagnosticTests.
-            // Plain English, not the language catalogue: resolving a translation goes through
-            // UltiTools.getInstance(), which this path must not touch (the regression test above).
-            System.err.println("[UltiPanel] WebSocket is not connected; cannot send the message");
+            // A panel-connection line (#584). Two callers hold a lock across this call:
+            // ServerMonitorManager's drains hold logDrainLock, and UltiPanelLogTransmitter's
+            // sendBatch/flushLogs hold batchModeLock. A line that reached the log stream from here
+            // would take batchModeLock while logDrainLock is held -- the reverse of the order the
+            // size-threshold drain takes them in, an AB-BA deadlock. #467 wrote it to System.err on
+            // the premise that standard error bypasses java.util.logging; on Paper it does not:
+            // SysoutCatcher re-logs a plugin's System.err line through that plugin's logger, so it
+            // reached SystemLogHandler unmarked. PanelConnectionLog marks the record, and
+            // SystemLogHandler never hands a marked record to the transmitter, so no stream lock is
+            // taken; the console still shows the line. Regression test: SysErrRelogDeadlockTest.
+            // Plain English, not the language catalogue, as before.
+            PanelConnectionLog.log(Level.WARNING, "[UltiPanel] WebSocket is not connected; cannot send the message");
             return;
         }
 

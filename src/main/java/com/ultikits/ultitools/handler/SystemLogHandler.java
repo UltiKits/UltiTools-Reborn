@@ -260,10 +260,30 @@ public class SystemLogHandler extends Handler {
             }
 
         } catch (Exception e) {
-            // Avoid a logging loop by writing to System.err directly
-            System.err.println(FrameworkText.format("[UltiPanel] SystemLogHandler处理日志记录失败: %s", e.getMessage()));
+            reportPublishFailure(e);
         } finally {
             PUBLISHING.set(false);
+        }
+    }
+
+    /**
+     * Reports a failure to handle a record (#584). It used to be printed to {@code System.err} to
+     * avoid a logging loop, but on Paper standard error is not a way around the logger:
+     * {@code SysoutCatcher} re-logs the line through the plugin logger, unmarked, back into this
+     * handler. It is logged as a panel-connection line instead, which the stream never carries;
+     * it is called while {@link #PUBLISHING} is still set, so the copy that reaches this handler is
+     * dropped by the re-entry guard as well, and the console shows the line. A failure of the
+     * logger itself is ignored: a log line must never break the logging call that produced it.
+     */
+    // PMD.AvoidCatchingGenericException: any handler of the plugin logger may throw, and JUL does
+    // not catch what a handler throws.
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private static void reportPublishFailure(Exception failure) {
+        try {
+            PanelConnectionLog.log(Level.WARNING,
+                    FrameworkText.format("[UltiPanel] SystemLogHandler处理日志记录失败: %s", failure.getMessage()));
+        } catch (RuntimeException ignored) {
+            // Nowhere left to report it.
         }
     }
 

@@ -1,16 +1,23 @@
 package com.ultikits.ultitools.websocket;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.mockStatic;
-import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.lenient;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.net.URISyntaxException;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
@@ -19,11 +26,11 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.mockito.MockedStatic;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.utils.TestHelper;
 
 /**
  * Unit tests for {@link UltiPanelWebSocketClient}.
@@ -329,38 +336,62 @@ class UltiPanelWebSocketClientTest {
     }
 
     /**
-     * Gate-2 finding (review round 13, pull request #467). {@code sendMessage()}'s
-     * {@code !isOpen()} branch used to log its warning via {@code UltiTools.getInstance()
-     * .getLogger()} -- the shared plugin logger {@link com.ultikits.ultitools.handler
-     * .SystemLogHandler} captures. Two callers of this exact method hold a lock while calling it:
-     * {@code ServerMonitorManager#sendBatchUpdate}/{@code #drainAndSendLogsOnly} hold
-     * {@code logDrainLock}; {@code UltiPanelLogTransmitter#sendLog}/{@code #sendBatch} hold
-     * {@code batchModeLock} before reaching this method indirectly (via the log record this
-     * branch used to emit, routed back through {@code SystemLogHandler}). If the socket closes
-     * between a caller's own {@code isConnected()} check and this method's {@code isOpen()}
-     * check, the warning fired while the caller still held its lock, re-entering the transmitter
-     * pipeline and acquiring the OTHER lock in the opposite order from the size-triggered drain
-     * path -- an AB-BA deadlock. Fixed by writing this diagnostic straight to {@code System.err},
-     * the same pattern {@code UltiPanelLogTransmitter#sendLog}'s own catch block already uses for
-     * the identical reason ("do not use the logger, to avoid the loop").
+     * Gate-2 finding (review round 13, pull request #467), corrected by #584. {@code sendMessage()}'s
+     * {@code !isOpen()} branch is reached with a lock held: {@code ServerMonitorManager}'s drains
+     * hold {@code logDrainLock}, and {@code UltiPanelLogTransmitter#sendBatch}/{@code #flushLogs}
+     * hold {@code batchModeLock}. A diagnostic that reached the log stream from there took the
+     * other lock in the reverse order -- an AB-BA deadlock. #467 wrote it to {@code System.err} on
+     * the premise that standard error bypasses the logger; on Paper, {@code SysoutCatcher} re-logs
+     * it through the plugin logger, so the premise was false. The diagnostic is now a
+     * {@link PanelConnectionLog} record, which the stream never carries. The deadlock itself is
+     * reproduced in {@code SysErrRelogDeadlockTest}.
      */
     @Nested
-    @DisplayName("closed-socket sendMessage never re-enters the shared plugin logger")
+    @DisplayName("closed-socket sendMessage logs a panel-connection line, never System.err")
     class ClosedSocketSendDiagnosticTests {
 
-        private MockedStatic<UltiTools> ultiToolsMock;
+        private final List<LogRecord> records = new CopyOnWriteArrayList<>();
+        private final Logger pluginLogger = Logger.getLogger("UltiTools-ClosedSocketSendDiagnosticTests");
+        private final Handler capture = new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                records.add(record);
+            }
+
+            @Override
+            public void flush() {
+                // Nothing buffered.
+            }
+
+            @Override
+            public void close() {
+                // Nothing to release.
+            }
+        };
+        private PrintStream originalErr;
 
         @AfterEach
-        void tearDown() {
-            if (ultiToolsMock != null) {
-                ultiToolsMock.close();
+        void tearDown() throws Exception {
+            if (originalErr != null) {
+                System.setErr(originalErr);
             }
+            pluginLogger.removeHandler(capture);
+            Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
+            instanceField.setAccessible(true);
+            instanceField.set(null, null);
         }
 
         @Test
-        @DisplayName("sendMessage on a never-opened client does not call UltiTools.getInstance()")
-        void sendMessageOnClosedSocketNeverCallsUltiToolsGetInstance() throws URISyntaxException {
-            ultiToolsMock = mockStatic(UltiTools.class);
+        @DisplayName("sendMessage on a never-opened client logs a marked panel-connection line and nothing to System.err")
+        void sendMessageOnClosedSocketLogsAMarkedPanelConnectionLine() throws URISyntaxException {
+            pluginLogger.setUseParentHandlers(false);
+            pluginLogger.setLevel(Level.ALL);
+            pluginLogger.addHandler(capture);
+            TestHelper.mockUltiToolsInstance(ultiTools ->
+                lenient().when(ultiTools.getLogger()).thenReturn(pluginLogger));
+            ByteArrayOutputStream err = new ByteArrayOutputStream();
+            originalErr = System.err;
+            System.setErr(new PrintStream(err, true));
 
             UltiPanelWebSocketClient client = new UltiPanelWebSocketClient(
                 TEST_URL, TEST_SERVER_ID, TEST_TOKEN);
@@ -370,7 +401,12 @@ class UltiPanelWebSocketClientTest {
             message.addProperty("type", "batch_update");
             client.sendMessage(message);
 
-            ultiToolsMock.verify(UltiTools::getInstance, never());
+            assertThat(records).hasSize(1);
+            assertThat(records.get(0).getMessage()).contains("WebSocket is not connected");
+            assertThat(records.get(0).getLevel()).isEqualTo(Level.WARNING);
+            assertThat(PanelConnectionLog.isPanelConnectionRecord(records.get(0)))
+                .as("marked, so SystemLogHandler never hands it to the transmitter").isTrue();
+            assertThat(err.size()).as("nothing is written to System.err").isZero();
         }
     }
 
