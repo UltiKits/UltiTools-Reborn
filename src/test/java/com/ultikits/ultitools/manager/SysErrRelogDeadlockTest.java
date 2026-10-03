@@ -42,7 +42,9 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
  * {@code JavaPlugin.getProvidingPlugin(...)}, and logs the line with
  * {@code plugin.getLogger().log(level, ...)} (read with {@code javap -c} on Paper 1.20.6, 1.21.1 and
  * 1.21.4). That is a record on the plugin logger, so it reaches {@link SystemLogHandler}. The
- * {@link SysoutCatcherStandIn} below does exactly that.
+ * {@link SysoutCatcherStandIn} below does the part that matters here -- it logs the line on the
+ * plugin logger -- but at WARNING and without Paper's {@code [STDERR]} prefix and nag line, none of
+ * which changes which handlers and locks the record reaches.
  * <p>
  * <b>The deadlock.</b> The main thread logs; {@code sendLog} holds {@code batchModeLock};
  * {@code addToBatch} crosses the size threshold and runs the external size-threshold callback
