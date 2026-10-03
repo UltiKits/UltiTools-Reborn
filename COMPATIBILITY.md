@@ -459,6 +459,84 @@ This section governs the third kind.
   `PluginInstallUtils.UndeterminedEntriesException` (`@ApiStatus.Internal`), so no outcome
   discards what another established.
 
+- The JSON storage backend no longer hands out the entities it caches (#522). Before 6.3.0,
+  `SimpleJsonDataOperator`'s read paths (`getById`, `getAll`, `page`, `getLike`, and every
+  `query()` terminal built on them) returned the very instances it kept in memory, and `insert`
+  cached the instance it was given, so on `datasource.type: json` changing a loaded (or just
+  inserted) entity **without** calling `update(...)` changed the store and was written to disk at
+  the next flush. On SQLite and MySQL the same code never persisted anything, because every read
+  materialises the row afresh. As of 6.3.0 every JSON read returns a detached copy produced by the
+  same Gson form the store writes to disk, and `insert` caches a copy: a change reaches the store
+  only through `update(...)` (or `update(column, value, id)`), on every backend alike. `update(T)`
+  also fires `onUpdate()` on the entity passed in, before its fields are copied into the store,
+  exactly as the relational backends do — so an `AuditableDataEntity`'s `updatedAt`/`updatedBy`
+  now show on the caller's instance on the JSON backend too, and `exist(entity)` looks the entry
+  up by the entity's id, as the relational backends do, instead of comparing it with the cached
+  copy through `equals()`. A module that relied on the old
+  aliasing — changing a loaded entity and counting on the next flush to save it — must now call
+  `update(...)`; no module in this monorepo was found doing so (see the pull request's consumer
+  impact list). The cost is one Gson round trip per entity returned, the same materialisation the
+  relational backends already pay (see `ultitools.storage.detached-reads` in `FEATURES.md`).
+- `Query#delete()` returns the number of rows actually removed, as its javadoc always said (#521).
+  It used to return the number of rows the query *matched*, and it skipped a matched row whose id
+  was `null` while still counting it, so a caller reading the `int` as "rows removed" could be told
+  a delete succeeded when it removed nothing. As of 6.3.0 the count comes from the backend's own
+  affected-row count (a row another writer removed between the read and the delete is not
+  counted), and a matched row with a `null` id is refused with a `DataAccessException` naming the
+  entity type **before** any row is deleted, since no delete can address it. This corrects
+  behaviour that contradicted the documentation, so it takes no migration period. A third-party
+  `DataOperator` implementation, which cannot report what its `delById` removed, is counted by
+  checking that the row existed immediately before that call and is gone after it (see `ultitools.storage.query-delete-count` in `FEATURES.md`).
+- Rows left without an id by UltiTools-API 6.2.0 are repaired, and addressing a row by a null id
+  is refused (#546, maintainer decision of 2026-09-27). 6.2.0 did not assign an id in `insert`, and
+  SQLite's generated DDL accepted a `NULL` primary key, so every row a module inserted without an
+  id on that release was stored with none; such a row could be read, but every `update`/`delete` of
+  it bound `WHERE id = NULL`, matched nothing and returned normally, so a change the module
+  reported as saved was lost at the next restart. As of 6.3.0, when a SQLite-backed table is
+  initialised every row whose `id` is `NULL` is given the id its entity reports through `getId()`,
+  or a new UUID when the entity reports none, in either case only if the entity read back with that
+  id reports it; a row that no written id would make addressable is left as it is and counted, by
+  reason, in one WARNING line per table: a derived id that more than one row without an id reports
+  (none of those rows is written — maintainer decision of 2026-09-29, the rule UltiEssentials' own
+  repair applies), a derived id another row already holds, or a derived id that is `null` or a row
+  that cannot be read as the entity — only the `id`
+  column is written, all rows in one transaction, so the repair writes user data at startup, which
+  is what the maintainer decided — and one INFO line names the table, the count and how many rows
+  took the entity's own id; a second start finds nothing and logs nothing. The reported id comes
+  first because an entity may derive `getId()` from another column (UltiEssentials'
+  `UuidKeyedDataEntity` and UltiKits' `KitClaimData` derive it from a `uuid` column) and every
+  lookup binds that value, so a random id would leave such a row exactly as unreachable as `NULL`
+  did. For the same reason every write path (`insert`, `insertAll`, `update(T)`, `updateAll`,
+  `updateIf`) now stores `getId()` in the `id` column rather than the inherited field: an entity
+  that overrides `getId()` never sets that field, so on 6.3.0 before this change it still inserted
+  a `NULL` id on SQLite, and on MySQL its insert failed outright. MySQL never
+  accepted a `NULL` id and runs no backfill. Independently, `update(T)`, `update(column, value, id)`,
+  `delById` and `updateAll` addressed by a `null` id now throw `DataAccessException` on every
+  backend instead of silently matching nothing (the JSON backend used to throw a raw
+  `NullPointerException`); `updateAll` checks every entity before it writes any. A call with a
+  non-null id that matches no row is unchanged. See `ultitools.storage.null-id-backfill` and
+  `ultitools.storage.null-id-refused` in `FEATURES.md`.
+- `DataOperator` gains one method, `boolean updateIf(T entity, WhereCondition... expected)` (#543):
+  a conditional write that applies only while the stored row still matches every expected
+  condition, and reports whether it applied, on the JSON, SQLite and MySQL backends. No existing
+  method's signature changes, and it is a `default` method, so a module compiled against 6.2.x
+  still links. Its default body throws `UnsupportedOperationException` naming the implementing
+  class rather than quietly performing an unconditional write — a third-party `DataOperator`
+  implementation keeps working for every other method and must implement `updateIf` before a caller
+  can rely on it. The framework's own operators implement it (see
+  `ultitools.storage.conditional-update` in `FEATURES.md`).
+- An update by a non-null id that matches no row writes nothing and says so (#558, maintainer
+  decision of 2026-09-29). `update(T)`, `update(column, value, id)` and `updateAll` now log one
+  WARNING naming the table and the id each time, on JSON, SQLite and MySQL, and return normally —
+  as SQLite and MySQL already did, silently; the JSON backend used to throw a raw
+  `NullPointerException`, which a module catching `RuntimeException` or `Exception` around the call
+  saw as a failed write. The caller learns the outcome through a new method,
+  `int updateCounted(T entity)` on `DataOperator`: `1` for a written row, `0` when no row has the id.
+  It is a `default` method, so no existing signature changes and a module compiled against 6.2.x
+  still links; a third-party implementation that does not override it is counted by whether the row
+  exists before its `update` (the one remaining miscount: a delete by another writer during that
+  call). See `ultitools.storage.missing-row-update` in `FEATURES.md`.
+
 ### Behavioral changes that do need one
 
 - A documented default value flipping.
