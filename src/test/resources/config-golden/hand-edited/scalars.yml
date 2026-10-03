@@ -1,0 +1,26 @@
+values:
+  single: 'single quoted'
+  double: "double quoted"
+  plain: plain text
+  yes-text: 'yes'
+  yes-bool: yes
+  no-bool: No
+  on-bool: on
+  decimal: 1.50
+  hex: 0x10
+  octal: 0o17
+  underscore: 1_000
+  infinity: .inf
+  negative-infinity: -.inf
+  not-a-number: .nan
+  tilde: ~
+  null-word: null
+  empty:
+  date: 2020-01-01
+  timestamp: 2001-12-14t21:59:43.10-05:00
+  big: 123456789012345678901234567890
+  long: 10000000000
+  exponent: 1e3
+  negative-zero: -0.0
+  colour: '&a&lGreen'
+  percent: '%player%'

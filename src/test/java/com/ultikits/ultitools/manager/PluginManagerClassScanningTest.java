@@ -47,6 +47,10 @@ import com.ultikits.ultitools.interfaces.IPlugin;
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
 class PluginManagerClassScanningTest {
 
+    /** The duplicate-copy warning's catalogue key (UltiTools-Dev-Doc#96); its English text is in en.json. */
+    private static final String DUPLICATE_MAIN_CLASS =
+            "以下 JAR 文件都声明了同一个模块主类 %s：%s。该模块的类只从 %s 加载，其余副本不会加载；请只保留其中一个。";
+
     @TempDir
     File tempDir;
 
@@ -213,12 +217,16 @@ class PluginManagerClassScanningTest {
         // two REAL jar files on disk -- only that makes the loaded class's own CodeSource
         // genuinely resolve to one specific jar, which a mocked/ambient test classloader cannot
         // exercise (see writeClassEntry's own javadoc on why bare fabricated jars are not enough).
+        // legitimateJar physically carries ConcretePlugin but declares another main: -- so a JAR
+        // borrowing ConcretePlugin is borrowing a class, not duplicating a module. (A second JAR
+        // declaring the same main: as the one that supplies the class is a duplicate copy, reported
+        // once for every copy together; see duplicateMainClass_logsOneWarningNamingEveryJar.)
         File legitimateJar = createModuleJar(
-                "legitimate-plugin.jar", ConcretePlugin.class.getName(), ConcretePlugin.class);
-        // brokenJar's plugin.yml claims the exact same main: as legitimateJar's, but does not
-        // physically carry that class's bytecode at all -- the shape Codex's finding named: "a
-        // module's main: names a class absent from that module but present in another installed
-        // module".
+                "legitimate-plugin.jar", OtherConcretePlugin.class.getName(), ConcretePlugin.class,
+                OtherConcretePlugin.class);
+        // brokenJar's plugin.yml claims ConcretePlugin as its main:, but does not physically carry
+        // that class's bytecode at all -- the shape Codex's finding named: "a module's main: names a
+        // class absent from that module but present in another installed module".
         File brokenJar = createModuleJar("broken-plugin.jar", ConcretePlugin.class.getName());
 
         URLClassLoader sharedModuleLoader = new ChildFirstClassLoader(
@@ -238,7 +246,7 @@ class PluginManagerClassScanningTest {
                     .as("the legitimate, matching pairing must still succeed")
                     .isNotNull();
             assertThat(legitimateResult.getName())
-                    .isEqualTo(ConcretePlugin.class.getName());
+                    .isEqualTo(OtherConcretePlugin.class.getName());
 
             assertThat(invokeLoadPluginMainClass(brokenJar))
                     .as("a main: borrowed from a different module's jar must be refused")
@@ -253,6 +261,84 @@ class PluginManagerClassScanningTest {
             injectUltiToolsClassLoader(null);
             sharedModuleLoader.close();
         }
+    }
+
+    /** A module JAR in {@code folder} whose {@code plugin.yml} is {@code pluginYml}, carrying {@code classes}. */
+    private File moduleJarIn(File folder, String name, String pluginYml, Class<?>... classes) throws IOException {
+        File jar = new File(folder, name);
+        try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(jar.toPath()))) {
+            output.putNextEntry(new JarEntry("plugin.yml"));
+            output.write(pluginYml.getBytes(StandardCharsets.UTF_8));
+            output.closeEntry();
+            for (Class<?> type : classes) {
+                writeClassEntry(output, type);
+            }
+        }
+        return jar;
+    }
+
+    private List<LogRecord> logsNaming(Level level, String... fragments) {
+        List<LogRecord> matching = new ArrayList<>();
+        for (LogRecord record : bukkitLogs) {
+            String message = record.getMessage();
+            boolean all = level.equals(record.getLevel()) && message != null;
+            for (String fragment : fragments) {
+                all = all && message.contains(fragment);
+            }
+            if (all) {
+                matching.add(record);
+            }
+        }
+        return matching;
+    }
+
+    @Test
+    @DisplayName("UltiTools-Dev-Doc#96: two JARs declaring one main class give one warning naming both and the one the classes load from")
+    void duplicateMainClass_logsOneWarningNamingEveryJar() throws Exception {
+        File modules = new File(tempDir, "modules");
+        assertThat(modules.mkdirs()).isTrue();
+        String main = ConcretePlugin.class.getName();
+        File a = moduleJarIn(modules, "A.jar", "name: Fixture\nmain: " + main + "\n", ConcretePlugin.class);
+        File b = moduleJarIn(modules, "B.jar", "name: RenamedFixture\nmain: " + main + "\n", ConcretePlugin.class);
+        // The module class loader's URLs are in file-name order (#476), so A.jar supplies the class.
+        try (URLClassLoader loader = new ChildFirstClassLoader(new URL[]{a.toURI().toURL(), b.toURI().toURL()},
+                Thread.currentThread().getContextClassLoader(), main)) {
+            injectUltiToolsClassLoader(loader);
+            assertThat(pluginManager.discoverModuleClasses(modules)).isTrue();
+        } finally {
+            injectUltiToolsClassLoader(null);
+        }
+
+        assertThat(logsNaming(Level.WARNING, "A.jar", "B.jar"))
+                .as("exactly one warning names both copies")
+                .hasSize(1)
+                .first()
+                .extracting(LogRecord::getMessage)
+                .isEqualTo("[UltiTools-API] " + String.format(DUPLICATE_MAIN_CLASS, main, "A.jar, B.jar", "A.jar"));
+        assertThat(logsNaming(Level.SEVERE, "B.jar")).as("no second report of the same copy").isEmpty();
+        assertThat(pluginManager.getModuleJarIndex().jarsDeclaring(main)).containsExactly(a, b);
+        assertThat(pluginManager.getModuleJarIndex().supplierOf(main)).isEqualTo(a);
+    }
+
+    @Test
+    @DisplayName("UltiTools-Dev-Doc#96: without a duplicate main class there is no duplicate warning")
+    void noDuplicateMainClass_logsNoDuplicateWarning() throws Exception {
+        File modules = new File(tempDir, "modules");
+        assertThat(modules.mkdirs()).isTrue();
+        File a = moduleJarIn(modules, "A.jar", "name: Fixture\nmain: " + ConcretePlugin.class.getName() + "\n",
+                ConcretePlugin.class);
+        File b = moduleJarIn(modules, "B.jar", "name: Other\nmain: " + OtherConcretePlugin.class.getName() + "\n",
+                OtherConcretePlugin.class);
+        try (URLClassLoader loader = new ChildFirstClassLoader(new URL[]{a.toURI().toURL(), b.toURI().toURL()},
+                Thread.currentThread().getContextClassLoader(), ConcretePlugin.class.getName())) {
+            injectUltiToolsClassLoader(loader);
+            assertThat(pluginManager.discoverModuleClasses(modules)).isTrue();
+        } finally {
+            injectUltiToolsClassLoader(null);
+        }
+
+        assertThat(logsNaming(Level.WARNING, "A.jar")).isEmpty();
+        assertThat(logsNaming(Level.WARNING, "B.jar")).isEmpty();
     }
 
     /**
@@ -692,6 +778,13 @@ class PluginManagerClassScanningTest {
     }
 
     static class ConcretePlugin extends UltiToolsPlugin {
+        @Override
+        public boolean registerSelf() {
+            return true;
+        }
+    }
+
+    static class OtherConcretePlugin extends UltiToolsPlugin {
         @Override
         public boolean registerSelf() {
             return true;

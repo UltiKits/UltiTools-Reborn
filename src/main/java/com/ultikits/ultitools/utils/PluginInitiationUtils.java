@@ -1180,6 +1180,7 @@ public class PluginInitiationUtils {
      * <p>Package-private rather than private — only so it can be tested.
      */
     static void handleConfigUpdate(JsonObject data) {
+        if (data == null || queueConfigCallback(() -> handleConfigUpdate(data.deepCopy()))) { return; }
         if (data == null) {
             return;
         }
@@ -1488,6 +1489,13 @@ public class PluginInitiationUtils {
         }
     }
     
+    /** Queues a whole panel config callback; never waits while a caller may hold an entity monitor. */
+    private static boolean queueConfigCallback(Runnable callback) {
+        if (Bukkit.getServer() == null || Bukkit.isPrimaryThread()) { return false; }
+        Bukkit.getScheduler().runTask(UltiTools.getInstance(), callback);
+        return true;
+    }
+
     // ========== Config management message handlers ==========
 
     /**
@@ -1505,6 +1513,7 @@ public class PluginInitiationUtils {
      * payload, so no code path here reads it any more.
      */
     private static void handleConfigUpload(JsonObject data) {
+        if (data == null || queueConfigCallback(() -> handleConfigUpload(data.deepCopy()))) { return; }
         if (data == null) {
             return;
         }
@@ -1733,6 +1742,7 @@ public class PluginInitiationUtils {
      * Uploads the local config to the server
      */
     private static void uploadConfig(UltiPanelWebSocketClient client) {
+        if (queueConfigCallback(() -> uploadConfig(client))) { return; }
         JsonObject configMessage = new JsonObject();
         configMessage.addProperty("type", "upload_config");
         

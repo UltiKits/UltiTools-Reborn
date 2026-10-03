@@ -3,18 +3,22 @@ package com.ultikits.ultitools.interfaces.impl.data;
 import java.lang.reflect.Field;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.Callable;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import javax.sql.DataSource;
@@ -27,6 +31,8 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonDeserializer;
 import com.google.gson.JsonNull;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParseException;
 import com.google.gson.JsonPrimitive;
 import com.google.gson.JsonSerializer;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
@@ -53,9 +59,14 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
  * @since 6.2.0
  */
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // ORM maps private @Column fields to SQL -- see 08-GATE05-TRIAGE.md
-public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<String>> implements DataOperator<T> {
+public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<String>>
+        implements DataOperator<T>, RowCountingDelete {
 
     private static final Logger LOGGER = Logger.getLogger(AbstractRelationalDataOperator.class.getName());
+    /** The primary-key column every generated table declares; its value is always {@code getId()}. */
+    private static final String ID_COLUMN = "id";
+    /** Alias of the row-identifier column {@link #backfillNullIds} selects next to the entity's own. */
+    private static final String BACKFILL_ROWID = "ultitools_backfill_rowid";
     /**
      * Default Gson has no bundled adapter for {@code java.time.LocalDateTime}: its reflective
      * fallback tries to reach {@code LocalDateTime}'s private fields, which JDK 9+'s module
@@ -204,6 +215,210 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
     }
 
     /**
+     * Gives every row of this operator's table whose {@code id} is {@code NULL} an id that makes it
+     * addressable, and logs one line naming the table and the count when there were any (#546,
+     * maintainer decision of 2026-09-27).
+     * <p>
+     * UltiTools-API 6.2.0 did not assign an id in {@link #insert}, and SQLite's generated DDL
+     * ({@code PRIMARY KEY (`id`)} with no {@code NOT NULL}) accepted the {@code NULL}, so every row
+     * a module inserted without an id on that release was stored with none. Such a row can be read
+     * by any other column, but {@code WHERE id = ?} bound to {@code null} matches nothing, so every
+     * update or delete of it silently did nothing.
+     * <p>
+     * Each row gets the id its entity reports through {@code getId()} (an entity may derive it from
+     * another column), or a new UUID when it reports none -- but only if an entity read back with
+     * that id in the {@code id} column reports it, since every lookup binds {@code getId()}. A row
+     * no written id would make addressable is left as it is, and one WARNING per table counts them
+     * by reason: a derived id that more than one row without an id reports (none of them is
+     * written, maintainer decision of 2026-09-29, the rule UltiEssentials' own repair applies), a
+     * derived id another row already holds, and a derived id that is {@code null} or a row that
+     * cannot be read as the entity. Only the {@code id} column is written, guarded by {@code id IS NULL} and
+     * keyed by the engine's row identifier, all rows in one transaction. A second start writes
+     * nothing and logs no INFO line; rows that were left are counted again. A failure rolls the
+     * whole repair back and is logged at {@code SEVERE}; the table is still usable, and an update
+     * or delete through a row without an id is refused rather than silently matching nothing.
+     * <p>
+     * Called by the subclass whose engine can hold a {@code NULL} id ({@code SQLiteDataOperator});
+     * MySQL rejects a {@code NULL} primary key, so its operator never calls it.
+     *
+     * @param rowIdColumn the engine's row-identifier pseudo-column (SQLite's {@code _rowid_}); a
+     *                    constant supplied by the subclass, never caller input
+     * @return the number of rows given an id
+     * @since 6.3.0
+     */
+    protected final int backfillNullIds(String rowIdColumn) {
+        String select = "SELECT " + rowIdColumn + " AS " + BACKFILL_ROWID + ", `" + tableName + "`.* FROM `"
+                + tableName + "` WHERE `id` IS NULL";
+        String update = "UPDATE `" + tableName + "` SET `id` = ? WHERE " + rowIdColumn + " = ? AND `id` IS NULL";
+        String held = "SELECT COUNT(*) FROM `" + tableName + "` WHERE `id` = ?";
+        int reported = 0;
+        int generated = 0;
+        int shared = 0;
+        int alreadyHeld = 0;
+        int unusable = 0;
+        try (Connection conn = dataSource.getConnection()) {
+            boolean autoCommit = conn.getAutoCommit();
+            conn.setAutoCommit(false);
+            try {
+                List<Object> rowIds = new ArrayList<>();
+                List<String> candidates = new ArrayList<>();
+                List<Boolean> fromEntity = new ArrayList<>();
+                readRowsWithoutId(conn, select, rowIds, candidates, fromEntity);
+                Map<String, Integer> occurrences = new HashMap<>();
+                for (String id : candidates) {
+                    if (id != null) {
+                        occurrences.merge(id, 1, Integer::sum);
+                    }
+                }
+                for (int i = 0; i < rowIds.size(); i++) {
+                    String id = candidates.get(i);
+                    if (id == null) {
+                        unusable++;
+                    } else if (occurrences.get(id) > 1) {
+                        // Maintainer decision 2026-09-29 ("touch none of those rows, only warn"): a reported id more
+                        // than one row shares is written to none of them, or a write made through
+                        // one row would reach the other -- UltiEssentials' own repair does the same.
+                        shared++;
+                    } else if (isHeld(conn, held, id) || !assignId(conn, update, id, rowIds.get(i))) {
+                        alreadyHeld++;
+                    } else if (fromEntity.get(i)) {
+                        reported++;
+                    } else {
+                        generated++;
+                    }
+                }
+                conn.commit();
+            } catch (SQLException e) {
+                conn.rollback();
+                throw e;
+            } finally {
+                conn.setAutoCommit(autoCommit);
+            }
+        } catch (SQLException e) {
+            LOGGER.log(Level.SEVERE, "Could not assign ids to the rows of table '" + tableName
+                    + "' that have none; nothing was changed. Rows without an id cannot be updated or deleted "
+                    + "until this succeeds on a later start.", e);
+            return 0;
+        }
+        int repaired = reported + generated;
+        if (repaired > 0) {
+            LOGGER.info("Assigned an id to " + repaired + " row(s) of table '" + tableName
+                    + "' that had none (rows written without an id by UltiTools-API 6.2.0): " + reported
+                    + " took the id the entity itself reports, " + generated + " were given a new UUID; "
+                    + "only the id column was written.");
+        }
+        int left = shared + alreadyHeld + unusable;
+        if (left > 0) {
+            LOGGER.warning(left + " row(s) of table '" + tableName + "' still have no id and were left as "
+                    + "they are: " + shared + " share a reported id with another row without an id, "
+                    + alreadyHeld + " report an id another row already holds, " + unusable
+                    + " report no id or could not be read as " + type.getName() + ". No value written to "
+                    + "the id column would make them addressable by getId() alone, so they cannot be "
+                    + "updated or deleted by id.");
+        }
+        return repaired;
+    }
+
+    /**
+     * Reads every row of {@code select} (row identifier first, then the table's columns) and
+     * decides which id, if any, would make it addressable.
+     * <p>
+     * Every {@code WHERE id = ?} binds {@code getId()}, and an entity may derive {@code getId()}
+     * from another column -- UltiEssentials' and UltiKits' do -- so an id is useful only if an
+     * entity read back with it in the {@code id} column reports it. The id the entity already
+     * reports is tried first; otherwise a new UUID. A candidate that would not be reported back
+     * (the entity derives a {@code null} id), and a row that cannot be read as the entity at all,
+     * get {@code null}: writing anything to such a row would change nothing any lookup uses.
+     */
+    private void readRowsWithoutId(Connection conn, String select, List<Object> rowIds, List<String> candidates,
+                                   List<Boolean> fromEntity) throws SQLException {
+        RowMapper<T> mapper = getRowMapper();
+        queryRunner.query(conn, select, rs -> {
+            while (rs.next()) {
+                rowIds.add(rs.getObject(1));
+                T entity = readEntity(mapper, rs);
+                Object reported = entity == null ? null : entity.getId();
+                boolean hasReported = reported != null && !reported.toString().isEmpty();
+                String candidate = hasReported ? reported.toString() : UUID.randomUUID().toString();
+                candidates.add(entity != null && reportsAs(entity, candidate) ? candidate : null);
+                fromEntity.add(hasReported);
+            }
+            return null;
+        });
+    }
+
+    private T readEntity(RowMapper<T> mapper, ResultSet rs) throws SQLException {
+        try {
+            return mapper.map(rs);
+        } catch (JsonParseException e) {
+            LOGGER.warning("A row of table '" + tableName + "' without an id could not be read as "
+                    + type.getName() + " (" + e.getMessage() + "); it is left without an id.");
+            return null;
+        }
+    }
+
+    /**
+     * Whether {@code entity}, read back with {@code candidate} in its {@code id} column, reports
+     * {@code candidate} from {@code getId()} -- that is, whether writing it makes the row
+     * addressable.
+     */
+    private boolean reportsAs(T entity, String candidate) {
+        JsonObject tree = GSON.toJsonTree(entity).getAsJsonObject();
+        // BaseDataEntity's id field is named like its column.
+        tree.addProperty(ID_COLUMN, candidate);
+        Object reported = GSON.fromJson(tree, type).getId();
+        return reported != null && candidate.equals(reported.toString());
+    }
+
+    /** Whether a row of this table already holds {@code id} in its id column. */
+    private boolean isHeld(Connection conn, String held, String id) throws SQLException {
+        Number count = queryRunner.query(conn, held, new ScalarHandler<Number>(), id);
+        return count != null && count.longValue() > 0;
+    }
+
+    /**
+     * Writes {@code id} into the row with this row identifier, on the backfill's own connection
+     * (so inside its transaction), if the row still has none. A value another row already holds
+     * violates the primary key; that is reported as {@code false} and the row is left without an
+     * id, since any other value would not be what its entity reports. The statement fails alone:
+     * SQLite rolls back only the failing statement, and the transaction continues.
+     */
+    private boolean assignId(Connection conn, String update, String id, Object rowId) throws SQLException {
+        try {
+            return queryRunner.update(conn, update, id, rowId) > 0;
+        } catch (SQLException e) {
+            if (isConstraintViolation(e)) {
+                return false;
+            }
+            throw e;
+        }
+    }
+
+    private static boolean isConstraintViolation(SQLException e) {
+        String state = e.getSQLState();
+        // SQLState class 23 is "integrity constraint violation"; the SQLite driver reports a
+        // PRIMARY KEY/UNIQUE failure with no SQLState, but always names the constraint.
+        return (state != null && state.startsWith("23"))
+                || (e.getMessage() != null && e.getMessage().contains("constraint"));
+    }
+
+    /**
+     * Refuses an update or delete addressed by a {@code null} id (#546): {@code WHERE id = ?} bound
+     * to {@code null} matches no row, so the call used to return normally having changed nothing.
+     *
+     * @param id        the id the caller addressed the row by
+     * @param operation what was attempted, for the message
+     * @throws DataAccessException if {@code id} is {@code null}
+     */
+    private void requireId(Object id, String operation) {
+        if (id == null) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                    "Refusing to " + operation + " a row of table '" + tableName + "' (" + type.getName()
+                            + ") by a null id: no row can be addressed by it.");
+        }
+    }
+
+    /**
      * The read handler used by {@link #getAll(WhereCondition...)}, {@link #getLike}, and
      * {@link #page}: fires {@code onLoad()} once per row it materializes. {@link #getById} and
      * {@link #delById} deliberately do *not* go through this handler -- see
@@ -228,6 +443,27 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      * delete-hook-path split).
      */
     private ResultSetHandler<List<T>> getRawListHandler() {
+        RowMapper<T> mapper = getRowMapper();
+        return rs -> {
+            List<T> list = new ArrayList<>();
+            while (rs.next()) {
+                list.add(mapper.map(rs));
+            }
+            return list;
+        };
+    }
+
+    /** Materialises the current row of a result set as an entity; see {@link #getRowMapper()}. */
+    private interface RowMapper<E> {
+        E map(ResultSet rs) throws SQLException;
+    }
+
+    /**
+     * Materialises one row as an entity without firing {@code onLoad()}: shared by
+     * {@link #getRawListHandler()} and {@link #backfillNullIds}, so a row is read the same way
+     * whichever needs it. A column labelled {@link #BACKFILL_ROWID} is skipped.
+     */
+    private RowMapper<T> getRowMapper() {
         // Build mappings from SQL column names to Java field names and boolean detection.
         // Gson matches JSON keys to Java field names, so we must use field names (camelCase)
         // as map keys, not SQL column names (snake_case).
@@ -248,25 +484,23 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         }
 
         return rs -> {
-            List<T> list = new ArrayList<>();
             ResultSetMetaData meta = rs.getMetaData();
             int cols = meta.getColumnCount();
-            while (rs.next()) {
-                Map<String, Object> map = new LinkedHashMap<>();
-                for (int i = 1; i <= cols; i++) {
-                    String colName = meta.getColumnLabel(i).toLowerCase(Locale.ROOT);
-                    Object value = rs.getObject(i);
-                    if (booleanColumns.containsKey(colName)) {
-                        value = normaliseBoolean(value, colName);
-                    }
-                    // Use Java field name as key so Gson can match it during deserialization
-                    String fieldName = columnToFieldName.getOrDefault(colName, colName);
-                    map.put(fieldName, value);
+            Map<String, Object> map = new LinkedHashMap<>();
+            for (int i = 1; i <= cols; i++) {
+                String colName = meta.getColumnLabel(i).toLowerCase(Locale.ROOT);
+                if (BACKFILL_ROWID.equals(colName)) {
+                    continue;
                 }
-                String json = GSON.toJson(map);
-                list.add(GSON.fromJson(json, type));
+                Object value = rs.getObject(i);
+                if (booleanColumns.containsKey(colName)) {
+                    value = normaliseBoolean(value, colName);
+                }
+                // Use Java field name as key so Gson can match it during deserialization
+                String fieldName = columnToFieldName.getOrDefault(colName, colName);
+                map.put(fieldName, value);
             }
-            return list;
+            return GSON.fromJson(GSON.toJson(map), type);
         };
     }
 
@@ -472,7 +706,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
     public void insert(T obj) {
         // Auto-generate UUID for id if not set
         if (obj.getId() == null) {
-            obj.setId(java.util.UUID.randomUUID().toString());
+            obj.setId(UUID.randomUUID().toString());
         }
         // Fires before the fields below are read for the SQL parameters, so whatever onCreate()
         // writes (e.g. AuditableDataEntity's createdAt/createdBy) is what actually gets persisted.
@@ -493,15 +727,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                 sql.append("`").append(column.value()).append("`");
                 values.append("?");
                 try {
-                    Object value = field.get(obj);
-                    if (value != null && !BasicTypeUtil.isBasicType(field.getType())) {
-                        String jsonString = GSON.toJson(value);
-                        if (jsonString.startsWith("\"") && jsonString.endsWith("\"")) {
-                            jsonString = jsonString.substring(1, jsonString.length() - 1);
-                        }
-                        value = jsonString;
-                    }
-                    params.add(value);
+                    params.add(persistedValue(field, column.value(), obj));
                 } catch (IllegalAccessException e) {
                     throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
                             "Failed to access entity fields", e);
@@ -556,13 +782,27 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      */
     @Override
     public void delById(Object id) {
+        deleteByIdCounted(id);
+    }
+
+    /**
+     * {@link #delById(Object)}, returning the affected-row count the database reported for the
+     * {@code DELETE} (#521), so {@code Query#delete()} can return rows removed instead of rows
+     * matched.
+     *
+     * @param id the row id
+     * @return the number of rows the {@code DELETE} removed
+     */
+    @Override
+    public int deleteByIdCounted(Object id) {
+        requireId(id, "delete");
         T entity = fetchRawById(id);
         if (entity != null) {
             entity.onDelete();
         }
         String sql = "DELETE FROM " + tableName + " WHERE id = ?";
         try {
-            queryRunner.update(sql, id);
+            return queryRunner.update(sql, id);
         } catch (SQLException e) {
             throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
                     "Failed to delete entity by id: " + id, e);
@@ -571,12 +811,13 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
 
     @Override
     public void update(String column, Object value, Object id) {
+        requireId(id, "update");
         if (value != null && !BasicTypeUtil.isBasicType(value.getClass())) {
             value = GSON.toJson(value);
         }
         String sql = "UPDATE " + tableName + " SET " + column + " = ? WHERE id = ?";
         try {
-            queryRunner.update(sql, value, id);
+            warnIfNoRow(queryRunner.update(sql, value, id), id);
         } catch (SQLException e) {
             throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
                     "Failed to update column: " + column, e);
@@ -585,13 +826,114 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
 
     @Override
     public void update(T obj) throws IllegalAccessException {
+        updateRow(obj);
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Returns the database's affected-row count for the {@code UPDATE}.
+     */
+    @Override
+    public int updateCounted(T entity) {
+        try {
+            return updateRow(entity);
+        } catch (IllegalAccessException e) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID, "Failed to access entity fields", e);
+        }
+    }
+
+    /**
+     * {@link #update(BaseDataEntity)}, returning the number of rows the {@code UPDATE} changed.
+     * A non-null id that matches no row writes nothing and logs one WARNING (#558).
+     */
+    private int updateRow(T obj) throws IllegalAccessException {
+        requireId(obj.getId(), "update");
         // Fires before the fields below are read for the SQL parameters, so whatever onUpdate()
         // writes (e.g. AuditableDataEntity's updatedAt/updatedBy) is what actually gets
         // persisted. onUpdate() does not touch createdAt/createdBy, so an entity carrying its
         // original creation values in memory persists them unchanged here.
         obj.onUpdate();
-        StringBuilder sql = new StringBuilder("UPDATE ").append(tableName).append(" SET ");
+        StringBuilder sql = new StringBuilder();
         List<Object> params = new ArrayList<>();
+        appendUpdateSet(sql, params, obj);
+        sql.append(" WHERE id = ?");
+        params.add(obj.getId());
+        try {
+            return warnIfNoRow(queryRunner.update(sql.toString(), params.toArray()), obj.getId());
+        } catch (SQLException e) {
+            throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
+                    "Failed to update entity", e);
+        }
+    }
+
+    /**
+     * Logs one WARNING when an update by a non-null id changed no row, and returns the count
+     * unchanged (#558, maintainer decision 2026-09-29). The call still returns normally: a row
+     * another writer deleted is not a storage failure, and module code catches exceptions from
+     * {@code update} as storage failures.
+     */
+    private int warnIfNoRow(int changed, Object id) {
+        if (changed == 0) {
+            LOGGER.warning("Update of table '" + tableName + "' matched no row with id '" + id
+                    + "'; nothing was written.");
+        }
+        return changed;
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * One {@code UPDATE ... SET <every mapped column> WHERE id = ? AND <expected>} statement; the
+     * database's affected-row count decides the result, so the check and the write cannot be
+     * separated by another writer, on the same server or another one sharing the database.
+     * Condition columns pass the same allow-list as every other WHERE clause here, and values are
+     * bound as parameters.
+     */
+    @Override
+    public boolean updateIf(T entity, WhereCondition... expected) {
+        requireId(entity.getId(), "update");
+        entity.onUpdate();
+        StringBuilder sql = new StringBuilder();
+        List<Object> params = new ArrayList<>();
+        try {
+            appendUpdateSet(sql, params, entity);
+        } catch (IllegalAccessException e) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID, "Failed to access entity fields", e);
+        }
+        List<WhereCondition> conditions = new ArrayList<>();
+        conditions.add(WhereCondition.builder().column("id").value(entity.getId()).build());
+        if (expected != null) {
+            for (WhereCondition condition : expected) {
+                if (condition == null) {
+                    throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                            "updateIf was given a null condition for table '" + tableName + "'.");
+                }
+                if (!condition.isEmpty() && condition.getValue() == null) {
+                    // `column = NULL` is never true in SQL, so the write could never apply and a
+                    // caller's re-read-and-retry loop would spin forever.
+                    throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                            "updateIf cannot compare column '" + condition.getColumn() + "' with a null value.");
+                }
+                conditions.add(condition);
+            }
+        }
+        appendConditions(sql, params, conditions.toArray(new WhereCondition[0]), true);
+        try {
+            return queryRunner.update(sql.toString(), params.toArray()) > 0;
+        } catch (SQLException e) {
+            throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
+                    "Failed to conditionally update entity", e);
+        }
+    }
+
+    /**
+     * Appends {@code UPDATE <table> SET `col` = ?, ...} for every {@code @Column} field of
+     * {@code obj}, and the values in the same order, serialised exactly as {@link #insert} does.
+     * Shared by {@link #update(BaseDataEntity)} and {@link #updateIf}.
+     */
+    private void appendUpdateSet(StringBuilder sql, List<Object> params, T obj) throws IllegalAccessException {
+        sql.append("UPDATE ").append(tableName).append(" SET ");
         Field[] fields = ReflectionUtil.getFields(obj.getClass());
         boolean first = true;
         for (Field field : fields) {
@@ -602,25 +944,9 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                     sql.append(", ");
                 }
                 sql.append("`").append(column.value()).append("` = ?");
-                Object value = field.get(obj);
-                if (value != null && !BasicTypeUtil.isBasicType(field.getType())) {
-                    String jsonString = GSON.toJson(value);
-                    if (jsonString.startsWith("\"") && jsonString.endsWith("\"")) {
-                        jsonString = jsonString.substring(1, jsonString.length() - 1);
-                    }
-                    value = jsonString;
-                }
-                params.add(value);
+                params.add(persistedValue(field, column.value(), obj));
                 first = false;
             }
-        }
-        sql.append(" WHERE id = ?");
-        params.add(obj.getId());
-        try {
-            queryRunner.update(sql.toString(), params.toArray());
-        } catch (SQLException e) {
-            throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
-                    "Failed to update entity", e);
         }
     }
 
@@ -672,7 +998,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
             // into insert() would silently skip this path.
             for (T entity : entities) {
                 if (entity.getId() == null) {
-                    entity.setId(java.util.UUID.randomUUID().toString());
+                    entity.setId(UUID.randomUUID().toString());
                 }
                 entity.onCreate();
             }
@@ -699,15 +1025,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                 for (T entity : entities) {
                     int idx = 1;
                     for (ColumnMapping col : columns) {
-                        Object value = col.field.get(entity);
-                        if (value != null && !BasicTypeUtil.isBasicType(col.field.getType())) {
-                            String json = GSON.toJson(value);
-                            if (json.startsWith("\"") && json.endsWith("\"")) {
-                                json = json.substring(1, json.length() - 1);
-                            }
-                            value = json;
-                        }
-                        pstmt.setObject(idx++, value);
+                        pstmt.setObject(idx++, persistedValue(col.field, col.columnName, entity));
                     }
                     pstmt.addBatch();
                 }
@@ -723,6 +1041,10 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
     public void updateAll(List<T> entities) throws IllegalAccessException {
         if (entities == null || entities.isEmpty()) {
             return;
+        }
+        // Checked before the batch starts, so a refused batch writes nothing.
+        for (T entity : entities) {
+            requireId(entity.getId(), "update");
         }
         try {
             transaction((Callable<Void>) () -> {
@@ -751,20 +1073,16 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                         entity.onUpdate();
                         int idx = 1;
                         for (ColumnMapping col : columns) {
-                            Object value = col.field.get(entity);
-                            if (value != null && !BasicTypeUtil.isBasicType(col.field.getType())) {
-                                String json = GSON.toJson(value);
-                                if (json.startsWith("\"") && json.endsWith("\"")) {
-                                    json = json.substring(1, json.length() - 1);
-                                }
-                                value = json;
-                            }
-                            pstmt.setObject(idx++, value);
+                            pstmt.setObject(idx++, persistedValue(col.field, col.columnName, entity));
                         }
                         pstmt.setObject(idx, entity.getId());
                         pstmt.addBatch();
                     }
-                    pstmt.executeBatch();
+                    int[] changed = pstmt.executeBatch();
+                    for (int row = 0; row < changed.length; row++) {
+                        // Statement.SUCCESS_NO_INFO (-2) says nothing about the row; only 0 means no match.
+                        warnIfNoRow(changed[row], entities.get(row).getId());
+                    }
                 } catch (SQLException | IllegalAccessException e) {
                     throw new DataAccessException(ErrorCode.DATA_OPERATION_FAILED,
                             "Batch update failed", e);
@@ -779,6 +1097,29 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
             throw new DataAccessException(ErrorCode.TRANSACTION_FAILED,
                     "Batch update transaction failed", e);
         }
+    }
+
+    /**
+     * The value written for one {@code @Column} field of {@code obj}, serialised as every write
+     * path here always has: a non-basic value goes out as JSON, with a bare string's quotes
+     * removed.
+     * <p>
+     * The {@code id} column is written from {@code getId()}, not from the inherited field, because
+     * {@code getId()} is what every {@code WHERE id = ?} binds (#546). An entity that overrides
+     * {@code getId()} onto another column -- UltiEssentials' and UltiKits' do -- never sets the
+     * inherited field, so writing the field stored a {@code NULL} id that no update or delete could
+     * reach (and that MySQL refused outright).
+     */
+    private Object persistedValue(Field field, String columnName, T obj) throws IllegalAccessException {
+        Object value = ID_COLUMN.equals(columnName) ? obj.getId() : field.get(obj);
+        if (value != null && !BasicTypeUtil.isBasicType(field.getType())) {
+            String json = GSON.toJson(value);
+            if (json.startsWith("\"") && json.endsWith("\"")) {
+                json = json.substring(1, json.length() - 1);
+            }
+            value = json;
+        }
+        return value;
     }
 
     // ===== Column mapping helper =====

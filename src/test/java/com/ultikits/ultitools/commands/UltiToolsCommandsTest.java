@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Timeout;
 import java.util.concurrent.TimeUnit;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.ReloadReport;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.exceptions.CommandException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
@@ -151,6 +152,112 @@ class UltiToolsCommandsTest {
                 .hasCause(cause)
                 .extracting(t -> ((CommandException) t).getErrorCode())
                 .isEqualTo(ErrorCode.COMMAND_EXECUTION_FAILED);
+    }
+
+    @Test
+    @DisplayName("#509: /ul reload <name> replies failure, not success, when the module's reload throws")
+    void reloadNamedModuleWhoseReloadThrowsRepliesFailure() {
+        UltiToolsPlugin broken = mock(UltiToolsPlugin.class);
+        when(broken.getPluginName()).thenReturn("BrokenModule");
+        doThrow(new IllegalStateException("hook boom")).when(broken).reloadWithReport();
+        when(mockPluginManager.getPluginList()).thenReturn(Arrays.asList(broken));
+
+        boolean result = executor.onCommand(player, mockCommand, "ul", new String[]{"reload", "BrokenModule"});
+        server.getScheduler().performOneTick();
+
+        assertThat(result).isTrue();
+        String reply = player.nextMessage();
+        assertThat(reply).as("the sender is told the reload failed, naming the module")
+                .contains("BrokenModule").contains("failed to reload").contains("hook boom")
+                .doesNotContain("%s");
+        assertThat(player.nextMessage()).as("no success reply follows a failure").isNull();
+    }
+
+    @Test
+    @DisplayName("#529: /ul reload <name> names the parts that did not reload instead of the plain success reply")
+    void reloadNamedModuleWithPartialReportRepliesTheReasons() {
+        UltiToolsPlugin partial = mock(UltiToolsPlugin.class);
+        when(partial.getPluginName()).thenReturn("PartialModule");
+        ReloadReport report = new ReloadReport();
+        report.partial("scoreboard service did not restart");
+        when(partial.reloadWithReport()).thenReturn(report);
+        when(mockPluginManager.getPluginList()).thenReturn(Arrays.asList(partial));
+
+        boolean result = executor.onCommand(player, mockCommand, "ul", new String[]{"reload", "PartialModule"});
+        server.getScheduler().performOneTick();
+
+        assertThat(result).isTrue();
+        String reply = player.nextMessage();
+        assertThat(reply).contains("PartialModule").contains("scoreboard service did not restart")
+                .doesNotContain("%s").isNotEqualTo("模块 PartialModule 已重载");
+        assertThat(player.nextMessage()).as("no plain success reply follows").isNull();
+    }
+
+    @Test
+    @DisplayName("/ul reload <name> replies success for a complete reload")
+    void reloadNamedModuleRepliesSuccess() {
+        UltiToolsPlugin good = mock(UltiToolsPlugin.class);
+        when(good.getPluginName()).thenReturn("GoodModule");
+        when(good.reloadWithReport()).thenReturn(new ReloadReport());
+        when(mockPluginManager.getPluginList()).thenReturn(Arrays.asList(good));
+
+        executor.onCommand(player, mockCommand, "ul", new String[]{"reload", "GoodModule"});
+        server.getScheduler().performOneTick();
+
+        assertThat(player.nextMessage()).isEqualTo("模块 GoodModule 已重载");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable failure) throws T {
+        throw (T) failure;
+    }
+
+    @Test
+    @DisplayName("#509: /ul reload <name> replies failure for an Error or an undeclared checked exception too")
+    void reloadNamedModuleRepliesFailureForErrorsAndSneakyCheckedExceptions() {
+        // Gate-1 review (reviewer A P3, reviewer B IN-01/IN-02): the command caught only
+        // RuntimeException | Error and rethrew VirtualMachineError, so these reached the generic
+        // command-error line instead of the reload's own failure reply.
+        UltiToolsPlugin recursive = mock(UltiToolsPlugin.class);
+        when(recursive.getPluginName()).thenReturn("RecursiveModule");
+        doThrow(new StackOverflowError("recursive onReload")).when(recursive).reloadWithReport();
+        UltiToolsPlugin sneaky = mock(UltiToolsPlugin.class);
+        when(sneaky.getPluginName()).thenReturn("SneakyModule");
+        when(sneaky.reloadWithReport()).thenAnswer(invocation -> {
+            sneakyThrow(new IOException("disk gone"));
+            return null;
+        });
+        when(mockPluginManager.getPluginList()).thenReturn(Arrays.asList(recursive, sneaky));
+
+        executor.onCommand(player, mockCommand, "ul", new String[]{"reload", "RecursiveModule"});
+        server.getScheduler().performOneTick();
+        executor.onCommand(player, mockCommand, "ul", new String[]{"reload", "SneakyModule"});
+        server.getScheduler().performOneTick();
+
+        assertThat(player.nextMessage()).contains("RecursiveModule").contains("failed to reload")
+                .contains("recursive onReload");
+        assertThat(player.nextMessage()).contains("SneakyModule").contains("failed to reload").contains("disk gone");
+    }
+
+    @Test
+    @DisplayName("#509: a bare /ul reload replies the reload summary to the sender")
+    void bareReloadRepliesTheSummary() throws IOException {
+        TestHelper.mockUltiToolsInstance(ultiTools -> {
+            when(ultiTools.getPluginManager()).thenReturn(mockPluginManager);
+            try {
+                when(ultiTools.reloadPluginsAndReport())
+                        .thenReturn(Arrays.asList("Failed to reload 1 of 2 modules: BrokenModule."));
+            } catch (IOException ignored) {
+                // stubbing never invokes the real method; the checked exception cannot occur here
+            }
+        });
+        UltiToolsCommands freshExecutor = new UltiToolsCommands();
+
+        boolean result = freshExecutor.onCommand(player, mockCommand, "ul", new String[]{"reload"});
+        server.getScheduler().performOneTick();
+
+        assertThat(result).isTrue();
+        assertThat(player.nextMessage()).isEqualTo("Failed to reload 1 of 2 modules: BrokenModule.");
     }
 
     @Test

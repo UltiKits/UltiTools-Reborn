@@ -27,6 +27,9 @@ public class SQLiteDataOperator<T extends BaseDataEntity<String>> extends Abstra
      */
     public SQLiteDataOperator(DataSource dataSource, Class<T> type) {
         super(dataSource, type);
+        // SQLite's DDL accepted a NULL id, and UltiTools-API 6.2.0 inserted rows without one
+        // (#546): give them ids now. _rowid_ is SQLite's built-in row identifier.
+        backfillNullIds("_rowid_");
     }
 
     @Override

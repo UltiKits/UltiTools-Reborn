@@ -373,12 +373,12 @@ class ConfigManagerShutdownSaveTest {
         configManager.register(plugin, control);
 
         config.setValue("set-by-code");
-        assumeThat(scalarFile.setWritable(false)).as("file permissions are enforceable here").isTrue();
-        try {
-            assumeThat(scalarFile.canWrite()).as("not running with permission-bypassing privileges").isFalse();
+        // Read-only target mode is not a failure for atomic replacement in a writable parent.
+        try (org.mockito.MockedStatic<com.ultikits.ultitools.config.document.AtomicConfigWriter> writer =
+                Mockito.mockStatic(com.ultikits.ultitools.config.document.AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
+            writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.write(
+                    Mockito.eq(scalarFile.toPath()), Mockito.anyString())).thenThrow(new IOException("injected write failure"));
             assertThatThrownBy(config::save).isInstanceOf(IOException.class);
-        } finally {
-            assertThat(scalarFile.setWritable(true)).isTrue();
         }
         assertThat(read(scalarFile)).isEqualTo("value: original\n");
         String controlEdit = "value: control-operator-edit\n";
@@ -480,6 +480,27 @@ class ConfigManagerShutdownSaveTest {
         assertThat(read(listFile)).isEqualTo(onDisk);
     }
 
+    @Test
+    @DisplayName("8b. A 6.2-written integer list stored as quoted text is not rewritten by load, reload or shutdown")
+    void saveAll_doesNotRewriteQuotedIntegerListWrittenBy62() throws IOException {
+        // 6.2's DefaultConfigParser stored every list element as text, so a 6.2-saved List<Integer>
+        // reads "- '60'". The entity binds 60 (an approved coercion); the bytes must stay as they are
+        // until module code or a panel edit actually saves the file (wfufw-s2 compat-62 row, cleaner.yml).
+        File listFile = file("config/list.yml");
+        String onDisk = "ids:\n- '60'\n- '70'\n";
+        write(listFile, onDisk);
+        ListConfig config = new ListConfig("config/list.yml");
+        configManager.register(plugin, config);
+        assertThat(config.ids).containsExactly(60, 70);
+
+        configManager.saveAll();
+        assertThat(read(listFile)).isEqualTo(onDisk);
+
+        configManager.reloadConfigs(plugin);
+        configManager.saveAll();
+        assertThat(read(listFile)).isEqualTo(onDisk);
+    }
+
     // ==================== 9. explicit save() stays unconditional ====================
 
     @Test
@@ -535,6 +556,32 @@ class ConfigManagerShutdownSaveTest {
         assertThat(read(twoFile)).contains("a: a-by-code").contains("b: b1");
     }
 
+    @Test
+    void managerReloadRetainsMissingLiveValueAgainstDeclaredDefaultWithoutWriting() throws IOException {
+        File twoFile = file("config/two.yml");
+        write(twoFile, "a: a1\nb: b1\n");
+        TwoKeyConfig config = new TwoKeyConfig("config/two.yml");
+        configManager.register(plugin, config);
+        config.setA("a-by-code");
+        int[] notifications = {0};
+        config.addChangeListener(changed -> notifications[0]++);
+        write(twoFile, "# operator\nb: b2\n");
+        java.nio.file.attribute.FileTime time = Files.getLastModifiedTime(twoFile.toPath());
+        configManager.reloadConfigs(plugin);
+        assertThat(config.a).isEqualTo("a-by-code");
+        assertThat(config.b).isEqualTo("b2");
+        assertThat(read(twoFile)).isEqualTo("# operator\nb: b2\n");
+        assertThat(Files.getLastModifiedTime(twoFile.toPath())).isEqualTo(time);
+        assertThat(notifications[0]).isEqualTo(1);
+        assertThat(config.isPresentInFile("a")).isFalse();
+        assertThat(config.isModifiedSinceSnapshot()).isTrue();
+        config.setA("a-default");
+        assertThat(config.isModifiedSinceSnapshot()).isFalse();
+        config.setA("a-by-code");
+        configManager.saveAll();
+        assertThat(read(twoFile)).contains("a: a-by-code", "b: b2", "# operator");
+    }
+
     // ==================== 11. the comparison never touches the live configuration ====================
 
     @Test
@@ -566,12 +613,11 @@ class ConfigManagerShutdownSaveTest {
 
         config.setValue("set-by-code");
         write(scalarFile, "value: operator-edit\n");
-        assumeThat(scalarFile.setWritable(false)).as("file permissions are enforceable here").isTrue();
-        try {
-            assumeThat(scalarFile.canWrite()).as("not running with permission-bypassing privileges").isFalse();
+        try (org.mockito.MockedStatic<com.ultikits.ultitools.config.document.AtomicConfigWriter> writer =
+                Mockito.mockStatic(com.ultikits.ultitools.config.document.AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
+            writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.write(
+                    Mockito.eq(scalarFile.toPath()), Mockito.anyString())).thenThrow(new IOException("injected write failure"));
             configManager.saveAll();
-        } finally {
-            assertThat(scalarFile.setWritable(true)).isTrue();
         }
 
         assertThat(read(scalarFile)).isEqualTo("value: operator-edit\n");
@@ -665,8 +711,8 @@ class ConfigManagerShutdownSaveTest {
     }
 
     @Test
-    @DisplayName("14d. An explicit save() still writes while the file is unparseable")
-    void save_explicitCallStillWritesOverAnUnparseableFile() throws IOException {
+    @DisplayName("14d. An explicit save protects an unparseable file until a successful load")
+    void save_explicitCallProtectsUnparseableFileUntilSuccessfulLoad() throws IOException {
         File scalarFile = file("config/scalar.yml");
         write(scalarFile, "value: on-disk\n");
         ScalarConfig config = new ScalarConfig("config/scalar.yml");
@@ -675,10 +721,21 @@ class ConfigManagerShutdownSaveTest {
         write(scalarFile, "value: [unclosed\n  bad: : :\n");
         config.reload();
         config.setValue("set-by-code");
+        String broken = read(scalarFile);
         config.save();
 
+        // Plan 17-58/#511 part 2: no explicit write may clear the protection latch.
+        assertThat(read(scalarFile)).isEqualTo(broken);
+        assertThat(config.isLastLoadUnparseable()).isTrue();
+        write(scalarFile, "value: repaired\n");
+        config.save();
+        assertThat(read(scalarFile)).isEqualTo("value: repaired\n");
+        assertThat(config.isLastLoadUnparseable()).isTrue();
+        config.reload();
+        assertThat(config.isLastLoadUnparseable()).isFalse();
+        config.setValue("set-by-code");
+        config.save();
         assertThat(read(scalarFile)).contains("value: set-by-code");
-        // And the successful write cleared the unparseable state, so shutdown behaves normally.
         configManager.saveAll();
         assertThat(unparseableWarnings()).isEmpty();
     }

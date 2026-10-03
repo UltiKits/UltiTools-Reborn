@@ -93,8 +93,8 @@ class UltiToolsPluginLifecycleHookTest {
     /**
      * Overrides {@code onReload()}, snapshotting -- at the moment it runs -- whether the
      * framework's own config-reload step already ran and how many reload log records had
-     * already been captured. Both snapshots must read "already happened" if the hook truly runs
-     * last.
+     * already been captured. The config reload must read "already happened"; since #509 the
+     * reload log line must read "not yet", because it reports a reload that has finished.
      */
     abstract static class OverridingOnReloadFixturePlugin extends UltiToolsPlugin {
         boolean onReloadRan = false;
@@ -163,6 +163,9 @@ class UltiToolsPluginLifecycleHookTest {
         Field resourceFolderPathField = UltiToolsPlugin.class.getDeclaredField("resourceFolderPath");
         resourceFolderPathField.setAccessible(true);
         resourceFolderPathField.set(plugin, System.getProperty("java.io.tmpdir"));
+        // #529: the framework calls onReload(ReloadReport), whose default body calls onReload();
+        // on a mock that default must run for this suite's onReload() assertions to hold.
+        doCallRealMethod().when(plugin).onReload(any(ReloadReport.class));
         return plugin;
     }
 
@@ -257,8 +260,8 @@ class UltiToolsPluginLifecycleHookTest {
     }
 
     @Test
-    @DisplayName("onReload() runs after the framework's config reload and after the reload log line, in that order")
-    void onReloadRunsAfterConfigReloadAndReloadLogLine() throws Exception {
+    @DisplayName("onReload() runs after the framework's config reload and before the reload log line (#509)")
+    void onReloadRunsAfterConfigReloadAndBeforeReloadLogLine() throws Exception {
         OverridingOnReloadFixturePlugin plugin = reloadSafePlugin(OverridingOnReloadFixturePlugin.class, "TestModule");
         AtomicBoolean configReloadedFlag = new AtomicBoolean(false);
         plugin.configReloadedFlag = configReloadedFlag;
@@ -276,10 +279,12 @@ class UltiToolsPluginLifecycleHookTest {
         assertTrue(plugin.configAlreadyReloadedWhenOnReloadRan,
                 "ConfigManager.reloadConfigs() must have already run by the time onReload() runs");
         assertThat(plugin.capturedLogCountWhenOnReloadRan)
-                .as("the per-module reload log line must already have been emitted by the time "
-                        + "onReload() runs -- a count of 0 here means onReload() ran before the "
-                        + "log line, or the log line was never emitted at all")
-                .isEqualTo(1);
+                .as("#509: the per-module reload line reports a finished reload, so it must not have "
+                        + "been emitted yet when onReload() runs")
+                .isEqualTo(0);
+        assertThat(capturedLogs)
+                .as("the reload line is emitted once, after onReload() returned")
+                .hasSize(1);
 
         InOrder order = inOrder(mockConfigManager, plugin);
         order.verify(mockConfigManager).reloadConfigs(plugin);
