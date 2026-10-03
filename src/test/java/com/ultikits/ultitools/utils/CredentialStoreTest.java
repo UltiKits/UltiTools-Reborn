@@ -2,30 +2,49 @@ package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.AbstractSet;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
+import com.google.gson.Gson;
+import com.google.gson.JsonParseException;
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.entities.TokenEntity;
+import com.ultikits.ultitools.exceptions.DataAccessException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -33,6 +52,10 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.mockito.MockedStatic;
 
 /**
  * Pins {@link CredentialStore}'s contract: one owner of the credential document, an atomic
@@ -43,6 +66,21 @@ import org.junit.jupiter.api.io.TempDir;
 @DisplayName("CredentialStore -- single-owner, atomically-replaced, migrated-in-place credential file")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class CredentialStoreTest {
+
+    /**
+     * #569: size of the first value of the paused document -- large enough that serialization
+     * must flush partial bytes to disk before the pause point.
+     */
+    private static final int BULK_CHARS = 64 * 1024;
+
+    /**
+     * #569: bounds one thread-state transition, never a throughput -- a hang detector only. The
+     * class-level {@code @Timeout} stays the overall budget; this bound only gives a single hung
+     * transition a readable message.
+     */
+    private static final long HANG_BOUND_MILLIS = 20_000L;
+
+    private static final Gson GSON = new Gson();
 
     @TempDir
     Path tempDir;
@@ -318,7 +356,8 @@ class CredentialStoreTest {
     // ---- Deterministic interleaving: no torn file, no lost update (D-14). Each case releases all
     // threads together via a CyclicBarrier so contention is real, joins every thread, and asserts
     // on file content AFTER the join -- the assertion after the join is the point; its absence is
-    // exactly what makes DataStoreManagerTest#concurrentReadWriteShouldBeSafe worthless (D-14). ----
+    // exactly what makes DataStoreManagerTest#concurrentReadWriteShouldBeSafe worthless (D-14). The
+    // reader case further down is paced by latches instead of a barrier; see its own comment (#569). ----
 
     private static void awaitBarrier(CyclicBarrier barrier) {
         try {
@@ -398,55 +437,535 @@ class CredentialStoreTest {
         }
     }
 
-    @Test
-    @DisplayName("a reader racing concurrent writers never observes a parse failure")
-    void concurrentReadNeverObservesPartialWrite() throws Exception {
-        int writerCount = 8;
-        CredentialStore.write(new LinkedHashMap<>());
-        ExecutorService pool = Executors.newFixedThreadPool(writerCount + 1);
-        CyclicBarrier barrier = new CyclicBarrier(writerCount + 1);
-        AtomicBoolean stop = new AtomicBoolean(false);
-        AtomicInteger parseFailures = new AtomicInteger(0);
-        AtomicInteger readsPerformed = new AtomicInteger(0);
-        try {
-            Future<?> readerFuture = pool.submit(() -> {
-                awaitBarrier(barrier);
-                while (!stop.get()) {
-                    CredentialStore.ReadResult result = CredentialStore.read();
-                    readsPerformed.incrementAndGet();
-                    if (result.isParseFailure()) {
-                        parseFailures.incrementAndGet();
-                    }
-                }
-            });
+    // ---- Issue #569: a reader overlapping an in-flight write, made deterministic. The previous
+    // version of this test raced one spinning reader against 8 writers x 50 writes and bounded the
+    // writers' join at 20 s. That bounded the wall-clock throughput of 400 lock-serialized
+    // filesystem writes, not correctness: measured at about 65 ms on an idle machine, the same
+    // unmodified test timed out (java.util.concurrent.TimeoutException from Future.get) once the
+    // JVM shared one CPU with 120 busy loops, and no parse failure was observed in any run. It also
+    // could not detect an in-place write under the lock at all, because read() and write() share
+    // that lock -- yet an in-place write is exactly what a crash mid-write would expose on disk.
+    // This version pauses ONE real write at the instant the risk exists (partial bytes already on
+    // disk) and checks every observable view at that instant, so its running time no longer scales
+    // with 400 x scheduler delay. Every thread is released, interrupted and awaited in the finally,
+    // and the pool's termination is asserted. The pause sits in the serialization step, so this
+    // proves that a write never goes to the credential path in place; the final replace step (the
+    // atomic move itself) is outside what a caller-side pause can reach. ----
 
-            List<Future<?>> writers = new ArrayList<>();
-            for (int i = 0; i < writerCount; i++) {
-                int writerIndex = i;
-                writers.add(pool.submit(() -> {
-                    awaitBarrier(barrier);
-                    for (int iteration = 0; iteration < 50; iteration++) {
-                        Map<String, Object> doc = new LinkedHashMap<>();
-                        doc.put("writer", writerIndex);
-                        doc.put("iteration", iteration);
-                        CredentialStore.write(doc);
-                    }
-                }));
+    @Test
+    @DisplayName("a read() overlapping an in-flight write never observes a partial document, and the "
+            + "credential path keeps the previous complete document while the new one is being written (#569)")
+    void concurrentReadNeverObservesPartialWrite() throws Exception {
+        // Pin migrate()'s old-location lookup to a path that does not exist, so migrate() is a no-op
+        // here whatever UltiTools instance an earlier test class in the same fork left behind.
+        CredentialStore.setOldLocationForTesting(
+                tempDir.resolve("no-pre-6.3.0-location").resolve("data.json"));
+
+        Map<String, Object> previous = new LinkedHashMap<>();
+        previous.put("marker", "previous-complete-document");
+        CredentialStore.write(previous);
+
+        char[] bulk = new char[BULK_CHARS];
+        Arrays.fill(bulk, 'x');
+        CountDownLatch writerPaused = new CountDownLatch(1);
+        CountDownLatch releaseWriter = new CountDownLatch(1);
+        PausingDocument next = new PausingDocument(writerPaused, releaseWriter);
+        next.put("bulk", new String(bulk));
+        next.put("marker", "next-complete-document");
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> writer = pool.submit(() -> CredentialStore.write(next));
+            awaitPause(writerPaused, writer);
+            // The write is now in flight: CredentialStore.write(next) has not returned, and is
+            // part-way through serializing `next`, with most of its first entry already flushed to disk.
+            // Every violated view is collected, so one run reports all of them.
+            List<String> violations = new ArrayList<>();
+
+            // (1) Non-vacuity control: the risk this test guards against really exists right now --
+            // an unparseable prefix of `next` is on disk in the credential file's directory.
+            if (filesHoldingAPartialDocument(dataFile.getParent()).isEmpty()) {
+                violations.add("control: while the write is paused, no file in the credential directory "
+                        + "holds an unparseable prefix of the in-flight document, so this test no longer "
+                        + "exercises a write in progress and proves nothing (if the store now serializes "
+                        + "into memory before writing, the pause point has to move, the store is not "
+                        + "necessarily broken)");
             }
-            for (Future<?> writer : writers) {
-                writer.get(20, TimeUnit.SECONDS);
+
+            // (2) On-disk view -- what a crash at this instant, or any other process reading the
+            // file, would find: the credential path still names the previous complete document.
+            if (!Files.exists(dataFile)) {
+                violations.add("on disk: the credential path vanished while a replacement was in flight");
+            } else {
+                String onDisk = new String(Files.readAllBytes(dataFile), StandardCharsets.UTF_8);
+                if (!parses(onDisk)) {
+                    violations.add("on disk: while a write was in flight the credential path held a "
+                            + "partial document -- the write went to the credential path in place instead "
+                            + "of to a temporary file");
+                }
+                if (!onDisk.contains("previous-complete-document")) {
+                    violations.add("on disk: while a write was in flight the credential path no longer "
+                            + "held the previous document");
+                }
             }
-            stop.set(true);
-            readerFuture.get(20, TimeUnit.SECONDS);
+
+            // (3) In-process view: a read() issued now, while the write is in flight. It either
+            // returns straight away or blocks on the store lock; the write is released only after
+            // one of the two has happened, so the read genuinely overlaps the write. This check can
+            // only tell apart a read path that takes no store lock at all (migrate() included): any
+            // lock on the way in holds the reader until the write is done. An in-place write is
+            // caught by (2) whatever the read path does.
+            AtomicReference<Thread> readerThread = new AtomicReference<>();
+            Future<CredentialStore.ReadResult> reader = pool.submit(() -> {
+                readerThread.set(Thread.currentThread());
+                return CredentialStore.read();
+            });
+            awaitFinishedOrBlocked(reader, readerThread);
+            releaseWriter.countDown();
+            writer.get(HANG_BOUND_MILLIS, TimeUnit.MILLISECONDS);
+            CredentialStore.ReadResult overlapping = reader.get(HANG_BOUND_MILLIS, TimeUnit.MILLISECONDS);
+
+            if (overlapping.isParseFailure()) {
+                violations.add("read(): a read overlapping an in-flight write observed a partial document");
+            } else if (!overlapping.isParsed()) {
+                violations.add("read(): the credential file exists throughout, yet the overlapping read "
+                        + "reported it absent");
+            } else {
+                Object marker = overlapping.data().get("marker");
+                if (!"previous-complete-document".equals(marker) && !"next-complete-document".equals(marker)) {
+                    violations.add("read(): the overlapping read returned neither complete document, "
+                            + "marker=" + marker);
+                }
+            }
+
+            assertThat(violations)
+                    .as("every view of the credential file while a write was in flight")
+                    .isEmpty();
         } finally {
-            pool.shutdown();
+            releaseWriter.countDown();
+            pool.shutdownNow();
+            pool.awaitTermination(HANG_BOUND_MILLIS, TimeUnit.MILLISECONDS);
+        }
+        assertThat(pool.isTerminated())
+                .as("no worker thread may outlive this test in the shared surefire fork")
+                .isTrue();
+
+        // After the write lands, the paused document is there in full, not truncated by the pause.
+        CredentialStore.ReadResult after = CredentialStore.read();
+        assertThat(after.isParsed()).isTrue();
+        assertThat(after.data()).containsEntry("marker", "next-complete-document");
+        assertThat((String) after.data().get("bulk")).hasSize(BULK_CHARS);
+    }
+
+    private static boolean parses(String json) {
+        try {
+            GSON.fromJson(json, Map.class);
+            return true;
+        } catch (JsonParseException e) {
+            return false;
+        }
+    }
+
+    private static List<Path> filesHoldingAPartialDocument(Path directory) throws IOException {
+        List<Path> partials = new ArrayList<>();
+        try (Stream<Path> files = Files.list(directory)) {
+            for (Path file : files.filter(Files::isRegularFile).collect(Collectors.toList())) {
+                String content = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
+                if (content.contains("xxxxxxxxxxxxxxxx") && !parses(content)) {
+                    partials.add(file);
+                }
+            }
+        }
+        return partials;
+    }
+
+    /**
+     * Waits until the writer is paused mid-serialization. Fails at once, with the writer's own
+     * exception if it threw, when the write finished without ever pausing.
+     */
+    private static void awaitPause(CountDownLatch paused, Future<?> writer) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(HANG_BOUND_MILLIS);
+        while (!paused.await(10, TimeUnit.MILLISECONDS)) {
+            if (writer.isDone()) {
+                writer.get();
+                throw new AssertionError("write() completed without pausing mid-serialization: the "
+                        + "store no longer serializes the caller's document inside write(), so this "
+                        + "test's pause point needs revisiting");
+            }
+            if (System.nanoTime() - deadline > 0) {
+                throw new AssertionError("the writer did not reach the pause point within "
+                        + HANG_BOUND_MILLIS + " ms");
+            }
+        }
+    }
+
+    /** Waits until the reader has either returned or is blocked entering a monitor. */
+    private static void awaitFinishedOrBlocked(Future<?> reader, AtomicReference<Thread> readerThread)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(HANG_BOUND_MILLIS);
+        while (!reader.isDone()) {
+            Thread thread = readerThread.get();
+            if (thread != null && thread.getState() == Thread.State.BLOCKED) {
+                return;
+            }
+            if (System.nanoTime() - deadline > 0) {
+                throw new AssertionError("the overlapping read() neither returned nor blocked on the "
+                        + "store lock within " + HANG_BOUND_MILLIS + " ms");
+            }
+            Thread.sleep(1);
+        }
+    }
+
+    // ---- #573 part 1: an existing credential file that is empty, whitespace-only or unparseable is
+    // preserved under the maintainer's #470 rule (an unreadable file is treated like an unparseable
+    // one and never overwritten): no new server UUID, no token write, one SEVERE line naming the
+    // file. Only a file that does not exist at all starts a fresh identity. ----
+
+    static Stream<Arguments> unreadableContents() {
+        return Stream.of(
+                Arguments.of("empty", ""),
+                Arguments.of("whitespace-only", "  \n\t \r\n  "),
+                Arguments.of("JSON null", "null"),
+                Arguments.of("truncated JSON",
+                        "{\"uuid\":\"kept-server-identity\",\"cloud_token\":{\"access_token\":\"synthetic-tok"));
+    }
+
+    /** Pins migrate()'s old-location lookup to a path that does not exist. */
+    private void pinNoPre630Location() {
+        CredentialStore.setOldLocationForTesting(tempDir.resolve("no-pre-6.3.0-location").resolve("data.json"));
+    }
+
+    private static List<String> namesIn(Path directory) throws IOException {
+        try (Stream<Path> files = Files.list(directory)) {
+            return files.map(file -> file.getFileName().toString()).sorted().collect(Collectors.toList());
+        }
+    }
+
+    private static TokenEntity syntheticToken() {
+        TokenEntity token = new TokenEntity();
+        token.setAccess_token("synthetic-access-token");
+        token.setRefresh_token("synthetic-refresh-token");
+        return token;
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("unreadableContents")
+    @DisplayName("read() reports an existing empty, whitespace-only or unparseable file as a parse failure, never as a document (#573)")
+    void readReportsAnUnreadableFileAsAParseFailure(String kind, String content) throws IOException {
+        pinNoPre630Location();
+        Files.write(dataFile, content.getBytes(StandardCharsets.UTF_8));
+
+        CredentialStore.ReadResult result = CredentialStore.read();
+
+        assertThat(result.isParseFailure()).as("a %s credential file is a torn file", kind).isTrue();
+        assertThat(result.isParsed()).isFalse();
+        assertThat(result.isAbsent()).isFalse();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("unreadableContents")
+    @DisplayName("getUltiToolsUUID() fails with an IOException naming the file and writes no new identity over an unreadable file (#573)")
+    void getUltiToolsUUIDFailsWithoutWritingANewIdentity(String kind, String content) throws IOException {
+        pinNoPre630Location();
+        byte[] before = content.getBytes(StandardCharsets.UTF_8);
+        Files.write(dataFile, before);
+
+        assertThatThrownBy(CommonUtils::getUltiToolsUUID)
+                .as("a %s credential file must be a clear, declared failure, not a fresh identity", kind)
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining(dataFile.toAbsolutePath().toString());
+
+        assertThat(Files.readAllBytes(dataFile)).as("the %s file must be left byte-for-byte untouched", kind)
+                .isEqualTo(before);
+        assertThat(namesIn(tempDir)).as("nothing else may be written beside it").containsExactly("data.json");
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("unreadableContents")
+    @DisplayName("saving or clearing the cloud token refuses to overwrite an unreadable file (#573)")
+    void tokenSaveAndClearRefuseToOverwriteAnUnreadableFile(String kind, String content) throws IOException {
+        pinNoPre630Location();
+        byte[] before = content.getBytes(StandardCharsets.UTF_8);
+        Files.write(dataFile, before);
+        TokenStore tokenStore = new TokenStore();
+
+        assertThatThrownBy(() -> tokenStore.save(syntheticToken()))
+                .as("a login or refresh must not replace a %s credential file", kind)
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining(dataFile.toAbsolutePath().toString());
+        assertThatThrownBy(() -> tokenStore.clearIfMatches(syntheticToken()))
+                .as("a logout must not rewrite a %s credential file", kind)
+                .isInstanceOf(DataAccessException.class);
+
+        assertThat(Files.readAllBytes(dataFile)).isEqualTo(before);
+        assertThat(namesIn(tempDir)).containsExactly("data.json");
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("unreadableContents")
+    @DisplayName("an unreadable pre-6.3.0 data.json with no current file blocks identity generation and is kept byte-for-byte (#573)")
+    void anUnreadablePre630FileWithNoCurrentFileBlocksIdentityGeneration(String kind, String content)
+            throws IOException {
+        Path oldFile = tempDir.resolve("old-location").resolve("data.json");
+        Path newFile = tempDir.resolve("new-location").resolve("credentials.json");
+        Files.createDirectories(oldFile.getParent());
+        byte[] before = content.getBytes(StandardCharsets.UTF_8);
+        Files.write(oldFile, before);
+        CredentialStore.setOldLocationForTesting(oldFile);
+        CredentialStore.setTargetPathForTesting(newFile);
+
+        assertThat(CredentialStore.read().isParseFailure())
+                .as("with only a %s pre-6.3.0 file present the store is unreadable, not empty", kind)
+                .isTrue();
+        assertThatThrownBy(CommonUtils::getUltiToolsUUID)
+                .as("a %s pre-6.3.0 file must not be replaced by a fresh identity at the new location", kind)
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining(oldFile.toAbsolutePath().toString());
+
+        assertThat(Files.readAllBytes(oldFile)).isEqualTo(before);
+        assertThat(Files.exists(newFile)).as("no current file may be created").isFalse();
+    }
+
+    @Test
+    @DisplayName("an unreadable pre-6.3.0 data.json beside a valid current file is left alone and the current identity is used (#573)")
+    void anUnreadablePre630FileBesideAValidCurrentFileIsLeftAlone() throws Exception {
+        Path oldFile = tempDir.resolve("old-location").resolve("data.json");
+        Path newFile = tempDir.resolve("new-location").resolve("credentials.json");
+        Files.createDirectories(oldFile.getParent());
+        Files.createDirectories(newFile.getParent());
+        byte[] oldBefore = new byte[0];
+        Files.write(oldFile, oldBefore);
+        Files.write(newFile, "{\"uuid\":\"current-server-identity\"}".getBytes(StandardCharsets.UTF_8));
+        CredentialStore.setOldLocationForTesting(oldFile);
+        CredentialStore.setTargetPathForTesting(newFile);
+
+        assertThat(CommonUtils.getUltiToolsUUID()).isEqualTo("current-server-identity");
+        assertThat(Files.readAllBytes(oldFile)).isEqualTo(oldBefore);
+    }
+
+    @Test
+    @DisplayName("a credential file that does not exist at all still starts a fresh identity (#573 must not change a fresh install)")
+    void aMissingFileStillStartsAFreshIdentity() throws Exception {
+        pinNoPre630Location();
+        assertThat(Files.exists(dataFile)).isFalse();
+
+        String uuid = CommonUtils.getUltiToolsUUID();
+
+        assertThat(uuid).matches("[0-9a-f]{32}");
+        CredentialStore.ReadResult reread = CredentialStore.read();
+        assertThat(reread.isParsed()).isTrue();
+        assertThat(reread.data()).containsEntry("uuid", uuid);
+    }
+
+    @Test
+    @DisplayName("an unreadable credential file is reported as one SEVERE line naming it, once per episode (#573)")
+    void anUnreadableFileIsReportedOnceAsSevere() throws IOException {
+        pinNoPre630Location();
+        List<LogRecord> records = new ArrayList<>();
+        Logger logger = Logger.getAnonymousLogger();
+        logger.setUseParentHandlers(false);
+        logger.addHandler(new Handler() {
+            @Override
+            public void publish(LogRecord logRecord) {
+                records.add(logRecord);
+            }
+
+            @Override
+            public void flush() {
+                // nothing buffered
+            }
+
+            @Override
+            public void close() {
+                // nothing to release
+            }
+        });
+        UltiTools plugin = mock(UltiTools.class);
+        when(plugin.getLogger()).thenReturn(logger);
+        try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class)) {
+            ultiTools.when(UltiTools::getInstance).thenReturn(plugin);
+            Files.write(dataFile, new byte[0]);
+
+            CredentialStore.read();
+            CredentialStore.read();
+            assertThatThrownBy(CommonUtils::getUltiToolsUUID).isInstanceOf(IOException.class);
+            assertThat(records.stream().filter(r -> Level.SEVERE.equals(r.getLevel())).collect(Collectors.toList()))
+                    .as("repeated reads of the same unreadable file log it once")
+                    .hasSize(1)
+                    .allSatisfy(r -> assertThat(r.getMessage()).contains(dataFile.toAbsolutePath().toString()));
+
+            Files.write(dataFile, "{\"uuid\":\"restored-identity\"}".getBytes(StandardCharsets.UTF_8));
+            assertThat(CredentialStore.read().isParsed()).isTrue();
+            Files.write(dataFile, "   ".getBytes(StandardCharsets.UTF_8));
+            CredentialStore.read();
         }
 
-        // Assertion AFTER the join, with a control assertion so this cannot vacuously pass.
-        assertThat(readsPerformed.get()).as("the reader must actually have raced the writers").isPositive();
-        assertThat(parseFailures.get())
-                .as("every read must either parse or report absence -- never a parse failure from a torn write")
-                .isZero();
+        assertThat(records.stream().filter(r -> Level.SEVERE.equals(r.getLevel())).count())
+                .as("the file breaking again after a good read is a new episode and is reported again")
+                .isEqualTo(2);
+    }
+
+    // ---- #573 part 3: the final replace step itself. The #569 test pauses in serialization, before
+    // the replace; these two reach the replace from outside the store too: the temporary file is
+    // observed (and, in the second, removed) while the writer is paused, with no hook in the store. ----
+
+    private static PausingDocument pausedNextDocument(CountDownLatch paused, CountDownLatch release) {
+        char[] bulk = new char[BULK_CHARS];
+        Arrays.fill(bulk, 'x');
+        PausingDocument next = new PausingDocument(paused, release);
+        next.put("bulk", new String(bulk));
+        next.put("marker", "next-complete-document");
+        return next;
+    }
+
+    @Test
+    @DisplayName("the replace step renames the written temporary file onto the credential path, not a copy (#573)")
+    void replaceStepRenamesTheTemporaryFileOntoTheCredentialPath() throws Exception {
+        pinNoPre630Location();
+        Map<String, Object> previous = new LinkedHashMap<>();
+        previous.put("marker", "previous-complete-document");
+        CredentialStore.write(previous);
+        CountDownLatch paused = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        PausingDocument next = pausedNextDocument(paused, release);
+
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> writer = pool.submit(() -> CredentialStore.write(next));
+            awaitPause(paused, writer);
+            List<Path> partials = filesHoldingAPartialDocument(dataFile.getParent());
+            assertThat(partials).as("the in-flight document is written to one temporary file").hasSize(1);
+            Path temporary = partials.get(0);
+            assertThat(temporary).as("never to the credential path itself").isNotEqualTo(dataFile);
+            Object temporaryKey = Files.readAttributes(temporary, BasicFileAttributes.class).fileKey();
+            assumeTrue(temporaryKey != null, "this platform exposes no file keys");
+
+            releaseWriter(release, writer);
+
+            assertThat(Files.readAttributes(dataFile, BasicFileAttributes.class).fileKey())
+                    .as("the credential path must now name the very file that was written -- a rename, not a copy")
+                    .isEqualTo(temporaryKey);
+            assertThat(Files.exists(temporary)).isFalse();
+            assertThat(CredentialStore.read().data()).containsEntry("marker", "next-complete-document");
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+            pool.awaitTermination(HANG_BOUND_MILLIS, TimeUnit.MILLISECONDS);
+        }
+        assertThat(pool.isTerminated()).isTrue();
+    }
+
+    @Test
+    @DisplayName("a failure at the replace step leaves the previous credential file byte-for-byte intact (#573)")
+    void aFailureAtTheReplaceStepLeavesThePreviousFileIntact() throws Exception {
+        pinNoPre630Location();
+        Map<String, Object> previous = new LinkedHashMap<>();
+        previous.put("marker", "previous-complete-document");
+        CredentialStore.write(previous);
+        byte[] before = Files.readAllBytes(dataFile);
+        CountDownLatch paused = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        PausingDocument next = pausedNextDocument(paused, release);
+
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> writer = pool.submit(() -> CredentialStore.write(next));
+            awaitPause(paused, writer);
+            List<Path> partials = filesHoldingAPartialDocument(dataFile.getParent());
+            assertThat(partials).hasSize(1);
+            Path temporary = partials.get(0);
+            assertThat(temporary).isNotEqualTo(dataFile);
+            // The writer keeps its open handle and finishes writing; the rename that follows then
+            // has no source. That is a failure at exactly the replace step, reached from outside.
+            Files.delete(temporary);
+            release.countDown();
+
+            assertThatThrownBy(() -> writer.get(HANG_BOUND_MILLIS, TimeUnit.MILLISECONDS))
+                    .isInstanceOf(ExecutionException.class)
+                    .hasCauseInstanceOf(DataAccessException.class)
+                    .hasRootCauseInstanceOf(NoSuchFileException.class);
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+            pool.awaitTermination(HANG_BOUND_MILLIS, TimeUnit.MILLISECONDS);
+        }
+        assertThat(pool.isTerminated()).isTrue();
+
+        assertThat(Files.readAllBytes(dataFile))
+                .as("a failed replace must leave the previous file exactly as it was")
+                .isEqualTo(before);
+        assertThat(namesIn(tempDir)).as("and no temporary file behind").containsExactly("data.json");
+        assertThat(CredentialStore.read().data()).containsEntry("marker", "previous-complete-document");
+    }
+
+    private static void releaseWriter(CountDownLatch release, Future<?> writer) throws Exception {
+        release.countDown();
+        writer.get(HANG_BOUND_MILLIS, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * A credential document whose serialization pauses before its second entry: it holds the
+     * caller inside {@link CredentialStore#write(Map)} -- after the first (bulk) entry has been
+     * handed to the writer and mostly flushed to disk -- until the test releases it. Gson's map
+     * adapter serializes a map by iterating {@link #entrySet()} once, so this needs no hook in the
+     * store; a store that serialized some other way, or copied the map first, would pause elsewhere
+     * or not at all, and the test then fails with a message saying so. It must not be an anonymous
+     * or local class: Gson excludes those and would serialize them as {@code null}.
+     */
+    private static final class PausingDocument extends LinkedHashMap<String, Object> {
+
+        private static final long serialVersionUID = 1L;
+
+        private final transient CountDownLatch paused;
+        private final transient CountDownLatch release;
+
+        PausingDocument(CountDownLatch paused, CountDownLatch release) {
+            this.paused = paused;
+            this.release = release;
+        }
+
+        @Override
+        public Set<Map.Entry<String, Object>> entrySet() {
+            Set<Map.Entry<String, Object>> entries = super.entrySet();
+            return new AbstractSet<Map.Entry<String, Object>>() {
+                @Override
+                public int size() {
+                    return entries.size();
+                }
+
+                @Override
+                public Iterator<Map.Entry<String, Object>> iterator() {
+                    Iterator<Map.Entry<String, Object>> delegate = entries.iterator();
+                    return new Iterator<Map.Entry<String, Object>>() {
+                        private int yielded;
+
+                        @Override
+                        public boolean hasNext() {
+                            if (yielded == 1) {
+                                pauseUntilReleased();
+                            }
+                            return delegate.hasNext();
+                        }
+
+                        @Override
+                        public Map.Entry<String, Object> next() {
+                            yielded++;
+                            return delegate.next();
+                        }
+                    };
+                }
+            };
+        }
+
+        void pauseUntilReleased() {
+            paused.countDown();
+            try {
+                release.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("interrupted while paused mid-serialization", e);
+            }
+        }
     }
 
     // ---- The single-owner invariant (promote decision, assumption_delta_decision). Structural,
