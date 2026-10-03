@@ -238,6 +238,13 @@ class SysErrRelogDeadlockTest {
         return message;
     }
 
+    /** The messages of the records the transmitter queued for the stream, oldest first. */
+    private List<String> streamed() {
+        List<String> messages = new java.util.ArrayList<>();
+        transmitter.drainQueue(100).forEach(e -> messages.add(e.getAsJsonObject().get("message").getAsString()));
+        return messages;
+    }
+
     private boolean consoleContains(String fragment) {
         return console.stream().anyMatch(r -> r.getMessage() != null && r.getMessage().contains(fragment));
     }
@@ -251,6 +258,8 @@ class SysErrRelogDeadlockTest {
                 .as("the diagnostic still reaches the console").isTrue();
         assertThat(sysoutCatcher.lines)
                 .as("the framework's own diagnostic is not written to System.err").isEmpty();
+        assertThat(streamed()).as("only the main thread's line is streamed; the diagnostic is not")
+                .containsExactly("an ordinary line on the main thread");
     }
 
     @Test
@@ -260,5 +269,17 @@ class SysErrRelogDeadlockTest {
 
         assertThat(consoleContains("a line printed to System.err under the drain lock"))
                 .as("the line still reaches the console").isTrue();
+        assertThat(streamed()).as("a line logged while the drain lock is held is not streamed")
+                .containsExactly("an ordinary line on the main thread");
+    }
+
+    @Test
+    @DisplayName("control: with the drain lock wired but not held, a re-logged System.err line is streamed")
+    void relogWithoutDrainLockIsStillStreamed() {
+        transmitter.setBatchSize(100);
+
+        System.err.println("a line printed to System.err outside the drain lock");
+
+        assertThat(streamed()).containsExactly("a line printed to System.err outside the drain lock");
     }
 }

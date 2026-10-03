@@ -31,6 +31,14 @@ import org.jetbrains.annotations.ApiStatus;
  * <p>
  * This class NEVER uses java.util.logging.Logger to prevent circular logging.
  * All internal error output uses System.err.
+ * <p>
+ * On Paper, System.err does not bypass the logger: {@code SysoutCatcher} re-logs a plugin's
+ * System.err line through that plugin's logger, so it can reach {@code SystemLogHandler} (#584).
+ * That is safe here because of where the two lines run: {@link #reportError} is called from
+ * {@code SystemLogHandler} (inside its same-thread re-entry guard, which drops the re-logged copy),
+ * from command execution, the cooldown validator, the declarative GUI scheduler and the AOP exception
+ * interceptor, and the configuration is loaded at start-up and reload. None of these callers holds
+ * a lock of the log stream, so at worst the line reaches the stream as an ordinary line.
  *
  * @since 6.2.3
  */
