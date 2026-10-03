@@ -26,13 +26,14 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 /**
  * The start-up records the early capture replays when the log stream starts (#487) reach the panel
- * in batches even when live batching is off, while live records keep going out one by one.
+ * in chunked {@code log_batch} frames even when live batching is off, while live records keep going
+ * out one by one.
  * <p>
  * Measured on a real server (phase 17, row {@code ultitools.config.config-yml} part (c)): with
  * {@code ultipanel.logging.batch.enabled: false} every replayed record was its own message, about
  * 350 at once on connect, and the panel's per-client quota (50 messages in 10 seconds) rejected
- * them. The replay now follows the batch settings -- {@code batch.size} records per message, one
- * message per {@code batch.interval} -- whether or not live batching is on.
+ * them. The replay is now sent in chunks of up to 64 KiB, about one per second, whatever the live
+ * batch settings say.
  */
 @DisplayName("Early-capture replay is batched even with live batching off")
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
@@ -109,7 +110,7 @@ class EarlyLogReplayBatchingTest {
     }
 
     @Test
-    @DisplayName("replayed records go out in ceil(N / batch.size) log_batch frames; live records one by one")
+    @DisplayName("replayed records go out in byte-budget log_batch frames, not one per record; live records one by one")
     void replayIsBatchedAndLiveIsNot() throws Exception {
         EarlyLogCapture.start(Collections.emptyList());
         for (int i = 1; i <= EARLY_LINES; i++) {
@@ -136,12 +137,10 @@ class EarlyLogReplayBatchingTest {
                     .doesNotStartWith("early line");
         }
 
-        // ceil(R / batch.size) frames, every frame but the last one full.
-        int expectedFrames = (replayed.size() + BATCH_SIZE - 1) / BATCH_SIZE;
-        assertThat(batches).as("replay frames for %d replayed records", replayed.size()).hasSize(expectedFrames);
-        for (int i = 0; i < batches.size() - 1; i++) {
-            assertThat(messagesOf(batches.get(i))).hasSize(BATCH_SIZE);
-        }
+        // The replay is chunked by a byte budget, not by the live batch.size: a few dozen short
+        // start-up records fit in one frame, although batch.size is 10.
+        assertThat(batches).as("replay frames for %d replayed records", replayed.size()).hasSize(1);
+        assertThat(replayed.size()).isGreaterThan(BATCH_SIZE);
 
         // Live records after the replay are still sent one by one, each in its own log_stream frame.
         List<String> liveStreamed = new ArrayList<>();
