@@ -573,10 +573,12 @@ Each corrects a declared behaviour the stream did not deliver. The panel protoco
   internal class.
 - **Records logged before the stream starts reach it** (#487). From `onLoad` until the panel
   connection opens, records are kept in a start-up buffer (2000 records, an estimated 512 KiB, five
-  minutes) and sent, oldest first, when the stream starts. They are sent in batches whether or not
-  live batching is on: `ultipanel.logging.batch.size` records per `log_batch` message, the first at
-  once and then one every `batch.interval`; each keeps the time its record was logged, and a live
-  record logged meanwhile can arrive before the last batches. The buffer applies the stream's
+  minutes) and sent, oldest first, when the stream starts, in `log_batch` messages of at most
+  64 KiB, the first at once and then about one per second, independent of the
+  `ultipanel.logging.batch.*` keys: a full buffer drains in seconds and uses at most 10 of the panel's
+  50 messages per 10 seconds. Each entry keeps the time its record was logged, a single entry too
+  large for one message is shortened (stack trace first) rather than dropped, and a live record
+  logged meanwhile can arrive before the last replay messages. The buffer applies the stream's
   filters as records arrive and is released without sending anything when there is no cloud login
   or when its time is up; with the `logs` capability off it is not attached and keeps nothing.
 - **Lines about the panel connection are no longer sent to the panel.** The panel's `error` replies
