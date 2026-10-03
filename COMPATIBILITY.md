@@ -573,9 +573,19 @@ Each corrects a declared behaviour the stream did not deliver. The panel protoco
   internal class.
 - **Records logged before the stream starts reach it** (#487). From `onLoad` until the panel
   connection opens, records are kept in a start-up buffer (2000 records, an estimated 512 KiB, five
-  minutes) and sent first, oldest first, when the stream starts. The buffer applies the stream's
+  minutes) and sent, oldest first, when the stream starts. They are sent in batches whether or not
+  live batching is on: `ultipanel.logging.batch.size` records per `log_batch` message, the first at
+  once and then one every `batch.interval`; each keeps the time its record was logged, and a live
+  record logged meanwhile can arrive before the last batches. The buffer applies the stream's
   filters as records arrive and is released without sending anything when there is no cloud login
   or when its time is up; with the `logs` capability off it is not attached and keeps nothing.
+- **Lines about the panel connection are no longer sent to the panel.** The panel's `error` replies
+  and notifications, inbound messages the framework cannot use, the WebSocket client's connect,
+  disconnect, heartbeat and reconnect lines, and the warnings about a message that could not be sent
+  are written to the server console as before, but the log stream drops them. With
+  `ultipanel.logging.batch.enabled: false`, each logged `error` reply used to be streamed, rejected
+  by the panel's quota and replied to again: 42,066 `[WebSocket error] Rate limit exceeded` lines in
+  one measured run. A panel view that showed these lines no longer receives them.
 - **The `server.properties` refusal for a key the file does not hold** now reads `This key is not in
   this server's server.properties` instead of `This server version has no such key` (#473): nothing
   tells a key the running version lacks from one the file omits. A panel or tool that matched on the

@@ -86,8 +86,11 @@ ultipanel:
     # Grouping the live log stream sent to the panel into batches instead of one message per line.
     # 面板日志流是否按批次分组发送，而不是逐行发送。
     batch:
-      # Whether batching is enabled; disabling sends every log line immediately as its own message.
-      # 是否启用批量发送；关闭后每条日志都会作为独立消息立即发送。
+      # Whether batching is enabled; disabling sends every live log line immediately as its own
+      # message. The start-up records replayed when the panel connection opens are sent in batches
+      # of `size`, one every `interval`, either way.
+      # 是否启用批量发送；关闭后每条实时日志都会作为独立消息立即发送。面板连接建立时补发的启动期日志
+      # 无论是否开启，都按 `size` 条一批、每 `interval` 一批发送。
       enabled: true
       # Number of queued log entries that triggers an early send, ahead of the interval below.
       # A value below 1 is rejected at boot and the compiled-in default is kept, matching the
