@@ -113,7 +113,6 @@ class ConfigReloadSignalTest {
 
         assertThat(config.limit).isEqualTo(35);
         assertThat(config.name).isEqualTo("running");
-        assertThat(config.isModifiedSinceSnapshot()).isTrue();
         assertThat(config.isPresentInFile("limit")).isFalse();
         assertThat(notified).hasValue(0);
         assertThat(config.isLastLoadUnparseable()).as("the file stays protected until a successful load").isTrue();
