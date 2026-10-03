@@ -53,7 +53,10 @@ plain value `p` emitted by the converter (`p = toPlain(x)`), `toPlain(fromPlain(
 A converter may accept noncanonical input `q`; `toPlain(fromPlain(q))` is its canonical form, and
 normalization is stable: `fromPlain(toPlain(fromPlain(q)))` equals `fromPlain(q)`. Approved coercions
 (number to String, numeric text to int/float, `"false"` to boolean and duplicate elements to a Set)
-remain unchanged. Equality is semantic value comparison, not object identity; numeric plain values
+remain unchanged. 6.2's default parser stored every list element as text, so a 6.2-saved
+`List<Integer>` reads `- '60'`; 6.3.0 binds it as the number 60 and writes `- 60` the next time
+that file is saved by its module or a panel edit. Loading, reloading and the shutdown check never
+rewrite such a file on their own. Equality is semantic value comparison, not object identity; numeric plain values
 compare by value. Reload merges and panel leaf edits rely on forward equality. A converter that adds
 a value during reading without undoing that change during writing violates this contract.
 
