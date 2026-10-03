@@ -1426,13 +1426,10 @@ public class PluginManager {
         moduleJarIndex.record(mainClassName, pluginJar);
 
         try {
-            // GEN-07 (D-14): records what the removed classload filter layers would have refused
-            // for mainClassName, independent of whether loadClass below succeeds, throws
-            // ClassNotFoundException, or throws SecurityException -- classify() is a pure function
-            // of the name alone. Purely observational; never refuses. Kept for parity with every
-            // other class-load call site in this class even though there is now exactly one class
-            // to evaluate per module.
-            ClassLoaderUtils.recordClassloadFilterAudit(pluginJar.getName(), mainClassName);
+            // No class-load audit here (#557): this step used to record the main class and emit a
+            // summary for the jar, and the entity scan then emitted a second summary for the same jar,
+            // so every module was reported twice. The entity scan visits every class of the jar,
+            // including this one, so it is the single audit per module.
             // Use security-validated class loading (checks dangerous classes/packages)
             // but NOT loadPluginClass() which rejects non-UltiToolsPlugin classes
             Class<?> aClass = ClassLoaderUtils.loadClass(mainClassName);
@@ -1495,10 +1492,6 @@ public class PluginManager {
                 "[UltiTools-API] Security violation while loading declared main class '"
                     + mainClassName + "' for module '" + pluginJar.getName() + "': " + e.getMessage());
             return null;
-        } finally {
-            // GEN-07 (D-14): the audit summary, for parity with every other call site -- see
-            // recordClassloadFilterAudit's own comment above.
-            ClassLoaderUtils.emitClassloadFilterAuditSummary(pluginJar.getName());
         }
     }
 
@@ -1561,14 +1554,11 @@ public class PluginManager {
         } finally {
             // D-19: fires after the entity scan loop finishes, whether it completed normally or
             // the jar itself could not be read -- exactly once per call, naming pluginJar as the
-            // module. Independent of loadPluginMainClass's own emitSummary call above: the two
-            // scan the same jar for different purposes and may run at different times, so each
-            // owns its own accumulator lifecycle for the classes it individually recorded.
+            // module.
             ModuleScanDiagnostics.emitSummary(pluginJar.getName());
-            // GEN-07 (D-14): the audit summary lands at the same point, so the two diagnostics
-            // read as one pattern rather than two. Same independence rationale as
-            // ModuleScanDiagnostics above -- this scan owns its own ClassloadFilterAudit
-            // accumulator lifecycle, separate from loadPluginMainClass's.
+            // GEN-07 (D-14): the class-load audit summary lands at the same point, so the two
+            // diagnostics read as one pattern. This is the only place a jar's audit is emitted
+            // (#557): the scan records every class of the jar, the main class included.
             ClassLoaderUtils.emitClassloadFilterAuditSummary(pluginJar.getName());
         }
         return entities;
@@ -1727,7 +1717,7 @@ public class PluginManager {
      * prose message (Codex review, PR #551 round 1, P2).
      */
     private static final Pattern INTERNAL_CLASS_NAME_PATTERN =
-            Pattern.compile("[A-Za-z_$][A-Za-zA-Z0-9_$]*(?:/[A-Za-z_$][A-Za-zA-Z0-9_$]*)*");
+            Pattern.compile("[A-Za-z_$][A-Za-z0-9_$]*(?:/[A-Za-z_$][A-Za-z0-9_$]*)*");
 
     /**
      * Extraction of the internal (dot-qualified) name of the class {@code failure} reports
@@ -2157,7 +2147,7 @@ public class PluginManager {
             }
             if (existing.isNewerVersionThan(plugin)) {
                 Bukkit.getLogger().log(Level.WARNING,
-                        String.format("[UltiTools-API] %s load failed！There is already a new version！", plugin.getPluginName()));
+                        String.format("[UltiTools-API] %s load failed! There is already a new version!", plugin.getPluginName()));
                 return true;
             }
         }
@@ -2225,7 +2215,7 @@ public class PluginManager {
     private boolean isUltiToolsVersionCompatible(UltiToolsPlugin plugin) {
         if (plugin.getMinUltiToolsVersion() > UltiTools.getPluginVersion()) {
             Bukkit.getLogger().log(Level.WARNING,
-                    String.format("[UltiTools-API] %s load failed！UltiTools version is outdated！", plugin.getPluginName()));
+                    String.format("[UltiTools-API] %s load failed! UltiTools version is outdated!", plugin.getPluginName()));
             return false;
         }
         return true;
@@ -2259,12 +2249,12 @@ public class PluginManager {
                 try { plugin.getContext().close(); }
                 finally { releaseConfigEntities(plugin); }
                 Bukkit.getLogger().log(Level.WARNING,
-                        String.format("[UltiTools-API] %s load failed！Version: %s。", plugin.getPluginName(), plugin.getVersion()));
+                        String.format("[UltiTools-API] %s load failed! Version: %s.", plugin.getPluginName(), plugin.getVersion()));
             }
             return registerSelf;
         } catch (Exception | Error e) {
             Bukkit.getLogger().log(Level.WARNING, e, String::new);
-            Bukkit.getLogger().log(Level.WARNING, String.format("[UltiTools-API] %s load failed！", plugin.getPluginName()));
+            Bukkit.getLogger().log(Level.WARNING, String.format("[UltiTools-API] %s load failed!", plugin.getPluginName()));
             // WR-02 (#410): onPluginRegistered() may have already run pluginList.add(plugin)
             // and recorded some of this module's beans' @Scheduled tasks (correctly, per
             // TaskManager's own #410 fix) before a LATER bean's own scheduling call threw.
@@ -2281,7 +2271,7 @@ public class PluginManager {
                 } catch (Exception | Error unregisterFailure) {
                     Bukkit.getLogger().log(Level.WARNING, unregisterFailure, String::new);
                     Bukkit.getLogger().log(Level.WARNING, String.format(
-                            "[UltiTools-API] %s failed to unregister cleanly after a failed load！",
+                            "[UltiTools-API] %s failed to unregister cleanly after a failed load!",
                             plugin.getPluginName()));
                     // #457's unregister() now closes the context in a finally (see its
                     // javadoc), so it has already run -- successfully or not -- by the time
@@ -2321,7 +2311,7 @@ public class PluginManager {
             }
         }
         Bukkit.getLogger().log(Level.INFO,
-                String.format("[UltiTools-API] %s loaded！Version: %s。", plugin.getPluginName(), plugin.getVersion()));
+                String.format("[UltiTools-API] %s loaded! Version: %s.", plugin.getPluginName(), plugin.getVersion()));
     }
 
     /**

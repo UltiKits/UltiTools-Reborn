@@ -345,281 +345,6 @@ class CommandExecutionManagerTest {
     }
 
     @Nested
-    @DisplayName("CommandOutputCapture 详细测试")
-    class CommandOutputCaptureDetailedTests {
-
-        @Test
-        @DisplayName("sendMessage(String) 应该捕获消息并添加换行")
-        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
-        void sendMessageShouldCaptureWithNewline() throws Exception {
-            // 使用反射访问内部类
-            Class<?> captureClass = Class.forName("com.ultikits.ultitools.manager.CommandExecutionManager$CommandOutputCapture");
-            java.lang.reflect.Constructor<?> constructor = captureClass.getDeclaredConstructor(org.bukkit.command.CommandSender.class);
-            constructor.setAccessible(true);
-            
-            org.bukkit.command.CommandSender delegate = mock(org.bukkit.command.CommandSender.class);
-            Object capture = constructor.newInstance(delegate);
-            
-            // 调用 sendMessage
-            java.lang.reflect.Method sendMessage = captureClass.getMethod("sendMessage", String.class);
-            sendMessage.invoke(capture, "Test message");
-            
-            // 获取输出
-            java.lang.reflect.Method getOutput = captureClass.getMethod("getOutput");
-            String output = (String) getOutput.invoke(capture);
-            
-            assertThat(output).isEqualTo("Test message");
-        }
-
-        @Test
-        @DisplayName("sendMessage(String...) 应该捕获多条消息")
-        void sendMessageArrayShouldCaptureMultiple() throws Exception {
-            Class<?> captureClass = Class.forName("com.ultikits.ultitools.manager.CommandExecutionManager$CommandOutputCapture");
-            java.lang.reflect.Constructor<?> constructor = captureClass.getDeclaredConstructor(org.bukkit.command.CommandSender.class);
-            constructor.setAccessible(true);
-            
-            org.bukkit.command.CommandSender delegate = mock(org.bukkit.command.CommandSender.class);
-            Object capture = constructor.newInstance(delegate);
-            
-            java.lang.reflect.Method sendMessages = captureClass.getMethod("sendMessage", String[].class);
-            sendMessages.invoke(capture, (Object) new String[]{"Message 1", "Message 2", "Message 3"});
-            
-            java.lang.reflect.Method getOutput = captureClass.getMethod("getOutput");
-            String output = (String) getOutput.invoke(capture);
-            
-            assertThat(output).contains("Message 1", "Message 2", "Message 3");
-        }
-
-        @Test
-        @DisplayName("sendMessage(UUID, String) 应该捕获消息")
-        void sendMessageWithUuidShouldCapture() throws Exception {
-            Class<?> captureClass = Class.forName("com.ultikits.ultitools.manager.CommandExecutionManager$CommandOutputCapture");
-            java.lang.reflect.Constructor<?> constructor = captureClass.getDeclaredConstructor(org.bukkit.command.CommandSender.class);
-            constructor.setAccessible(true);
-            
-            org.bukkit.command.CommandSender delegate = mock(org.bukkit.command.CommandSender.class);
-            Object capture = constructor.newInstance(delegate);
-            
-            java.lang.reflect.Method sendMessageUuid = captureClass.getMethod("sendMessage", java.util.UUID.class, String.class);
-            sendMessageUuid.invoke(capture, java.util.UUID.randomUUID(), "UUID message");
-            
-            java.lang.reflect.Method getOutput = captureClass.getMethod("getOutput");
-            String output = (String) getOutput.invoke(capture);
-            
-            assertThat(output).isEqualTo("UUID message");
-        }
-
-        @Test
-        @DisplayName("sendMessage(UUID, String...) 应该捕获多条消息")
-        void sendMessageWithUuidArrayShouldCapture() throws Exception {
-            Class<?> captureClass = Class.forName("com.ultikits.ultitools.manager.CommandExecutionManager$CommandOutputCapture");
-            java.lang.reflect.Constructor<?> constructor = captureClass.getDeclaredConstructor(org.bukkit.command.CommandSender.class);
-            constructor.setAccessible(true);
-            
-            org.bukkit.command.CommandSender delegate = mock(org.bukkit.command.CommandSender.class);
-            Object capture = constructor.newInstance(delegate);
-            
-            java.lang.reflect.Method sendMessagesUuid = captureClass.getMethod("sendMessage", java.util.UUID.class, String[].class);
-            sendMessagesUuid.invoke(capture, java.util.UUID.randomUUID(), new String[]{"Msg A", "Msg B"});
-            
-            java.lang.reflect.Method getOutput = captureClass.getMethod("getOutput");
-            String output = (String) getOutput.invoke(capture);
-            
-            assertThat(output).contains("Msg A", "Msg B");
-        }
-
-        @Test
-        @DisplayName("delegate 方法应该正确委托")
-        void delegateMethodsShouldWork() throws Exception {
-            Class<?> captureClass = Class.forName("com.ultikits.ultitools.manager.CommandExecutionManager$CommandOutputCapture");
-            java.lang.reflect.Constructor<?> constructor = captureClass.getDeclaredConstructor(org.bukkit.command.CommandSender.class);
-            constructor.setAccessible(true);
-            
-            org.bukkit.command.CommandSender delegate = mock(org.bukkit.command.CommandSender.class);
-            when(delegate.getName()).thenReturn("TestSender");
-            when(delegate.isOp()).thenReturn(true);
-            when(delegate.hasPermission("test.perm")).thenReturn(true);
-            when(delegate.isPermissionSet("test.perm")).thenReturn(true);
-            when(delegate.getServer()).thenReturn(server);
-            
-            Object capture = constructor.newInstance(delegate);
-            
-            // 测试各个委托方法
-            java.lang.reflect.Method getName = captureClass.getMethod("getName");
-            assertThat(getName.invoke(capture)).isEqualTo("TestSender");
-            
-            java.lang.reflect.Method isOp = captureClass.getMethod("isOp");
-            assertThat(isOp.invoke(capture)).isEqualTo(true);
-            
-            java.lang.reflect.Method hasPermission = captureClass.getMethod("hasPermission", String.class);
-            assertThat(hasPermission.invoke(capture, "test.perm")).isEqualTo(true);
-            
-            java.lang.reflect.Method isPermissionSet = captureClass.getMethod("isPermissionSet", String.class);
-            assertThat(isPermissionSet.invoke(capture, "test.perm")).isEqualTo(true);
-            
-            java.lang.reflect.Method getServer = captureClass.getMethod("getServer");
-            assertThat(getServer.invoke(capture)).isEqualTo(server);
-        }
-
-        @Test
-        @DisplayName("setOp 应该委托给 delegate")
-        void setOpShouldDelegate() throws Exception {
-            Class<?> captureClass = Class.forName("com.ultikits.ultitools.manager.CommandExecutionManager$CommandOutputCapture");
-            java.lang.reflect.Constructor<?> constructor = captureClass.getDeclaredConstructor(org.bukkit.command.CommandSender.class);
-            constructor.setAccessible(true);
-            
-            org.bukkit.command.CommandSender delegate = mock(org.bukkit.command.CommandSender.class);
-            Object capture = constructor.newInstance(delegate);
-            
-            java.lang.reflect.Method setOp = captureClass.getMethod("setOp", boolean.class);
-            setOp.invoke(capture, true);
-            
-            verify(delegate).setOp(true);
-        }
-
-        @Test
-        @DisplayName("recalculatePermissions 应该委托给 delegate")
-        void recalculatePermissionsShouldDelegate() throws Exception {
-            Class<?> captureClass = Class.forName("com.ultikits.ultitools.manager.CommandExecutionManager$CommandOutputCapture");
-            java.lang.reflect.Constructor<?> constructor = captureClass.getDeclaredConstructor(org.bukkit.command.CommandSender.class);
-            constructor.setAccessible(true);
-            
-            org.bukkit.command.CommandSender delegate = mock(org.bukkit.command.CommandSender.class);
-            Object capture = constructor.newInstance(delegate);
-            
-            java.lang.reflect.Method recalc = captureClass.getMethod("recalculatePermissions");
-            recalc.invoke(capture);
-            
-            verify(delegate).recalculatePermissions();
-        }
-
-        @Test
-        @DisplayName("getEffectivePermissions 应该委托给 delegate")
-        void getEffectivePermissionsShouldDelegate() throws Exception {
-            Class<?> captureClass = Class.forName("com.ultikits.ultitools.manager.CommandExecutionManager$CommandOutputCapture");
-            java.lang.reflect.Constructor<?> constructor = captureClass.getDeclaredConstructor(org.bukkit.command.CommandSender.class);
-            constructor.setAccessible(true);
-            
-            org.bukkit.command.CommandSender delegate = mock(org.bukkit.command.CommandSender.class);
-            java.util.Set<org.bukkit.permissions.PermissionAttachmentInfo> perms = new java.util.HashSet<>();
-            when(delegate.getEffectivePermissions()).thenReturn(perms);
-            
-            Object capture = constructor.newInstance(delegate);
-            
-            java.lang.reflect.Method getEffective = captureClass.getMethod("getEffectivePermissions");
-            assertThat(getEffective.invoke(capture)).isEqualTo(perms);
-        }
-
-        @Test
-        @DisplayName("Permission 对象版本的方法应该正确委托")
-        void permissionObjectMethodsShouldDelegate() throws Exception {
-            Class<?> captureClass = Class.forName("com.ultikits.ultitools.manager.CommandExecutionManager$CommandOutputCapture");
-            java.lang.reflect.Constructor<?> constructor = captureClass.getDeclaredConstructor(org.bukkit.command.CommandSender.class);
-            constructor.setAccessible(true);
-            
-            org.bukkit.command.CommandSender delegate = mock(org.bukkit.command.CommandSender.class);
-            org.bukkit.permissions.Permission perm = new org.bukkit.permissions.Permission("test.perm");
-            when(delegate.hasPermission(perm)).thenReturn(true);
-            when(delegate.isPermissionSet(perm)).thenReturn(true);
-            
-            Object capture = constructor.newInstance(delegate);
-            
-            java.lang.reflect.Method hasPermPerm = captureClass.getMethod("hasPermission", org.bukkit.permissions.Permission.class);
-            assertThat(hasPermPerm.invoke(capture, perm)).isEqualTo(true);
-            
-            java.lang.reflect.Method isPermSetPerm = captureClass.getMethod("isPermissionSet", org.bukkit.permissions.Permission.class);
-            assertThat(isPermSetPerm.invoke(capture, perm)).isEqualTo(true);
-        }
-
-        @Test
-        @DisplayName("addAttachment 方法应该正确委托")
-        void addAttachmentMethodsShouldDelegate() throws Exception {
-            Class<?> captureClass = Class.forName("com.ultikits.ultitools.manager.CommandExecutionManager$CommandOutputCapture");
-            java.lang.reflect.Constructor<?> constructor = captureClass.getDeclaredConstructor(org.bukkit.command.CommandSender.class);
-            constructor.setAccessible(true);
-            
-            org.bukkit.command.CommandSender delegate = mock(org.bukkit.command.CommandSender.class);
-            org.bukkit.plugin.Plugin mockPlugin = mock(org.bukkit.plugin.Plugin.class);
-            org.bukkit.permissions.PermissionAttachment mockAttachment = mock(org.bukkit.permissions.PermissionAttachment.class);
-            
-            when(delegate.addAttachment(mockPlugin)).thenReturn(mockAttachment);
-            when(delegate.addAttachment(mockPlugin, "perm", true)).thenReturn(mockAttachment);
-            when(delegate.addAttachment(mockPlugin, 10)).thenReturn(mockAttachment);
-            when(delegate.addAttachment(mockPlugin, "perm", true, 10)).thenReturn(mockAttachment);
-            
-            Object capture = constructor.newInstance(delegate);
-            
-            // Test addAttachment(Plugin)
-            java.lang.reflect.Method addAttach1 = captureClass.getMethod("addAttachment", org.bukkit.plugin.Plugin.class);
-            assertThat(addAttach1.invoke(capture, mockPlugin)).isEqualTo(mockAttachment);
-            
-            // Test addAttachment(Plugin, String, boolean)
-            java.lang.reflect.Method addAttach2 = captureClass.getMethod("addAttachment", org.bukkit.plugin.Plugin.class, String.class, boolean.class);
-            assertThat(addAttach2.invoke(capture, mockPlugin, "perm", true)).isEqualTo(mockAttachment);
-            
-            // Test addAttachment(Plugin, int)
-            java.lang.reflect.Method addAttach3 = captureClass.getMethod("addAttachment", org.bukkit.plugin.Plugin.class, int.class);
-            assertThat(addAttach3.invoke(capture, mockPlugin, 10)).isEqualTo(mockAttachment);
-            
-            // Test addAttachment(Plugin, String, boolean, int)
-            java.lang.reflect.Method addAttach4 = captureClass.getMethod("addAttachment", org.bukkit.plugin.Plugin.class, String.class, boolean.class, int.class);
-            assertThat(addAttach4.invoke(capture, mockPlugin, "perm", true, 10)).isEqualTo(mockAttachment);
-        }
-
-        @Test
-        @DisplayName("removeAttachment 应该委托给 delegate")
-        void removeAttachmentShouldDelegate() throws Exception {
-            Class<?> captureClass = Class.forName("com.ultikits.ultitools.manager.CommandExecutionManager$CommandOutputCapture");
-            java.lang.reflect.Constructor<?> constructor = captureClass.getDeclaredConstructor(org.bukkit.command.CommandSender.class);
-            constructor.setAccessible(true);
-            
-            org.bukkit.command.CommandSender delegate = mock(org.bukkit.command.CommandSender.class);
-            org.bukkit.permissions.PermissionAttachment mockAttachment = mock(org.bukkit.permissions.PermissionAttachment.class);
-            
-            Object capture = constructor.newInstance(delegate);
-            
-            java.lang.reflect.Method removeAttach = captureClass.getMethod("removeAttachment", org.bukkit.permissions.PermissionAttachment.class);
-            removeAttach.invoke(capture, mockAttachment);
-            
-            verify(delegate).removeAttachment(mockAttachment);
-        }
-
-        @Test
-        @DisplayName("spigot 方法应该委托给 delegate")
-        void spigotShouldDelegate() throws Exception {
-            Class<?> captureClass = Class.forName("com.ultikits.ultitools.manager.CommandExecutionManager$CommandOutputCapture");
-            java.lang.reflect.Constructor<?> constructor = captureClass.getDeclaredConstructor(org.bukkit.command.CommandSender.class);
-            constructor.setAccessible(true);
-            
-            org.bukkit.command.CommandSender delegate = mock(org.bukkit.command.CommandSender.class);
-            org.bukkit.command.CommandSender.Spigot spigotMock = mock(org.bukkit.command.CommandSender.Spigot.class);
-            when(delegate.spigot()).thenReturn(spigotMock);
-            
-            Object capture = constructor.newInstance(delegate);
-            
-            java.lang.reflect.Method spigot = captureClass.getMethod("spigot");
-            assertThat(spigot.invoke(capture)).isEqualTo(spigotMock);
-        }
-
-        @Test
-        @DisplayName("name 方法应该委托给 delegate")
-        void nameShouldDelegate() throws Exception {
-            Class<?> captureClass = Class.forName("com.ultikits.ultitools.manager.CommandExecutionManager$CommandOutputCapture");
-            java.lang.reflect.Constructor<?> constructor = captureClass.getDeclaredConstructor(org.bukkit.command.CommandSender.class);
-            constructor.setAccessible(true);
-            
-            org.bukkit.command.CommandSender delegate = mock(org.bukkit.command.CommandSender.class);
-            net.kyori.adventure.text.Component nameComponent = net.kyori.adventure.text.Component.text("TestName");
-            when(delegate.name()).thenReturn(nameComponent);
-            
-            Object capture = constructor.newInstance(delegate);
-            
-            java.lang.reflect.Method name = captureClass.getMethod("name");
-            assertThat(name.invoke(capture)).isEqualTo(nameComponent);
-        }
-    }
-
-    @Nested
     @DisplayName("executeCommandInternal 详细测试")
     class ExecuteCommandInternalTests {
 
@@ -1372,6 +1097,64 @@ class CommandExecutionManagerTest {
             // MUST restore: a leaked default locale corrupts every later test in the 5340-test
             // suite, not just this class.
             java.util.Locale.setDefault(originalLocale);
+        }
+    }
+
+    @Nested
+    @DisplayName("command_result is honest about where the output goes (console mirror, as of 6.3.0)")
+    class HonestResultTests {
+
+        private JsonObject runAndCaptureResultData(String command, String commandId) {
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", command);
+            commandData.addProperty("executor", "console");
+            commandData.addProperty("commandId", commandId);
+
+            manager.executeCommand(commandData);
+            server.getScheduler().performOneTick();
+
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient).sendMessage(captor.capture());
+            return captor.getValue().getAsJsonObject("data");
+        }
+
+        @Test
+        @DisplayName("an accepted command runs as the server console and the result says it was dispatched, "
+                + "not that it succeeded with output")
+        void acceptedCommand_saysDispatchedAndPointsToLogStream() {
+            java.util.concurrent.atomic.AtomicReference<org.bukkit.command.CommandSender> seen =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            server.getCommandMap().register("mirrortest", new org.bukkit.command.Command("mirrortest") {
+                @Override
+                public boolean execute(org.bukkit.command.CommandSender sender, String label, String[] args) {
+                    seen.set(sender);
+                    sender.sendMessage("Cannot delete the default world!");
+                    return true;
+                }
+            });
+
+            JsonObject data = runAndCaptureResultData("mirrortest", "honest-accepted");
+
+            // Console identity is kept: the module sees the server's own console sender.
+            assertThat(seen.get()).isSameAs(server.getConsoleSender());
+            assertThat(data.get("success").getAsBoolean()).isTrue();
+            assertThat(data.get("output").getAsString())
+                    .isEqualTo(CommandExecutionManager.DISPATCHED_OUTPUT)
+                    .contains("dispatched to the server console")
+                    .contains("server log stream")
+                    .doesNotContain("executed successfully");
+        }
+
+        @Test
+        @DisplayName("a command the console does not accept is reported as not accepted, still pointing to the log stream")
+        void rejectedCommand_saysNotAcceptedAndPointsToLogStream() {
+            JsonObject data = runAndCaptureResultData("definitely_not_a_registered_command", "honest-rejected");
+
+            assertThat(data.get("success").getAsBoolean()).isFalse();
+            assertThat(data.get("output").getAsString())
+                    .isEqualTo(CommandExecutionManager.NOT_ACCEPTED_OUTPUT)
+                    .contains("server log stream")
+                    .doesNotContain("Command execution failed");
         }
     }
 }

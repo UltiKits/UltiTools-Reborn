@@ -6,7 +6,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.logging.ConsoleHandler;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -32,20 +31,23 @@ import java.util.logging.Logger;
  * classloading scan ({@code initPluginModules()}) before it constructs {@code RemoteActionLog}
  * ({@code initWebSocketManagers()}) -- the log does not exist yet at the point this evaluator
  * needs to run. Its {@code Verdict} is also {@code ALLOWED}/{@code DENIED}, and "would have been
- * denied under the old gate but is now unconditionally allowed" is neither. Logging follows the
- * same discipline {@code RemoteActionLog} and {@code ModuleScanDiagnostics} establish: a dedicated
- * non-root {@link Logger} with {@code setUseParentHandlers(false)}, so a record here can never
- * reach {@code SystemLogHandler} (which attaches only to the root logger and auto-reports any
- * {@link Level#SEVERE} record carrying a {@link Throwable} into {@code ErrorReportCollector}) and
- * risk the circular-logging hazard both of those classes' javadoc already warns about.
- * {@code setUseParentHandlers(false)} also disconnects this logger from the root logger's own
- * handlers -- the console/{@code logs/latest.log} sink the server installs there -- so, exactly
- * like {@code ModuleScanDiagnostics}, a dedicated {@link ConsoleHandler} is attached directly in
- * the static initializer below to restore that reach without restoring the
- * {@code SystemLogHandler} path. Internal failures of this evaluator itself would print to
- * {@link System#err} rather than through any {@link Logger} -- the same discipline, for the same
- * reason -- but this class has no internal failure mode: {@link #classify(String)} is a pure
- * function over in-memory {@link Set}s and never throws.
+ * denied under the old gate but is now unconditionally allowed" is neither.
+ * <p>
+ * <b>Logging (#557).</b> Records go to a dedicated non-root {@link Logger} with
+ * {@code setUseParentHandlers(false)}, so a record here never propagates on its own to the root
+ * logger that {@code SystemLogHandler} watches (that handler auto-reports any SEVERE record carrying
+ * a {@link Throwable} into {@code ErrorReportCollector}). A {@link PluginLoggerBridge} forwards INFO
+ * and above to the plugin's own logger, so an operator sees the line at its real level and in the
+ * server's normal log format. An earlier private console handler wrote to the standard error stream,
+ * which Paper prints as two WARN lines per record. What an operator sees, by design:
+ * <ul>
+ *   <li>a clean result (no class would have been refused) is logged at FINE, below what is
+ *       forwarded, and so is not shown -- the class-name filters no longer exist, so "nothing
+ *       would have been refused" is not news;</li>
+ *   <li>a non-clean result is one INFO line per module jar, naming the module and the count.</li>
+ * </ul>
+ * The summary is emitted once per module jar, by the entity scan that visits every class of the jar;
+ * the main-class step does not audit, because the scan covers the main class too.
  * <p>
  * <b>Locale.ROOT, not the default locale.</b> The removed {@code isSafeClassName} lowercased with
  * the no-argument {@code String#toLowerCase()}, which uses the JVM's default locale. Under a
@@ -64,40 +66,29 @@ final class ClassloadFilterAudit {
     private static final Logger AUDIT_LOGGER = Logger.getLogger(ClassloadFilterAudit.class.getName());
 
     /**
-     * The level of this class's own {@link ConsoleHandler}. Named, package-private and asserted on
-     * by {@code ClassloadFilterAuditTest} rather than left inline: the live handler list on a JUL
-     * logger is global mutable state that other tests in the same JVM add to and remove from, so a
-     * test that reads it back is order-dependent. This constant is the decision itself.
+     * The least severe level {@link PluginLoggerBridge} forwards to the plugin logger. Named,
+     * package-private and asserted on by {@code ClassloadFilterAuditTest} rather than left inline: the
+     * live handler list on a JUL logger is global mutable state that other tests in the same JVM add to
+     * and remove from, so a test that reads it back is order-dependent. This constant is the decision
+     * itself.
+     * <p>
+     * It is INFO, not ALL, on purpose: {@link #record} logs FINE for every class {@link #classify}
+     * returns a layer for, and that is every class of a third-party module (anything outside the seven
+     * trusted prefixes), up to a thousand per module. Forwarding those would print up to a thousand
+     * lines per module on top of the one INFO summary that is the operator-facing output. The logger
+     * itself stays at ALL so a test- or debug-attached handler still receives FINE.
      */
-    static final Level CONSOLE_HANDLER_LEVEL = Level.INFO;
+    static final Level FORWARD_LEVEL = Level.INFO;
 
     static {
         // Load-bearing (see class javadoc): the only way this logger's records could reach
-        // SystemLogHandler is by propagating to the root logger, and this call removes that path
-        // entirely.
+        // SystemLogHandler on their own is by propagating to the root logger, and this call removes
+        // that path entirely.
         AUDIT_LOGGER.setUseParentHandlers(false);
         AUDIT_LOGGER.setLevel(Level.ALL);
-        // setUseParentHandlers(false) above also disconnects this logger from the root logger's
-        // own handlers -- the console/logs-latest.log sink the server installs there. A dedicated
-        // handler restores that reach without restoring the SystemLogHandler path. Matches
-        // ModuleScanDiagnostics's identical fix, confirmed on a real server in 07-JAPICMP-BASELINE.md's
-        // "D-19 diagnostic observation" section -- found here by the same real-server verification
-        // step this class's own D-14 mandates (Rule 1: a logger with no handler and parent
-        // handlers disabled produces no output anywhere, silently).
-        //
-        // 07-fix: this handler sits at INFO, NOT ALL -- deliberately differing from
-        // ModuleScanDiagnostics's otherwise identical block, because the two emit at completely
-        // different volumes. ModuleScanDiagnostics logs FINE only for a class that actually failed
-        // to load, which is rare. This class logs FINE for every class classify() returns a layer
-        // for, and classify() returns WHITELIST for anything outside the seven trusted prefixes --
-        // that is EVERY class of a third-party module, once per class, from the per-class scan
-        // loops at PluginManager:474 and :622 (capped at 1000 classes per JAR by PluginManager:357).
-        // At ALL that is up to a thousand console lines per module at startup, on top of the one
-        // INFO summary that is the actual operator-facing output. The logger itself stays at ALL so
-        // a test- or debug-attached handler still receives FINE.
-        ConsoleHandler consoleHandler = new ConsoleHandler();
-        consoleHandler.setLevel(CONSOLE_HANDLER_LEVEL);
-        AUDIT_LOGGER.addHandler(consoleHandler);
+        // With parent handlers off, the server's console sink is out of reach too. Forward INFO and above
+        // to the plugin logger so an operator still sees a non-clean audit, at its real level.
+        AUDIT_LOGGER.addHandler(new PluginLoggerBridge(FORWARD_LEVEL));
     }
 
     // The four lists SecurityPolicy used to own directly, relocated here by D-14. Package-private
@@ -267,16 +258,19 @@ final class ClassloadFilterAudit {
             counts[layer.ordinal()]++;
         }
         AUDIT_LOGGER.log(Level.FINE, "Module '" + moduleName + "': class '" + className + "' "
-                + layer.describe() + " -- GEN-07 removed this layer, so it was allowed to load.");
+                + layer.describe() + " -- the class-name filters were removed in 6.3.0, so it was "
+                + "allowed to load.");
     }
 
     /**
-     * Emits exactly ONE {@link Level#INFO} summary for {@code moduleName}, ALWAYS -- even when
-     * nothing was recorded for it. A module in which the removed layers would have refused
-     * nothing is itself the measurement (Test 8), not silence; this differs deliberately from
-     * {@code ModuleScanDiagnostics.emitSummary}, which is a no-op when its accumulator is empty.
-     * Resets the accumulator for {@code moduleName} afterward, so a subsequent re-scan of the same
-     * module starts clean.
+     * Emits exactly ONE summary for {@code moduleName}: one {@link Level#INFO} line when at least one
+     * class would have been refused by a removed layer, or one {@link Level#FINE} line when none would
+     * (a clean result is the expected case, not operator news). Resets the accumulator for
+     * {@code moduleName} afterward, so a subsequent re-scan of the same module starts clean.
+     * <p>
+     * This differs deliberately from {@code ModuleScanDiagnostics.emitSummary}, which emits nothing
+     * when its accumulator is empty: here a clean module is still a recorded measurement, just not one
+     * that is forwarded to the console.
      *
      * @param moduleName the module whose scan just finished
      */
@@ -292,14 +286,19 @@ final class ClassloadFilterAudit {
         for (int count : counts) {
             total += count;
         }
-        String message = "Module '" + moduleName + "' classload-filter audit: " + total
-                + " class(es) would have been refused by GEN-07's removed layers -- exact-name "
-                + "blacklist: " + counts[Layer.EXACT_BLACKLIST.ordinal()] + ", dangerous package "
-                + "prefix: " + counts[Layer.PACKAGE_PREFIX.ordinal()] + ", trusted-package "
-                + "whitelist: " + counts[Layer.WHITELIST.ordinal()] + ", suspicious keyword: "
-                + counts[Layer.KEYWORD.ordinal()] + ". These layers no longer refuse anything -- "
-                + "this is telemetry only.";
-        AUDIT_LOGGER.log(Level.INFO, message);
+        if (total == 0) {
+            AUDIT_LOGGER.log(Level.FINE, "Module '" + moduleName + "' class-load audit: no class would have "
+                    + "been refused by the class-name filters removed in 6.3.0.");
+            return;
+        }
+        AUDIT_LOGGER.log(Level.INFO, "Module '" + moduleName + "' class-load audit: " + total
+                + " class(es) would have been refused by the class-name filters removed in 6.3.0"
+                + " (exact-name blacklist: " + counts[Layer.EXACT_BLACKLIST.ordinal()]
+                + ", dangerous package prefix: " + counts[Layer.PACKAGE_PREFIX.ordinal()]
+                + ", trusted-package whitelist: " + counts[Layer.WHITELIST.ordinal()]
+                + ", suspicious keyword: " + counts[Layer.KEYWORD.ordinal()] + ")."
+                + " Those filters no longer refuse anything, so the module loaded normally; this is for"
+                + " information only.");
     }
 
     private static boolean isBlank(String value) {

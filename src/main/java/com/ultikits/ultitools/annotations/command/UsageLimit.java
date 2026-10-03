@@ -23,6 +23,14 @@ import java.lang.annotation.Target;
  * {@link #ContainConsole()} defaults to {@code true} as of 6.3.0 -- a console sender is subject
  * to this limit unless a mapping opts out explicitly.
  * <p>
+ * <b>Re-entry (as of 6.3.0).</b> A command body runs at dispatch on the server thread, so a body
+ * that dispatches its own command -- {@code performCommand} or {@code Bukkit.dispatchCommand} --
+ * runs the nested dispatch while its own lock is still held. The nested dispatch is refused with
+ * the ordinary lock message ({@code SENDER}: from the same sender; {@code ALL}: from any sender);
+ * acquisition never waits, so nothing blocks and nothing deadlocks. The outer body's lock is
+ * released when the outer body returns, normally or by throwing. A body that must run its own
+ * command again should schedule it with {@code runTask} instead.
+ * <p>
  * A mapping -- or the executor class itself -- carrying this annotation with {@link LimitType#SENDER}
  * or {@link LimitType#ALL} whose chain omits {@code UsageLockValidator} is refused at plugin load,
  * naming the offending class and, when known, the offending mapping method (SILENT-11 / D-01,

@@ -1100,6 +1100,178 @@ The migration period runs in two steps:
 This section follows [PEP 387](https://peps.python.org/pep-0387/); the principle is the same one:
 tell people which floor they are standing on before removing it.
 
+### Command bodies run at dispatch (6.3.0) — changed without a migration period
+
+This is a change "in the timing of a side effect", the last kind listed above, made in 6.3.0 without
+the two-step period by the maintainer's decision of 2026-09-29 (#541), which accepted that it changes
+command timing for **every module, third-party modules included**.
+
+**What changed.** Before 6.3.0, `BaseCommandExecutor` ran every synchronous command body one tick after
+the command was dispatched. As of 6.3.0 the body runs **at dispatch**, inside the call that dispatched
+it, whenever that call is on the server's primary thread — which is where Bukkit dispatches everything
+a player, the console, a command block, a command minecart, RCON or the panel sends. It is handed to
+`runTask` only when `onCommand` is called from another thread, as Bukkit's own commands behave. An
+`@AsyncCommand` or `@RunAsync` body is unchanged: it always runs asynchronously. The deferral had no
+recorded reason: it came from sharing one `BukkitRunnable` with `@RunAsync` in 6.0.0.
+
+**Why.** Paper 1.21.11 records a command block's output only while its dispatch is open, and RCON
+reads its output as soon as the dispatch returns, so a deferred body's replies to those senders were
+lost. (The panel's remote command runs as the server console, whose replies no sender can read; they
+reach the panel through the log stream instead — see "The panel's log stream mirrors the server
+console" below.) The deferral also let two dispatches in one tick both pass
+`@CmdCD`, because the cooldown was recorded when the deferred body finished; the cooldown is now
+recorded before the first dispatch returns.
+
+**What a module author has to check.**
+
+- Code that relied on the one-tick delay — for example a command body that expected the dispatching
+  event to have finished first — must schedule that work itself with `runTask`.
+- **Paper's rule for inventory clicks.** An `InventoryClickEvent` handler (including a GUI library's
+  `onClick` callback) must not open or close an inventory directly, and must not call
+  `performCommand` or `Bukkit.dispatchCommand` directly either: a module command dispatched there now
+  runs its body — which may open or close an inventory — inside the click event. Defer the call with
+  `Bukkit.getScheduler().runTask(...)`. The fifteen UltiKits modules were surveyed; the handlers that
+  did this are tracked as UltiMenu#28, UltiSocial#27, UltiKits#41, UltiMail#43 and UltiWorlds#50.
+- **A body that dispatches another command** runs the nested body on the same thread before its own
+  has finished. The audit user (`AuditableDataEntity`'s current user, written into `created_by` /
+  `updated_by`) is saved before each body and restored after it: the nested body sees its own sender
+  (none for a sender that is not a player), the outer body sees its own sender again afterwards, and a
+  thread that carried no user before the outermost command carries none after it. Before 6.3.0 the
+  body cleared the user when it finished.
+- **`@UsageLimit` and re-entry.** A body that dispatches its own command while holding its lock gets
+  the nested dispatch refused with the ordinary lock message (`SENDER`: from the same sender; `ALL`:
+  from any sender). Acquiring never waits, so nothing blocks; the outer lock is released when the
+  outer body returns, normally or by throwing. Schedule the nested call with `runTask` if it must run.
+  A body that dispatches its own command **without** `@UsageLimit` and without a stopping condition
+  now recurses on the main thread until the stack overflows; before 6.3.0 it repeated once a tick.
+- **Two dispatches in one tick meet the cooldown.** The second of two dispatches of a `@CmdCD` command
+  by one player in the same tick is refused.
+
+### Other command and task runtime changes (6.3.0) that need no migration period
+
+Each corrects behaviour that contradicted the documentation or left state held by mistake.
+
+- **Active `@CmdCD` cooldowns are kept per executor instance** as well as per mapping (#539). One
+  `CooldownValidator` shared by two executors of one class — two modules passing one `ValidatorChain`
+  — no longer refuses a player on executor B for a use through executor A. `clearCooldown(UUID, String)`
+  and `getRemainingCooldown(UUID, String)` keep working unchanged for one executor per validator, which
+  is the shape both `BaseCommandExecutor` constructors create; when a validator serves several
+  executors they span all of them (the longest remaining time, and every executor's cooldown
+  cleared). The new overloads `clearCooldown(UUID, Object, String)` and
+  `getRemainingCooldown(UUID, Object, String)` address one executor. The executor is held weakly, so
+  an active cooldown never keeps an unloaded module's executor reachable.
+- **A `@UsageLimit` lock is released when the dispatch is refused after it was taken** (#568): by the
+  cooldown (which validates after the lock), by the argument-count check, because a parameter did
+  not parse, or by an exception from a later validator, a parameter parser or the scheduler. Before 6.3.0 the lock stayed held until the player quit, and every later call of the
+  mapping was refused. The mechanism is a new default method, `CommandValidator#onRefused`, called for
+  each validator that passed; its default does nothing, so existing validators are unaffected, and a
+  refused dispatch runs no `onComplete`, so it applies no cooldown. Every `onRefused` and every
+  `onComplete` hook now runs even when an earlier validator's hook throws; the first exception is
+  rethrown afterwards.
+- **`@Scheduled` methods declared on a superclass of a bean are scheduled** (#532), as the annotation's
+  javadoc always said. An overridden method is scheduled once, with the most derived declaration's
+  annotation; an override without `@Scheduled` is not scheduled. A method that previously never ran
+  because an abstract base declared it now runs; none of the fifteen UltiKits modules declares one.
+
+### Panel log stream and panel reply changes (6.3.0) that need no migration period
+
+Each corrects a declared behaviour the stream did not deliver. The panel protocol is unchanged.
+
+- **`ultipanel.logging.excluded-loggers` ships empty** (#485). The six defaults before 6.3.0
+  (`com.mojang.authlib`, `net.minecraft.network`, `org.apache.http`, `com.zaxxer.hikari`,
+  `org.eclipse.jetty`, `ErrorReportCollector`) could never match: the stream then received only
+  `java.util.logging` records, whose logger names are `Minecraft` (everything logged through
+  `Bukkit.getLogger()`), a plugin's own name, or `com.ultikits.ultitools.*`; those libraries log
+  through Log4j or SLF4J, and `ErrorReportCollector` never logs through JUL. A configured list is now
+  used as given. Nothing that reached the stream before is filtered differently. With the console
+  mirror below, Log4j lines reach the stream too, under their Log4j logger names, and a configured
+  entry applies to them as well; the default stays empty so the stream shows the whole console.
+- **A log batch whose send fails is held and sent first** (#486), on the transmitter's own sender and
+  on the `batch_update` drain; no newer record is drained while one is held. Delivery stays best
+  effort: a batch whose connection drops just after it was written may arrive twice. Records the
+  full queue (1000 records) discards are counted and reported by one WARNING at most once a minute,
+  in the server log only. `UltiPanelLogTransmitter#holdUndelivered(JsonArray)` is added to that
+  internal class.
+- **Records logged before the stream starts reach it** (#487). From `onLoad` until the panel
+  connection opens, records are kept in a start-up buffer (2000 records, an estimated 512 KiB, five
+  minutes) and sent, oldest first, when the stream starts, in `log_batch` messages of at most
+  64 KiB, the first at once and then about one per second, independent of the
+  `ultipanel.logging.batch.*` keys: a full buffer drains in seconds and uses at most 10 of the panel's
+  50 messages per 10 seconds. Each entry keeps the time its record was logged, a single entry too
+  large for one message is shortened (stack trace first) rather than dropped, and a live record
+  logged meanwhile can arrive before the last replay messages. The buffer applies the stream's
+  filters as records arrive and is released without sending anything when there is no cloud login
+  or when its time is up; with the `logs` capability off it is not attached and keeps nothing.
+- **Lines about the panel connection are no longer sent to the panel.** The panel's `error` replies
+  and notifications, inbound messages the framework cannot use, the WebSocket client's connect,
+  disconnect, heartbeat and reconnect lines, and the warnings about a message that could not be sent
+  are written to the server console as before, but the log stream drops them. With
+  `ultipanel.logging.batch.enabled: false`, each logged `error` reply used to be streamed, rejected
+  by the panel's quota and replied to again: 42,066 `[WebSocket error] Rate limit exceeded` lines in
+  one measured run. A panel view that showed these lines no longer receives them.
+- **The panel's log stream mirrors the server console** (maintainer decision, 2026-10-03). Paper prints
+  its own output through Log4j — command feedback, a module's reply to the console sender, joins and
+  quits, chat, vanilla warnings and errors, and player command lines — and before 6.3.0 none of it
+  reached the panel, because the stream listened only to `java.util.logging`. The framework now
+  installs an appender on Log4j's root logger at load (with the `logs` capability on) and removes it at
+  disable; each line passes the same filters, batching and start-up replay as a plugin line, without
+  ANSI colour codes. **The stream shows exactly what the console shows, including player command lines
+  with their arguments** (`<player> issued server command: /login <password>` included): the panel is
+  at the console's trust level, so whatever the console shows the panel may show. A plugin line
+  arrives once, although Paper also copies it into Log4j; lines about the panel connection, the
+  transmitter's own lines and the WebSocket library's (`org.java_websocket.*`) are never sent. If the
+  server's Log4j configuration uses asynchronous loggers, the mirror is not installed, a console
+  WARNING says so, and the stream carries plugin lines only. A Log4j `ERROR` line with an exception is
+  now also reported to UltiPanel's error collection, once. **New `provided` dependency:**
+  `org.apache.logging.log4j:log4j-core` (2.24.1, with `log4j-api` 2.24.1 declared alongside), which
+  Paper supplies at runtime; it is not shaded, and a module needs nothing new.
+- **The panel's remote command result no longer claims to carry the command's output.** A panel
+  command is typed into the server console: it runs as the server's own console sender, unchanged for
+  modules. Paper 1.21.11 replaces any console sender with the real console before running a command,
+  so the framework's output capture never received a reply, and every `command_result` read the
+  invented `Command executed successfully`. The result now reads `Command dispatched to the server
+  console. Its output appears in the server log stream.`, or `The server console did not accept the
+  command. Any message it printed appears in the server log stream.` when the dispatch returned
+  false; blocklist refusals, an empty command and dispatch errors are unchanged. The replies themselves
+  appear in the log stream (the item above). A panel or tool that showed `output` as the command's
+  reply now shows this sentence.
+- **The `server.properties` refusal for a key the file does not hold** now reads `This key is not in
+  this server's server.properties` instead of `This server version has no such key` (#473): nothing
+  tells a key the running version lacks from one the file omits. A panel or tool that matched on the
+  old text must match the new one; the UltiPanel worker and frontend do not match on it.
+
+### Framework text follows `language`; the class-load audit is quiet on a clean start (6.3.0) that need no migration period
+
+Each corrects a declared behaviour the framework did not deliver. The panel protocol is unchanged.
+
+- **The framework's own console, reply and panel-stream text follows `language`** (#556). Until 6.3.0 about 150
+  lines of framework text were Chinese string literals that never went through `lang/*.json`, so an English
+  server still printed and sent them in Chinese. They now resolve through the catalogue (`en.json` gives the
+  English; under `language: zh` the text is unchanged): the reply every command sender gets when a module's
+  command body throws (`Command execution failed: <reason>`), the default processing notice of an
+  `@AsyncCommand` (`Processing...`), the framework's console lines (server status monitoring, log transmission,
+  WebSocket message handling, remote command and file operation logging), the lines it streams to the panel
+  (player join, quit and chat, plugin actions, the online-player count), and the `server.properties`
+  batch-failure text returned to the panel. A tool that matched one of these lines by its Chinese text on a
+  server running `language: en` must match the English text; the UltiPanel worker and frontend do not match on
+  any of them (their sources were searched, and the only hits were comments and the panel's own strings).
+  The verification e-mail stays bilingual on purpose, because its recipient's language is not the server's.
+  The default teleport service's display name, `InMemeryTeleportService#getName()`, is now `TeleportService`
+  (it was `传送服务`, the only Chinese service name); its `getResourceFolderName()` still returns `传送服务`, so
+  an existing install keeps its folder. Nothing in the framework or the fifteen modules looks the service up by
+  its name.
+  English log messages that carried full-width punctuation (`Configuration save failed！File path：…`,
+  `… load failed！`) now use ASCII punctuation; a tool that matched the full-width form must be updated.
+  `FrameworkText` (`com.ultikits.ultitools.utils`, `@ApiStatus.Internal`) is added for this.
+- **The class-load audit is quiet on a clean start** (#557). The audit that reports which classes the name-based
+  filters removed in 6.3.0 would have refused printed one line per module, twice per module, as two `WARN` lines
+  each (it wrote to the standard error stream, which Paper prints as `WARN`), naming an internal requirement
+  code. It now reaches the server log through the plugin logger: a module for which nothing would have been
+  refused is logged at `FINE` on the audit's own logger and is not forwarded to the console, and a module with at least one such class gets ONE `INFO`
+  line naming the jar and the count. The module-scan diagnostics use the same route; their `SEVERE` summary for
+  a skipped class is unchanged in level and content. `SecurityPolicy`'s one-time deprecation warning no longer
+  carries the internal code either.
+
 ## Binary incompatibilities the removal list cannot cover
 
 The removal list only covers changes where somebody knew they were changing an API. Both of its

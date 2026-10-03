@@ -235,8 +235,23 @@ public class InMemeryTeleportService implements TeleportService {
         return Optional.ofNullable(inMemoryLocationRecord.get(uuid));
     }
 
+    /**
+     * The display name. English, named after the service interface, like {@code DefaultEmailService}'s
+     * {@code "EmailService"}; it is no longer the folder name, see {@link #getResourceFolderName()}.
+     */
     @Override
     public String getName() {
+        return "TeleportService";
+    }
+
+    /**
+     * The resource folder name, kept at its pre-6.3.0 value so an existing install keeps its folder.
+     * {@link com.ultikits.ultitools.interfaces.BaseService#getResourceFolderName()} defaults to
+     * {@link #getName()}, which changed; this override pins the folder instead. It is an identifier,
+     * not text shown to anyone.
+     */
+    @Override
+    public String getResourceFolderName() {
         return "传送服务";
     }
 

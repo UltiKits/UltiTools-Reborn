@@ -18,6 +18,7 @@ import com.google.gson.JsonParser;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.entities.TokenEntity;
+import com.ultikits.ultitools.manager.EarlyLogCapture;
 import com.ultikits.ultitools.websocket.ExponentialBackoffStrategy;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
@@ -950,7 +951,7 @@ final class CloudSession {
     synchronized void initializeManagers() {
         if (!isCurrent()) {
             UltiTools.getInstance().getLogger().log(Level.FINE,
-                "云连接已关闭，跳过管理器初始化（这是一次登出之后迟到的握手）");
+                FrameworkText.text("云连接已关闭，跳过管理器初始化（这是一次登出之后迟到的握手）"));
             return;
         }
         wireManagers();
@@ -1012,6 +1013,8 @@ final class CloudSession {
                         UltiTools.getInstance().getLogStreamManager().initialize(webSocketClient);
                     }
                 } else {
+                    // #487: the stream will not start, so the early capture must not keep waiting.
+                    EarlyLogCapture.release();
                     PluginInitiationUtils.logSkippedCapability(Capability.LOGS);
                 }
             }
@@ -1026,9 +1029,9 @@ final class CloudSession {
                 }
             }
 
-            UltiTools.getInstance().getLogger().log(Level.FINE, "所有WebSocket管理器已初始化并启动监控");
+            UltiTools.getInstance().getLogger().log(Level.FINE, FrameworkText.text("所有WebSocket管理器已初始化并启动监控"));
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "初始化管理器时出错: " + e.getMessage(), e);
+            UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.format("初始化管理器时出错: %s", e.getMessage()), e);
         }
     }
 }

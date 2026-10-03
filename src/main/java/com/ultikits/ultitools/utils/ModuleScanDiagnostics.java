@@ -4,7 +4,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.logging.ConsoleHandler;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -34,10 +33,11 @@ import org.jetbrains.annotations.ApiStatus;
  * {@link #emitSummary(String)} deliberately carries no {@link Throwable} for the same reason; the
  * individual causes live only on the per-class {@link Level#FINE} detail recorded by {@link
  * #recordSkippedClass(String, String, Throwable)}. Disabling parent handlers also disconnects this
- * logger from the console/{@code logs/latest.log} sink the server installs on the root logger, so
- * a dedicated {@link ConsoleHandler} is attached directly — see the static initializer below and
- * {@code 07-JAPICMP-BASELINE.md}'s "D-19 diagnostic observation" section for the real-server
- * confirmation that this line reaches {@code logs/latest.log}.
+ * logger from the console/{@code logs/latest.log} sink the server installs on the root logger, so a
+ * {@link PluginLoggerBridge} forwards the records to the plugin's own logger (#557) -- the summary
+ * then reaches the console at its real level and in the server's normal log format. (A private
+ * console handler used here before wrote to the standard error stream, which Paper prints as two
+ * WARN lines per record.)
  *
  * @since 6.3.0
  */
@@ -53,11 +53,10 @@ public final class ModuleScanDiagnostics {
         DIAGNOSTICS_LOGGER.setUseParentHandlers(false);
         DIAGNOSTICS_LOGGER.setLevel(Level.ALL);
         // setUseParentHandlers(false) above also disconnects this logger from the root logger's
-        // own handlers -- the console/logs-latest.log sink the server installs there. A dedicated
-        // handler restores that reach without restoring the SystemLogHandler path.
-        ConsoleHandler consoleHandler = new ConsoleHandler();
-        consoleHandler.setLevel(Level.ALL);
-        DIAGNOSTICS_LOGGER.addHandler(consoleHandler);
+        // own handlers -- the console/logs-latest.log sink the server installs there. Forwarding to the
+        // plugin logger restores that reach, at each record's real level. The plugin logger's own level
+        // decides whether the FINE per-class detail is shown, so nothing extra reaches a default console.
+        DIAGNOSTICS_LOGGER.addHandler(new PluginLoggerBridge(Level.ALL));
     }
 
     /** One accumulator entry per module currently being scanned; cleared as each is emitted. */

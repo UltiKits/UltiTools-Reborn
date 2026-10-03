@@ -29,7 +29,9 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.AccessDecision;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.utils.CredentialStore;
+import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
+import com.ultikits.ultitools.websocket.PanelConnectionLog;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -372,7 +374,7 @@ public class FileOperationManager {
                 ? operationData.get("executor").getAsString() : "panel";
 
             UltiTools.getInstance().getLogger().log(Level.INFO,
-                String.format("收到文件操作请求: %s, 路径: %s (ID: %s)", operation, path, operationId));
+                FrameworkText.format("收到文件操作请求: %s, 路径: %s (ID: %s)", operation, path, operationId));
 
             // Captured before the async hop — see this method's javadoc.
             String capturedOperation = operation;
@@ -407,7 +409,7 @@ public class FileOperationManager {
         } catch (Exception e) {
             String operationId = operationData.has("operationId") && !operationData.get("operationId").isJsonNull()
                 ? operationData.get("operationId").getAsString() : null;
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "文件操作处理失败: " + e.getMessage());
+            UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.format("文件操作处理失败: %s", e.getMessage()));
             sendFileOperationResult(operationId, "unknown", "unknown", false,
                 "Error processing file operation: " + e.getMessage(), null);
         }
@@ -950,12 +952,12 @@ public class FileOperationManager {
             
             webSocketClient.sendMessage(resultMessage);
             
-            UltiTools.getInstance().getLogger().log(Level.INFO, 
-                String.format("文件操作结果已发送 (ID: %s, 操作: %s, 成功: %s)", 
+            PanelConnectionLog.log(Level.INFO, 
+                FrameworkText.format("文件操作结果已发送 (ID: %s, 操作: %s, 成功: %s)", 
                 operationId, operation, success));
             
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "发送文件操作结果失败: " + e.getMessage());
+            PanelConnectionLog.log(Level.WARNING, FrameworkText.format("发送文件操作结果失败: %s", e.getMessage()));
         }
     }
 }

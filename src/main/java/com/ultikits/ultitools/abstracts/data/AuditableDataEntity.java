@@ -3,6 +3,7 @@ package com.ultikits.ultitools.abstracts.data;
 import com.ultikits.ultitools.annotations.Column;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import org.jetbrains.annotations.ApiStatus;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -44,11 +45,11 @@ public abstract class AuditableDataEntity<ID extends java.io.Serializable> exten
      * Sets the current user for audit tracking.
      * Call this before performing data operations.
      * <p>
-     * {@code BaseCommandExecutor} (Phase 5's file; the current-user wrapper was added there in
-     * 02-08) calls this once, inside the runnable that actually invokes a command's matched
-     * method, when the resolved sender is a {@code Player} -- so a command handler's data
-     * operations record that player's UUID in {@code createdBy}/{@code updatedBy}. Nothing else
-     * in the framework calls this: a module performing data operations from outside a command
+     * {@code BaseCommandExecutor} sets the command sender's UUID around the body that actually
+     * invokes a command's matched method, when the resolved sender is a {@code Player} -- through
+     * {@link #swapCurrentUser(UUID)} as of 6.3.0, which also restores the previous user
+     * afterwards -- so a command handler's data operations record that player's UUID in
+     * {@code createdBy}/{@code updatedBy}. Nothing else in the framework sets it: a module performing data operations from outside a command
      * handler (a scheduled task, a listener, an external plugin via the External Plugin API) is
      * responsible for setting the context itself, or its writes record {@code null} actors.
      *
@@ -62,15 +63,41 @@ public abstract class AuditableDataEntity<ID extends java.io.Serializable> exten
      * Clears the current user context.
      * Call this after completing data operations.
      * <p>
-     * {@code BaseCommandExecutor} calls this in a {@code finally} around the same invocation it
-     * wraps with {@link #setCurrentUser(UUID)}, so it runs whether the handler returns normally
-     * or throws. It calls this method -- not {@code setCurrentUser(null)} -- specifically because
-     * this removes the {@link ThreadLocal} entry entirely rather than leaving a {@code null}
+     * This removes the {@link ThreadLocal} entry entirely rather than leaving a {@code null}
      * mapping behind, which matters on a pooled Bukkit worker thread that gets reused for a later,
-     * unrelated command.
+     * unrelated command. {@code BaseCommandExecutor} no longer calls it after a command body (as of
+     * 6.3.0, #541): it restores the user that was current before the body through
+     * {@link #swapCurrentUser(UUID)}, which removes the entry the same way when there was none.
      */
     public static void clearCurrentUser() {
         CURRENT_USER.remove();
+    }
+
+    /**
+     * Replaces the current user and returns the one it replaces, so a caller can put it back.
+     * <p>
+     * {@code BaseCommandExecutor} calls this around every command body (as of 6.3.0, #541): once
+     * with the sender's UUID (or {@code null} for a sender that is not a player) before the body,
+     * and once with the returned value in a {@code finally} after it. A command body runs at
+     * dispatch on the server thread, so a body that dispatches another command runs the nested
+     * body on the same thread before its own has finished; saving and restoring keeps each body's
+     * own user, and a thread that carried no user before the outermost command carries none after
+     * it. A {@code null} argument removes the {@link ThreadLocal} entry, as
+     * {@link #clearCurrentUser()} does, rather than storing {@code null}.
+     *
+     * @param userId the user to make current, or {@code null} for none
+     * @return the user that was current before, or {@code null} if there was none
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public static UUID swapCurrentUser(UUID userId) {
+        UUID previous = CURRENT_USER.get();
+        if (userId == null) {
+            CURRENT_USER.remove();
+        } else {
+            CURRENT_USER.set(userId);
+        }
+        return previous;
     }
     
     /**

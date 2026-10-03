@@ -46,8 +46,8 @@ public class SecurityPolicy {
 
     private static void warnDeprecatedNoOp() {
         if (DEPRECATION_WARNING_LOGGED.compareAndSet(false, true)) {
-            LOGGER.log(Level.WARNING, "[UltiTools-Security] GEN-07 (6.3.0): SecurityPolicy's "
-                    + "name-based classload filters were removed -- isSafeClassName/"
+            LOGGER.log(Level.WARNING, "[UltiTools-Security] SecurityPolicy's "
+                    + "name-based classload filters were removed in 6.3.0 -- isSafeClassName/"
                     + "isSafeParameterType always return true and addTrustedPackage/"
                     + "addDangerousClass are no-ops. This class provides no runtime constraint; "
                     + "see its class javadoc. (This warning logs once per JVM.)");

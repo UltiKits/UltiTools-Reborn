@@ -200,16 +200,13 @@ class ClassloadFilterAuditTest {
         }
 
         @Test
-        @DisplayName("record() is a no-op for a null or blank class name -- no FINE detail logged")
+        @DisplayName("record() is a no-op for a null or blank class name -- nothing is logged")
         void recordEmitsNoDetailForBlankInput() {
             ClassloadFilterAudit.record("empty-input-module", null);
             ClassloadFilterAudit.record("empty-input-module", "");
-            ClassloadFilterAudit.emitSummary("empty-input-module");
 
-            List<LogRecord> fineRecords = capturedLogs.stream()
-                    .filter(r -> Level.FINE.equals(r.getLevel()))
-                    .collect(Collectors.toList());
-            assertThat(fineRecords).isEmpty();
+            assertThat(capturedLogs).isEmpty();
+            ClassloadFilterAudit.emitSummary("empty-input-module");
         }
     }
 
@@ -218,23 +215,23 @@ class ClassloadFilterAuditTest {
     class SummaryTests {
 
         @Test
-        @DisplayName("Test 8: a module with no refusals still produces one INFO summary reporting zero")
-        void emptyModuleProducesZeroSummary() {
+        @DisplayName("Test 8 (#557): a module with no refusals is still measured, but as one FINE summary -- nothing at INFO")
+        void emptyModuleProducesOneQuietSummary() {
             ClassloadFilterAudit.record("healthy-module", "com.ultikits.ultitools.UltiTools");
             ClassloadFilterAudit.emitSummary("healthy-module");
 
-            List<LogRecord> infoRecords = capturedLogs.stream()
-                    .filter(r -> Level.INFO.equals(r.getLevel()))
-                    .collect(Collectors.toList());
-            assertThat(infoRecords).hasSize(1);
-            assertThat(infoRecords.get(0).getMessage())
-                    .contains("healthy-module")
-                    .contains("0 class(es)");
-
+            assertThat(capturedLogs.stream()
+                    .filter(r -> r.getLevel().intValue() >= Level.INFO.intValue())
+                    .collect(Collectors.toList()))
+                    .as("a clean audit is not operator news")
+                    .isEmpty();
             List<LogRecord> fineRecords = capturedLogs.stream()
                     .filter(r -> Level.FINE.equals(r.getLevel()))
                     .collect(Collectors.toList());
-            assertThat(fineRecords).isEmpty();
+            assertThat(fineRecords).hasSize(1);
+            assertThat(fineRecords.get(0).getMessage())
+                    .contains("healthy-module")
+                    .contains("no class would have been refused");
         }
 
         @Test
@@ -252,7 +249,10 @@ class ClassloadFilterAuditTest {
             assertThat(infoRecords).hasSize(1);
             assertThat(infoRecords.get(0).getMessage())
                     .contains("busy-module")
-                    .contains("3 class(es)");
+                    .contains("3 class(es)")
+                    .contains("exact-name blacklist: 1")
+                    .contains("trusted-package whitelist: 1")
+                    .contains("suspicious keyword: 1");
 
             List<LogRecord> fineRecords = capturedLogs.stream()
                     .filter(r -> Level.FINE.equals(r.getLevel()))
@@ -269,11 +269,13 @@ class ClassloadFilterAuditTest {
 
             ClassloadFilterAudit.emitSummary("reused-module");
 
-            List<LogRecord> infoRecords = capturedLogs.stream()
-                    .filter(r -> Level.INFO.equals(r.getLevel()))
-                    .collect(Collectors.toList());
-            assertThat(infoRecords).hasSize(1);
-            assertThat(infoRecords.get(0).getMessage()).contains("0 class(es)");
+            assertThat(capturedLogs.stream()
+                    .filter(r -> r.getLevel().intValue() >= Level.INFO.intValue())
+                    .collect(Collectors.toList()))
+                    .as("the second summary starts from zero, so it is a clean (FINE) one")
+                    .isEmpty();
+            assertThat(capturedLogs).hasSize(1);
+            assertThat(capturedLogs.get(0).getMessage()).contains("no class would have been refused");
         }
     }
 
@@ -302,19 +304,18 @@ class ClassloadFilterAuditTest {
     }
 
     @Test
-    @DisplayName("07-fix: the class's own ConsoleHandler is configured at INFO, so the per-class "
+    @DisplayName("07-fix: what is forwarded to the plugin logger starts at INFO, so the per-class "
             + "FINE records never reach the production console")
-    void consoleHandlerIsConfiguredAboveFine() {
+    void forwardingIsConfiguredAboveFine() {
         // classify() returns WHITELIST for every class outside the seven trusted prefixes, and
-        // record() is called once per class from PluginManager's scan loops (:474, :622), capped at
-        // 1000 classes per JAR by PluginManager:357. A ConsoleHandler at ALL therefore prints up to
-        // a thousand startup lines per third-party module, on top of the one INFO summary that is
-        // the actual operator-facing output.
+        // record() is called once per class from PluginManager's entity scan, which visits every class
+        // of the jar. Forwarding FINE would print up to a thousand startup lines per third-party
+        // module, on top of the one INFO summary that is the actual operator-facing output.
         //
         // Asserted against the named constant rather than auditLogger.getHandlers(): that list is
         // global mutable state which other tests in this JVM add to and remove from, so reading it
         // back is order-dependent -- measured, it is empty by the time the full suite reaches here.
-        assertThat(ClassloadFilterAudit.CONSOLE_HANDLER_LEVEL.intValue())
+        assertThat(ClassloadFilterAudit.FORWARD_LEVEL.intValue())
                 .isGreaterThanOrEqualTo(Level.INFO.intValue());
         // The logger itself must stay permissive, or a debug/test handler could never see FINE.
         assertThat(Logger.getLogger(ClassloadFilterAudit.class.getName()).getLevel())

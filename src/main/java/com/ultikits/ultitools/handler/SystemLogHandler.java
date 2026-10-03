@@ -4,6 +4,8 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.TriggerContext;
 import com.ultikits.ultitools.manager.UltiPanelLogTransmitter;
+import com.ultikits.ultitools.utils.FrameworkText;
+import com.ultikits.ultitools.websocket.PanelConnectionLog;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -16,6 +18,10 @@ import java.util.logging.LogRecord;
 /**
  * System log handler.
  * Captures all system log records and forwards them to the UltiPanel backend.
+ * <p>
+ * Attached to the {@code java.util.logging} root logger, it receives every plugin's lines
+ * directly. Paper's own console output (Log4j) reaches it through {@link ConsoleMirror}, converted
+ * into records, so the same filters apply to both (as of 6.3.0).
  *
  * @author UltiKits
  * @version 1.0.0
@@ -79,14 +85,19 @@ public class SystemLogHandler extends Handler {
         enabledLevels.add("error");
         // enabledLevels.add("debug"); // debug logging is disabled by default
 
-        // Loggers excluded by default (avoids transmitting excessive log volume)
+        // No logger is excluded by default (#485). An entry matches a record whose logger name
+        // starts with it. JUL records carry "Minecraft" (Bukkit's server logger, i.e. everything
+        // logged through Bukkit.getLogger(), including the framework's own "[UltiTools-API] ..."
+        // lines), each plugin's own logger, or a com.ultikits.ultitools.* class logger. The six
+        // entries shipped before 6.3.0 -- com.mojang.authlib, net.minecraft.network,
+        // org.apache.http, com.zaxxer.hikari, org.eclipse.jetty, ErrorReportCollector -- could match
+        // none of those: those libraries log through Log4j or SLF4J, and ErrorReportCollector never
+        // logs through JUL at all. Later in 6.3.0 the console mirror (ConsoleMirror) also feeds
+        // Log4j records here, under their Log4j logger names, so the stream mirrors the whole
+        // console; the default stays empty so nothing the console shows is hidden. Loop prevention
+        // does not depend on this list: the PUBLISHING guard above drops any record produced while
+        // one is being delivered.
         excludedLoggers = new HashSet<>();
-        excludedLoggers.add("com.mojang.authlib");
-        excludedLoggers.add("net.minecraft.network");
-        excludedLoggers.add("org.apache.http");
-        excludedLoggers.add("com.zaxxer.hikari");
-        excludedLoggers.add("org.eclipse.jetty");
-        excludedLoggers.add("ErrorReportCollector");
 
         // Apply the minimum level
         setLevel(minimumLevel);
@@ -142,19 +153,50 @@ public class SystemLogHandler extends Handler {
             if (UltiTools.getInstance().getConfig().contains("ultipanel.logging.excluded-loggers")) {
                 excludedLoggers.clear();
                 excludedLoggers.addAll(UltiTools.getInstance().getConfig().getStringList("ultipanel.logging.excluded-loggers"));
-                // Always preserve internal loggers to prevent circular logging
-                excludedLoggers.add("ErrorReportCollector");
             }
             
-            UltiTools.getInstance().getLogger().info("[UltiPanel] 系统日志处理器配置已加载");
+            UltiTools.getInstance().getLogger().info(FrameworkText.text("[UltiPanel] 系统日志处理器配置已加载"));
             
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().warning("[UltiPanel] 加载日志配置失败，使用默认配置: " + e.getMessage());
+            UltiTools.getInstance().getLogger().warning(FrameworkText.format("[UltiPanel] 加载日志配置失败，使用默认配置: %s", e.getMessage()));
         }
     }
     
     @Override
     public void publish(LogRecord record) {
+        publish(record, false);
+    }
+
+    /**
+     * The handler the early capture replays its start-up records into when the stream starts
+     * ({@code EarlyLogCapture#drainInto}, #487). It applies exactly the filters and mapping of
+     * {@link #publish(LogRecord)}, but hands each record to
+     * {@link UltiPanelLogTransmitter#replayLog} instead of {@link UltiPanelLogTransmitter#sendLog},
+     * so the replay is delivered in chunked messages even when live batching is off (as of 6.3.0). It is
+     * never attached to a logger.
+     *
+     * @return a handler that replays into this handler's transmitter
+     */
+    public Handler replayHandler() {
+        return new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                SystemLogHandler.this.publish(record, true);
+            }
+
+            @Override
+            public void flush() {
+                // Nothing buffered here; the transmitter holds the replayed records.
+            }
+
+            @Override
+            public void close() {
+                // Nothing to release.
+            }
+        };
+    }
+
+    private void publish(LogRecord record, boolean replayed) {
         // Gate-2 finding (round 9): reentrancy guard -- see PUBLISHING's own javadoc. Checked
         // before shouldProcessRecord() so a re-entrant call is dropped as cheaply as possible.
         if (Boolean.TRUE.equals(PUBLISHING.get())) {
@@ -176,11 +218,22 @@ public class SystemLogHandler extends Handler {
             // (deliberately NOT gated by enabledLevels -- see the comment there, CR-02).
             String source = determineLogSource(record);
 
-            // Check whether the level is enabled for panel delivery
-            if (enabledLevels.contains(level)) {
+            // Check whether the level is enabled for panel delivery. A line about the panel
+            // connection itself is never sent back to the panel (as of 6.3.0): the panel's error
+            // reply to a rejected message, logged and streamed, is rejected again and replied to
+            // again -- a feedback loop measured at 42,066 lines in one run. See PanelConnectionLog
+            // for why a mark on the record, not the logger-name filter, catches it. The error
+            // report below still runs for such a record: a SEVERE line with an exception (a
+            // failure while handling a panel message) is a framework fault worth collecting, and
+            // the panel's own error replies carry no exception, so they cannot loop through it.
+            if (enabledLevels.contains(level) && !PanelConnectionLog.isPanelConnectionRecord(record)) {
                 // Format the message and send the log
                 String message = formatLogMessage(record);
-                logTransmitter.sendLog(level, message, source, record.getThrown());
+                if (replayed) {
+                    logTransmitter.replayLog(level, message, source, record.getThrown(), record.getMillis());
+                } else {
+                    logTransmitter.sendLog(level, message, source, record.getThrown());
+                }
             }
 
             // Report error-level logs with exceptions to ErrorReportCollector, regardless of
@@ -208,7 +261,7 @@ public class SystemLogHandler extends Handler {
 
         } catch (Exception e) {
             // Avoid a logging loop by writing to System.err directly
-            System.err.println("[UltiPanel] SystemLogHandler处理日志记录失败: " + e.getMessage());
+            System.err.println(FrameworkText.format("[UltiPanel] SystemLogHandler处理日志记录失败: %s", e.getMessage()));
         } finally {
             PUBLISHING.set(false);
         }
@@ -233,11 +286,15 @@ public class SystemLogHandler extends Handler {
             }
         }
 
-        // Avoid processing UltiPanel's own log-transmission logs, to prevent a loop
+        // Avoid processing UltiPanel's own log-transmission logs, to prevent a loop. The WebSocket
+        // library the panel connection runs on logs through SLF4J, which reaches this handler only
+        // through the console mirror (ConsoleMirror, as of 6.3.0); its lines are about the panel
+        // connection itself and are never sent back over it.
         if (loggerName != null && (
             loggerName.contains("UltiPanelLogTransmitter") ||
             loggerName.contains("SystemLogHandler") ||
-            loggerName.contains("WebSocketClient")
+            loggerName.contains("WebSocketClient") ||
+            loggerName.startsWith("org.java_websocket")
         )) {
             return false;
         }
@@ -277,7 +334,7 @@ public class SystemLogHandler extends Handler {
             } catch (Exception e) {
                 // Formatting failed - fall back to the raw message plus the parameter values
                 StringBuilder sb = new StringBuilder(message);
-                sb.append(" [参数: ");
+                sb.append(FrameworkText.text(" [参数: "));
                 for (Object param : record.getParameters()) {
                     sb.append(param).append(", ");
                 }
@@ -298,7 +355,9 @@ public class SystemLogHandler extends Handler {
     private String determineLogSource(LogRecord record) {
         String loggerName = record.getLoggerName();
 
-        if (loggerName == null) {
+        // The root logger -- in Log4j, the one Paper's console sender writes every message it is
+        // sent to (ConsoleMirror) -- is the server console itself.
+        if (loggerName == null || loggerName.isEmpty()) {
             return "server";
         }
 
@@ -486,11 +545,11 @@ public class SystemLogHandler extends Handler {
      */
     public String getConfigurationInfo() {
         StringBuilder sb = new StringBuilder();
-        sb.append("SystemLogHandler配置信息:\n");
-        sb.append("- 最小日志级别: ").append(minimumLevel).append("\n");
-        sb.append("- 启用的级别: ").append(enabledLevels).append("\n");
-        sb.append("- 排除的记录器数量: ").append(excludedLoggers.size()).append("\n");
-        sb.append("- 日志传输器状态: ").append(logTransmitter != null ? "已连接" : "未连接");
+        sb.append(FrameworkText.text("SystemLogHandler配置信息:")).append("\n");
+        sb.append(FrameworkText.text("- 最小日志级别: ")).append(minimumLevel).append("\n");
+        sb.append(FrameworkText.text("- 启用的级别: ")).append(enabledLevels).append("\n");
+        sb.append(FrameworkText.text("- 排除的记录器数量: ")).append(excludedLoggers.size()).append("\n");
+        sb.append(FrameworkText.text("- 日志传输器状态: ")).append(logTransmitter != null ? FrameworkText.text("已连接") : FrameworkText.text("未连接"));
         return sb.toString();
     }
 }

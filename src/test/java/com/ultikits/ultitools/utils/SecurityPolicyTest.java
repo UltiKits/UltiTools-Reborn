@@ -387,11 +387,11 @@ class SecurityPolicyTest {
             long warningCount = capturedLogs.stream()
                     .filter(record -> Level.WARNING.equals(record.getLevel()))
                     .filter(record -> record.getMessage() != null
-                            && record.getMessage().contains("GEN-07"))
+                            && record.getMessage().contains("classload filters were removed"))
                     .count();
 
             assertThat(warningCount)
-                    .as("the GEN-07 deprecation warning must log at most once per JVM")
+                    .as("the classload-filter deprecation warning must log at most once per JVM")
                     .isLessThanOrEqualTo(1);
         }
     }

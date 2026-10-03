@@ -981,6 +981,27 @@
             <version>1.21.11-R0.1-SNAPSHOT</version>
             <scope>provided</scope>
         </dependency>
+        <!--
+            Log4j 2, provided by the Paper server at runtime and never shaded. The panel's log
+            stream mirrors the server console (as of 6.3.0): Paper prints its own output (command
+            feedback, joins, chat, vanilla warnings, a module's reply to the console sender)
+            through Log4j, which the java.util.logging root handler never sees, so the framework
+            installs an appender on Log4j's root logger (handler/ConsoleMirror). log4j-api is the
+            version paper-api already brings; log4j-core is aligned with it. Paper 1.21.11 ships
+            2.25.2, and only long-stable Log4j 2 API is used.
+        -->
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-api</artifactId>
+            <version>2.24.1</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-core</artifactId>
+            <version>2.24.1</version>
+            <scope>provided</scope>
+        </dependency>
         <!-- <dependency>
             <groupId>org.spigotmc</groupId>
             <artifactId>spigot-api</artifactId>

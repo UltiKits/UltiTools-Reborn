@@ -109,13 +109,20 @@ class InMemeryTeleportServiceTest {
     class GetNameTests {
 
         @Test
-        @DisplayName("应该返回正确的服务名称")
+        @DisplayName("the display name is an English identifier, like the sibling DefaultEmailService's")
         void shouldReturnCorrectName() {
             // Act
             String name = teleportService.getName();
 
-            // Assert
-            assertThat(name).isEqualTo("传送服务");
+            // Assert: no Han, CJK punctuation or full-width form (#556)
+            assertThat(name).isEqualTo("TeleportService");
+            assertThat(name).doesNotContainPattern("[\\p{IsHan}\\u3000-\\u303F\\uFF00-\\uFFEF]");
+        }
+
+        @Test
+        @DisplayName("the resource folder keeps its pre-6.3.0 name, so an existing install keeps its folder")
+        void resourceFolderNameIsUnchanged() {
+            assertThat(teleportService.getResourceFolderName()).isEqualTo("传送服务");
         }
     }
 
