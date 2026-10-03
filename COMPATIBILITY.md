@@ -712,10 +712,97 @@ This section governs the third kind.
   kept whatever an older jar first extracted, forever — a defect (#441), not a documented
   guarantee that the file would stay frozen. As of 6.3.0, a `lang/` file whose recorded extraction
   hash still matches its on-disk bytes is replaced by the current jar's copy on the next start,
-  with one INFO line naming the file; a file the operator has edited is left alone exactly as
-  before, with only the individual keys whose placeholder count moved resolved from the jar
-  instead (see `ultitools.language.file-refresh`/`ultitools.language.file-preserve` in
-  `FEATURES.md`). No operator who customised a file is affected either way.
+  with one INFO line naming the file; a file the operator has edited since it was recorded is left
+  alone exactly as before, with only the individual keys whose placeholder count moved resolved
+  from the jar instead (see `ultitools.language.file-refresh`/`ultitools.language.file-preserve` in
+  `FEATURES.md`). A file with no record at all is handled by the next entry.
+- **Upgrade note — language files without a provenance record are replaced on the first 6.3.0
+  start, including files an operator edited (#459).** Every `lang/` file extracted before 6.3.0
+  has no provenance record, so 6.3.0 cannot tell an operator's edit from a file that is merely an
+  older jar's wording. The maintainer decided on 2026-09-29 that on the first start after upgrading,
+  every such file whose bytes differ from the new module jar's copy is **replaced** by that copy and
+  recorded, and accepted in writing that this replaces operator-edited files too. Nothing is
+  deleted:
+  - the previous file is kept beside the new one, in the same
+    `plugins/UltiTools/pluginConfig/<module>/lang/` folder, as `<file>.bak` — for example
+    `lang/en.json.bak`. If that name is taken, the backup is `<file>.1.bak`, then `<file>.2.bak`,
+    and so on; an existing file is never overwritten. No backup name ends in `.json`, `.yml` or
+    `.yaml`, so a backup is never loaded as a catalogue;
+  - one WARNING per replaced file names the file and its backup;
+  - **to restore your edit**, stop the server, delete or move the new `lang/<file>` and rename
+    `<file>.bak` back to `<file>`, then start. The restored file now differs from the recorded
+    hash, so it is treated as your customisation and kept on every later start (the
+    `ultitools.language.file-preserve` rule);
+  - a file byte-identical to the jar's copy is only recorded, with no backup and no log line; a
+    file that already has a record keeps the rule in the previous entry; a second start changes
+    nothing;
+  - if the backup, the replacement or the record cannot be written (a read-only or symbolic-link
+    file, a folder that is not writable), the original file stays in place, nothing is recorded,
+    no backup is left behind, and the file is used as before, with the placeholder-count guard.
+  The framework's own `lang/` catalogue is read from the framework jar and has never been
+  extracted, so no framework file is affected. No per-release fingerprint list is used to spare
+  edited files; that alternative was offered and not chosen. See
+  `ultitools.language.unrecorded-replace` in `FEATURES.md`.
+
+  中文补充：升级到 6.3.0 后第一次启动时，所有没有来源记录、且与新版模块 jar 自带版本不同的语言文件都会被替换为新版，
+  服主改过的文件也会被替换（维护者于 2026-09-29 书面接受）。旧文件保留在同一个 `lang/` 目录下，名为 `<文件名>.bak`
+  （名字已被占用时依次为 `<文件名>.1.bak`、`<文件名>.2.bak`……，绝不覆盖已有文件，也不会被当作语言文件读取），
+  每替换一个文件，日志里有一行写明文件和备份。要恢复自己的修改：停服，把新文件移走，把 `.bak` 改回原名，再启动；
+  恢复后的文件与记录不一致，会被当作服主的修改一直保留。
+- Resolving a module's language only after its resources are extracted (#540). Before 6.3.0 the
+  constructors resolved the language first and extracted the bundled resources second. With the
+  multi-extension lookup added in 6.3.0 (#389), an operator who deleted `lang/<code>.json` to get a
+  fresh copy, beside an older `lang/<code>.yml`, got the stale `.yml` at start-up and the fresh
+  `.json` only at the next `/ul reload` — two catalogues from the same files, with nothing logged.
+  As of 6.3.0 extraction runs first in both constructors, so the start-up catalogue is the one the
+  next reload resolves (`ultitools.language.boot-resolve-after-extract`).
+- Writing a module's language provenance only after the load gates accept it (#460). The
+  refresh of an untouched `lang/` file, its provenance record and the #459 replacement used to run
+  inside the module's constructor, before `PluginManager` decided whether to keep the candidate — so
+  an older copy of a loaded module, or a module requiring a newer framework, rewrote the language
+  file it shares with the accepted version and then was thrown away. As of 6.3.0 the constructor
+  only computes the decision (and logs nothing about it); `PluginManager` commits it through the
+  new `UltiToolsPlugin#commitLanguageProvenance()` right after the gates pass, on both `register`
+  entry points. That method is `@ApiStatus.Internal` and public only because `PluginManager` is in
+  another package, like `setContext`; a module never needs to call it. A module that registers
+  through `PluginManager#register(UltiToolsPlugin)` gets this automatically. One thing is
+  unchanged: a language file the candidate's jar ships and the disk lacks is still extracted, with
+  its hash, while the candidate is constructed (`ultitools.language.rejected-candidate-untouched`).
+- Unwinding a refused External Plugin API registration (#537). When
+  `PluginManager#registerExternal` refused a plugin after recording its data-folder scope — the
+  command-executor contract check, the config-binding refusal of #531, or a failed container
+  `refresh()` — the scope, the entity ownership, the adapter's data scope and its context stayed
+  behind, so a corrected connection of the same plugin in the same process was handed the stale
+  scope. As of 6.3.0 the refusal closes the context and removes all four before rethrowing the same
+  exception; nothing a caller observes changes except that the retry now works
+  (`ultitools.boot.external-refusal-unwind`).
+- Naming a missing required plugin instead of printing a class-not-found trace (#554). A module
+  that cannot load because a plugin in its `plugin.yml` `depend:` list is not installed or not
+  enabled used to log `Cannot initialize plugin for <main class>: <missing class>` with a
+  `NoClassDefFoundError` trace. As of 6.3.0 that case logs one WARNING,
+  `Module '<name>' requires <plugin>, which is not installed or not enabled; the module is not
+  loaded.`, with no trace. Every other load failure keeps the old message and trace
+  (`ultitools.boot.missing-required-plugin`). When the required plugin is not installed at all,
+  the module is now refused before it is constructed: nothing of it runs, no resource is
+  extracted and no class is scanned. One consequence: a module that lists an uninstalled plugin
+  under `depend:` but never touched that plugin's classes while loading used to load anyway, and
+  is now refused, as Bukkit itself refuses a plugin whose `depend:` is missing. A required
+  plugin that is installed but not enabled yet is not refused early, because it may still be
+  enabled after UltiTools; that case is refused only if loading fails, as before.
+- Naming more callers in the economy unavailability warning (#462, #483, #489). The warning
+  `Module '<name>' requested the economy service, but …` could name only a loaded module whose
+  declared scan roots covered the calling class. As of 6.3.0 it also names a connected External
+  Plugin API consumer (by plugin name), a module requesting the economy while it is still being
+  registered (from its constructor, a `@PostConstruct` method or `registerSelf()`), and a module
+  whose main class sits outside its declared roots (its own package counts as a root). A caller
+  still unattributable is reported as `an unknown caller`, as before, but once per calling package
+  rather than once for all of them, so a second one is no longer silenced
+  (`ultitools.economy.attribute-caller`). Log wording and frequency only.
+- Three internal methods added to published classes for the fixes above, each
+  `@ApiStatus.Internal` and public only because the caller is in another package:
+  `UltiToolsPlugin#commitLanguageProvenance()` (#460), `PluginManager#getConnectedExternalScanPackages()`
+  (#462) and `PluginManager#getModuleBeingRegistered()` (#483). Additions only; no existing
+  signature changed. A module never needs to call them.
 - Saving at shutdown only the configuration that module code changed (#510). Operator-only disk
   edits survive a clean stop; pending code changes are saved before module release, with one
   warning naming replaced operator keys. The [config-layer contract](#config-layer-630) covers

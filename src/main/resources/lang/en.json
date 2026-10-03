@@ -179,5 +179,7 @@
   "Module '%s' reloaded partially; not reloaded: %s": "Module '%s' reloaded partially; not reloaded: %s",
   "Reloaded %d modules; %d only partially:": "Reloaded %d modules; %d only partially:",
   "Module %s reloaded partially; not reloaded: %s": "Module %s reloaded partially; not reloaded: %s",
-  "the language setting in config.yml changed from %s to %s; a full /ul reload applies it to every module": "the language setting in config.yml changed from %s to %s; a full /ul reload applies it to every module"
+  "the language setting in config.yml changed from %s to %s; a full /ul reload applies it to every module": "the language setting in config.yml changed from %s to %s; a full /ul reload applies it to every module",
+  "Language file '%s' of module '%s' had no provenance record and differed from the version bundled with this release, so it was replaced by the bundled version: this release cannot tell whether it had been edited. The previous file was kept as '%s'; to restore it, stop the server and rename it back.": "Language file '%s' of module '%s' had no provenance record and differed from the version bundled with this release, so it was replaced by the bundled version: this release cannot tell whether it had been edited. The previous file was kept as '%s'; to restore it, stop the server and rename it back.",
+  "Module '%s' requires %s, which is not installed or not enabled; the module is not loaded.": "Module '%s' requires %s, which is not installed or not enabled; the module is not loaded."
 }

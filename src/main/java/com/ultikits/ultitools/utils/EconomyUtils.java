@@ -60,6 +60,11 @@ public final class EconomyUtils {
 
     private static final Set<String> warnedModules = Collections.synchronizedSet(new LinkedHashSet<>());
 
+    /** Frames skipped when locating an unattributed caller's own package (#489). */
+    private static final String[] FRAMEWORK_AND_JDK_PREFIXES = {
+            "com.ultikits.ultitools.", "java.", "javax.", "jdk.", "sun.", "com.sun."
+    };
+
     private EconomyUtils() {
         // Utility class
     }
@@ -331,7 +336,14 @@ public final class EconomyUtils {
         if (provider.getState() == EconomyProvider.State.AVAILABLE) {
             return;
         }
-        reportEconomyStateIfUnavailable(attributeCallingModule());
+        String moduleName = attributeCallingModule();
+        if (moduleName != null) {
+            reportEconomyStateIfUnavailable(moduleName);
+            return;
+        }
+        // #489: an unattributable request is deduplicated per calling package, not in one shared
+        // slot -- otherwise the first unattributable module's warning silenced every later one.
+        reportUnattributedIfUnavailable(unattributedCallerPackage(Thread.currentThread().getStackTrace()));
     }
 
     /**
@@ -356,6 +368,59 @@ public final class EconomyUtils {
             return;
         }
         log(buildWarningMessage(dedupKey, state), false);
+    }
+
+    /**
+     * The WARN/dedup logic for a request attribution could not name (#489): the warning still
+     * names {@link #UNKNOWN_MODULE}, exactly as before, but its once-per-session dedup is keyed by
+     * the package of the closest calling frame outside the framework and the JDK, so a second
+     * unattributable caller in a different package gets its own warning instead of none. The
+     * number of keys is bounded by the number of distinct calling packages. Package-private for
+     * the same reason as {@link #reportEconomyStateIfUnavailable(String)}.
+     *
+     * @param callerPackage the closest calling frame's package, or {@code null} when none could be
+     *                      determined (then the single {@link #UNKNOWN_MODULE} slot is used)
+     */
+    static void reportUnattributedIfUnavailable(String callerPackage) {
+        EconomyProvider.State state = provider.getState();
+        if (state == EconomyProvider.State.AVAILABLE) {
+            return;
+        }
+        String dedupKey = callerPackage == null ? UNKNOWN_MODULE : UNKNOWN_MODULE + " in " + callerPackage;
+        if (!warnedModules.add(dedupKey)) {
+            return;
+        }
+        log(buildWarningMessage(UNKNOWN_MODULE, state), false);
+    }
+
+    /**
+     * The package of the closest frame in {@code stack} that belongs neither to the framework
+     * ({@code com.ultikits.ultitools.}) nor to the JDK -- the unattributed caller's own code.
+     *
+     * @return that package, or {@code null} when no such frame exists or it is in the default package
+     */
+    static String unattributedCallerPackage(StackTraceElement[] stack) {
+        if (stack == null) {
+            return null;
+        }
+        String callerClass = null;
+        for (StackTraceElement frame : stack) {
+            if (!isFrameworkOrJdkClass(frame.getClassName())) {
+                callerClass = frame.getClassName();
+                break;
+            }
+        }
+        int lastDot = callerClass == null ? -1 : callerClass.lastIndexOf('.');
+        return lastDot > 0 ? callerClass.substring(0, lastDot) : null;
+    }
+
+    private static boolean isFrameworkOrJdkClass(String className) {
+        for (String prefix : FRAMEWORK_AND_JDK_PREFIXES) {
+            if (className.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String buildWarningMessage(String moduleName, EconomyProvider.State state) {
@@ -436,15 +501,21 @@ public final class EconomyUtils {
         }
         Map<String, String> prefixToModule = new LinkedHashMap<>();
         try {
+            // #483: a module requesting the economy from its constructor, a @PostConstruct method
+            // or registerSelf() is not in the loaded list yet; the registering thread sees it here.
+            Map.Entry<String, Class<? extends UltiToolsPlugin>> registering = pluginManager.getModuleBeingRegistered();
+            if (registering != null) {
+                addModuleRoots(prefixToModule, pluginManager, registering.getValue(), registering.getKey());
+            }
             List<UltiToolsPlugin> pluginsSnapshot = new ArrayList<>(pluginManager.getPluginList());
             for (UltiToolsPlugin plugin : pluginsSnapshot) {
-                for (String pkg : pluginManager.getPluginScanPackages(plugin.getClass())) {
-                    mergeScanPackageOwner(prefixToModule, pkg, plugin.getPluginName());
-                }
+                addModuleRoots(prefixToModule, pluginManager, plugin.getClass(), plugin.getPluginName());
             }
         } catch (ConcurrentModificationException | NullPointerException e) {
             return null;
         }
+        // #462: connected External Plugin API consumers take part through their scan package.
+        addExternalPluginRoots(prefixToModule, pluginManager);
         return attributeModule(Thread.currentThread().getStackTrace(), prefixToModule);
     }
 
@@ -491,6 +562,31 @@ public final class EconomyUtils {
             }
         } else {
             prefixToModule.put(pkg, owner);
+        }
+    }
+
+    /**
+     * Merges one module's attribution roots into {@code prefixToModule}: every declared scan root
+     * ({@link PluginManager#getPluginScanPackages(Class)}), plus the module main class's own
+     * package as an implicit root (#489) -- a module whose declared roots do not cover its own
+     * package used to be unattributable for callers in that package. The implicit root goes
+     * through {@link #mergeScanPackageOwner} like a declared one, so the same rules apply: the
+     * longest matching prefix wins, and the same prefix claimed by two different modules is
+     * ambiguous. A root equal to one of the module's own declared roots changes nothing.
+     *
+     * @param prefixToModule the map being built, mutated in place
+     * @param pluginManager  source of the declared roots
+     * @param pluginClass    the module's main class
+     * @param owner          the module's name
+     */
+    static void addModuleRoots(Map<String, String> prefixToModule, PluginManager pluginManager,
+                               Class<? extends UltiToolsPlugin> pluginClass, String owner) {
+        for (String pkg : pluginManager.getPluginScanPackages(pluginClass)) {
+            mergeScanPackageOwner(prefixToModule, pkg, owner);
+        }
+        Package ownPackage = pluginClass.getPackage();
+        if (ownPackage != null && !ownPackage.getName().isEmpty()) {
+            mergeScanPackageOwner(prefixToModule, ownPackage.getName(), owner);
         }
     }
 
@@ -573,6 +669,23 @@ public final class EconomyUtils {
             return FrameMatch.NO_MATCH;
         }
         return bestHasSingleOwner ? FrameMatch.resolved(bestModule) : FrameMatch.AMBIGUOUS_MATCH;
+    }
+
+    /**
+     * Merges every connected External Plugin API consumer's scan package into {@code
+     * prefixToModule} under the plugin's name (#462), by the same rules as a module's roots. An
+     * empty scan package (a plugin main class in the default package) contributes nothing.
+     *
+     * @param prefixToModule the map being built, mutated in place
+     * @param pluginManager  source of the connected external plugins
+     */
+    private static void addExternalPluginRoots(Map<String, String> prefixToModule, PluginManager pluginManager) {
+        for (Map.Entry<String, String> external : pluginManager.getConnectedExternalScanPackages().entrySet()) {
+            String scanPackage = external.getValue();
+            if (scanPackage != null && !scanPackage.isEmpty()) {
+                mergeScanPackageOwner(prefixToModule, scanPackage, external.getKey());
+            }
+        }
     }
 
     /**
