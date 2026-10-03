@@ -431,8 +431,13 @@ This section governs the third kind.
   `NoClassDefFoundError` trace. As of 6.3.0 that case logs one WARNING,
   `Module '<name>' requires <plugin>, which is not installed or not enabled; the module is not
   loaded.`, with no trace. Every other load failure keeps the old message and trace
-  (`ultitools.boot.missing-required-plugin`). Log wording only; the module is refused exactly as
-  before.
+  (`ultitools.boot.missing-required-plugin`). When the required plugin is not installed at all,
+  the module is now refused before it is constructed: nothing of it runs, no resource is
+  extracted and no class is scanned. One consequence: a module that lists an uninstalled plugin
+  under `depend:` but never touched that plugin's classes while loading used to load anyway, and
+  is now refused, as Bukkit itself refuses a plugin whose `depend:` is missing. A required
+  plugin that is installed but not enabled yet is not refused early, because it may still be
+  enabled after UltiTools; that case is refused only if loading fails, as before.
 - Naming more callers in the economy unavailability warning (#462, #483, #489). The warning
   `Module '<name>' requested the economy service, but …` could name only a loaded module whose
   declared scan roots covered the calling class. As of 6.3.0 it also names a connected External
