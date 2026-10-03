@@ -1374,4 +1374,62 @@ class CommandExecutionManagerTest {
             java.util.Locale.setDefault(originalLocale);
         }
     }
+
+    @Nested
+    @DisplayName("command_result is honest about where the output goes (console mirror, as of 6.3.0)")
+    class HonestResultTests {
+
+        private JsonObject runAndCaptureResultData(String command, String commandId) {
+            JsonObject commandData = new JsonObject();
+            commandData.addProperty("command", command);
+            commandData.addProperty("executor", "console");
+            commandData.addProperty("commandId", commandId);
+
+            manager.executeCommand(commandData);
+            server.getScheduler().performOneTick();
+
+            ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+            verify(mockWebSocketClient).sendMessage(captor.capture());
+            return captor.getValue().getAsJsonObject("data");
+        }
+
+        @Test
+        @DisplayName("an accepted command runs as the server console and the result says it was dispatched, "
+                + "not that it succeeded with output")
+        void acceptedCommand_saysDispatchedAndPointsToLogStream() {
+            java.util.concurrent.atomic.AtomicReference<org.bukkit.command.CommandSender> seen =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            server.getCommandMap().register("mirrortest", new org.bukkit.command.Command("mirrortest") {
+                @Override
+                public boolean execute(org.bukkit.command.CommandSender sender, String label, String[] args) {
+                    seen.set(sender);
+                    sender.sendMessage("Cannot delete the default world!");
+                    return true;
+                }
+            });
+
+            JsonObject data = runAndCaptureResultData("mirrortest", "honest-accepted");
+
+            // Console identity is kept: the module sees the server's own console sender.
+            assertThat(seen.get()).isSameAs(server.getConsoleSender());
+            assertThat(data.get("success").getAsBoolean()).isTrue();
+            assertThat(data.get("output").getAsString())
+                    .isEqualTo(CommandExecutionManager.DISPATCHED_OUTPUT)
+                    .contains("dispatched to the server console")
+                    .contains("server log stream")
+                    .doesNotContain("executed successfully");
+        }
+
+        @Test
+        @DisplayName("a command the console does not accept is reported as not accepted, still pointing to the log stream")
+        void rejectedCommand_saysNotAcceptedAndPointsToLogStream() {
+            JsonObject data = runAndCaptureResultData("definitely_not_a_registered_command", "honest-rejected");
+
+            assertThat(data.get("success").getAsBoolean()).isFalse();
+            assertThat(data.get("output").getAsString())
+                    .isEqualTo(CommandExecutionManager.NOT_ACCEPTED_OUTPUT)
+                    .contains("server log stream")
+                    .doesNotContain("Command execution failed");
+        }
+    }
 }

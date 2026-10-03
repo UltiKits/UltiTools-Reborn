@@ -43,6 +43,14 @@ public class CommandExecutionManager {
      */
     private static final String ACTION_EXECUTE_COMMAND = "execute_command";
 
+    /** RED stub: the result text for a command the console accepted. */
+    static final String DISPATCHED_OUTPUT = "Command dispatched to the server console. "
+            + "Its output appears in the server log stream.";
+
+    /** RED stub: the result text for a command the console did not accept. */
+    static final String NOT_ACCEPTED_OUTPUT = "The server console did not accept the command. "
+            + "Any message it printed appears in the server log stream.";
+
     /**
      * Blocklist of dangerous commands that should not be executed remotely. This is the shipped
      * default, used only when {@code ultipanel.commands.blocklist} is absent from config.yml —
