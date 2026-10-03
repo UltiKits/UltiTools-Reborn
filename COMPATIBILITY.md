@@ -497,9 +497,11 @@ a player, the console, a command block, a command minecart, RCON or the panel se
 `@AsyncCommand` or `@RunAsync` body is unchanged: it always runs asynchronously. The deferral had no
 recorded reason: it came from sharing one `BukkitRunnable` with `@RunAsync` in 6.0.0.
 
-**Why.** Paper 1.21.11 records a command block's output only while its dispatch is open, and the
-panel's remote command and RCON read their output as soon as the dispatch returns, so a deferred body's
-replies to those senders were lost. The deferral also let two dispatches in one tick both pass
+**Why.** Paper 1.21.11 records a command block's output only while its dispatch is open, and RCON
+reads its output as soon as the dispatch returns, so a deferred body's replies to those senders were
+lost. (The panel's remote command runs as the server console, whose replies no sender can read; they
+reach the panel through the log stream instead — see "The panel's log stream mirrors the server
+console" below.) The deferral also let two dispatches in one tick both pass
 `@CmdCD`, because the cooldown was recorded when the deferred body finished; the cooldown is now
 recorded before the first dispatch returns.
 
@@ -564,7 +566,9 @@ Each corrects a declared behaviour the stream did not deliver. The panel protoco
   `java.util.logging` records, whose logger names are `Minecraft` (everything logged through
   `Bukkit.getLogger()`), a plugin's own name, or `com.ultikits.ultitools.*`; those libraries log
   through Log4j or SLF4J, and `ErrorReportCollector` never logs through JUL. A configured list is now
-  used as given. Nothing that reached the stream before is filtered differently.
+  used as given. Nothing that reached the stream before is filtered differently. With the console
+  mirror below, Log4j lines reach the stream too, under their Log4j logger names, and a configured
+  entry applies to them as well; the default stays empty so the stream shows the whole console.
 - **A log batch whose send fails is held and sent first** (#486), on the transmitter's own sender and
   on the `batch_update` drain; no newer record is drained while one is held. Delivery stays best
   effort: a batch whose connection drops just after it was written may arrive twice. Records the
@@ -588,6 +592,32 @@ Each corrects a declared behaviour the stream did not deliver. The panel protoco
   `ultipanel.logging.batch.enabled: false`, each logged `error` reply used to be streamed, rejected
   by the panel's quota and replied to again: 42,066 `[WebSocket error] Rate limit exceeded` lines in
   one measured run. A panel view that showed these lines no longer receives them.
+- **The panel's log stream mirrors the server console** (maintainer decision, 2026-10-03). Paper prints
+  its own output through Log4j — command feedback, a module's reply to the console sender, joins and
+  quits, chat, vanilla warnings and errors, and player command lines — and before 6.3.0 none of it
+  reached the panel, because the stream listened only to `java.util.logging`. The framework now
+  installs an appender on Log4j's root logger at load (with the `logs` capability on) and removes it at
+  disable; each line passes the same filters, batching and start-up replay as a plugin line, without
+  ANSI colour codes. **The stream shows exactly what the console shows, including player command lines
+  with their arguments** (`<player> issued server command: /login <password>` included): the panel is
+  at the console's trust level, so whatever the console shows the panel may show. A plugin line
+  arrives once, although Paper also copies it into Log4j; lines about the panel connection, the
+  transmitter's own lines and the WebSocket library's (`org.java_websocket.*`) are never sent. If the
+  server's Log4j configuration uses asynchronous loggers, the mirror is not installed, a console
+  WARNING says so, and the stream carries plugin lines only. A Log4j `ERROR` line with an exception is
+  now also reported to UltiPanel's error collection, once. **New `provided` dependency:**
+  `org.apache.logging.log4j:log4j-core` (2.24.1, with `log4j-api` 2.24.1 declared alongside), which
+  Paper supplies at runtime; it is not shaded, and a module needs nothing new.
+- **The panel's remote command result no longer claims to carry the command's output.** A panel
+  command is typed into the server console: it runs as the server's own console sender, unchanged for
+  modules. Paper 1.21.11 replaces any console sender with the real console before running a command,
+  so the framework's output capture never received a reply, and every `command_result` read the
+  invented `Command executed successfully`. The result now reads `Command dispatched to the server
+  console. Its output appears in the server log stream.`, or `The server console did not accept the
+  command. Any message it printed appears in the server log stream.` when the dispatch returned
+  false; blocklist refusals, an empty command and dispatch errors are unchanged. The replies themselves
+  appear in the log stream (the item above). A panel or tool that showed `output` as the command's
+  reply now shows this sentence.
 - **The `server.properties` refusal for a key the file does not hold** now reads `This key is not in
   this server's server.properties` instead of `This server version has no such key` (#473): nothing
   tells a key the running version lacks from one the file omits. A panel or tool that matched on the

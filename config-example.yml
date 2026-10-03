@@ -23,20 +23,21 @@ ultipanel:
       - "error"
       # - "debug"  # Disabled by default; not recommended in production.
 
-    # Loggers to exclude from the stream. An entry matches a record whose
-    # java.util.logging logger name starts with it. Only java.util.logging records
-    # reach the stream, and their names take three shapes: "Minecraft" (everything
-    # logged through Bukkit.getLogger(), including the framework's own
-    # "[UltiTools-API] ..." lines), a plugin's own name (its logger), and
-    # "com.ultikits.ultitools..." (framework class loggers). Libraries that log
-    # through Log4j or SLF4J (authlib, Netty, HikariCP, Jetty) never reach the
-    # stream, so naming them has no effect. The default is an empty list.
-    # 要从日志流中排除的记录器：条目匹配以它开头的 java.util.logging 记录器名。
-    # 只有 java.util.logging 记录会进入日志流，名称有三种："Minecraft"（经
-    # Bukkit.getLogger() 输出的一切，含框架自己的 "[UltiTools-API] ..." 行）、
-    # 插件自己的名称、"com.ultikits.ultitools..."（框架类记录器）。通过 Log4j
-    # 或 SLF4J 输出的库（authlib、Netty、HikariCP、Jetty）不会进入日志流，
-    # 写它们没有效果。默认是空列表。
+    # Loggers to exclude from the stream. An entry matches a line whose logger
+    # name starts with it. The stream mirrors the server console, so it receives
+    # java.util.logging records -- "Minecraft" (everything logged through
+    # Bukkit.getLogger(), including the framework's own "[UltiTools-API] ..."
+    # lines), a plugin's own name, "com.ultikits.ultitools..." (framework class
+    # loggers) -- and Paper's own Log4j lines under their Log4j names
+    # ("net.minecraft...", other server classes, a library's own name, and the
+    # empty root name Paper's console sender writes to). The default is an empty
+    # list, so nothing the console shows is hidden.
+    # 要从日志流中排除的记录器：条目匹配记录器名以它开头的行。日志流镜像服务器控制台，
+    # 因此既接收 java.util.logging 记录——"Minecraft"（经 Bukkit.getLogger() 输出的
+    # 一切，含框架自己的 "[UltiTools-API] ..." 行）、插件自己的名称、
+    # "com.ultikits.ultitools..."（框架类记录器）——也接收 Paper 自己经 Log4j 输出的行，
+    # 使用其 Log4j 记录器名（"net.minecraft..."、其他服务端类、库自己的名称，以及 Paper
+    # 控制台发送者写入的空根记录器名）。默认是空列表，控制台显示的内容不会被隐藏。
     excluded-loggers: []
       # - "Minecraft"
 
