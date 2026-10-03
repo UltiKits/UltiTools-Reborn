@@ -1142,10 +1142,11 @@ public class PluginInitiationUtils {
      * config key caused the skip.
      * <p>
      * This log line matters especially for {@link Capability#MONITORING}: {@code sendBatchUpdate}
-     * firing every 5 seconds is the panel's sole basis for deciding "is the server online" — turning
-     * monitoring off makes an upgraded server show as offline on the panel, which is the worst shape
-     * a failure can take, because the symptom points operators in the wrong direction (they go check
-     * the network and the token, not the config). D-08 already
+     * firing every 5 seconds is the panel's only source of liveness updates — turning monitoring off
+     * stops those updates, and whether the panel then shows the server as offline depends on the
+     * panel's own status cache (the Worker's cache has no expiry), so the panel may keep showing the
+     * last status. Either way the symptom (frozen dashboard values) points operators in the wrong
+     * direction (they go check the network and the token, not the config). D-08 already
      * set monitoring's out-of-the-box default to enabled as the first layer of mitigation; this log
      * line is the second.
      * <p>

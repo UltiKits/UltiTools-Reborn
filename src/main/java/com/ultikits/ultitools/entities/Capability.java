@@ -21,9 +21,9 @@ public enum Capability {
 
     MONITORING("monitoring", true, Arrays.asList(
             "Whether the panel may receive live server monitoring data (TPS, memory, world/player snapshots).",
-            "This is the panel's only \"server is alive\" signal — turning it off makes an upgraded server read as offline.",
+            "Turning it off stops the framework from sending the status and metrics messages that are the panel's only liveness updates; whether the panel then shows the server as offline depends on the panel's own status cache, not on this framework.",
             "面板是否可以接收服务器实时监控数据（TPS、内存、世界/玩家快照）。",
-            "这是面板判断「服务器是否在线」的唯一依据——关闭它会让升级后的服务器在面板上显示为离线。"
+            "关闭后框架将停止发送状态与指标消息（这是面板获得存活更新的唯一来源）；面板是否因此显示离线，取决于面板自身的状态缓存，而非本框架。"
     )),
     LOGS("logs", true, Arrays.asList(
             "Whether the panel receives the live console log stream.",
