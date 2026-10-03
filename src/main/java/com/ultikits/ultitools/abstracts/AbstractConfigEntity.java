@@ -871,10 +871,12 @@ public abstract class AbstractConfigEntity {
      * written: the operator's file is left byte-identical, and every field this call touched is
      * restored to the value it held before the call, so memory never disagrees with disk (D-01,
      * D-04). The entity keeps running after a refusal, so its in-memory state must not be left
-     * holding a rejected value; {@link #reload()} follows the same all-or-nothing rule.
+     * holding a rejected value; {@link #reload()} follows the same all-or-nothing rule. The same
+     * holds when the file replacement itself fails: every field and every piece of save
+     * tracking is restored to its state before the call, and the {@code IOException} is rethrown.
      *
      * @param jsonObject the JSON object containing the new properties
-     * @throws IOException            if an I/O error occurs
+     * @throws IOException            if an I/O error occurs; the entity is then left as it was
      * @throws ConfigurationException with {@link com.ultikits.ultitools.exceptions.ErrorCode#CONFIG_VALIDATION_FAILED}
      *                                 if the post-update field state violates a {@code @Range}/
      *                                 {@code @NotEmpty}/{@code @Size}/{@code @Pattern} constraint
@@ -882,15 +884,18 @@ public abstract class AbstractConfigEntity {
      */
     public void updateProperties(JsonObject jsonObject) throws IOException {
         synchronized (this) {
-            List<Field> touchedFields = new ArrayList<>();
-            List<Object> previousValues = new ArrayList<>();
+            PanelCheckpoint before = new PanelCheckpoint();
+            boolean saved = false;
             try {
-                Map<Field, List<List<String>>> leaves = applyAndValidate(jsonObject, touchedFields, previousValues);
+                List<Field> touchedFields = new ArrayList<>();
+                Map<Field, List<List<String>>> leaves = applyAndValidate(jsonObject, touchedFields, new ArrayList<>());
                 PreparedSave prepared = prepareSave(touchedFields, leaves);
                 if (prepared.changed) { write(prepared.candidate); }
                 acknowledgeSave(prepared);
-            } catch (RuntimeException failure) {
-                restoreFields(touchedFields, previousValues); throw failure;
+                saved = true;
+            } finally {
+                // A refusal or a failed file replacement leaves the entity exactly as before.
+                if (!saved) { before.restore(); }
             }
         }
     }
