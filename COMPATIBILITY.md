@@ -562,7 +562,7 @@ Each corrects a declared behaviour the stream did not deliver. The panel protoco
 
 - **`ultipanel.logging.excluded-loggers` ships empty** (#485). The six defaults before 6.3.0
   (`com.mojang.authlib`, `net.minecraft.network`, `org.apache.http`, `com.zaxxer.hikari`,
-  `org.eclipse.jetty`, `ErrorReportCollector`) could never match: the stream receives only
+  `org.eclipse.jetty`, `ErrorReportCollector`) could never match: the stream then received only
   `java.util.logging` records, whose logger names are `Minecraft` (everything logged through
   `Bukkit.getLogger()`), a plugin's own name, or `com.ultikits.ultitools.*`; those libraries log
   through Log4j or SLF4J, and `ErrorReportCollector` never logs through JUL. A configured list is now
