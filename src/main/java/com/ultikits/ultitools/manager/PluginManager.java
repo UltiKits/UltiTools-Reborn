@@ -99,7 +99,7 @@ import lombok.Getter;
 public class PluginManager {
     /**
      * The name of the JVM system property that opts back into the pre-6.3.0 degraded load
-     * order (D-10): every module in filesystem/classpath order, with no dependency resolution
+     * order (D-10): every module in discovery order (file-name order, #476), with no dependency resolution
      * at all. Modeled on Paper's own {@code -Dpaper.useLegacyPluginLoading=true} precedent -- a
      * one-shot, consumed-at-bootstrap decision, which is why it is a system property rather than
      * a reloadable {@code config.yml} key. The literal name is repeated (rather than referenced
@@ -112,6 +112,14 @@ public class PluginManager {
     private final List<UltiToolsPlugin> pluginList = new ArrayList<>();
 
     private final List<Class<? extends UltiToolsPlugin>> pluginClassList = new ArrayList<>();
+
+    /**
+     * What the start-up scan read: per declared main class, every JAR in the modules folder that
+     * declares it, and the JAR its class was loaded from (#516). {@code /upm uninstall} reads it to
+     * find every file of a loaded module.
+     */
+    @Getter
+    private final ModuleJarIndex moduleJarIndex = new ModuleJarIndex();
     private ClassLoader classLoader;
     @Getter
     private TaskManager taskManager;
@@ -170,22 +178,12 @@ public class PluginManager {
         registerFrameworkScheduledOwners();
         registerPlayerQuitListener();
         registerPluginDisableListener();
-        String currentPath = System.getProperty("user.dir");
-        String path = currentPath + File.separator + "plugins" + File.separator + "UltiTools" + File.separator + "plugins";
-        File pluginFolder = new File(path);
-        File[] plugins = pluginFolder.listFiles((file) -> file.getName().endsWith(".jar"));
-
-        if (plugins == null) {
+        // #517: the same folder the module class loader was built over, from the one method that
+        // computes it -- not the JVM's working directory, which a launcher may set anywhere.
+        File pluginFolder = com.ultikits.ultitools.utils.ModuleFileTransactions.modulesFolder(
+                UltiTools.getInstance().getDataFolder());
+        if (!discoverModuleClasses(pluginFolder)) {
             return;
-        }
-
-        Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Found " + plugins.length + " file(s):");
-
-        for (File file : plugins) {
-            Class<? extends UltiToolsPlugin> pluginClass = loadPluginMainClass(classLoader, file);
-            if (pluginClass != null) {
-                pluginClassList.add(pluginClass);
-            }
         }
         int success = 0;
         if (pluginClassList.isEmpty()) {
@@ -207,6 +205,80 @@ public class PluginManager {
                 Level.INFO,
                 String.format("[UltiTools-API] Succeeded loaded %d, Failed %d.", success, sortedPlugins.size() - success)
         );
+    }
+
+    /**
+     * Lists the modules folder once and reads each module JAR's declared main class, adding every
+     * class that loads to {@code pluginClassList}. Package-private so a test can drive the scan over
+     * a folder of its own.
+     *
+     * @param pluginFolder the modules folder
+     * @return {@code false} when the folder could not be listed
+     */
+    boolean discoverModuleClasses(File pluginFolder) {
+        File[] plugins = com.ultikits.ultitools.utils.ModuleFileTransactions.moduleJars(pluginFolder);
+        if (plugins == null) {
+            return false;
+        }
+
+        Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Found " + plugins.length + " file(s):");
+
+        for (File file : plugins) {
+            Class<? extends UltiToolsPlugin> pluginClass = loadPluginMainClass(classLoader, file);
+            if (pluginClass != null) {
+                pluginClassList.add(pluginClass);
+            }
+        }
+        warnOnDuplicateModuleJars();
+        return true;
+    }
+
+    /**
+     * One warning per module main class that two or more JARs in the modules folder declare,
+     * naming every one of them and the JAR the module's classes load from (UltiTools-Dev-Doc#96).
+     *
+     * <p>All module JARs share one class loader, so the copies are not loaded side by side and no
+     * version comparison runs between them: the class comes from the first JAR on the class path
+     * that carries it -- in file-name order (#476) -- and the other copies are refused. Without this
+     * line an operator who dropped a new version next to the old one would see the old one keep
+     * running with nothing saying why.
+     *
+     * <p>A main class none of whose copies loaded gets no line here: each copy has already been
+     * refused with its own line saying why.
+     */
+    private void warnOnDuplicateModuleJars() {
+        for (Map.Entry<String, List<File>> duplicate : moduleJarIndex.duplicates().entrySet()) {
+            File supplier = moduleJarIndex.supplierOf(duplicate.getKey());
+            if (supplier == null) {
+                continue;
+            }
+            List<String> names = new ArrayList<>();
+            for (File jar : duplicate.getValue()) {
+                names.add(jar.getName());
+            }
+            Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + String.format(UltiTools.getInstance().i18n(
+                    "以下 JAR 文件都声明了同一个模块主类 %s：%s。该模块的类只从 %s 加载，其余副本不会加载；请只保留其中一个。"),
+                    duplicate.getKey(), String.join(", ", names), supplier.getName()));
+        }
+    }
+
+    /**
+     * Whether a JAR whose declared main class was loaded from another JAR is another copy of that
+     * module: the other JAR is in the same modules folder and its own {@code plugin.yml} declares
+     * the same {@code main:}. Anything else is a class borrowed from a JAR that is not this module,
+     * which stays refused with its own SEVERE line. Reads only {@code plugin.yml}.
+     *
+     * @param pluginJar     the JAR being scanned
+     * @param supplier      the JAR its declared main class was loaded from
+     * @param mainClassName the main class it declares
+     * @return {@code true} when it is a duplicate copy
+     */
+    private static boolean isDuplicateCopy(File pluginJar, File supplier, String mainClassName) {
+        File folder = pluginJar.getAbsoluteFile().getParentFile();
+        File supplierFolder = supplier.getAbsoluteFile().getParentFile();
+        return folder != null && supplierFolder != null
+                && canonicalPath(folder).equals(canonicalPath(supplierFolder))
+                && mainClassName.equals(PluginYmlReader.readFromJarFile(supplier).getMain());
     }
 
     /**
@@ -916,6 +988,9 @@ public class PluginManager {
                     + "module jar must declare 'main: <fully.qualified.MainClass>' in plugin.yml.");
             return null;
         }
+        // #516: kept per main class, whether or not the class loads, so an uninstall can find every
+        // JAR that declares a loaded module -- the loader's own read, not a second scan.
+        moduleJarIndex.record(mainClassName, pluginJar);
 
         try {
             // GEN-07 (D-14): records what the removed classload filter layers would have refused
@@ -952,12 +1027,27 @@ public class PluginManager {
             // mismatch is a confirmed cross-jar class and is refused.
             File actualJarFile = resolveOwnJarFile(aClass);
             if (actualJarFile != null && !canonicalPath(actualJarFile).equals(canonicalPath(pluginJar))) {
+                if (isDuplicateCopy(pluginJar, actualJarFile, mainClassName)) {
+                    // UltiTools-Dev-Doc#96: another copy of the same module -- the JAR the class
+                    // came from declares this very main: too. It is still not loaded twice, and it
+                    // is reported once for every copy together after the scan
+                    // (warnOnDuplicateModuleJars), not here once per copy.
+                    moduleJarIndex.record(mainClassName, actualJarFile);
+                    moduleJarIndex.recordSupplier(mainClassName, actualJarFile);
+                    Bukkit.getLogger().log(Level.FINE, "[UltiTools-API] Module '" + pluginJar.getName()
+                            + "' is another copy of " + mainClassName + ", whose classes load from '"
+                            + actualJarFile.getName() + "'");
+                    return null;
+                }
                 Bukkit.getLogger().log(Level.SEVERE,
                     "[UltiTools-API] Module '" + pluginJar.getName() + "' declares main: '"
                         + mainClassName + "', but that class actually belongs to a different "
                         + "already-installed module jar ('" + actualJarFile.getName() + "') -- "
                         + "refusing to load a module whose declared main class is not its own.");
                 return null;
+            }
+            if (actualJarFile != null) {
+                moduleJarIndex.recordSupplier(mainClassName, actualJarFile);
             }
             return aClass.asSubclass(UltiToolsPlugin.class);
         } catch (ClassNotFoundException | LinkageError e) {
@@ -2668,7 +2758,7 @@ public class PluginManager {
             Bukkit.getLogger().log(Level.SEVERE,
                 "[UltiTools-API] Legacy unsorted plugin load order is ACTIVE because "
                     + "-Dultitools.useLegacyPluginLoading=true is set on the command line. "
-                    + "Dependency resolution is skipped entirely - modules load in filesystem "
+                    + "Dependency resolution is skipped entirely - modules load in file-name "
                     + "order and may fail to initialize if they rely on load order.");
             return new ArrayList<>(plugins);
         }

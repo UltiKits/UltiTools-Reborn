@@ -67,7 +67,10 @@ class PluginInstallUtilsUninstallTest {
             PluginInstallUtilsUninstallTest.class.getName().replace('.', '/');
 
     @TempDir
-    File dataFolder;
+    File serverRoot;
+
+    /** {@code <server root>/plugins/UltiTools}, as on a real server; the records live under the server root. */
+    private File dataFolder;
 
     private ServerMock server;
     private PluginManager pluginManager;
@@ -76,6 +79,7 @@ class PluginInstallUtilsUninstallTest {
 
     @BeforeEach
     void setUp() {
+        dataFolder = ModuleUpdateFixtures.dataFolderIn(serverRoot);
         MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
         MockBukkit.createMockPlugin();

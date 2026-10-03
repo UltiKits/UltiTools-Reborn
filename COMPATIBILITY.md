@@ -744,10 +744,10 @@ This section governs the third kind.
   URL for every entry of the modules folder, so a stray file or a subdirectory there no longer
   fails the uninstall (#504). A loaded module is asked which JAR it came from — its own
   `getProtectionDomain().getCodeSource()`, read before it is unloaded — and that JAR is deleted
-  whatever its metadata says, since an UltiTools module is identified by `@UltiToolsModule` and
-  needs no `plugin.yml` at all. Every other entry of the modules folder is placed in exactly one of
+  whatever its metadata says now (a file may have been replaced since the start, and a module
+  registered from code has no `plugin.yml` the loader read). Every other entry of the modules folder is placed in exactly one of
   four states, each decided by reading the archive — with one exception, an entry the module loader
-  itself would never load, judged by the same `.jar` test `PluginManager#init` applies to this
+  itself would never load, judged by the same `.jar` test the start-up scan applies to this
   folder, which is state B without being opened. The states: its `plugin.yml` declares this module,
   or it is a loaded instance's own code-source JAR (deleted); it opened and its `plugin.yml`
   declares another module, or it is a directory (ignored); nothing about it identifies a module,
@@ -767,6 +767,75 @@ This section governs the third kind.
   those entries travel with it as a suppressed
   `PluginInstallUtils.UndeterminedEntriesException` (`@ApiStatus.Internal`), so no outcome
   discards what another established.
+- `/upm update` and `PluginInstallUtils.updatePlugin(String)` no longer replace a module's JAR while
+  the server runs (#505, #513). Before 6.3.0 the update downloaded the new JAR into the modules
+  folder, deleted the old one with `File#delete()` while ignoring its result, and returned `true` —
+  reported as "Update successful" — whether or not the old JAR was gone, so a failed delete left two
+  versions of the module to race at the next start. Now the update **takes effect at the next start
+  and is committed only after that start shows the module loaded**: the command downloads the new JAR
+  into `.ultikits/upm-transactions/` under the server root — beside the credential store and outside
+  `plugins/`, where the panel's file interface cannot forge a record — and records it; the
+  next start moves the old JAR aside (keeping it) and the new one in, before the module class loader
+  is built; after the modules load, the update is kept only if the module is loaded from the new JAR
+  at the new version, and otherwise the old JAR is restored and the new one removed, with one log
+  line naming both versions. Nothing predicts before the restart whether a JAR will load. A move that
+  fails leaves the modules folder as it was and is reported in the start-up log and again by the
+  next `/upm update` of that module. The swap is an atomic rename, so when `plugins/` is on a
+  different file system from the server root the start refuses it, changes nothing, and names both
+  folders in one SEVERE line; there is no copy fallback. `updatePlugin(String)` keeps its signature; its `true` now
+  means "staged", and `PluginInstallUtils.stageUpdate(String)` (`@ApiStatus.Internal`) returns what
+  was staged or why nothing was. Nothing is staged, and `updatePlugin(String)` returns `false`, when
+  another JAR in the modules folder declares the module's `plugin.yml` `main:` and sorts before the
+  new JAR's file name: that copy would load instead at the next start, so the update could only be
+  rolled back; the reply names it (maintainer follow-up 19). Likewise when two loaded modules in
+  different JARs declare the same identify-string, since the update names a module only by that
+  string. The update only ever moves, replaces or deletes a file whose SHA-256 matches its record;
+  when another actor has changed one, it does nothing, keeps the record as `NEEDS_OPERATOR` with one
+  SEVERE line, and refuses `/upm update` and `/upm uninstall` of that module until the record and its
+  folder are deleted. Measured consumers: none of the fifteen module repositories or
+  UltiTools-External-Example call either method (their `origin/master`, searched for
+  `PluginInstallUtils`, `updatePlugin(` and `uninstallPlugin(`; the only hits are UAT documents
+  naming the `/upm` commands). An uninstall that goes ahead also cancels an update of that module
+  still waiting for the next start, and any download of one still running, on every outcome — its
+  JARs deleted, recorded for deletion, not deletable, or a modules folder that could not be listed —
+  matched on the identity it resolved (the unloaded instances' identify-strings and runtime names,
+  the names it was given or their JARs declare, and their JARs), not only on the name typed.
+  `PluginInstallUtils.uninstallPlugin(String)` does this too; the command reads the cancelled
+  versions through `uninstallPluginReporting(String, List)` (`@ApiStatus.Internal`).
+- `PluginInstallUtils.uninstallPlugin(String)` also deletes a JAR whose `plugin.yml` `main:` names
+  the loaded module's main class, whatever `name:` it declares (#516). The module loader identifies
+  a module JAR by that entry alone (since #548), and its start-up scan now records, per main class,
+  every JAR that declares it; before 6.3.0 a second copy of a module whose `plugin.yml` declared a
+  different `name:` survived the uninstall and loaded the module again at the next start. A main
+  class another loaded module also has is never matched, a file is judged by what it declares at the
+  time of the uninstall, and no class is read out of any archive.
+- Module JARs are discovered in file-name order (#476). Before 6.3.0 the start-up scan and the module
+  class loader took the modules folder in `File#listFiles()` order, which Java does not define (on
+  ext4 it is hash order). The order decides which of several JARs carrying the same class supplies it,
+  which copy of a duplicated module is read first, which module a `plugin.yml` `name:` shared by two
+  modules resolves to, and the order of the opt-in legacy load (`-Dultitools.useLegacyPluginLoading`).
+  Modules without a dependency between them already loaded in alphabetical order of their class names
+  and still do. An install that relied on one copy winning by listing order may see the other one win
+  after upgrading, once, and then the same one on every start and file system.
+- Two or more JARs in the modules folder declaring the same `plugin.yml` `main:` class are reported by
+  one start-up WARNING naming every one of them and the JAR the classes load from (UltiTools-Dev-Doc#96).
+  The copies were never loaded side by side and still are not; before, each refused copy logged its
+  own SEVERE line saying its main class belonged to another JAR. A JAR borrowing a class from a JAR that
+  does not declare it keeps that SEVERE refusal.
+- `PluginInstallUtils.uninstallPlugin(String)` no longer leaves a JAR it cannot delete for the
+  operator to delete by hand (#518). On Windows the shared module class loader keeps every module
+  JAR open while the server runs, so that instruction could not be followed. The uninstall now
+  records such a JAR and the next start deletes it before any module loads, if it is still the
+  recorded file (same SHA-256); the failure it raises is
+  `PluginInstallUtils.RemovalDeferredException` (`@ApiStatus.Internal`), a
+  `java.nio.file.FileSystemException` that names every recorded file as before. Only when the
+  record cannot be written does the plain `FileSystemException` leave as it did.
+- The modules folder is computed in one place, `<plugin data folder>/plugins` (#517). Before 6.3.0
+  the start-up scan read `System.getProperty("user.dir")` + `/plugins/UltiTools/plugins` while the
+  module class loader, install, update and uninstall read the data folder; on a server whose JVM was
+  started from another working directory the scan found JARs the class loader did not hold, and
+  `/upm` acted on a folder the scan did not read. The data folder follows Bukkit's own plugin
+  directory, so a server started from its root is unaffected.
 
 - The JSON storage backend no longer hands out the entities it caches (#522). Before 6.3.0,
   `SimpleJsonDataOperator`'s read paths (`getById`, `getAll`, `page`, `getLike`, and every
