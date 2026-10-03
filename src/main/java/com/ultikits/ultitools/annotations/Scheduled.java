@@ -15,7 +15,11 @@ import java.lang.annotation.Target;
  * Tasks are automatically cancelled when the owning plugin is unloaded.
  * {@link com.ultikits.ultitools.manager.TaskManager} walks the class hierarchy when scanning for
  * {@code @Scheduled} methods, so an annotated method is still found on a ByteBuddy AOP proxy of
- * the declaring bean.
+ * the declaring bean, and a method declared on a superclass of the bean -- an abstract base
+ * service -- is scheduled too (as of 6.3.0, #532; before, only the bean class's own declared
+ * methods were scanned). An overridden method is scheduled once, with the most derived
+ * declaration's annotation; an override that does not carry {@code @Scheduled} itself is not
+ * scheduled, because Java does not inherit annotations on methods.
  *
  * <p>Usage example:
  * <pre>{@code
@@ -50,10 +54,10 @@ import java.lang.annotation.Target;
  *       field is not an {@code int}, {@code long}, {@code Integer} or {@code Long}, or the value is
  *       below 1 second, {@code null} or above {@code Integer.MAX_VALUE / 20} seconds (about 3.4
  *       years). {@code 0} does not mean "off".</li>
- *   <li><b>Declared methods only.</b> The binding is found on the bean class's own declared
- *       methods (after unwrapping an AOP proxy), exactly like an unbound {@code @Scheduled}; a
- *       method inherited from a superclass is neither scheduled nor checked. Declare the bound
- *       method on the bean class itself (see issue #532).</li>
+ *   <li><b>Inherited methods included.</b> The binding is found on the same methods as an
+ *       unbound {@code @Scheduled}: the bean class (after unwrapping an AOP proxy) and its
+ *       superclasses, each overridden method once (#532). A bound method inherited from an
+ *       abstract base is scheduled and checked at load like one the bean class declares.</li>
  *   <li><b>Applied at {@code /ul reload}</b>, keeping the task's place in its cycle: the next run
  *       is the last run plus the new period (before the first run: the arm time plus the new
  *       delay), or the next tick if that moment has already passed. A reload never runs the task

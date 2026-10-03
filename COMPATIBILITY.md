@@ -4,6 +4,357 @@ This document explains what the version numbers of `com.ultikits:UltiTools-API` 
 deprecation and removal work, and which removals are currently scheduled. It is written for
 downstream module authors.
 
+## Config layer (6.3.0)
+
+This section is the configuration migration contract **as of v6.3.0**. The new public extension
+point is `com.ultikits.ultitools.config.convert.ConfigConverter<T>`, discovered with
+`@ConfigConverterFor`; the document tree and writer remain internal implementation details.
+Third-party modules must rebuild if they used the removed accessor, and register converters for
+unsupported declared field types before configuration initialization.
+
+### Rendering and save fallback
+
+The internal config storage layer renders the whole YAML document through SnakeYAML, preserving content, comment text and key
+order. Its existing line-terminator, BOM, final-newline and supported indentation-style rules remain in effect. Operator layout
+may be normalized: aligned inline comments, flow spacing, extra spaces after a colon, document markers, mixed indentation and
+trailing spaces are not byte-preservation guarantees. Changed anchored documents expand aliases and merge keys from their plain
+values while retaining comments on surviving keys. Comments on individual list items are kept only while the list keeps its length — the same as Bukkit, which keeps none. The storage API signatures are unchanged.
+
+Saving first attempts a forced same-directory temporary file and atomic replacement. Only an unsupported atomic move, EBUSY,
+EXDEV, or a permission/read-only refusal to create the temporary file allows the narrow fallback: exclusively create `<file>.bak`,
+copy and force the existing target's bytes, then overwrite and force the existing target in place. If a backup already exists,
+it is refreshed from the current target through a forced same-directory temporary and atomic replacement before the target is
+opened. A backup creation/write/force or refresh rename failure refuses the save before the target is touched and preserves the
+previous backup. No old-backup restoration or validation of the current target is implied by this refresh. Other staging or move
+failures refuse the save. A fallback attempt logs one warning identifying the target, backup, cause and outcome. Symbolic links
+remain links, with the backup beside the resolved target.
+
+After an in-place write begins, a failure may leave a partial target, but its complete forced backup remains. That backup is
+removed only after the next successful strict UTF-8 storage load; unreadable or unparseable files keep it. Backup cleanup is best
+effort and cannot turn a successful load into a failure. No automatic restoration policy is introduced.
+
+### Declared types, whole map keys and persistence
+
+`AbstractConfigEntity` uses the document, converter registry and atomic writer for initial defaults,
+explicit saves and panel updates. Typed collections resolve their full inherited generic types:
+convertible values bind, invalid collection/map elements are skipped with a located warning, and an
+invalid field value falls back to its initially declared default. Invalid reload values use that
+default too; a missing reload key instead retains its live field and is not added to the file.
+Warnings name the file, key and failed position/type; secret-shaped values and nested credentials
+are redacted. Unsupported declared types fail preflight before the file is read or created; register
+`@ConfigConverterFor` or declare a supported plain-data shape. The built-in Bukkit serialization
+fallback requires a registered alias; registered custom converters keep ownership of their types.
+For every value `x` of the declared type whose collections and arrays contain no null element,
+`fromPlain(toPlain(x))` equals `x`. Typed collections (including `List<Object>`) and reference arrays
+(including `Object[]`) omit null elements on write with one located warning per field. Reading keeps
+its existing skip/warning behavior; plain data in a declared `Object` slot is unchanged.
+Null map values and null whole fields still round-trip. For every canonical
+plain value `p` emitted by the converter (`p = toPlain(x)`), `toPlain(fromPlain(p))` equals `p`.
+A converter may accept noncanonical input `q`; `toPlain(fromPlain(q))` is its canonical form, and
+normalization is stable: `fromPlain(toPlain(fromPlain(q)))` equals `fromPlain(q)`. Approved coercions
+(number to String, numeric text to int/float, `"false"` to boolean and duplicate elements to a Set)
+remain unchanged. 6.2's default parser stored every list element as text, so a 6.2-saved
+`List<Integer>` reads `- '60'`; 6.3.0 binds it as the number 60 and writes `- 60` the next time
+that file is saved by its module or a panel edit. Loading, reloading and the shutdown check never
+rewrite such a file on their own. Equality is semantic value comparison, not object identity; numeric plain values
+compare by value. Reload merges and panel leaf edits rely on forward equality. A converter that adds
+a value during reading without undoing that change during writing violates this contract.
+
+Whole map keys, including `g.m`, `o.O` and `wave.`, are supported as of 6.3.0.
+`@ConfigEntry.path` still splits at every dot: `chat.aliases` selects nested settings, whereas a
+key `o.O` inside the bound map is one whole key. These are different path conventions. Legacy 6.2 files in which Bukkit
+split a dotted key into nested mappings are read as they are, never automatically merged or renamed.
+For a `Map<String, String>` the wrongly shaped nested value is skipped with a warning.
+Explicit `null` is stored and binds to reference fields (primitive null is a mismatch). UUIDs, enums,
+sets and registered Bukkit values use converter plain output, not Java class tags. A Bukkit value
+loaded into an `Object` slot remains a plain map. Unknown runtime objects refuse saves without
+changing the file.
+
+Panel JSON uses the same conversion path as file binding and saves: integral numbers within the long
+range become plain `Long`; integers beyond the long range are kept exactly as `BigInteger`.
+Fractional numbers keep the existing `Double` route, objects ordered maps and arrays lists before typed conversion.
+A panel write persists only touched fields; unrelated unsaved code edits remain dirty. Validation
+runs before any missing-key or panel persistence. Snapshots track successful effective values,
+separately from the raw document and byte fingerprint. Reordering a map is dirty, but an order-only
+save acknowledges its new effective order without changing operator file order, comments or bytes.
+
+An explicit save compares its candidates with the current disk document, not only the saved
+baseline, so it may replace an operator's changed value even when the entity was clean. Semantic
+no-op saves invoke no writer and preserve bytes and modification time. Edited saves use the full
+emitter described above, retaining untargeted data, key order and comment text subject to the list-item
+length limit above, while allowing layout normalization. A failed write never acknowledges the pending effective values as saved.
+
+Unreadable, unparseable and non-UTF-8 files are protected on every entity write path. Initial load
+keeps declared defaults; failed reload keeps running fields. One SEVERE names the file and safe cause.
+Explicit save does not clear protection; only a later successful load permits writes again.
+Parser diagnostics expose only numeric line/column metadata, never source snippets or scalar values.
+
+Exactly one `{key}` annotation comment (surrounding whitespace ignored) is framework-owned. Every
+load and write refreshes existing token comments from the module catalogue in the current language;
+operator block comments on token entries are replaced, while literal-entry comments are kept.
+Catalogue lookup failure keeps the literal token and warns once per entry per load. Comment text
+uses the document's YAML line-break/control-character sanitation, including the panel payload.
+A failed comment-only rewrite does not fail load or discard bound values: the entity stays dirty
+until persistence succeeds. No-op comparison includes these authoritative comments.
+
+A successful entity write that replaces an operator-edited value warns once, naming the file and
+only the keys actually replaced, never values. Explicit saves, partial panel writes and shutdown
+share this reporting. Comment/layout-only edits, equal candidate values and failed writes do not
+claim an overwrite. The check and write run under the same entity monitor.
+
+### Removed mutable configuration accessor
+
+`AbstractConfigEntity#getConfig()` is removed under the **6.3.0 one-time carve-out**.
+The accessor worked in 6.2.5: neither the non-functional nor the never-used same-release exception
+applies. This is an explicit maintainer-authorized removal, not evidence that the accessor was
+broken or that nobody used it.
+Use `isPresentInFile(String)` for presence in the last successfully loaded document: undeclared keys
+and explicit null count as present; unreadable/unparseable loads report false. Paths split at every
+dot like `@ConfigEntry.path`, so a whole map key containing a dot is not addressable through this
+method. Read or mutate declared fields and call `save()` instead of mutating Bukkit storage.
+Official callers measured in UltiEssentials `RemovedConfigKeys.java:83` and UltiRemoteBag
+`RemovedConfigKeys.java:91` migrate in the module batch; third-party usage is unknown.
+An unrecompiled caller invoking the removed accessor sees `NoSuchMethodError`. See the removal
+record in `compatibility/records/6.3.0.md`; all other public/protected entity signatures are retained.
+
+### Registration batches
+
+As of 6.3.0, package/directory configuration registration buffers initialization writes until every
+entity binds and validates. A refused batch creates no file and changes no existing file, including
+missing-key and language-token comment rewrites. Once accepted, files persist independently; an I/O
+failure preserves earlier successful files and protects the failed entity until a successful reload.
+Standalone registration still writes immediately. Framework-internal initialization bridges are not
+a module transaction API.
+
+### Superseded-copy configuration ordering
+
+As of 6.3.0, before framework construction of an identifiable newer module copy, the framework
+reads its own JAR plugin.yml using the constructor's main/version defaults and existing version
+comparator, and saves the loaded old copy's dirty configurations in sorted file-path order.
+A failed or protected old save refuses incoming construction and retains the old active copy.
+The old copy is not unloaded before incoming activation succeeds. If identity is unavailable
+before construction, or an already-constructed instance is supplied, there is no late old save:
+successful supersede warns once with the dropped file/entry keys (never values), then releases
+old configuration entities. Failed incoming construction, compatibility, assembly or activation
+releases only refused incoming configuration owners; existing owners remain registered.
+No constructor deferral, early unload or public storage/transaction API is introduced.
+
+### Configuration registry server-thread confinement
+
+As of 6.3.0, all ConfigManager registry operations are server-thread confined while a server
+runs. Direct off-thread register/registerAll/saveAll/unregisterAll/reloadConfigs calls warn once
+and do no work. Getters, toJson/getComments and both loadFromJson overloads warn once and throw
+IllegalStateException, rather than returning a misleading empty result or successful write.
+The no-server case remains supported. getAllConfigEntities preserves null for an unregistered
+module and otherwise returns an unmodifiable detached map; its entities are not copied.
+Panel update, upload-write and reconnect upload-read callbacks queue their whole operation and
+return immediately off-thread, responding only after the queued operation runs. Registry guards
+precede entity monitors. Multi-file panel transactions retain deterministically ordered touched-entity
+monitors through validation, preparation, commit and acknowledgment or rollback; direct single-entity
+persistence uses its existing monitor. No separate manager lock or blocking scheduler wait is added.
+Async registry callers must schedule on the server thread. Existing public method signatures and
+panel response fields/types are unchanged.
+
+### Configuration release and shutdown save
+
+As of 6.3.0, module unload releases that module instance's configuration registry entry even
+when its unload hook or context close throws. Later shutdown saves neither retain nor write
+unloaded entities. PluginManager.close saves all registered dirty configurations before unloading
+any module. After each module's unload hook and container `@PreDestroy` callbacks, shutdown saves
+that same owner's dirty configurations again before releasing the owner, even when cleanup throws.
+The final save retains protected-file refusal and per-entity failure isolation. Normal runtime unload itself does
+not save; superseded-copy preparation follows the separate preconstruction rule. Public existing
+signatures are unchanged; no module migration is required.
+
+### Configuration init and reload thread contract
+
+As of 6.3.0, configuration init, reload, manager reloadConfigs and module reloadSelf refuse
+calls off the server thread while a server runs. One warning names the module, entity path when
+applicable and caller thread; no field/file/lifecycle action occurs. Checks precede entity monitors.
+The no-server test harness case remains allowed. Public signatures, including final reloadSelf,
+are unchanged; async third-party callers must schedule their reload on the server thread.
+
+### Reload merge rule
+
+As of 6.3.0, reload compares the last effective disk baseline, current serialized fields, and
+incoming disk values. Memory-only changes survive and stay dirty; disk-only changes are adopted.
+Maps merge recursively by whole keys; lists and scalars are atomic. Conflicts take the file's value
+and warn with the located key and discarded value, redacting secret-shaped values. Absent map keys
+and explicit null differ. Missing whole declared fields retain their live values with the inherited
+declared-default baseline. This planner-selected file-wins policy can be overturned by the maintainer.
+Unreadable/unparseable reloads keep live values and protect the file as before.
+
+### Panel edits inside map entries
+
+As of 6.3.0, a changed panel leaf inside a declared map setting is applied through that field's
+full declared-type converter. Real whole keys containing dots remain whole. A path with multiple
+readings refuses with every reading named; an unknown changed key is explicitly refused. Any refused
+changed key refuses the whole payload, naming all refused paths. Unchanged displayed leaves are not
+edits, including undeclared operator keys and ambiguous paths. Previously these map-entry edits were
+silently ignored. Leaf edits preserve unrelated pending in-memory siblings and their dirty state,
+and preserve independently edited disk siblings without acknowledging them. Full declared-field
+conversion and validation still run: the live field is serialized, only targeted plain leaves are
+patched, and the registry binds that candidate once. The round-trip contract preserves untouched
+bound siblings without any type-specific map/object merging. Only targeted leaves are persisted.
+The existing `config_update_response` shape is unchanged.
+
+### Multi-file panel persistence
+
+As of 6.3.0, `ConfigManager#loadFromJson(String)` validates every touched configuration, stages
+all changed files, and only then replaces them. Entity baselines and raw acknowledgments advance
+after every commit succeeds. An in-process staging/replacement refusal restores attempted targets
+and the complete prior entity state, removes staged temporaries, and rethrows the original error.
+Recovery errors are attached as suppressed exceptions; persistently unavailable storage can prevent
+restoration and is not falsely reported as a successful rollback. Semantic no-ops write nothing.
+This is not a crash-safe multi-file transaction: a JVM crash between moves remains deferred to #545.
+The panel message shape and public `loadFromJson` signatures are unchanged. Internal staged-entity
+coordination bridges are not a module transaction API.
+
+### Migrating legacy parsers to converters
+
+The six deprecated announcements are `ConfigEntry#parser()`, `interfaces.Parser`,
+`interfaces.ObjectConfigSerializer`, and `interfaces.impl.pasers.ConfigParser`,
+`DefaultConfigParser`, `StringHashMapParser` (the published package spelling `pasers` is retained).
+Their first release carrying `@Deprecated(since = "6.3.0", forRemoval = true)` is 6.3.0; the next
+MINOR, 6.4.0, is the announced removal version. They are retained in 6.3.0, not deleted now.
+An explicit non-default `parser = X.class` still selects the frozen legacy adapter. Its detached
+input is emitted under one key and loaded by a fresh Bukkit `YamlConfiguration#get`, retaining
+6.2 section-based dotted-key splitting and Bukkit `==` alias deserialization at the root and inside
+lists/maps, including explicitly parsed `Object` fields. Registry converters do not hydrate these
+legacy inputs; legacy output still crosses the plain-data boundary and retains boxed widening.
+Bukkit's own alias restrictions remain: integral Vector coordinates deserialize to null, whereas
+fractional coordinates deserialize normally. Leaving `parser` at `DefaultConfigParser.class` selects the new registry,
+not that legacy class. Third-party subclasses retain their old executable behavior, not the new
+built-in collection semantics. The six announcements are indexed in
+[`compatibility/DEPRECATIONS.md`](compatibility/DEPRECATIONS.md).
+
+For a custom type, remove `parser = ...` from the field and place a public top-level converter
+with a public no-argument constructor in the module's `@UltiToolsModule.scanBasePackages`.
+The package scanner discovers top-level classes only, not nested converter classes. Converters are discovered before configuration
+construction and are not IoC beans: do not depend on injected services or constructor side effects.
+Two registrations for the same exact class refuse load naming both converters. Lookup uses an
+explicit non-default legacy parser first; otherwise the module's exact registration, then its
+non-exact superclass/interface registrations, then the framework's registrations in the same
+order, generic collections/arrays/enums/Object, and registered Bukkit serialization fallback.
+`exact = true` prevents a registration from serving subclasses.
+
+Here is a map-shaped value migration. Put the value/parser/field members in a module class named
+`MigrationExample` in package `example.config` (imports go before the outer class). Put the converter
+in its own public top-level `TokenConverter.java` in the same scanned package, as shown separately. `Token`
+must provide semantic `equals`/`hashCode` in production so round-trip comparisons mean value equality.
+The converter deliberately accepts only the one-key shape it can reproduce; accepting extra keys
+and dropping them would violate `toPlain(fromPlain(p)) == p`.
+
+```java
+import java.util.Map;
+import com.ultikits.ultitools.annotations.ConfigEntry;
+import com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser;
+
+// Before: inherits the legacy reflective writer and section reader.
+public static class Token {
+    public String text;
+    public Token(String text) { this.text = text; }
+    @Override public boolean equals(Object other) {
+        return other instanceof Token
+                && java.util.Objects.equals(text, ((Token) other).text);
+    }
+    @Override public int hashCode() { return java.util.Objects.hashCode(text); }
+}
+public static class TokenParser extends DefaultConfigParser {
+    @Override public Object parse(Object raw) {
+        Map<?, ?> map = (Map<?, ?>) super.parse(raw);
+        return new Token((String) map.get("text"));
+    }
+}
+@ConfigEntry(path = "token", parser = TokenParser.class)
+private Token oldToken = new Token("hello");
+
+// After: delete the old field/parser and use this declaration/converter.
+@ConfigEntry(path = "token")
+private Token token = new Token("hello");
+
+```
+
+```java
+// TokenConverter.java: a separate top-level source file.
+package example.config;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+import example.config.MigrationExample.Token;
+import com.ultikits.ultitools.config.convert.ConfigConverter;
+import com.ultikits.ultitools.config.convert.ConfigConverterFor;
+import com.ultikits.ultitools.config.convert.ConversionContext;
+import com.ultikits.ultitools.config.convert.ConversionException;
+
+@ConfigConverterFor(Token.class)
+public class TokenConverter implements ConfigConverter<Token> {
+    public TokenConverter() { }
+    @Override public Object toPlain(Token value, ConversionContext ctx) {
+        if (value == null) { return null; }
+        Map<String, Object> plain = new LinkedHashMap<>();
+        plain.put("text", value.text);
+        return plain;
+    }
+    @Override public Token fromPlain(Object plain, ConversionContext ctx)
+            throws ConversionException {
+        if (plain == null) { return null; }
+        if (!(plain instanceof Map)) { throw failure(ctx); }
+        Map<?, ?> map = (Map<?, ?>) plain;
+        if (map.size() != 1 || !map.containsKey("text")
+                || !(map.get("text") == null || map.get("text") instanceof String)) {
+            throw failure(ctx);
+        }
+        return new Token((String) map.get("text"));
+    }
+    private ConversionException failure(ConversionContext ctx) {
+        return new ConversionException("Expected only a text key containing text or null",
+                ctx.file(), ctx.path(), ctx.declaredType());
+    }
+}
+```
+
+The plain boundary permits null, strings, booleans, `Integer`, `Long`, `BigInteger`, `Double`,
+lists and string-keyed maps of those values. Return no Bukkit section, arbitrary Java bean or
+Java class tag. Use `ctx.toPlain(nested)` / `ctx.fromPlain(nested, declaredType)` for recursive
+conversion. A non-plain runtime value in an `Object` slot uses its runtime converter on write;
+already-plain values stay plain. Integer narrowing is exact and range checked. Float accepts a
+decimal only when `Float.toString(parsedFloat)` prints the same decimal value (scale does not
+matter): `0.03` and `1.50` are accepted, `0.100000001` is not. Float output uses that printable
+decimal as a plain `Double`. This is not a promise of exact binary representation for decimal floats.
+
+### Shutdown and known limits
+
+Shutdown saves dirty registered entities before module release. An operator-only disk edit does
+not make a clean live entity dirty and survives shutdown untouched; a pending code change is saved
+and may replace operator values with the warning above. A partial panel save cannot acknowledge an
+unrelated pending field. Async module field mutation itself is not protected by registry confinement:
+module authors must arrange server-thread mutations. Initialization batches and panel transactions
+are different: accepted initialization files persist independently, while the panel stages all
+touched files with in-process rollback.
+
+Known limits remain explicit, not guaranteed away: [#578](https://github.com/UltiKits/UltiTools-Reborn/issues/578)
+tracks out-of-threat-model storage findings (special anchored containers, alias-comment ownership,
+complex symlink paths and Unicode style-offset cost);
+[#580](https://github.com/UltiKits/UltiTools-Reborn/issues/580) tracks refusal of a valid block anchor
+with a comment before its first child key. Direct alias token comments can affect the anchor's
+comment and cause repeated writes. No general alias-preservation guarantee or automatic backup
+restoration is claimed. [#545](https://github.com/UltiKits/UltiTools-Reborn/issues/545) remains the
+separate crash-safe multi-file transaction limit.
+
+### 中文补充：6.3.0 配置层迁移
+
+- 新扩展点是 `ConfigConverter<T>` 和 `@ConfigConverterFor`，转换器必须是扫描包内带 public 无参构造器的 public 顶层类；扫描器不发现嵌套转换器。它不是 IoC bean。未知声明类型在读取或创建文件前拒绝模块加载；官方 UltiRecipe 的配方对象需要模块自己的转换器。
+- 注解 `path` 中的点仍表示嵌套路径；映射里的 `g.m`、`o.O`、`wave.` 从 6.3.0 起按完整键保存。6.2 已经拆开的文件原样读取，不会自动合并。完整泛型参与绑定；无效集合元素跳过，无效字段用声明默认值，缺失的重载字段保留运行值。允许 null 的引用类型可往返；`Object` 中的 Bukkit 序列化对象读取后仍是普通映射。
+- 保存内容、注释文字、键顺序和支持的文件风格；有修改时整份经过 SnakeYAML 输出，运维排版可以规整。语义无变化不写文件，字节和修改时间不变。浮点数按最短可回读十进制判断，不要求二进制精确。
+- 先临时文件、force、原子替换；仅已允许的原子替换/临时创建拒绝才走备份后原地写。已有 `.bak` 先从当前文件刷新并原子替换，之后才打开目标。失败保留备份，只有成功严格加载当前文件才清理；不自动还原，不保证多文件崩溃事务。
+- 不能读取、不能解析、非 UTF-8 文件不会被任何实体写入路径覆盖；初次失败用默认值，重载失败保留运行值。成功加载才解除保护。单独 `{key}` 注释归框架所有，按模块当前语言目录更新；字面注释保持。成功覆盖运维值时一条警告只列文件和键，不列值。
+- `getConfig()` 在 6.2.5 确实可用，不能冒称符合两个同版删除例外；维护者通过 6.3.0 一次性 carve-out 删除它。改用 `isPresentInFile` 查询上次成功加载时的存在性，修改声明字段后 `save()`。两个已知官方调用在 UltiEssentials 与 UltiRemoteBag；第三方用量未知。
+- 六个旧解析器相关声明在 6.3.0 首次带 `forRemoval`，公告 6.4.0 删除。显式非默认 parser 暂时保留冻结的旧行为；默认 parser 改走注册表。迁移示例见上方，转换器必须满足两条互逆等式，不能单向加值或悄悄丢字段。
+- 注册批次验证完成才开始独立写文件；面板批次先验证并暂存全部文件，在进程内失败时回滚，持久存储故障可能阻止恢复。面板唯一映射路径走整字段类型转换，歧义和未知变更拒绝整个请求；无关内存/磁盘兄弟项保留。
+- 重载三方合并，内存独有改动保留且仍脏，磁盘独有采用，冲突磁盘胜。仅磁盘该映射未变时保证内存顺序保留，不写文件。初始化、重载和注册表在服务器主线程执行；异步面板回调整体排队，不能阻塞等待。
+- 可以提前识别的新副本先保存旧副本配置再构造；失败保留旧副本。不能识别时成功替换后只警告丢弃的键，不事后保存。卸载释放实体，关闭先保存后释放。已知限制 #578、#580 和多文件崩溃限制 #545 仍存在。
+
 ## What the version number means
 
 **This project's version numbers are a product-stage signal, not a strict semver contract.**
@@ -361,59 +712,104 @@ This section governs the third kind.
   kept whatever an older jar first extracted, forever — a defect (#441), not a documented
   guarantee that the file would stay frozen. As of 6.3.0, a `lang/` file whose recorded extraction
   hash still matches its on-disk bytes is replaced by the current jar's copy on the next start,
-  with one INFO line naming the file; a file the operator has edited is left alone exactly as
-  before, with only the individual keys whose placeholder count moved resolved from the jar
-  instead (see `ultitools.language.file-refresh`/`ultitools.language.file-preserve` in
-  `FEATURES.md`). No operator who customised a file is affected either way.
-- Saving at shutdown only the configuration that module code changed. Before 6.3.0,
-  `UltiTools#onDisable()` rewrote **every** registered `@ConfigEntity` file from memory, so an edit
-  an operator made to a module's configuration file while the server was running was silently
-  discarded at the next stop (#510). That was a defect, not a guarantee: the documented contract is
-  only that a value set from code without calling `save()` is saved on disable, and that contract
-  is unchanged. As of 6.3.0 each configuration entity keeps a snapshot of what its file held when
-  the framework last read or wrote it (taken after `init()`, after every reload, and after every
-  successful `save()` or panel write, and derived from the file's text plus the configuration
-  class's declared defaults for keys the file does not contain, never from the live fields), and
-  the shutdown save writes only the entities whose current state differs from it. A value the file
-  does not hold therefore stays unsaved until it is written: a panel write that changes only some
-  keys, or a reload of a file from which a key was removed, does not hide an unsaved in-memory change
-  to another key. What an operator sees:
-  - an edit made to a file while the server runs survives a restart, provided no module code
-    changed that configuration in memory;
-  - a file the YAML parser rejects is never written at shutdown, whether or not module code changed
-    that configuration, because the framework does not know what the file holds; one WARNING names
-    the file and says the in-memory changes were not saved. (A file that fails to parse while the
-    module is *loading* is still overwritten with defaults at that moment, by `init()` itself —
-    a separate, pre-existing defect tracked as
-    [#511](https://github.com/UltiKits/UltiTools-Reborn/issues/511).) An explicit `save()` call
-    still writes, since that is the caller's deliberate act;
-  - an unchanged file is no longer rewritten at shutdown at all, so its cosmetic rewrites — values
-    re-quoted (a list of integers such as UltiCleaner's `item.warn-times` coming back as `'60'`),
-    comments re-emitted in the serializer's own layout — no longer happen then;
-  - first-boot defaults for missing keys are still written when the configuration loads, exactly
-    as before;
-  - if module code did change a configuration in memory **and** its file was also changed or removed
-    on disk since the snapshot, the in-memory state still wins and is written, and one WARNING per
-    file names the file and says the changes made while the server ran were overwritten;
-  - if that shutdown write fails (for example, the file was replaced by a directory, or is not
-    writable), the existing `Configuration save failed` WARNING is logged and no overwrite WARNING
-    is; an I/O error or an unchecked exception in one configuration does not stop the others from
-    being saved. A JVM `Error` is deliberately not caught: at that point the JVM itself is failing,
-    and isolating it would hide that.
+  with one INFO line naming the file; a file the operator has edited since it was recorded is left
+  alone exactly as before, with only the individual keys whose placeholder count moved resolved
+  from the jar instead (see `ultitools.language.file-refresh`/`ultitools.language.file-preserve` in
+  `FEATURES.md`). A file with no record at all is handled by the next entry.
+- **Upgrade note — language files without a provenance record are replaced on the first 6.3.0
+  start, including files an operator edited (#459).** Every `lang/` file extracted before 6.3.0
+  has no provenance record, so 6.3.0 cannot tell an operator's edit from a file that is merely an
+  older jar's wording. The maintainer decided on 2026-09-29 that on the first start after upgrading,
+  every such file whose bytes differ from the new module jar's copy is **replaced** by that copy and
+  recorded, and accepted in writing that this replaces operator-edited files too. Nothing is
+  deleted:
+  - the previous file is kept beside the new one, in the same
+    `plugins/UltiTools/pluginConfig/<module>/lang/` folder, as `<file>.bak` — for example
+    `lang/en.json.bak`. If that name is taken, the backup is `<file>.1.bak`, then `<file>.2.bak`,
+    and so on; an existing file is never overwritten. No backup name ends in `.json`, `.yml` or
+    `.yaml`, so a backup is never loaded as a catalogue;
+  - one WARNING per replaced file names the file and its backup;
+  - **to restore your edit**, stop the server, delete or move the new `lang/<file>` and rename
+    `<file>.bak` back to `<file>`, then start. The restored file now differs from the recorded
+    hash, so it is treated as your customisation and kept on every later start (the
+    `ultitools.language.file-preserve` rule);
+  - a file byte-identical to the jar's copy is only recorded, with no backup and no log line; a
+    file that already has a record keeps the rule in the previous entry; a second start changes
+    nothing;
+  - if the backup, the replacement or the record cannot be written (a read-only or symbolic-link
+    file, a folder that is not writable), the original file stays in place, nothing is recorded,
+    no backup is left behind, and the file is used as before, with the placeholder-count guard.
+  The framework's own `lang/` catalogue is read from the framework jar and has never been
+  extracted, so no framework file is affected. No per-release fingerprint list is used to spare
+  edited files; that alternative was offered and not chosen. See
+  `ultitools.language.unrecorded-replace` in `FEATURES.md`.
 
-  Panel writes arrive on the WebSocket thread, not the server thread. `UltiTools#onDisable()` calls
-  `stopWebsocket()` before `saveAll()`, but that only starts the close handshake
-  (`WebSocketClient#close(int, String)` does not wait; `closeBlocking()` would), so a panel write
-  already being handled can still run while, or after, the shutdown save handles the same
-  configuration. Each configuration entity's own read, write and snapshot paths, and the shutdown
-  save's check-then-save of it, hold that entity's lock, so the two are applied one after the other,
-  each as a whole: a code change is never lost to an overlapping panel write, and a refused panel
-  value never reaches the file. Module code that changes a configuration from its own
-  asynchronous tasks is not covered by this lock.
-
-  An explicit `save()` call still writes unconditionally. A module that relied on the shutdown save
-  to reformat an untouched file should call `save()` itself (see `ultitools.config.shutdown-keeps-operator-edit`
-  and `ultitools.config.shutdown-saves-code-change` in `FEATURES.md`).
+  中文补充：升级到 6.3.0 后第一次启动时，所有没有来源记录、且与新版模块 jar 自带版本不同的语言文件都会被替换为新版，
+  服主改过的文件也会被替换（维护者于 2026-09-29 书面接受）。旧文件保留在同一个 `lang/` 目录下，名为 `<文件名>.bak`
+  （名字已被占用时依次为 `<文件名>.1.bak`、`<文件名>.2.bak`……，绝不覆盖已有文件，也不会被当作语言文件读取），
+  每替换一个文件，日志里有一行写明文件和备份。要恢复自己的修改：停服，把新文件移走，把 `.bak` 改回原名，再启动；
+  恢复后的文件与记录不一致，会被当作服主的修改一直保留。
+- Resolving a module's language only after its resources are extracted (#540). Before 6.3.0 the
+  constructors resolved the language first and extracted the bundled resources second. With the
+  multi-extension lookup added in 6.3.0 (#389), an operator who deleted `lang/<code>.json` to get a
+  fresh copy, beside an older `lang/<code>.yml`, got the stale `.yml` at start-up and the fresh
+  `.json` only at the next `/ul reload` — two catalogues from the same files, with nothing logged.
+  As of 6.3.0 extraction runs first in both constructors, so the start-up catalogue is the one the
+  next reload resolves (`ultitools.language.boot-resolve-after-extract`).
+- Writing a module's language provenance only after the load gates accept it (#460). The
+  refresh of an untouched `lang/` file, its provenance record and the #459 replacement used to run
+  inside the module's constructor, before `PluginManager` decided whether to keep the candidate — so
+  an older copy of a loaded module, or a module requiring a newer framework, rewrote the language
+  file it shares with the accepted version and then was thrown away. As of 6.3.0 the constructor
+  only computes the decision (and logs nothing about it); `PluginManager` commits it through the
+  new `UltiToolsPlugin#commitLanguageProvenance()` right after the gates pass, on both `register`
+  entry points. That method is `@ApiStatus.Internal` and public only because `PluginManager` is in
+  another package, like `setContext`; a module never needs to call it. A module that registers
+  through `PluginManager#register(UltiToolsPlugin)` gets this automatically. One thing is
+  unchanged: a language file the candidate's jar ships and the disk lacks is still extracted, with
+  its hash, while the candidate is constructed (`ultitools.language.rejected-candidate-untouched`).
+- Unwinding a refused External Plugin API registration (#537). When
+  `PluginManager#registerExternal` refused a plugin after recording its data-folder scope — the
+  command-executor contract check, the config-binding refusal of #531, or a failed container
+  `refresh()` — the scope, the entity ownership, the adapter's data scope and its context stayed
+  behind, so a corrected connection of the same plugin in the same process was handed the stale
+  scope. As of 6.3.0 the refusal closes the context and removes all four before rethrowing the same
+  exception; nothing a caller observes changes except that the retry now works
+  (`ultitools.boot.external-refusal-unwind`).
+- Naming a missing required plugin instead of printing a class-not-found trace (#554). A module
+  that cannot load because a plugin in its `plugin.yml` `depend:` list is not installed or not
+  enabled used to log `Cannot initialize plugin for <main class>: <missing class>` with a
+  `NoClassDefFoundError` trace. As of 6.3.0 that case logs one WARNING,
+  `Module '<name>' requires <plugin>, which is not installed or not enabled; the module is not
+  loaded.`, with no trace. Every other load failure keeps the old message and trace
+  (`ultitools.boot.missing-required-plugin`). When the required plugin is not installed at all,
+  the module is now refused before it is constructed: nothing of it runs, no resource is
+  extracted and no class is scanned. One consequence: a module that lists an uninstalled plugin
+  under `depend:` but never touched that plugin's classes while loading used to load anyway, and
+  is now refused, as Bukkit itself refuses a plugin whose `depend:` is missing. A required
+  plugin that is installed but not enabled yet is not refused early, because it may still be
+  enabled after UltiTools; that case is refused only if loading fails, as before.
+- Naming more callers in the economy unavailability warning (#462, #483, #489). The warning
+  `Module '<name>' requested the economy service, but …` could name only a loaded module whose
+  declared scan roots covered the calling class. As of 6.3.0 it also names a connected External
+  Plugin API consumer (by plugin name), a module requesting the economy while it is still being
+  registered (from its constructor, a `@PostConstruct` method or `registerSelf()`), and a module
+  whose main class sits outside its declared roots (its own package counts as a root). A caller
+  still unattributable is reported as `an unknown caller`, as before, but once per calling package
+  rather than once for all of them, so a second one is no longer silenced
+  (`ultitools.economy.attribute-caller`). Log wording and frequency only.
+- Three internal methods added to published classes for the fixes above, each
+  `@ApiStatus.Internal` and public only because the caller is in another package:
+  `UltiToolsPlugin#commitLanguageProvenance()` (#460), `PluginManager#getConnectedExternalScanPackages()`
+  (#462) and `PluginManager#getModuleBeingRegistered()` (#483). Additions only; no existing
+  signature changed. A module never needs to call them.
+- Saving at shutdown only the configuration that module code changed (#510). Operator-only disk
+  edits survive a clean stop; pending code changes are saved before module release, with one
+  warning naming replaced operator keys. The [config-layer contract](#config-layer-630) covers
+  protected files, partial panel acknowledgments, semantic no-ops and server-thread confinement.
+  Panel callbacks queue their complete operation on the server thread; they do not perform registry
+  writes concurrently on the WebSocket thread. Explicit entity saves still compare against current
+  disk content and can replace an operator edit even when the entity was clean.
 
 - `PluginInstallUtils.uninstallPlugin(String)` unloading through the framework's one full unload
   path, and reporting the outcome it documents (#503, #501). It used to call
@@ -435,10 +831,10 @@ This section governs the third kind.
   URL for every entry of the modules folder, so a stray file or a subdirectory there no longer
   fails the uninstall (#504). A loaded module is asked which JAR it came from — its own
   `getProtectionDomain().getCodeSource()`, read before it is unloaded — and that JAR is deleted
-  whatever its metadata says, since an UltiTools module is identified by `@UltiToolsModule` and
-  needs no `plugin.yml` at all. Every other entry of the modules folder is placed in exactly one of
+  whatever its metadata says now (a file may have been replaced since the start, and a module
+  registered from code has no `plugin.yml` the loader read). Every other entry of the modules folder is placed in exactly one of
   four states, each decided by reading the archive — with one exception, an entry the module loader
-  itself would never load, judged by the same `.jar` test `PluginManager#init` applies to this
+  itself would never load, judged by the same `.jar` test the start-up scan applies to this
   folder, which is state B without being opened. The states: its `plugin.yml` declares this module,
   or it is a loaded instance's own code-source JAR (deleted); it opened and its `plugin.yml`
   declares another module, or it is a directory (ignored); nothing about it identifies a module,
@@ -458,6 +854,227 @@ This section governs the third kind.
   those entries travel with it as a suppressed
   `PluginInstallUtils.UndeterminedEntriesException` (`@ApiStatus.Internal`), so no outcome
   discards what another established.
+- `/upm update` and `PluginInstallUtils.updatePlugin(String)` no longer replace a module's JAR while
+  the server runs (#505, #513). Before 6.3.0 the update downloaded the new JAR into the modules
+  folder, deleted the old one with `File#delete()` while ignoring its result, and returned `true` —
+  reported as "Update successful" — whether or not the old JAR was gone, so a failed delete left two
+  versions of the module to race at the next start. Now the update **takes effect at the next start
+  and is committed only after that start shows the module loaded**: the command downloads the new JAR
+  into `.ultikits/upm-transactions/` under the server root — beside the credential store and outside
+  `plugins/`, where the panel's file interface cannot forge a record — and records it; the
+  next start moves the old JAR aside (keeping it) and the new one in, before the module class loader
+  is built; after the modules load, the update is kept only if the module is loaded from the new JAR
+  at the new version, and otherwise the old JAR is restored and the new one removed, with one log
+  line naming both versions. Nothing predicts before the restart whether a JAR will load. A move that
+  fails leaves the modules folder as it was and is reported in the start-up log and again by the
+  next `/upm update` of that module. The swap is an atomic rename, so when `plugins/` is on a
+  different file system from the server root the start refuses it, changes nothing, and names both
+  folders in one SEVERE line; there is no copy fallback. `updatePlugin(String)` keeps its signature; its `true` now
+  means "staged", and `PluginInstallUtils.stageUpdate(String)` (`@ApiStatus.Internal`) returns what
+  was staged or why nothing was. Nothing is staged, and `updatePlugin(String)` returns `false`, when
+  another JAR in the modules folder declares the module's `plugin.yml` `main:` and sorts before the
+  new JAR's file name: that copy would load instead at the next start, so the update could only be
+  rolled back; the reply names it (maintainer follow-up 19). Likewise when two loaded modules in
+  different JARs declare the same identify-string, since the update names a module only by that
+  string. The update only ever moves, replaces or deletes a file whose SHA-256 matches its record;
+  when another actor has changed one, it does nothing, keeps the record as `NEEDS_OPERATOR` with one
+  SEVERE line, and refuses `/upm update` and `/upm uninstall` of that module until the record and its
+  folder are deleted. Measured consumers: none of the fifteen module repositories or
+  UltiTools-External-Example call either method (their `origin/master`, searched for
+  `PluginInstallUtils`, `updatePlugin(` and `uninstallPlugin(`; the only hits are UAT documents
+  naming the `/upm` commands). An uninstall that goes ahead also cancels an update of that module
+  still waiting for the next start, and any download of one still running, on every outcome — its
+  JARs deleted, recorded for deletion, not deletable, or a modules folder that could not be listed —
+  matched on the identity it resolved (the unloaded instances' identify-strings and runtime names,
+  the names it was given or their JARs declare, and their JARs), not only on the name typed.
+  `PluginInstallUtils.uninstallPlugin(String)` does this too; the command reads the cancelled
+  versions through `uninstallPluginReporting(String, List)` (`@ApiStatus.Internal`).
+- `PluginInstallUtils.uninstallPlugin(String)` also deletes a JAR whose `plugin.yml` `main:` names
+  the loaded module's main class, whatever `name:` it declares (#516). The module loader identifies
+  a module JAR by that entry alone (since #548), and its start-up scan now records, per main class,
+  every JAR that declares it; before 6.3.0 a second copy of a module whose `plugin.yml` declared a
+  different `name:` survived the uninstall and loaded the module again at the next start. A main
+  class another loaded module also has is never matched, a file is judged by what it declares at the
+  time of the uninstall, and no class is read out of any archive.
+- Module JARs are discovered in file-name order (#476). Before 6.3.0 the start-up scan and the module
+  class loader took the modules folder in `File#listFiles()` order, which Java does not define (on
+  ext4 it is hash order). The order decides which of several JARs carrying the same class supplies it,
+  which copy of a duplicated module is read first, which module a `plugin.yml` `name:` shared by two
+  modules resolves to, and the order of the opt-in legacy load (`-Dultitools.useLegacyPluginLoading`).
+  Modules without a dependency between them already loaded in alphabetical order of their class names
+  and still do. An install that relied on one copy winning by listing order may see the other one win
+  after upgrading, once, and then the same one on every start and file system.
+- Two or more JARs in the modules folder declaring the same `plugin.yml` `main:` class are reported by
+  one start-up WARNING naming every one of them and the JAR the classes load from (UltiTools-Dev-Doc#96).
+  The copies were never loaded side by side and still are not; before, each refused copy logged its
+  own SEVERE line saying its main class belonged to another JAR. A JAR borrowing a class from a JAR that
+  does not declare it keeps that SEVERE refusal.
+- `PluginInstallUtils.uninstallPlugin(String)` no longer leaves a JAR it cannot delete for the
+  operator to delete by hand (#518). On Windows the shared module class loader keeps every module
+  JAR open while the server runs, so that instruction could not be followed. The uninstall now
+  records such a JAR and the next start deletes it before any module loads, if it is still the
+  recorded file (same SHA-256); the failure it raises is
+  `PluginInstallUtils.RemovalDeferredException` (`@ApiStatus.Internal`), a
+  `java.nio.file.FileSystemException` that names every recorded file as before. Only when the
+  record cannot be written does the plain `FileSystemException` leave as it did.
+- The modules folder is computed in one place, `<plugin data folder>/plugins` (#517). Before 6.3.0
+  the start-up scan read `System.getProperty("user.dir")` + `/plugins/UltiTools/plugins` while the
+  module class loader, install, update and uninstall read the data folder; on a server whose JVM was
+  started from another working directory the scan found JARs the class loader did not hold, and
+  `/upm` acted on a folder the scan did not read. The data folder follows Bukkit's own plugin
+  directory, so a server started from its root is unaffected.
+
+- The JSON storage backend no longer hands out the entities it caches (#522). Before 6.3.0,
+  `SimpleJsonDataOperator`'s read paths (`getById`, `getAll`, `page`, `getLike`, and every
+  `query()` terminal built on them) returned the very instances it kept in memory, and `insert`
+  cached the instance it was given, so on `datasource.type: json` changing a loaded (or just
+  inserted) entity **without** calling `update(...)` changed the store and was written to disk at
+  the next flush. On SQLite and MySQL the same code never persisted anything, because every read
+  materialises the row afresh. As of 6.3.0 every JSON read returns a detached copy produced by the
+  same Gson form the store writes to disk, and `insert` caches a copy: a change reaches the store
+  only through `update(...)` (or `update(column, value, id)`), on every backend alike. `update(T)`
+  also fires `onUpdate()` on the entity passed in, before its fields are copied into the store,
+  exactly as the relational backends do — so an `AuditableDataEntity`'s `updatedAt`/`updatedBy`
+  now show on the caller's instance on the JSON backend too, and `exist(entity)` looks the entry
+  up by the entity's id, as the relational backends do, instead of comparing it with the cached
+  copy through `equals()`. A module that relied on the old
+  aliasing — changing a loaded entity and counting on the next flush to save it — must now call
+  `update(...)`; no module in this monorepo was found doing so (see the pull request's consumer
+  impact list). The cost is one Gson round trip per entity returned, the same materialisation the
+  relational backends already pay (see `ultitools.storage.detached-reads` in `FEATURES.md`).
+- `Query#delete()` returns the number of rows actually removed, as its javadoc always said (#521).
+  It used to return the number of rows the query *matched*, and it skipped a matched row whose id
+  was `null` while still counting it, so a caller reading the `int` as "rows removed" could be told
+  a delete succeeded when it removed nothing. As of 6.3.0 the count comes from the backend's own
+  affected-row count (a row another writer removed between the read and the delete is not
+  counted), and a matched row with a `null` id is refused with a `DataAccessException` naming the
+  entity type **before** any row is deleted, since no delete can address it. This corrects
+  behaviour that contradicted the documentation, so it takes no migration period. A third-party
+  `DataOperator` implementation, which cannot report what its `delById` removed, is counted by
+  checking that the row existed immediately before that call and is gone after it (see `ultitools.storage.query-delete-count` in `FEATURES.md`).
+- Rows left without an id by UltiTools-API 6.2.0 are repaired, and addressing a row by a null id
+  is refused (#546, maintainer decision of 2026-09-27). 6.2.0 did not assign an id in `insert`, and
+  SQLite's generated DDL accepted a `NULL` primary key, so every row a module inserted without an
+  id on that release was stored with none; such a row could be read, but every `update`/`delete` of
+  it bound `WHERE id = NULL`, matched nothing and returned normally, so a change the module
+  reported as saved was lost at the next restart. As of 6.3.0, when a SQLite-backed table is
+  initialised every row whose `id` is `NULL` is given the id its entity reports through `getId()`,
+  or a new UUID when the entity reports none, in either case only if the entity read back with that
+  id reports it; a row that no written id would make addressable is left as it is and counted, by
+  reason, in one WARNING line per table: a derived id that more than one row without an id reports
+  (none of those rows is written — maintainer decision of 2026-09-29, the rule UltiEssentials' own
+  repair applies), a derived id another row already holds, or a derived id that is `null` or a row
+  that cannot be read as the entity — only the `id`
+  column is written, all rows in one transaction, so the repair writes user data at startup, which
+  is what the maintainer decided — and one INFO line names the table, the count and how many rows
+  took the entity's own id; a second start finds nothing and logs nothing. The reported id comes
+  first because an entity may derive `getId()` from another column (UltiEssentials'
+  `UuidKeyedDataEntity` and UltiKits' `KitClaimData` derive it from a `uuid` column) and every
+  lookup binds that value, so a random id would leave such a row exactly as unreachable as `NULL`
+  did. For the same reason every write path (`insert`, `insertAll`, `update(T)`, `updateAll`,
+  `updateIf`) now stores `getId()` in the `id` column rather than the inherited field: an entity
+  that overrides `getId()` never sets that field, so on 6.3.0 before this change it still inserted
+  a `NULL` id on SQLite, and on MySQL its insert failed outright. MySQL never
+  accepted a `NULL` id and runs no backfill. Independently, `update(T)`, `update(column, value, id)`,
+  `delById` and `updateAll` addressed by a `null` id now throw `DataAccessException` on every
+  backend instead of silently matching nothing (the JSON backend used to throw a raw
+  `NullPointerException`); `updateAll` checks every entity before it writes any. A call with a
+  non-null id that matches no row is unchanged. See `ultitools.storage.null-id-backfill` and
+  `ultitools.storage.null-id-refused` in `FEATURES.md`.
+- `DataOperator` gains one method, `boolean updateIf(T entity, WhereCondition... expected)` (#543):
+  a conditional write that applies only while the stored row still matches every expected
+  condition, and reports whether it applied, on the JSON, SQLite and MySQL backends. No existing
+  method's signature changes, and it is a `default` method, so a module compiled against 6.2.x
+  still links. Its default body throws `UnsupportedOperationException` naming the implementing
+  class rather than quietly performing an unconditional write — a third-party `DataOperator`
+  implementation keeps working for every other method and must implement `updateIf` before a caller
+  can rely on it. The framework's own operators implement it (see
+  `ultitools.storage.conditional-update` in `FEATURES.md`).
+- An update by a non-null id that matches no row writes nothing and says so (#558, maintainer
+  decision of 2026-09-29). `update(T)`, `update(column, value, id)` and `updateAll` now log one
+  WARNING naming the table and the id each time, on JSON, SQLite and MySQL, and return normally —
+  as SQLite and MySQL already did, silently; the JSON backend used to throw a raw
+  `NullPointerException`, which a module catching `RuntimeException` or `Exception` around the call
+  saw as a failed write. The caller learns the outcome through a new method,
+  `int updateCounted(T entity)` on `DataOperator`: `1` for a written row, `0` when no row has the id.
+  It is a `default` method, so no existing signature changes and a module compiled against 6.2.x
+  still links; a third-party implementation that does not override it is counted by whether the row
+  exists before its `update` (the one remaining miscount: a delete by another writer during that
+  call). See `ultitools.storage.missing-row-update` in `FEATURES.md`.
+
+- `PluginManager#getPluginList()` returning an unmodifiable snapshot, and
+  `PluginManager#unregister(UltiToolsPlugin)` delisting the module (#507). `getPluginList()` used to return the manager's live internal `ArrayList`, which callers had
+  to mutate to delist a module `unregister` had unloaded, and which a reader on another thread (the
+  asynchronous `/upm list`, the economy facade's module attribution) could see fail with a
+  `ConcurrentModificationException` or a trailing `null` while the main thread unloaded a module.
+  Mutating that list was never a documented contract; it was the mechanism of the defect. As of
+  6.3.0 the method keeps its signature and return type and returns a copy taken at the moment of the
+  call: it does not change afterwards, and `add`, `remove` and `clear` throw
+  `UnsupportedOperationException`. Code that only reads or iterates it is unaffected — which, measured
+  against the fifteen modules' `master` and UltiTools-External-Example, is every caller (two modules
+  iterate it; none mutates it). `unregister` itself now removes the module from the loaded modules,
+  by identity and whether or not the module's unload hook threw. It does not change the module's
+  configuration entities: releasing them, so the shutdown save stops writing the files of a module
+  unloaded while the server ran, is part of the configuration-layer rework in this release.
+- Registrations released per module instance, and a superseded copy of a module unloaded through the
+  full unload path (#506, #528). This path is reached only when code registers a newer instance of a
+  loaded module through `PluginManager#register(...)`; two jars of one module in the modules folder
+  never supersede each other. The older copy used to get only `unregisterSelf()`: its `@Scheduled`
+  tasks kept running, its container stayed open and it stayed listed next to its replacement, and a
+  failure thrown by its unload hook was reported as the **incoming** version failing to load and
+  aborted that version's activation. As of 6.3.0 the older copy goes through `unregister` — tasks
+  cancelled, container closed, registrations released, delisted — and a failure of its unload hook
+  is logged against the older copy's name and version while the incoming copy goes on loading. As in
+  `PluginManager#close()`, every `Exception` or `Error` the older copy throws counts as its own
+  failure. Because both copies share a module name,
+  `TabCompletionManager`, `EventBus` and `PanelResponderRegistry` can now also record the registering
+  module instance, and `unregister` releases by instance first. The framework records it for
+  everything a module registers in the three registries while it loads — during its container
+  refresh, where `@PostConstruct` runs, and during `registerSelf()` — through the ordinary name-only
+  methods, and for every `@ModuleEventHandler` method. A registration made later records it only
+  through the new overloads that take the instance. A registration filed under the module's name
+  only is released by name as before, except while another loaded copy shares that name, when it
+  stays until the last copy of the name is unloaded. One visible consequence: a completer a module
+  registers in `registerSelf()` is now released when the module unloads; before, only completers
+  registered during the container refresh were. Added, all `@since 6.3.0`:
+  `TabCompletionManager#beginRegistrationScope(String, UltiToolsPlugin)` and
+  `#unregisterByOwnerInstance(UltiToolsPlugin)`; `EventBus#register(...)` and `EventBus#subscribe(...)`
+  with an owner-instance parameter, `#beginRegistrationScope(UltiToolsPlugin)`,
+  `#endRegistrationScope()` and `#unregisterByOwnerInstance(UltiToolsPlugin)`;
+  `PanelResponderRegistry#registerResponder(...)` with an owner-instance parameter,
+  `#beginRegistrationScope(UltiToolsPlugin)`, `#endRegistrationScope()` and
+  `#unregisterByOwnerInstance(UltiToolsPlugin)`; two `HandlerEntry` constructors and a getter for
+  the owner instance. Every name-keyed method keeps its signature and behaviour.
+- `/ul reload` and a module's reload reporting what actually happened (#509, #529, #502). Before
+  6.3.0 `reloadSelf()` logged `Module '<name>' reloaded.` before the module's `onReload()` ran and did
+  not guard it, so a throwing hook printed the success line followed by a stack trace,
+  `/ul reload <name>` answered only with the generic command-error line, and a bare `/ul reload`
+  stopped at that module, leaving every module after it unreloaded. As of 6.3.0:
+  - the per-module line is logged only after the hook returned; when any reload step or the hook
+    throws, one SEVERE line names the module and the cause instead, and the failure is rethrown
+    unchanged to the caller;
+  - a bare `/ul reload` reloads every module in isolation — as in `PluginManager#close()`, every
+    `Exception` or `Error` one module throws is that module's failure — and ends with a summary
+    naming the modules that failed instead of `All plugins reloaded.`; the summary is also sent to
+    the command's sender, which previously got no reply on success and the generic command-error
+    line on failure;
+  - `/ul reload <name>` replies failure, naming the module and the cause, when the reload threw;
+  - a module can report a partial reload without throwing: the new public final class
+    `ReloadReport`, the new hook `protected void onReload(ReloadReport report)` — whose default body
+    calls `onReload()`, so a module overriding only `onReload()` behaves exactly as before — and the
+    new `public final ReloadReport reloadWithReport()`, which runs the same reload as `reloadSelf()`
+    and returns the report. `reloadSelf()` keeps its `public final void` signature. A partial
+    reload logs a WARNING naming the parts instead of the success line, `/ul reload <name>` replies
+    with those parts instead of the success reply, and the `/ul reload` summary lists the module
+    with them;
+  - a per-module reload whose framework `config.yml` on disk holds a different `language` than the
+    one the framework runs with keeps the running language — one server-wide setting is not applied
+    to one module — and reports the reload as partial, naming both values and that a full
+    `/ul reload` applies it. A full `/ul reload` applies the new language to every module, as before.
+
+  The new console lines and replies are in both shipped catalogues. A module that catches a failure
+  in `onReload()` and only logs it keeps working unchanged; to make the operator see it, override
+  `onReload(ReloadReport)` instead and record the failure with `report.partial(...)`.
 - An existing credential file that cannot be read is preserved (#573). As of 6.3.0,
   `CommonUtils.getUltiToolsUUID()` fails with its declared `IOException`, naming the file, when the
   credential file exists but is empty, whitespace-only, the JSON literal `null` or not valid JSON,
@@ -496,6 +1113,178 @@ The migration period runs in two steps:
 
 This section follows [PEP 387](https://peps.python.org/pep-0387/); the principle is the same one:
 tell people which floor they are standing on before removing it.
+
+### Command bodies run at dispatch (6.3.0) — changed without a migration period
+
+This is a change "in the timing of a side effect", the last kind listed above, made in 6.3.0 without
+the two-step period by the maintainer's decision of 2026-09-29 (#541), which accepted that it changes
+command timing for **every module, third-party modules included**.
+
+**What changed.** Before 6.3.0, `BaseCommandExecutor` ran every synchronous command body one tick after
+the command was dispatched. As of 6.3.0 the body runs **at dispatch**, inside the call that dispatched
+it, whenever that call is on the server's primary thread — which is where Bukkit dispatches everything
+a player, the console, a command block, a command minecart, RCON or the panel sends. It is handed to
+`runTask` only when `onCommand` is called from another thread, as Bukkit's own commands behave. An
+`@AsyncCommand` or `@RunAsync` body is unchanged: it always runs asynchronously. The deferral had no
+recorded reason: it came from sharing one `BukkitRunnable` with `@RunAsync` in 6.0.0.
+
+**Why.** Paper 1.21.11 records a command block's output only while its dispatch is open, and RCON
+reads its output as soon as the dispatch returns, so a deferred body's replies to those senders were
+lost. (The panel's remote command runs as the server console, whose replies no sender can read; they
+reach the panel through the log stream instead — see "The panel's log stream mirrors the server
+console" below.) The deferral also let two dispatches in one tick both pass
+`@CmdCD`, because the cooldown was recorded when the deferred body finished; the cooldown is now
+recorded before the first dispatch returns.
+
+**What a module author has to check.**
+
+- Code that relied on the one-tick delay — for example a command body that expected the dispatching
+  event to have finished first — must schedule that work itself with `runTask`.
+- **Paper's rule for inventory clicks.** An `InventoryClickEvent` handler (including a GUI library's
+  `onClick` callback) must not open or close an inventory directly, and must not call
+  `performCommand` or `Bukkit.dispatchCommand` directly either: a module command dispatched there now
+  runs its body — which may open or close an inventory — inside the click event. Defer the call with
+  `Bukkit.getScheduler().runTask(...)`. The fifteen UltiKits modules were surveyed; the handlers that
+  did this are tracked as UltiMenu#28, UltiSocial#27, UltiKits#41, UltiMail#43 and UltiWorlds#50.
+- **A body that dispatches another command** runs the nested body on the same thread before its own
+  has finished. The audit user (`AuditableDataEntity`'s current user, written into `created_by` /
+  `updated_by`) is saved before each body and restored after it: the nested body sees its own sender
+  (none for a sender that is not a player), the outer body sees its own sender again afterwards, and a
+  thread that carried no user before the outermost command carries none after it. Before 6.3.0 the
+  body cleared the user when it finished.
+- **`@UsageLimit` and re-entry.** A body that dispatches its own command while holding its lock gets
+  the nested dispatch refused with the ordinary lock message (`SENDER`: from the same sender; `ALL`:
+  from any sender). Acquiring never waits, so nothing blocks; the outer lock is released when the
+  outer body returns, normally or by throwing. Schedule the nested call with `runTask` if it must run.
+  A body that dispatches its own command **without** `@UsageLimit` and without a stopping condition
+  now recurses on the main thread until the stack overflows; before 6.3.0 it repeated once a tick.
+- **Two dispatches in one tick meet the cooldown.** The second of two dispatches of a `@CmdCD` command
+  by one player in the same tick is refused.
+
+### Other command and task runtime changes (6.3.0) that need no migration period
+
+Each corrects behaviour that contradicted the documentation or left state held by mistake.
+
+- **Active `@CmdCD` cooldowns are kept per executor instance** as well as per mapping (#539). One
+  `CooldownValidator` shared by two executors of one class — two modules passing one `ValidatorChain`
+  — no longer refuses a player on executor B for a use through executor A. `clearCooldown(UUID, String)`
+  and `getRemainingCooldown(UUID, String)` keep working unchanged for one executor per validator, which
+  is the shape both `BaseCommandExecutor` constructors create; when a validator serves several
+  executors they span all of them (the longest remaining time, and every executor's cooldown
+  cleared). The new overloads `clearCooldown(UUID, Object, String)` and
+  `getRemainingCooldown(UUID, Object, String)` address one executor. The executor is held weakly, so
+  an active cooldown never keeps an unloaded module's executor reachable.
+- **A `@UsageLimit` lock is released when the dispatch is refused after it was taken** (#568): by the
+  cooldown (which validates after the lock), by the argument-count check, because a parameter did
+  not parse, or by an exception from a later validator, a parameter parser or the scheduler. Before 6.3.0 the lock stayed held until the player quit, and every later call of the
+  mapping was refused. The mechanism is a new default method, `CommandValidator#onRefused`, called for
+  each validator that passed; its default does nothing, so existing validators are unaffected, and a
+  refused dispatch runs no `onComplete`, so it applies no cooldown. Every `onRefused` and every
+  `onComplete` hook now runs even when an earlier validator's hook throws; the first exception is
+  rethrown afterwards.
+- **`@Scheduled` methods declared on a superclass of a bean are scheduled** (#532), as the annotation's
+  javadoc always said. An overridden method is scheduled once, with the most derived declaration's
+  annotation; an override without `@Scheduled` is not scheduled. A method that previously never ran
+  because an abstract base declared it now runs; none of the fifteen UltiKits modules declares one.
+
+### Panel log stream and panel reply changes (6.3.0) that need no migration period
+
+Each corrects a declared behaviour the stream did not deliver. The panel protocol is unchanged.
+
+- **`ultipanel.logging.excluded-loggers` ships empty** (#485). The six defaults before 6.3.0
+  (`com.mojang.authlib`, `net.minecraft.network`, `org.apache.http`, `com.zaxxer.hikari`,
+  `org.eclipse.jetty`, `ErrorReportCollector`) could never match: the stream then received only
+  `java.util.logging` records, whose logger names are `Minecraft` (everything logged through
+  `Bukkit.getLogger()`), a plugin's own name, or `com.ultikits.ultitools.*`; those libraries log
+  through Log4j or SLF4J, and `ErrorReportCollector` never logs through JUL. A configured list is now
+  used as given. Nothing that reached the stream before is filtered differently. With the console
+  mirror below, Log4j lines reach the stream too, under their Log4j logger names, and a configured
+  entry applies to them as well; the default stays empty so the stream shows the whole console.
+- **A log batch whose send fails is held and sent first** (#486), on the transmitter's own sender and
+  on the `batch_update` drain; no newer record is drained while one is held. Delivery stays best
+  effort: a batch whose connection drops just after it was written may arrive twice. Records the
+  full queue (1000 records) discards are counted and reported by one WARNING at most once a minute,
+  in the server log only. `UltiPanelLogTransmitter#holdUndelivered(JsonArray)` is added to that
+  internal class.
+- **Records logged before the stream starts reach it** (#487). From `onLoad` until the panel
+  connection opens, records are kept in a start-up buffer (2000 records, an estimated 512 KiB, five
+  minutes) and sent, oldest first, when the stream starts, in `log_batch` messages of at most
+  64 KiB, the first at once and then about one per second, independent of the
+  `ultipanel.logging.batch.*` keys: a full buffer drains in seconds and uses at most 10 of the panel's
+  50 messages per 10 seconds. Each entry keeps the time its record was logged, a single entry too
+  large for one message is shortened (stack trace first) rather than dropped, and a live record
+  logged meanwhile can arrive before the last replay messages. The buffer applies the stream's
+  filters as records arrive and is released without sending anything when there is no cloud login
+  or when its time is up; with the `logs` capability off it is not attached and keeps nothing.
+- **Lines about the panel connection are no longer sent to the panel.** The panel's `error` replies
+  and notifications, inbound messages the framework cannot use, the WebSocket client's connect,
+  disconnect, heartbeat and reconnect lines, and the warnings about a message that could not be sent
+  are written to the server console as before, but the log stream drops them. With
+  `ultipanel.logging.batch.enabled: false`, each logged `error` reply used to be streamed, rejected
+  by the panel's quota and replied to again: 42,066 `[WebSocket error] Rate limit exceeded` lines in
+  one measured run. A panel view that showed these lines no longer receives them.
+- **The panel's log stream mirrors the server console** (maintainer decision, 2026-10-03). Paper prints
+  its own output through Log4j — command feedback, a module's reply to the console sender, joins and
+  quits, chat, vanilla warnings and errors, and player command lines — and before 6.3.0 none of it
+  reached the panel, because the stream listened only to `java.util.logging`. The framework now
+  installs an appender on Log4j's root logger at load (with the `logs` capability on) and removes it at
+  disable; each line passes the same filters, batching and start-up replay as a plugin line, without
+  ANSI colour codes. **The stream shows exactly what the console shows, including player command lines
+  with their arguments** (`<player> issued server command: /login <password>` included): the panel is
+  at the console's trust level, so whatever the console shows the panel may show. A plugin line
+  arrives once, although Paper also copies it into Log4j; lines about the panel connection, the
+  transmitter's own lines and the WebSocket library's (`org.java_websocket.*`) are never sent. If the
+  server's Log4j configuration uses asynchronous loggers, the mirror is not installed, a console
+  WARNING says so, and the stream carries plugin lines only. A Log4j `ERROR` line with an exception is
+  now also reported to UltiPanel's error collection, once. **New `provided` dependency:**
+  `org.apache.logging.log4j:log4j-core` (2.24.1, with `log4j-api` 2.24.1 declared alongside), which
+  Paper supplies at runtime; it is not shaded, and a module needs nothing new.
+- **The panel's remote command result no longer claims to carry the command's output.** A panel
+  command is typed into the server console: it runs as the server's own console sender, unchanged for
+  modules. Paper 1.21.11 replaces any console sender with the real console before running a command,
+  so the framework's output capture never received a reply, and every `command_result` read the
+  invented `Command executed successfully`. The result now reads `Command dispatched to the server
+  console. Its output appears in the server log stream.`, or `The server console did not accept the
+  command. Any message it printed appears in the server log stream.` when the dispatch returned
+  false; blocklist refusals, an empty command and dispatch errors are unchanged. The replies themselves
+  appear in the log stream (the item above). A panel or tool that showed `output` as the command's
+  reply now shows this sentence.
+- **The `server.properties` refusal for a key the file does not hold** now reads `This key is not in
+  this server's server.properties` instead of `This server version has no such key` (#473): nothing
+  tells a key the running version lacks from one the file omits. A panel or tool that matched on the
+  old text must match the new one; the UltiPanel worker and frontend do not match on it.
+
+### Framework text follows `language`; the class-load audit is quiet on a clean start (6.3.0) that need no migration period
+
+Each corrects a declared behaviour the framework did not deliver. The panel protocol is unchanged.
+
+- **The framework's own console, reply and panel-stream text follows `language`** (#556). Until 6.3.0 about 150
+  lines of framework text were Chinese string literals that never went through `lang/*.json`, so an English
+  server still printed and sent them in Chinese. They now resolve through the catalogue (`en.json` gives the
+  English; under `language: zh` the text is unchanged): the reply every command sender gets when a module's
+  command body throws (`Command execution failed: <reason>`), the default processing notice of an
+  `@AsyncCommand` (`Processing...`), the framework's console lines (server status monitoring, log transmission,
+  WebSocket message handling, remote command and file operation logging), the lines it streams to the panel
+  (player join, quit and chat, plugin actions, the online-player count), and the `server.properties`
+  batch-failure text returned to the panel. A tool that matched one of these lines by its Chinese text on a
+  server running `language: en` must match the English text; the UltiPanel worker and frontend do not match on
+  any of them (their sources were searched, and the only hits were comments and the panel's own strings).
+  The verification e-mail stays bilingual on purpose, because its recipient's language is not the server's.
+  The default teleport service's display name, `InMemeryTeleportService#getName()`, is now `TeleportService`
+  (it was `传送服务`, the only Chinese service name); its `getResourceFolderName()` still returns `传送服务`, so
+  an existing install keeps its folder. Nothing in the framework or the fifteen modules looks the service up by
+  its name.
+  English log messages that carried full-width punctuation (`Configuration save failed！File path：…`,
+  `… load failed！`) now use ASCII punctuation; a tool that matched the full-width form must be updated.
+  `FrameworkText` (`com.ultikits.ultitools.utils`, `@ApiStatus.Internal`) is added for this.
+- **The class-load audit is quiet on a clean start** (#557). The audit that reports which classes the name-based
+  filters removed in 6.3.0 would have refused printed one line per module, twice per module, as two `WARN` lines
+  each (it wrote to the standard error stream, which Paper prints as `WARN`), naming an internal requirement
+  code. It now reaches the server log through the plugin logger: a module for which nothing would have been
+  refused is logged at `FINE` on the audit's own logger and is not forwarded to the console, and a module with at least one such class gets ONE `INFO`
+  line naming the jar and the count. The module-scan diagnostics use the same route; their `SEVERE` summary for
+  a skipped class is unchanged in level and content. `SecurityPolicy`'s one-time deprecation warning no longer
+  carries the internal code either.
 
 ## Binary incompatibilities the removal list cannot cover
 

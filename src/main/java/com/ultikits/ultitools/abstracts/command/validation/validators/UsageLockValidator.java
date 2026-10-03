@@ -28,7 +28,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * through the normal validation-rejection path; the mapped method is never invoked. Release
  * happens in {@link #onComplete(CommandContext, boolean)}, driven by the validator chain that
  * actually ran this validator (see {@link CommandValidator#onComplete(CommandContext, boolean)}) --
- * never called twice, and never called for an invocation whose acquisition failed.
+ * never called twice, and never called for an invocation whose acquisition failed -- or, when the
+ * dispatch is refused after this validator acquired the lock but before the method runs, in
+ * {@link #onRefused(CommandContext)} (#568).
  *
  * @author wisdomme
  * @version 2.0.0
@@ -115,6 +117,20 @@ public class UsageLockValidator implements CommandValidator, PlayerCacheSaver {
      */
     @Override
     public void onComplete(CommandContext context, boolean commandSucceeded) {
+        releaseLock(context);
+    }
+
+    /**
+     * Releases the lock this validator acquired for a dispatch that was then refused before the
+     * mapped method ran -- by a later validator (such as the cooldown, which runs after this one),
+     * the argument-count check, or parameter parsing. Before 6.3.0 nothing released it on those
+     * paths, and the lock stayed held until the player quit (#568).
+     *
+     * @param context the command context
+     * @since 6.3.0
+     */
+    @Override
+    public void onRefused(CommandContext context) {
         releaseLock(context);
     }
 

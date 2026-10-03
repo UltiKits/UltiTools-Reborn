@@ -779,8 +779,8 @@ class ConfigManagerTest {
     class ReloadConfigsDetailedTests {
 
         @Test
-        @DisplayName("应该为所有配置调用 init")
-        void shouldCallInitForAllConfigs() throws Exception {
+        @DisplayName("Reload every registered config without reinitializing it")
+        void shouldReloadAllRegisteredConfigsWithoutInit() throws Exception {
             // Arrange
             Field mapField = ConfigManager.class.getDeclaredField("pluginConfigMap");
             mapField.setAccessible(true);
@@ -802,9 +802,11 @@ class ConfigManagerTest {
             // Act
             configManager.reloadConfigs(mockPlugin);
 
-            // Assert - 验证 init 被调用
-            verify(mockConfig1).init(mockPlugin);
-            verify(mockConfig2).init(mockPlugin);
+            // Plan 17-58: normal reload uses the entity's missing-key/no-write contract, not init.
+            verify(mockConfig1).reload();
+            verify(mockConfig2).reload();
+            verify(mockConfig1, never()).init(mockPlugin);
+            verify(mockConfig2, never()).init(mockPlugin);
             assertThat(configMap).as("Config map should contain both configs").hasSize(2);
         }
     }
@@ -894,7 +896,7 @@ class ConfigManagerTest {
             configManager.saveAll();
 
             verify(mockConfig).save();
-            verify(mockLogger).log(Level.WARNING, "Configuration save failed！File path：configdir");
+            verify(mockLogger).log(Level.WARNING, "Configuration save failed! File path: configdir");
             assertThat(configDir.isDirectory()).as("Config dir should exist").isTrue();
         }
 
@@ -924,7 +926,7 @@ class ConfigManagerTest {
 
             verify(healthy).save();
             verify(mockLogger).log(eq(Level.WARNING),
-                eq("Configuration save failed！File path：config/failing.yml"),
+                eq("Configuration save failed! File path: config/failing.yml"),
                 any(IllegalStateException.class));
         }
     }
@@ -1016,7 +1018,8 @@ class ConfigManagerTest {
             configManager.loadFromJson(json);
 
             // Assert - verify is an assertion
-            verify(mockConfig).updateProperties(any(com.google.gson.JsonObject.class));
+            verify(mockConfig).preparePanelWrite(any(com.google.gson.JsonObject.class));
+            verify(mockConfig, never()).updateProperties(any(com.google.gson.JsonObject.class));
             assertThat(json).as("JSON should be valid").isNotEmpty();
         }
 
@@ -1042,6 +1045,7 @@ class ConfigManagerTest {
             configManager.loadFromJson(json);
 
             // Assert - updateProperties 不应该被调用
+            verify(mockConfig, never()).preparePanelWrite(any(com.google.gson.JsonObject.class));
             verify(mockConfig, never()).updateProperties(any(com.google.gson.JsonObject.class));
             assertThat(json).as("JSON should contain non-matching path").contains("other.yml");
         }

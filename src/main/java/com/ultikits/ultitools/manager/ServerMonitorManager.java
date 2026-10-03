@@ -5,6 +5,8 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
+import com.ultikits.ultitools.utils.FrameworkText;
+import com.ultikits.ultitools.websocket.PanelConnectionLog;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -276,7 +278,7 @@ public class ServerMonitorManager {
         if (scheduler == null || scheduler.isShutdown()) {
             scheduler = Executors.newScheduledThreadPool(2);
         }
-        UltiTools.getInstance().getLogger().log(Level.INFO, "启动服务器状态监控");
+        UltiTools.getInstance().getLogger().log(Level.INFO, FrameworkText.text("启动服务器状态监控"));
 
         // Send the initial status as soon as the WebSocket connection is established
         Bukkit.getScheduler().runTaskLater(UltiTools.getInstance(), () -> {
@@ -364,7 +366,7 @@ public class ServerMonitorManager {
         cancelTask(tpsTask);
         tpsTask = null;
         scheduler.shutdown();
-        UltiTools.getInstance().getLogger().log(Level.INFO, "停止服务器状态监控");
+        UltiTools.getInstance().getLogger().log(Level.INFO, FrameworkText.text("停止服务器状态监控"));
     }
 
     private static void cancelTask(BukkitTask task) {
@@ -375,7 +377,7 @@ public class ServerMonitorManager {
                 // Hand the exception itself to the logger instead of concatenating getMessage():
                 // this preserves the stack trace and avoids unconditional string concatenation at
                 // the log call site (both PMD's PreserveStackTrace and GuardLogStatement watch for this).
-                UltiTools.getInstance().getLogger().log(Level.FINE, "取消监控任务时出错", e);
+                UltiTools.getInstance().getLogger().log(Level.FINE, FrameworkText.text("取消监控任务时出错"), e);
             }
         }
     }
@@ -386,7 +388,7 @@ public class ServerMonitorManager {
     public void sendServerStatus() {
         try {
             if (webSocketClient == null || !webSocketClient.isConnected()) {
-                UltiTools.getInstance().getLogger().log(Level.WARNING, "WebSocket未连接，无法发送服务器状态");
+                PanelConnectionLog.log(Level.WARNING, FrameworkText.text("WebSocket未连接，无法发送服务器状态"));
                 return;
             }
 
@@ -404,15 +406,15 @@ public class ServerMonitorManager {
             // The player count in the log line also comes from the snapshot -- this line also
             // runs on the async thread, so reading Bukkit directly here would be the same defect.
             ServerStateSnapshot snapshot = currentSnapshot();
-            UltiTools.getInstance().getLogger().log(Level.FINE,
-                String.format("已发送服务器状态: 玩家 %d/%d, TPS %.1f, 内存 %dMB/%dMB",
+            PanelConnectionLog.log(Level.FINE,
+                FrameworkText.format("已发送服务器状态: 玩家 %d/%d, TPS %.1f, 内存 %dMB/%dMB",
                     snapshot.playerCount, snapshot.maxPlayers,
                     calculateTPS()[0],
                     (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / 1024 / 1024,
                     Runtime.getRuntime().maxMemory() / 1024 / 1024));
 
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "发送服务器状态失败: " + e.getMessage(), e);
+            PanelConnectionLog.log(Level.WARNING, FrameworkText.format("发送服务器状态失败: %s", e.getMessage()), e);
         }
     }
     
@@ -472,7 +474,7 @@ public class ServerMonitorManager {
                 lastCpuUsage = Math.min((systemLoad / processors) * 100, 100);
             }
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.FINE, "无法获取CPU使用率: " + e.getMessage());
+            UltiTools.getInstance().getLogger().log(Level.FINE, FrameworkText.format("无法获取CPU使用率: %s", e.getMessage()));
         }
     }
 
@@ -482,7 +484,7 @@ public class ServerMonitorManager {
     public void sendServerStatusWithRequestId(String requestId) {
         try {
             if (webSocketClient == null || !webSocketClient.isConnected()) {
-                UltiTools.getInstance().getLogger().log(Level.WARNING, "WebSocket未连接，无法发送服务器状态");
+                PanelConnectionLog.log(Level.WARNING, FrameworkText.text("WebSocket未连接，无法发送服务器状态"));
                 return;
             }
 
@@ -498,11 +500,11 @@ public class ServerMonitorManager {
             // Send the message
             webSocketClient.sendMessage(message);
 
-            UltiTools.getInstance().getLogger().log(Level.INFO, 
-                String.format("已响应服务器状态请求，请求ID: %s", requestId));
+            PanelConnectionLog.log(Level.INFO, 
+                FrameworkText.format("已响应服务器状态请求，请求ID: %s", requestId));
 
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "响应服务器状态请求失败: " + e.getMessage(), e);
+            PanelConnectionLog.log(Level.WARNING, FrameworkText.format("响应服务器状态请求失败: %s", e.getMessage()), e);
         }
     }
     
@@ -605,7 +607,7 @@ public class ServerMonitorManager {
             return true;
         }
         UltiTools.getInstance().getLogger().log(Level.SEVERE,
-            "[ServerMonitor] 试图在非主线程上采样 Bukkit 状态，已拒绝。这是一个编程错误，请检查调度。");
+            FrameworkText.text("[ServerMonitor] 试图在非主线程上采样 Bukkit 状态，已拒绝。这是一个编程错误，请检查调度。"));
         return false;
     }
 
@@ -641,7 +643,7 @@ public class ServerMonitorManager {
             // Same convention as cancelTask: hand the exception itself to the logger instead of
             // concatenating getMessage() at the call site.
             UltiTools.getInstance().getLogger().log(Level.WARNING,
-                "[ServerMonitor] 采样服务器状态失败", e);
+                FrameworkText.text("[ServerMonitor] 采样服务器状态失败"), e);
         }
     }
 
@@ -764,6 +766,8 @@ public class ServerMonitorManager {
             // first. Widening the lock to cover the send closes that window; the errors-drain in
             // between is harmless to include (it does not itself race against anything).
             synchronized (logDrainLock) {
+                UltiPanelLogTransmitter drainedFrom = null;
+                JsonArray drainedLogs = null;
                 // Drain logs from the log transmitter -- whether to drain is decided by the LOGS
                 // capability switch (D-12). The gate must sit before drainQueue(...), not after
                 // the result is obtained only to be thrown away: drain-then-discard is still the
@@ -791,6 +795,8 @@ public class ServerMonitorManager {
                             JsonArray logs = transmitter.drainQueue(transmitter.getBatchSize());
                             if (logs.size() > 0) {
                                 data.add("logs", logs);
+                                drainedFrom = transmitter;
+                                drainedLogs = logs;
                             }
                         }
                     }
@@ -812,12 +818,12 @@ public class ServerMonitorManager {
                 }
 
                 message.add("data", data);
-                webSocketClient.sendMessage(message);
+                sendKeepingUndeliveredLogs(message, drainedFrom, drainedLogs);
             }
 
             tickCount++;
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING,
+            PanelConnectionLog.log(Level.WARNING,
                 "Failed to send batch update: " + e.getMessage(), e);
         }
     }
@@ -859,7 +865,7 @@ public class ServerMonitorManager {
 
             drainAndSendLogsOnly(transmitter);
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING,
+            PanelConnectionLog.log(Level.WARNING,
                 "Failed to send log-only batch update: " + e.getMessage(), e);
         }
     }
@@ -901,7 +907,7 @@ public class ServerMonitorManager {
             drainAndSendLogsOnly(transmitter);
             lastLogFlushMs.set(System.currentTimeMillis());
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING,
+            PanelConnectionLog.log(Level.WARNING,
                 "Failed to send size-triggered log batch: " + e.getMessage(), e);
         }
     }
@@ -936,7 +942,28 @@ public class ServerMonitorManager {
             JsonObject data = new JsonObject();
             data.add("logs", logs);
             message.add("data", data);
+            sendKeepingUndeliveredLogs(message, transmitter, logs);
+        }
+    }
+
+    /**
+     * Sends a {@code batch_update} frame and, when it carried log records and did not go out, hands
+     * them back to the transmitter so the next drain sends them before anything newer (#486). The
+     * frame did not go out if {@code sendMessage} threw -- the exception still propagates to the
+     * caller's own handler -- or if the client no longer reports itself connected afterwards, which
+     * is what the closed-socket path of {@code sendMessage} leaves behind. Called with
+     * {@link #logDrainLock} held, so the hand-back cannot interleave with another drain.
+     */
+    private void sendKeepingUndeliveredLogs(JsonObject message, UltiPanelLogTransmitter transmitter,
+                                            JsonArray logs) {
+        boolean sent = false;
+        try {
             webSocketClient.sendMessage(message);
+            sent = webSocketClient.isConnected();
+        } finally {
+            if (!sent && transmitter != null) {
+                transmitter.holdUndelivered(logs);
+            }
         }
     }
 
@@ -1063,7 +1090,7 @@ public class ServerMonitorManager {
             webSocketClient.sendMessage(message);
 
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "发送性能数据失败: " + e.getMessage());
+            PanelConnectionLog.log(Level.WARNING, FrameworkText.format("发送性能数据失败: %s", e.getMessage()));
         }
     }
 
@@ -1084,7 +1111,7 @@ public class ServerMonitorManager {
             webSocketClient.sendMessage(message);
 
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "发送性能数据失败: " + e.getMessage());
+            PanelConnectionLog.log(Level.WARNING, FrameworkText.format("发送性能数据失败: %s", e.getMessage()));
         }
     }
 
@@ -1113,7 +1140,7 @@ public class ServerMonitorManager {
         lastTick = currentTime;
 
         UltiTools.getInstance().getLogger().log(Level.FINEST, 
-            String.format("TPS更新: 当前TPS=%.2f, 时间间隔=%dms", currentTPS, timeDiff));
+            FrameworkText.format("TPS更新: 当前TPS=%.2f, 时间间隔=%dms", currentTPS, timeDiff));
     }
     
     /**
@@ -1224,7 +1251,7 @@ public class ServerMonitorManager {
             webSocketClient.sendMessage(message);
             
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "发送玩家事件失败: " + e.getMessage());
+            PanelConnectionLog.log(Level.WARNING, FrameworkText.format("发送玩家事件失败: %s", e.getMessage()));
         }
     }
     

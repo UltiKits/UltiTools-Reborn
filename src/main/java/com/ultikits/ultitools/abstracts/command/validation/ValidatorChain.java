@@ -120,7 +120,16 @@ public final class ValidatorChain {
                 continue;
             }
 
-            CommandValidator.ValidationResult result = validator.validate(context);
+            CommandValidator.ValidationResult result;
+            try {
+                result = validator.validate(context);
+            } catch (RuntimeException e) {
+                // #568: a validator that throws refuses the dispatch as surely as one that returns a
+                // failure, so the validators that already passed -- a UsageLockValidator that took
+                // its lock -- must hear of it before the exception leaves the chain.
+                notifyRefused(context, passedValidators, e);
+                throw e;
+            }
             results.add(result);
 
             if (!result.isValid()) {
@@ -131,6 +140,52 @@ public final class ValidatorChain {
         }
 
         return ChainValidationResult.success(results, passedValidators);
+    }
+
+    /**
+     * Calls {@link CommandValidator#onRefused(CommandContext)} on each of {@code passedValidators},
+     * in order, for a dispatch refused after they passed and before the mapped method ran (#568).
+     * Every hook runs even when an earlier one throws, so one validator's failing hook cannot keep a
+     * later validator -- a {@code UsageLockValidator} -- from releasing what it holds; the first
+     * exception a hook threw is rethrown afterwards, with any later ones suppressed on it.
+     *
+     * @param context          the command context
+     * @param passedValidators the validators that passed for this dispatch, in chain order; may be
+     *                         {@code null}
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public static void notifyRefused(CommandContext context, List<CommandValidator> passedValidators) {
+        RuntimeException failure = notifyRefused(context, passedValidators, null);
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    /**
+     * Runs every refusal hook; returns the first exception a hook threw, or attaches it to
+     * {@code pending} (an exception already on its way out) and returns {@code null}.
+     */
+    private static RuntimeException notifyRefused(CommandContext context, List<CommandValidator> passedValidators,
+                                                  RuntimeException pending) {
+        if (passedValidators == null) {
+            return null;
+        }
+        RuntimeException first = null;
+        for (CommandValidator passed : passedValidators) {
+            try {
+                passed.onRefused(context);
+            } catch (RuntimeException e) {
+                if (pending != null) {
+                    pending.addSuppressed(e);
+                } else if (first == null) {
+                    first = e;
+                } else {
+                    first.addSuppressed(e);
+                }
+            }
+        }
+        return first;
     }
 
     /**

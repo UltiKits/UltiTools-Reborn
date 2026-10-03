@@ -549,20 +549,51 @@ class UltiToolsPluginLanguageFallbackTest {
     }
 
     @Test
-    @DisplayName("D-06 branch 4: no record, disk != jar -> never recorded, never rewritten, per-key "
-            + "placeholder check still applies (real %s/%d convention, CR-01)")
-    void noRecordWithDiskDifferingFromJarNeverRecordsNeverRewritesAppliesPlaceholderCheck() throws Throwable {
+    @DisplayName("D-06 branch 4 as amended by #459: no record, disk != jar -> replaced by the jar's copy, "
+            + "recorded, old bytes kept as en.json.bak, one line naming both")
+    void noRecordWithDiskDifferingFromJarIsReplacedRecordedAndBackedUp() throws Throwable {
+        // #459, maintainer 2026-09-29 (question 3, option 2): this branch used to keep the file,
+        // never record it and only apply the placeholder check. It now replaces the file.
         ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
                 "{\"known\":\"Hi %s, %d items\"}", "{\"known\":\"Hi %s\"}");
         File diskFile = new File(fixture.resourceFolder, "lang" + File.separator + "en.json");
         byte[] beforeBytes = Files.readAllBytes(diskFile.toPath());
+        File backup = new File(diskFile.getParentFile(), "en.json.bak");
 
         Language language = resolveProvenanceLanguage(fixture);
 
         assertThat(language.getLocalizedText("known")).isEqualTo("Hi %s, %d items");
+        assertThat(Files.readAllBytes(diskFile.toPath())).isEqualTo(Files.readAllBytes(fixture.jarLangFile.toPath()));
+        assertThat(Files.readAllBytes(backup.toPath())).isEqualTo(beforeBytes);
+        assertThat(ResourceHashSidecar.readRecordedHash(fixture.resourceFolder, "lang/en.json"))
+                .contains(ResourceHashSidecar.sha256(diskFile));
+        verify(fixture.mockLogger, times(1)).warning(argThat((String msg) ->
+                msg.contains(diskFile.getPath()) && msg.contains(backup.getPath())));
+        verify(fixture.mockLogger, times(1)).warning(anyString());
+    }
+
+    @Test
+    @DisplayName("D-06 branch 4, replacement refused (file pinned read-only): kept, never recorded, per-key "
+            + "placeholder check still applies (real %s/%d convention, CR-01)")
+    void noRecordWithDiskDifferingFromJarKeptWhenReplacementRefusedAppliesPlaceholderCheck() throws Throwable {
+        ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
+                "{\"known\":\"Hi %s, %d items\"}", "{\"known\":\"Hi %s\"}");
+        File diskFile = new File(fixture.resourceFolder, "lang" + File.separator + "en.json");
+        byte[] beforeBytes = Files.readAllBytes(diskFile.toPath());
+        assertThat(diskFile.setWritable(false)).isTrue();
+
+        Language language;
+        try {
+            language = resolveProvenanceLanguage(fixture);
+        } finally {
+            diskFile.setWritable(true);
+        }
+
+        assertThat(language.getLocalizedText("known")).isEqualTo("Hi %s, %d items");
         assertThat(Files.readAllBytes(diskFile.toPath())).isEqualTo(beforeBytes);
         assertThat(ResourceHashSidecar.readRecordedHash(fixture.resourceFolder, "lang/en.json")).isEmpty();
-        verify(fixture.mockLogger, times(1)).warning(argThat((String msg) -> msg.contains("known")));
+        assertThat(diskFile.getParentFile().list()).containsExactly("en.json");
+        verify(fixture.mockLogger, times(1)).warning(argThat((String msg) -> msg.contains("'known'")));
     }
 
     @Test
@@ -570,6 +601,10 @@ class UltiToolsPluginLanguageFallbackTest {
             + "fallback, never as an error")
     void emptyDiskFileResolvesEveryKeyThroughJarFallbackWithoutError() throws Throwable {
         ProvenanceFixture fixture = buildProvenanceFixture("en", ".json", "{\"greeting\":\"Hi\"}", "");
+        // Recorded as something else, so the empty file is an operator's edit that is kept (branch
+        // 2) and its own parse is what this test exercises; an unrecorded empty file would now be
+        // replaced by the jar's copy (#459).
+        ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "hash-of-the-extracted-copy");
 
         Language resolved = resolveProvenanceLanguage(fixture);
 
@@ -591,7 +626,16 @@ class UltiToolsPluginLanguageFallbackTest {
         ProvenanceFixture unknownProvenance = buildProvenanceFixture("en", ".json",
                 "{\"common\":\"jar-value\",\"onlyInJar\":\"x\"}",
                 "{\"common\":\"disk-value\"}");
-        Language viaUnknownProvenance = resolveProvenanceLanguage(unknownProvenance);
+        // Since #459 the unknown-provenance branch replaces the file; it leaves the file alone only
+        // when the replacement is refused -- here, a file pinned read-only.
+        File unknownDiskFile = new File(unknownProvenance.resourceFolder, "lang" + File.separator + "en.json");
+        assertThat(unknownDiskFile.setWritable(false)).isTrue();
+        Language viaUnknownProvenance;
+        try {
+            viaUnknownProvenance = resolveProvenanceLanguage(unknownProvenance);
+        } finally {
+            unknownDiskFile.setWritable(true);
+        }
 
         assertThat(viaKnownCustomisation.getLocalizedText("common"))
                 .isEqualTo(viaUnknownProvenance.getLocalizedText("common"))

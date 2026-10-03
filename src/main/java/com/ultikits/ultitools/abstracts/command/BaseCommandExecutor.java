@@ -7,6 +7,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 import java.util.logging.Level;
@@ -45,6 +46,7 @@ import com.ultikits.ultitools.annotations.command.RunAsync;
 import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.manager.TriggerContext;
+import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
 import lombok.Getter;
@@ -280,17 +282,25 @@ public abstract class BaseCommandExecutor implements TabExecutor {
             if (errorMsg != null) {
                 sender.sendMessage(errorMsg);
             }
+            notifyRefused(context, validationResult);
             return true;
         }
         
-        // Check parameter count
-        if (!validateParameterCount(args, format, sender, command)) {
-            return true;
+        // Check parameter count and build the method parameters. A refusal here -- by return or by
+        // an exception, such as a module's TypeParser throwing a runtime exception -- releases what
+        // the validators acquired (#568). The refusal hooks run outside the try: a hook that throws
+        // must not be caught below and make every hook run a second time.
+        Object[] methodParams;
+        try {
+            methodParams = validateParameterCount(args, format, sender, command)
+                    ? buildMethodParams(context, method)
+                    : null;
+        } catch (RuntimeException e) {
+            notifyRefusedAndRethrow(context, validationResult, e);
+            throw e;
         }
-        
-        // Build method parameters
-        Object[] methodParams = buildMethodParams(context, method);
         if (methodParams == null) {
+            notifyRefused(context, validationResult);
             return true;
         }
         
@@ -301,8 +311,38 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     }
 
     /**
+     * Tells each validator that passed for this dispatch that it was refused before the mapped
+     * method ran, in chain order, so a validator that acquired something in {@code validate} --
+     * {@code UsageLockValidator}'s lock -- releases it (#568). Driven from the chain's own
+     * passed-validator list, like {@code onComplete}, never from a named field.
+     */
+    private static void notifyRefused(CommandContext context, ValidatorChain.ChainValidationResult validationResult) {
+        ValidatorChain.notifyRefused(context, validationResult.getPassedValidators());
+    }
+
+    /**
+     * {@link #notifyRefused} for a dispatch leaving by {@code cause}: every hook still runs, and a hook
+     * that throws is attached to {@code cause} as suppressed rather than replacing it.
+     */
+    private static void notifyRefusedAndRethrow(CommandContext context,
+                                                ValidatorChain.ChainValidationResult validationResult,
+                                                RuntimeException cause) {
+        try {
+            notifyRefused(context, validationResult);
+        } catch (RuntimeException hookFailure) {
+            cause.addSuppressed(hookFailure);
+        }
+    }
+
+    /**
      * Executes the command method.
      * Supports both synchronous and asynchronous execution via @AsyncCommand or @RunAsync.
+     * <p>
+     * A synchronous body runs at once, inside the dispatch, when this is called on the server's
+     * primary thread -- which is where Bukkit dispatches every command a player, the console, a
+     * command block or the panel sends -- and is handed to {@code runTask} only when it is not
+     * (as of 6.3.0, #541; before, every synchronous body was deferred one tick). An
+     * {@code @AsyncCommand}/{@code @RunAsync} body always runs asynchronously.
      *
      * @param context          the command context
      * @param method           the method to execute
@@ -350,9 +390,37 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         };
 
         if (isAsync) {
-            dispatchAsyncCommand(context, asyncCommand, runnable, reported);
+            dispatchAsyncCommand(context, asyncCommand, runnable, reported, ranValidators);
+        } else if (Bukkit.isPrimaryThread()) {
+            // #541 (maintainer's answer of 2026-09-29): on the server thread the body runs now,
+            // inside the dispatch, as Bukkit's own commands do -- so a command block, a command
+            // minecart, the panel's remote command and RCON receive its replies while their
+            // output capture is still open, and a @CmdCD cooldown is recorded before the
+            // dispatch returns. Applies to every sender; no sender-type branch.
+            runnable.run();
         } else {
-            runnable.runTask(UltiTools.getInstance());
+            // Off the server thread the body must not touch the Bukkit API directly, so it is
+            // handed to the main thread, exactly as before 6.3.0.
+            dispatchScheduled(context, ranValidators, () -> runnable.runTask(UltiTools.getInstance()));
+        }
+    }
+
+    /**
+     * Hands a body to the scheduler; if the scheduler refuses it (the plugin is disabling, for
+     * example), the body never runs and so never reaches its {@code onComplete} hooks, so the
+     * validators that passed are told of the refusal instead (#568) before the exception leaves.
+     */
+    private static void dispatchScheduled(CommandContext context, List<CommandValidator> ranValidators,
+                                          Runnable schedule) {
+        try {
+            schedule.run();
+        } catch (RuntimeException e) {
+            try {
+                ValidatorChain.notifyRefused(context, ranValidators);
+            } catch (RuntimeException hookFailure) {
+                e.addSuppressed(hookFailure);
+            }
+            throw e;
         }
     }
 
@@ -373,19 +441,21 @@ public abstract class BaseCommandExecutor implements TabExecutor {
                                     AtomicBoolean reported) {
         try {
             // T-02-REP-1/T-02-EOP-4 (02-08): the current-user context for
-            // AuditableDataEntity's audit columns is set and cleared HERE, inside the
+            // AuditableDataEntity's audit columns is set and restored HERE, inside the
             // runnable that actually invokes the matched method -- not around the
-            // runTask()/runTaskAsynchronously() call below that schedules this runnable.
-            // Sync command bodies are deferred one tick and @AsyncCommand/@RunAsync bodies
-            // run on another thread entirely; a ThreadLocal write made on the scheduling
-            // thread would be invisible on whichever thread actually executes this run()
-            // (T-02-REP-4). clearCurrentUser() -- not setCurrentUser(null) -- runs in a
-            // finally around the whole body so a pooled Bukkit worker thread never carries
-            // one command's user into the next, whether this command's sender was a Player
-            // or not, and whether the handler returned normally or threw.
-            if (context.isPlayer()) {
-                AuditableDataEntity.setCurrentUser(context.getPlayer().getUniqueId());
-            }
+            // runTask()/runTaskAsynchronously() call that may schedule this runnable. An
+            // off-primary-thread sync body and every @AsyncCommand/@RunAsync body run on
+            // another thread; a ThreadLocal write made on the scheduling thread would be
+            // invisible on whichever thread actually executes this run() (T-02-REP-4).
+            // #541: on the primary thread a body runs at dispatch, so a body that dispatches
+            // another command runs the nested body right here, on the same thread, before its
+            // own has finished. The user current before this body is therefore saved and put
+            // back in the finally -- the nested body sees its own sender (none for a sender
+            // that is not a player), the outer body sees its own again afterwards, and a thread
+            // that carried no user before the outermost command (a pooled worker included)
+            // carries none after it, whether the handler returned normally or threw.
+            final UUID previousUser = AuditableDataEntity.swapCurrentUser(
+                    context.isPlayer() ? context.getPlayer().getUniqueId() : null);
             try {
                 boolean commandSucceeded = false;
                 try {
@@ -401,12 +471,10 @@ public abstract class BaseCommandExecutor implements TabExecutor {
                     // acquisition happened inside its validate() step (acquire-as-you-validate),
                     // so it is no longer named by field here either -- lockValidator.releaseLock
                     // is reached only via onComplete, only for a validator that actually ran.
-                    for (CommandValidator ranValidator : ranValidators) {
-                        ranValidator.onComplete(context, commandSucceeded);
-                    }
+                    completeAll(context, ranValidators, commandSucceeded);
                 }
             } finally {
-                AuditableDataEntity.clearCurrentUser();
+                AuditableDataEntity.swapCurrentUser(previousUser);
             }
         } finally {
             // WIRE-12: claim the flag so a watcher that fires later -- a stale delayed
@@ -414,6 +482,30 @@ public abstract class BaseCommandExecutor implements TabExecutor {
             // The body is NEVER interrupted to make this deadline; it always runs this
             // finally exactly once, win or lose the race.
             reported.compareAndSet(false, true);
+        }
+    }
+
+    /**
+     * Calls every validator's {@code onComplete} in chain order. Each runs even when an earlier one
+     * throws, so one validator's failing hook cannot keep a later {@code UsageLockValidator} from
+     * releasing its lock (#568); the first exception is rethrown afterwards, later ones suppressed.
+     */
+    private static void completeAll(CommandContext context, List<CommandValidator> ranValidators,
+                                    boolean commandSucceeded) {
+        RuntimeException first = null;
+        for (CommandValidator ranValidator : ranValidators) {
+            try {
+                ranValidator.onComplete(context, commandSucceeded);
+            } catch (RuntimeException e) {
+                if (first == null) {
+                    first = e;
+                } else {
+                    first.addSuppressed(e);
+                }
+            }
+        }
+        if (first != null) {
+            throw first;
         }
     }
 
@@ -477,7 +569,7 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     private void reportCommandExecutionError(CommandContext context, Method method, Exception e,
                                               TriggerContext triggerCtx) {
         Throwable cause = e.getCause() != null ? e.getCause() : e;
-        context.getSender().sendMessage(ChatColor.RED + "命令执行出错: " + describe(cause));
+        context.getSender().sendMessage(ChatColor.RED + FrameworkText.format("命令执行出错: %s", describe(cause)));
         Logger.getLogger(BaseCommandExecutor.class.getName())
                 .log(Level.SEVERE, "Command execution failed: " + method.getName(), e);
         // Report to error collector
@@ -526,22 +618,30 @@ public abstract class BaseCommandExecutor implements TabExecutor {
      * @since 6.3.0
      */
     private void dispatchAsyncCommand(CommandContext context, AsyncCommand asyncCommand,
-                                       BukkitRunnable runnable, AtomicBoolean reported) {
-        // Show processing message if enabled
-        if (asyncCommand != null && asyncCommand.showProcessing()) {
-            String processingKey = asyncCommand.processingMessageKey();
-            String processingMsg = processingKey.isEmpty()
-                    ? "处理中..."
-                    : UltiTools.getInstance().i18n(processingKey);
-            context.getSender().sendMessage(ChatColor.YELLOW + processingMsg);
-        }
+                                       BukkitRunnable runnable, AtomicBoolean reported,
+                                       List<CommandValidator> ranValidators) {
+        // The refusal hooks (#568) cover only what happens before the body is accepted: the
+        // processing notice and the body's submission. Once the scheduler has accepted the body,
+        // the body owns the validators' post-actions (onComplete), so a failure to arm the timeout
+        // watcher below must not release what the pending body still holds (local Codex review of
+        // #570, run 2).
+        dispatchScheduled(context, ranValidators, () -> {
+            // Show processing message if enabled
+            if (asyncCommand != null && asyncCommand.showProcessing()) {
+                String processingKey = asyncCommand.processingMessageKey();
+                String processingMsg = processingKey.isEmpty()
+                        ? FrameworkText.text("处理中...")
+                        : UltiTools.getInstance().i18n(processingKey);
+                context.getSender().sendMessage(ChatColor.YELLOW + processingMsg);
+            }
 
-        // WIRE-12/D-13: schedule the command body asynchronously EXACTLY ONCE. A timeout
-        // (if configured) is enforced by a SEPARATE watcher below, never by re-wrapping
-        // this runnable in another one -- that "wrap and re-dispatch" shape is what
-        // produced the double async dispatch this replaces, on the DEFAULT path of every
-        // @AsyncCommand (timeout()'s default is 30).
-        runnable.runTaskAsynchronously(UltiTools.getInstance());
+            // WIRE-12/D-13: schedule the command body asynchronously EXACTLY ONCE. A timeout
+            // (if configured) is enforced by a SEPARATE watcher below, never by re-wrapping
+            // this runnable in another one -- that "wrap and re-dispatch" shape is what
+            // produced the double async dispatch this replaces, on the DEFAULT path of every
+            // @AsyncCommand (timeout()'s default is 30).
+            runnable.runTaskAsynchronously(UltiTools.getInstance());
+        });
 
         if (asyncCommand != null && asyncCommand.timeout() > 0) {
             armTimeoutWatcher(context, asyncCommand, reported);

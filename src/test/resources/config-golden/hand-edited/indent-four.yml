@@ -1,0 +1,7 @@
+settings:
+    general:
+        enabled: true
+        name: test
+    worlds:
+        - world
+        - world_nether

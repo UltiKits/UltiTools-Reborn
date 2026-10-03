@@ -21,6 +21,7 @@ import com.ultikits.ultitools.aop.ProxyFactory;
 import com.ultikits.ultitools.aop.ProxyOf;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.exceptions.PluginModuleException;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
@@ -174,7 +175,13 @@ public class TaskManager {
     private void scanAndSchedule(UltiToolsPlugin module, Object bean, Consumer<BukkitTask> recorder) {
         Class<?> targetClass = getTargetClass(bean.getClass());
 
-        for (Method method : targetClass.getDeclaredMethods()) {
+        // #532: the unwrapped class and its superclasses up to Object, each overridable method
+        // once, as its most derived declaration -- so a @Scheduled method an abstract base service
+        // declares is scheduled, and an override is scheduled once with its own annotation (an
+        // override without @Scheduled is not scheduled). Spring's ScheduledAnnotationBeanPostProcessor
+        // selects over the hierarchy the same way. The three load-time checks below walk the same set.
+
+        for (Method method : ReflectionUtil.getAllMethods(targetClass)) {
             Scheduled scheduled = method.getAnnotation(Scheduled.class);
             if (scheduled == null) {
                 continue;
@@ -457,7 +464,7 @@ public class TaskManager {
      */
     static void validateConfigBindings(UltiToolsPlugin module, Object bean) {
         Class<?> targetClass = ProxyFactory.unwrap(bean.getClass());
-        for (Method method : targetClass.getDeclaredMethods()) {
+        for (Method method : ReflectionUtil.getAllMethods(targetClass)) {
             Scheduled scheduled = method.getAnnotation(Scheduled.class);
             if (scheduled != null && isSchedulableSignature(method) && ConfigBindings.isBound(scheduled)) {
                 BoundTask.resolveAtLoad(module, bean, targetClass, method, scheduled);
@@ -473,7 +480,7 @@ public class TaskManager {
      */
     static String firstBoundMethod(Object bean) {
         Class<?> targetClass = ProxyFactory.unwrap(bean.getClass());
-        for (Method method : targetClass.getDeclaredMethods()) {
+        for (Method method : ReflectionUtil.getAllMethods(targetClass)) {
             Scheduled scheduled = method.getAnnotation(Scheduled.class);
             if (scheduled != null && isSchedulableSignature(method) && ConfigBindings.isBound(scheduled)) {
                 return targetClass.getSimpleName() + "." + method.getName();
@@ -492,7 +499,7 @@ public class TaskManager {
      */
     static void refuseConfigBindings(Object bean) {
         Class<?> targetClass = ProxyFactory.unwrap(bean.getClass());
-        for (Method method : targetClass.getDeclaredMethods()) {
+        for (Method method : ReflectionUtil.getAllMethods(targetClass)) {
             Scheduled scheduled = method.getAnnotation(Scheduled.class);
             if (scheduled != null && isSchedulableSignature(method) && ConfigBindings.isBound(scheduled)) {
                 throw bindingOutsideModule(targetClass, method);

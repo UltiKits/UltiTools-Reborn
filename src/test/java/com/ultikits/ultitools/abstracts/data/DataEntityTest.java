@@ -431,7 +431,9 @@ public class DataEntityTest {
      * {@code BaseCommandExecutor}'s current-user wrapper contract by dispatching real
      * {@code onCommand(...)} calls through a mocked {@link BukkitScheduler} that runs the
      * scheduled {@link Runnable} on a thread distinct from the calling thread -- joined before
-     * returning. This deliberately defeats a wrapper placed around the *scheduling* call: a
+     * returning. As of #541 a synchronous body is scheduled only when {@code onCommand} is off the
+     * primary thread, which is what {@code dispatch} drives ({@code Bukkit.isPrimaryThread()} is
+     * false under the static mock); {@code dispatchOnPrimaryThread} drives the inline path. This deliberately defeats a wrapper placed around the *scheduling* call: a
      * {@code ThreadLocal} write made on the calling thread is invisible from a genuinely
      * different thread, so only a wrapper placed inside the handler's own {@code run()} can pass
      * these tests. See the plan's read_first note on this exact trap and 02-08-PLAN.md's
@@ -484,6 +486,27 @@ public class DataEntityTest {
             return mock(BukkitTask.class);
         }
 
+        /**
+         * Like {@link #dispatch}, but with {@code Bukkit.isPrimaryThread()} true: the path every
+         * command a player, the console, a command block or the panel dispatches takes on a real
+         * server (#541). {@link #dispatch} leaves it false and so drives the off-primary-thread
+         * path, where the body is still handed to {@code runTask}.
+         */
+        private void dispatchOnPrimaryThread(BaseCommandExecutor executor, CommandSender sender, String[] args) {
+            BukkitScheduler mockScheduler = mock(BukkitScheduler.class);
+            when(mockScheduler.runTask(any(), any(Runnable.class)))
+                    .thenAnswer(inv -> runOnNewThreadCapturingPostState(inv.getArgument(1)));
+
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class);
+                 MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class)) {
+                bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
+                bukkitMock.when(Bukkit::isPrimaryThread).thenReturn(true);
+                UltiTools mockUltiTools = stubUltiTools();
+                ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
+                executor.onCommand(sender, mockCommand, "probe", args);
+            }
+        }
+
         private void dispatch(BaseCommandExecutor executor, CommandSender sender, String[] args) {
             BukkitScheduler mockScheduler = mock(BukkitScheduler.class);
             when(mockScheduler.runTask(any(), any(Runnable.class)))
@@ -500,20 +523,30 @@ public class DataEntityTest {
             }
         }
 
+        /**
+         * #541 (maintainer's answer of 2026-09-29): on the primary thread a synchronous body runs
+         * inline, at dispatch, so it observes its sender's UUID on the dispatching thread itself --
+         * and that thread carries no current-user entry once {@code onCommand} returns. Before
+         * 6.3.0 the body was deferred one tick and ran on whatever thread the scheduler chose; the
+         * scheduler seam here still hands deferred work to a separate thread, so a body that is
+         * wrongly deferred is caught by the thread assertion.
+         */
         @Test
-        @DisplayName("Player-sourced sync command observes the player's UUID, on a thread distinct from the caller")
+        @DisplayName("Player-sourced sync command on the primary thread observes the player's UUID inline, on the dispatching thread")
         void playerSyncCommandObservesUuidOnHandlerThread() {
             CurrentUserProbeExecutor executor = new CurrentUserProbeExecutor();
             Player player = mock(Player.class);
             UUID uuid = UUID.randomUUID();
             when(player.getUniqueId()).thenReturn(uuid);
 
-            dispatch(executor, player, new String[]{});
+            dispatchOnPrimaryThread(executor, player, new String[]{});
 
-            assertTrue(executor.invoked, "the probe handler should have run");
+            assertTrue(executor.invoked, "the probe handler should have run before onCommand returned");
             assertEquals(uuid, executor.observedDuringHandler);
-            assertNotEquals(Thread.currentThread(), executor.executionThread,
-                    "the handler must run on the thread the scheduler actually invokes it on, not the calling thread");
+            assertEquals(Thread.currentThread(), executor.executionThread,
+                    "on the primary thread the body runs inline, on the dispatching thread");
+            assertNull(AuditableDataEntity.getCurrentUser(),
+                    "the dispatching thread must carry no current-user entry after the command returns");
         }
 
         @Test

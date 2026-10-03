@@ -24,6 +24,7 @@ import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
@@ -37,14 +38,17 @@ import com.google.gson.JsonSerializer;
 import com.google.gson.reflect.TypeToken;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
+import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.Cached;
 import com.ultikits.ultitools.interfaces.DataOperator;
+import com.ultikits.ultitools.interfaces.impl.data.RowCountingDelete;
 import com.ultikits.ultitools.manager.JsonTransactionManager;
 import com.ultikits.ultitools.utils.BeanCopyUtil;
 import com.ultikits.ultitools.utils.FileUtils;
+import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.utils.JsonPathUtil;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
@@ -55,7 +59,9 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
  * @author wisdomme
  * @version 1.0.0
  */
-public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements DataOperator<T>, Cached {
+public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
+        implements DataOperator<T>, Cached, RowCountingDelete {
+    private static final Logger LOGGER = Logger.getLogger(SimpleJsonDataOperator.class.getName());
     /**
      * Default Gson has no bundled adapter for {@code java.time.LocalDateTime}: its reflective
      * fallback tries to reach {@code LocalDateTime}'s private fields, which JDK 9+'s module
@@ -115,7 +121,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
                     T entity = GSON.fromJson(reader, type);
                     cache.put(FileUtils.mainName(dataFile), entity);
                 } catch (Exception e) {
-                    Bukkit.getLogger().log(Level.SEVERE, ChatColor.RED + "发现一个数据损坏！位置：" + dataFile.getAbsolutePath());
+                    Bukkit.getLogger().log(Level.SEVERE, ChatColor.RED + FrameworkText.format("发现一个数据损坏！位置：%s", dataFile.getAbsolutePath()));
                 }
             });
         }
@@ -161,9 +167,9 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
     }
 
     /**
-     * Deep-copies this operator's current cache: serialize/deserialize to break references, since
-     * {@code update(T)} mutates cached entities in-place via {@link
-     * BeanCopyUtil#copyProperties}. Package-private hook shared by {@link #transaction(Callable)}
+     * Deep-copies this operator's current cache: serialize/deserialize to break references, so a
+     * rollback restores the values as they were even if a cached instance is replaced or changed
+     * later. Package-private hook shared by {@link #transaction(Callable)}
      * (the pre-existing per-operator mechanism, unchanged) and {@link #beforeMutate()} (the new
      * per-plugin {@link JsonTransactionManager} hook, 02-05) -- one copy of the deep-copy logic,
      * two callers.
@@ -171,7 +177,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
     synchronized Map<Object, T> snapshotCache() {
         Map<Object, T> snapshot = new HashMap<>();
         for (Map.Entry<Object, T> entry : cache.entrySet()) {
-            snapshot.put(entry.getKey(), GSON.fromJson(GSON.toJson(entry.getValue()), type));
+            snapshot.put(entry.getKey(), detach(entry.getValue()));
         }
         return snapshot;
     }
@@ -221,9 +227,58 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
         return fieldName != null ? fieldName : column;
     }
 
+    /**
+     * Returns a detached copy of {@code entity}, produced by the same Gson form this operator
+     * persists to disk (#522).
+     * <p>
+     * Every read path hands out one of these rather than the instance held in {@link #cache},
+     * and {@link #insert} stores one rather than the caller's instance. Before 6.3.0 the cached
+     * instances themselves were returned, so changing a loaded entity without calling
+     * {@code update(...)} changed the store and was written at the next flush -- on
+     * {@code datasource.type: json} only; the relational backends materialise every row afresh,
+     * so there a change without {@code update(...)} never persisted. The copy is what makes the
+     * same module code behave the same on every backend.
+     *
+     * @param entity the cached (or caller-supplied) instance
+     * @return a new instance equal in every persisted field
+     */
+    private T detach(T entity) {
+        // Through a JSON tree rather than text: the same Gson form, without pretty-printing a
+        // string only to parse it again.
+        return GSON.fromJson(GSON.toJsonTree(entity), type);
+    }
+
+    /**
+     * Refuses an update or delete addressed by a {@code null} id (#546), which no entry can have
+     * as its key; the cache is a {@code ConcurrentHashMap}, so it used to surface as a raw
+     * {@code NullPointerException}. Mirrors {@code AbstractRelationalDataOperator}'s refusal.
+     */
+    private void requireId(Object id, String operation) {
+        if (id == null) {
+            throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                    "Refusing to " + operation + " an entry of JSON store '" + type.getName()
+                            + "' by a null id: no entry can be addressed by it.");
+        }
+    }
+
+    private List<T> detachAll(List<T> entities) {
+        List<T> copies = new ArrayList<>(entities.size());
+        for (T entity : entities) {
+            copies.add(detach(entity));
+        }
+        return copies;
+    }
+
+    /**
+     * Looks the entry up by the entity's id, as the relational operators do (#522). Comparing the
+     * caller's instance with the cached one through {@code equals()} stopped matching once reads
+     * and inserts were detached: an entity whose {@code equals()} covers a field it changed without
+     * calling {@code update(...)} no longer equals the stored copy.
+     */
     @Override
     public boolean exist(T object) {
-        return cache.containsValue(object);
+        Object id = object == null ? null : object.getId();
+        return id != null && findStored(id) != null;
     }
 
     @Override
@@ -235,10 +290,12 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
 
     @Override
     public T getById(Object id) {
-        T entity = cache.get(id);
-        if (entity != null) {
-            entity.onLoad();
+        T cached = cache.get(id);
+        if (cached == null) {
+            return null;
         }
+        T entity = detach(cached);
+        entity.onLoad();
         return entity;
     }
 
@@ -256,7 +313,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
      */
     @Override
     public List<T> getAll(WhereCondition... whereConditions) {
-        List<T> results = getAllRaw(whereConditions);
+        List<T> results = detachAll(getAllRaw(whereConditions));
         for (T entity : results) {
             entity.onLoad();
         }
@@ -288,15 +345,10 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
                 throw new DataAccessException(ErrorCode.DATA_QUERY_FAILED, "Query value is not serializable");
             }
             List<T> collection = new ArrayList<>();
+            String valueJson = GSON.toJson(condition.getValue());
             for (T each : cache.values()) {
                 Map<String, Object> map = GSON.fromJson(GSON.toJson(each), mapType);
-                Object byPath = JsonPathUtil.getByPath(map, resolveColumn(condition.getColumn()));
-                if (byPath == null) {
-                    continue;
-                }
-                String data = GSON.toJson(byPath);
-                String value = GSON.toJson(condition.getValue());
-                if (conditionCal(data, value, condition)) collection.add(each);
+                if (matches(map, condition, valueJson)) collection.add(each);
             }
             // Multiple conditions are ANDed: the first condition establishes the initial set,
             // every condition after it intersects, and an empty set stays empty. The original
@@ -343,10 +395,11 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
                     break;
             }
         }
-        for (T entity : res) {
+        List<T> copies = detachAll(res);
+        for (T entity : copies) {
             entity.onLoad();
         }
-        return res;
+        return copies;
     }
 
     @Override
@@ -364,7 +417,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
         if (end > all.size()) {
             end = all.size();
         }
-        List<T> slice = all.subList(start, end);
+        List<T> slice = detachAll(all.subList(start, end));
         for (T entity : slice) {
             entity.onLoad();
         }
@@ -386,10 +439,11 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
         }
         // Fires before the cache is touched, mirroring AbstractRelationalDataOperator.insert:
         // whatever onCreate() writes (e.g. AuditableDataEntity's createdAt/createdBy) is exactly
-        // what ends up cached (and, on flush(), persisted) -- obj is the same instance stored
-        // below, not a copy.
+        // what ends up cached (and, on flush(), persisted). A detached copy is cached, not obj
+        // itself, so a later change to obj does not reach the store without update() -- the
+        // same as on the relational backends (#522).
         obj.onCreate();
-        cache.putIfAbsent(obj.getId(), obj);
+        cache.putIfAbsent(obj.getId(), detach(obj));
     }
 
     /**
@@ -434,15 +488,10 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
             }
             Collection<Map.Entry<Object, T>> collection = new ArrayList<>();
             Set<Map.Entry<Object, T>> values = cache.entrySet();
+            String valueJson = GSON.toJson(condition.getValue());
             for (Map.Entry<Object, T> next : values) {
                 Map<String, Object> map = GSON.fromJson(GSON.toJson(next.getValue()), mapType);
-                Object byPath = JsonPathUtil.getByPath(map, resolveColumn(condition.getColumn()));
-                if (byPath == null) {
-                    continue;
-                }
-                String data = GSON.toJson(byPath);
-                String value = GSON.toJson(condition.getValue());
-                if (conditionCal(data, value, condition)) collection.add(next);
+                if (matches(map, condition, valueJson)) collection.add(next);
             }
             // A copy of the same defect getAll had; likewise changed to a genuine intersection.
             // On the delete path, the original code would delete every row the second condition
@@ -468,16 +517,30 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
      */
     @Override
     public synchronized void delById(Object id) {
+        deleteByIdCounted(id);
+    }
+
+    /**
+     * {@link #delById(Object)}, returning how many cache entries it removed (#521), so
+     * {@code Query#delete()} can return rows removed instead of rows matched.
+     *
+     * @param id the entry id
+     * @return {@code 1} if an entry with this id was removed, {@code 0} if there was none
+     */
+    @Override
+    public synchronized int deleteByIdCounted(Object id) {
+        requireId(id, "delete");
         beforeMutate();
         T entity = cache.get(id);
         if (entity != null) {
             entity.onDelete();
         }
-        cache.remove(id);
+        return cache.remove(id) != null ? 1 : 0;
     }
 
     @Override
     public synchronized void update(String column, Object value, Object id) {
+        requireId(id, "update");
         beforeMutate();
         if (!Serializable.class.isAssignableFrom(value.getClass())) {
             // GATE-05 group two (08-21): routed to the typed data-access hierarchy. Unlike the
@@ -486,6 +549,10 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
             throw new DataAccessException(ErrorCode.DATA_PERSISTENCE_FAILED, "Query value is not serializable");
         }
         T obj = cache.get(id);
+        if (obj == null) {
+            warnNoEntry(id);
+            return;
+        }
         Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
         Map<String, Object> map = GSON.fromJson(GSON.toJson(obj), mapType);
         // Without resolving the column name first, putByPath would write into a brand-new key
@@ -497,20 +564,159 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
 
     @Override
     public synchronized void update(T obj) {
-        beforeMutate();
+        updateEntry(obj);
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Returns the number of entries replaced, decided under this operator's lock.
+     */
+    @Override
+    public synchronized int updateCounted(T entity) {
+        return updateEntry(entity);
+    }
+
+    /**
+     * {@link #update(BaseDataEntity)}, returning how many entries it changed: an id no entry has
+     * writes nothing and logs one WARNING, where it used to throw a raw
+     * {@code NullPointerException} (#558).
+     */
+    private int updateEntry(T obj) {
         Object id = obj.getId();
-        T old = cache.get(id);
+        requireId(id, "update");
+        T old = findStored(id);
+        // Copied onto a detached copy of the cached entry, which then replaces it in one put:
+        // reads run without this lock, so mutating the cached instance field by field could let
+        // a concurrent read serialise a half-updated entity. Callers always pass a detached
+        // instance since #522 (no read hands out the cached one), and BeanCopyUtil copies every
+        // primitive field since #520.
+        //
+        // onUpdate() fires on the caller's obj before its fields are copied, exactly as
+        // AbstractRelationalDataOperator.update(T) fires it before reading the fields it writes:
+        // whatever the hook writes (e.g. AuditableDataEntity's updatedAt/updatedBy) is both what
+        // persists and what the caller's instance shows afterwards, on every backend.
+        obj.onUpdate();
         if (old == null) {
-            old = cache.get(id.toString());
+            warnNoEntry(id);
+            return 0;
         }
-        BeanCopyUtil.copyProperties(obj, old, "id");
-        // Fires on old (the instance actually cached below), after the incoming obj's fields have
-        // been copied onto it -- callers may pass either the same cached instance (the common
-        // get-mutate-update pattern) or a fresh detached instance with the same id; either way,
-        // whatever onUpdate() writes on the entity that ends up cached is what persists. Mirrors
-        // AbstractRelationalDataOperator.update(T)'s "fires before the row is written" ordering.
-        old.onUpdate();
-        cache.put(old.getId(), old);
+        beforeMutate();
+        replaceEntry(old, obj);
+        return 1;
+    }
+
+    /**
+     * Logs one WARNING for an update by a non-null id that matches no entry (#558, maintainer
+     * decision 2026-09-29), naming the store by its {@code @Table} value -- the directory it is
+     * kept in -- as the relational backends name the table.
+     */
+    private void warnNoEntry(Object id) {
+        Table table = type.getAnnotation(Table.class);
+        String name = table != null ? table.value() : type.getSimpleName();
+        LOGGER.warning("Update of table '" + name + "' matched no entry with id '" + id
+                + "'; nothing was written.");
+    }
+
+    /** The cached entry for {@code id}, trying its string form when the key type differs. */
+    private T findStored(Object id) {
+        T stored = cache.get(id);
+        return stored != null ? stored : cache.get(id.toString());
+    }
+
+    /**
+     * Replaces {@code stored} in the cache with a copy carrying every field of {@code source}
+     * except {@code id}, in one {@code put}, so a concurrent read never sees a half-copied entry.
+     * Shared by {@link #update(BaseDataEntity)} and {@link #updateIf}.
+     */
+    private void replaceEntry(T stored, T source) {
+        T updated = detach(stored);
+        BeanCopyUtil.copyProperties(source, updated, "id");
+        cache.put(updated.getId(), updated);
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * The stored entry is checked against {@code expected} with the same matching
+     * {@link #getAll(WhereCondition...)} uses, and replaced, while this operator's lock is held,
+     * so no other write through this operator can come between the check and the write. A JSON
+     * store belongs to one server; nothing here coordinates two servers.
+     */
+    @Override
+    public synchronized boolean updateIf(T entity, WhereCondition... expected) {
+        Object id = entity.getId();
+        requireId(id, "update");
+        List<WhereCondition> conditions = evaluableConditions(expected);
+        T stored = findStored(id);
+        entity.onUpdate();
+        if (stored == null) {
+            return false;
+        }
+        Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
+        Map<String, Object> map = GSON.fromJson(GSON.toJson(stored), mapType);
+        for (WhereCondition condition : conditions) {
+            if (!matches(map, condition, GSON.toJson(condition.getValue()))) {
+                return false;
+            }
+        }
+        beforeMutate();
+        replaceEntry(stored, entity);
+        return true;
+    }
+
+    /**
+     * The non-empty conditions of an {@link #updateIf} call, each checked before anything is
+     * read: a {@code null} condition, a column the entity does not map with {@code @Column}, and a
+     * {@code null} or non-serialisable value are refused with a {@link DataAccessException}, as
+     * the relational operators refuse them. {@link #getAll(WhereCondition...)} would simply match
+     * nothing for an unknown column, but a conditional write that can never apply would make the
+     * caller's re-read-and-retry loop spin forever.
+     */
+    private List<WhereCondition> evaluableConditions(WhereCondition... expected) {
+        List<WhereCondition> conditions = new ArrayList<>();
+        if (expected == null) {
+            return conditions;
+        }
+        for (WhereCondition condition : expected) {
+            if (condition == null) {
+                throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                        "updateIf was given a null condition for JSON store '" + type.getName() + "'.");
+            }
+            if (condition.isEmpty()) {
+                continue;
+            }
+            String column = condition.getColumn();
+            if (column == null || !columnToFieldName.containsKey(column.toLowerCase(Locale.ROOT))) {
+                throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                        "Unknown column '" + column + "' for entity " + type.getName()
+                                + " -- it is not among the entity's @Column mappings.");
+            }
+            if (condition.getValue() == null) {
+                throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                        "updateIf cannot compare column '" + column + "' with a null value.");
+            }
+            if (!Serializable.class.isAssignableFrom(condition.getValue().getClass())) {
+                throw new DataAccessException(ErrorCode.DATA_QUERY_FAILED, "Query value is not serializable");
+            }
+            conditions.add(condition);
+        }
+        return conditions;
+    }
+
+    /**
+     * Whether one serialised entry satisfies one condition -- the single matching rule shared by
+     * {@link #getAll(WhereCondition...)}, {@link #del(WhereCondition...)} and {@link #updateIf}.
+     * An entry that lacks the condition's column never matches. {@code valueJson} is the
+     * condition's value already serialised, once per condition rather than once per entry; each
+     * caller has already checked that the value is serialisable.
+     */
+    private boolean matches(Map<String, Object> map, WhereCondition condition, String valueJson) {
+        Object byPath = JsonPathUtil.getByPath(map, resolveColumn(condition.getColumn()));
+        if (byPath == null) {
+            return false;
+        }
+        return conditionCal(GSON.toJson(byPath), valueJson, condition);
     }
 
     @Override
@@ -561,7 +767,6 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
     @Override
     public synchronized <R> R transaction(Callable<R> action) throws Exception {
         // Deep copy: serialize/deserialize to break references
-        // (update(T) mutates entities in-place via BeanCopyUtil.copyProperties)
         Map<Object, T> snapshot = snapshotCache();
         try {
             return action.call();
@@ -604,6 +809,10 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>> implements
 
     @Override
     public synchronized void updateAll(List<T> entities) throws IllegalAccessException {
+        // Checked before the batch starts, so a refused batch changes nothing.
+        for (T entity : entities) {
+            requireId(entity.getId(), "update");
+        }
         try {
             transaction((Callable<Void>) () -> {
                 for (T entity : entities) {

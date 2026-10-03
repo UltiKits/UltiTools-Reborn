@@ -39,9 +39,9 @@ import com.ultikits.ultitools.annotations.ConfigEntry;
  * boot again from that file, edit the file, reload.
  * <p>
  * The fix is JLS widening only, the conversions the matching primitive field already accepts. A
- * narrowing value is still refused exactly as before. ({@code float}/{@code Float} fields are not
- * covered: YAML hands back a {@code Double} for a decimal, and {@code double} to {@code float} is
- * narrowing, so they cannot load a decimal before or after this change -- #534.)
+ * narrowing value is still not narrowed. ({@code float}/{@code Float} decimals are covered separately
+ * by {@code ConfigFloatDecimalTest}: as of #534 a decimal loads when its float reading prints back
+ * the same.)
  */
 @DisplayName("AbstractConfigEntity numeric widening from YAML (#531 CR-01)")
 class ConfigNumericWideningTest {
@@ -82,11 +82,95 @@ class ConfigNumericWideningTest {
         }
     }
 
+    // Deliberately verifies the frozen explicit legacy-parser binding contract.
+    @SuppressWarnings("removal")
+    @com.ultikits.ultitools.annotations.ConfigEntity("legacy.yml")
+    public static class LegacyNumbers extends AbstractConfigEntity {
+        @ConfigEntry(path = "value", parser = LegacyParser.class) Long value = 7L;
+        public LegacyNumbers(String path) { super(path); }
+    }
+
+    // Integer document values exercise the prior boxed widening boundary.
+    @SuppressWarnings("removal")
+    public static class LegacyParser extends com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser { }
+
+    @Test
+    void explicitLegacyParserWidensOnBootReloadDefaultAndEveryPanelRoute() throws Exception {
+        com.ultikits.ultitools.manager.ConfigManager manager = new com.ultikits.ultitools.manager.ConfigManager();
+        LegacyNumbers first = new LegacyNumbers("legacy.yml"); manager.register(plugin, first);
+        assertThat(first.value).isEqualTo(7L);
+        LegacyNumbers second = new LegacyNumbers("legacy.yml"); manager.register(plugin, second);
+        assertThat(second.value).isEqualTo(7L);
+        Path legacy = tempDir.resolve("legacy.yml");
+        Files.write(legacy, "value: 19\n".getBytes(StandardCharsets.UTF_8)); second.reload();
+        assertThat(second.value).isEqualTo(19L);
+        second.value = 25L;
+        Files.write(legacy, "value: 19\n".getBytes(StandardCharsets.UTF_8)); second.reload();
+        assertThat(second.value).as("merged reload retains unsaved value when disk is unchanged").isEqualTo(25L);
+        Files.write(legacy, "value: 29\n".getBytes(StandardCharsets.UTF_8)); second.reload();
+        assertThat(second.value).as("a simultaneous scalar conflict keeps the file value").isEqualTo(29L);
+        manager.loadFromJson("legacy.yml", "{\"value\":31}");
+        assertThat(second.value).isEqualTo(31L);
+        manager.loadFromJson("{\"NumbersModule\":{\"legacy.yml\":{\"value\":33}}}");
+        assertThat(second.value).isEqualTo(33L);
+        assertThat(second.isModifiedSinceSnapshot()).isFalse();
+        Files.write(legacy, "value: invalid\n".getBytes(StandardCharsets.UTF_8)); second.reload();
+        assertThat(second.value).as("invalid load restores and rebinds the declared default").isEqualTo(7L);
+    }
+
+    @SuppressWarnings("removal")
+    @com.ultikits.ultitools.annotations.ConfigEntity("legacy-vector.yml")
+    public static class LegacyVector extends AbstractConfigEntity {
+        @ConfigEntry(path = "vec", parser = VectorParser.class)
+        org.bukkit.util.Vector vec = new org.bukkit.util.Vector(1, 2, 3);
+        public LegacyVector(String path) { super(path); }
+    }
+
+    @SuppressWarnings("removal")
+    public static class VectorParser extends com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser<org.bukkit.util.Vector> {
+        @Override public org.bukkit.util.Vector parse(Object raw) { return (org.bukkit.util.Vector) raw; }
+        @Override public org.bukkit.configuration.MemorySection serializeToMemorySection(org.bukkit.util.Vector value) {
+            org.bukkit.configuration.MemoryConfiguration section = new org.bukkit.configuration.MemoryConfiguration();
+            section.set("==", "Vector"); section.set("x", value.getX());
+            section.set("y", value.getY()); section.set("z", value.getZ()); return section;
+        }
+    }
+
+    @Test
+    void explicitAliasParserWorksOnRawDefaultMergedReloadAndPanelProposal() throws Exception {
+        Path path = tempDir.resolve("legacy-vector.yml");
+        Files.write(path, vectorYaml(4).getBytes(StandardCharsets.UTF_8));
+        com.ultikits.ultitools.manager.ConfigManager manager = new com.ultikits.ultitools.manager.ConfigManager();
+        LegacyVector entity = new LegacyVector("legacy-vector.yml"); manager.register(plugin, entity);
+        assertThat(entity.vec).isEqualTo(bukkitVector(vectorYaml(4)));
+        entity.vec = new org.bukkit.util.Vector(7, 2, 3);
+        entity.reload();
+        assertThat(entity.vec).as("merged reload retains an unsaved live value").isEqualTo(bukkitVector(vectorYaml(7)));
+        Files.write(path, vectorYaml(9).getBytes(StandardCharsets.UTF_8)); entity.reload();
+        assertThat(entity.vec).isEqualTo(bukkitVector(vectorYaml(9)));
+        manager.loadFromJson("legacy-vector.yml", "{\"vec\":{\"==\":\"Vector\",\"x\":11.5,\"y\":2.5,\"z\":3.5}}");
+        assertThat(entity.vec).isEqualTo(bukkitVector("vec: {==: Vector, x: 11.5, y: 2.5, z: 3.5}"));
+        manager.loadFromJson("{\"NumbersModule\":{\"legacy-vector.yml\":{\"vec\":{\"==\":\"Vector\",\"x\":13.5,\"y\":2.5,\"z\":3.5}}}}");
+        assertThat(entity.vec).isEqualTo(bukkitVector("vec: {==: Vector, x: 13.5, y: 2.5, z: 3.5}"));
+        Files.write(path, "vec: invalid\n".getBytes(StandardCharsets.UTF_8)); entity.reload();
+        assertThat(entity.vec).as("invalid whole value restores the serialized declared default")
+                .isEqualTo(bukkitVector(vectorYaml(1)));
+    }
+
+    private static String vectorYaml(int x) {
+        return "vec: {==: Vector, x: " + x + ".0, y: 2.0, z: 3.0}\n";
+    }
+    private static org.bukkit.util.Vector bukkitVector(String text) throws Exception {
+        org.bukkit.configuration.file.YamlConfiguration yaml = new org.bukkit.configuration.file.YamlConfiguration();
+        yaml.loadFromString(text); return (org.bukkit.util.Vector) yaml.get("vec");
+    }
+
     @BeforeEach
     void setUp() {
         plugin = Mockito.mock(UltiToolsPlugin.class);
         lenient().when(plugin.getPluginName()).thenReturn("NumbersModule");
         lenient().when(plugin.getConfigFolder()).thenReturn(tempDir.toString());
+        lenient().when(plugin.getResourceFolderPath()).thenReturn(tempDir.toString());
         lenient().when(plugin.getConfigFile(anyString())).thenAnswer(
                 invocation -> new File(tempDir.toFile(), invocation.<String>getArgument(0)));
     }
@@ -204,25 +288,35 @@ class ConfigNumericWideningTest {
         assertThat(config.isLastInitIncomplete()).as("a completed first boot").isFalse();
 
         writeFile("limits:\n  boxed-long: 30\n");
-        assertThat(file().toFile().setWritable(false)).isTrue();
-        try {
-            assumeFalse(Files.isWritable(file()), "needs a non-root user so the write-back really fails");
+        // Atomic replacement can replace a read-only target in a writable parent; inject real I/O failure.
+        try (org.mockito.MockedStatic<com.ultikits.ultitools.config.document.AtomicConfigWriter> writer =
+                Mockito.mockStatic(com.ultikits.ultitools.config.document.AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
+            writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.write(
+                    Mockito.eq(file()), Mockito.anyString())).thenThrow(new IOException("injected write failure"));
             assertThatThrownBy(() -> config.init(plugin)).isInstanceOf(IOException.class);
             assertThat(config.isLastInitIncomplete()).as("after a failed write-back").isTrue();
-        } finally {
-            assertThat(file().toFile().setWritable(true)).isTrue();
         }
 
         config.init(plugin);
         assertThat(config.isLastInitIncomplete()).as("after the next complete init").isFalse();
     }
 
+    /**
+     * #526 (maintainer 2026-09-29): a value that does not fit the field is still never narrowed into
+     * it, but it no longer throws out of {@code init()} and takes the module down -- the field keeps
+     * its declared default and one warning names the key and the value.
+     */
     @Test
-    @DisplayName("a value too large for an Integer field is still refused -- widening only, never narrowing")
+    @DisplayName("a value too large for an Integer field is not narrowed: the default is kept, with a warning")
     void narrowingIsStillRefused() throws IOException {
         writeFile("small: 3000000000\n");
+        NarrowConfig config = new NarrowConfig(PATH);
 
-        assertThatThrownBy(() -> new NarrowConfig(PATH).init(plugin))
-                .isInstanceOf(IllegalArgumentException.class);
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            assertThatCode(() -> config.init(plugin)).doesNotThrowAnyException();
+            assertThat(config.small).isEqualTo(1);
+            assertThat(warnings.messagesContaining("'small'")).hasSize(1)
+                    .allSatisfy(message -> assertThat(message).contains("3000000000"));
+        }
     }
 }

@@ -1,0 +1,14 @@
+defaults: &defaults
+  radius: 100
+  enabled: true
+channels:
+  global:
+    <<: *defaults
+    prefix: '&7[G]'
+  local:
+    <<: *defaults
+    radius: 50
+worlds: &worlds
+  - world
+  - world_nether
+mirror: *worlds

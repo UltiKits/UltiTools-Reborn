@@ -1,0 +1,2 @@
+# Golden config fixtures are compared byte for byte (plan 17-56); no checkout may convert their line endings.
+src/test/resources/config-golden/** -text

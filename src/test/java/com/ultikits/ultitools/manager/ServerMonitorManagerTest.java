@@ -827,7 +827,11 @@ class ServerMonitorManagerTest {
             serverMonitorManager.sendServerStatus();
             
             // Assert - 应该记录警告
-            verify(mockLogger).log(any(java.util.logging.Level.class), org.mockito.ArgumentMatchers.contains("发送服务器状态失败"), any(Throwable.class));
+            assertThat(com.ultikits.ultitools.testutil.LoggedLines.records(mockLogger))
+                .anySatisfy(record -> {
+                    assertThat(record.getMessage()).contains("发送服务器状态失败");
+                    assertThat(record.getThrown()).isNotNull();
+                });
         }
     }
 

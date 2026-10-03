@@ -414,7 +414,12 @@ class ServerPropertiesManagerTest {
 
             JsonObject message = captureMessage(socket);
             assertThat(message.get("success").getAsBoolean()).isFalse();
-            assertThat(message.get("reason").getAsString()).isEqualTo("This server version has no such key");
+            // #473: the reason states what is known -- the key is absent from this server's file --
+            // and no longer asserts that the running server version lacks the key, which the
+            // framework cannot tell apart from a file that simply omits it.
+            assertThat(message.get("reason").getAsString())
+                    .isEqualTo("This key is not in this server's server.properties")
+                    .doesNotContainIgnoringCase("version");
 
             byte[] after = Files.readAllBytes(propsFile.toPath());
             assertThat(after).isEqualTo(before);

@@ -12,11 +12,13 @@ import com.ultikits.ultitools.annotations.command.CmdCD;
 import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.manager.TriggerContext;
+import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.ApiStatus;
 
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Method;
 import java.util.Map;
 import java.util.UUID;
@@ -41,14 +43,20 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
     private static final Logger LOGGER = Logger.getLogger(CooldownValidator.class.getName());
 
     /**
-     * Map of player UUID -> (method name -> cooldown end timestamp)
+     * Map of player UUID -> (cooldown key -> cooldown end timestamp).
+     * <p>
+     * The cooldown key is an {@link ExecutorMethodKey} -- the dispatching executor instance, held
+     * weakly and compared by identity, plus {@code method.toString()} -- whenever the context
+     * carries an executor, which every dispatch through {@code BaseCommandExecutor} does (#539).
+     * A context without an executor (a validator driven directly, outside any executor) keys by
+     * the {@code method.toString()} string alone, exactly as before 6.3.0.
      * <p>
      * {@code saveBeforeRemove = true} so {@link #savePlayerData(UUID)} -- which delegates to
      * the pre-existing {@link #clearCooldowns(UUID)} -- fires on quit; see that method's
      * javadoc for why (GEN-08, D-03).
      */
     @PlayerCache(saveBeforeRemove = true)
-    private final Map<UUID, Map<String, Long>> cooldowns = new ConcurrentHashMap<>();
+    private final Map<UUID, Map<Object, Long>> cooldowns = new ConcurrentHashMap<>();
 
     /**
      * True once this instance has registered {@link #cooldowns} with the live {@link
@@ -114,11 +122,11 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
         // own. Checking the value first would free every player at once and bring the old stamps
         // back on a later non-zero value.
         UUID playerId = player.getUniqueId();
-        String methodKey = method.toString();
-        
-        Map<String, Long> playerCooldowns = cooldowns.get(playerId);
+        Object cooldownKey = cooldownKey(context.getExecutor(), method.toString());
+
+        Map<Object, Long> playerCooldowns = cooldowns.get(playerId);
         if (playerCooldowns != null) {
-            Long endTime = playerCooldowns.get(methodKey);
+            Long endTime = playerCooldowns.get(cooldownKey);
             if (endTime != null && System.currentTimeMillis() < endTime) {
                 long remainingSeconds = TimeUnit.MILLISECONDS.toSeconds(endTime - System.currentTimeMillis()) + 1;
                 return ValidationResult.failure(
@@ -158,11 +166,28 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
         }
         
         UUID playerId = player.getUniqueId();
-        String methodKey = method.toString();
         long endTime = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(cooldownSeconds);
-        
+
         cooldowns.computeIfAbsent(playerId, k -> new ConcurrentHashMap<>())
-                .put(methodKey, endTime);
+                .put(cooldownKey(context.getExecutor(), method.toString()), endTime);
+    }
+
+    /**
+     * The key an active cooldown is stored under (#539): the executor instance and the method
+     * when the dispatch names an executor, the method string alone when it does not.
+     */
+    private static Object cooldownKey(Object executor, String methodKey) {
+        return executor == null ? methodKey : new ExecutorMethodKey(executor, methodKey);
+    }
+
+    /**
+     * Whether a stored cooldown key belongs to {@code methodKey}, whichever executor it names --
+     * the match the string-keyed accessors use.
+     */
+    private static boolean isKeyFor(Object key, String methodKey) {
+        return key instanceof ExecutorMethodKey
+                ? ((ExecutorMethodKey) key).methodKey.equals(methodKey)
+                : methodKey.equals(key);
     }
     
     /**
@@ -246,49 +271,148 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
     }
     
     /**
-     * Clears a specific cooldown for a player.
+     * Clears a specific cooldown for a player, on every executor this validator serves.
+     * <p>
+     * As of 6.3.0 an active cooldown is keyed by the executor instance as well as the method
+     * (#539). With one executor per validator -- the shape both {@code BaseCommandExecutor}
+     * constructors create -- this clears exactly that executor's cooldown, as before. When one
+     * validator serves several executors, it clears the method's cooldown on all of them; use
+     * {@link #clearCooldown(UUID, Object, String)} to address one.
      *
      * @param playerId  the player's UUID
-     * @param methodKey the method key
+     * @param methodKey the method key, {@code method.toString()} of the mapping method
      */
     public void clearCooldown(UUID playerId, String methodKey) {
-        Map<String, Long> playerCooldowns = cooldowns.get(playerId);
+        Map<Object, Long> playerCooldowns = cooldowns.get(playerId);
         if (playerCooldowns != null) {
-            playerCooldowns.remove(methodKey);
+            playerCooldowns.keySet().removeIf(key -> isKeyFor(key, methodKey));
         }
     }
-    
+
     /**
-     * Gets the remaining cooldown time in seconds.
+     * Clears one executor's cooldown of a method for a player (#539).
      *
      * @param playerId  the player's UUID
-     * @param methodKey the method key
+     * @param executor  the executor instance the cooldown was recorded on
+     * @param methodKey the method key, {@code method.toString()} of the mapping method
+     * @since 6.3.0
+     */
+    public void clearCooldown(UUID playerId, Object executor, String methodKey) {
+        Map<Object, Long> playerCooldowns = cooldowns.get(playerId);
+        if (playerCooldowns != null) {
+            playerCooldowns.remove(cooldownKey(executor, methodKey));
+        }
+    }
+
+    /**
+     * Gets the remaining cooldown time in seconds, on any executor this validator serves.
+     * <p>
+     * With one executor per validator this is that executor's remaining time, as before 6.3.0.
+     * When one validator serves several executors it is the longest remaining time among them;
+     * use {@link #getRemainingCooldown(UUID, Object, String)} to address one (#539).
+     *
+     * @param playerId  the player's UUID
+     * @param methodKey the method key, {@code method.toString()} of the mapping method
      * @return remaining seconds, or 0 if not on cooldown
      */
     public long getRemainingCooldown(UUID playerId, String methodKey) {
-        Map<String, Long> playerCooldowns = cooldowns.get(playerId);
+        Map<Object, Long> playerCooldowns = cooldowns.get(playerId);
         if (playerCooldowns == null) {
             return 0;
         }
-        Long endTime = playerCooldowns.get(methodKey);
-        if (endTime == null || System.currentTimeMillis() >= endTime) {
+        long latestEnd = 0;
+        for (Map.Entry<Object, Long> entry : playerCooldowns.entrySet()) {
+            if (isKeyFor(entry.getKey(), methodKey) && isLive(entry.getKey())) {
+                latestEnd = Math.max(latestEnd, entry.getValue());
+            }
+        }
+        return remainingSeconds(latestEnd);
+    }
+
+    /**
+     * Gets one executor's remaining cooldown of a method, in seconds (#539).
+     *
+     * @param playerId  the player's UUID
+     * @param executor  the executor instance the cooldown was recorded on
+     * @param methodKey the method key, {@code method.toString()} of the mapping method
+     * @return remaining seconds, or 0 if not on cooldown
+     * @since 6.3.0
+     */
+    public long getRemainingCooldown(UUID playerId, Object executor, String methodKey) {
+        Map<Object, Long> playerCooldowns = cooldowns.get(playerId);
+        if (playerCooldowns == null) {
             return 0;
         }
-        return TimeUnit.MILLISECONDS.toSeconds(endTime - System.currentTimeMillis()) + 1;
+        Long endTime = playerCooldowns.get(cooldownKey(executor, methodKey));
+        return endTime == null ? 0 : remainingSeconds(endTime);
     }
-    
+
+    private static long remainingSeconds(long endTime) {
+        long now = System.currentTimeMillis();
+        if (now >= endTime) {
+            return 0;
+        }
+        return TimeUnit.MILLISECONDS.toSeconds(endTime - now) + 1;
+    }
+
+    /** A key whose executor has been garbage collected can never be matched again. */
+    private static boolean isLive(Object key) {
+        return !(key instanceof ExecutorMethodKey) || ((ExecutorMethodKey) key).executor.get() != null;
+    }
+
     /**
      * Cleans up expired cooldowns to prevent memory leaks.
-     * Should be called periodically.
+     * Should be called periodically. Also drops the cooldowns of an executor that has since been
+     * garbage collected (a module that unloaded), which no dispatch can reach any more.
      */
     public void cleanupExpired() {
         long now = System.currentTimeMillis();
         cooldowns.forEach((playerId, methods) -> {
-            methods.entrySet().removeIf(entry -> entry.getValue() < now);
+            methods.entrySet().removeIf(entry -> entry.getValue() < now || !isLive(entry.getKey()));
             if (methods.isEmpty()) {
                 cooldowns.remove(playerId);
             }
         });
+    }
+
+    /**
+     * An executor-scoped cooldown key (#539): the executor instance, compared by identity and held
+     * weakly so an active cooldown never keeps an unloaded module's executor -- and with it the
+     * module's class loader -- reachable, plus {@code method.toString()}. Identity rather than
+     * {@code equals}: two executors of one class are two owners, whatever their class declares.
+     */
+    private static final class ExecutorMethodKey {
+        private final WeakReference<Object> executor;
+        private final String methodKey;
+        private final int hash;
+
+        ExecutorMethodKey(Object executor, String methodKey) {
+            this.executor = new WeakReference<>(executor);
+            this.methodKey = methodKey;
+            this.hash = 31 * System.identityHashCode(executor) + methodKey.hashCode();
+        }
+
+        // Deliberate identity comparison: the key's contract (see the class javadoc above) is that two
+        // executors of one class are two owners, so the referents are compared by reference, never by
+        // their own equals(). The referent may also already be collected, which is handled by the null check.
+        @Override
+        @SuppressWarnings("PMD.CompareObjectsWithEquals")
+        public boolean equals(Object other) {
+            if (this == other) {
+                return true;
+            }
+            if (!(other instanceof ExecutorMethodKey)) {
+                return false;
+            }
+            ExecutorMethodKey that = (ExecutorMethodKey) other;
+            Object mine = executor.get();
+            return mine != null && mine == that.executor.get() && methodKey.equals(that.methodKey);
+        }
+
+        @Override
+        public int hashCode() {
+            return hash;
+        }
     }
     
     /**
@@ -358,7 +482,7 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
                 + "loads, so a validator added later cannot enforce one");
         LOGGER.log(Level.SEVERE, cause.getMessage(), cause);
         reportUnresolvedBinding(context, cause);
-        return ValidationResult.failure(ChatColor.RED + "命令执行出错: " + cause.getMessage(),
+        return ValidationResult.failure(ChatColor.RED + FrameworkText.format("命令执行出错: %s", cause.getMessage()),
                 "command.error.cooldown-unresolved");
     }
 

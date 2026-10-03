@@ -29,6 +29,7 @@ import org.objenesis.Objenesis;
 import org.objenesis.ObjenesisStd;
 
 import com.ultikits.ultitools.entities.Language;
+import com.ultikits.ultitools.utils.ResourceHashSidecar;
 import com.ultikits.ultitools.utils.TestHelper;
 
 /**
@@ -234,6 +235,9 @@ class UltiToolsPluginLanguagePerKeyFallbackTest {
         // "disk wins for a key it has" is unambiguous.
         Files.write(diskLangFile.toPath(),
                 "{\"known\":\"&cDisk-customised translation.\"}".getBytes(StandardCharsets.UTF_8));
+        // Recorded as the copy extracted earlier, so this file is an operator's customisation that
+        // is kept; without a record it would be replaced by the jar's copy on this start (#459).
+        ResourceHashSidecar.record(diskResourceFolder, "lang/en.json", "hash-of-the-extracted-copy");
 
         ClassLoader isolatingBase = new LangResourceHidingClassLoader(
                 UltiToolsPluginLanguagePerKeyFallbackTest.class.getClassLoader());

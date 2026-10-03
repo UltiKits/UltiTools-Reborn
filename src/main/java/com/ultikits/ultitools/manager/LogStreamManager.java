@@ -6,7 +6,10 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.handler.ConsoleMirror;
 import com.ultikits.ultitools.handler.SystemLogHandler;
+import com.ultikits.ultitools.utils.FrameworkText;
+import com.ultikits.ultitools.websocket.PanelConnectionLog;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import lombok.Getter;
 import org.bukkit.Bukkit;
@@ -23,6 +26,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -57,7 +61,7 @@ public class LogStreamManager implements Listener {
         try {
             Bukkit.getPluginManager().registerEvents(this, UltiTools.getInstance());
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().warning("注册事件监听器失败: " + e.getMessage());
+            UltiTools.getInstance().getLogger().warning(FrameworkText.format("注册事件监听器失败: %s", e.getMessage()));
         }
     }
     
@@ -82,9 +86,16 @@ public class LogStreamManager implements Listener {
         // shutdown(), and shutdown()'s only caller is onDisable. So every connection blip leaked
         // one handler plus one thread, and every log line got sent N times over. See issue #181.
         detachAllSystemLogHandlers();
+        // #486: what the previous transmitter could not send -- a batch held from a failed send and
+        // anything still queued -- is carried to the new one below instead of being dropped with the
+        // old object. Its shutdown flush first sends what the old connection still can (the same
+        // client reconnecting); after a reconnect on a fresh client that flush fails and the records
+        // are still here.
+        JsonArray unsent = null;
         if (logTransmitter != null) {
             try {
                 logTransmitter.shutdown();
+                unsent = logTransmitter.takePending();
             } catch (Exception e) {
                 UltiTools.getInstance().getLogger().warning(
                     "[UltiPanel] Error shutting down previous log transmitter: " + e.getMessage());
@@ -96,6 +107,7 @@ public class LogStreamManager implements Listener {
         // Initialize the log transmitter
         String serverId = getServerId();
         this.logTransmitter = new UltiPanelLogTransmitter(client, serverId);
+        this.logTransmitter.adoptPending(unsent);
 
         // Gate-2 finding (round 4): externalDrainMode must be re-applied to EVERY freshly-created
         // transmitter, not only once from ServerMonitorManager#startMonitoring(). wireManagers()
@@ -127,9 +139,32 @@ public class LogStreamManager implements Listener {
         this.systemLogHandler = new SystemLogHandler(logTransmitter);
         this.systemLogHandler.loadConfiguration();
 
-        // Add the system log handler to the root Logger
+        // Add the system log handler to the root Logger -- after replaying, oldest first, what
+        // the early capture attached in UltiTools#onLoad() kept, so the lines logged before the
+        // panel connection opened reach the stream too (#487). On a reconnect there is no capture
+        // any more and this only attaches the handler.
+        //
+        // The replay goes through the handler's replay path and is delivered in log_batch messages
+        // of at most 64 KiB, the first at once and then about one per second, whatever the live
+        // batch settings (as of 6.3.0; UltiPanelLogTransmitter#REPLAY_CHUNK_MAX_BYTES). Replayed one message per record, about 350 start-up
+        // records at connect exceeded the panel's per-client quota (50 messages in 10 seconds) on a
+        // real server. Records a previous transmitter could not deliver (#486) are not part of
+        // this replay: they were adopted into the queue above and follow the live batching path.
+        //
+        // The console mirror (as of 6.3.0) feeds Paper's own Log4j console output into whichever of
+        // the two handlers is attached; installed in UltiTools#onLoad(), and again here (it does
+        // nothing when already installed) for a stream started after it was removed.
+        ConsoleMirror.install();
         Logger rootLogger = Logger.getLogger("");
-        rootLogger.addHandler(systemLogHandler);
+        SystemLogHandler liveHandler = systemLogHandler;
+        int notKept = EarlyLogCapture.drainInto(liveHandler.replayHandler(), () -> rootLogger.addHandler(liveHandler));
+        logTransmitter.startReplay();
+        if (notKept > 0) {
+            UltiTools.getInstance().getLogger().info(String.format(
+                    "[UltiPanel] %d start-up log record(s) were not kept for the panel: the start-up buffer "
+                            + "holds at most %d records and about %d KiB.", notKept, EarlyLogCapture.MAX_RECORDS,
+                    EarlyLogCapture.MAX_BYTES / 1024));
+        }
 
         // D-20 (maintainer decision, 2026-09-15): this used to call startLogStream("auto",
         // "info") here to auto-subscribe a permanent sentinel client. That call did nothing real
@@ -171,9 +206,9 @@ public class LogStreamManager implements Listener {
                 try {
                     logTransmitter.setBatchSize(batchSize);
                 } catch (IllegalArgumentException e) {
-                    UltiTools.getInstance().getLogger().warning("[UltiPanel] "
-                            + "ultipanel.logging.batch.size 配置值无效 (" + batchSize + "): " + e.getMessage()
-                            + "，保留默认值 " + logTransmitter.getBatchSize());
+                    UltiTools.getInstance().getLogger().warning(FrameworkText.format(
+                            "[UltiPanel] ultipanel.logging.batch.size 配置值无效 (%d): %s，保留默认值 %d",
+                            batchSize, e.getMessage(), logTransmitter.getBatchSize()));
                 }
             }
 
@@ -187,18 +222,18 @@ public class LogStreamManager implements Listener {
                 try {
                     logTransmitter.setIntervalMs(interval);
                 } catch (IllegalArgumentException e) {
-                    UltiTools.getInstance().getLogger().warning("[UltiPanel] "
-                            + "ultipanel.logging.batch.interval 配置值无效 (" + interval + "): " + e.getMessage()
-                            + "，保留默认值 " + logTransmitter.getIntervalMs() + "ms");
+                    UltiTools.getInstance().getLogger().warning(FrameworkText.format(
+                            "[UltiPanel] ultipanel.logging.batch.interval 配置值无效 (%d): %s，保留默认值 %dms",
+                            interval, e.getMessage(), logTransmitter.getIntervalMs()));
                 }
             }
             
-            UltiTools.getInstance().getLogger().info(String.format(
+            UltiTools.getInstance().getLogger().info(FrameworkText.format(
                 "[UltiPanel] 日志传输配置 - 批量发送: %s, 批量大小: %d, 发送间隔: %dms",
                 logTransmitter.isBatchEnabled(), logTransmitter.getBatchSize(), logTransmitter.getIntervalMs()));
             
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().warning("[UltiPanel] 加载批量发送配置失败，使用默认配置: " + e.getMessage());
+            UltiTools.getInstance().getLogger().warning(FrameworkText.format("[UltiPanel] 加载批量发送配置失败，使用默认配置: %s", e.getMessage()));
         }
     }
     
@@ -207,11 +242,11 @@ public class LogStreamManager implements Listener {
      */
     private void sendInitializationLogs() {
         // Send the server-startup information
-        logTransmitter.info("UltiTools 日志传输系统已启动", "plugin:UltiTools");
+        logTransmitter.info(FrameworkText.text("UltiTools 日志传输系统已启动"), "plugin:UltiTools");
 
         // Send the current online-player-count information
         int onlineCount = Bukkit.getOnlinePlayers().size();
-        logTransmitter.info(String.format("当前在线玩家数量: %d", onlineCount), "server");
+        logTransmitter.info(FrameworkText.format("当前在线玩家数量: %d", onlineCount), "server");
 
         // Send the system configuration information
         if (systemLogHandler != null) {
@@ -225,7 +260,7 @@ public class LogStreamManager implements Listener {
      */
     public void handleLogStreamMessage(JsonObject data) {
         if (data == null) {
-            UltiTools.getInstance().getLogger().warning("LogStreamManager: 收到空的日志流消息");
+            UltiTools.getInstance().getLogger().warning(FrameworkText.text("LogStreamManager: 收到空的日志流消息"));
             return;
         }
         
@@ -241,7 +276,7 @@ public class LogStreamManager implements Listener {
         }
         
         UltiTools.getInstance().getLogger().info(
-            String.format("LogStreamManager: 处理日志流操作 - 动作: %s, 客户端: %s, 级别: %s", 
+            FrameworkText.format("LogStreamManager: 处理日志流操作 - 动作: %s, 客户端: %s, 级别: %s", 
                 action, clientId, level));
         
         switch (action != null ? action : "") {
@@ -263,7 +298,7 @@ public class LogStreamManager implements Listener {
                 break;
             default:
                 UltiTools.getInstance().getLogger().warning(
-                    String.format("LogStreamManager: 未知的日志流操作: %s", action));
+                    FrameworkText.format("LogStreamManager: 未知的日志流操作: %s", action));
                 sendErrorResponse(clientId, "Unknown log stream action: " + action);
                 break;
         }
@@ -320,7 +355,7 @@ public class LogStreamManager implements Listener {
             sendStreamResponse(clientId, "config_updated", "Configuration updated: " + String.join("; ", changes));
 
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().warning("[UltiPanel] 更新配置失败: " + e.getMessage());
+            UltiTools.getInstance().getLogger().warning(FrameworkText.format("[UltiPanel] 更新配置失败: %s", e.getMessage()));
             sendErrorResponse(clientId, "Failed to update configuration: " + e.getMessage());
         }
     }
@@ -367,7 +402,7 @@ public class LogStreamManager implements Listener {
         }
         if (batchChanged) {
             changes.add("batch settings updated");
-            UltiTools.getInstance().getLogger().info("[UltiPanel] 批量发送配置已更新");
+            UltiTools.getInstance().getLogger().info(FrameworkText.text("[UltiPanel] 批量发送配置已更新"));
         }
     }
 
@@ -626,8 +661,8 @@ public class LogStreamManager implements Listener {
             webSocketClient.sendMessage(response);
 
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().warning(
-                String.format("LogStreamManager: 发送流响应失败: %s", e.getMessage()));
+            PanelConnectionLog.log(Level.WARNING, 
+                FrameworkText.format("LogStreamManager: 发送流响应失败: %s", e.getMessage()));
         }
     }
 
@@ -654,8 +689,8 @@ public class LogStreamManager implements Listener {
             webSocketClient.sendMessage(response);
             
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().warning(
-                String.format("LogStreamManager: 发送错误响应失败: %s", e.getMessage()));
+            PanelConnectionLog.log(Level.WARNING, 
+                FrameworkText.format("LogStreamManager: 发送错误响应失败: %s", e.getMessage()));
         }
     }
     
@@ -707,7 +742,7 @@ public class LogStreamManager implements Listener {
      */
     public void sendPlayerEventLog(String eventType, String playerName, String message) {
         sendCustomLog("info", 
-            String.format("[玩家事件] %s: %s - %s", eventType, playerName, message),
+            FrameworkText.format("[玩家事件] %s: %s - %s", eventType, playerName, message),
             "plugin:UltiTools");
     }
 
@@ -716,7 +751,7 @@ public class LogStreamManager implements Listener {
      */
     public void sendPluginActionLog(String action, String details) {
         sendCustomLog("info",
-            String.format("[插件操作] %s: %s", action, details),
+            FrameworkText.format("[插件操作] %s: %s", action, details),
             "plugin:UltiTools");
     }
 
@@ -725,18 +760,18 @@ public class LogStreamManager implements Listener {
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
         String playerName = event.getPlayer().getName();
-        sendPlayerEventLog("JOIN", playerName, "玩家加入服务器");
+        sendPlayerEventLog("JOIN", playerName, FrameworkText.text("玩家加入服务器"));
     }
     
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
         String playerName = event.getPlayer().getName();
-        sendPlayerEventLog("QUIT", playerName, "玩家离开服务器");
+        sendPlayerEventLog("QUIT", playerName, FrameworkText.text("玩家离开服务器"));
     }
     
     @EventHandler
     public void onServerLoad(ServerLoadEvent event) {
-        sendCustomLog("info", "服务器加载完成", "server");
+        sendCustomLog("info", FrameworkText.text("服务器加载完成"), "server");
     }
     
     /**
@@ -759,7 +794,8 @@ public class LogStreamManager implements Listener {
             logTransmitter.shutdown();
         }
 
-        // Remove the handler from Bukkit's Logger
+        // Remove the console mirror and the handler from Bukkit's Logger
+        ConsoleMirror.uninstall();
         detachAllSystemLogHandlers();
 
         UltiTools.getInstance().getLogger().info("[UltiPanel] LogStreamManager shutdown");

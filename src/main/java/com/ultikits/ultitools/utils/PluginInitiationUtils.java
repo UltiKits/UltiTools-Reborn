@@ -22,6 +22,7 @@ import com.ultikits.ultitools.manager.RemoteActionLog;
 import com.ultikits.ultitools.manager.ServerPropertiesManager;
 import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
 import com.ultikits.ultitools.websocket.ExponentialBackoffStrategy;
+import com.ultikits.ultitools.websocket.PanelConnectionLog;
 import com.ultikits.ultitools.websocket.PanelResponderRegistry;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
@@ -331,14 +332,14 @@ public class PluginInitiationUtils {
      *                client parameter itself must not be re-read from the session either)
      */
     static void onWebSocketOpened(CloudSession session, UltiPanelWebSocketClient client) {
-        UltiTools.getInstance().getLogger().log(Level.FINE, UltiTools.getInstance().i18n("Websocket已连接!"));
+        PanelConnectionLog.log(Level.FINE, UltiTools.getInstance().i18n("Websocket已连接!"));
 
         // The handshake has genuinely succeeded — this is the only place where the phrase
         // "reconnection succeeded" actually holds. The outer budget is also only reset here —
         // resetting it inside reinitWebSocket would treat "a client was built" as success, and the
         // budget would never run out. See issue #181 / #223.
         onWebSocketConnected(session);
-        UltiTools.getInstance().getLogger().log(Level.INFO,
+        PanelConnectionLog.log(Level.INFO,
             "WebSocket connected to UltiPanel");
 
         // Subscribe to the current server
@@ -735,8 +736,8 @@ public class PluginInitiationUtils {
      */
     static void handleInboundMessage(JsonObject message) {
         if (message == null) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING,
-                "[WebSocket消息处理] 收到 null 消息，已忽略");
+            PanelConnectionLog.log(Level.WARNING,
+                FrameworkText.text("[WebSocket消息处理] 收到 null 消息，已忽略"));
             return;
         }
 
@@ -775,8 +776,8 @@ public class PluginInitiationUtils {
                 type = message.get("type").getAsString();
             }
             if (type == null || type.isEmpty()) {
-                UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    String.format("[WebSocket消息处理] 消息缺少有效的 type 字段，已忽略: %s",
+                PanelConnectionLog.log(Level.WARNING,
+                    FrameworkText.format("[WebSocket消息处理] 消息缺少有效的 type 字段，已忽略: %s",
                         new Gson().toJson(message)));
                 // Early return — the type never resolved, so there is nothing a subscriber could
                 // filter on. This also means the trailing publish call below is never reached.
@@ -787,8 +788,8 @@ public class PluginInitiationUtils {
                 ? message.getAsJsonObject("data") : null;
 
             // Log that the received message has started processing
-            UltiTools.getInstance().getLogger().log(Level.FINE,
-                String.format("[WebSocket消息处理] 类型: %s, 开始处理", type));
+            PanelConnectionLog.log(Level.FINE,
+                FrameworkText.format("[WebSocket消息处理] 类型: %s, 开始处理", type));
 
             // Lookup replaces the former 24-case switch — see INBOUND_HANDLERS. Every entry
             // invokes the same target its former case label invoked; an absent entry is the same
@@ -807,8 +808,8 @@ public class PluginInitiationUtils {
                 if (responderRegistry != null && responderRegistry.hasResponder(type)) {
                     dispatchToResponder(type, data, responderRegistry);
                 } else {
-                    UltiTools.getInstance().getLogger().log(Level.WARNING,
-                        String.format("未知的消息类型: %s，消息内容: %s", type, new Gson().toJson(message)));
+                    PanelConnectionLog.log(Level.WARNING,
+                        FrameworkText.format("未知的消息类型: %s，消息内容: %s", type, new Gson().toJson(message)));
                     // Don't send error responses to avoid feedback loops with server
                 }
                 // Unknown to the framework's own dispatch table is exactly the case WIRE-16
@@ -819,8 +820,8 @@ public class PluginInitiationUtils {
                 shouldPublishEvent = true;
             }
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.SEVERE,
-                String.format("处理消息类型 %s 时发生错误: %s", type, e.getMessage()), e);
+            PanelConnectionLog.log(Level.SEVERE,
+                FrameworkText.format("处理消息类型 %s 时发生错误: %s", type, e.getMessage()), e);
             // Don't send error responses to avoid feedback loops with server
             // shouldPublishEvent stays at its default (false): an exception mid-dispatch means
             // the framework cannot say the message was actually handled, so this conservatively
@@ -828,8 +829,8 @@ public class PluginInitiationUtils {
         }
 
         // Log that message processing has completed
-        UltiTools.getInstance().getLogger().log(Level.FINE,
-            String.format("[WebSocket消息处理] 类型: %s, 处理完成", type));
+        PanelConnectionLog.log(Level.FINE,
+            FrameworkText.format("[WebSocket消息处理] 类型: %s, 处理完成", type));
 
         // One added statement at the end of the bridge (D-29, issue #237, WIRE-16). Appended
         // rather than inserted: removing this call must leave the 24 pre-existing message types
@@ -868,7 +869,7 @@ public class PluginInitiationUtils {
         String requestId = data != null ? readString(data, "requestId") : null;
         registry.dispatch(type, data, requestId).whenComplete((result, throwable) -> {
             if (requestId == null || requestId.isEmpty()) {
-                UltiTools.getInstance().getLogger().log(Level.FINE,
+                PanelConnectionLog.log(Level.FINE,
                     String.format("Responder reply for type '%s' not sent — request carried no requestId", type));
                 return;
             }
@@ -885,7 +886,7 @@ public class PluginInitiationUtils {
                 response.addProperty("serverId", currentWebSocketClient().getServerId());
                 currentWebSocketClient().sendMessage(response);
             } else {
-                UltiTools.getInstance().getLogger().log(Level.FINE,
+                PanelConnectionLog.log(Level.FINE,
                     "Responder reply for type '" + type + "' not sent — no WebSocket client connected");
             }
         });
@@ -1141,10 +1142,11 @@ public class PluginInitiationUtils {
      * config key caused the skip.
      * <p>
      * This log line matters especially for {@link Capability#MONITORING}: {@code sendBatchUpdate}
-     * firing every 5 seconds is the panel's sole basis for deciding "is the server online" — turning
-     * monitoring off makes an upgraded server show as offline on the panel, which is the worst shape
-     * a failure can take, because the symptom points operators in the wrong direction (they go check
-     * the network and the token, not the config). D-08 already
+     * firing every 5 seconds is the panel's only source of liveness updates — turning monitoring off
+     * stops those updates, and whether the panel then shows the server as offline depends on the
+     * panel's own status cache (the Worker's cache has no expiry), so the panel may keep showing the
+     * last status. Either way the symptom (frozen dashboard values) points operators in the wrong
+     * direction (they go check the network and the token, not the config). D-08 already
      * set monitoring's out-of-the-box default to enabled as the first layer of mitigation; this log
      * line is the second.
      * <p>
@@ -1178,6 +1180,7 @@ public class PluginInitiationUtils {
      * <p>Package-private rather than private — only so it can be tested.
      */
     static void handleConfigUpdate(JsonObject data) {
+        if (data == null || queueConfigCallback(() -> handleConfigUpdate(data.deepCopy()))) { return; }
         if (data == null) {
             return;
         }
@@ -1203,10 +1206,10 @@ public class PluginInitiationUtils {
         if (configContent == null) {
             if (data.has("message") && !data.get("message").isJsonNull()) {
                 UltiTools.getInstance().getLogger().log(Level.FINE,
-                        String.format("收到服务器配置更新确认: %s", data.get("message").getAsString()));
+                        FrameworkText.format("收到服务器配置更新确认: %s", data.get("message").getAsString()));
             } else {
                 UltiTools.getInstance().getLogger().log(Level.FINE,
-                        "收到不含配置内容的 update_config 消息，按回声处理");
+                        FrameworkText.text("收到不含配置内容的 update_config 消息，按回声处理"));
             }
             return;
         }
@@ -1216,7 +1219,7 @@ public class PluginInitiationUtils {
             // defect, not "this message need not be handled" — treating it as the latter dresses
             // the defect up as a normal path.
             UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    "收到不含 requestId 的配置更新请求，仍会应用，但无法向面板回报结果");
+                    FrameworkText.text("收到不含 requestId 的配置更新请求，仍会应用，但无法向面板回报结果"));
         }
 
         try {
@@ -1228,7 +1231,7 @@ public class PluginInitiationUtils {
             // get logged as "an error occurred while handling message type update_config" — and the
             // panel would never get a reply.
             UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    String.format("应用配置更新失败（文件: %s）: %s", fileName, e.getMessage()), e);
+                    FrameworkText.format("应用配置更新失败（文件: %s）: %s", fileName, e.getMessage()), e);
             sendConfigUpdateResponse(requestId, false, e.getMessage());
         }
     }
@@ -1254,7 +1257,7 @@ public class PluginInitiationUtils {
         String legacy = readString(data, "config");
         if (legacy != null) {
             UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    "update_config 使用了已废弃的 data.config 字段，请改用 data.configData");
+                    FrameworkText.text("update_config 使用了已废弃的 data.config 字段，请改用 data.configData"));
         }
         return legacy;
     }
@@ -1337,19 +1340,19 @@ public class PluginInitiationUtils {
         pongResponse.add("data", pongData);
         
         currentWebSocketClient().sendMessage(pongResponse);
-        UltiTools.getInstance().getLogger().log(Level.FINE, "Responded to ping with pong");
+        PanelConnectionLog.log(Level.FINE, "Responded to ping with pong");
     }
     
     /**
      * Handles a pong message
      */
     private static void handlePong(JsonObject data) {
-        UltiTools.getInstance().getLogger().log(Level.FINE, "Received pong response");
+        PanelConnectionLog.log(Level.FINE, "Received pong response");
         if (data != null && data.has("timestamp") && !data.get("timestamp").isJsonNull()) {
             long serverTimestamp = data.get("timestamp").getAsLong();
             long currentTime = System.currentTimeMillis();
             long latency = currentTime - serverTimestamp;
-            UltiTools.getInstance().getLogger().log(Level.FINE, "WebSocket latency: " + latency + "ms");
+            PanelConnectionLog.log(Level.FINE, "WebSocket latency: " + latency + "ms");
         }
     }
     
@@ -1362,11 +1365,11 @@ public class PluginInitiationUtils {
             String serverId = safeGetString(data, "serverId");
             String message = safeGetString(data, "message");
             if (subscribed) {
-                UltiTools.getInstance().getLogger().log(Level.INFO,
-                    String.format("成功订阅服务器: %s - %s", serverId, message));
+                PanelConnectionLog.log(Level.INFO,
+                    FrameworkText.format("成功订阅服务器: %s - %s", serverId, message));
             } else {
-                UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    String.format("订阅服务器失败: %s - %s", serverId, message));
+                PanelConnectionLog.log(Level.WARNING,
+                    FrameworkText.format("订阅服务器失败: %s - %s", serverId, message));
             }
         }
     }
@@ -1377,8 +1380,8 @@ public class PluginInitiationUtils {
     private static void handleUnsubscribe(JsonObject data) {
         if (data != null) {
             String serverId = safeGetString(data, "serverId");
-            UltiTools.getInstance().getLogger().log(Level.INFO,
-                String.format("已取消订阅服务器: %s", serverId));
+            PanelConnectionLog.log(Level.INFO,
+                FrameworkText.format("已取消订阅服务器: %s", serverId));
         }
     }
     
@@ -1389,8 +1392,8 @@ public class PluginInitiationUtils {
         if (data != null) {
             String message = safeGetString(data, "message");
             String clientId = safeGetString(data, "clientId");
-            UltiTools.getInstance().getLogger().log(Level.INFO,
-                String.format("[服务器通知] %s (客户端ID: %s)", message, clientId));
+            PanelConnectionLog.log(Level.INFO,
+                FrameworkText.format("[服务器通知] %s (客户端ID: %s)", message, clientId));
         }
     }
     
@@ -1400,8 +1403,8 @@ public class PluginInitiationUtils {
     private static void handleError(JsonObject data) {
         if (data != null) {
             String errorMessage = safeGetString(data, "message");
-            UltiTools.getInstance().getLogger().log(Level.SEVERE,
-                String.format("[WebSocket错误] %s", errorMessage));
+            PanelConnectionLog.log(Level.SEVERE,
+                FrameworkText.format("[WebSocket错误] %s", errorMessage));
         }
     }
     
@@ -1417,8 +1420,8 @@ public class PluginInitiationUtils {
                 ? data.getAsJsonObject("player") : null;
             if (player != null) {
                 String playerName = safeGetString(player, "name");
-                UltiTools.getInstance().getLogger().log(Level.INFO,
-                    String.format("[玩家事件] %s: %s", eventType, playerName));
+                PanelConnectionLog.log(Level.INFO,
+                    FrameworkText.format("[玩家事件] %s: %s", eventType, playerName));
             }
         }
     }
@@ -1432,8 +1435,8 @@ public class PluginInitiationUtils {
         // command_result messages are echoed back from DO — already logged by
         // CommandExecutionManager, so we only log at FINE (debug) level here.
         if (data != null) {
-            UltiTools.getInstance().getLogger().log(Level.FINE,
-                String.format("[命令执行结果] %s", data));
+            PanelConnectionLog.log(Level.FINE,
+                FrameworkText.format("[命令执行结果] %s", data));
         }
     }
     
@@ -1447,12 +1450,12 @@ public class PluginInitiationUtils {
             String operation = safeGetString(data, "operation");
             String path = safeGetString(data, "path");
             String message = safeGetString(data, "message");
-            UltiTools.getInstance().getLogger().log(Level.INFO,
-                String.format("[文件操作结果] ID: %s, 操作: %s, 路径: %s, 成功: %s, 消息: %s",
+            PanelConnectionLog.log(Level.INFO,
+                FrameworkText.format("[文件操作结果] ID: %s, 操作: %s, 路径: %s, 成功: %s, 消息: %s",
                     operationId, operation, path, success, message));
             if (!success && message != null) {
-                UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    String.format("文件操作失败: %s", message));
+                PanelConnectionLog.log(Level.WARNING,
+                    FrameworkText.format("文件操作失败: %s", message));
             }
         }
     }
@@ -1466,8 +1469,8 @@ public class PluginInitiationUtils {
         if (data != null) {
             String operation = safeGetString(data, "operation");
             String operationId = safeGetString(data, "operationId");
-            UltiTools.getInstance().getLogger().log(Level.INFO,
-                String.format("[备份操作] 操作类型: %s, ID: %s", operation, operationId));
+            PanelConnectionLog.log(Level.INFO,
+                FrameworkText.format("[备份操作] 操作类型: %s, ID: %s", operation, operationId));
         }
     }
     
@@ -1480,12 +1483,19 @@ public class PluginInitiationUtils {
             double progress = safeGetDouble(data, "progress", 0.0);
             String currentStep = safeGetString(data, "currentStep");
             boolean completed = safeGetBoolean(data, "completed", false);
-            UltiTools.getInstance().getLogger().log(Level.INFO,
-                String.format("[备份进度] ID: %s, 进度: %.1f%%, 当前步骤: %s, 完成: %s",
+            PanelConnectionLog.log(Level.INFO,
+                FrameworkText.format("[备份进度] ID: %s, 进度: %.1f%%, 当前步骤: %s, 完成: %s",
                     operationId, progress, currentStep, completed));
         }
     }
     
+    /** Queues a whole panel config callback; never waits while a caller may hold an entity monitor. */
+    private static boolean queueConfigCallback(Runnable callback) {
+        if (Bukkit.getServer() == null || Bukkit.isPrimaryThread()) { return false; }
+        Bukkit.getScheduler().runTask(UltiTools.getInstance(), callback);
+        return true;
+    }
+
     // ========== Config management message handlers ==========
 
     /**
@@ -1503,6 +1513,7 @@ public class PluginInitiationUtils {
      * payload, so no code path here reads it any more.
      */
     private static void handleConfigUpload(JsonObject data) {
+        if (data == null || queueConfigCallback(() -> handleConfigUpload(data.deepCopy()))) { return; }
         if (data == null) {
             return;
         }
@@ -1523,8 +1534,8 @@ public class PluginInitiationUtils {
         // over field presence alone.
         if (data.has("message")) {
             String message = data.get("message").getAsString();
-            UltiTools.getInstance().getLogger().log(Level.FINE,
-                String.format("收到服务器配置上传确认: %s", message));
+            PanelConnectionLog.log(Level.FINE,
+                FrameworkText.format("收到服务器配置上传确认: %s", message));
             return;
         }
 
@@ -1538,7 +1549,7 @@ public class PluginInitiationUtils {
         String configName = data.has("configName") ? data.get("configName").getAsString() : null;
 
         UltiTools.getInstance().getLogger().log(Level.FINE,
-            String.format("[配置上传] 类型: %s, 名称: %s", configType, configName));
+            FrameworkText.format("[配置上传] 类型: %s, 名称: %s", configType, configName));
 
         try {
             // Handle the config upload logic
@@ -1585,7 +1596,7 @@ public class PluginInitiationUtils {
                 boolean backup = data.get("backup").getAsBoolean();
 
                 UltiTools.getInstance().getLogger().log(Level.FINE,
-                    String.format("处理配置上传: 类型=%s, 名称=%s, 格式=%s, 备份=%s",
+                    FrameworkText.format("处理配置上传: 类型=%s, 名称=%s, 格式=%s, 备份=%s",
                         configType, configName, format, backup));
 
                 if (!(configContent instanceof JsonObject)) {
@@ -1662,10 +1673,10 @@ public class PluginInitiationUtils {
                 if (data != null && data.has("message")) {
                     String message = data.get("message").getAsString();
                     UltiTools.getInstance().getLogger().log(Level.FINE, 
-                        String.format("收到服务器插件列表确认: %s", message));
+                        FrameworkText.format("收到服务器插件列表确认: %s", message));
                 } else {
                     UltiTools.getInstance().getLogger().log(Level.FINE, 
-                        "收到服务器插件列表消息，但不包含requestId，忽略处理");
+                        FrameworkText.text("收到服务器插件列表消息，但不包含requestId，忽略处理"));
                 }
             }
         } catch (Exception e) {
@@ -1682,7 +1693,7 @@ public class PluginInitiationUtils {
             if (data != null && data.has("requestId")) {
                 String requestId = data.get("requestId").getAsString();
                 UltiTools.getInstance().getLogger().log(Level.FINE, 
-                    String.format("收到服务器状态请求，请求ID: %s", requestId));
+                    FrameworkText.format("收到服务器状态请求，请求ID: %s", requestId));
 
                 // Immediately send the current server status, including the request id
                 UltiTools.getInstance().getServerMonitorManager().sendServerStatusWithRequestId(requestId);
@@ -1691,14 +1702,14 @@ public class PluginInitiationUtils {
                 if (data != null && data.has("message")) {
                     String message = data.get("message").getAsString();
                     UltiTools.getInstance().getLogger().log(Level.FINE, 
-                        String.format("收到服务器状态确认: %s", message));
+                        FrameworkText.format("收到服务器状态确认: %s", message));
                 } else {
                     UltiTools.getInstance().getLogger().log(Level.FINE, 
-                        "收到服务器状态消息，但不包含requestId，忽略处理");
+                        FrameworkText.text("收到服务器状态消息，但不包含requestId，忽略处理"));
                 }
             }
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "处理服务器状态请求失败: " + e.getMessage(), e);
+            UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.format("处理服务器状态请求失败: %s", e.getMessage()), e);
         }
     }
     
@@ -1716,10 +1727,10 @@ public class PluginInitiationUtils {
                 if (data != null && data.has("message")) {
                     String message = data.get("message").getAsString();
                     UltiTools.getInstance().getLogger().log(Level.FINE, 
-                        String.format("收到服务器性能数据确认: %s", message));
+                        FrameworkText.format("收到服务器性能数据确认: %s", message));
                 } else {
                     UltiTools.getInstance().getLogger().log(Level.FINE, 
-                        "收到服务器性能数据消息，但不包含requestId，忽略处理");
+                        FrameworkText.text("收到服务器性能数据消息，但不包含requestId，忽略处理"));
                 }
             }
         } catch (Exception e) {
@@ -1731,6 +1742,7 @@ public class PluginInitiationUtils {
      * Uploads the local config to the server
      */
     private static void uploadConfig(UltiPanelWebSocketClient client) {
+        if (queueConfigCallback(() -> uploadConfig(client))) { return; }
         JsonObject configMessage = new JsonObject();
         configMessage.addProperty("type", "upload_config");
         
@@ -1772,9 +1784,9 @@ public class PluginInitiationUtils {
 
         message.add("data", propsJson);
 
-        UltiTools.getInstance().getLogger().log(Level.FINE, "正在上传服务器属性配置...");
+        UltiTools.getInstance().getLogger().log(Level.FINE, FrameworkText.text("正在上传服务器属性配置..."));
         client.sendMessage(message);
-        UltiTools.getInstance().getLogger().log(Level.FINE, "服务器属性配置上传成功!");
+        UltiTools.getInstance().getLogger().log(Level.FINE, FrameworkText.text("服务器属性配置上传成功!"));
     }
 
     /**
@@ -1812,7 +1824,7 @@ public class PluginInitiationUtils {
         // disableCloud(), or by being superseded via CloudSession.startNew()) fails this gate
         // permanently, regardless of what is current by the time this runs.
         if (!session.isCurrent()) {
-            UltiTools.getInstance().getLogger().log(Level.FINE,
+            PanelConnectionLog.log(Level.FINE,
                 "Cloud features are disabled — skipping WebSocket re-initialization");
             return;
         }
@@ -1825,7 +1837,7 @@ public class PluginInitiationUtils {
         if (!session.getBackoff().shouldContinue()) {
             // Finish saying this before tearing down: the disableCloud() call below shuts off the
             // log upload channel, and this line has to go out before that happens.
-            UltiTools.getInstance().getLogger().log(Level.WARNING, String.format(
+            PanelConnectionLog.log(Level.WARNING, String.format(
                 "WebSocket re-initialization gave up after %d attempts. Cloud features are now idle. "
                     + "Run /ulticloud login to retry, or restart the server.",
                 CloudSession.MAX_REINIT_ATTEMPTS));
@@ -1851,7 +1863,7 @@ public class PluginInitiationUtils {
             return;
         }
 
-        UltiTools.getInstance().getLogger().log(Level.INFO, String.format(
+        PanelConnectionLog.log(Level.INFO, String.format(
             "Re-initializing WebSocket connection (attempt %d/%d)...",
             session.getBackoff().getAttemptCount() + 1, CloudSession.MAX_REINIT_ATTEMPTS));
         session.getBackoff().getNextDelay();   // Record one attempt; the actual wait is handled by the client-side scheduler
@@ -1862,7 +1874,7 @@ public class PluginInitiationUtils {
             try {
                 oldClient.disconnect();
             } catch (Exception e) {
-                UltiTools.getInstance().getLogger().log(Level.FINE,
+                PanelConnectionLog.log(Level.FINE,
                     "Error disconnecting old WebSocket: " + e.getMessage());
             }
             session.setWebSocketClient(null);
@@ -1875,15 +1887,15 @@ public class PluginInitiationUtils {
                     && !currentToken.getRefresh_token().isEmpty()) {
                 TokenEntity refreshed = session.refresh(currentToken.getRefresh_token());
                 if (refreshed != null) {
-                    UltiTools.getInstance().getLogger().log(Level.INFO,
+                    PanelConnectionLog.log(Level.INFO,
                         "Token refreshed for WebSocket re-initialization");
                 } else {
-                    UltiTools.getInstance().getLogger().log(Level.WARNING,
+                    PanelConnectionLog.log(Level.WARNING,
                         "Token refresh failed — cannot re-initialize WebSocket");
                     return;
                 }
             } else {
-                UltiTools.getInstance().getLogger().log(Level.WARNING,
+                PanelConnectionLog.log(Level.WARNING,
                     "No valid token available — cannot re-initialize WebSocket");
                 return;
             }
@@ -1911,7 +1923,7 @@ public class PluginInitiationUtils {
         // it would block a concurrent /ulticloud logout on the main thread for that long.
         synchronized (session) {
             if (!session.isCurrent()) {
-                UltiTools.getInstance().getLogger().log(Level.INFO,
+                PanelConnectionLog.log(Level.INFO,
                     "Cloud features were disabled during re-initialization — aborting");
                 return;
             }
@@ -1925,10 +1937,10 @@ public class PluginInitiationUtils {
                 // not happened yet. Measurement showed a 401 immediately following this line. The
                 // success message is now logged by onOpen (see initWebsocket's onConnectHandler),
                 // which is the point where the connection is actually up. See issue #223.
-                UltiTools.getInstance().getLogger().log(Level.FINE,
+                PanelConnectionLog.log(Level.FINE,
                     "WebSocket re-initialization dispatched — awaiting handshake");
             } catch (IOException e) {
-                UltiTools.getInstance().getLogger().log(Level.WARNING,
+                PanelConnectionLog.log(Level.WARNING,
                     "WebSocket re-initialization failed: " + e.getMessage());
             }
         }

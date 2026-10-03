@@ -15,7 +15,7 @@ import java.lang.annotation.Target;
 public @interface CmdMapping {
     /**
      * @return command format  <br>
-     * For example: if command is "/test" then <br> "" stands for "/test"；<br>"&lt;player&gt;" stands for "/test &lt;player&gt;"； <br>"send &lt;message&gt;" stands for "/test send &lt;message&gt;"
+     * For example: if command is "/test" then <br> "" stands for "/test";<br>"&lt;player&gt;" stands for "/test &lt;player&gt;"; <br>"send &lt;message&gt;" stands for "/test send &lt;message&gt;"
      */
     String format();
 

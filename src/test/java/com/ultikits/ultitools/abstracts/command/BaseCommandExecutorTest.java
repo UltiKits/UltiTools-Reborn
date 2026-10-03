@@ -1428,21 +1428,19 @@ class BaseCommandExecutorTest {
         }
 
         @Test
-        @DisplayName("Test 7: a synchronous mapping is unaffected -- deferred by one tick, arms no watcher")
+        @DisplayName("Test 7: a synchronous mapping runs inline at dispatch on the primary thread, arms no watcher")
         void synchronousMappingUnaffectedAndArmsNoWatcher() {
             AsyncCommandExecutor executor = new AsyncCommandExecutor();
 
             try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
                 BukkitScheduler scheduler = mock(BukkitScheduler.class);
                 bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
-                lenient().when(scheduler.runTask(any(Plugin.class), any(Runnable.class))).thenAnswer(invocation -> {
-                    Runnable task = invocation.getArgument(1);
-                    task.run();
-                    return null;
-                });
+                // #541: on the primary thread the body runs at dispatch; nothing is scheduled.
+                bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
 
                 executor.onCommand(mockPlayer, mockCommand, "asynctest", new String[]{"sync"});
 
+                verify(scheduler, never()).runTask(any(Plugin.class), any(Runnable.class));
                 verify(scheduler, never()).runTaskAsynchronously(any(Plugin.class), any(Runnable.class));
                 verify(scheduler, never()).runTaskLaterAsynchronously(
                         any(Plugin.class), any(Runnable.class), anyLong());
@@ -1559,11 +1557,11 @@ class BaseCommandExecutorTest {
     /**
      * Fixture for the bare-command path.
      * <p>
-     * onCommand defers a synchronous command body by one tick through BukkitRunnable,
-     * and this test class runs on plain Mockito with no Bukkit scheduler. Dispatch is
-     * overridden to invoke inline, so the whole path is still exercised -- onCommand,
-     * matchMethod, the validator chain, validateParameterCount -- minus the hop through
-     * the scheduler.
+     * onCommand runs a synchronous command body inline when it is on the primary thread and
+     * hands it to runTask when it is not (#541); either way it asks Bukkit, and this test class
+     * runs on plain Mockito with no Bukkit server. Dispatch is overridden to invoke inline, so
+     * the whole path is still exercised -- onCommand, matchMethod, the validator chain,
+     * validateParameterCount -- minus the primary-thread check.
      */
     @CmdTarget(CmdTarget.CmdTargetType.BOTH)
     @CmdExecutor(alias = {"bare"})

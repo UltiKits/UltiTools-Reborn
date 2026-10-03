@@ -14,12 +14,15 @@ import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Supplier;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
@@ -39,6 +42,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.ReloadReport;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.abstracts.command.ConfigBoundCooldownState;
@@ -99,7 +103,7 @@ import lombok.Getter;
 public class PluginManager {
     /**
      * The name of the JVM system property that opts back into the pre-6.3.0 degraded load
-     * order (D-10): every module in filesystem/classpath order, with no dependency resolution
+     * order (D-10): every module in discovery order (file-name order, #476), with no dependency resolution
      * at all. Modeled on Paper's own {@code -Dpaper.useLegacyPluginLoading=true} precedent -- a
      * one-shot, consumed-at-bootstrap decision, which is why it is a system property rather than
      * a reloadable {@code config.yml} key. The literal name is repeated (rather than referenced
@@ -108,10 +112,68 @@ public class PluginManager {
      */
     private static final String LEGACY_PLUGIN_LOADING_PROPERTY = "ultitools.useLegacyPluginLoading";
 
-    @Getter
-    private final List<UltiToolsPlugin> pluginList = new ArrayList<>();
+    /** Framework i18n key: the {@code /ul reload} summary when every module reloaded (#509). */
+    static final String RELOAD_SUMMARY_ALL_KEY = "All %d modules reloaded.";
+
+    /** Framework i18n key: the {@code /ul reload} summary naming the modules that failed (#509). */
+    static final String RELOAD_SUMMARY_FAILED_KEY =
+            "Failed to reload %d of %d modules: %s. See the console for each failure.";
+
+    /**
+     * Framework i18n key: the line after {@link #RELOAD_SUMMARY_FAILED_KEY} when, besides the failed
+     * modules, some reloaded only partly; the partial modules' own lines follow it (#529; Codex
+     * review of #564, round 2).
+     */
+    static final String RELOAD_SUMMARY_MIXED_PARTIAL_KEY = "%d of the others reloaded only partially:";
+
+    /** Framework i18n key: the {@code /ul reload} summary when no module failed but some reloaded only partly (#529). */
+    static final String RELOAD_SUMMARY_PARTIAL_KEY = "Reloaded %d modules; %d only partially:";
+
+    /**
+     * Framework i18n key: one partially reloaded module and the parts that did not reload (#529).
+     * The same text {@code /ul reload <name>} replies; the literal is repeated in that command.
+     */
+    static final String RELOAD_PARTIAL_LINE_KEY = "Module %s reloaded partially; not reloaded: %s";
+
+    /**
+     * Framework i18n key for the one line logged when a module cannot load because a plugin its
+     * {@code plugin.yml} lists under {@code depend:} is not installed or not enabled (#554).
+     * Arguments: the module, the missing plugins joined by {@code ", "}. Package-private so a test
+     * can assert both shipped catalogues translate it.
+     */
+    static final String MISSING_REQUIRED_PLUGIN_LOG_KEY =
+            "Module '%s' requires %s, which is not installed or not enabled; the module is not loaded.";
+
+    /**
+     * The loaded modules, in load order. Only this manager changes it: a module is listed by
+     * {@link #onPluginRegistered} and delisted by {@link #unregister(UltiToolsPlugin)}.
+     * <p>
+     * A {@link CopyOnWriteArrayList} because it is read from other threads (the asynchronous
+     * {@code /upm list}, the economy facade's module attribution) while the main thread loads and
+     * unloads modules. Every mutation replaces the backing array under the list's own lock, and
+     * both {@link #getPluginList()}'s snapshot and every loop in this class read one whole array,
+     * so a reader never sees a half-applied change and a loop that unloads modules while it
+     * iterates cannot fail (#507).
+     */
+    private final List<UltiToolsPlugin> pluginList = new CopyOnWriteArrayList<>();
 
     private final List<Class<? extends UltiToolsPlugin>> pluginClassList = new ArrayList<>();
+
+    /**
+     * What the start-up scan read: per declared main class, every JAR in the modules folder that
+     * declares it, and the JAR its class was loaded from (#516). {@code /upm uninstall} reads it to
+     * find every file of a loaded module.
+     */
+    @Getter
+    private final ModuleJarIndex moduleJarIndex = new ModuleJarIndex();
+
+    /**
+     * The module being registered on each thread, name and main class (#483); see {@link
+     * #getModuleBeingRegistered()}. A {@link ThreadLocal} so it can never be read by, or leak
+     * into, another thread.
+     */
+    private final ThreadLocal<Map.Entry<String, Class<? extends UltiToolsPlugin>>> moduleBeingRegistered =
+            new ThreadLocal<>();
     private ClassLoader classLoader;
     @Getter
     private TaskManager taskManager;
@@ -137,6 +199,15 @@ public class PluginManager {
     private final Map<String, DataScope> externalScopesByFolder = new ConcurrentHashMap<>();
 
     /**
+     * Connected External Plugin API consumers, plugin name to scan package (#462): added when
+     * {@link #registerExternal(ExternalPluginAdapter, Class[])} completes, removed by
+     * {@link #unregisterExternal(ExternalPluginAdapter)}. Read through
+     * {@link #getConnectedExternalScanPackages()} by economy attribution, which otherwise could not
+     * name a caller that is not a module.
+     */
+    private final Map<String, String> connectedExternalScanPackages = new ConcurrentHashMap<>();
+
+    /**
      * The framework-owned types whose {@link com.ultikits.ultitools.annotations.Scheduled} methods
      * this manager registers.
      * <p>
@@ -159,6 +230,25 @@ public class PluginManager {
             new LinkedHashSet<>(Collections.<Class<?>>singletonList(PlayerCacheManager.class)));
 
     /**
+     * Returns the modules currently loaded, in load order, as an unmodifiable snapshot.
+     * <p>
+     * The returned list is a copy taken at the moment of the call. It does not change when a
+     * module is loaded or unloaded afterwards, and every attempt to add, remove or clear throws
+     * {@link UnsupportedOperationException}. Only this manager changes which modules are loaded:
+     * {@code register(...)} lists a module and {@link #unregister(UltiToolsPlugin)} delists it.
+     * <p>
+     * Since 6.3.0 (#507). Before, this returned the manager's live internal {@code ArrayList}, so
+     * callers delisted unloaded modules by removing from it, and a reader on another thread could
+     * fail with a {@link java.util.ConcurrentModificationException} or see a trailing {@code null}
+     * while the main thread unloaded a module. The signature and return type are unchanged.
+     *
+     * @return an unmodifiable snapshot of the loaded modules
+     */
+    public List<UltiToolsPlugin> getPluginList() {
+        return Collections.unmodifiableList(new ArrayList<>(pluginList));
+    }
+
+    /**
      * Initialize plugin manager. Please do not call this method manually.
      *
      * @throws IOException IO exception
@@ -170,22 +260,12 @@ public class PluginManager {
         registerFrameworkScheduledOwners();
         registerPlayerQuitListener();
         registerPluginDisableListener();
-        String currentPath = System.getProperty("user.dir");
-        String path = currentPath + File.separator + "plugins" + File.separator + "UltiTools" + File.separator + "plugins";
-        File pluginFolder = new File(path);
-        File[] plugins = pluginFolder.listFiles((file) -> file.getName().endsWith(".jar"));
-
-        if (plugins == null) {
+        // #517: the same folder the module class loader was built over, from the one method that
+        // computes it -- not the JVM's working directory, which a launcher may set anywhere.
+        File pluginFolder = com.ultikits.ultitools.utils.ModuleFileTransactions.modulesFolder(
+                UltiTools.getInstance().getDataFolder());
+        if (!discoverModuleClasses(pluginFolder)) {
             return;
-        }
-
-        Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Found " + plugins.length + " file(s):");
-
-        for (File file : plugins) {
-            Class<? extends UltiToolsPlugin> pluginClass = loadPluginMainClass(classLoader, file);
-            if (pluginClass != null) {
-                pluginClassList.add(pluginClass);
-            }
         }
         int success = 0;
         if (pluginClassList.isEmpty()) {
@@ -210,17 +290,110 @@ public class PluginManager {
     }
 
     /**
+     * Lists the modules folder once and reads each module JAR's declared main class, adding every
+     * class that loads to {@code pluginClassList}. Package-private so a test can drive the scan over
+     * a folder of its own.
+     *
+     * @param pluginFolder the modules folder
+     * @return {@code false} when the folder could not be listed
+     */
+    boolean discoverModuleClasses(File pluginFolder) {
+        File[] plugins = com.ultikits.ultitools.utils.ModuleFileTransactions.moduleJars(pluginFolder);
+        if (plugins == null) {
+            return false;
+        }
+
+        Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Found " + plugins.length + " file(s):");
+
+        for (File file : plugins) {
+            Class<? extends UltiToolsPlugin> pluginClass = loadPluginMainClass(classLoader, file);
+            if (pluginClass != null) {
+                pluginClassList.add(pluginClass);
+            }
+        }
+        warnOnDuplicateModuleJars();
+        return true;
+    }
+
+    /**
+     * One warning per module main class that two or more JARs in the modules folder declare,
+     * naming every one of them and the JAR the module's classes load from (UltiTools-Dev-Doc#96).
+     *
+     * <p>All module JARs share one class loader, so the copies are not loaded side by side and no
+     * version comparison runs between them: the class comes from the first JAR on the class path
+     * that carries it -- in file-name order (#476) -- and the other copies are refused. Without this
+     * line an operator who dropped a new version next to the old one would see the old one keep
+     * running with nothing saying why.
+     *
+     * <p>A main class none of whose copies loaded gets no line here: each copy has already been
+     * refused with its own line saying why.
+     */
+    private void warnOnDuplicateModuleJars() {
+        for (Map.Entry<String, List<File>> duplicate : moduleJarIndex.duplicates().entrySet()) {
+            File supplier = moduleJarIndex.supplierOf(duplicate.getKey());
+            if (supplier == null) {
+                continue;
+            }
+            List<String> names = new ArrayList<>();
+            for (File jar : duplicate.getValue()) {
+                names.add(jar.getName());
+            }
+            Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + String.format(UltiTools.getInstance().i18n(
+                    "以下 JAR 文件都声明了同一个模块主类 %s：%s。该模块的类只从 %s 加载，其余副本不会加载；请只保留其中一个。"),
+                    duplicate.getKey(), String.join(", ", names), supplier.getName()));
+        }
+    }
+
+    /**
+     * Whether a JAR whose declared main class was loaded from another JAR is another copy of that
+     * module: the other JAR is in the same modules folder and its own {@code plugin.yml} declares
+     * the same {@code main:}. Anything else is a class borrowed from a JAR that is not this module,
+     * which stays refused with its own SEVERE line. Reads only {@code plugin.yml}.
+     *
+     * @param pluginJar     the JAR being scanned
+     * @param supplier      the JAR its declared main class was loaded from
+     * @param mainClassName the main class it declares
+     * @return {@code true} when it is a duplicate copy
+     */
+    private static boolean isDuplicateCopy(File pluginJar, File supplier, String mainClassName) {
+        File folder = pluginJar.getAbsoluteFile().getParentFile();
+        File supplierFolder = supplier.getAbsoluteFile().getParentFile();
+        return folder != null && supplierFolder != null
+                && canonicalPath(folder).equals(canonicalPath(supplierFolder))
+                && mainClassName.equals(PluginYmlReader.readFromJarFile(supplier).getMain());
+    }
+
+    /**
      * Register plugin.
      *
      * @param pluginClass Plugin class
      * @return Register result
      */
     public boolean register(Class<? extends UltiToolsPlugin> pluginClass) {
+        // #483: before construction only the class is known; a module's name is its plugin.yml
+        // name: (the no-argument constructor refuses a module without one, D-16).
+        PluginYmlReader.PluginYmlInfo pluginYml = PluginYmlReader.read(pluginClass);
+        String name = pluginYml.getName();
+        // #554: a module whose required plugin is not installed is refused before it is
+        // initialized, constructed, extracted or scanned.
+        if (refusesForUninstalledRequiredPlugin(pluginYml, pluginClass.getName())) {
+            return false;
+        }
+        Map.Entry<String, Class<? extends UltiToolsPlugin>> previous = beginRegistration(
+                name != null ? name : pluginClass.getSimpleName(), pluginClass);
+        try {
+            return registerClass(pluginClass);
+        } finally {
+            endRegistration(previous);
+        }
+    }
+
+    private boolean registerClass(Class<? extends UltiToolsPlugin> pluginClass) {
         UltiToolsPlugin plugin;
         try {
             plugin = initializePlugin(classLoader, pluginClass);
         } catch (Exception | Error e) {
-            logPluginInitializationFailure(pluginClass.getName(), e);
+            logPluginInitializationFailure(pluginClass, pluginClass.getName(), e);
             return false;
         }
         // null means the compatibility gate refused it; the refusal reason has already been
@@ -240,12 +413,34 @@ public class PluginManager {
      * @return Register result
      */
     public boolean register(UltiToolsPlugin plugin) {
+        Map.Entry<String, Class<? extends UltiToolsPlugin>> previous = beginRegistration(
+                plugin.getPluginName(), plugin.getClass());
+        try {
+            return registerInstance(plugin);
+        } finally {
+            endRegistration(previous);
+        }
+    }
+
+    private boolean registerInstance(UltiToolsPlugin plugin) {
+        // #554: the caller constructed this instance; nothing more of it runs -- no gate, no
+        // container, no scan -- when a plugin it requires is not installed.
+        if (refusesForUninstalledRequiredPlugin(PluginYmlReader.read(plugin.getClass()), plugin.getPluginName())) {
+            // The constructor already registered this instance's configuration entities; like
+            // every other refusal of a constructed instance, release them (framework cleanup only,
+            // no module code runs).
+            releaseConfigEntities(plugin);
+            return false;
+        }
         // The gate runs first: this path's instance is caller-supplied and the container hasn't
         // been built yet, so if it's refused, not a single bean gets constructed. See issue #184.
         if (!passesCompatibilityGates(plugin)) {
+            releaseConfigEntities(plugin);
             return false;
         }
         try {
+            // #460: only a candidate the gates accepted writes its language provenance.
+            plugin.commitLanguageProvenance();
             // WIRE-05/WIRE-06: this path now assembles through the exact same method
             // initializePlugin does -- see its javadoc for the full instruction sequence. The
             // only remaining difference between the two entry points is where the plugin
@@ -255,7 +450,8 @@ public class PluginManager {
             SimpleContainer pluginContext = new SimpleContainer();
             assemblePluginContainer(pluginContext, plugin, plugin.getClass(), classLoader);
         } catch (Exception | Error e) {
-            logPluginInitializationFailure(plugin.getPluginName(), e);
+            releaseConfigEntities(plugin);
+            logPluginInitializationFailure(plugin.getClass(), plugin.getPluginName(), e);
             return false;
         }
         boolean result = attemptPluginRegistration(plugin);
@@ -263,6 +459,133 @@ public class PluginManager {
             registerBukkit(plugin);
         }
         return result;
+    }
+
+    /**
+     * Refuses a module before anything of it runs when a plugin its {@code plugin.yml} lists under
+     * {@code depend:} is not installed on this server (#554): logs the one WARNING naming the module
+     * and those plugins and returns {@code true}; the caller returns without initializing,
+     * constructing, extracting or scanning anything of the module, so a class that belongs to the
+     * missing plugin is never loaded and never logs a trace.
+     * <p>
+     * Only a plugin that is not installed at all counts here. A plugin that is installed but not
+     * enabled yet may still be enabled after UltiTools -- Bukkit enables in its own order, and only
+     * the plugins UltiTools itself lists under {@code depend:} or {@code softdepend:} are guaranteed
+     * to come first -- so refusing it here would refuse a module that loads today. That case keeps
+     * the late check in {@link #logPluginInitializationFailure(Class, String, Throwable)}.
+     *
+     * @param pluginYml    the module's own {@code plugin.yml}
+     * @param fallbackName the name to log when the {@code plugin.yml} has no {@code name:}
+     * @return {@code true} when the module was refused and the line logged
+     */
+    private static boolean refusesForUninstalledRequiredPlugin(PluginYmlReader.PluginYmlInfo pluginYml,
+            String fallbackName) {
+        List<String> missing = new ArrayList<>();
+        for (String required : pluginYml.getDepend()) {
+            if (required != null && !required.trim().isEmpty()
+                    && Bukkit.getPluginManager().getPlugin(required) == null) {
+                missing.add(required);
+            }
+        }
+        if (missing.isEmpty()) {
+            return false;
+        }
+        logMissingRequiredPlugins(pluginYml.getName() != null ? pluginYml.getName() : fallbackName, missing);
+        return true;
+    }
+
+    /** Logs the one {@link #MISSING_REQUIRED_PLUGIN_LOG_KEY} line, without a trace (#554). */
+    private static void logMissingRequiredPlugins(String moduleName, List<String> missing) {
+        Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + String.format(
+                UltiTools.getInstance().i18n(MISSING_REQUIRED_PLUGIN_LOG_KEY), moduleName, String.join(", ", missing)));
+    }
+
+    /**
+     * Logs a module's initialization failure (#554): when the failure is a class-not-found kind
+     * ({@link NoClassDefFoundError} or {@link ClassNotFoundException} anywhere in the cause chain)
+     * and at least one plugin the module lists under {@code depend:} is not installed or not
+     * enabled, one WARNING names the module and those plugins, without the raw trace -- the
+     * missing class belongs to the missing plugin and the trace says nothing more. In every other
+     * case, including a class-not-found failure while every {@code depend:} plugin is present,
+     * {@link #logPluginInitializationFailure(String, Throwable)} logs the existing message and
+     * trace unchanged.
+     * <p>
+     * A plugin that is not installed at all is refused earlier, before construction, by {@link
+     * #refusesForUninstalledRequiredPlugin}; this late check still serves a required plugin that is
+     * installed but not enabled, which the early check deliberately leaves alone.
+     *
+     * @param pluginClass the module's main class, whose own jar's {@code plugin.yml} is read
+     * @param moduleName  the module refusing to load, however the caller identifies it
+     * @param thrown      the throwable caught at the registration boundary
+     */
+    static void logPluginInitializationFailure(Class<?> pluginClass, String moduleName, Throwable thrown) {
+        if (isClassNotFoundKind(thrown)) {
+            PluginYmlReader.PluginYmlInfo pluginYml = PluginYmlReader.read(pluginClass);
+            List<String> missing = new ArrayList<>();
+            for (String required : pluginYml.getDepend()) {
+                if (isPluginAbsentOrDisabled(required)) {
+                    missing.add(required);
+                }
+            }
+            if (!missing.isEmpty()) {
+                logMissingRequiredPlugins(pluginYml.getName() != null ? pluginYml.getName() : moduleName, missing);
+                return;
+            }
+        }
+        logPluginInitializationFailure(moduleName, thrown);
+    }
+
+    /**
+     * Whether {@code thrown}'s cause chain holds a {@link NoClassDefFoundError} or a {@link
+     * ClassNotFoundException}. Bounded by identity-based cycle detection, like {@link
+     * #rootCauseMessage(Throwable)}.
+     */
+    private static boolean isClassNotFoundKind(Throwable thrown) {
+        Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Throwable current = thrown; current != null && visited.add(current); current = current.getCause()) {
+            if (current instanceof NoClassDefFoundError || current instanceof ClassNotFoundException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Records the module being registered on this thread (#483) and returns the record it replaces
+     * (a registration started from inside another module's registration), for {@link
+     * #endRegistration} to restore.
+     */
+    private Map.Entry<String, Class<? extends UltiToolsPlugin>> beginRegistration(String name,
+            Class<? extends UltiToolsPlugin> pluginClass) {
+        Map.Entry<String, Class<? extends UltiToolsPlugin>> previous = moduleBeingRegistered.get();
+        moduleBeingRegistered.set(new AbstractMap.SimpleImmutableEntry<>(name, pluginClass));
+        return previous;
+    }
+
+    /** Restores the record {@link #beginRegistration} replaced, or clears it; runs in a {@code finally}. */
+    private void endRegistration(Map.Entry<String, Class<? extends UltiToolsPlugin>> previous) {
+        if (previous == null) {
+            moduleBeingRegistered.remove();
+        } else {
+            moduleBeingRegistered.set(previous);
+        }
+    }
+
+    /**
+     * The module being registered on the calling thread, as name and main class, or {@code null}
+     * (#483). Set by both {@code register} entry points before the module is constructed or
+     * assembled and cleared when the attempt ends, successful or not, so a module requesting the
+     * economy from its constructor, a {@code @PostConstruct} method or {@code registerSelf()} --
+     * before it is in {@code getPluginList()} -- can still be named. Per thread: another thread,
+     * even one the module starts during registration, never sees it. Not part of the module-facing
+     * API; public only because economy attribution lives in another package.
+     *
+     * @return the module being registered on this thread, or {@code null} when none is
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public Map.Entry<String, Class<? extends UltiToolsPlugin>> getModuleBeingRegistered() {
+        return moduleBeingRegistered.get();
     }
 
     /**
@@ -330,9 +653,58 @@ public class PluginManager {
     }
 
     /**
+     * Unloads a module: releases everything the framework registered for it, runs its unload hook
+     * through {@link UltiToolsPlugin#unregisterSelf()}, closes its container and removes it from the
+     * loaded modules.
+     * <p>
+     * The last two always run, in that order, even when the unload hook throws; the hook's failure
+     * is then rethrown to the caller. Since 6.3.0 (#507) this method delists the module itself, by
+     * identity, so no caller has to. After the container is closed and before the module is
+     * delisted, the configuration layer releases the module's configuration entities through
+     * {@link ConfigManager#unregisterAll(UltiToolsPlugin)} (#507); when the unload is part of
+     * {@link #close()}, their shutdown save runs first.
+     *
+     * <p>
+     * The three registries a module can file registrations in by name -- tab-completion
+     * completers, EventBus handlers and panel responders -- are released by instance first: every
+     * registration recorded against this module instance goes, whatever name it was filed under.
+     * Registrations filed under the module's name only are then released by name, unless another
+     * loaded copy of the module shares that name; they cannot be told apart from that copy's, so
+     * they stay until the last copy of the name is unloaded (#506).
+     *
      * @param plugin UltiTools plugin instance
      */
     public void unregister(UltiToolsPlugin plugin) {
+        unregister(plugin, isNameInUseByAnotherLoadedCopy(plugin), false);
+    }
+
+    /**
+     * Whether a loaded module other than {@code plugin} itself carries {@code plugin}'s name.
+     *
+     * @param plugin the module about to be unloaded
+     * @return {@code true} if releasing by name would also release another loaded copy's registrations
+     */
+    private boolean isNameInUseByAnotherLoadedCopy(UltiToolsPlugin plugin) {
+        String name = plugin.getPluginName();
+        for (UltiToolsPlugin listed : pluginList) {
+            if (listed != plugin && name != null && name.equals(listed.getPluginName())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The body of {@link #unregister(UltiToolsPlugin)}.
+     *
+     * @param plugin         the module to unload
+     * @param nameStillInUse whether another copy of the module -- listed, or being activated as
+     *                       this copy's replacement -- shares its name, so that name-only
+     *                       registrations must not be released by name (#506)
+     * @param shutdown       whether this unload is part of {@link #close()}, so the module's
+     *                       configuration is saved for shutdown before its entities are released
+     */
+    private void unregister(UltiToolsPlugin plugin, boolean nameStillInUse, boolean shutdown) {
         // Each registry-cleanup step below is isolated from every other step's failure
         // (Codex review on #457, round 4: "Run all registry cleanup after an earlier
         // failure") -- an Error from one owner registry (e.g. TaskManager.cancelAll() not
@@ -357,24 +729,16 @@ public class PluginManager {
         // nothing is a no-op (unregisterByOwner(null) and unregisterByOwner("unknown-name") both
         // return 0 and throw nothing).
         runUnregisterStep(plugin, "unregister tab-completion completers",
-                () -> TabCompletionManager.getInstance().unregisterByOwner(plugin.getPluginName()));
+                () -> releaseCompleters(plugin, nameStillInUse));
         // Unregister @ModuleEventHandler handlers from EventBus
-        runUnregisterStep(plugin, "unregister EventBus handlers", () -> {
-            EventBus eventBus = UltiTools.getInstance().getEventBus();
-            if (eventBus != null) {
-                eventBus.unregisterAll(plugin.getPluginName());
-            }
-        });
+        runUnregisterStep(plugin, "unregister EventBus handlers",
+                () -> releaseEventHandlers(plugin, nameStillInUse));
         // Unregister this module's panel message responders (WIRE-16, D-26/D-27, Plan 06-08
-        // Task 3) — mirrors the EventBus.unregisterAll call immediately above; a responder
-        // left behind by an unloaded module would go on answering panel requests with code
-        // whose classloader is gone.
-        runUnregisterStep(plugin, "unregister panel message responders", () -> {
-            PanelResponderRegistry panelResponderRegistry = UltiTools.getInstance().getPanelResponderRegistry();
-            if (panelResponderRegistry != null) {
-                panelResponderRegistry.unregisterAll(plugin.getPluginName());
-            }
-        });
+        // Task 3) — mirrors the EventBus release immediately above; a responder left behind by
+        // an unloaded module would go on answering panel requests with code whose classloader
+        // is gone.
+        runUnregisterStep(plugin, "unregister panel message responders",
+                () -> releasePanelResponders(plugin, nameStillInUse));
         // Release this module's recorded @ConditionalOnConfig scan-time decisions (#392,
         // D-01). The record holds Class<?> references and would otherwise pin the module's
         // ClassLoader after unload, exactly like the TabCompletionManager / EventBus /
@@ -403,9 +767,114 @@ public class PluginManager {
             // container (SILENT-19, #338). Guard the close the same way the steps above do,
             // and run it even if unregisterSelf() itself throws (Codex review on #457, round
             // 2: "Close the module context when its unload hook throws").
-            if (plugin.getContext() != null) {
-                plugin.getContext().close();
+            try {
+                if (plugin.getContext() != null) {
+                    plugin.getContext().close();
+                }
+            } finally {
+                try {
+                    try {
+                        if (shutdown) {
+                            runUnregisterStep(plugin, "save shutdown teardown configuration", () -> {
+                                ConfigManager configs = UltiTools.getInstance().getConfigManager();
+                                if (configs != null) { configs.saveForShutdown(plugin); }
+                            });
+                        }
+                    } finally {
+                        runUnregisterStep(plugin, "release configuration entities", () -> {
+                            ConfigManager configs = UltiTools.getInstance().getConfigManager();
+                            if (configs != null) { configs.unregisterAll(plugin); }
+                        });
+                    }
+                } finally {
+                    // #507: the delisting lives here, not at each caller. By identity: two copies of
+                    // one module share a name and may be equal to nothing but themselves.
+                    pluginList.removeIf(listed -> listed == plugin);
+                }
             }
+        }
+    }
+
+    /**
+     * Releases {@code plugin}'s tab-completion completers: those recorded against the instance,
+     * then -- unless another copy of the module shares its name -- those recorded by name only
+     * (#506).
+     */
+    private static void releaseCompleters(UltiToolsPlugin plugin, boolean nameStillInUse) {
+        TabCompletionManager completions = TabCompletionManager.getInstance();
+        completions.unregisterByOwnerInstance(plugin);
+        if (!nameStillInUse) {
+            completions.unregisterByOwner(plugin.getPluginName());
+        }
+    }
+
+    /**
+     * Releases {@code plugin}'s EventBus handlers, by instance and then, unless another copy of the
+     * module shares its name, by name (#506).
+     */
+    private static void releaseEventHandlers(UltiToolsPlugin plugin, boolean nameStillInUse) {
+        EventBus eventBus = UltiTools.getInstance().getEventBus();
+        if (eventBus == null) {
+            return;
+        }
+        eventBus.unregisterByOwnerInstance(plugin);
+        if (!nameStillInUse) {
+            eventBus.unregisterAll(plugin.getPluginName());
+        }
+    }
+
+    /**
+     * Releases {@code plugin}'s panel responders, by instance and then, unless another copy of the
+     * module shares its name, by name (#506).
+     */
+    private static void releasePanelResponders(UltiToolsPlugin plugin, boolean nameStillInUse) {
+        PanelResponderRegistry panelResponderRegistry = UltiTools.getInstance().getPanelResponderRegistry();
+        if (panelResponderRegistry == null) {
+            return;
+        }
+        panelResponderRegistry.unregisterByOwnerInstance(plugin);
+        if (!nameStillInUse) {
+            panelResponderRegistry.unregisterAll(plugin.getPluginName());
+        }
+    }
+
+    /**
+     * Opens, on this thread, the registration scopes of the three registries a module files
+     * registrations in by name -- tab-completion completers, EventBus handlers, panel responders --
+     * so that what the module registers while the framework loads it (its container refresh and its
+     * {@code registerSelf()}) is recorded against this instance (#506; Codex review of #564, round
+     * 3). Always paired with {@link #endLoadScopes()} in a {@code finally}.
+     */
+    private static void beginLoadScopes(UltiToolsPlugin plugin) {
+        TabCompletionManager.getInstance().beginRegistrationScope(plugin.getPluginName(), plugin);
+        UltiTools framework = UltiTools.getInstance();
+        if (framework == null) {
+            return;
+        }
+        EventBus eventBus = framework.getEventBus();
+        if (eventBus != null) {
+            eventBus.beginRegistrationScope(plugin);
+        }
+        PanelResponderRegistry panelResponderRegistry = framework.getPanelResponderRegistry();
+        if (panelResponderRegistry != null) {
+            panelResponderRegistry.beginRegistrationScope(plugin);
+        }
+    }
+
+    /** Closes the scopes {@link #beginLoadScopes(UltiToolsPlugin)} opened on this thread. */
+    private static void endLoadScopes() {
+        TabCompletionManager.getInstance().endRegistrationScope();
+        UltiTools framework = UltiTools.getInstance();
+        if (framework == null) {
+            return;
+        }
+        EventBus eventBus = framework.getEventBus();
+        if (eventBus != null) {
+            eventBus.endRegistrationScope();
+        }
+        PanelResponderRegistry panelResponderRegistry = framework.getPanelResponderRegistry();
+        if (panelResponderRegistry != null) {
+            panelResponderRegistry.endRegistrationScope();
         }
     }
 
@@ -435,11 +904,15 @@ public class PluginManager {
      * Unregister all plugins.
      */
     public void close() {
+        // Save while all module entities are still registered, before any unload can release them.
+        ConfigManager configs = UltiTools.getInstance().getConfigManager();
+        if (configs != null) { configs.saveAll(); }
         // Disconnect all external plugins first
         UltiToolsAPI.disconnectAll();
 
         Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Unregistering all plugins...");
-        for (UltiToolsPlugin plugin : pluginList) {
+        // A snapshot: unregister() delists each module as it goes (#507).
+        for (UltiToolsPlugin plugin : new ArrayList<>(pluginList)) {
             // One module's unregister() (ultimately its own onUnregister()) throwing must
             // not cascade into every subsequent module's own command/listener/EventBus/
             // PanelResponderRegistry unregistration, nor skip pluginList.clear()/
@@ -447,7 +920,7 @@ public class PluginManager {
             // UltiTools.onDisable() and skip configManager.saveAll() (WR-01,
             // 16-REVIEW-lifecycle.md) -- mirrors the register() convention above.
             try {
-                unregister(plugin);
+                unregister(plugin, isNameInUseByAnotherLoadedCopy(plugin), true);
             } catch (Exception | Error e) {
                 logPluginUnregistrationFailure(plugin.getPluginName(), e);
             }
@@ -833,17 +1306,74 @@ public class PluginManager {
 
     /**
      * Reload all plugins. This operation only reload plugin configuration.
+     * <p>
+     * Since 6.3.0 each module is reloaded in isolation (#509): a module whose reload throws is
+     * logged by its own {@code reloadSelf()}, the remaining modules are still reloaded, and the
+     * closing summary names every module that failed instead of an unconditional "all reloaded".
+     * See {@link #reloadAllAndReport()}.
      */
     public void reload() {
+        reloadAllAndReport();
+    }
+
+    /**
+     * Reloads every loaded module, each isolated from the others' failures, then logs a summary
+     * and returns it (#509). {@code /ul reload} sends the returned lines to its sender. The summary
+     * also lists every module whose reload hook reported parts that did not reload, with those
+     * parts (#529).
+     * <p>
+     * A module whose reload throws has already logged a failure line naming itself and its cause;
+     * it is counted as failed and the next module is reloaded. The isolation is {@link #close()}'s:
+     * every {@code Exception} or {@code Error} one module throws is that module's failure, including
+     * a {@code StackOverflowError} from a recursive hook.
+     *
+     * @return the summary lines, already localized, in the order they were logged
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public List<String> reloadAllAndReport() {
         Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Reloading all plugins...");
-        for (UltiToolsPlugin plugin : pluginList) {
-            plugin.reloadSelf();
+        List<UltiToolsPlugin> modules = new ArrayList<>(pluginList);
+        List<String> failed = new ArrayList<>();
+        List<String> partialLines = new ArrayList<>();
+        for (UltiToolsPlugin plugin : modules) {
+            try {
+                ReloadReport report = plugin.reloadWithReport();
+                if (report.isPartial()) {
+                    partialLines.add(String.format(UltiTools.getInstance().i18n(RELOAD_PARTIAL_LINE_KEY),
+                            plugin.getPluginName(), String.join("; ", report.getPartialReasons())));
+                }
+            } catch (Exception | Error e) {
+                // reloadSelf() has already logged the failure line naming the module, with its
+                // stack trace; the summary below names it again for the operator. Same policy as
+                // close(): nothing one module throws stops the modules after it.
+                failed.add(plugin.getPluginName());
+            }
         }
-        Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] All plugins reloaded.");
+        List<String> summary = new ArrayList<>();
+        if (!failed.isEmpty()) {
+            summary.add(String.format(UltiTools.getInstance().i18n(RELOAD_SUMMARY_FAILED_KEY),
+                    failed.size(), modules.size(), String.join(", ", failed)));
+            if (!partialLines.isEmpty()) {
+                summary.add(String.format(UltiTools.getInstance().i18n(RELOAD_SUMMARY_MIXED_PARTIAL_KEY),
+                        partialLines.size()));
+            }
+        } else if (!partialLines.isEmpty()) {
+            summary.add(String.format(UltiTools.getInstance().i18n(RELOAD_SUMMARY_PARTIAL_KEY),
+                    modules.size(), partialLines.size()));
+        } else {
+            summary.add(String.format(UltiTools.getInstance().i18n(RELOAD_SUMMARY_ALL_KEY), modules.size()));
+        }
+        summary.addAll(partialLines);
+        Level summaryLevel = failed.isEmpty() && partialLines.isEmpty() ? Level.INFO : Level.WARNING;
+        for (String line : summary) {
+            Bukkit.getLogger().log(summaryLevel, "[UltiTools-API] " + line);
+        }
         Bukkit.getLogger().log(
                 Level.WARNING,
                 "[UltiTools-API] This operation is only used for reloading plugin configuration. If (un)installing, please restart the server!"
         );
+        return summary;
     }
 
     /**
@@ -891,15 +1421,15 @@ public class PluginManager {
                     + "module jar must declare 'main: <fully.qualified.MainClass>' in plugin.yml.");
             return null;
         }
+        // #516: kept per main class, whether or not the class loads, so an uninstall can find every
+        // JAR that declares a loaded module -- the loader's own read, not a second scan.
+        moduleJarIndex.record(mainClassName, pluginJar);
 
         try {
-            // GEN-07 (D-14): records what the removed classload filter layers would have refused
-            // for mainClassName, independent of whether loadClass below succeeds, throws
-            // ClassNotFoundException, or throws SecurityException -- classify() is a pure function
-            // of the name alone. Purely observational; never refuses. Kept for parity with every
-            // other class-load call site in this class even though there is now exactly one class
-            // to evaluate per module.
-            ClassLoaderUtils.recordClassloadFilterAudit(pluginJar.getName(), mainClassName);
+            // No class-load audit here (#557): this step used to record the main class and emit a
+            // summary for the jar, and the entity scan then emitted a second summary for the same jar,
+            // so every module was reported twice. The entity scan visits every class of the jar,
+            // including this one, so it is the single audit per module.
             // Use security-validated class loading (checks dangerous classes/packages)
             // but NOT loadPluginClass() which rejects non-UltiToolsPlugin classes
             Class<?> aClass = ClassLoaderUtils.loadClass(mainClassName);
@@ -927,12 +1457,27 @@ public class PluginManager {
             // mismatch is a confirmed cross-jar class and is refused.
             File actualJarFile = resolveOwnJarFile(aClass);
             if (actualJarFile != null && !canonicalPath(actualJarFile).equals(canonicalPath(pluginJar))) {
+                if (isDuplicateCopy(pluginJar, actualJarFile, mainClassName)) {
+                    // UltiTools-Dev-Doc#96: another copy of the same module -- the JAR the class
+                    // came from declares this very main: too. It is still not loaded twice, and it
+                    // is reported once for every copy together after the scan
+                    // (warnOnDuplicateModuleJars), not here once per copy.
+                    moduleJarIndex.record(mainClassName, actualJarFile);
+                    moduleJarIndex.recordSupplier(mainClassName, actualJarFile);
+                    Bukkit.getLogger().log(Level.FINE, "[UltiTools-API] Module '" + pluginJar.getName()
+                            + "' is another copy of " + mainClassName + ", whose classes load from '"
+                            + actualJarFile.getName() + "'");
+                    return null;
+                }
                 Bukkit.getLogger().log(Level.SEVERE,
                     "[UltiTools-API] Module '" + pluginJar.getName() + "' declares main: '"
                         + mainClassName + "', but that class actually belongs to a different "
                         + "already-installed module jar ('" + actualJarFile.getName() + "') -- "
                         + "refusing to load a module whose declared main class is not its own.");
                 return null;
+            }
+            if (actualJarFile != null) {
+                moduleJarIndex.recordSupplier(mainClassName, actualJarFile);
             }
             return aClass.asSubclass(UltiToolsPlugin.class);
         } catch (ClassNotFoundException | LinkageError e) {
@@ -947,10 +1492,6 @@ public class PluginManager {
                 "[UltiTools-API] Security violation while loading declared main class '"
                     + mainClassName + "' for module '" + pluginJar.getName() + "': " + e.getMessage());
             return null;
-        } finally {
-            // GEN-07 (D-14): the audit summary, for parity with every other call site -- see
-            // recordClassloadFilterAudit's own comment above.
-            ClassLoaderUtils.emitClassloadFilterAuditSummary(pluginJar.getName());
         }
     }
 
@@ -1013,14 +1554,11 @@ public class PluginManager {
         } finally {
             // D-19: fires after the entity scan loop finishes, whether it completed normally or
             // the jar itself could not be read -- exactly once per call, naming pluginJar as the
-            // module. Independent of loadPluginMainClass's own emitSummary call above: the two
-            // scan the same jar for different purposes and may run at different times, so each
-            // owns its own accumulator lifecycle for the classes it individually recorded.
+            // module.
             ModuleScanDiagnostics.emitSummary(pluginJar.getName());
-            // GEN-07 (D-14): the audit summary lands at the same point, so the two diagnostics
-            // read as one pattern rather than two. Same independence rationale as
-            // ModuleScanDiagnostics above -- this scan owns its own ClassloadFilterAudit
-            // accumulator lifecycle, separate from loadPluginMainClass's.
+            // GEN-07 (D-14): the class-load audit summary lands at the same point, so the two
+            // diagnostics read as one pattern. This is the only place a jar's audit is emitted
+            // (#557): the scan records every class of the jar, the main class included.
             ClassLoaderUtils.emitClassloadFilterAuditSummary(pluginJar.getName());
         }
         return entities;
@@ -1179,7 +1717,7 @@ public class PluginManager {
      * prose message (Codex review, PR #551 round 1, P2).
      */
     private static final Pattern INTERNAL_CLASS_NAME_PATTERN =
-            Pattern.compile("[A-Za-z_$][A-Za-zA-Z0-9_$]*(?:/[A-Za-z_$][A-Za-zA-Z0-9_$]*)*");
+            Pattern.compile("[A-Za-z_$][A-Za-z0-9_$]*(?:/[A-Za-z_$][A-Za-z0-9_$]*)*");
 
     /**
      * Extraction of the internal (dot-qualified) name of the class {@code failure} reports
@@ -1609,7 +2147,7 @@ public class PluginManager {
             }
             if (existing.isNewerVersionThan(plugin)) {
                 Bukkit.getLogger().log(Level.WARNING,
-                        String.format("[UltiTools-API] %s load failed！There is already a new version！", plugin.getPluginName()));
+                        String.format("[UltiTools-API] %s load failed! There is already a new version!", plugin.getPluginName()));
                 return true;
             }
         }
@@ -1617,7 +2155,18 @@ public class PluginManager {
     }
 
     /**
-     * Unloads the old version this load supersedes.
+     * Unloads the old version this load supersedes, through the full {@link
+     * #unregister(UltiToolsPlugin)} path (#506): its tasks are cancelled, its container closed, its
+     * registrations released and it is delisted. When the incoming copy shares its name, it has
+     * already registered under it, so only the registrations recorded against the old instance are
+     * released and name-only ones stay with the incoming copy; a successor under a different name
+     * leaves the old name unused, and its name-only registrations are released too.
+     * <p>
+     * Each old copy's unload is isolated (#528): a failure thrown by its unload hook is logged
+     * against that copy's name and version and does not abort the incoming registration. The
+     * isolation is {@link #close()}'s: every {@code Exception} or {@code Error} counts. Rethrowing an
+     * {@code Error} here would not abort anything cleanly -- {@code attemptPluginRegistration}'s own
+     * handler would take it, blame the incoming version and leave neither copy listed.
      * <p>
      * <b>May only be called after the new module's {@code registerSelf()} returns true</b> -- not
      * "after the container is built". The two are one step apart: the container being built only
@@ -1632,7 +2181,33 @@ public class PluginManager {
                 continue;
             }
             if (plugin.isNewerVersionThan(existing)) {
-                existing.unregisterSelf();
+                ConfigManager configs = UltiTools.getInstance().getConfigManager();
+                List<String> dropped = configs == null ? Collections.emptyList() : configs.unsavedPaths(existing);
+                if (!dropped.isEmpty()) {
+                    Bukkit.getLogger().log(Level.WARNING, "Superseded module " + existing.getPluginName()
+                            + " configuration changes dropped (incoming copy already read its files): "
+                            + String.join(", ", dropped));
+                }
+                // #528: the outgoing copy's cleanup is isolated from the incoming registration.
+                // unregister() has closed the old copy's container and delisted it whether or not
+                // its hook threw, and has released its configuration entities -- the configuration
+                // layer's #507 release, run by unregister() itself -- so a failure here is the old
+                // copy's, is reported against it, and the new copy goes on loading -- close()'s
+                // policy, Errors included.
+                // #506: the incoming copy shares the old name only if its plugin.yml says so; a
+                // renamed successor cannot own registrations filed under the old name (Codex review
+                // of #564, round 6). The incoming copy is not listed yet, so it is compared here.
+                boolean nameStillInUse = Objects.equals(existing.getPluginName(), plugin.getPluginName())
+                        || isNameInUseByAnotherLoadedCopy(existing);
+                try {
+                    unregister(existing, nameStillInUse, false);
+                } catch (Exception | Error e) {
+                    Bukkit.getLogger().log(Level.WARNING, String.format(
+                            "[UltiTools-API] Version %s of %s, superseded by version %s, threw while unloading: %s. "
+                                    + "It has been unloaded and delisted; version %s continues to load.",
+                            existing.getVersion(), existing.getPluginName(), plugin.getVersion(),
+                            rootCauseMessage(e), plugin.getVersion()), e);
+                }
             }
         }
     }
@@ -1640,7 +2215,7 @@ public class PluginManager {
     private boolean isUltiToolsVersionCompatible(UltiToolsPlugin plugin) {
         if (plugin.getMinUltiToolsVersion() > UltiTools.getPluginVersion()) {
             Bukkit.getLogger().log(Level.WARNING,
-                    String.format("[UltiTools-API] %s load failed！UltiTools version is outdated！", plugin.getPluginName()));
+                    String.format("[UltiTools-API] %s load failed! UltiTools version is outdated!", plugin.getPluginName()));
             return false;
         }
         return true;
@@ -1648,7 +2223,14 @@ public class PluginManager {
 
     private boolean attemptPluginRegistration(UltiToolsPlugin plugin) {
         try {
-            boolean registerSelf = plugin.registerSelf();
+            boolean registerSelf;
+            // #506: what the module registers in registerSelf() is recorded against this instance.
+            beginLoadScopes(plugin);
+            try {
+                registerSelf = plugin.registerSelf();
+            } finally {
+                endLoadScopes();
+            }
             if (registerSelf) {
                 // Unloading the old version can only happen here: the container being built does
                 // not mean the module is alive -- registerSelf() returning true is the step where
@@ -1664,14 +2246,15 @@ public class PluginManager {
                 unregisterSupersededVersions(plugin);
                 onPluginRegistered(plugin);
             } else {
-                plugin.getContext().close();
+                try { plugin.getContext().close(); }
+                finally { releaseConfigEntities(plugin); }
                 Bukkit.getLogger().log(Level.WARNING,
-                        String.format("[UltiTools-API] %s load failed！Version: %s。", plugin.getPluginName(), plugin.getVersion()));
+                        String.format("[UltiTools-API] %s load failed! Version: %s.", plugin.getPluginName(), plugin.getVersion()));
             }
             return registerSelf;
         } catch (Exception | Error e) {
             Bukkit.getLogger().log(Level.WARNING, e, String::new);
-            Bukkit.getLogger().log(Level.WARNING, String.format("[UltiTools-API] %s load failed！", plugin.getPluginName()));
+            Bukkit.getLogger().log(Level.WARNING, String.format("[UltiTools-API] %s load failed!", plugin.getPluginName()));
             // WR-02 (#410): onPluginRegistered() may have already run pluginList.add(plugin)
             // and recorded some of this module's beans' @Scheduled tasks (correctly, per
             // TaskManager's own #410 fix) before a LATER bean's own scheduling call threw.
@@ -1680,15 +2263,15 @@ public class PluginManager {
             // registerSelf()" -- only a module whose OWN activation already succeeded, but
             // whose framework-side post-registration bookkeeping failed partway, reaches here.
             // unregister(plugin) itself is wrapped separately: it must not let a SECOND
-            // exception escape this handler, and the plugin must not stay in pluginList either
-            // way.
+            // exception escape this handler. It delists the plugin in its own finally block
+            // (#507), so the plugin does not stay in pluginList either way.
             if (pluginList.contains(plugin)) {
                 try {
                     unregister(plugin);
                 } catch (Exception | Error unregisterFailure) {
                     Bukkit.getLogger().log(Level.WARNING, unregisterFailure, String::new);
                     Bukkit.getLogger().log(Level.WARNING, String.format(
-                            "[UltiTools-API] %s failed to unregister cleanly after a failed load！",
+                            "[UltiTools-API] %s failed to unregister cleanly after a failed load!",
                             plugin.getPluginName()));
                     // #457's unregister() now closes the context in a finally (see its
                     // javadoc), so it has already run -- successfully or not -- by the time
@@ -1701,10 +2284,9 @@ public class PluginManager {
                     // once even when unregister() itself throws during this teardown -- is
                     // still met, now by #457's finally, and is still asserted by this same
                     // test class's unregisterFailureDuringTeardownIsHandledAndPluginStillRemoved.
-                } finally {
-                    pluginList.remove(plugin);
                 }
             }
+            releaseConfigEntities(plugin);
             return false;
         }
     }
@@ -1729,7 +2311,7 @@ public class PluginManager {
             }
         }
         Bukkit.getLogger().log(Level.INFO,
-                String.format("[UltiTools-API] %s loaded！Version: %s。", plugin.getPluginName(), plugin.getVersion()));
+                String.format("[UltiTools-API] %s loaded! Version: %s.", plugin.getPluginName(), plugin.getVersion()));
     }
 
     /**
@@ -1751,7 +2333,7 @@ public class PluginManager {
             @SuppressWarnings("unchecked")
             Class<? extends ModuleEvent> eventType = (Class<? extends ModuleEvent>) params[0];
             eventBus.register(eventType, annotation.priority(), annotation.ignoreCancelled(),
-                    plugin.getPluginName(), method, bean);
+                    plugin.getPluginName(), plugin, method, bean);
         }
     }
 
@@ -1993,6 +2575,58 @@ public class PluginManager {
                 Transactional.class, transactionInterceptor, 100, transactionalCache));
     }
 
+    private static void releaseConfigEntities(UltiToolsPlugin plugin) {
+        ConfigManager configs = UltiTools.getInstance().getConfigManager();
+        if (configs != null) { configs.unregisterAll(plugin); }
+    }
+
+    private void saveIdentifiedSupersededCopies(Class<? extends UltiToolsPlugin> incomingClass) {
+        String[] identity = readConstructionIdentity(incomingClass);
+        if (identity == null) { return; }
+        List<UltiToolsPlugin> superseded = new ArrayList<>();
+        for (UltiToolsPlugin existing : pluginList) {
+            if (identity[0].equals(existing.getMainClass()) && existing.getVersion() != null
+                    && identity[1] != null && com.ultikits.ultitools.utils.VersionComparatorUtil.compare(
+                            identity[1], existing.getVersion()) > 0) {
+                superseded.add(existing);
+            }
+        }
+        superseded.sort(java.util.Comparator.comparing(UltiToolsPlugin::getPluginName)
+                .thenComparing(UltiToolsPlugin::getVersion));
+        ConfigManager configs = UltiTools.getInstance().getConfigManager();
+        if (configs == null) { return; }
+        for (UltiToolsPlugin existing : superseded) {
+            try { configs.saveBeforeReplacement(existing); }
+            catch (IOException failure) {
+                throw new IllegalStateException("Cannot save configuration before constructing replacement for "
+                        + existing.getPluginName(), failure);
+            }
+        }
+    }
+
+    /** Reads the exact own-JAR input and defaults used by UltiToolsPlugin's constructor. */
+    private static String[] readConstructionIdentity(Class<?> incomingClass) {
+        try {
+            java.security.CodeSource source = incomingClass.getProtectionDomain().getCodeSource();
+            if (source == null || source.getLocation() == null) { return null; }
+            String path = source.getLocation().getPath();
+            path = path.startsWith("/") ? path : path.substring(1);
+            java.net.URL entry = new java.net.URI("jar:file:" + path + "!/plugin.yml").toURL();
+            java.net.JarURLConnection connection = (java.net.JarURLConnection) entry.openConnection();
+            try (java.io.InputStream stream = connection.getInputStream();
+                    java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(stream))) {
+                org.bukkit.configuration.file.YamlConfiguration metadata =
+                        new org.bukkit.configuration.file.YamlConfiguration();
+                metadata.load(reader);
+                if (!metadata.contains("name")) { return null; }
+                return new String[]{metadata.getString("main", "unknown"), metadata.getString("version", "unknown")};
+            }
+        } catch (Exception unavailable) {
+            // Unidentifiable targets use the no-save, key-naming fallback only after successful activation.
+            return null;
+        }
+    }
+
     /**
      * Initialize module using its default (zero-argument) constructor. This is the live,
      * undeprecated construction path -- {@link #register(Class)} calls it directly.
@@ -2002,13 +2636,23 @@ public class PluginManager {
      * @return the initialized module, or {@code null} if a compatibility gate rejected it
      */
     private UltiToolsPlugin initializePlugin(ClassLoader classLoader, Class<? extends UltiToolsPlugin> pluginClass) {
+        saveIdentifiedSupersededCopies(pluginClass);
+        ConfigManager configs = UltiTools.getInstance().getConfigManager();
+        Set<UltiToolsPlugin> before = configs == null ? Collections.emptySet() : configs.registeredOwners(pluginClass);
         UltiToolsPlugin plugin;
         try {
-            // Use the default constructor
             Constructor<? extends UltiToolsPlugin> constructor = pluginClass.getDeclaredConstructor();
             plugin = constructor.newInstance();
-        } catch (Exception e) {
-            throw new IllegalStateException("Failed to initialize plugin: " + pluginClass.getName(), e);
+        } catch (Exception | Error failure) {
+            if (configs != null) {
+                for (UltiToolsPlugin candidate : configs.registeredOwners(pluginClass)) {
+                    if (!before.contains(candidate) && !pluginList.contains(candidate)) {
+                        releaseConfigEntities(candidate);
+                    }
+                }
+            }
+            if (failure instanceof Error) { throw (Error) failure; }
+            throw new IllegalStateException("Failed to initialize plugin: " + pluginClass.getName(), failure);
         }
         return finishInitializingPlugin(classLoader, pluginClass, plugin);
     }
@@ -2028,11 +2672,16 @@ public class PluginManager {
         // incompatible bean graph runs first -- exactly where it would blow up. See
         // passesCompatibilityGates.
         if (!passesCompatibilityGates(plugin)) {
+            releaseConfigEntities(plugin);
             return null;
         }
 
         SimpleContainer pluginContext = new SimpleContainer();
         try {
+            // #460: the language provenance decision computed during construction is written only
+            // now, after the gates accepted this candidate -- a rejected duplicate or a module
+            // built for a newer framework never touches the language files the module shares.
+            plugin.commitLanguageProvenance();
             // WIRE-05: both entry points build their container through this one shared
             // assembly method now -- see its own javadoc for the full instruction sequence and
             // why setContext() runs first. Pass THIS method's own `classLoader` PARAMETER, not
@@ -2044,8 +2693,10 @@ public class PluginManager {
             // field's default null.
             assemblePluginContainer(pluginContext, plugin, pluginClass, classLoader);
             return plugin;
-        } catch (Exception e) {
-            throw new IllegalStateException("Failed to initialize plugin: " + pluginClass.getName(), e);
+        } catch (Exception | Error failure) {
+            releaseConfigEntities(plugin);
+            if (failure instanceof Error) { throw (Error) failure; }
+            throw new IllegalStateException("Failed to initialize plugin: " + pluginClass.getName(), failure);
         }
     }
 
@@ -2137,11 +2788,14 @@ public class PluginManager {
         // module shares ONE URLClassLoader (see init(ClassLoader) and validateAdditionalEntity's
         // identical D-19 finding above) -- an explicit scope is the only mechanism that still
         // separates two modules' completers.
-        TabCompletionManager.getInstance().beginRegistrationScope(plugin.getPluginName());
+        // #506: the instance as well as the name, so unloading a superseded copy of this module
+        // later releases this copy's registrations and not its replacement's. The same scope, in
+        // all three registries, is opened around registerSelf() in attemptPluginRegistration.
+        beginLoadScopes(plugin);
         try {
             pluginContext.refresh();
         } finally {
-            TabCompletionManager.getInstance().endRegistrationScope();
+            endLoadScopes();
         }
 
         // @ContextEntry handling (WIRE-06): read after refresh() -- registerSingleton above
@@ -2568,7 +3222,7 @@ public class PluginManager {
             Bukkit.getLogger().log(Level.SEVERE,
                 "[UltiTools-API] Legacy unsorted plugin load order is ACTIVE because "
                     + "-Dultitools.useLegacyPluginLoading=true is set on the command line. "
-                    + "Dependency resolution is skipped entirely - modules load in filesystem "
+                    + "Dependency resolution is skipped entirely - modules load in file-name "
                     + "order and may fail to initialize if they rely on load order.");
             return new ArrayList<>(plugins);
         }
@@ -2676,25 +3330,39 @@ public class PluginManager {
         // holds this data folder), nothing below has run yet -- no entity ownership recorded, no
         // DataScope attached to the adapter. A refused registerExternal() leaves no partial state.
         registerExternalScope(adapter.getDataFolder(), scope);
-        registerEntityOwnership(scope);
-        adapter.setDataScope(scope);
-        wireAop(context, scope);
-        context.refresh();
-        adapter.setContext(context);
+        // Only the ownership records this attempt inserts are its own to undo on a refusal: a
+        // record already held -- by a live registration of the same plugin, or by anyone else --
+        // is left alone (#537, gate 1).
+        List<Class<?>> ownershipAdded = new ArrayList<>();
+        try {
+            recordNewEntityOwnership(scope, ownershipAdded);
+            adapter.setDataScope(scope);
+            wireAop(context, scope);
+            context.refresh();
+            adapter.setContext(context);
 
-        // WR-01 (05-REVIEW.md): the External Plugin API's own registration path never reached
-        // validateCommandExecutorContracts -- register(UltiToolsPlugin)/initializePlugin already
-        // enforce it (assemblePluginContainer's own last line), but registerExternal is a
-        // separate, parallel container-assembly path that built its own SimpleContainer and
-        // skipped straight to task/listener/command registration. Placed here -- immediately
-        // after refresh(), before ANY Bukkit-facing side effect (task scheduling, @PlayerCache
-        // registration, EventBus wiring, command/listener registration) -- mirroring the internal
-        // path's placement as the last step of container assembly, so a refusal leaves no partial
-        // registration on either path (fail-closed, module-granularity isolation, D-01/D-04).
-        validateCommandExecutorContracts(context);
-        // #531: an external plugin has no module config registry, so a config binding cannot
-        // resolve; refuse it here, before any side effect, rather than mid-scheduling.
-        refuseConfigBindingsOutsideModules(context);
+            // WR-01 (05-REVIEW.md): the External Plugin API's own registration path never reached
+            // validateCommandExecutorContracts -- register(UltiToolsPlugin)/initializePlugin already
+            // enforce it (assemblePluginContainer's own last line), but registerExternal is a
+            // separate, parallel container-assembly path that built its own SimpleContainer and
+            // skipped straight to task/listener/command registration. Placed here -- immediately
+            // after refresh(), before ANY Bukkit-facing side effect (task scheduling, @PlayerCache
+            // registration, EventBus wiring, command/listener registration) -- mirroring the internal
+            // path's placement as the last step of container assembly, so a refusal leaves no partial
+            // registration on either path (fail-closed, module-granularity isolation, D-01/D-04).
+            validateCommandExecutorContracts(context);
+            // #531: an external plugin has no module config registry, so a config binding cannot
+            // resolve; refuse it here, before any side effect, rather than mid-scheduling.
+            refuseConfigBindingsOutsideModules(context);
+        } catch (RuntimeException | Error refused) {
+            // #537: a refusal (or a failed refresh()) after the scope was registered used to leave
+            // the scope, the entity ownership, the adapter's data scope and its context behind, so
+            // a corrected connection of the same plugin in the same process met the stale scope.
+            // Nothing Bukkit-facing has been registered yet at this point, so undoing these four
+            // is the whole unwinding unregisterExternal would do.
+            unwindRefusedExternal(adapter, context, scope, ownershipAdded);
+            throw refused;
+        }
 
         String pluginName = adapter.getPluginName();
 
@@ -2724,8 +3392,24 @@ public class PluginManager {
         UltiTools.getInstance().getCommandManager().registerAllExternal(adapter);
         UltiTools.getInstance().getListenerManager().registerAllExternal(adapter);
 
+        connectedExternalScanPackages.put(pluginName, adapter.getScanPackage());
+
         Bukkit.getLogger().log(Level.INFO,
                 "[UltiTools-API] External plugin registered: " + pluginName + " v" + adapter.getVersion());
+    }
+
+    /**
+     * The connected External Plugin API consumers, plugin name to scan package (#462) -- a copy,
+     * safe to read from any thread. Not part of the module-facing API; public only because
+     * economy attribution lives in another package.
+     *
+     * @return plugin name to scan package, for every external plugin registered and not yet
+     *         unregistered
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public Map<String, String> getConnectedExternalScanPackages() {
+        return Collections.unmodifiableMap(new LinkedHashMap<>(connectedExternalScanPackages));
     }
 
     /**
@@ -2750,6 +3434,52 @@ public class PluginManager {
     }
 
     /**
+     * Records {@code scope}'s owned entities in {@link #entityOwnership} where no owner is recorded
+     * yet, adding each entity it recorded to {@code added} -- the records a refused registration may
+     * undo (#537, gate 1). Adds to the caller's list as it goes, so an exception midway still leaves
+     * the caller knowing what was recorded.
+     */
+    private void recordNewEntityOwnership(DataScope scope, List<Class<?>> added) {
+        for (Class<?> entity : scope.getOwnedEntities()) {
+            if (entityOwnership.putIfAbsent(entity, scope.getPluginName()) == null) {
+                added.add(entity);
+            }
+        }
+    }
+
+    /**
+     * Undoes what {@link #registerExternal(ExternalPluginAdapter, Class[])} registered before a
+     * refusal after the folder scope was recorded (#537): closes the context (if {@code refresh()}
+     * got as far as building one), clears the adapter's context and data scope, removes the
+     * entity-ownership records this attempt inserted, and removes the folder scope -- only if it is
+     * still this attempt's own scope instance. A record or scope this attempt found already in place
+     * (a live registration of the same plugin, for example) is left alone.
+     *
+     * @param adapter        the refused adapter
+     * @param context        the container this attempt built
+     * @param scope          the scope this attempt minted and registered
+     * @param ownershipAdded the entities whose ownership record this attempt inserted
+     */
+    private void unwindRefusedExternal(ExternalPluginAdapter adapter, SimpleContainer context, DataScope scope,
+            List<Class<?>> ownershipAdded) {
+        try {
+            context.close();
+        } catch (RuntimeException closeFailure) {
+            Bukkit.getLogger().log(Level.WARNING, closeFailure, () -> "[UltiTools-API] Could not close the container of "
+                    + "refused external plugin " + adapter.getPluginName());
+        }
+        adapter.setContext(null);
+        adapter.setDataScope(null);
+        for (Class<?> entity : ownershipAdded) {
+            entityOwnership.remove(entity, scope.getPluginName());
+        }
+        // By identity, not remove(key, value): DataScope's equals compares plugin name and folder,
+        // so a live registration of the same plugin would compare equal and be removed with it.
+        externalScopesByFolder.computeIfPresent(canonicalPath(adapter.getDataFolder()),
+                (folder, registered) -> registered == scope ? null : registered);
+    }
+
+    /**
      * Unregister an external Bukkit plugin adapter from the framework.
      * Tears down the IoC container, unregisters commands/listeners, and cleans up resources.
      *
@@ -2758,6 +3488,7 @@ public class PluginManager {
      */
     public void unregisterExternal(ExternalPluginAdapter adapter) {
         String pluginName = adapter.getPluginName();
+        connectedExternalScanPackages.remove(pluginName);
 
         // Cancel @Scheduled tasks
         if (taskManager != null) {

@@ -19,6 +19,7 @@ import org.bukkit.plugin.Plugin;
 
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -88,7 +89,7 @@ public class PlayerEventManager implements Listener {
         Plugin plugin = Bukkit.getPluginManager().getPlugin("UltiTools");
         if (plugin == null) {
             UltiTools.getInstance().getLogger().log(java.util.logging.Level.WARNING,
-                "[PlayerEventManager] 找不到 UltiTools 插件实例，玩家事件监听器未注册");
+                FrameworkText.text("[PlayerEventManager] 找不到 UltiTools 插件实例，玩家事件监听器未注册"));
             return;
         }
         Bukkit.getPluginManager().registerEvents(this, plugin);
@@ -142,8 +143,8 @@ public class PlayerEventManager implements Listener {
 
         // Also send a log-stream message
         UltiTools.getInstance().getLogStreamManager().sendPlayerEventLog(
-            "玩家加入", player.getName(), 
-            String.format("玩家加入服务器，当前在线: %d人", Bukkit.getOnlinePlayers().size())
+            FrameworkText.text("玩家加入"), player.getName(), 
+            FrameworkText.format("玩家加入服务器，当前在线: %d人", Bukkit.getOnlinePlayers().size())
         );
     }
 
@@ -174,8 +175,8 @@ public class PlayerEventManager implements Listener {
 
         // Also send a log-stream message
         UltiTools.getInstance().getLogStreamManager().sendPlayerEventLog(
-            "玩家退出", player.getName(),
-            String.format("玩家离开服务器，当前在线: %d人", Math.max(0, Bukkit.getOnlinePlayers().size() - 1))
+            FrameworkText.text("玩家退出"), player.getName(),
+            FrameworkText.format("玩家离开服务器，当前在线: %d人", Math.max(0, Bukkit.getOnlinePlayers().size() - 1))
         );
     }
 
@@ -207,7 +208,7 @@ public class PlayerEventManager implements Listener {
         // Also send a log-stream message (chat messages are usually frequent, use debug level)
         UltiTools.getInstance().getLogStreamManager().sendCustomLog(
             "debug",
-            String.format("[聊天] <%s> %s", player.getName(), event.getMessage()),
+            FrameworkText.format("[聊天] <%s> %s", player.getName(), event.getMessage()),
             "plugin:UltiTools"
         );
     }

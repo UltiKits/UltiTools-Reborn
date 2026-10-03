@@ -18,6 +18,7 @@ import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.AccessDecision;
 import com.ultikits.ultitools.entities.Capability;
+import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -41,6 +42,24 @@ public class CommandExecutionManager {
      * The {@link RemoteActionLog.Entry#getAction()} literal for every entry this class records.
      */
     private static final String ACTION_EXECUTE_COMMAND = "execute_command";
+
+    /**
+     * The {@code command_result} text for a command the server console accepted. A panel command
+     * is typed into the server console (maintainer decision, 6.3.0): it runs as the console sender,
+     * and Paper sends a console command's replies to the console itself, never to a sender the
+     * framework could read, so the result cannot carry them. They reach the panel through the log
+     * stream, which mirrors the console ({@code ConsoleMirror}).
+     */
+    static final String DISPATCHED_OUTPUT = "Command dispatched to the server console. "
+            + "Its output appears in the server log stream.";
+
+    /**
+     * The {@code command_result} text for a command the server console did not accept
+     * ({@code Bukkit.dispatchCommand} returned {@code false}: an unknown command, or a command
+     * whose executor reported a usage error).
+     */
+    static final String NOT_ACCEPTED_OUTPUT = "The server console did not accept the command. "
+            + "Any message it printed appears in the server log stream.";
 
     /**
      * Blocklist of dangerous commands that should not be executed remotely. This is the shipped
@@ -187,7 +206,7 @@ public class CommandExecutionManager {
                 // builds its own truncated command string: decision.getMessage() already names
                 // the resolved base command plus its config key and file (D-05).
                 UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    String.format("[远程命令] 已拦截: %s", command));
+                    FrameworkText.format("[远程命令] 已拦截: %s", command));
                 RemoteActionLog deniedLog = UltiTools.getInstance().getRemoteActionLog();
                 if (deniedLog != null) {
                     deniedLog.record(RemoteActionLog.Entry.denied(Capability.COMMANDS,
@@ -201,7 +220,7 @@ public class CommandExecutionManager {
             long startTime = System.currentTimeMillis();
 
             UltiTools.getInstance().getLogger().log(Level.INFO,
-                String.format("[远程命令] > %s", command));
+                FrameworkText.format("[远程命令] > %s", command));
 
             // Record the policy decision BEFORE the dispatch hop, not inside it or after it
             // (D-22). The log records the decision, not the execution result — a decision
@@ -220,7 +239,7 @@ public class CommandExecutionManager {
             });
 
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "执行命令时发生错误: " + e.getMessage());
+            UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.format("执行命令时发生错误: %s", e.getMessage()));
             String commandId = commandData.has("commandId") && !commandData.get("commandId").isJsonNull() 
                 ? commandData.get("commandId").getAsString() : null;
             sendCommandResult(commandId, false, "Internal error: " + e.getMessage(), 0);
@@ -242,34 +261,28 @@ public class CommandExecutionManager {
                 sender = Bukkit.getConsoleSender();
             }
             
-            // Create a custom CommandSender to capture output
-            CommandOutputCapture outputCapture = new CommandOutputCapture(sender);
-            
-            // Execute the command (CommandOutputCapture implements ConsoleCommandSender
-            // so Paper's Brigadier dispatcher recognizes the sender type)
-            boolean success = Bukkit.dispatchCommand(outputCapture, command);
+            // Dispatched as the console sender itself, exactly as if typed into the console. Paper
+            // replaces any ConsoleCommandSender with the real console source before running the
+            // command, so no wrapper could read the replies; they appear in the log stream.
+            boolean success = Bukkit.dispatchCommand(sender, command);
 
             // Calculate execution time
             long executionTime = System.currentTimeMillis() - startTime;
 
             if (!success) {
                 UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    String.format("[远程命令] 命令执行失败: %s", command));
+                    FrameworkText.format("[远程命令] 命令执行失败: %s", command));
             }
-            
-            // Get command output
-            String output = outputCapture.getOutput();
-            if (output.isEmpty()) {
-                output = success ? "Command executed successfully" : "Command execution failed";
-            }
-            
+
+            String output = success ? DISPATCHED_OUTPUT : NOT_ACCEPTED_OUTPUT;
+
             // Send execution result
             sendCommandResult(commandId, success, output, executionTime);
             
         } catch (Exception e) {
             long executionTime = System.currentTimeMillis() - startTime;
             UltiTools.getInstance().getLogger().log(Level.WARNING,
-                String.format("[远程命令] 命令执行异常: %s", command), e);
+                FrameworkText.format("[远程命令] 命令执行异常: %s", command), e);
             sendCommandResult(commandId, false, "Error executing command: " + e.getMessage(), executionTime);
         }
     }
@@ -305,7 +318,7 @@ public class CommandExecutionManager {
             webSocketClient.sendMessage(message);
 
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, "发送命令结果失败: " + e.getMessage());
+            UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.format("发送命令结果失败: %s", e.getMessage()));
         }
     }
     
@@ -326,196 +339,5 @@ public class CommandExecutionManager {
         public boolean isSuccess() { return success; }
         public String getOutput() { return output; }
         public long getExecutionTime() { return executionTime; }
-    }
-    
-    /**
-     * Command output capture.
-     * Implements ConsoleCommandSender (not just CommandSender) because Paper 1.21+
-     * requires the sender to be a recognized type when dispatching commands through
-     * Brigadier. Paper's VanillaCommandWrapper.getListener() checks instanceof for
-     * ConsoleCommandSender, Player, etc. A plain CommandSender implementation would
-     * cause dispatchCommand() to return false.
-     */
-    private static class CommandOutputCapture implements org.bukkit.command.ConsoleCommandSender {
-        private final CommandSender delegate;
-        private final StringBuilder output;
-
-        public CommandOutputCapture(CommandSender delegate) {
-            this.delegate = delegate;
-            this.output = new StringBuilder();
-        }
-
-        @Override
-        public void sendMessage(String message) {
-            output.append(message).append("\n");
-            // Log via Bukkit root logger (no [UltiTools] prefix) so it appears
-            // in both server console and web console (via SystemLogHandler → JUL)
-            String clean = org.bukkit.ChatColor.stripColor(message);
-            if (clean != null && !clean.isEmpty()) {
-                Bukkit.getLogger().info(clean);
-            }
-        }
-
-        @Override
-        public void sendMessage(net.kyori.adventure.text.Component message) {
-            // Paper 1.21+ commands use Adventure Component API
-            try {
-                String plain = net.kyori.adventure.text.serializer.plain
-                        .PlainTextComponentSerializer.plainText().serialize(message);
-                output.append(plain).append("\n");
-                if (!plain.isEmpty()) {
-                    Bukkit.getLogger().info(plain);
-                }
-            } catch (Exception e) {
-                String fallback = message.toString();
-                output.append(fallback).append("\n");
-                Bukkit.getLogger().info(fallback);
-            }
-        }
-
-        @Override
-        public void sendMessage(String... messages) {
-            for (String message : messages) {
-                sendMessage(message);
-            }
-        }
-
-        @Override
-        public void sendMessage(java.util.UUID sender, String message) {
-            sendMessage(message);
-        }
-
-        @Override
-        public void sendMessage(java.util.UUID sender, String... messages) {
-            for (String message : messages) {
-                sendMessage(message);
-            }
-        }
-
-        public String getOutput() {
-            return output.toString().trim();
-        }
-
-        // Conversable interface methods (required by ConsoleCommandSender)
-        @Override
-        public boolean isConversing() {
-            if (delegate instanceof org.bukkit.conversations.Conversable) {
-                return ((org.bukkit.conversations.Conversable) delegate).isConversing();
-            }
-            return false;
-        }
-
-        @Override
-        public void acceptConversationInput(String input) {
-            if (delegate instanceof org.bukkit.conversations.Conversable) {
-                ((org.bukkit.conversations.Conversable) delegate).acceptConversationInput(input);
-            }
-        }
-
-        @Override
-        public boolean beginConversation(org.bukkit.conversations.Conversation conversation) {
-            if (delegate instanceof org.bukkit.conversations.Conversable) {
-                return ((org.bukkit.conversations.Conversable) delegate).beginConversation(conversation);
-            }
-            return false;
-        }
-
-        @Override
-        public void abandonConversation(org.bukkit.conversations.Conversation conversation) {
-            if (delegate instanceof org.bukkit.conversations.Conversable) {
-                ((org.bukkit.conversations.Conversable) delegate).abandonConversation(conversation);
-            }
-        }
-
-        @Override
-        public void abandonConversation(org.bukkit.conversations.Conversation conversation, org.bukkit.conversations.ConversationAbandonedEvent details) {
-            if (delegate instanceof org.bukkit.conversations.Conversable) {
-                ((org.bukkit.conversations.Conversable) delegate).abandonConversation(conversation, details);
-            }
-        }
-
-        @Override
-        public void sendRawMessage(String message) {
-            output.append(message).append("\n");
-            String clean = org.bukkit.ChatColor.stripColor(message);
-            if (clean != null && !clean.isEmpty()) {
-                Bukkit.getLogger().info(clean);
-            }
-        }
-
-        @Override
-        public void sendRawMessage(java.util.UUID sender, String message) {
-            sendRawMessage(message);
-        }
-
-        // CommandSender delegate methods
-        @Override
-        public org.bukkit.Server getServer() { return delegate.getServer(); }
-
-        @Override
-        public String getName() { return delegate.getName(); }
-
-        @Override
-        public net.kyori.adventure.text.Component name() {
-            return delegate.name();
-        }
-
-        @Override
-        public boolean isPermissionSet(String name) { return delegate.isPermissionSet(name); }
-
-        @Override
-        public boolean isPermissionSet(org.bukkit.permissions.Permission perm) { return delegate.isPermissionSet(perm); }
-
-        @Override
-        public boolean hasPermission(String name) { return delegate.hasPermission(name); }
-
-        @Override
-        public boolean hasPermission(org.bukkit.permissions.Permission perm) { return delegate.hasPermission(perm); }
-
-        @Override
-        public org.bukkit.permissions.PermissionAttachment addAttachment(org.bukkit.plugin.Plugin plugin, String name, boolean value) {
-            return delegate.addAttachment(plugin, name, value);
-        }
-
-        @Override
-        public org.bukkit.permissions.PermissionAttachment addAttachment(org.bukkit.plugin.Plugin plugin) {
-            return delegate.addAttachment(plugin);
-        }
-
-        @Override
-        public org.bukkit.permissions.PermissionAttachment addAttachment(org.bukkit.plugin.Plugin plugin, String name, boolean value, int ticks) {
-            return delegate.addAttachment(plugin, name, value, ticks);
-        }
-
-        @Override
-        public org.bukkit.permissions.PermissionAttachment addAttachment(org.bukkit.plugin.Plugin plugin, int ticks) {
-            return delegate.addAttachment(plugin, ticks);
-        }
-
-        @Override
-        public void removeAttachment(org.bukkit.permissions.PermissionAttachment attachment) {
-            delegate.removeAttachment(attachment);
-        }
-
-        @Override
-        public void recalculatePermissions() {
-            delegate.recalculatePermissions();
-        }
-
-        @Override
-        public java.util.Set<org.bukkit.permissions.PermissionAttachmentInfo> getEffectivePermissions() {
-            return delegate.getEffectivePermissions();
-        }
-
-        @Override
-        public boolean isOp() { return delegate.isOp(); }
-
-        @Override
-        public void setOp(boolean value) { delegate.setOp(value); }
-
-        @Override
-        public org.bukkit.command.CommandSender.Spigot spigot() {
-            return delegate.spigot();
-        }
     }
 }
