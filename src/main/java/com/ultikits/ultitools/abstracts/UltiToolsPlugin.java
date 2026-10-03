@@ -36,6 +36,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -99,6 +100,33 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * literal string between production and test code.
      */
     static final String RELOAD_LOG_MESSAGE_KEY = "Module '%s' reloaded.";
+    /**
+     * Framework i18n key for the SEVERE line {@link #reloadSelf()} logs, naming the module and the
+     * cause, when any of its steps or the module's own {@link #onReload()} throws (#509). The success
+     * line {@link #RELOAD_LOG_MESSAGE_KEY} is never logged for that reload. Package-private for the
+     * same catalogue-coverage test as that key.
+     */
+    static final String RELOAD_FAILED_LOG_MESSAGE_KEY = "Module '%s' failed to reload: %s";
+    /**
+     * Framework i18n key for the WARNING line logged instead of {@link #RELOAD_LOG_MESSAGE_KEY}
+     * when the module's reload hook recorded parts that did not reload in its {@link ReloadReport}
+     * (#529). Package-private for the same catalogue-coverage test as that key.
+     */
+    static final String RELOAD_PARTIAL_LOG_MESSAGE_KEY = "Module '%s' reloaded partially; not reloaded: %s";
+    /**
+     * The partial reason in the report {@link #reloadWithReport()} returns when the call was
+     * refused because it was made off the server thread (#538). Not an i18n key: nothing
+     * reaches the operator through it on the framework's own reload paths, which run on the
+     * server thread; it is for a module that calls {@link #reloadWithReport()} itself.
+     */
+    static final String RELOAD_REFUSED_OFF_THREAD_REASON = "the reload was refused: it was called off the server thread";
+    /**
+     * Framework i18n key for the partial-reload reason a per-module reload records when the
+     * {@code language} setting in the framework's {@code config.yml} on disk differs from the one
+     * the framework runs with (#502). Package-private for the catalogue-coverage test.
+     */
+    static final String LANGUAGE_CHANGE_PENDING_KEY =
+            "the language setting in config.yml changed from %s to %s; a full /ul reload applies it to every module";
     /**
      * Matches a {@code java.util.Formatter} conversion specifier, e.g. {@code %s} in {@code
      * "Hello, %s!"}, or {@code %1$s} for an explicit argument index. Used only by {@link
@@ -1662,10 +1690,12 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * Extension point for a module's own reload work.
      * <p>
      * Called by {@link #reloadSelf()} <em>after</em> the framework's own reload steps -- config
-     * reload, config-bound timing refresh (#531), language-catalogue refresh,
-     * {@code @ConditionalOnConfig} drift report, and the
-     * framework-owned per-module reload log line (D-02, D-03) -- so a real-work override sees
-     * the already-reloaded configuration rather than the stale one. {@link #reloadSelf()} is
+     * reload, config-bound timing refresh (#531), language-catalogue refresh and
+     * {@code @ConditionalOnConfig} drift report (D-02) -- so a real-work override sees the
+     * already-reloaded configuration rather than the stale one. The framework-owned per-module
+     * reload line (D-03) is logged only after this hook returned; if it throws, a failure line
+     * naming the module is logged instead and the exception propagates to the caller (#509).
+     * {@link #reloadSelf()} is
      * {@code final} and always runs its own steps first; a module cannot skip them by
      * overriding {@link #reloadSelf()} itself, because that is no longer possible (D-01). The
      * default body does nothing; override this method, not {@link #reloadSelf()}, to add reload
@@ -1679,6 +1709,26 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
+     * Extension point for a module's own reload work, with a way to report a partial reload
+     * (#529).
+     * <p>
+     * Called by {@link #reloadSelf()} and {@link #reloadWithReport()} at the point {@link
+     * #onReload()} is documented to run, with a fresh {@link ReloadReport}. A module that reloads
+     * only part of what it should records each part that did not reload with {@link
+     * ReloadReport#partial(String)} and returns normally; the framework then reports the reload
+     * as partial, naming those parts, instead of as a success. The default body calls {@link
+     * #onReload()}, so a module that overrides only that method behaves exactly as before 6.3.0.
+     * Override one of the two, not both: an override of this method replaces the call to
+     * {@link #onReload()} unless it calls {@code super.onReload(report)}.
+     *
+     * @param report the report for this reload, to record the parts that did not reload
+     * @since 6.3.0
+     */
+    protected void onReload(ReloadReport report) {
+        onReload();
+    }
+
+    /**
      * Reload this plugin's configuration and language files.
      * <p>
      * Also reports (but does not act on) any {@code @ConditionalOnConfig} drift: the condition
@@ -1687,14 +1737,87 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * rebuilds anything (issue #392, D-01). Right after the configuration reload, and only if it
      * succeeded, the module's config-bound {@code @Scheduled} tasks and {@code @CmdCD} cooldowns
      * pick up their reloaded values (#531; see {@code PluginManager#applyReloadedConfigBindings}).
-     * {@code final} and always runs its own steps,
-     * then logs one framework-owned INFO line naming this module (D-03), then calls
-     * {@link #onReload()} -- a module can no longer skip any of this by overriding
-     * {@code reloadSelf()} itself, because that override point no longer exists (D-01).
+     * {@code final} and always runs its own steps, then calls {@link #onReload()} -- a module can
+     * no longer skip any of this by overriding {@code reloadSelf()} itself, because that override
+     * point no longer exists (D-01). The hook it calls is {@link #onReload(ReloadReport)}, whose
+     * default body calls {@link #onReload()}.
+     * <p>
+     * Only when every step and the hook returned does it log one framework-owned line naming this
+     * module (D-03): an INFO success line, or a WARNING naming the parts that did not reload when
+     * the hook recorded any in its {@link ReloadReport} (#529). If anything throws, it logs one
+     * SEVERE line naming the module and the cause instead, never the success line, and rethrows the
+     * failure unchanged, so a caller can report it -- {@code /ul reload <name>} replies failure, and
+     * a full {@code /ul reload} carries on with the next module and names this one in its summary
+     * (#509).
+     * <p>
+     * The signature is unchanged since 6.2; {@link #reloadWithReport()} runs the same reload and
+     * returns the report.
      */
     @Override
     public final void reloadSelf() {
-        if (!ConfigManager.permitsConfigThread(this, "reloadSelf")) { return; }
+        performReload();
+    }
+
+    /**
+     * Reloads this module exactly as {@link #reloadSelf()} does, and returns what its reload hook
+     * reported (#529).
+     * <p>
+     * {@code /ul reload} and {@code /ul reload <name>} call this to tell the operator which parts
+     * of a module did not reload. A module's own reload command can call it for the same reason.
+     *
+     * @return the report of this reload, never {@code null}; empty when every part reloaded
+     * @throws RuntimeException whatever a reload step or the module's hook threw, after it was logged
+     *                          (a checked exception the hook threw without declaring it propagates
+     *                          unchanged in the same way)
+     * @throws Error            whatever a reload step or the module's hook threw, after it was logged
+     * @since 6.3.0
+     */
+    public final ReloadReport reloadWithReport() {
+        return performReload();
+    }
+
+    /**
+     * The body of {@link #reloadSelf()} and {@link #reloadWithReport()}. Private, so both public
+     * entry points always run exactly this.
+     *
+     * @return the report the module's hook filled in; when the call was refused off the server
+     *         thread (#538), a report whose only partial reason is that refusal
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // logged and rethrown unchanged -- see reloadSelf()
+    private ReloadReport performReload() {
+        ReloadReport report = new ReloadReport();
+        // #538: off the server thread both entry points are refused before anything runs --
+        // the guard logs its one warning and nothing else is logged, read or changed. The
+        // returned report names the refusal, so reloadWithReport() never presents a reload
+        // that did not run as a complete one.
+        if (!ConfigManager.permitsConfigThread(this, "reloadSelf")) {
+            report.partial(RELOAD_REFUSED_OFF_THREAD_REASON);
+            return report;
+        }
+        try {
+            runReloadSteps(report);
+        } catch (Exception | Error e) {
+            // Exception, not RuntimeException: a hook can throw a checked exception it does not
+            // declare (Lombok @SneakyThrows); it gets the failure line too. Rethrown unchanged.
+            LOGGER.log(Level.SEVERE, String.format(UltiTools.getInstance().i18n(RELOAD_FAILED_LOG_MESSAGE_KEY),
+                    getPluginName(), describeFailure(e)), e);
+            throw e;
+        }
+        if (report.isPartial()) {
+            LOGGER.log(Level.WARNING, String.format(UltiTools.getInstance().i18n(RELOAD_PARTIAL_LOG_MESSAGE_KEY),
+                    getPluginName(), String.join("; ", report.getPartialReasons())));
+        } else {
+            LOGGER.log(Level.INFO, String.format(UltiTools.getInstance().i18n(RELOAD_LOG_MESSAGE_KEY), getPluginName()));
+        }
+        return report;
+    }
+
+    /**
+     * The reload steps, in order, ending with the module's own hook.
+     *
+     * @param report the report handed to the module's hook
+     */
+    private void runReloadSteps(ReloadReport report) {
         getConfigManager().reloadConfigs(this);
         // #531: apply the reloaded values to config-bound @Scheduled/@CmdCD. Only reached when
         // reloadConfigs did not throw, so a refused reload leaves the running timings alone.
@@ -1702,13 +1825,63 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         if (pluginManager != null) {
             pluginManager.applyReloadedConfigBindings(this);
         }
-        // Reinitialize language in case language setting changed
+        // Rebuild the catalogue from this module's language files, re-read from disk and jar, in
+        // the language the framework runs with. The `language` setting is one value for the
+        // whole server: a per-module reload does not apply a changed value to this module alone,
+        // which would leave it speaking a different language from the framework and every other
+        // module. It records the change instead, so the operator is told a full /ul reload
+        // applies it (#502).
         language = createLanguageFromPath(resourceFolderPath);
+        String pendingLanguage = pendingLanguageSetting();
+        if (pendingLanguage != null) {
+            report.partial(String.format(UltiTools.getInstance().i18n(LANGUAGE_CHANGE_PENDING_KEY),
+                    getLanguageCode(), pendingLanguage));
+        }
         // @ConditionalOnConfig is evaluated once at component-scan time; a reload can only
         // report drift on a watched key, never re-register or rebuild anything (#392, D-01).
         ConditionalRegistrationEvaluator.reportDrift(this);
-        LOGGER.log(Level.INFO, String.format(UltiTools.getInstance().i18n(RELOAD_LOG_MESSAGE_KEY), getPluginName()));
-        onReload();
+        onReload(report);
+    }
+
+    /**
+     * The framework's {@code language} setting as it is in {@code config.yml} on disk now, when it
+     * differs from the value the framework runs with (#502).
+     * <p>
+     * The framework reads its configuration once and re-reads it only on a full {@code /ul
+     * reload}. A missing, unreadable or unparseable file, or one without the key, is not a pending
+     * change: that is reported, if at all, by the full reload that reads it.
+     *
+     * @return the value on disk, or {@code null} if it is the running value or cannot be read
+     */
+    private String pendingLanguageSetting() {
+        UltiTools framework = UltiTools.getInstance();
+        File dataFolder = framework.getDataFolder();
+        if (dataFolder == null) {
+            return null;
+        }
+        File configFile = new File(dataFolder, "config.yml");
+        if (!configFile.isFile()) {
+            return null;
+        }
+        YamlConfiguration onDisk = new YamlConfiguration();
+        try {
+            onDisk.load(configFile);
+        } catch (IOException | InvalidConfigurationException e) {
+            return null;
+        }
+        String diskLanguage = onDisk.getString("language");
+        return diskLanguage != null && !diskLanguage.equals(getLanguageCode()) ? diskLanguage : null;
+    }
+
+    /**
+     * A failure's message for a one-line report, or its class name when it carries none.
+     *
+     * @param failure the failure to describe
+     * @return a non-null description
+     */
+    private static String describeFailure(Throwable failure) {
+        String message = failure.getMessage();
+        return message != null ? message : failure.getClass().getName();
     }
 
     /**

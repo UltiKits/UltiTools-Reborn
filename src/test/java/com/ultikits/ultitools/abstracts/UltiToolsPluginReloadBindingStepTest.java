@@ -59,6 +59,8 @@ class UltiToolsPluginReloadBindingStepTest {
         resourceFolderPathField.setAccessible(true);
         resourceFolderPathField.set(plugin, System.getProperty("java.io.tmpdir"));
         doCallRealMethod().when(plugin).reloadSelf();
+        // #529: the framework calls onReload(ReloadReport), whose default body calls onReload().
+        doCallRealMethod().when(plugin).onReload(any(ReloadReport.class));
         return plugin;
     }
 

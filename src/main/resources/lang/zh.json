@@ -99,5 +99,14 @@
   "%s 的另一个更新正在进行中，请稍后再试；没有做任何改动。": "%s 的另一个更新正在进行中，请稍后再试；没有做任何改动。",
   "%s 中有上一次更新留下、没有记录的旧版本 JAR；请先检查并移走它": "%s 中有上一次更新留下、没有记录的旧版本 JAR；请先检查并移走它",
   "模块 %s 保留的旧版本 JAR（%s）不见了，无法回滚；%s 保持不动。": "模块 %s 保留的旧版本 JAR（%s）不见了，无法回滚；%s 保持不动。",
-  "以下 JAR 文件都声明了同一个模块主类 %s：%s。该模块的类只从 %s 加载，其余副本不会加载；请只保留其中一个。": "以下 JAR 文件都声明了同一个模块主类 %s：%s。该模块的类只从 %s 加载，其余副本不会加载；请只保留其中一个。"
+  "以下 JAR 文件都声明了同一个模块主类 %s：%s。该模块的类只从 %s 加载，其余副本不会加载；请只保留其中一个。": "以下 JAR 文件都声明了同一个模块主类 %s：%s。该模块的类只从 %s 加载，其余副本不会加载；请只保留其中一个。",
+  "Module '%s' failed to reload: %s": "模块 '%s' 重载失败：%s",
+  "All %d modules reloaded.": "已重载全部 %d 个模块。",
+  "Failed to reload %d of %d modules: %s. See the console for each failure.": "重载失败 %d 个（共 %d 个模块）：%s。每个失败的详情见控制台。",
+  "%d of the others reloaded only partially:": "其余模块中有 %d 个只重载了一部分：",
+  "Module %s failed to reload: %s. See the console for details.": "§c模块 %s 重载失败：%s。详情见控制台。",
+  "Module '%s' reloaded partially; not reloaded: %s": "模块 '%s' 只重载了一部分；未重载：%s",
+  "Reloaded %d modules; %d only partially:": "已重载 %d 个模块，其中 %d 个只重载了一部分：",
+  "Module %s reloaded partially; not reloaded: %s": "模块 %s 只重载了一部分；未重载：%s",
+  "the language setting in config.yml changed from %s to %s; a full /ul reload applies it to every module": "config.yml 中的语言设置已从 %s 改为 %s；执行完整的 /ul reload 才会对所有模块生效"
 }

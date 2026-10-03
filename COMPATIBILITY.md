@@ -915,6 +915,80 @@ This section governs the third kind.
   exists before its `update` (the one remaining miscount: a delete by another writer during that
   call). See `ultitools.storage.missing-row-update` in `FEATURES.md`.
 
+- `PluginManager#getPluginList()` returning an unmodifiable snapshot, and
+  `PluginManager#unregister(UltiToolsPlugin)` delisting the module (#507). `getPluginList()` used to return the manager's live internal `ArrayList`, which callers had
+  to mutate to delist a module `unregister` had unloaded, and which a reader on another thread (the
+  asynchronous `/upm list`, the economy facade's module attribution) could see fail with a
+  `ConcurrentModificationException` or a trailing `null` while the main thread unloaded a module.
+  Mutating that list was never a documented contract; it was the mechanism of the defect. As of
+  6.3.0 the method keeps its signature and return type and returns a copy taken at the moment of the
+  call: it does not change afterwards, and `add`, `remove` and `clear` throw
+  `UnsupportedOperationException`. Code that only reads or iterates it is unaffected — which, measured
+  against the fifteen modules' `master` and UltiTools-External-Example, is every caller (two modules
+  iterate it; none mutates it). `unregister` itself now removes the module from the loaded modules,
+  by identity and whether or not the module's unload hook threw. It does not change the module's
+  configuration entities: releasing them, so the shutdown save stops writing the files of a module
+  unloaded while the server ran, is part of the configuration-layer rework in this release.
+- Registrations released per module instance, and a superseded copy of a module unloaded through the
+  full unload path (#506, #528). This path is reached only when code registers a newer instance of a
+  loaded module through `PluginManager#register(...)`; two jars of one module in the modules folder
+  never supersede each other. The older copy used to get only `unregisterSelf()`: its `@Scheduled`
+  tasks kept running, its container stayed open and it stayed listed next to its replacement, and a
+  failure thrown by its unload hook was reported as the **incoming** version failing to load and
+  aborted that version's activation. As of 6.3.0 the older copy goes through `unregister` — tasks
+  cancelled, container closed, registrations released, delisted — and a failure of its unload hook
+  is logged against the older copy's name and version while the incoming copy goes on loading. As in
+  `PluginManager#close()`, every `Exception` or `Error` the older copy throws counts as its own
+  failure. Because both copies share a module name,
+  `TabCompletionManager`, `EventBus` and `PanelResponderRegistry` can now also record the registering
+  module instance, and `unregister` releases by instance first. The framework records it for
+  everything a module registers in the three registries while it loads — during its container
+  refresh, where `@PostConstruct` runs, and during `registerSelf()` — through the ordinary name-only
+  methods, and for every `@ModuleEventHandler` method. A registration made later records it only
+  through the new overloads that take the instance. A registration filed under the module's name
+  only is released by name as before, except while another loaded copy shares that name, when it
+  stays until the last copy of the name is unloaded. One visible consequence: a completer a module
+  registers in `registerSelf()` is now released when the module unloads; before, only completers
+  registered during the container refresh were. Added, all `@since 6.3.0`:
+  `TabCompletionManager#beginRegistrationScope(String, UltiToolsPlugin)` and
+  `#unregisterByOwnerInstance(UltiToolsPlugin)`; `EventBus#register(...)` and `EventBus#subscribe(...)`
+  with an owner-instance parameter, `#beginRegistrationScope(UltiToolsPlugin)`,
+  `#endRegistrationScope()` and `#unregisterByOwnerInstance(UltiToolsPlugin)`;
+  `PanelResponderRegistry#registerResponder(...)` with an owner-instance parameter,
+  `#beginRegistrationScope(UltiToolsPlugin)`, `#endRegistrationScope()` and
+  `#unregisterByOwnerInstance(UltiToolsPlugin)`; two `HandlerEntry` constructors and a getter for
+  the owner instance. Every name-keyed method keeps its signature and behaviour.
+- `/ul reload` and a module's reload reporting what actually happened (#509, #529, #502). Before
+  6.3.0 `reloadSelf()` logged `Module '<name>' reloaded.` before the module's `onReload()` ran and did
+  not guard it, so a throwing hook printed the success line followed by a stack trace,
+  `/ul reload <name>` answered only with the generic command-error line, and a bare `/ul reload`
+  stopped at that module, leaving every module after it unreloaded. As of 6.3.0:
+  - the per-module line is logged only after the hook returned; when any reload step or the hook
+    throws, one SEVERE line names the module and the cause instead, and the failure is rethrown
+    unchanged to the caller;
+  - a bare `/ul reload` reloads every module in isolation — as in `PluginManager#close()`, every
+    `Exception` or `Error` one module throws is that module's failure — and ends with a summary
+    naming the modules that failed instead of `All plugins reloaded.`; the summary is also sent to
+    the command's sender, which previously got no reply on success and the generic command-error
+    line on failure;
+  - `/ul reload <name>` replies failure, naming the module and the cause, when the reload threw;
+  - a module can report a partial reload without throwing: the new public final class
+    `ReloadReport`, the new hook `protected void onReload(ReloadReport report)` — whose default body
+    calls `onReload()`, so a module overriding only `onReload()` behaves exactly as before — and the
+    new `public final ReloadReport reloadWithReport()`, which runs the same reload as `reloadSelf()`
+    and returns the report. `reloadSelf()` keeps its `public final void` signature. A partial
+    reload logs a WARNING naming the parts instead of the success line, `/ul reload <name>` replies
+    with those parts instead of the success reply, and the `/ul reload` summary lists the module
+    with them;
+  - a per-module reload whose framework `config.yml` on disk holds a different `language` than the
+    one the framework runs with keeps the running language — one server-wide setting is not applied
+    to one module — and reports the reload as partial, naming both values and that a full
+    `/ul reload` applies it. A full `/ul reload` applies the new language to every module, as before.
+
+  The new console lines and replies are in both shipped catalogues. A module that catches a failure
+  in `onReload()` and only logs it keeps working unchanged; to make the operator see it, override
+  `onReload(ReloadReport)` instead and record the failure with `report.partial(...)`.
+
 ### Behavioral changes that do need one
 
 - A documented default value flipping.

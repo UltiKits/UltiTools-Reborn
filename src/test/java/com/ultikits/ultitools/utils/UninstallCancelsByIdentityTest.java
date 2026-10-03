@@ -42,6 +42,7 @@ import org.mockbukkit.mockbukkit.MockBukkit;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.ListenerManager;
+import com.ultikits.ultitools.manager.PluginListSeeding;
 import com.ultikits.ultitools.manager.PluginManager;
 
 /**
@@ -102,7 +103,7 @@ class UninstallCancelsByIdentityTest {
     private UltiToolsPlugin loaded(String runtimeName, String identifyString) {
         UltiToolsPlugin plugin = loadedModule(runtimeName, "1.0", identifyString);
         doCallRealMethod().when(plugin).unregisterSelf();
-        pluginManager.getPluginList().add(plugin);
+        PluginListSeeding.add(pluginManager, plugin);
         return plugin;
     }
 

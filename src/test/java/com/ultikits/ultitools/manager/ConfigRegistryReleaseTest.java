@@ -45,7 +45,7 @@ class ConfigRegistryReleaseTest {
         ConfigFileStubs.stubConfigFolder(owner, directory.toFile());
         Files.write(directory.resolve("release.yml"), "value: disk\n".getBytes(StandardCharsets.UTF_8));
         entity = new Values("release.yml"); configs.register(owner, entity); entity.value = "pending";
-        plugins.getPluginList().add(owner);
+        PluginListSeeding.add(plugins, owner);
     }
     @AfterEach void cleanup() { MockBukkitHelper.safeUnmock(); }
     private String disk() throws Exception {
@@ -127,7 +127,7 @@ class ConfigRegistryReleaseTest {
     @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Exercise the existing private activation boundary without unrelated bootstrap.
     void failedActivationPreDestroyDoesNotAddSave() throws Exception {
         HookOwner hook = callbackOwner(false, true); hook.checkInitialSave = false;
-        plugins.getPluginList().clear(); when(hook.registerSelf()).thenReturn(false);
+        PluginListSeeding.clear(plugins); when(hook.registerSelf()).thenReturn(false);
         java.lang.reflect.Method activation = PluginManager.class.getDeclaredMethod("attemptPluginRegistration", UltiToolsPlugin.class);
         activation.setAccessible(true);
         assertThat(activation.invoke(plugins, hook)).isEqualTo(false);
@@ -176,7 +176,7 @@ class ConfigRegistryReleaseTest {
     }
 
     private HookOwner callbackOwner(boolean throwing, boolean destroy) throws Exception {
-        configs.unregisterAll(owner); plugins.getPluginList().clear();
+        configs.unregisterAll(owner); PluginListSeeding.clear(plugins);
         HookOwner hook = mock(HookOwner.class);
         lenient().when(hook.getPluginName()).thenReturn("ReleasedModule");
         lenient().when(hook.getResourceFolderPath()).thenReturn(directory.toString());
@@ -190,7 +190,7 @@ class ConfigRegistryReleaseTest {
             hook.bean = new DestroyBean(hook, entity, configs); context.registerSingleton("destroyer", hook.bean);
         }
         configs.register(hook, entity); entity.value = "pending";
-        plugins.getPluginList().add(hook); return hook;
+        PluginListSeeding.add(plugins, hook); return hook;
     }
 
     abstract static class HookOwner extends UltiToolsPlugin {

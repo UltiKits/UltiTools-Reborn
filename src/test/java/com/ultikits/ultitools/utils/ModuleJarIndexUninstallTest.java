@@ -25,6 +25,7 @@ import org.mockbukkit.mockbukkit.MockBukkit;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.ListenerManager;
+import com.ultikits.ultitools.manager.PluginListSeeding;
 import com.ultikits.ultitools.manager.PluginManager;
 
 /**
@@ -105,7 +106,7 @@ class ModuleJarIndexUninstallTest {
         T plugin = mock(type);
         when(plugin.getPluginName()).thenReturn(runtimeName);
         doCallRealMethod().when(plugin).unregisterSelf();
-        pluginManager.getPluginList().add(plugin);
+        PluginListSeeding.add(pluginManager, plugin);
         return plugin;
     }
 
