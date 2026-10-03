@@ -57,6 +57,14 @@ import org.mockbukkit.mockbukkit.ServerMock;
  * java.util.logging} into Log4j2), so it cannot carry this record either. The mechanism this
  * class exercises therefore cannot ever receive that record, independent of what a live player
  * session would show.
+ * <p>
+ * <b>Superseded later in 6.3.0 (maintainer decision, Q-PANEL).</b> The panel's log stream now
+ * mirrors the server console: {@code handler.ConsoleMirror} installs an appender on Log4j's root
+ * logger and feeds its events into this same handler, so the player command line does reach the
+ * panel, unredacted, exactly as the console shows it. The maintainer ruled that whatever the
+ * console shows the panel may show (same trust level), replacing the redaction-plus-advisory
+ * disposition this measurement was written under. The tests below still pin the handler's own
+ * behaviour; {@code handler.ConsoleMirrorTest} covers the Log4j route.
  *
  * @since 6.3.0
  */

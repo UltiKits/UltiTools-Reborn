@@ -1,7 +1,6 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -31,14 +30,17 @@ import com.ultikits.ultitools.utils.TestHelper;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 /**
- * #541: the panel's remote command reads its output capture right after
- * {@code Bukkit.dispatchCommand} returns. A module command's body now runs inside that dispatch
- * on the primary thread, so its reply is in the captured output the panel receives.
+ * #541: a module command's body runs inside the dispatch the panel's remote command makes on the
+ * primary thread, as the server console sender.
  * <p>
- * Before the fix the body was deferred one tick, so the capture was read empty and the panel
- * received the generic "Command executed successfully" instead of the module's reply.
+ * Superseded in part later in 6.3.0 (maintainer decision Q-PANEL): the {@code command_result} no
+ * longer carries the reply. On Paper 1.21.11 the dispatch replaces any console sender with the real
+ * console, so no capture ever received a reply; the result now says the command was dispatched, and
+ * the reply reaches the panel through the log stream, which mirrors the console
+ * ({@code handler.ConsoleMirrorTest}). These tests pin that the body still runs inside the
+ * dispatch, replying to the console sender, before the result is sent.
  */
-@DisplayName("The panel's remote command returns a module command's reply (#541)")
+@DisplayName("The panel's remote command runs a module command's body inside the dispatch, as the console (#541)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class RemoteCommandModuleReplyTest {
 
@@ -90,8 +92,8 @@ class RemoteCommandModuleReplyTest {
     }
 
     @Test
-    @DisplayName("the command_result output carries the module body's reply")
-    void remoteCommandOutputCarriesTheModuleReply() {
+    @DisplayName("the module body replies to the console sender inside the dispatch; the result says dispatched")
+    void remoteCommandRunsTheModuleBodyInsideTheDispatch() {
         JsonObject commandData = new JsonObject();
         commandData.addProperty("command", "moduleprobe");
         commandData.addProperty("executor", "console");
@@ -101,15 +103,17 @@ class RemoteCommandModuleReplyTest {
         // One tick runs the manager's own hop to the main thread, which dispatches the command.
         server.getScheduler().performOneTick();
 
+        // The body ran inside that dispatch (no further tick), replying to the console sender.
+        assertThat(server.getConsoleSender().nextMessage()).isEqualTo("module reply 541");
         ArgumentCaptor<JsonObject> sent = ArgumentCaptor.forClass(JsonObject.class);
         verify(webSocketClient).sendMessage(sent.capture());
         JsonObject data = sent.getValue().getAsJsonObject("data");
-        assertThat(data.get("output").getAsString()).contains("module reply 541");
+        assertThat(data.get("output").getAsString()).isEqualTo(CommandExecutionManager.DISPATCHED_OUTPUT);
     }
 
     @Test
-    @DisplayName("control: a command that replies inside its own dispatch is captured the same way")
-    void controlAnInlineReplyingCommandIsCaptured() {
+    @DisplayName("control: a command that replies inside its own dispatch replies to the console sender too")
+    void controlAnInlineReplyingCommandRepliesToTheConsole() {
         server.getCommandMap().register("controlprobe", new Command("controlprobe") {
             @Override
             public boolean execute(CommandSender sender, String label, String[] args) {
@@ -125,9 +129,10 @@ class RemoteCommandModuleReplyTest {
         manager.executeCommand(commandData);
         server.getScheduler().performOneTick();
 
+        assertThat(server.getConsoleSender().nextMessage()).isEqualTo("control reply");
         ArgumentCaptor<JsonObject> sent = ArgumentCaptor.forClass(JsonObject.class);
         verify(webSocketClient).sendMessage(sent.capture());
-        assertThat(sent.getValue().getAsJsonObject("data").get("output").getAsString()).contains("control reply");
-        verify(webSocketClient).sendMessage(any(JsonObject.class));
+        assertThat(sent.getValue().getAsJsonObject("data").get("output").getAsString())
+                .isEqualTo(CommandExecutionManager.DISPATCHED_OUTPUT);
     }
 }

@@ -6,6 +6,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.handler.ConsoleMirror;
 import com.ultikits.ultitools.handler.SystemLogHandler;
 import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.websocket.PanelConnectionLog;
@@ -149,6 +150,11 @@ public class LogStreamManager implements Listener {
         // records at connect exceeded the panel's per-client quota (50 messages in 10 seconds) on a
         // real server. Records a previous transmitter could not deliver (#486) are not part of
         // this replay: they were adopted into the queue above and follow the live batching path.
+        //
+        // The console mirror (as of 6.3.0) feeds Paper's own Log4j console output into whichever of
+        // the two handlers is attached; installed in UltiTools#onLoad(), and again here (it does
+        // nothing when already installed) for a stream started after it was removed.
+        ConsoleMirror.install();
         Logger rootLogger = Logger.getLogger("");
         SystemLogHandler liveHandler = systemLogHandler;
         int notKept = EarlyLogCapture.drainInto(liveHandler.replayHandler(), () -> rootLogger.addHandler(liveHandler));
@@ -788,7 +794,8 @@ public class LogStreamManager implements Listener {
             logTransmitter.shutdown();
         }
 
-        // Remove the handler from Bukkit's Logger
+        // Remove the console mirror and the handler from Bukkit's Logger
+        ConsoleMirror.uninstall();
         detachAllSystemLogHandlers();
 
         UltiTools.getInstance().getLogger().info("[UltiPanel] LogStreamManager shutdown");

@@ -18,6 +18,10 @@ import java.util.logging.LogRecord;
 /**
  * System log handler.
  * Captures all system log records and forwards them to the UltiPanel backend.
+ * <p>
+ * Attached to the {@code java.util.logging} root logger, it receives every plugin's lines
+ * directly. Paper's own console output (Log4j) reaches it through {@link ConsoleMirror}, converted
+ * into records, so the same filters apply to both (as of 6.3.0).
  *
  * @author UltiKits
  * @version 1.0.0
@@ -81,18 +85,18 @@ public class SystemLogHandler extends Handler {
         enabledLevels.add("error");
         // enabledLevels.add("debug"); // debug logging is disabled by default
 
-        // No logger is excluded by default (#485). An entry matches a record whose
-        // java.util.logging logger name starts with it, and this handler receives only JUL
-        // records: "Minecraft" (Bukkit's server logger, i.e. everything logged through
-        // Bukkit.getLogger(), including the framework's own "[UltiTools-API] ..." lines), each
-        // plugin's own logger, and com.ultikits.ultitools.* class loggers. The six entries shipped
-        // before 6.3.0 -- com.mojang.authlib, net.minecraft.network, org.apache.http,
-        // com.zaxxer.hikari, org.eclipse.jetty, ErrorReportCollector -- could match none of them:
-        // those libraries log through Log4j or SLF4J and never produce a JUL record, and
-        // ErrorReportCollector never logs through JUL at all. Excluding a received logger by
-        // default would hide real lines, so the default is empty. Loop prevention does not depend
-        // on this list: the PUBLISHING guard above drops any record produced while one is being
-        // delivered.
+        // No logger is excluded by default (#485). An entry matches a record whose logger name
+        // starts with it. JUL records carry "Minecraft" (Bukkit's server logger, i.e. everything
+        // logged through Bukkit.getLogger(), including the framework's own "[UltiTools-API] ..."
+        // lines), each plugin's own logger, or a com.ultikits.ultitools.* class logger. The six
+        // entries shipped before 6.3.0 -- com.mojang.authlib, net.minecraft.network,
+        // org.apache.http, com.zaxxer.hikari, org.eclipse.jetty, ErrorReportCollector -- could match
+        // none of those: those libraries log through Log4j or SLF4J, and ErrorReportCollector never
+        // logs through JUL at all. Later in 6.3.0 the console mirror (ConsoleMirror) also feeds
+        // Log4j records here, under their Log4j logger names, so the stream mirrors the whole
+        // console; the default stays empty so nothing the console shows is hidden. Loop prevention
+        // does not depend on this list: the PUBLISHING guard above drops any record produced while
+        // one is being delivered.
         excludedLoggers = new HashSet<>();
 
         // Apply the minimum level
@@ -282,11 +286,15 @@ public class SystemLogHandler extends Handler {
             }
         }
 
-        // Avoid processing UltiPanel's own log-transmission logs, to prevent a loop
+        // Avoid processing UltiPanel's own log-transmission logs, to prevent a loop. The WebSocket
+        // library the panel connection runs on logs through SLF4J, which reaches this handler only
+        // through the console mirror (ConsoleMirror, as of 6.3.0); its lines are about the panel
+        // connection itself and are never sent back over it.
         if (loggerName != null && (
             loggerName.contains("UltiPanelLogTransmitter") ||
             loggerName.contains("SystemLogHandler") ||
-            loggerName.contains("WebSocketClient")
+            loggerName.contains("WebSocketClient") ||
+            loggerName.startsWith("org.java_websocket")
         )) {
             return false;
         }
@@ -347,7 +355,9 @@ public class SystemLogHandler extends Handler {
     private String determineLogSource(LogRecord record) {
         String loggerName = record.getLoggerName();
 
-        if (loggerName == null) {
+        // The root logger -- in Log4j, the one Paper's console sender writes every message it is
+        // sent to (ConsoleMirror) -- is the server console itself.
+        if (loggerName == null || loggerName.isEmpty()) {
             return "server";
         }
 
