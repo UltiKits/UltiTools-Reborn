@@ -28,9 +28,11 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
  * A bound value is always a whole number of <b>seconds</b>, read from the {@code @ConfigEntry}
  * field of the module's own registered config entity -- the same instance {@code /ul reload}
  * reloads in place, resolved once at load and kept, so there is one source of truth. A reload
- * that {@code validateFields()} refused never reaches the binding step; the one gap is a reload
- * whose file write failed with an {@code IOException}, which {@code ConfigManager.reloadConfigs}
- * logs and continues past without running the field's own validation annotations (#533), so only the binding's own range rule is guaranteed. The default lives only in that
+ * that {@code validateFields()} refused never reaches the binding step, and neither does one that
+ * failed with an {@code IOException} or an unreadable or unparseable file: as of #589
+ * {@code ConfigManager.reloadConfigs} lets every such failure through instead of logging and
+ * continuing past it (#533), so the binding step only ever sees a validated reload. The binding's
+ * own range rule is still checked as well. The default lives only in that
  * field's initializer; an annotation literal next to a binding is refused rather than used as a
  * fallback, because after {@code init()} a declared key always has a value and a fallback would be
  * a second, hand-synchronised copy of the default.
