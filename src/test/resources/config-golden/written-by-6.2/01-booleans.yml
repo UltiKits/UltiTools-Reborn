@@ -1,0 +1,6 @@
+flags:
+  # Enable the feature
+  enabled: true
+  # Debug output
+  debug: false
+  boxed: true

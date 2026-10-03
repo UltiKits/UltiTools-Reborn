@@ -1,0 +1,16 @@
+# UltiChat - Auto-Reply Configuration
+
+autoreply:
+  enabled: true
+  cooldown: 10
+  rules:
+    server-ip:
+      keyword: "server IP"
+      response: "Server address: play.example.com"
+      mode: contains
+      case-sensitive: false
+    rules-info:
+      keyword: "rules"
+      response: "Please check /rules for server rules."
+      mode: contains
+      case-sensitive: false

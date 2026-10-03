@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
@@ -114,13 +115,14 @@ class PluginManagerTest {
         }
 
         @Test
-        @DisplayName("返回的列表应该是可变的")
-        void returnedListShouldBeMutable() {
+        @DisplayName("the returned list is an unmodifiable snapshot (#507)")
+        void returnedListShouldBeUnmodifiable() {
             // Act
             List<UltiToolsPlugin> list = pluginManager.getPluginList();
 
-            // Assert - 列表应该是可操作的（虽然不推荐直接修改）
-            assertThat(list).isInstanceOf(ArrayList.class);
+            // Assert - #507: callers read the loaded modules; only PluginManager changes them
+            assertThatThrownBy(() -> list.add(mock(UltiToolsPlugin.class)))
+                    .isInstanceOf(UnsupportedOperationException.class);
         }
     }
 
@@ -556,14 +558,14 @@ class PluginManagerTest {
     class PluginListTests {
 
         @Test
-        @DisplayName("getPluginList 应该返回相同列表引用")
-        void getPluginListShouldReturnSameReference() {
+        @DisplayName("each getPluginList call returns an independent snapshot (#507)")
+        void getPluginListShouldReturnIndependentSnapshots() {
             // Act
             List<UltiToolsPlugin> list1 = pluginManager.getPluginList();
             List<UltiToolsPlugin> list2 = pluginManager.getPluginList();
 
-            // Assert
-            assertThat(list1).isSameAs(list2);
+            // Assert - #507: a snapshot, never the live internal list
+            assertThat(list1).isNotSameAs(list2).isEqualTo(list2);
         }
 
         @Test
@@ -772,7 +774,7 @@ class PluginManagerTest {
             UltiToolsPlugin loaded = modules("Dup", "com.example.Dup", "2.0.0", CURRENT_API_VERSION);
             UltiToolsPlugin older = modules("Dup", "com.example.Dup", "1.0.0", CURRENT_API_VERSION);
             when(loaded.isNewerVersionThan(older)).thenReturn(true);
-            pluginManager.getPluginList().add(loaded);
+            PluginListSeeding.add(pluginManager, loaded);
 
             // Act
             boolean result = pluginManager.register(older);
@@ -791,7 +793,7 @@ class PluginManagerTest {
             UltiToolsPlugin newer = modules("Dup", "com.example.Dup", "2.0.0", CURRENT_API_VERSION);
             when(newer.isNewerVersionThan(older)).thenReturn(true);
             when(newer.registerSelf()).thenReturn(true);
-            pluginManager.getPluginList().add(older);
+            PluginListSeeding.add(pluginManager, older);
 
             // Act
             boolean result = pluginManager.register(newer);
@@ -813,7 +815,7 @@ class PluginManagerTest {
             UltiToolsPlugin newer = modules("Dup", "com.example.Dup", "2.0.0", CURRENT_API_VERSION);
             when(newer.isNewerVersionThan(older)).thenReturn(true);
             when(newer.registerSelf()).thenReturn(false);
-            pluginManager.getPluginList().add(older);
+            PluginListSeeding.add(pluginManager, older);
 
             boolean result = pluginManager.register(newer);
 
@@ -828,7 +830,7 @@ class PluginManagerTest {
             UltiToolsPlugin newer = modules("Dup", "com.example.Dup", "2.0.0", CURRENT_API_VERSION);
             when(newer.isNewerVersionThan(older)).thenReturn(true);
             when(newer.registerSelf()).thenThrow(new java.io.IOException("激活失败"));
-            pluginManager.getPluginList().add(older);
+            PluginListSeeding.add(pluginManager, older);
 
             boolean result = pluginManager.register(newer);
 
@@ -843,7 +845,7 @@ class PluginManagerTest {
             UltiToolsPlugin older = modules("Dup", "com.example.Dup", "1.0.0", CURRENT_API_VERSION);
             UltiToolsPlugin newer = modules("Dup", "com.example.Dup", "2.0.0", CURRENT_API_VERSION + 1);
             lenient().when(newer.isNewerVersionThan(older)).thenReturn(true);
-            pluginManager.getPluginList().add(older);
+            PluginListSeeding.add(pluginManager, older);
 
             // Act
             boolean result = pluginManager.register(newer);

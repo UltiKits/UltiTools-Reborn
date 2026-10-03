@@ -33,15 +33,10 @@ import com.ultikits.ultitools.annotations.config.Range;
 import com.ultikits.ultitools.exceptions.ConfigurationException;
 
 /**
- * A panel write runs on the WebSocket thread, and {@code UltiTools#onDisable()} closes the
- * WebSocket without waiting for it before calling {@link ConfigManager#saveAll()}, so a panel write
- * already in flight can overlap the shutdown save (#510, gate-1 WR-02). The entity monitor held by
- * both paths makes each see the other's whole effect or none of it.
- * <p>
- * The overlap is forced with latches, not sleeps: the panel write is parked inside its validation
- * step, while its proposed value is applied in memory, by a constructor gate (validation constructs
- * a throwaway instance of the config class). The shutdown save is started only then, and the panel
- * write is released only once the shutdown thread is either blocked on the entity or finished.
+ * An off-thread registry save refuses before an entity monitor already held by a direct edit.
+ * Latches force the edit to remain inside validation until the refused save returns. After the
+ * edit refuses, a controlled server-thread save persists the original code change, never the
+ * refused candidate. Actual panel callbacks marshal their entire operation to the server thread.
  */
 @DisplayName("ConfigManager.saveAll and a concurrent panel write never lose a change (#510)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS, threadMode = ThreadMode.SEPARATE_THREAD)
@@ -107,14 +102,32 @@ class ConfigEntityLockConcurrencyTest {
         com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
     }
 
+    private void registerOnControlledServerThread(LimitConfig config) throws IOException {
+        try (org.mockito.MockedStatic<org.bukkit.Bukkit> bukkit = org.mockito.Mockito.mockStatic(
+                org.bukkit.Bukkit.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            when(org.bukkit.Bukkit.isPrimaryThread()).thenReturn(true);
+            configManager.register(plugin, config);
+            assertThat(configManager.getConfigEntity(plugin, LimitConfig.class)).isSameAs(config);
+        }
+    }
+
+    private void saveOnControlledServerThread() {
+        // The separate-thread timeout fixture is not MockBukkit's server thread; control only that predicate.
+        try (org.mockito.MockedStatic<org.bukkit.Bukkit> bukkit = org.mockito.Mockito.mockStatic(
+                org.bukkit.Bukkit.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            when(org.bukkit.Bukkit.isPrimaryThread()).thenReturn(true);
+            configManager.saveAll();
+        }
+    }
+
     @Test
-    @DisplayName("A refused panel write in flight during the shutdown save: the code change is saved, the refused value never reaches disk")
+    @DisplayName("Off-thread save refuses while an entity is held; later server-thread save persists only the code change")
     void saveAll_duringInFlightPanelWrite_savesWholeCodeChange() throws Exception {
         File limitFile = new File(tempDir, "config/limit.yml");
         Files.createDirectories(limitFile.getParentFile().toPath());
         Files.write(limitFile.toPath(), "limit: 1\n".getBytes(StandardCharsets.UTF_8));
         LimitConfig config = new LimitConfig("config/limit.yml");
-        configManager.register(plugin, config);
+        registerOnControlledServerThread(config);
 
         // Module code changes the value in memory without saving.
         config.setLimit(5);
@@ -134,24 +147,27 @@ class ConfigEntityLockConcurrencyTest {
         panel.start();
         assertThat(gate.entered.await(10, TimeUnit.SECONDS)).as("panel write reached validation").isTrue();
 
-        Thread shutdown = new Thread(configManager::saveAll, "ultitools-reborn-510-shutdown");
-        shutdown.start();
-        Thread.State exitState = shutdown.getState();
-        while (exitState != Thread.State.BLOCKED && exitState != Thread.State.TERMINATED) {
-            Thread.yield();
-            exitState = shutdown.getState();
+        Logger refusedLogger = mock(Logger.class);
+        Thread shutdown = new Thread(() -> {
+            try (org.mockito.MockedStatic<org.bukkit.Bukkit> bukkit = org.mockito.Mockito.mockStatic(org.bukkit.Bukkit.class)) {
+                when(org.bukkit.Bukkit.getServer()).thenReturn(mock(org.bukkit.Server.class));
+                when(org.bukkit.Bukkit.isPrimaryThread()).thenReturn(false);
+                when(org.bukkit.Bukkit.getLogger()).thenReturn(refusedLogger);
+                configManager.saveAll();
+            }
+        }, "ultitools-reborn-510-shutdown");
+        try {
+            shutdown.start(); shutdown.join(2000);
+            assertThat(shutdown.isAlive()).as("guard cannot wait on the held entity monitor").isFalse();
+            assertThat(panel.isAlive()).isTrue();
+            org.mockito.Mockito.verify(refusedLogger).log(org.mockito.ArgumentMatchers.eq(java.util.logging.Level.WARNING),
+                    org.mockito.ArgumentMatchers.contains("ultitools-reborn-510-shutdown"));
+            assertThat(new String(Files.readAllBytes(limitFile.toPath()), StandardCharsets.UTF_8)).contains("limit: 1");
+        } finally {
+            gate.release.countDown(); panel.join(2000); shutdown.join(2000);
         }
-        // The overlap must be real: the panel write is still parked inside the monitor, and the
-        // shutdown thread is blocked on it. A TERMINATED shutdown thread here would mean the two
-        // never overlapped, which would make the assertions below prove nothing.
-        assertThat(exitState).isEqualTo(Thread.State.BLOCKED);
-        assertThat(panel.isAlive()).isTrue();
-
-        gate.release.countDown();
-        panel.join();
-        shutdown.join();
-
         assertThat(panelOutcome.get()).isInstanceOf(ConfigurationException.class);
+        saveOnControlledServerThread();
         assertThat(new String(Files.readAllBytes(limitFile.toPath()), StandardCharsets.UTF_8))
                 .contains("limit: 5")
                 .doesNotContain("99");

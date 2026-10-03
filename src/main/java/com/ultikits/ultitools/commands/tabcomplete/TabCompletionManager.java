@@ -11,6 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.bukkit.command.Command;
 import org.bukkit.entity.Player;
 
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.command.CmdParam;
 
 /**
@@ -60,19 +61,21 @@ public class TabCompletionManager {
     
     private static volatile TabCompletionManager instance;
     
-    private final Map<String, TabCompleter> completers = new ConcurrentHashMap<>();
-    private final MethodInvocationCompleter methodCompleter = new MethodInvocationCompleter();
-
     /**
-     * Key -&gt; owner (05-06 / D-08, T-05-24). Populated only while a {@link
-     * #beginRegistrationScope(String)}/{@link #endRegistrationScope()} window is active, so a
-     * completer registered through the plain public {@link #register(String, TabCompleter)} by a
-     * caller unaware of ownership is simply never recorded here -- "unowned", never swept by
-     * {@link #unregisterByOwner(String)}. Keyed by the completer KEY (a {@code String}), not by
-     * the completer's {@code Class} -- Phase 1 D-35/D-38 forbids static {@code Class}-keyed maps
-     * because they pin a plugin's ClassLoader; a String key holds nothing that does.
+     * Key -&gt; its registration: the completer together with the owner name and owner instance the
+     * registration was attributed to (05-06 / D-08, T-05-24; #506). One immutable entry per key,
+     * replaced as a whole by {@link #register(String, TabCompleter)} and removed by the owner sweeps
+     * only while it is still the exact entry they matched, so a key registered again meanwhile --
+     * from another thread, or by anything the sweep triggers -- keeps its new completer (Codex review
+     * of #564, round 4). The owner fields are recorded only while a {@link
+     * #beginRegistrationScope(String)}/{@link #endRegistrationScope()} window is active; a completer
+     * registered outside one is "unowned" and never swept. Keyed by the completer KEY (a {@code
+     * String}), not by the completer's {@code Class} -- Phase 1 D-35/D-38 forbids static {@code
+     * Class}-keyed maps because they pin a plugin's ClassLoader. An owner instance is held only
+     * until that module is unloaded, exactly as the completer object itself is.
      */
-    private final Map<String, String> keyOwners = new ConcurrentHashMap<>();
+    private final Map<String, Registration> completers = new ConcurrentHashMap<>();
+    private final MethodInvocationCompleter methodCompleter = new MethodInvocationCompleter();
 
     /**
      * The owner currently attributed to registrations made via {@link #register(String,
@@ -82,6 +85,14 @@ public class TabCompletionManager {
      * while sequential today, should not silently corrupt ownership if that ever changes.
      */
     private final ThreadLocal<String> currentOwner = new ThreadLocal<>();
+
+    /**
+     * The module instance attributed to registrations in the current scope, if the scope names one
+     * (#506). Two copies of one module share a name, so only the instance tells a superseded copy's
+     * completers from its replacement's; {@link #unregisterByOwnerInstance(UltiToolsPlugin)}
+     * releases by it.
+     */
+    private final ThreadLocal<UltiToolsPlugin> currentOwnerInstance = new ThreadLocal<>();
 
     /**
      * Private constructor - use getInstance().
@@ -110,13 +121,13 @@ public class TabCompletionManager {
      * Registers all built-in completers.
      */
     private void registerBuiltInCompleters() {
-        completers.put(PLAYERS, new OnlinePlayersCompleter());
-        completers.put(WORLDS, new WorldsCompleter());
-        completers.put(MATERIALS, new MaterialsCompleter());
-        completers.put(BLOCKS, MaterialsCompleter.blocksOnly());
-        completers.put(ITEMS, MaterialsCompleter.itemsOnly());
-        completers.put(BOOLEAN, StaticSuggestionsCompleter.forBoolean());
-        completers.put(TOGGLE, StaticSuggestionsCompleter.forToggle());
+        completers.put(PLAYERS, new Registration(new OnlinePlayersCompleter(), null, null));
+        completers.put(WORLDS, new Registration(new WorldsCompleter(), null, null));
+        completers.put(MATERIALS, new Registration(new MaterialsCompleter(), null, null));
+        completers.put(BLOCKS, new Registration(MaterialsCompleter.blocksOnly(), null, null));
+        completers.put(ITEMS, new Registration(MaterialsCompleter.itemsOnly(), null, null));
+        completers.put(BOOLEAN, new Registration(StaticSuggestionsCompleter.forBoolean(), null, null));
+        completers.put(TOGGLE, new Registration(StaticSuggestionsCompleter.forToggle(), null, null));
     }
     
     /**
@@ -129,13 +140,7 @@ public class TabCompletionManager {
         if (key == null || completer == null) {
             throw new IllegalArgumentException("Key and completer must not be null");
         }
-        completers.put(key, completer);
-        String owner = currentOwner.get();
-        if (owner != null) {
-            keyOwners.put(key, owner);
-        } else {
-            keyOwners.remove(key);
-        }
+        completers.put(key, new Registration(completer, currentOwner.get(), currentOwnerInstance.get()));
     }
 
     /**
@@ -145,7 +150,6 @@ public class TabCompletionManager {
      */
     public void unregister(String key) {
         completers.remove(key);
-        keyOwners.remove(key);
     }
 
     /**
@@ -183,7 +187,30 @@ public class TabCompletionManager {
      * @since 6.3.0
      */
     public void beginRegistrationScope(String owner) {
+        beginRegistrationScope(owner, null);
+    }
+
+    /**
+     * Same as {@link #beginRegistrationScope(String)}, and additionally attributes every key
+     * registered in the scope to {@code ownerInstance}, so {@link
+     * #unregisterByOwnerInstance(UltiToolsPlugin)} can release exactly that module instance's
+     * completers (#506). {@code PluginManager} opens this form for every module it loads: when a
+     * newer copy of a module replaces an older one, both copies share a name, and only the
+     * instance tells their completers apart.
+     *
+     * @param owner         the name to attribute subsequent registrations to, as in {@link
+     *                      #beginRegistrationScope(String)}
+     * @param ownerInstance the module instance to attribute them to; {@code null} records none,
+     *                      which is exactly {@link #beginRegistrationScope(String)}
+     * @since 6.3.0
+     */
+    public void beginRegistrationScope(String owner, UltiToolsPlugin ownerInstance) {
         currentOwner.set(owner);
+        if (ownerInstance != null) {
+            currentOwnerInstance.set(ownerInstance);
+        } else {
+            currentOwnerInstance.remove();
+        }
     }
 
     /**
@@ -196,17 +223,17 @@ public class TabCompletionManager {
      */
     public void endRegistrationScope() {
         currentOwner.remove();
+        currentOwnerInstance.remove();
     }
 
     /**
      * Bulk-unregisters every completer key currently attributed to {@code owner} by an earlier
-     * {@link #beginRegistrationScope(String)}/{@link #endRegistrationScope()} window, built
-     * entirely from the already-public {@link #unregister(String)} -- so removal semantics are
-     * identical to a caller unregistering each key by hand, just batched by owner (D-08: "No new
-     * public method is needed: {@code unregister(String)} already exists -- the bulk sweep can be
-     * built from it"). A key registered outside any scope (core built-ins, or any caller that
-     * never calls {@link #beginRegistrationScope(String)}) has no recorded owner and is never
-     * matched here, regardless of {@code owner}'s value.
+     * {@link #beginRegistrationScope(String)}/{@link #endRegistrationScope()} window. Each key is
+     * removed only while it still holds the registration the sweep matched, so a key registered
+     * again meanwhile keeps its new completer (Codex review of #564, round 4). A key registered
+     * outside any scope (core built-ins, or any caller that never calls {@link
+     * #beginRegistrationScope(String)}) has no recorded owner and is never matched here, regardless
+     * of {@code owner}'s value.
      *
      * @param owner the owner identifier to sweep; {@code null} matches nothing and is a no-op
      * @return the number of keys unregistered
@@ -216,16 +243,41 @@ public class TabCompletionManager {
         if (owner == null) {
             return 0;
         }
-        List<String> keysToRemove = new ArrayList<>();
-        for (Map.Entry<String, String> entry : keyOwners.entrySet()) {
-            if (owner.equals(entry.getValue())) {
-                keysToRemove.add(entry.getKey());
+        int removed = 0;
+        for (Map.Entry<String, Registration> entry : completers.entrySet()) {
+            Registration registration = entry.getValue();
+            if (owner.equals(registration.owner) && completers.remove(entry.getKey(), registration)) {
+                removed++;
             }
         }
-        for (String key : keysToRemove) {
-            unregister(key);
+        return removed;
+    }
+
+    /**
+     * Unregisters every completer key registered in a scope that named {@code ownerInstance}
+     * (#506), whatever name the scope carried. A key another module or another copy of the same
+     * module registered afterwards belongs to that registrant and is not touched, and a key
+     * registered without an instance is never matched here -- {@link #unregisterByOwner(String)}
+     * still releases those by name.
+     *
+     * @param ownerInstance the module instance being unloaded; {@code null} matches nothing
+     * @return the number of keys unregistered
+     * @since 6.3.0
+     */
+    public int unregisterByOwnerInstance(UltiToolsPlugin ownerInstance) {
+        if (ownerInstance == null) {
+            return 0;
         }
-        return keysToRemove.size();
+        int removed = 0;
+        for (Map.Entry<String, Registration> entry : completers.entrySet()) {
+            Registration registration = entry.getValue();
+            // remove(key, value) is atomic and compares the whole registration by identity: a key
+            // registered again in the meantime holds a new registration and is left alone.
+            if (registration.ownerInstance == ownerInstance && completers.remove(entry.getKey(), registration)) {
+                removed++;
+            }
+        }
+        return removed;
     }
 
     /**
@@ -235,7 +287,12 @@ public class TabCompletionManager {
      * @return the completer or null if not found
      */
     public TabCompleter getCompleter(String key) {
-        return completers.get(key);
+        return completerFor(key);
+    }
+
+    private TabCompleter completerFor(String key) {
+        Registration registration = completers.get(key);
+        return registration == null ? null : registration.completer;
     }
     
     /**
@@ -265,7 +322,7 @@ public class TabCompletionManager {
         // Check for built-in completer by parameter name
         String paramName = context.getParameterName();
         if (paramName != null && paramName.startsWith("@")) {
-            TabCompleter completer = completers.get(paramName);
+            TabCompleter completer = completerFor(paramName);
             if (completer != null) {
                 return completer.complete(context);
             }
@@ -300,7 +357,7 @@ public class TabCompletionManager {
         }
 
         if (resolvedSuggest != null && resolvedSuggest.startsWith("@")) {
-            TabCompleter completer = completers.get(resolvedSuggest);
+            TabCompleter completer = completerFor(resolvedSuggest);
             if (completer != null) {
                 return completer.complete(context);
             }
@@ -345,7 +402,7 @@ public class TabCompletionManager {
      * @return list of suggestions
      */
     public List<String> suggestWith(TabCompletionContext context, String completerKey) {
-        TabCompleter completer = completers.get(completerKey);
+        TabCompleter completer = completerFor(completerKey);
         if (completer != null) {
             return completer.complete(context);
         }
@@ -432,5 +489,22 @@ public class TabCompletionManager {
         
         Collections.sort(suggestions);
         return suggestions;
+    }
+
+    /**
+     * One key's registration: the completer and the owner it was attributed to, replaced and
+     * removed as a unit. Compared by identity, so a sweep's conditional removal never matches a
+     * newer registration of the same key.
+     */
+    private static final class Registration {
+        private final TabCompleter completer;
+        private final String owner;
+        private final UltiToolsPlugin ownerInstance;
+
+        private Registration(TabCompleter completer, String owner, UltiToolsPlugin ownerInstance) {
+            this.completer = completer;
+            this.owner = owner;
+            this.ownerInstance = ownerInstance;
+        }
     }
 }

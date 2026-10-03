@@ -1,0 +1,13 @@
+# Chat channels
+channels:
+  global:
+    prefix: '&7[G]'
+    radius: -1
+    enabled: true
+  local:
+    prefix: '&e[L]'
+    radius: 100
+    enabled: false
+aliases:
+  gm: gamemode
+  tp: teleport

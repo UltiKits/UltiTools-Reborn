@@ -294,17 +294,15 @@ public class PluginDependencyResolver {
      * This does not change which module wins the alias - that is still whichever comes first in
      * {@code nodes} iteration order (discovery order), exactly as before. It only makes the
      * operator aware that a pick happened, instead of the dependency graph silently depending on
-     * filesystem directory-listing order with nothing logged.
+     * discovery order with nothing logged.
      * <p>
      * <b>IN-01 (gate-1 review, 16-REVIEW-residue.md):</b> "discovery order" here is deterministic
-     * GIVEN a deterministic {@code nodes} iteration order, but this class's only production
-     * caller, {@code PluginManager.init(ClassLoader)}, builds its input list from a raw
-     * {@code File.listFiles()} call with no sort - measured non-alphabetical and
-     * non-creation-order on this environment's filesystem (see #476). This WARNING's named
-     * "winner" is therefore only as reproducible as that upstream order; not a regression this
-     * change introduces (resolution already picked "whichever came first" before this fix), and
-     * not addressed here deliberately - sorting the upstream list would itself be a load-order
-     * behaviour change on existing installs, requiring its own decision. Tracked as #476.
+     * GIVEN a deterministic {@code nodes} iteration order. As of 6.3.0 (#476) this class's only
+     * production caller, {@code PluginManager.init(ClassLoader)}, builds its input list from the
+     * modules folder in file-name order ({@code ModuleFileTransactions#moduleJars}) -- before that
+     * it was a raw {@code File.listFiles()} call, measured non-alphabetical and non-creation-order
+     * on ext4 -- so this WARNING names the same "winner" for the same folder on every file
+     * system.
      * <p>
      * <b>Gate-2 Codex finding, PR #478 round 1:</b> the naive "first plugin.yml declarer wins"
      * answer is wrong whenever the colliding name ALSO equals some other node's own simple class

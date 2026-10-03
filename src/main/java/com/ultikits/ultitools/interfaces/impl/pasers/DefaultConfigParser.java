@@ -15,7 +15,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Config binder serializes private fields to YAML -- see 08-GATE05-TRIAGE.md
+/**
+ * Legacy configuration parser; executable behavior remains unchanged.
+ * @deprecated Use {@link com.ultikits.ultitools.config.convert.ConfigConverter} and
+ * {@link com.ultikits.ultitools.config.convert.ConfigConverterFor}; removed in the next version.
+ * @removeIn 6.4.0
+ */
+@Deprecated(since = "6.3.0", forRemoval = true)
+// Frozen legacy superclass retained for compatibility until removal.
+@SuppressWarnings({"PMD.AvoidAccessibilityAlteration", "removal"}) // Config binder serializes private fields to YAML -- see 08-GATE05-TRIAGE.md
 public class DefaultConfigParser extends ConfigParser<Object> {
 
     @Override

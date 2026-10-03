@@ -614,8 +614,8 @@ class ConfigValidationTest {
         }
 
         @Test
-        @DisplayName("Should not throw and not change the field when the JSON names no known @ConfigEntry path")
-        void shouldNoOpForUnknownPath() throws IOException {
+        @DisplayName("Should refuse an unknown changed panel path without changing file or fields")
+        void shouldRefuseUnknownChangedPath() throws IOException {
             File configFile = new File(tempDir.toFile(), "range.yml");
             Files.write(configFile.toPath(), "interval: 100\nrate: 0.5".getBytes());
 
@@ -625,7 +625,10 @@ class ConfigValidationTest {
             JsonObject json = new JsonObject();
             json.addProperty("notARealField", "whatever");
 
-            assertThatCode(() -> config.updateProperties(json)).doesNotThrowAnyException();
+            String before = sha256(configFile.toPath());
+            assertThatThrownBy(() -> config.updateProperties(json))
+                    .isInstanceOf(ConfigurationException.class).hasMessageContaining("notARealField");
+            assertThat(sha256(configFile.toPath())).isEqualTo(before);
 
             assertThat(config.interval).isEqualTo(100);
         }

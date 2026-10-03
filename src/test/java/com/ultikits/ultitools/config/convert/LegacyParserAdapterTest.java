@@ -1,0 +1,382 @@
+package com.ultikits.ultitools.config.convert;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.MemoryConfiguration;
+import org.bukkit.configuration.MemorySection;
+import org.junit.jupiter.api.Test;
+import com.ultikits.ultitools.annotations.ConfigEntry;
+
+class LegacyParserAdapterTest {
+    private final ConverterRegistry registry = ConverterRegistry.framework();
+
+    @Test
+    void extendingPlainAndStringMapParsersReceiveDetachedLegacySections() throws Exception {
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("o.O", "split"); input.put("nested", Collections.singletonMap("a.b", "inner"));
+        for (String field : Arrays.asList("extending", "plain")) {
+            Object converted = registry.fromPlainResult(input, Object.class, "f", Collections.emptyList(), entry(field)).value();
+            assertThat(converted).isInstanceOf(Map.class);
+            Map<?, ?> output = (Map<?, ?>) converted;
+            assertThat(output).isNotNull();
+            assertThat(output.get("o")).isEqualTo(Collections.singletonMap("O", "split"));
+            assertThat(output.get("nested")).isEqualTo(Collections.singletonMap("a", Collections.singletonMap("b", "inner")));
+        }
+        Object mapped = registry.fromPlainResult(Collections.singletonMap("key", "value"), HashMap.class,
+                "f", Collections.emptyList(), entry("stringMap")).value();
+        assertThat(mapped).isEqualTo(Collections.singletonMap("key", "value"));
+        assertThat(input).containsKey("o.O");
+    }
+
+    @Test
+    void finalSerializeKeepsCustomSetShapeAndNormalizesUuidOutputLeaf() throws Exception {
+        Object result = registry.toPlain(new LinkedHashSet<>(Arrays.asList("red", "blue")), Set.class,
+                "f", Collections.emptyList(), entry("joined"));
+        assertThat(result).isEqualTo(Collections.singletonMap("joined", "red,blue"));
+        Object uuid = registry.toPlain(new Object(), Object.class, "f", Collections.singletonList("id"), entry("uuid"));
+        assertThat(uuid).isEqualTo(Collections.singletonMap("id", new UUID(0, 1).toString()));
+    }
+
+    @Test
+    void listSectionsAreExplicitlyNormalizedByAdapterAndObjectWrite() throws Exception {
+        MemoryConfiguration section = new MemoryConfiguration(); section.set("a", 1);
+        Object value = Collections.singletonList(section);
+        assertThat(registry.toPlain(value, Object.class, "f", Collections.emptyList(), entry("extending")))
+                .isEqualTo(Collections.singletonList(Collections.singletonMap("a", 1)));
+        assertThat(registry.toPlain(value, Object.class, "f", Collections.emptyList()))
+                .isEqualTo(Collections.singletonList(Collections.singletonMap("a", 1)));
+    }
+
+    @Test
+    void unknownOutputAndConstructorFailureAreCheckedAndLocated() {
+        assertThatThrownBy(() -> registry.toPlain(new Object(), Object.class, "file.yml", Collections.singletonList("key"), entry("unknown")))
+                .isInstanceOf(ConversionException.class).hasMessageContaining("file.yml").hasMessageContaining("key").hasMessageContaining("UnsupportedLeaf");
+        assertThatThrownBy(() -> registry.toPlain("value", String.class, "file.yml", Collections.singletonList("key"), entry("constructor")))
+                .isInstanceOf(ConversionException.class).hasMessageContaining("file.yml").hasMessageContaining("key");
+    }
+
+    @Test
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // Assertions run in the invoked helper, generated test or joined asynchronous task.
+    void eachParallelConversionGetsFreshParserAndLegacySelectionPrecedesRegistry() throws Exception {
+        ConverterRegistry custom = new ConverterRegistry(registry);
+        custom.register(String.class, new ConfigConverter<String>() {
+            @Override public Object toPlain(String value, ConversionContext ctx) { return "registry"; }
+            @Override public String fromPlain(Object plain, ConversionContext ctx) { return "registry"; }
+        }, true);
+        CompletableFuture<?>[] calls = new CompletableFuture<?>[20];
+        for (int i = 0; i < calls.length; i++) {
+            calls[i] = CompletableFuture.runAsync(() -> {
+                try {
+                    Object read = custom.fromPlainResult("value", String.class, "f", Collections.emptyList(), entry("stateful")).value();
+                    assertThat(read).isEqualTo("first");
+                } catch (Exception failure) { throw new AssertionError(failure); }
+            });
+        }
+        CompletableFuture.allOf(calls).join();
+    }
+
+    @Test
+    void rootListInputRemainsIntactAfterMutatingParserAndRetry() throws Exception {
+        List<Object> input = new ArrayList<>(Arrays.asList("first", "second"));
+        for (int attempt = 0; attempt < 3; attempt++) {
+            Object size = registry.fromPlainResult(input, Object.class, "f", Collections.emptyList(), entry("mutating")).value();
+            assertThat(size).isEqualTo(2);
+            assertThat(input).containsExactly("first", "second");
+        }
+    }
+
+    @Test
+    void rootMapNestedListsAndMapsRemainDetached() throws Exception {
+        List<Object> list = new ArrayList<>();
+        Map<String, Object> nested = new LinkedHashMap<>(); nested.put("kept", "value");
+        list.add(nested);
+        Map<String, Object> input = new LinkedHashMap<>(); input.put("items", list);
+        registry.fromPlainResult(input, Object.class, "f", Collections.emptyList(), entry("mutating"));
+        assertThat(input).containsKey("items");
+        assertThat(list).containsExactly(nested);
+        assertThat(nested).containsEntry("kept", "value");
+    }
+
+    @Test
+    void sharedInputIsStableAcrossParallelMutatingParsers() throws Exception {
+        List<Object> input = new ArrayList<>(Arrays.asList("first", "second"));
+        ConfigEntry annotation = entry("mutating");
+        CompletableFuture<?>[] calls = new CompletableFuture<?>[20];
+        for (int i = 0; i < calls.length; i++) {
+            calls[i] = CompletableFuture.runAsync(() -> {
+                try {
+                    Object size = registry.fromPlainResult(input, Object.class, "f", Collections.emptyList(), annotation).value();
+                    assertThat(size).isEqualTo(2);
+                } catch (Exception failure) { throw new AssertionError(failure); }
+            });
+        }
+        CompletableFuture.allOf(calls).join();
+        assertThat(input).containsExactly("first", "second");
+    }
+
+    @Test
+    void explicitLegacyResultsRetainEveryBoxedWideningPairWithoutNarrowing() throws Exception {
+        Class<?>[] types = {Byte.class, Short.class, Integer.class, Long.class, Float.class, Double.class};
+        Number[] numbers = {Byte.valueOf((byte) 7), Short.valueOf((short) 7), Integer.valueOf(7),
+                Long.valueOf(7), Float.valueOf(7), Double.valueOf(7)};
+        for (int from = 0; from < types.length; from++) {
+            for (int to = from; to < types.length; to++) {
+                Object widened = LegacyParserAdapter.widenToFieldType(types[to], numbers[from]);
+                assertThat(widened).isInstanceOf(types[to]);
+                Object value = registry.fromPlainResult(types[from].getSimpleName(), types[to], "legacy.yml",
+                        Collections.singletonList("value"), entry("wrappers")).value();
+                assertThat(value).as("%s to %s", types[from], types[to]).isInstanceOf(types[to]);
+                assertThat(((Number) value).doubleValue()).isEqualTo(7.0);
+            }
+            for (int to = 0; to < from; to++) {
+                final Number input = numbers[from]; final Class<?> target = types[to];
+                assertThat(LegacyParserAdapter.widenToFieldType(target, input)).isSameAs(input);
+                final String wrapper = types[from].getSimpleName();
+                assertThatThrownBy(() -> registry.fromPlainResult(wrapper, target, "legacy.yml",
+                        Collections.singletonList("value"), entry("wrappers")))
+                        .isInstanceOf(ConversionException.class).hasMessageContaining("legacy.yml");
+            }
+        }
+    }
+
+    @Test void inheritedParserOutputNormalizesNestedListEnumAndSet() throws Exception {
+        MemoryConfiguration section = new MemoryConfiguration(); section.set("whole", "value");
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("nested", Arrays.asList(section, BoundaryMode.FAST,
+                new LinkedHashSet<>(Arrays.asList("red", "blue"))));
+        Object output = registry.toPlain(input, Object.class, "legacy.yml",
+                Collections.singletonList("value"), entry("extending"));
+        assertThat(output).isEqualTo(Collections.singletonMap("nested", Arrays.asList(
+                Collections.singletonMap("whole", "value"), "FAST", Arrays.asList("red", "blue"))));
+        com.ultikits.ultitools.config.document.PlainData.requirePlain(Collections.singletonList("value"), output);
+    }
+    enum BoundaryMode { FAST }
+    static class DottedObject {
+        final Map<String, String> values;
+        DottedObject(Map<String, String> values) { this.values = values; }
+    }
+    static class DottedShape { List<DottedObject> objects; }
+    @Test void registeredObjectInsideListKeepsItsDottedMapKeys() throws Exception {
+        ConverterRegistry custom = new ConverterRegistry(registry);
+        custom.register(DottedObject.class, new ConfigConverter<DottedObject>() {
+            @Override public Object toPlain(DottedObject value, ConversionContext context) {
+                return new LinkedHashMap<>(value.values);
+            }
+            @Override public DottedObject fromPlain(Object plain, ConversionContext context) throws ConversionException {
+                java.lang.reflect.Type type;
+                try { type = DottedObject.class.getDeclaredField("values").getGenericType(); }
+                catch (NoSuchFieldException failure) { throw new AssertionError(failure); }
+                return new DottedObject(context.fromPlain(plain, type));
+            }
+        }, true);
+        Map<String, String> keys = new LinkedHashMap<>(); keys.put("g.m", "first"); keys.put("wave.", "second");
+        java.lang.reflect.Type type = DottedShape.class.getDeclaredField("objects").getGenericType();
+        Object plain = custom.toPlain(Collections.singletonList(new DottedObject(keys)), type,
+                "objects.yml", Collections.singletonList("objects"));
+        assertThat(plain).isEqualTo(Collections.singletonList(keys));
+        List<DottedObject> rebound = custom.fromPlain(plain, type, "objects.yml", Collections.singletonList("objects"));
+        assertThat(rebound).hasSize(1); assertThat(rebound.get(0).values).isEqualTo(keys);
+    }
+
+    @Test
+    void explicitVectorAndObjectParsersReceiveBukkitAliasObjects() throws Exception {
+        Map<String, Object> vector = vectorPlain(1);
+        Object expected = bukkitInput(vector);
+        assertThat(expected).isEqualTo(new org.bukkit.util.Vector(1, 2, 3));
+        assertThat(registry.fromPlainResult(vector, org.bukkit.util.Vector.class, "legacy.yml",
+                Collections.singletonList("vec"), entry("vector")).value()).isEqualTo(expected);
+        assertThat(registry.fromPlainResult(vector, Object.class, "legacy.yml",
+                Collections.singletonList("vec"), entry("identity")).value()).isEqualTo(expected);
+        assertThat(registry.fromPlainResult(vector, Object.class, "legacy.yml",
+                Collections.singletonList("vec")).value()).isEqualTo(vector);
+    }
+
+    @Test
+    void explicitParserReceivesBukkitAliasesInsideListsAndMaps() throws Exception {
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("list", Collections.singletonList(vectorPlain(4)));
+        input.put("map", Collections.singletonMap("child", vectorPlain(7)));
+        ConfigurationSection expected = (ConfigurationSection) bukkitInput(input);
+        ConfigurationSection actual = (ConfigurationSection) registry.fromPlainResult(input, Object.class,
+                "legacy.yml", Collections.singletonList("value"), entry("identity")).value();
+        assertThat(actual.getList("list")).isEqualTo(expected.getList("list"));
+        assertThat(actual.get("map.child")).isEqualTo(expected.get("map.child"));
+        assertThat(actual.getList("list")).isEqualTo(Collections.singletonList(new org.bukkit.util.Vector(4, 2, 3)));
+        assertThat(actual.get("map.child")).isEqualTo(new org.bukkit.util.Vector(7, 2, 3));
+        assertThat(input.get("list")).isEqualTo(Collections.singletonList(vectorPlain(4)));
+    }
+
+    @Test
+    void legacyInputNumberTypesAndIntegralAliasMatchBukkitOracle() throws Exception {
+        Number[] values = {Byte.valueOf((byte) 7), Short.valueOf((short) 7), Integer.valueOf(7),
+                Long.valueOf(7), Float.valueOf(7), Double.valueOf(7)};
+        for (Number value : values) {
+            Object expected = bukkitInput(value);
+            Object actual = registry.fromPlainResult(value, Object.class, "legacy.yml",
+                    Collections.singletonList("value"), entry("identity")).value();
+            assertThat(actual).isEqualTo(expected).isInstanceOf(expected.getClass());
+        }
+        Map<String, Object> integral = vectorPlain(1);
+        integral.put("x", 1); integral.put("y", 2); integral.put("z", 3);
+        assertThat(bukkitInput(integral)).as("Bukkit itself refuses integral Vector coordinates").isNull();
+        assertThat(registry.fromPlainResult(integral, Object.class, "legacy.yml",
+                Collections.singletonList("vec"), entry("identity")).value()).isNull();
+    }
+
+    // The parser's return type, unlike its YAML input type, controls the JLS widening boundary.
+    @SuppressWarnings("removal")
+    public static class WrapperParser extends Plain {
+        @Override public Object parse(Object value) {
+            switch ((String) value) {
+                case "Byte": return Byte.valueOf((byte) 7);
+                case "Short": return Short.valueOf((short) 7);
+                case "Integer": return Integer.valueOf(7);
+                case "Long": return Long.valueOf(7);
+                case "Float": return Float.valueOf(7);
+                case "Double": return Double.valueOf(7);
+                default: throw new IllegalArgumentException("Unknown test wrapper");
+            }
+        }
+    }
+
+    private static Map<String, Object> vectorPlain(int x) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("==", "Vector"); value.put("x", (double) x); value.put("y", 2.0); value.put("z", 3.0);
+        return value;
+    }
+
+    private static Object bukkitInput(Object plain) throws Exception {
+        org.bukkit.configuration.file.YamlConfiguration yaml = new org.bukkit.configuration.file.YamlConfiguration();
+        yaml.loadFromString(new org.yaml.snakeyaml.Yaml().dump(Collections.singletonMap("value", plain)));
+        return yaml.get("value");
+    }
+
+    // Explicit parsers deliberately observe Bukkit's historical input, not registry conversion.
+    @SuppressWarnings("removal")
+    public static class IdentityParser extends com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser<Object> {
+        @Override public Object parse(Object value) { return value; }
+        @Override public MemorySection serializeToMemorySection(Object value) {
+            return new com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser().serializeToMemorySection(value);
+        }
+    }
+    @SuppressWarnings("removal")
+    public static class VectorParser extends com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser<org.bukkit.util.Vector> {
+        @Override public org.bukkit.util.Vector parse(Object value) { return (org.bukkit.util.Vector) value; }
+        @Override public MemorySection serializeToMemorySection(org.bukkit.util.Vector value) {
+            MemoryConfiguration section = new MemoryConfiguration();
+            section.set("==", "Vector"); section.set("x", value.getX());
+            section.set("y", value.getY()); section.set("z", value.getZ());
+            return section;
+        }
+    }
+
+    private static ConfigEntry entry(String name) throws NoSuchFieldException {
+        return Shapes.class.getDeclaredField(name).getAnnotation(ConfigEntry.class);
+    }
+    // Deliberately exercises the deprecated legacy parser compatibility contract.
+    @SuppressWarnings("removal")
+    public static class Extending extends com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser { }
+    // Deliberately exercises the deprecated legacy parser compatibility contract.
+    @SuppressWarnings("removal")
+    public static class Plain extends com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser<Object> {
+        @Override public Object parse(Object object) { return new com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser().parse(object); }
+        @Override public MemorySection serializeToMemorySection(Object value) { return new com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser().serializeToMemorySection(value); }
+    }
+    // Deliberately exercises the deprecated legacy parser compatibility contract.
+    @SuppressWarnings("removal")
+    public static class Joined extends com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser<Set<String>> {
+        @Override public Set<String> parse(Object object) {
+            return new LinkedHashSet<>(Arrays.asList(((ConfigurationSection) object).getString("joined").split(",")));
+        }
+        @Override public MemorySection serializeToMemorySection(Set<String> value) {
+            MemoryConfiguration section = new MemoryConfiguration(); section.set("joined", String.join(",", value)); return section;
+        }
+    }
+    public static class UuidOutput extends Plain {
+        @Override public MemorySection serializeToMemorySection(Object value) {
+            MemoryConfiguration section = new MemoryConfiguration(); section.set("id", new UUID(0, 1)); return section;
+        }
+    }
+    public static class UnsupportedLeaf { }
+    public static class UnknownOutput extends Plain {
+        @Override public MemorySection serializeToMemorySection(Object value) {
+            MemoryConfiguration section = new MemoryConfiguration(); section.set("bad", new UnsupportedLeaf()); return section;
+        }
+    }
+    public static class BadConstructor extends Plain {
+        public BadConstructor() { throw new IllegalArgumentException("constructor failed"); }
+    }
+    public static class Mutating extends Plain {
+        @Override public Object parse(Object value) {
+            if (value instanceof ConfigurationSection) {
+                ConfigurationSection section = (ConfigurationSection) value;
+                List<?> items = section.getList("items");
+                if (items != null) { mutate(items); }
+                section.set("items", null);
+                return 1;
+            }
+            List<?> list = (List<?>) value;
+            int size = list.size(); mutate(list); return size;
+        }
+        private static void mutate(List<?> list) {
+            for (Object element : list) {
+                if (element instanceof Map<?, ?>) { ((Map<?, ?>) element).clear(); }
+                if (element instanceof List<?>) { mutate((List<?>) element); }
+            }
+            list.clear();
+        }
+    }
+
+    public static class Stateful extends Plain {
+        private int calls;
+        @Override public Object parse(Object value) { return ++calls == 1 ? "first" : "shared"; }
+    }
+    static class Shapes {
+        @SuppressWarnings("removal")
+        @ConfigEntry(parser = WrapperParser.class) Object wrappers;
+        @SuppressWarnings("removal")
+        @ConfigEntry(parser = VectorParser.class) org.bukkit.util.Vector vector;
+        @SuppressWarnings("removal")
+        @ConfigEntry(parser = IdentityParser.class) Object identity;
+        // Deliberately selects a mutating legacy parser to verify input isolation.
+        @SuppressWarnings("removal")
+        @ConfigEntry(parser = Mutating.class) Object mutating;
+        // Deliberately selects a legacy parser to verify compatibility dispatch.
+        @SuppressWarnings("removal")
+        @ConfigEntry(parser = Extending.class) Object extending;
+        // Deliberately selects a legacy parser to verify compatibility dispatch.
+        @SuppressWarnings("removal")
+        @ConfigEntry(parser = Plain.class) Object plain;
+        // Deliberately selects a legacy parser to verify compatibility dispatch.
+        @SuppressWarnings("removal")
+        @ConfigEntry(parser = com.ultikits.ultitools.interfaces.impl.pasers.StringHashMapParser.class) Object stringMap;
+        // Deliberately selects a legacy parser to verify compatibility dispatch.
+        @SuppressWarnings("removal")
+        @ConfigEntry(parser = Joined.class) Object joined;
+        // Deliberately selects a legacy parser to verify compatibility dispatch.
+        @SuppressWarnings("removal")
+        @ConfigEntry(parser = UuidOutput.class) Object uuid;
+        // Deliberately selects a legacy parser to verify compatibility dispatch.
+        @SuppressWarnings("removal")
+        @ConfigEntry(parser = UnknownOutput.class) Object unknown;
+        // Deliberately selects a legacy parser to verify compatibility dispatch.
+        @SuppressWarnings("removal")
+        @ConfigEntry(parser = BadConstructor.class) Object constructor;
+        // Deliberately selects a legacy parser to verify compatibility dispatch.
+        @SuppressWarnings("removal")
+        @ConfigEntry(parser = Stateful.class) Object stateful;
+    }
+}

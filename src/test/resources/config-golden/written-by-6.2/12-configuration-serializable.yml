@@ -1,0 +1,11 @@
+kits:
+  # Kits as a list
+  list:
+  - ==: com.ultikits.ultitools.abstracts.Capture62WriterTest$Kit
+    amount: 3
+    name: starter
+  by-name:
+    starter:
+      ==: com.ultikits.ultitools.abstracts.Capture62WriterTest$Kit
+      amount: 3
+      name: starter
