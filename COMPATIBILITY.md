@@ -40,8 +40,10 @@ explicit saves and panel updates. Typed collections resolve their full inherited
 convertible values bind, invalid collection/map elements are skipped with a located warning, and an
 invalid field value falls back to its initially declared default. Invalid reload values use that
 default too; a missing reload key instead retains its live field and is not added to the file.
-Warnings name the file, key and failed position/type; secret-shaped values and nested credentials
-are redacted. Unsupported declared types fail preflight before the file is read or created; register
+Warnings name the file, key and failed position/type and, as of 6.3.0 (#590), the converter's own
+reason (the message it gave `ConversionException`, without the location prefix) as `(reason: ...)`;
+secret-shaped values and nested credentials are redacted, the reason with them, and a multi-line
+reason is kept on one log line. Unsupported declared types fail preflight before the file is read or created; register
 `@ConfigConverterFor` or declare a supported plain-data shape. The built-in Bukkit serialization
 fallback requires a registered alias; registered custom converters keep ownership of their types.
 For every value `x` of the declared type whose collections and arrays contain no null element,
@@ -85,7 +87,15 @@ emitter described above, retaining untargeted data, key order and comment text s
 length limit above, while allowing layout normalization. A failed write never acknowledges the pending effective values as saved.
 
 Unreadable, unparseable and non-UTF-8 files are protected on every entity write path. Initial load
-keeps declared defaults; failed reload keeps running fields. One SEVERE names the file and safe cause.
+keeps declared defaults and logs one SEVERE naming the file and safe cause. As of 6.3.0 (#589) a
+failed reload keeps running fields and the file unchanged and throws `ConfigurationException`
+(`CONFIG_LOAD_FAILED` for an unreadable file, `CONFIG_PARSE_FAILED` for one that does not parse)
+naming the file and the same safe cause, instead of logging and returning normally; the entity logs
+nothing itself, because its caller reports it: `ConfigManager#reloadConfigs` lets it through, the
+module's reload logs one SEVERE line naming the module and the cause, `/ul reload <module>` replies
+that the module failed to reload, and a full `/ul reload` names the module among its failures. A
+module that calls `reload()` itself and catches only `IOException` now sees this unchecked
+exception propagate; catch `ConfigurationException` to report it in the module's own reply.
 Explicit save does not clear protection; only a later successful load permits writes again.
 Parser diagnostics expose only numeric line/column metadata, never source snippets or scalar values.
 
@@ -182,7 +192,8 @@ Maps merge recursively by whole keys; lists and scalars are atomic. Conflicts ta
 and warn with the located key and discarded value, redacting secret-shaped values. Absent map keys
 and explicit null differ. Missing whole declared fields retain their live values with the inherited
 declared-default baseline. This planner-selected file-wins policy can be overturned by the maintainer.
-Unreadable/unparseable reloads keep live values and protect the file as before.
+Unreadable/unparseable reloads keep live values and protect the file as before, and throw
+`ConfigurationException` naming the file and the safe cause (#589).
 
 ### Panel edits inside map entries
 
@@ -1058,7 +1069,9 @@ This section governs the third kind.
     naming the modules that failed instead of `All plugins reloaded.`; the summary is also sent to
     the command's sender, which previously got no reply on success and the generic command-error
     line on failure;
-  - `/ul reload <name>` replies failure, naming the module and the cause, when the reload threw;
+  - `/ul reload <name>` replies failure, naming the module and the cause, when the reload threw —
+    including, as of #589, when one of the module's configuration files cannot be read or parsed
+    (before #589 that reload logged the protected-load line and still replied success);
   - a module can report a partial reload without throwing: the new public final class
     `ReloadReport`, the new hook `protected void onReload(ReloadReport report)` — whose default body
     calls `onReload()`, so a module overriding only `onReload()` behaves exactly as before — and the
