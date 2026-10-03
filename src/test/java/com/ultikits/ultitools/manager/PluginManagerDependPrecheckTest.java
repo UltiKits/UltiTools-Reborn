@@ -246,6 +246,24 @@ class PluginManagerDependPrecheckTest {
     }
 
     @Test
+    @DisplayName("register(UltiToolsPlugin) refused by the precheck still releases the instance's configuration entities")
+    void instancePathRefusalReleasesConfigurationEntities() throws Exception {
+        // Integration pin (#566 precheck x #581 release): the precheck runs first, and its refusal,
+        // like every other refusal of a constructed instance, releases what the constructor registered.
+        Class<? extends UltiToolsPlugin> moduleClass = moduleClassRequiringAbsentPlugin();
+        UltiToolsPlugin instance = moduleClass.getDeclaredConstructor().newInstance();
+        ConfigManager configs = com.ultikits.ultitools.UltiTools.getInstance().getConfigManager();
+        Mockito.clearInvocations(configs);
+        PluginManager pluginManager = new PluginManager();
+
+        boolean registered = pluginManager.register(instance);
+
+        assertThat(registered).isFalse();
+        assertThat(instance.getContext()).as("container assembled").isNull();
+        Mockito.verify(configs).unregisterAll(instance);
+    }
+
+    @Test
     @DisplayName("required plugin installed and enabled: the module is constructed as before")
     void presentRequiredPluginIsNotRefusedByThePrecheck() throws Exception {
         MockBukkit.createMockPlugin(REQUIRED_PLUGIN);
