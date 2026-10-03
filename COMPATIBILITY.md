@@ -4,6 +4,357 @@ This document explains what the version numbers of `com.ultikits:UltiTools-API` 
 deprecation and removal work, and which removals are currently scheduled. It is written for
 downstream module authors.
 
+## Config layer (6.3.0)
+
+This section is the configuration migration contract **as of v6.3.0**. The new public extension
+point is `com.ultikits.ultitools.config.convert.ConfigConverter<T>`, discovered with
+`@ConfigConverterFor`; the document tree and writer remain internal implementation details.
+Third-party modules must rebuild if they used the removed accessor, and register converters for
+unsupported declared field types before configuration initialization.
+
+### Rendering and save fallback
+
+The internal config storage layer renders the whole YAML document through SnakeYAML, preserving content, comment text and key
+order. Its existing line-terminator, BOM, final-newline and supported indentation-style rules remain in effect. Operator layout
+may be normalized: aligned inline comments, flow spacing, extra spaces after a colon, document markers, mixed indentation and
+trailing spaces are not byte-preservation guarantees. Changed anchored documents expand aliases and merge keys from their plain
+values while retaining comments on surviving keys. Comments on individual list items are kept only while the list keeps its length — the same as Bukkit, which keeps none. The storage API signatures are unchanged.
+
+Saving first attempts a forced same-directory temporary file and atomic replacement. Only an unsupported atomic move, EBUSY,
+EXDEV, or a permission/read-only refusal to create the temporary file allows the narrow fallback: exclusively create `<file>.bak`,
+copy and force the existing target's bytes, then overwrite and force the existing target in place. If a backup already exists,
+it is refreshed from the current target through a forced same-directory temporary and atomic replacement before the target is
+opened. A backup creation/write/force or refresh rename failure refuses the save before the target is touched and preserves the
+previous backup. No old-backup restoration or validation of the current target is implied by this refresh. Other staging or move
+failures refuse the save. A fallback attempt logs one warning identifying the target, backup, cause and outcome. Symbolic links
+remain links, with the backup beside the resolved target.
+
+After an in-place write begins, a failure may leave a partial target, but its complete forced backup remains. That backup is
+removed only after the next successful strict UTF-8 storage load; unreadable or unparseable files keep it. Backup cleanup is best
+effort and cannot turn a successful load into a failure. No automatic restoration policy is introduced.
+
+### Declared types, whole map keys and persistence
+
+`AbstractConfigEntity` uses the document, converter registry and atomic writer for initial defaults,
+explicit saves and panel updates. Typed collections resolve their full inherited generic types:
+convertible values bind, invalid collection/map elements are skipped with a located warning, and an
+invalid field value falls back to its initially declared default. Invalid reload values use that
+default too; a missing reload key instead retains its live field and is not added to the file.
+Warnings name the file, key and failed position/type; secret-shaped values and nested credentials
+are redacted. Unsupported declared types fail preflight before the file is read or created; register
+`@ConfigConverterFor` or declare a supported plain-data shape. The built-in Bukkit serialization
+fallback requires a registered alias; registered custom converters keep ownership of their types.
+For every value `x` of the declared type whose collections and arrays contain no null element,
+`fromPlain(toPlain(x))` equals `x`. Typed collections (including `List<Object>`) and reference arrays
+(including `Object[]`) omit null elements on write with one located warning per field. Reading keeps
+its existing skip/warning behavior; plain data in a declared `Object` slot is unchanged.
+Null map values and null whole fields still round-trip. For every canonical
+plain value `p` emitted by the converter (`p = toPlain(x)`), `toPlain(fromPlain(p))` equals `p`.
+A converter may accept noncanonical input `q`; `toPlain(fromPlain(q))` is its canonical form, and
+normalization is stable: `fromPlain(toPlain(fromPlain(q)))` equals `fromPlain(q)`. Approved coercions
+(number to String, numeric text to int/float, `"false"` to boolean and duplicate elements to a Set)
+remain unchanged. 6.2's default parser stored every list element as text, so a 6.2-saved
+`List<Integer>` reads `- '60'`; 6.3.0 binds it as the number 60 and writes `- 60` the next time
+that file is saved by its module or a panel edit. Loading, reloading and the shutdown check never
+rewrite such a file on their own. Equality is semantic value comparison, not object identity; numeric plain values
+compare by value. Reload merges and panel leaf edits rely on forward equality. A converter that adds
+a value during reading without undoing that change during writing violates this contract.
+
+Whole map keys, including `g.m`, `o.O` and `wave.`, are supported as of 6.3.0.
+`@ConfigEntry.path` still splits at every dot: `chat.aliases` selects nested settings, whereas a
+key `o.O` inside the bound map is one whole key. These are different path conventions. Legacy 6.2 files in which Bukkit
+split a dotted key into nested mappings are read as they are, never automatically merged or renamed.
+For a `Map<String, String>` the wrongly shaped nested value is skipped with a warning.
+Explicit `null` is stored and binds to reference fields (primitive null is a mismatch). UUIDs, enums,
+sets and registered Bukkit values use converter plain output, not Java class tags. A Bukkit value
+loaded into an `Object` slot remains a plain map. Unknown runtime objects refuse saves without
+changing the file.
+
+Panel JSON uses the same conversion path as file binding and saves: integral numbers within the long
+range become plain `Long`; integers beyond the long range are kept exactly as `BigInteger`.
+Fractional numbers keep the existing `Double` route, objects ordered maps and arrays lists before typed conversion.
+A panel write persists only touched fields; unrelated unsaved code edits remain dirty. Validation
+runs before any missing-key or panel persistence. Snapshots track successful effective values,
+separately from the raw document and byte fingerprint. Reordering a map is dirty, but an order-only
+save acknowledges its new effective order without changing operator file order, comments or bytes.
+
+An explicit save compares its candidates with the current disk document, not only the saved
+baseline, so it may replace an operator's changed value even when the entity was clean. Semantic
+no-op saves invoke no writer and preserve bytes and modification time. Edited saves use the full
+emitter described above, retaining untargeted data, key order and comment text subject to the list-item
+length limit above, while allowing layout normalization. A failed write never acknowledges the pending effective values as saved.
+
+Unreadable, unparseable and non-UTF-8 files are protected on every entity write path. Initial load
+keeps declared defaults; failed reload keeps running fields. One SEVERE names the file and safe cause.
+Explicit save does not clear protection; only a later successful load permits writes again.
+Parser diagnostics expose only numeric line/column metadata, never source snippets or scalar values.
+
+Exactly one `{key}` annotation comment (surrounding whitespace ignored) is framework-owned. Every
+load and write refreshes existing token comments from the module catalogue in the current language;
+operator block comments on token entries are replaced, while literal-entry comments are kept.
+Catalogue lookup failure keeps the literal token and warns once per entry per load. Comment text
+uses the document's YAML line-break/control-character sanitation, including the panel payload.
+A failed comment-only rewrite does not fail load or discard bound values: the entity stays dirty
+until persistence succeeds. No-op comparison includes these authoritative comments.
+
+A successful entity write that replaces an operator-edited value warns once, naming the file and
+only the keys actually replaced, never values. Explicit saves, partial panel writes and shutdown
+share this reporting. Comment/layout-only edits, equal candidate values and failed writes do not
+claim an overwrite. The check and write run under the same entity monitor.
+
+### Removed mutable configuration accessor
+
+`AbstractConfigEntity#getConfig()` is removed under the **6.3.0 one-time carve-out**.
+The accessor worked in 6.2.5: neither the non-functional nor the never-used same-release exception
+applies. This is an explicit maintainer-authorized removal, not evidence that the accessor was
+broken or that nobody used it.
+Use `isPresentInFile(String)` for presence in the last successfully loaded document: undeclared keys
+and explicit null count as present; unreadable/unparseable loads report false. Paths split at every
+dot like `@ConfigEntry.path`, so a whole map key containing a dot is not addressable through this
+method. Read or mutate declared fields and call `save()` instead of mutating Bukkit storage.
+Official callers measured in UltiEssentials `RemovedConfigKeys.java:83` and UltiRemoteBag
+`RemovedConfigKeys.java:91` migrate in the module batch; third-party usage is unknown.
+An unrecompiled caller invoking the removed accessor sees `NoSuchMethodError`. See the removal
+record in `compatibility/records/6.3.0.md`; all other public/protected entity signatures are retained.
+
+### Registration batches
+
+As of 6.3.0, package/directory configuration registration buffers initialization writes until every
+entity binds and validates. A refused batch creates no file and changes no existing file, including
+missing-key and language-token comment rewrites. Once accepted, files persist independently; an I/O
+failure preserves earlier successful files and protects the failed entity until a successful reload.
+Standalone registration still writes immediately. Framework-internal initialization bridges are not
+a module transaction API.
+
+### Superseded-copy configuration ordering
+
+As of 6.3.0, before framework construction of an identifiable newer module copy, the framework
+reads its own JAR plugin.yml using the constructor's main/version defaults and existing version
+comparator, and saves the loaded old copy's dirty configurations in sorted file-path order.
+A failed or protected old save refuses incoming construction and retains the old active copy.
+The old copy is not unloaded before incoming activation succeeds. If identity is unavailable
+before construction, or an already-constructed instance is supplied, there is no late old save:
+successful supersede warns once with the dropped file/entry keys (never values), then releases
+old configuration entities. Failed incoming construction, compatibility, assembly or activation
+releases only refused incoming configuration owners; existing owners remain registered.
+No constructor deferral, early unload or public storage/transaction API is introduced.
+
+### Configuration registry server-thread confinement
+
+As of 6.3.0, all ConfigManager registry operations are server-thread confined while a server
+runs. Direct off-thread register/registerAll/saveAll/unregisterAll/reloadConfigs calls warn once
+and do no work. Getters, toJson/getComments and both loadFromJson overloads warn once and throw
+IllegalStateException, rather than returning a misleading empty result or successful write.
+The no-server case remains supported. getAllConfigEntities preserves null for an unregistered
+module and otherwise returns an unmodifiable detached map; its entities are not copied.
+Panel update, upload-write and reconnect upload-read callbacks queue their whole operation and
+return immediately off-thread, responding only after the queued operation runs. Registry guards
+precede entity monitors. Multi-file panel transactions retain deterministically ordered touched-entity
+monitors through validation, preparation, commit and acknowledgment or rollback; direct single-entity
+persistence uses its existing monitor. No separate manager lock or blocking scheduler wait is added.
+Async registry callers must schedule on the server thread. Existing public method signatures and
+panel response fields/types are unchanged.
+
+### Configuration release and shutdown save
+
+As of 6.3.0, module unload releases that module instance's configuration registry entry even
+when its unload hook or context close throws. Later shutdown saves neither retain nor write
+unloaded entities. PluginManager.close saves all registered dirty configurations before unloading
+any module. After each module's unload hook and container `@PreDestroy` callbacks, shutdown saves
+that same owner's dirty configurations again before releasing the owner, even when cleanup throws.
+The final save retains protected-file refusal and per-entity failure isolation. Normal runtime unload itself does
+not save; superseded-copy preparation follows the separate preconstruction rule. Public existing
+signatures are unchanged; no module migration is required.
+
+### Configuration init and reload thread contract
+
+As of 6.3.0, configuration init, reload, manager reloadConfigs and module reloadSelf refuse
+calls off the server thread while a server runs. One warning names the module, entity path when
+applicable and caller thread; no field/file/lifecycle action occurs. Checks precede entity monitors.
+The no-server test harness case remains allowed. Public signatures, including final reloadSelf,
+are unchanged; async third-party callers must schedule their reload on the server thread.
+
+### Reload merge rule
+
+As of 6.3.0, reload compares the last effective disk baseline, current serialized fields, and
+incoming disk values. Memory-only changes survive and stay dirty; disk-only changes are adopted.
+Maps merge recursively by whole keys; lists and scalars are atomic. Conflicts take the file's value
+and warn with the located key and discarded value, redacting secret-shaped values. Absent map keys
+and explicit null differ. Missing whole declared fields retain their live values with the inherited
+declared-default baseline. This planner-selected file-wins policy can be overturned by the maintainer.
+Unreadable/unparseable reloads keep live values and protect the file as before.
+
+### Panel edits inside map entries
+
+As of 6.3.0, a changed panel leaf inside a declared map setting is applied through that field's
+full declared-type converter. Real whole keys containing dots remain whole. A path with multiple
+readings refuses with every reading named; an unknown changed key is explicitly refused. Any refused
+changed key refuses the whole payload, naming all refused paths. Unchanged displayed leaves are not
+edits, including undeclared operator keys and ambiguous paths. Previously these map-entry edits were
+silently ignored. Leaf edits preserve unrelated pending in-memory siblings and their dirty state,
+and preserve independently edited disk siblings without acknowledging them. Full declared-field
+conversion and validation still run: the live field is serialized, only targeted plain leaves are
+patched, and the registry binds that candidate once. The round-trip contract preserves untouched
+bound siblings without any type-specific map/object merging. Only targeted leaves are persisted.
+The existing `config_update_response` shape is unchanged.
+
+### Multi-file panel persistence
+
+As of 6.3.0, `ConfigManager#loadFromJson(String)` validates every touched configuration, stages
+all changed files, and only then replaces them. Entity baselines and raw acknowledgments advance
+after every commit succeeds. An in-process staging/replacement refusal restores attempted targets
+and the complete prior entity state, removes staged temporaries, and rethrows the original error.
+Recovery errors are attached as suppressed exceptions; persistently unavailable storage can prevent
+restoration and is not falsely reported as a successful rollback. Semantic no-ops write nothing.
+This is not a crash-safe multi-file transaction: a JVM crash between moves remains deferred to #545.
+The panel message shape and public `loadFromJson` signatures are unchanged. Internal staged-entity
+coordination bridges are not a module transaction API.
+
+### Migrating legacy parsers to converters
+
+The six deprecated announcements are `ConfigEntry#parser()`, `interfaces.Parser`,
+`interfaces.ObjectConfigSerializer`, and `interfaces.impl.pasers.ConfigParser`,
+`DefaultConfigParser`, `StringHashMapParser` (the published package spelling `pasers` is retained).
+Their first release carrying `@Deprecated(since = "6.3.0", forRemoval = true)` is 6.3.0; the next
+MINOR, 6.4.0, is the announced removal version. They are retained in 6.3.0, not deleted now.
+An explicit non-default `parser = X.class` still selects the frozen legacy adapter. Its detached
+input is emitted under one key and loaded by a fresh Bukkit `YamlConfiguration#get`, retaining
+6.2 section-based dotted-key splitting and Bukkit `==` alias deserialization at the root and inside
+lists/maps, including explicitly parsed `Object` fields. Registry converters do not hydrate these
+legacy inputs; legacy output still crosses the plain-data boundary and retains boxed widening.
+Bukkit's own alias restrictions remain: integral Vector coordinates deserialize to null, whereas
+fractional coordinates deserialize normally. Leaving `parser` at `DefaultConfigParser.class` selects the new registry,
+not that legacy class. Third-party subclasses retain their old executable behavior, not the new
+built-in collection semantics. The six announcements are indexed in
+[`compatibility/DEPRECATIONS.md`](compatibility/DEPRECATIONS.md).
+
+For a custom type, remove `parser = ...` from the field and place a public top-level converter
+with a public no-argument constructor in the module's `@UltiToolsModule.scanBasePackages`.
+The package scanner discovers top-level classes only, not nested converter classes. Converters are discovered before configuration
+construction and are not IoC beans: do not depend on injected services or constructor side effects.
+Two registrations for the same exact class refuse load naming both converters. Lookup uses an
+explicit non-default legacy parser first; otherwise the module's exact registration, then its
+non-exact superclass/interface registrations, then the framework's registrations in the same
+order, generic collections/arrays/enums/Object, and registered Bukkit serialization fallback.
+`exact = true` prevents a registration from serving subclasses.
+
+Here is a map-shaped value migration. Put the value/parser/field members in a module class named
+`MigrationExample` in package `example.config` (imports go before the outer class). Put the converter
+in its own public top-level `TokenConverter.java` in the same scanned package, as shown separately. `Token`
+must provide semantic `equals`/`hashCode` in production so round-trip comparisons mean value equality.
+The converter deliberately accepts only the one-key shape it can reproduce; accepting extra keys
+and dropping them would violate `toPlain(fromPlain(p)) == p`.
+
+```java
+import java.util.Map;
+import com.ultikits.ultitools.annotations.ConfigEntry;
+import com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser;
+
+// Before: inherits the legacy reflective writer and section reader.
+public static class Token {
+    public String text;
+    public Token(String text) { this.text = text; }
+    @Override public boolean equals(Object other) {
+        return other instanceof Token
+                && java.util.Objects.equals(text, ((Token) other).text);
+    }
+    @Override public int hashCode() { return java.util.Objects.hashCode(text); }
+}
+public static class TokenParser extends DefaultConfigParser {
+    @Override public Object parse(Object raw) {
+        Map<?, ?> map = (Map<?, ?>) super.parse(raw);
+        return new Token((String) map.get("text"));
+    }
+}
+@ConfigEntry(path = "token", parser = TokenParser.class)
+private Token oldToken = new Token("hello");
+
+// After: delete the old field/parser and use this declaration/converter.
+@ConfigEntry(path = "token")
+private Token token = new Token("hello");
+
+```
+
+```java
+// TokenConverter.java: a separate top-level source file.
+package example.config;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+import example.config.MigrationExample.Token;
+import com.ultikits.ultitools.config.convert.ConfigConverter;
+import com.ultikits.ultitools.config.convert.ConfigConverterFor;
+import com.ultikits.ultitools.config.convert.ConversionContext;
+import com.ultikits.ultitools.config.convert.ConversionException;
+
+@ConfigConverterFor(Token.class)
+public class TokenConverter implements ConfigConverter<Token> {
+    public TokenConverter() { }
+    @Override public Object toPlain(Token value, ConversionContext ctx) {
+        if (value == null) { return null; }
+        Map<String, Object> plain = new LinkedHashMap<>();
+        plain.put("text", value.text);
+        return plain;
+    }
+    @Override public Token fromPlain(Object plain, ConversionContext ctx)
+            throws ConversionException {
+        if (plain == null) { return null; }
+        if (!(plain instanceof Map)) { throw failure(ctx); }
+        Map<?, ?> map = (Map<?, ?>) plain;
+        if (map.size() != 1 || !map.containsKey("text")
+                || !(map.get("text") == null || map.get("text") instanceof String)) {
+            throw failure(ctx);
+        }
+        return new Token((String) map.get("text"));
+    }
+    private ConversionException failure(ConversionContext ctx) {
+        return new ConversionException("Expected only a text key containing text or null",
+                ctx.file(), ctx.path(), ctx.declaredType());
+    }
+}
+```
+
+The plain boundary permits null, strings, booleans, `Integer`, `Long`, `BigInteger`, `Double`,
+lists and string-keyed maps of those values. Return no Bukkit section, arbitrary Java bean or
+Java class tag. Use `ctx.toPlain(nested)` / `ctx.fromPlain(nested, declaredType)` for recursive
+conversion. A non-plain runtime value in an `Object` slot uses its runtime converter on write;
+already-plain values stay plain. Integer narrowing is exact and range checked. Float accepts a
+decimal only when `Float.toString(parsedFloat)` prints the same decimal value (scale does not
+matter): `0.03` and `1.50` are accepted, `0.100000001` is not. Float output uses that printable
+decimal as a plain `Double`. This is not a promise of exact binary representation for decimal floats.
+
+### Shutdown and known limits
+
+Shutdown saves dirty registered entities before module release. An operator-only disk edit does
+not make a clean live entity dirty and survives shutdown untouched; a pending code change is saved
+and may replace operator values with the warning above. A partial panel save cannot acknowledge an
+unrelated pending field. Async module field mutation itself is not protected by registry confinement:
+module authors must arrange server-thread mutations. Initialization batches and panel transactions
+are different: accepted initialization files persist independently, while the panel stages all
+touched files with in-process rollback.
+
+Known limits remain explicit, not guaranteed away: [#578](https://github.com/UltiKits/UltiTools-Reborn/issues/578)
+tracks out-of-threat-model storage findings (special anchored containers, alias-comment ownership,
+complex symlink paths and Unicode style-offset cost);
+[#580](https://github.com/UltiKits/UltiTools-Reborn/issues/580) tracks refusal of a valid block anchor
+with a comment before its first child key. Direct alias token comments can affect the anchor's
+comment and cause repeated writes. No general alias-preservation guarantee or automatic backup
+restoration is claimed. [#545](https://github.com/UltiKits/UltiTools-Reborn/issues/545) remains the
+separate crash-safe multi-file transaction limit.
+
+### 中文补充：6.3.0 配置层迁移
+
+- 新扩展点是 `ConfigConverter<T>` 和 `@ConfigConverterFor`，转换器必须是扫描包内带 public 无参构造器的 public 顶层类；扫描器不发现嵌套转换器。它不是 IoC bean。未知声明类型在读取或创建文件前拒绝模块加载；官方 UltiRecipe 的配方对象需要模块自己的转换器。
+- 注解 `path` 中的点仍表示嵌套路径；映射里的 `g.m`、`o.O`、`wave.` 从 6.3.0 起按完整键保存。6.2 已经拆开的文件原样读取，不会自动合并。完整泛型参与绑定；无效集合元素跳过，无效字段用声明默认值，缺失的重载字段保留运行值。允许 null 的引用类型可往返；`Object` 中的 Bukkit 序列化对象读取后仍是普通映射。
+- 保存内容、注释文字、键顺序和支持的文件风格；有修改时整份经过 SnakeYAML 输出，运维排版可以规整。语义无变化不写文件，字节和修改时间不变。浮点数按最短可回读十进制判断，不要求二进制精确。
+- 先临时文件、force、原子替换；仅已允许的原子替换/临时创建拒绝才走备份后原地写。已有 `.bak` 先从当前文件刷新并原子替换，之后才打开目标。失败保留备份，只有成功严格加载当前文件才清理；不自动还原，不保证多文件崩溃事务。
+- 不能读取、不能解析、非 UTF-8 文件不会被任何实体写入路径覆盖；初次失败用默认值，重载失败保留运行值。成功加载才解除保护。单独 `{key}` 注释归框架所有，按模块当前语言目录更新；字面注释保持。成功覆盖运维值时一条警告只列文件和键，不列值。
+- `getConfig()` 在 6.2.5 确实可用，不能冒称符合两个同版删除例外；维护者通过 6.3.0 一次性 carve-out 删除它。改用 `isPresentInFile` 查询上次成功加载时的存在性，修改声明字段后 `save()`。两个已知官方调用在 UltiEssentials 与 UltiRemoteBag；第三方用量未知。
+- 六个旧解析器相关声明在 6.3.0 首次带 `forRemoval`，公告 6.4.0 删除。显式非默认 parser 暂时保留冻结的旧行为；默认 parser 改走注册表。迁移示例见上方，转换器必须满足两条互逆等式，不能单向加值或悄悄丢字段。
+- 注册批次验证完成才开始独立写文件；面板批次先验证并暂存全部文件，在进程内失败时回滚，持久存储故障可能阻止恢复。面板唯一映射路径走整字段类型转换，歧义和未知变更拒绝整个请求；无关内存/磁盘兄弟项保留。
+- 重载三方合并，内存独有改动保留且仍脏，磁盘独有采用，冲突磁盘胜。仅磁盘该映射未变时保证内存顺序保留，不写文件。初始化、重载和注册表在服务器主线程执行；异步面板回调整体排队，不能阻塞等待。
+- 可以提前识别的新副本先保存旧副本配置再构造；失败保留旧副本。不能识别时成功替换后只警告丢弃的键，不事后保存。卸载释放实体，关闭先保存后释放。已知限制 #578、#580 和多文件崩溃限制 #545 仍存在。
+
 ## What the version number means
 
 **This project's version numbers are a product-stage signal, not a strict semver contract.**
@@ -365,55 +716,13 @@ This section governs the third kind.
   before, with only the individual keys whose placeholder count moved resolved from the jar
   instead (see `ultitools.language.file-refresh`/`ultitools.language.file-preserve` in
   `FEATURES.md`). No operator who customised a file is affected either way.
-- Saving at shutdown only the configuration that module code changed. Before 6.3.0,
-  `UltiTools#onDisable()` rewrote **every** registered `@ConfigEntity` file from memory, so an edit
-  an operator made to a module's configuration file while the server was running was silently
-  discarded at the next stop (#510). That was a defect, not a guarantee: the documented contract is
-  only that a value set from code without calling `save()` is saved on disable, and that contract
-  is unchanged. As of 6.3.0 each configuration entity keeps a snapshot of what its file held when
-  the framework last read or wrote it (taken after `init()`, after every reload, and after every
-  successful `save()` or panel write, and derived from the file's text plus the configuration
-  class's declared defaults for keys the file does not contain, never from the live fields), and
-  the shutdown save writes only the entities whose current state differs from it. A value the file
-  does not hold therefore stays unsaved until it is written: a panel write that changes only some
-  keys, or a reload of a file from which a key was removed, does not hide an unsaved in-memory change
-  to another key. What an operator sees:
-  - an edit made to a file while the server runs survives a restart, provided no module code
-    changed that configuration in memory;
-  - a file the YAML parser rejects is never written at shutdown, whether or not module code changed
-    that configuration, because the framework does not know what the file holds; one WARNING names
-    the file and says the in-memory changes were not saved. (A file that fails to parse while the
-    module is *loading* is still overwritten with defaults at that moment, by `init()` itself —
-    a separate, pre-existing defect tracked as
-    [#511](https://github.com/UltiKits/UltiTools-Reborn/issues/511).) An explicit `save()` call
-    still writes, since that is the caller's deliberate act;
-  - an unchanged file is no longer rewritten at shutdown at all, so its cosmetic rewrites — values
-    re-quoted (a list of integers such as UltiCleaner's `item.warn-times` coming back as `'60'`),
-    comments re-emitted in the serializer's own layout — no longer happen then;
-  - first-boot defaults for missing keys are still written when the configuration loads, exactly
-    as before;
-  - if module code did change a configuration in memory **and** its file was also changed or removed
-    on disk since the snapshot, the in-memory state still wins and is written, and one WARNING per
-    file names the file and says the changes made while the server ran were overwritten;
-  - if that shutdown write fails (for example, the file was replaced by a directory, or is not
-    writable), the existing `Configuration save failed` WARNING is logged and no overwrite WARNING
-    is; an I/O error or an unchecked exception in one configuration does not stop the others from
-    being saved. A JVM `Error` is deliberately not caught: at that point the JVM itself is failing,
-    and isolating it would hide that.
-
-  Panel writes arrive on the WebSocket thread, not the server thread. `UltiTools#onDisable()` calls
-  `stopWebsocket()` before `saveAll()`, but that only starts the close handshake
-  (`WebSocketClient#close(int, String)` does not wait; `closeBlocking()` would), so a panel write
-  already being handled can still run while, or after, the shutdown save handles the same
-  configuration. Each configuration entity's own read, write and snapshot paths, and the shutdown
-  save's check-then-save of it, hold that entity's lock, so the two are applied one after the other,
-  each as a whole: a code change is never lost to an overlapping panel write, and a refused panel
-  value never reaches the file. Module code that changes a configuration from its own
-  asynchronous tasks is not covered by this lock.
-
-  An explicit `save()` call still writes unconditionally. A module that relied on the shutdown save
-  to reformat an untouched file should call `save()` itself (see `ultitools.config.shutdown-keeps-operator-edit`
-  and `ultitools.config.shutdown-saves-code-change` in `FEATURES.md`).
+- Saving at shutdown only the configuration that module code changed (#510). Operator-only disk
+  edits survive a clean stop; pending code changes are saved before module release, with one
+  warning naming replaced operator keys. The [config-layer contract](#config-layer-630) covers
+  protected files, partial panel acknowledgments, semantic no-ops and server-thread confinement.
+  Panel callbacks queue their complete operation on the server thread; they do not perform registry
+  writes concurrently on the WebSocket thread. Explicit entity saves still compare against current
+  disk content and can replace an operator edit even when the entity was clean.
 
 - `PluginInstallUtils.uninstallPlugin(String)` unloading through the framework's one full unload
   path, and reporting the outcome it documents (#503, #501). It used to call

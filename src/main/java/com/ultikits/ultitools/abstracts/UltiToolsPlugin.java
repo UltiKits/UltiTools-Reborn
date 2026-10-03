@@ -46,6 +46,7 @@ import com.google.gson.reflect.TypeToken;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
+import com.ultikits.ultitools.config.convert.ConverterRegistry;
 import com.ultikits.ultitools.context.ConditionalRegistrationEvaluator;
 import com.ultikits.ultitools.context.MergedAnnotationResolver;
 import com.ultikits.ultitools.context.SimpleContainer;
@@ -217,6 +218,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         identifyString = pluginConfig.getString("identify-string", null);
 
         resourceFolderPath = UltiTools.getInstance().getDataFolder().getAbsolutePath() + File.separator + "pluginConfig" + File.separator + this.getPluginName();
+        prepareConfigConverters();
         language = initializeLanguage();
         saveResources();
         try{
@@ -1193,6 +1195,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         this.mainClass = mainClass;
         this.identifyString = null; // Connector plugins don't have identify-string
         this.resourceFolderPath = resourceFolderPath;
+        prepareConfigConverters();
         language = createLanguageFromPath(resourceFolderPath);
         saveResources();
         try {
@@ -1270,6 +1273,19 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      */
     public static PluginManager getPluginManager() {
         return UltiTools.getInstance().getPluginManager();
+    }
+
+    /**
+     * Prepares converters and checks only enabled auto-config entities before resources are extracted.
+     */
+    private void prepareConfigConverters() {
+        String[] packages = DependencyUtils.getPluginPackages(this);
+        ClassLoader loader = this.getClass().getClassLoader();
+        ConverterRegistry.prepareModule(this, packages, loader);
+        EnableAutoRegister annotation = MergedAnnotationResolver.find(this.getClass(), EnableAutoRegister.class);
+        if (annotation != null && annotation.config()) {
+            ConverterRegistry.prepareSelectedConfigs(this, packages, loader);
+        }
     }
 
     /**
@@ -1678,6 +1694,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      */
     @Override
     public final void reloadSelf() {
+        if (!ConfigManager.permitsConfigThread(this, "reloadSelf")) { return; }
         getConfigManager().reloadConfigs(this);
         // #531: apply the reloaded values to config-bound @Scheduled/@CmdCD. Only reached when
         // reloadConfigs did not throw, so a refused reload leaves the running timings alone.

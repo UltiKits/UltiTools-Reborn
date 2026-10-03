@@ -1,10 +1,13 @@
 package com.ultikits.ultitools.abstracts;
 
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Type;
+import java.lang.reflect.ParameterizedType;
+import java.util.LinkedHashMap;
+import java.util.Iterator;
 import java.nio.file.Files;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -18,17 +21,26 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-import org.bukkit.configuration.InvalidConfigurationException;
-import org.bukkit.configuration.file.YamlConfiguration;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonPrimitive;
+import com.google.common.reflect.TypeToken;
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.config.document.ConfigDocument;
+import com.ultikits.ultitools.config.document.ConfigLoadResult;
+import com.ultikits.ultitools.config.document.AtomicConfigWriter;
+import com.ultikits.ultitools.config.document.PlainData;
+import com.ultikits.ultitools.config.convert.ConverterRegistry;
+import com.ultikits.ultitools.config.convert.ConversionResult;
+import com.ultikits.ultitools.config.convert.ConversionFailure;
+import com.ultikits.ultitools.config.convert.ConversionException;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.annotations.config.NotEmpty;
 import com.ultikits.ultitools.annotations.config.Pattern;
@@ -42,114 +54,51 @@ import lombok.AccessLevel;
 import lombok.Getter;
 
 /**
- * Abstract class representing a configuration entity.
- * <p>
- * Precondition for subclasses (#363, counts re-measured for #510): the constructor must be cheap
- * and free of side effects. For any class declaring at least one {@code @ConfigEntry} field, the
- * framework constructs and discards throwaway instances of this class on the paths below, and a
- * constructor that opens a file, registers a listener, or otherwise does real work pays that cost
- * again on every one of those events, purely to be thrown away:
- * <ul>
- * <li>{@link #validateFields()} - reached from {@link #init(UltiToolsPlugin)}, {@link #reload()},
- * {@link #updateProperties(com.google.gson.JsonObject)} and {@link
- * #validateProposedProperties(com.google.gson.JsonObject)} - constructs ONE instance via {@link
- * #ensureConstructable()} to prove the class still supports one of the framework's two documented
- * construction idioms. The construction happens before the accept/refuse decision, not only when a
- * panel write is ultimately accepted.</li>
- * <li>{@link #canonicalize(String)} constructs ONE instance, which it uses to read the text being
- * canonicalized (see that method). It runs once in {@code takeSnapshot()} - that is, on every
- * {@link #init(UltiToolsPlugin)}, {@link #reload()}, successful {@link #save()} and successful
- * {@link #updateProperties(JsonObject)} - and once in {@link #isModifiedSinceSnapshot()}, the
- * shutdown check.</li>
- * </ul>
- * Measured totals per operation: {@code init()} 2, {@code reload()} 2, a panel write 2, {@link
- * #save()} 1, and the shutdown check 1 per configuration (2 when it goes on to save). {@link
- * #save()} and the shutdown check construct nothing before 6.3.0 and are the two paths a module
- * author is most likely to consider exempt. A class with zero {@code @ConfigEntry} fields
- * constructs nothing on any of them. The documented {@code super(configFilePath)}-only idiom is
- * unaffected - each construction is a single, trivial reflective call.
- * <p>
- * Saved-state snapshot (#510, since 6.3.0): every entity remembers what its file on disk holds as
- * of the last time the framework read or wrote it - after {@link #init(UltiToolsPlugin)} (including
- * a first-boot defaults write), after {@link #reload()}, after every successful {@link #save()},
- * and after every successful {@link #updateProperties(JsonObject)} - together with a SHA-256
- * fingerprint of the file at that same point. The snapshot is derived from the file's text, plus
- * this class's declared defaults for keys the text does not contain, and never from this instance's
- * fields, so no unwritten in-memory change can ever be recorded as saved. The
- * shutdown save ({@code ConfigManager#saveAll()}) writes only the entities for which {@link
- * #isModifiedSinceSnapshot()} is {@code true}, so an operator's edit to a file whose configuration
- * no module code changed survives a restart. An explicit {@link #save()} call still writes
- * unconditionally.
- * <p>
- * Thread safety (#510): the framework's own read, write, snapshot and comparison paths - {@link
- * #init(UltiToolsPlugin)}'s and {@link #reload()}'s load, {@link #save()}, {@link
- * #updateProperties(JsonObject)}, {@link #validateProposedProperties(JsonObject)} and the two
- * snapshot checks - run under this entity's own monitor, which {@code ConfigManager#saveAll()} also
- * holds across its check-then-save of this entity. A panel write arriving on the WebSocket thread
- * and the shutdown save therefore each see the other's whole effect or none of it. Field setters in
- * module code are not synchronized by the framework.
- * <p>
- * That monitor is held across file I/O and across the constructions listed above, so it is also a
- * new direction of blocking: a panel write on the WebSocket thread holds it across validation, the
- * write and the snapshot, and a module calling {@link #save()} on the server thread waits for that
- * span. Both are bounded by small configuration files and by the cheap-constructor precondition.
+ * A module configuration bound through the converter registry and a comment-preserving document.
+ * All framework operations run under the entity monitor; module field setters remain unsynchronized.
+ * Constructors must be cheap and side-effect-free: validation constructs one throwaway instance to
+ * prove the existing String/no-arg construction contract. Snapshot checks never construct entities.
+ * The persisted raw document and the ordered effective field baseline are separate: partial panel
+ * writes must not acknowledge unrelated unsaved code edits. Missing reload keys retain live fields,
+ * but their baseline remains the initial declared default.
  */
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Config binder writes/reads private @ConfigEntry fields -- see 08-GATE05-TRIAGE.md
 @Getter
 public abstract class AbstractConfigEntity {
+    private static final Object ABSENT_RELOAD_VALUE = new Object();
     private static final Logger LOGGER = Logger.getLogger(AbstractConfigEntity.class.getName());
 
-    /**
-     * The numeric wrappers in JLS 5.1.2 widening order: every conversion from an earlier entry to a
-     * later one is a widening primitive conversion, and no other conversion between them is.
-     */
-    private static final List<Class<?>> WIDENING_ORDER = Collections.unmodifiableList(Arrays.<Class<?>>asList(
-            Byte.class, Short.class, Integer.class, Long.class, Float.class, Double.class));
-
-    /** Converts a {@link Number} to the wrapper at the same index of {@link #WIDENING_ORDER}. */
-    private static final List<Function<Number, Object>> WIDENERS =
-            Collections.unmodifiableList(Arrays.<Function<Number, Object>>asList(
-                    Number::byteValue, Number::shortValue, Number::intValue, Number::longValue,
-                    Number::floatValue, Number::doubleValue));
-    
     private final String configFilePath;
     private final List<ConfigChangeListener> changeListeners = new CopyOnWriteArrayList<>();
     private UltiToolsPlugin ultiToolsPlugin;
-    private YamlConfiguration config;
-    /**
-     * The canonical form (see {@link #canonicalize(String)}) of the text on disk as of the last
-     * snapshot point (#510), or {@code null} before the first successful snapshot - which {@link
-     * #isModifiedSinceSnapshot()} treats as modified, so shutdown keeps the pre-#510 "save it"
-     * behaviour for an entity that was never in sync with its file. A serialized string, never a
-     * reference to or shallow copy of the field values: a module that mutates a collection field in
-     * place (UltiChat's auto-reply {@code rules} map) must still be detected as changed.
-     */
     @Getter(AccessLevel.NONE)
-    private volatile String savedSnapshot;
-    /**
-     * Fingerprint of the file on disk as of the last snapshot point (#510), see {@link
-     * #fingerprintOf(File)}; {@code null} before the first snapshot.
-     */
+    private ConfigDocument document;
     @Getter(AccessLevel.NONE)
-    private volatile String savedFileFingerprint;
-    /**
-     * Whether the last attempt to read this configuration's file failed to parse (#510). While set,
-     * the framework does not know what the file holds, so {@link #isModifiedSinceSnapshot()} reports
-     * {@code false} and the shutdown save leaves the file alone rather than overwriting an operator's
-     * broken file with the in-memory state. Cleared by the next successful load or save.
-     */
+    private Map<String, Object> lastLoadedPresence;
     @Getter(AccessLevel.NONE)
-    private volatile boolean lastLoadUnparseable;
-    /**
-     * Whether the last {@link #init} did not run to the end of its validation -- set when it starts,
-     * cleared only after {@link #validateFields()} succeeds. A caller that catches the
-     * {@code IOException} of a failed write-back (as {@code ConfigManager} does) is otherwise left
-     * with an entity whose fields hold the file's new values unvalidated (#533). Kept on the entity
-     * so that it lives and dies with it; nothing else has to remember to clear it (Codex round 3 on
-     * #536).
-     */
+    private final Map<Field, RawEntry> acknowledgedRaw = new LinkedHashMap<>();
+
+    @Getter(AccessLevel.NONE)
+    private final Map<Field, Object> declaredDefaults = new LinkedHashMap<>();
+    @Getter(AccessLevel.NONE)
+    private Map<Field, Object> savedSnapshot;
+    @Getter(AccessLevel.NONE)
+    private String savedFileFingerprint;
+    @Getter(AccessLevel.NONE)
+    private boolean lastLoadUnparseable;
     @Getter(AccessLevel.NONE)
     private volatile boolean lastInitIncomplete;
+    @Getter(AccessLevel.NONE)
+    private boolean defaultsCaptured;
+    @Getter(AccessLevel.NONE)
+    private boolean pendingCommentWrite;
+    @Getter(AccessLevel.NONE)
+    private boolean deferInitialization;
+    @Getter(AccessLevel.NONE)
+    private PendingInitialization pendingInitialization;
+
+    @Getter(AccessLevel.NONE)
+    private final Set<String> warnedCommentKeys = ConcurrentHashMap.newKeySet();
 
     /**
      * The value ranges a config binding (#531) imposes on this entity's keys, by {@code @ConfigEntry}
@@ -162,6 +111,32 @@ public abstract class AbstractConfigEntity {
     @Getter(AccessLevel.NONE)
     private final Map<String, Map<String, Predicate<Long>>> bindingRanges = new ConcurrentHashMap<>();
 
+    /** A detached raw entry acknowledgment; absent and explicit null are different states. */
+    private static final class RawEntry {
+        private final boolean present;
+        private final Object value;
+
+        private RawEntry(ConfigDocument source, List<String> path) {
+            this(source.contains(path), source.get(path));
+        }
+
+        private RawEntry(boolean present, Object value) {
+            this.present = present; this.value = PlainData.copy(value);
+        }
+
+        private boolean matches(ConfigDocument source, List<String> path) {
+            return present == source.contains(path) && PlainData.plainEquals(value, source.get(path));
+        }
+    }
+
+    private static final class PendingInitialization {
+        private final ConfigDocument candidate;
+        private final Map<Field, Object> baseline;
+        private PendingInitialization(ConfigDocument candidate, Map<Field, Object> baseline) {
+            this.candidate = candidate; this.baseline = baseline;
+        }
+    }
+
     /**
      * Constructor for AbstractConfigEntity.
      *
@@ -172,116 +147,250 @@ public abstract class AbstractConfigEntity {
     }
 
     /**
-     * Saves the configuration to the file.
-     * <p>
-     * An explicit call always writes, whether or not anything changed since the last snapshot. Only
-     * the shutdown save ({@code ConfigManager#saveAll()}) is conditional on {@link
-     * #isModifiedSinceSnapshot()} (#510). A successful write refreshes the snapshot; a failed write
-     * leaves the previous snapshot in place, so the entity stays modified and the shutdown save
-     * retries it.
-     *
-     * @throws IOException if an I/O error occurs
+     * Persists all fields, preserving current operator comments and unknown keys. Semantically
+     * equal data performs no writer call (bytes and modification time stay unchanged). An explicit
+     * save still replaces disk values differing from the entity, even when the entity was clean.
+     * A failed write leaves the previous effective baseline in place.
+     * @throws IOException if persistence fails
      */
     public void save() throws IOException {
         synchronized (this) {
-            applyFieldsTo(config);
-            config.save(new File(ultiToolsPlugin.getConfigFolder() + File.separator + configFilePath));
-            // #510: an explicit save is a caller's deliberate act and always writes, so the file now
-            // holds what the framework just wrote - whatever state it was in before.
-            lastLoadUnparseable = false;
-            takeSnapshot();
+            if (lastLoadUnparseable) { return; }
+            persist(configEntryFields());
         }
     }
 
-    /**
-     * Copies every non-null {@code @ConfigEntry} field, serialized through its declared parser, onto
-     * {@code target}. The one serialization path shared by {@link #save()}, {@link
-     * #renderSaveText()} and {@link #canonicalizeOnce(String, AbstractConfigEntity, java.util.List)}, so the shutdown comparison renders
-     * exactly what {@code save()} would write (#510).
-     *
-     * @param target the configuration to write the serialized field values into
-     */
-    @SuppressWarnings("unchecked")
-    private void applyFieldsTo(YamlConfiguration target) {
-        for (Field field : ReflectionUtil.getFields(this.getClass())) {
-            if (!field.isAnnotationPresent(ConfigEntry.class)) {
-                continue;
-            }
-            field.setAccessible(true);
-            ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
-            String path = annotation.path();
-            if (path.isEmpty()) {
-                path = field.getName();
-            }
-            Object fieldValue = ReflectionUtil.getFieldValue(this, field);
-            if (fieldValue == null) {
-                continue;
-            }
-            Object serialized = ReflectionUtil.newInstance(annotation.parser()).serialize(fieldValue);
-            target.set(path, serialized);
-        }
+    private ConverterRegistry registry() { return ConverterRegistry.forModule(ultiToolsPlugin); }
+
+    private String fieldPath(Field field) {
+        String path = field.getAnnotation(ConfigEntry.class).path();
+        return path.isEmpty() ? field.getName() : path;
     }
 
-    /**
-     * Renders the exact text {@link #save()} would write right now, without writing it and without
-     * touching the live {@link #config} (which {@link #toJsonObject()} still reports to the panel).
-     * The live configuration is copied through its own YAML text - comments included - and the
-     * fields are applied to the copy through {@link #applyFieldsTo(YamlConfiguration)}, the same
-     * path {@code save()} uses.
-     *
-     * @return the rendered text, or {@code null} if the live configuration's own text cannot be
-     *         parsed back
-     */
-    private String renderSaveText() {
-        YamlConfiguration copy = new YamlConfiguration();
-        copy.options().parseComments(true);
+    private List<String> keys(Field field) { return Arrays.asList(fieldPath(field).split("\\.", -1)); }
+
+    private Type declaredType(Field field) {
+        return TypeToken.of(getClass()).resolveType(field.getGenericType()).getType();
+    }
+
+    private Object plainValue(Field field) { return plainValue(field, false); }
+
+    private Object plainValue(Field field, boolean writing) {
+        field.setAccessible(true);
         try {
-            copy.loadFromString(config.saveToString());
-        } catch (InvalidConfigurationException e) {
-            return null;
+            ConversionResult<Object> result = registry().toPlainResult(ReflectionUtil.getFieldValue(this, field),
+                    declaredType(field), configFilePath, keys(field), field.getAnnotation(ConfigEntry.class));
+            if (writing && !result.failures().isEmpty()) {
+                List<String> locations = new ArrayList<>();
+                for (ConversionFailure failure : result.failures()) {
+                    List<String> path = failure.path();
+                    List<String> relative = path.subList(keys(field).size(), path.size());
+                    boolean secret = isSecretShapedFieldName(field.getName());
+                    for (String key : path) { secret |= isSecretShapedFieldName(key); }
+                    locations.add(secret ? "<redacted>" : relative.toString());
+                }
+                LOGGER.warning("File " + configFilePath + ", key '" + fieldPath(field)
+                        + "': omitted null collection/array elements at " + String.join(", ", locations));
+            }
+            return PlainData.copy(result.value());
+        } catch (ConversionException failure) {
+            throw new ConfigurationException(failure.getMessage(), failure);
         }
-        applyFieldsTo(copy);
-        return copy.saveToString();
     }
 
-    /**
-     * Brings a configuration text to the form this entity would give it after reading it and saving
-     * it again (#510): the text is parsed, a throwaway instance of this class (one per call, see the
-     * construction counts in this class's own javadoc) loads every present {@code @ConfigEntry} key
-     * through its parser exactly as {@link #init(UltiToolsPlugin)} does
-     * (absent keys keep that instance's declared defaults), and the instance's fields are applied back
-     * onto the parsed text through {@link #applyFieldsTo(YamlConfiguration)}. Two passes make the
-     * result stable, because a default filled in for an absent key by the first pass is re-read
-     * through the parser by the second.
-     * <p>
-     * Both sides of the shutdown comparison go through this: the snapshot canonicalizes the text on
-     * disk, {@link #isModifiedSinceSnapshot()} canonicalizes what {@link #save()} would write now.
-     * Parser quirks therefore cancel out (for example {@code DefaultConfigParser} reading the
-     * integers of a YAML list back as strings), while any in-memory value the file does not hold -
-     * a field a partial panel write did not touch, a key missing from a reloaded file - still
-     * differs.
-     *
-     * @param text a YAML text, possibly {@code null}
-     * @return the canonical text, or {@code null} if {@code text} is {@code null} or cannot be parsed
-     */
-    private String canonicalize(String text) {
-        if (text == null) {
-            return null;
+    private Map<Field, Object> currentPlain(List<Field> fields) { return currentPlain(fields, false); }
+
+    private Map<Field, Object> currentPlain(List<Field> fields, boolean writing) {
+        Map<Field, Object> plain = new LinkedHashMap<>();
+        for (Field field : fields) { plain.put(field, plainValue(field, writing)); }
+        return plain;
+    }
+
+    private void captureDefaults() {
+        if (!defaultsCaptured) {
+            declaredDefaults.putAll(currentPlain(configEntryFields()));
+            defaultsCaptured = true;
         }
-        List<Field> configFields = configEntryFields();
-        if (configFields.isEmpty()) {
-            // Nothing to read into an instance, so do not construct one. A class with no
-            // @ConfigEntry field never reaches validateFields()' constructability check either, so
-            // it may legitimately have no constructor this class can resolve; constructing one here
-            // would fail, clear the snapshot, and make the shutdown save rewrite an untouched file.
-            return renderParsed(text);
+    }
+
+    private void persist(List<Field> fields) throws IOException {
+        PreparedSave prepared = prepareSave(fields);
+        if (prepared.changed) { write(prepared.candidate); }
+        acknowledgeSave(prepared);
+    }
+
+    private static final class PreparedSave {
+        private final ConfigDocument candidate;
+        private final Map<Field, Object> values;
+        private final List<String> overwritten;
+        private final boolean changed;
+        private Map<Field, RawEntry> raw;
+        private PreparedSave(ConfigDocument candidate, Map<Field, Object> values,
+                List<String> overwritten, boolean changed) {
+            this.candidate = candidate; this.values = values;
+            this.overwritten = overwritten; this.changed = changed;
         }
-        // One throwaway instance for both passes, not one each: pass one writes a value for every
-        // @ConfigEntry key, so pass two overwrites every field it reads and cannot see anything pass
-        // one left behind. Reusing it ACROSS calls would not be safe - the declared defaults it
-        // carries for absent keys are exactly what the comparison relies on.
-        AbstractConfigEntity probe = constructSibling();
-        return canonicalizeOnce(canonicalizeOnce(text, probe, configFields), probe, configFields);
+    }
+
+    private PreparedSave prepareSave(List<Field> fields) throws IOException {
+        return prepareSave(fields, Collections.emptyMap());
+    }
+
+    @SuppressWarnings("PMD.NPathComplexity") // Keep candidate conversion, leaf ownership and disk comparison in their established order.
+    private PreparedSave prepareSave(List<Field> fields, Map<Field, List<List<String>>> leaves) throws IOException {
+        // Convert every candidate before reading or mutating the presentation document.
+        Map<Field, Object> values = currentPlain(fields, true);
+        ConfigLoadResult loaded = ConfigDocument.load(ultiToolsPlugin.getConfigFile(configFilePath).toPath());
+        if (protectFailedLoad(loaded)) {
+            throw new IOException("Cannot save " + configFilePath + ": current file is " + loaded.state());
+        }
+        ConfigDocument candidate = loaded.state() == ConfigLoadResult.State.LOADED
+                ? loaded.document() : ConfigDocument.empty();
+        boolean changed = false;
+        List<String> overwritten = new ArrayList<>();
+        Map<Field, RawEntry> raw = new LinkedHashMap<>();
+        for (Map.Entry<Field, Object> entry : values.entrySet()) {
+            Field field = entry.getKey();
+            List<String> path = keys(field);
+            if (leaves.containsKey(field)) {
+                Object baseline = savedSnapshot == null ? declaredDefaults.get(field) : savedSnapshot.get(field);
+                RawEntry previous = acknowledgedRaw.get(field);
+                Object rawBaseline = previous == null ? null : previous.value;
+                for (List<String> leaf : leaves.get(field)) {
+                    List<String> diskPath = new ArrayList<>(path); diskPath.addAll(leaf);
+                    Object next = mapLeaf(entry.getValue(), leaf);
+                    boolean existed = candidate.contains(diskPath);
+                    if (!existed || !PlainData.plainEquals(candidate.get(diskPath), next)) {
+                        if (previous != null && (mapContains(previous.value, leaf) != existed
+                                || !PlainData.plainEquals(mapLeaf(previous.value, leaf), candidate.get(diskPath)))) {
+                            overwritten.add("'" + String.join(".", diskPath) + "'");
+                        }
+                        candidate.set(diskPath, next); changed = true;
+                    }
+                    baseline = patchedMap(baseline, leaf, next);
+                    rawBaseline = patchedMap(rawBaseline, leaf, next);
+                }
+                entry.setValue(baseline);
+                raw.put(field, new RawEntry(true, rawBaseline));
+                continue;
+            }
+            boolean missing = !candidate.contains(path);
+            if (missing || !PlainData.plainEquals(candidate.get(path), entry.getValue())) {
+                RawEntry previous = acknowledgedRaw.get(entry.getKey());
+                if (previous != null && !previous.matches(candidate, path)) {
+                    overwritten.add("'" + fieldPath(entry.getKey()) + "'");
+                }
+                candidate.set(path, entry.getValue()); changed = true;
+            }
+            if (missing && !isTokenComment(entry.getKey())) { changed |= addEntryComment(candidate, entry.getKey()); }
+        }
+        changed |= updateTokenComments(candidate);
+        PreparedSave prepared = new PreparedSave(candidate, values, overwritten, changed);
+        prepared.raw = raw;
+        return prepared;
+    }
+
+    private void acknowledgeSave(PreparedSave prepared) {
+        if (prepared.changed && !prepared.overwritten.isEmpty()) { warnOverwritten(prepared.overwritten); }
+        pendingCommentWrite = false;
+        document = prepared.candidate;
+        if (savedSnapshot == null) { savedSnapshot = new LinkedHashMap<>(declaredDefaults); }
+        savedSnapshot.putAll(prepared.values);
+        for (Field field : prepared.values.keySet()) {
+            RawEntry raw = prepared.raw == null ? null : prepared.raw.get(field);
+            acknowledgedRaw.put(field, raw == null ? new RawEntry(prepared.candidate, keys(field)) : raw);
+        }
+        savedFileFingerprint = fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath));
+    }
+
+    private void acknowledgeRaw(ConfigDocument source, List<Field> fields) {
+        for (Field field : fields) { acknowledgedRaw.put(field, new RawEntry(source, keys(field))); }
+    }
+
+    private void warnOverwritten(List<String> paths) {
+        // Values are deliberately omitted: even an ordinary field may hold a credential.
+        Logger logger = UltiTools.getInstance() == null ? LOGGER : UltiTools.getInstance().getLogger();
+        logger.log(Level.WARNING, "Configuration file " + ultiToolsPlugin.getConfigFile(configFilePath).getAbsolutePath()
+                + " had operator-edited keys overwritten: " + String.join(", ", paths));
+    }
+
+    private void write(ConfigDocument candidate) throws IOException {
+        File file = ultiToolsPlugin.getConfigFile(configFilePath);
+        Files.createDirectories(file.toPath().toAbsolutePath().getParent());
+        AtomicConfigWriter.write(file.toPath(), candidate.render());
+    }
+
+    private boolean isTokenComment(Field field) {
+        return field.getAnnotation(ConfigEntry.class).comment().trim().matches("\\{[^{}]+\\}");
+    }
+
+    private String resolvedComment(Field field) {
+        String literal = field.getAnnotation(ConfigEntry.class).comment();
+        if (!isTokenComment(field)) { return literal; }
+        String token = literal.trim();
+        String key = token.substring(1, token.length() - 1);
+        String resolved = null;
+        try { resolved = ultiToolsPlugin.i18n(key); }
+        catch (RuntimeException unavailable) {
+            // Catalogue failure must not prevent configuration values from loading.
+        }
+        if (resolved != null && !resolved.equals(key)) { return resolved; }
+        if (warnedCommentKeys.add(fieldPath(field))) {
+            LOGGER.warning("Module " + ultiToolsPlugin.getPluginName() + ", file " + configFilePath
+                    + ", path '" + fieldPath(field) + "': missing comment catalogue key '" + key + "'");
+        }
+        return token;
+    }
+
+    private boolean addEntryComment(ConfigDocument target, Field field) {
+        String comment = resolvedComment(field);
+        if (comment.isEmpty()) { return false; }
+        List<String> before = target.blockComment(keys(field));
+        // Merge-inherited entries exist in the plain view but need their own explicit comment owner.
+        target.set(keys(field), target.get(keys(field)));
+        target.setFrameworkComment(keys(field), Collections.singletonList(comment));
+        return !before.equals(target.blockComment(keys(field)));
+    }
+
+    private boolean updateTokenComments(ConfigDocument target) {
+        boolean changed = false;
+        for (Field field : configEntryFields()) {
+            if (isTokenComment(field) && target.contains(keys(field))) {
+                changed |= addEntryComment(target, field);
+            }
+        }
+        return changed;
+    }
+
+    private String panelComment(Field field) {
+        // Reuse the storage boundary's sole sanitation policy, including every YAML line break.
+        ConfigDocument presentation = ConfigDocument.empty();
+        presentation.set(keys(field), null);
+        presentation.setFrameworkComment(keys(field), Collections.singletonList(resolvedComment(field)));
+        return String.join("\n", presentation.blockComment(keys(field)));
+    }
+
+    private boolean protectFailedLoad(ConfigLoadResult loaded) {
+        if (loaded.state() != ConfigLoadResult.State.UNREADABLE
+                && loaded.state() != ConfigLoadResult.State.UNPARSEABLE) { return false; }
+        lastLoadUnparseable = true;
+        String cause = loaded.state() == ConfigLoadResult.State.UNREADABLE
+                ? loaded.cause().getClass().getSimpleName() : safeParserLocation(loaded.parserMessage());
+        LOGGER.severe("Cannot load " + configFilePath + ": " + cause + "; file will not be overwritten");
+        return true;
+    }
+
+    private static String safeParserLocation(String message) {
+        if (message != null) {
+            // The storage result discards the typed parser cause. Extract numeric metadata only,
+            // never the filename, parser reason, scalar snippet or throwable message.
+            java.util.regex.Matcher location = java.util.regex.Pattern.compile(
+                    "(?m)^ *in [^\\r\\n]*, line ([0-9]+), column ([0-9]+):? *$").matcher(message);
+            if (location.find()) {
+                return "invalid YAML at line " + location.group(1) + ", column " + location.group(2);
+            }
+        }
+        return "invalid YAML or UTF-8";
     }
 
     /**
@@ -301,133 +410,81 @@ public abstract class AbstractConfigEntity {
     }
 
     /**
-     * Parses {@code text} and renders it back, with no field applied - the whole of {@link
-     * #canonicalize(String)} for a class that declares no {@code @ConfigEntry} field.
-     *
-     * @param text a YAML text
-     * @return the re-rendered text, or {@code null} if it cannot be parsed
-     */
-    private String renderParsed(String text) {
-        YamlConfiguration parsed = new YamlConfiguration();
-        parsed.options().parseComments(true);
-        try {
-            parsed.loadFromString(text);
-        } catch (InvalidConfigurationException e) {
-            return null;
-        }
-        return parsed.saveToString();
-    }
-
-    /**
-     * One pass of {@link #canonicalize(String)}.
-     *
-     * @param text         a YAML text, possibly {@code null}
-     * @param probe        the throwaway instance this pass reads {@code text} into
-     * @param configFields this class's {@code @ConfigEntry} fields, never empty
-     * @return the text after one read-and-render pass, or {@code null} if it cannot be parsed
-     */
-    private String canonicalizeOnce(String text, AbstractConfigEntity probe, List<Field> configFields) {
-        if (text == null) {
-            return null;
-        }
-        YamlConfiguration parsed = new YamlConfiguration();
-        parsed.options().parseComments(true);
-        try {
-            parsed.loadFromString(text);
-        } catch (InvalidConfigurationException e) {
-            return null;
-        }
-        for (Field field : configFields) {
-            ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
-            String path = annotation.path();
-            if (path.isEmpty()) {
-                path = field.getName();
-            }
-            Object configValue = parsed.get(path);
-            if (configValue != null) {
-                ReflectionUtil.setFieldValue(probe, field, readConfigValue(field, annotation, configValue));
-            }
-        }
-        probe.applyFieldsTo(parsed);
-        return parsed.saveToString();
-    }
-
-    /**
-     * Records the snapshot and the on-disk file fingerprint (#510). Called, under this entity's
-     * monitor, right after {@link #init(UltiToolsPlugin)} or {@link #reload()} has read the file and
-     * right after {@link #save()} or {@link #updateProperties(JsonObject)} has written it - at each of
-     * those points the live {@link #config} holds exactly the file's content, and the snapshot is
-     * derived from that text alone.
-     * <p>
-     * Never throws. If the snapshot cannot be computed, it is cleared rather than left stale, so the
-     * entity counts as modified and shutdown saves it exactly as it did before #510, and a WARNING
-     * says so; a fingerprint that cannot be computed is recorded as {@code "unreadable"}.
-     */
-    private void takeSnapshot() {
-        synchronized (this) {
-            try {
-                savedFileFingerprint = fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath));
-            } catch (RuntimeException e) {
-                savedFileFingerprint = "unreadable";
-            }
-            String snapshot = null;
-            RuntimeException failure = null;
-            try {
-                snapshot = canonicalize(config.saveToString());
-            } catch (RuntimeException e) {
-                failure = e;
-            }
-            savedSnapshot = snapshot;
-            if (snapshot == null) {
-                LOGGER.log(Level.WARNING, "Cannot snapshot the saved state of " + configFilePath
-                        + "; it will be saved at shutdown whether or not it changed", failure);
-            }
-        }
-    }
-
-    /**
-     * Whether this entity's current state differs from what its file held when the framework last
-     * read or wrote it (#510): the canonical form of the text {@link #save()} would write now is
-     * compared with the snapshot. This is what the shutdown save uses to decide whether to write this
-     * configuration at all.
-     * <p>
-     * Framework-internal: this method is called only by {@code ConfigManager#saveAll()} and is
-     * {@code public} solely because {@code ConfigManager} lives in another package. Module code
-     * should not call it.
-     * <p>
-     * An entity that was never initialized has nothing to save and reports {@code false}. An entity
-     * with no snapshot yet (its first-boot defaults write failed, or its snapshot could not be
-     * computed) reports {@code true}, preserving the pre-#510 behaviour of saving it at shutdown. A
-     * map field whose entries were only reordered also reports {@code true}, because serialization
-     * follows the map's iteration order; saving it is harmless and matches the pre-#510 behaviour.
-     * <p>
-     * Two cases deliberately report {@code false}. An entity whose file failed to parse the last
-     * time it was read ({@link #isLastLoadUnparseable()}) is never written by the shutdown save: the
-     * framework does not know what that file holds, so overwriting it with the in-memory state would
-     * destroy an operator's broken-but-recoverable file. And a key the file does not contain whose
-     * in-memory value equals this class's declared default is indistinguishable from the file's own
-     * implied state; it is not written at shutdown, and the next load produces the same value anyway.
-     *
-     * @return {@code true} if the shutdown save should write this configuration
+     * Whether serialized fields differ from their last bound/persisted effective values.
+     * Map iteration order is significant here; the storage equality used for no-op saves is not.
+     * Protected files and uninitialized entities are never saved by shutdown.
+     * @return whether shutdown should persist this entity
      * @since 6.3.0
      */
     @ApiStatus.Internal
     public final boolean isModifiedSinceSnapshot() {
         synchronized (this) {
-            if (config == null || ultiToolsPlugin == null || lastLoadUnparseable) {
-                return false;
-            }
-            String snapshot = savedSnapshot;
-            if (snapshot == null) {
+            if (document == null || ultiToolsPlugin == null || lastLoadUnparseable) { return false; }
+            if (savedSnapshot == null || pendingCommentWrite) { return true; }
+            try { return !orderedEquals(savedSnapshot, currentPlain(configEntryFields())); }
+            catch (RuntimeException failure) {
+                LOGGER.warning("Cannot compare the state of " + configFilePath + "; treating it as changed");
                 return true;
             }
-            try {
-                return !snapshot.equals(canonicalize(renderSaveText()));
-            } catch (RuntimeException e) {
-                LOGGER.log(Level.WARNING, "Cannot compare the state of " + configFilePath
-                        + " with its snapshot; treating it as changed", e);
-                return true;
+        }
+    }
+
+    /** Names unsaved declared entries without exposing their values, for superseded-copy reporting.
+     * @return changed entry paths
+     */
+    @ApiStatus.Internal
+    public final List<String> unsavedEntryPaths() {
+        synchronized (this) {
+            List<String> paths = new ArrayList<>();
+            for (Field field : configEntryFields()) {
+                if (savedSnapshot == null || !orderedEquals(savedSnapshot.get(field), plainValue(field))) {
+                    paths.add(fieldPath(field));
+                }
             }
+            return paths;
+        }
+    }
+
+    private static boolean orderedEquals(Object left, Object right) {
+        if (left instanceof Map && right instanceof Map) {
+            Map<?, ?> a = (Map<?, ?>) left; Map<?, ?> b = (Map<?, ?>) right;
+            if (a.size() != b.size()) { return false; }
+            Iterator<? extends Map.Entry<?, ?>> ai = a.entrySet().iterator();
+            Iterator<? extends Map.Entry<?, ?>> bi = b.entrySet().iterator();
+            while (ai.hasNext()) {
+                Map.Entry<?, ?> x = ai.next(); Map.Entry<?, ?> y = bi.next();
+                if (!x.getKey().equals(y.getKey()) || !orderedEquals(x.getValue(), y.getValue())) { return false; }
+            }
+            return true;
+        }
+        if (left instanceof List && right instanceof List) {
+            List<?> a = (List<?>) left; List<?> b = (List<?>) right;
+            if (a.size() != b.size()) { return false; }
+            for (int i = 0; i < a.size(); i++) {
+                if (!orderedEquals(a.get(i), b.get(i))) { return false; }
+            }
+            return true;
+        }
+        return PlainData.plainEquals(left, right);
+    }
+
+    /**
+     * Reports presence in the last successfully loaded document, including explicit nulls and
+     * undeclared keys. The path splits at every dot like ConfigEntry paths; a key itself containing
+     * a dot cannot be addressed through this method. Failed loads report no presence.
+     * @param path dotted configuration path
+     * @return whether the last load contained the key
+     * @since 6.3.0
+     */
+    public final boolean isPresentInFile(String path) {
+        synchronized (this) {
+            if (lastLoadedPresence == null || lastLoadUnparseable) { return false; }
+            Object current = lastLoadedPresence;
+            for (String key : path.split("\\.", -1)) {
+                if (!(current instanceof Map) || !((Map<?, ?>) current).containsKey(key)) { return false; }
+                current = ((Map<?, ?>) current).get(key);
+            }
+            return true;
         }
     }
 
@@ -454,7 +511,7 @@ public abstract class AbstractConfigEntity {
      * should not call it.
      *
      * @return {@code true} if the last load of this configuration's file failed to parse, and no
-     *         successful load or save has happened since
+     *         successful load has happened since
      * @since 6.3.0
      */
     @ApiStatus.Internal
@@ -558,130 +615,222 @@ public abstract class AbstractConfigEntity {
      * @throws IOException if an I/O error occurs
      */
     public final void init(UltiToolsPlugin ultiToolsPlugin) throws IOException {
-        lastInitIncomplete = true;
+        initialize(ultiToolsPlugin, false);
+    }
+
+    /** Framework manager bridge; binds without flushing initialization writes.
+     * @param plugin owning module
+     * @throws IOException on load failure
+     */
+    @ApiStatus.Internal
+    public final void initForBatch(UltiToolsPlugin plugin) throws IOException {
+        initialize(plugin, true);
+    }
+
+    private void initialize(UltiToolsPlugin ultiToolsPlugin, boolean deferred) throws IOException {
+        if (!com.ultikits.ultitools.manager.ConfigManager.permitsConfigThread(ultiToolsPlugin, "init " + configFilePath)) { return; }
         synchronized (this) {
+            deferInitialization = deferred;
+            lastInitIncomplete = true;
             this.ultiToolsPlugin = ultiToolsPlugin;
-            File file = ultiToolsPlugin.getConfigFile(configFilePath);
-            config = new YamlConfiguration();
-            // D-08: options().parseComments(true) must be set on THIS instance before load() runs -
-            // load() reads the option itself (verified via javap against paper-api), so setting it
-            // afterward only affects a later save(), not this read. Under
-            // -DPaper.parseYamlCommentsByDefault=false an operator's existing comments would
-            // otherwise be dropped right here at parse time, and the missing-key branch below would
-            // then write them out of their own file - the exact D-01 violation this lane exists to
-            // prevent. Explicit, not inherited from the system-property default.
-            config.options().parseComments(true);
-            lastLoadUnparseable = false;
-            try {
-                config.load(file);
-            } catch (FileNotFoundException ignored) {
-                // Mirrors the bare static factory's own behaviour for a missing file: a missing
-                // file is the normal "first run" case, not an error - config stays empty and every
-                // field below takes the missing-key branch.
-            } catch (InvalidConfigurationException e) {
-                // #510: the framework does not know what this file holds, so the shutdown save must
-                // not write over it. Cleared by the next successful load or save.
-                lastLoadUnparseable = true;
-                LOGGER.log(Level.SEVERE, "Cannot load " + file, e);
-            }
-            boolean upToDate = true;
-            for (Field field : ReflectionUtil.getFields(this.getClass())) {
-                if (field.isAnnotationPresent(ConfigEntry.class)) {
-                    field.setAccessible(true);
-                    ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
-                    String path = annotation.path();
-                    if (path.isEmpty()) {
-                        path = field.getName();
-                    }
-                    Object configValue = config.get(path);
-                    if (configValue != null) {
-                        ReflectionUtil.setFieldValue(this, field, readConfigValue(field, annotation, configValue));
-                    } else {
-                        upToDate = false;
-                        config.set(path, ReflectionUtil.getFieldValue(this, field));
-                        // D-07/D-09: the key never existed in the operator's file, so writing its
-                        // @ConfigEntry comment alongside the value discloses nothing of theirs - this
-                        // is D-01's sole sanctioned exception, widened from "silently add a value" to
-                        // "silently add a value and its explanation". Never reached on the
-                        // already-has-the-key path above, and this is the only comment write in the
-                        // whole class.
-                        List<String> commentLines = splitComment(annotation.comment());
-                        if (!commentLines.isEmpty()) {
-                            config.setComments(path, commentLines);
-                        }
-                    }
-                }
-            }
-            if (!upToDate) {
-                config.save(file);
-            }
-            // #510: config now holds exactly the file's content, including any first-boot defaults
-            // write. The snapshot is taken from that text, so a change listener below that changes a
-            // value in memory is still seen as a code change by the shutdown save.
-            takeSnapshot();
+            registry().checkEntityFields(getClass(), ultiToolsPlugin.getPluginName(), configFilePath);
+            captureDefaults();
+            try { load(true); }
+            finally { deferInitialization = false; }
+            lastInitIncomplete = false;
         }
-
-        // Validate fields and reset invalid values to defaults
-        validateFields();
-        lastInitIncomplete = false;
-
-        // Notify listeners after initialization
         notifyChangeListeners();
     }
 
-    /**
-     * The one conversion from a raw YAML value to the value stored in a {@code @ConfigEntry} field:
-     * the entry's parser, then {@link #widenToFieldType}. Every place that reads the file into a
-     * field goes through here -- {@link #init}, {@link #reload()} and the #510 snapshot probe in
-     * {@code canonicalizeOnce} -- so the three cannot drift apart again. Round 2 of #531 gate-1 CR-01
-     * found the snapshot probe still unwidened: a {@code Long} field made every snapshot fail, and
-     * the shutdown save then overwrote operator edits (the #510 defect, reinstated).
-     *
-     * @param field      the target {@code @ConfigEntry} field
-     * @param annotation its {@code @ConfigEntry}
-     * @param raw        the value SnakeYAML returned for the entry's path, never {@code null}
-     * @return the value to store in {@code field}
-     */
-    private static Object readConfigValue(Field field, ConfigEntry annotation, Object raw) {
-        Object parsed = ReflectionUtil.newInstance(annotation.parser()).parse(raw);
-        return widenToFieldType(field.getType(), parsed);
+    @SuppressWarnings("PMD.NPathComplexity") // Keep protected load, binding, three-way merge and initialization persistence under one monitor.
+    private void load(boolean initialize) throws IOException {
+        warnedCommentKeys.clear();
+        ConfigLoadResult loaded = ConfigDocument.load(ultiToolsPlugin.getConfigFile(configFilePath).toPath());
+        if (protectFailedLoad(loaded)) {
+            if (document == null) { document = ConfigDocument.empty(); }
+            validateFields();
+            return;
+        }
+        lastLoadUnparseable = false;
+        ConfigDocument next = loaded.state() == ConfigLoadResult.State.LOADED
+                ? loaded.document() : ConfigDocument.empty();
+        // Presence describes the load input, never defaults/comment writes or a later save read.
+        Map<String, Object> loadedPresence = next.toPlain();
+        Map<Field, Object> baseline = new LinkedHashMap<>(declaredDefaults);
+        Map<Field, Object> mine = initialize ? Collections.emptyMap() : currentPlain(configEntryFields());
+        List<String> conflicts = new ArrayList<>();
+        List<Field> missing = new ArrayList<>();
+        for (Field field : configEntryFields()) {
+            field.setAccessible(true);
+            if (!next.contains(keys(field))) { missing.add(field); continue; }
+            Object raw = next.get(keys(field));
+            try {
+                ConversionResult<Object> converted = registry().fromPlainResult(raw, declaredType(field),
+                        configFilePath, keys(field), field.getAnnotation(ConfigEntry.class));
+                ReflectionUtil.setFieldValue(this, field, converted.value());
+                for (ConversionFailure failure : converted.failures()) {
+                    warnConversion(field, failure.path(), failure.declaredType(), failure.raw(), raw);
+                }
+            } catch (ConversionException failure) {
+                warnConversion(field, failure.path(), failure.declaredType(), raw, raw);
+                // Restore the initially declared default, not a live unsaved value or the last load.
+                try {
+                    Object value = registry().fromPlainResult(declaredDefaults.get(field), declaredType(field),
+                            configFilePath, keys(field), field.getAnnotation(ConfigEntry.class)).value();
+                    ReflectionUtil.setFieldValue(this, field, value);
+                } catch (ConversionException invalidDefault) {
+                    throw new ConfigurationException(invalidDefault.getMessage(), invalidDefault);
+                }
+            }
+            Object theirs = plainValue(field);
+            baseline.put(field, theirs);
+            if (!initialize && savedSnapshot != null && savedSnapshot.containsKey(field)) {
+                Object merged = mergeReload(savedSnapshot.get(field), mine.get(field), theirs,
+                        fieldPath(field), isSecretShapedFieldName(field.getName()), conflicts);
+                try {
+                    Object value = registry().fromPlainResult(merged, declaredType(field), configFilePath,
+                            keys(field), field.getAnnotation(ConfigEntry.class)).value();
+                    ReflectionUtil.setFieldValue(this, field, value);
+                } catch (ConversionException failure) { throw new ConfigurationException(failure.getMessage(), failure); }
+            }
+        }
+        validateFields();
+        document = next;
+        boolean changed = false;
+        if (initialize) {
+            for (Field field : missing) {
+                Object value = plainValue(field, true);
+                next.set(keys(field), value); addEntryComment(next, field);
+                baseline.put(field, value); changed = true;
+            }
+        }
+        boolean commentsChanged = updateTokenComments(next);
+        pendingCommentWrite = false;
+        if (deferInitialization && (changed || commentsChanged)) {
+            pendingInitialization = new PendingInitialization(next, baseline);
+            lastLoadedPresence = loadedPresence;
+            return;
+        }
+        if (changed) { write(next); }
+        else if (commentsChanged) {
+            try { write(next); }
+            catch (IOException failure) {
+                pendingCommentWrite = true;
+                LOGGER.warning("Cannot rewrite comments in " + configFilePath + ": "
+                        + failure.getClass().getSimpleName() + "; pending for retry");
+            }
+        }
+        lastLoadedPresence = loadedPresence;
+        savedSnapshot = baseline;
+        acknowledgeRaw(next, configEntryFields());
+        savedFileFingerprint = fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath));
+        for (String conflict : conflicts) { LOGGER.warning("Configuration " + configFilePath + ": " + conflict); }
     }
 
-    /**
-     * Gives a boxed numeric field exactly the widening conversions its primitive already gets.
-     * <p>
-     * SnakeYAML hands back an {@code Integer} for a whole number such as {@code 1800}.
-     * {@code Field.set} widens that into a {@code long} or {@code double} field, but it refuses the
-     * same value for a {@code Long}, {@code Double} or {@code Float} field (measured:
-     * {@code IllegalArgumentException: Can not set java.lang.Long field ... to java.lang.Integer}).
-     * A boxed field therefore loaded on the first boot, when the key was missing and the field
-     * default was written, and threw on every later boot and on every reload (#531, gate-1 CR-01).
-     * <p>
-     * Only the JLS 5.1.2 widening primitive conversions are applied, so a boxed field accepts
-     * exactly what its primitive accepts: {@code Short} from {@code Byte}; {@code Integer} from
-     * {@code Byte}/{@code Short}; {@code Long} from {@code Byte}/{@code Short}/{@code Integer};
-     * {@code Float} from any integral value; {@code Double} from any integral value or a
-     * {@code Float}. Anything else -- a narrowing conversion, a non-numeric value, a field that
-     * is not a numeric wrapper -- is returned unchanged, so {@code Field.set} refuses it exactly as
-     * before.
-     *
-     * @param fieldType the declared type of the target field
-     * @param value     the parsed value
-     * @return {@code value} widened to {@code fieldType}, or {@code value} itself
-     */
-    static Object widenToFieldType(Class<?> fieldType, Object value) {
-        if (!(value instanceof Number) || fieldType.isInstance(value)) {
-            return value;
+    @SuppressWarnings("PMD.NPathComplexity") // The recursive three-way merge explicitly distinguishes absence, order and secret-valued conflicts.
+    private Object mergeReload(Object base, Object mine, Object theirs, String path, boolean secret, List<String> conflicts) {
+        if (orderedEquals(mine, base)) { return theirs; }
+        if (orderedEquals(theirs, base) || orderedEquals(mine, theirs)) { return mine; }
+        if (base instanceof Map && mine instanceof Map && theirs instanceof Map) {
+            Map<?, ?> b = (Map<?, ?>) base; Map<?, ?> m = (Map<?, ?>) mine; Map<?, ?> t = (Map<?, ?>) theirs;
+            Set<Object> keys = new java.util.LinkedHashSet<>(); keys.addAll(t.keySet()); keys.addAll(m.keySet()); keys.addAll(b.keySet());
+            Map<String, Object> merged = new LinkedHashMap<>();
+            for (Object key : keys) {
+                Object value = mergeReload(b.containsKey(key) ? b.get(key) : ABSENT_RELOAD_VALUE,
+                        m.containsKey(key) ? m.get(key) : ABSENT_RELOAD_VALUE,
+                        t.containsKey(key) ? t.get(key) : ABSENT_RELOAD_VALUE,
+                        path + "." + key, secret || isSecretShapedFieldName(String.valueOf(key)), conflicts);
+                if (value != ABSENT_RELOAD_VALUE) { merged.put(String.valueOf(key), value); }
+            }
+            return merged;
         }
-        int from = WIDENING_ORDER.indexOf(value.getClass());
-        int to = WIDENING_ORDER.indexOf(fieldType);
-        // Not a numeric wrapper pair, or a narrowing conversion: unchanged, so Field.set refuses it.
-        if (from < 0 || to <= from) {
-            return value;
-        }
-        return WIDENERS.get(to).apply((Number) value);
+        String value = secret || isSecretShapedFieldName(path) || containsSecret(mine) ? "<redacted>"
+                : mine == ABSENT_RELOAD_VALUE ? "<absent>" : String.valueOf(mine);
+        conflicts.add("reload conflict at '" + path + "': discarded in-memory value " + value + "; file wins");
+        return theirs;
     }
 
+    /** Flushes only a validated manager batch's initialization candidate.
+     * @throws IOException when replacement fails; the entity is then protected until reload
+     */
+    @ApiStatus.Internal
+    public final void flushInitializationWrite() throws IOException {
+        synchronized (this) {
+            PendingInitialization pending = pendingInitialization;
+            pendingInitialization = null;
+            if (pending == null || lastLoadUnparseable) { return; }
+            try { write(pending.candidate); }
+            catch (IOException failure) { lastLoadUnparseable = true; throw failure; }
+            document = pending.candidate;
+            savedSnapshot = pending.baseline;
+            acknowledgeRaw(document, configEntryFields());
+            savedFileFingerprint = fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath));
+        }
+    }
+
+    /** Clears an uncommitted initialization belonging to a refused manager batch. */
+    @ApiStatus.Internal
+    public final void discardInitializationWrite() {
+        synchronized (this) {
+            if (pendingInitialization == null) { return; }
+            pendingInitialization = null;
+            document = null;
+            savedSnapshot = null;
+            acknowledgedRaw.clear();
+            savedFileFingerprint = null;
+            lastLoadedPresence = new LinkedHashMap<>();
+        }
+    }
+
+    @SuppressWarnings("PMD.NPathComplexity") // Diagnostic traversal distinguishes list positions, whole keys and inherited secret boundaries.
+    private void warnConversion(Field field, List<String> path, Type type, Object raw, Object fieldRaw) {
+        StringBuilder located = new StringBuilder(fieldPath(field));
+        Object cursor = fieldRaw;
+        boolean parentSecret = isSecretShapedFieldName(field.getName());
+        for (String key : keys(field)) { parentSecret |= isSecretShapedFieldName(key); }
+        for (int i = keys(field).size(); i < path.size(); i++) {
+            String part = path.get(i);
+            if (cursor instanceof List) {
+                located.append('[').append(part).append(']');
+                cursor = ((List<?>) cursor).get(Integer.parseInt(part));
+            } else {
+                located.append('.').append(parentSecret ? "<redacted>" : part);
+                cursor = cursor instanceof Map ? ((Map<?, ?>) cursor).get(part) : null;
+            }
+            parentSecret |= isSecretShapedFieldName(part);
+        }
+        String key = located.toString();
+        boolean secret = isSecretShapedFieldName(field.getName());
+        for (String part : path) { secret |= isSecretShapedFieldName(part); }
+        String found = raw instanceof Map ? "a map" : raw instanceof List ? "a list"
+                : raw instanceof String ? "text" : raw == null ? "null" : raw.getClass().getSimpleName();
+        // Container values may hold nested credentials; redact the entire failed specimen.
+        String value = secret || containsSecret(raw) ? "<redacted>" : String.valueOf(raw);
+        LOGGER.warning("File " + configFilePath + ", key '" + key + "', declared as " + typeName(type)
+                + ": found " + found + " " + value + "; skipped or using the declared default");
+    }
+
+    private boolean containsSecret(Object value) {
+        if (value instanceof Map) {
+            for (Map.Entry<?, ?> entry : ((Map<?, ?>) value).entrySet()) {
+                if (isSecretShapedFieldName(String.valueOf(entry.getKey())) || containsSecret(entry.getValue())) { return true; }
+            }
+        } else if (value instanceof List) {
+            for (Object child : (List<?>) value) { if (containsSecret(child)) { return true; } }
+        }
+        return false;
+    }
+
+    private static String typeName(Type type) {
+        if (type instanceof Class) { return ((Class<?>) type).getSimpleName(); }
+        if (type instanceof ParameterizedType) {
+            ParameterizedType parameterized = (ParameterizedType) type;
+            List<String> arguments = new ArrayList<>();
+            for (Type argument : parameterized.getActualTypeArguments()) { arguments.add(typeName(argument)); }
+            return typeName(parameterized.getRawType()) + "<" + String.join(", ", arguments) + ">";
+        }
+        return type.getTypeName();
+    }
 
     /**
      * Splits a {@code @ConfigEntry.comment()} value into one {@link List} element per line, in
@@ -712,20 +861,22 @@ public abstract class AbstractConfigEntity {
      * {@code @ConfigEntry} is a supported style, {@code init}/{@code save} read and write it by
      * field name, and {@link #toJsonObject()} also sends it to the panel by field name -- but
      * this method was looking for an empty-string key in the JSON, which never exists, so the
-     * field was silently skipped while {@code config.save} still ran and the caller still
+     * field was silently skipped while persistence still ran and the caller still
      * received success.
      * <p>
      * Since 6.3.0 (SILENT-14, closing CR-01) this method validates the full post-update field
      * state - the same {@link #validateFields()} {@link #init(UltiToolsPlugin)}/{@link
-     * #reload()} already use - before either {@code config.set(...)} or {@code config.save(...)}
+     * #reload()} already use - before either document mutation or file persistence
      * runs. A violating value refuses with {@link ConfigurationException} instead of being
      * written: the operator's file is left byte-identical, and every field this call touched is
      * restored to the value it held before the call, so memory never disagrees with disk (D-01,
-     * D-04). Unlike {@link #reload()}, this entity keeps running after a refusal, so its
-     * in-memory state must not be left holding a rejected value.
+     * D-04). The entity keeps running after a refusal, so its in-memory state must not be left
+     * holding a rejected value; {@link #reload()} follows the same all-or-nothing rule. The same
+     * holds when the file replacement itself fails: every field and every piece of save
+     * tracking is restored to its state before the call, and the {@code IOException} is rethrown.
      *
      * @param jsonObject the JSON object containing the new properties
-     * @throws IOException            if an I/O error occurs
+     * @throws IOException            if an I/O error occurs; the entity is then left as it was
      * @throws ConfigurationException with {@link com.ultikits.ultitools.exceptions.ErrorCode#CONFIG_VALIDATION_FAILED}
      *                                 if the post-update field state violates a {@code @Range}/
      *                                 {@code @NotEmpty}/{@code @Size}/{@code @Pattern} constraint
@@ -733,39 +884,133 @@ public abstract class AbstractConfigEntity {
      */
     public void updateProperties(JsonObject jsonObject) throws IOException {
         synchronized (this) {
-            // Phase one/two: apply touched fields then validate the full post-update state -
-            // extracted into applyAndValidate() so #358 Part 2's validateProposedProperties(JsonObject)
-            // can share the exact same apply-then-validate contract without persisting.
-            List<Field> touchedFields = new ArrayList<>();
-            List<Object> previousValues = new ArrayList<>();
+            PanelCheckpoint before = new PanelCheckpoint();
+            boolean saved = false;
             try {
-                applyAndValidate(jsonObject, touchedFields, previousValues);
-            } catch (RuntimeException e) {
-                // The original exception is rethrown unchanged - never wrapped, never converted to
-                // IOException, never swallowed.
-                for (int i = 0; i < touchedFields.size(); i++) {
-                    ReflectionUtil.setFieldValue(this, touchedFields.get(i), previousValues.get(i));
-                }
-                throw e;
+                List<Field> touchedFields = new ArrayList<>();
+                Map<Field, List<List<String>>> leaves = applyAndValidate(jsonObject, touchedFields, new ArrayList<>());
+                PreparedSave prepared = prepareSave(touchedFields, leaves);
+                if (prepared.changed) { write(prepared.candidate); }
+                acknowledgeSave(prepared);
+                saved = true;
+            } finally {
+                // A refusal or a failed file replacement leaves the entity exactly as before.
+                if (!saved) { before.restore(); }
             }
-
-            // Phase three: persist. Only reached once validation has passed. Writes the same
-            // Gson-deserialized value the method has always written - not the @ConfigEntry.parser()
-            // serialized form save() uses; that asymmetry is pre-existing and out of scope here.
-            for (Field field : touchedFields) {
-                ConfigEntry annotation = field.getAnnotation(ConfigEntry.class);
-                String path = annotation.path();
-                if (path.isEmpty()) {
-                    path = field.getName();
-                }
-                config.set(path, ReflectionUtil.getFieldValue(this, field));
-            }
-            config.save(ultiToolsPlugin.getConfigFile(configFilePath));
-            lastLoadUnparseable = false;
-            // #510: config holds exactly what was written. Fields this payload did not touch are not in
-            // it; the snapshot comes from this text, so an unsaved code change to them stays modified.
-            takeSnapshot();
         }
+    }
+
+    /** Prepares one panel entity without acknowledging or replacing its file.
+     * @param properties proposed panel values
+     * @return manager-owned write
+     * @throws IOException if reading or staging fails
+     */
+    @ApiStatus.Internal
+    public final PanelWrite preparePanelWrite(JsonObject properties) throws IOException {
+        synchronized (this) {
+            PanelCheckpoint before = new PanelCheckpoint();
+            try {
+                List<Field> touched = new ArrayList<>();
+                Map<Field, List<List<String>>> leaves = applyAndValidate(properties, touched, new ArrayList<>());
+                PreparedSave prepared = prepareSave(touched, leaves);
+                java.nio.file.Path target = ultiToolsPlugin.getConfigFile(configFilePath).toPath();
+                byte[] original = Files.exists(target) ? Files.readAllBytes(target) : null;
+                AtomicConfigWriter.StagedWrite staged = null;
+                if (prepared.changed) {
+                    Files.createDirectories(target.toAbsolutePath().getParent());
+                    staged = AtomicConfigWriter.stage(target, prepared.candidate.render());
+                }
+                Map<Field, Object> bound = new LinkedHashMap<>();
+                for (Field field : touched) { bound.put(field, ReflectionUtil.getFieldValue(this, field)); }
+                before.restore();
+                return new PanelWrite(before, prepared, target, original, staged, bound);
+            } catch (IOException | RuntimeException failure) {
+                before.restore(); throw failure;
+            }
+        }
+    }
+
+    /** Complete entity state before a panel candidate or a reload attempt, including raw and effective acknowledgments. */
+    private final class PanelCheckpoint {
+        private final List<Field> fields = configEntryFields();
+        private final List<Object> values = new ArrayList<>();
+        private final ConfigDocument oldDocument = document;
+        private final Map<Field, Object> baseline = savedSnapshot == null ? null : new LinkedHashMap<>(savedSnapshot);
+        private final Map<String, Object> presence = lastLoadedPresence;
+        private final Map<Field, RawEntry> raw = new LinkedHashMap<>(acknowledgedRaw);
+        private final String fingerprint = savedFileFingerprint;
+        private final boolean protectedFile = lastLoadUnparseable;
+        private final boolean incomplete = lastInitIncomplete;
+        private final boolean comments = pendingCommentWrite;
+        private final boolean deferred = deferInitialization;
+        private final PendingInitialization initialization = pendingInitialization;
+        private final Set<String> warningKeys = new java.util.LinkedHashSet<>(warnedCommentKeys);
+        private PanelCheckpoint() {
+            for (Field field : fields) { values.add(ReflectionUtil.getFieldValue(AbstractConfigEntity.this, field)); }
+        }
+        private void restore() {
+            restoreFields(fields, values);
+            document = oldDocument; savedSnapshot = baseline; lastLoadedPresence = presence;
+            acknowledgedRaw.clear(); acknowledgedRaw.putAll(raw); savedFileFingerprint = fingerprint;
+            lastLoadUnparseable = protectedFile; lastInitIncomplete = incomplete;
+            pendingCommentWrite = comments; deferInitialization = deferred; pendingInitialization = initialization;
+            warnedCommentKeys.clear(); warnedCommentKeys.addAll(warningKeys);
+        }
+    }
+
+    /** Narrow manager coordination for one staged entity; not a module transaction API. */
+    @ApiStatus.Internal
+    public final class PanelWrite {
+        private final PanelCheckpoint before;
+        private final PreparedSave prepared;
+        private final java.nio.file.Path target;
+        private final byte[] original;
+        private final AtomicConfigWriter.StagedWrite staged;
+        private boolean attempted;
+        private final Map<Field, Object> bound;
+        private PanelWrite(PanelCheckpoint before, PreparedSave prepared, java.nio.file.Path target,
+                byte[] original, AtomicConfigWriter.StagedWrite staged, Map<Field, Object> bound) {
+            this.before = before; this.prepared = prepared; this.target = target;
+            this.original = original; this.staged = staged; this.bound = bound;
+        }
+        /** @throws IOException if the existing atomic writer cannot replace this file */
+        public void commit() throws IOException {
+            if (staged != null) { attempted = true; staged.commit(); }
+        }
+        /** Acknowledges only after every manager-owned replacement succeeds. */
+        public void acknowledge() {
+            synchronized (AbstractConfigEntity.this) {
+                for (Map.Entry<Field, Object> entry : bound.entrySet()) {
+                    ReflectionUtil.setFieldValue(AbstractConfigEntity.this, entry.getKey(), entry.getValue());
+                }
+                acknowledgeSave(prepared);
+            }
+        }
+        /** Restores an attempted target and all entity state; always discards its staged file.
+         * @throws IOException if physical recovery fails
+         */
+        public void rollback() throws IOException {
+            synchronized (AbstractConfigEntity.this) {
+                try {
+                    if (attempted) {
+                        if (original == null) { Files.deleteIfExists(target); }
+                        else { AtomicConfigWriter.write(target, new String(original, java.nio.charset.StandardCharsets.UTF_8)); }
+                    }
+                } finally {
+                    before.restore(); discard();
+                }
+            }
+        }
+        /** Releases a staged file that has not been committed. */
+        public void discard() {
+            if (staged != null && !staged.discard()) {
+                LOGGER.warning("Could not remove staged configuration file for " + configFilePath);
+            }
+        }
+    }
+
+    private void restoreFields(List<Field> fields, List<Object> values) {
+        for (int i = 0; i < fields.size(); i++) { ReflectionUtil.setFieldValue(this, fields.get(i), values.get(i)); }
     }
 
     /**
@@ -786,18 +1031,10 @@ public abstract class AbstractConfigEntity {
      *                                 validation constraint
      */
     public void validateProposedProperties(JsonObject jsonObject) {
-        // #510: under the entity monitor, so a concurrent shutdown save never writes a proposed
-        // value that this call is about to restore.
         synchronized (this) {
-            List<Field> touchedFields = new ArrayList<>();
-            List<Object> previousValues = new ArrayList<>();
-            try {
-                applyAndValidate(jsonObject, touchedFields, previousValues);
-            } finally {
-                for (int i = 0; i < touchedFields.size(); i++) {
-                    ReflectionUtil.setFieldValue(this, touchedFields.get(i), previousValues.get(i));
-                }
-            }
+            PanelCheckpoint before = new PanelCheckpoint();
+            try { applyAndValidate(jsonObject, new ArrayList<>(), new ArrayList<>()); }
+            finally { before.restore(); }
         }
     }
 
@@ -814,31 +1051,149 @@ public abstract class AbstractConfigEntity {
      * @throws ConfigurationException with {@link com.ultikits.ultitools.exceptions.ErrorCode#CONFIG_VALIDATION_FAILED}
      *                                 if the post-update field state violates a constraint
      */
-    private void applyAndValidate(JsonObject jsonObject, List<Field> touchedFieldsOut, List<Object> previousValuesOut) {
-        Gson gson = new Gson();
-        for (Field field : ReflectionUtil.getFields(this.getClass())) {
-            if (field.isAnnotationPresent(ConfigEntry.class)) {
-                field.setAccessible(true);
-                ConfigEntry annotation = field.getAnnotation(ConfigEntry.class);
-                String path = annotation.path();
-                if (path.isEmpty()) {
-                    path = field.getName();
-                }
-                if (jsonObject.has(path)) {
-                    Object configValue = gson.fromJson(jsonObject.get(path), field.getType());
-                    if (configValue != null) {
-                        touchedFieldsOut.add(field);
-                        previousValuesOut.add(ReflectionUtil.getFieldValue(this, field));
-                        ReflectionUtil.setFieldValue(this, field, configValue);
-                    }
+    @SuppressWarnings("PMD.NPathComplexity") // Resolve every panel owner and validate every candidate before publishing any field.
+    private Map<Field, List<List<String>>> applyAndValidate(JsonObject jsonObject, List<Field> touchedFieldsOut, List<Object> previousValuesOut) {
+        if (lastLoadUnparseable) {
+            throw new ConfigurationException("Protected configuration file " + configFilePath
+                    + ": its last load was unreadable or unparseable; reload a valid file before editing");
+        }
+        Map<Field, Object> proposed = new LinkedHashMap<>();
+        Map<Field, List<List<String>>> leaves = new LinkedHashMap<>();
+        Set<Field> whole = new java.util.LinkedHashSet<>();
+        List<String> refused = new ArrayList<>();
+        JsonObject displayed = toJsonObject();
+        for (Map.Entry<String, JsonElement> edit : jsonObject.entrySet()) {
+            String path = edit.getKey();
+            Object raw = jsonToPlain(edit.getValue());
+            if (displayed.has(path) && PlainData.plainEquals(jsonToPlain(displayed.get(path)), raw)) { continue; }
+            Field owner = null;
+            for (Field field : configEntryFields()) {
+                String entry = fieldPath(field);
+                if (path.equals(entry)) { owner = field; break; }
+                if (path.startsWith(entry + ".") && (owner == null || entry.length() > fieldPath(owner).length())) {
+                    owner = field;
                 }
             }
+            if (owner == null) { refused.add("'" + path + "': no declared entry"); continue; }
+            if (path.equals(fieldPath(owner))) {
+                proposed.put(owner, raw); leaves.remove(owner); whole.add(owner); continue;
+            }
+            Object source = document == null ? null : document.get(keys(owner));
+            List<List<String>> matches = new ArrayList<>();
+            matchMapPaths(source, path.substring(fieldPath(owner).length() + 1), new ArrayList<>(), matches);
+            if (matches.size() != 1) {
+                refused.add("'" + path + "': " + (matches.isEmpty() ? "not found" : "ambiguous " + matches));
+                continue;
+            }
+            Object tree = proposed.containsKey(owner) ? proposed.get(owner) : plainValue(owner);
+            if (!(tree instanceof Map)) { refused.add("'" + path + "': not a map entry"); continue; }
+            replaceMapLeaf(tree, matches.get(0), raw);
+            proposed.put(owner, tree);
+            if (!whole.contains(owner)) { leaves.computeIfAbsent(owner, ignored -> new ArrayList<>()).add(matches.get(0)); }
         }
-        // Must run before any field write above is persisted - otherwise a refusal would still
-        // leave the in-memory YamlConfiguration holding rejected values for a later, unrelated
-        // save() to flush.
+        Map<Field, Object> converted = new LinkedHashMap<>();
+        for (Map.Entry<Field, Object> proposal : proposed.entrySet()) {
+            Field field = proposal.getKey();
+            try {
+                ConversionResult<Object> result = registry().fromPlainResult(proposal.getValue(), declaredType(field),
+                        configFilePath, keys(field), field.getAnnotation(ConfigEntry.class));
+                if (!result.failures().isEmpty()) {
+                    for (ConversionFailure failure : result.failures()) {
+                        refused.add("'" + String.join(".", failure.path()) + "': invalid panel value for "
+                                + typeName(failure.declaredType()));
+                    }
+                } else {
+                    converted.put(field, result.value());
+                }
+            } catch (ConversionException failure) {
+                refused.add("'" + String.join(".", failure.path()) + "': invalid panel value for "
+                        + typeName(failure.declaredType()));
+            }
+        }
+        if (!refused.isEmpty()) { throw new ConfigurationException("File " + configFilePath + ": " + String.join("; ", refused)); }
+        for (Map.Entry<Field, Object> entry : converted.entrySet()) {
+            Field field = entry.getKey(); field.setAccessible(true);
+            touchedFieldsOut.add(field); previousValuesOut.add(ReflectionUtil.getFieldValue(this, field));
+            ReflectionUtil.setFieldValue(this, field, entry.getValue());
+        }
         validateFields();
         validateBindingRanges(touchedFieldsOut);
+        return leaves;
+    }
+
+    private static Object mapLeaf(Object tree, List<String> path) {
+        Object value = tree;
+        for (String key : path) {
+            if (!(value instanceof Map)) { return null; }
+            value = ((Map<?, ?>) value).get(key);
+        }
+        return value;
+    }
+
+    private static boolean mapContains(Object tree, List<String> path) {
+        Object value = tree;
+        for (String key : path) {
+            if (!(value instanceof Map) || !((Map<?, ?>) value).containsKey(key)) { return false; }
+            value = ((Map<?, ?>) value).get(key);
+        }
+        return true;
+    }
+
+    private static Object patchedMap(Object tree, List<String> path, Object value) {
+        Map<String, Object> copy = new LinkedHashMap<>();
+        if (tree instanceof Map) {
+            for (Map.Entry<?, ?> entry : ((Map<?, ?>) tree).entrySet()) {
+                copy.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+        String key = path.get(0);
+        copy.put(key, path.size() == 1 ? value : patchedMap(copy.get(key), path.subList(1, path.size()), value));
+        return copy;
+    }
+
+    private static void matchMapPaths(Object node, String remaining, List<String> prefix, List<List<String>> matches) {
+        if (!(node instanceof Map)) { return; }
+        for (Map.Entry<?, ?> entry : ((Map<?, ?>) node).entrySet()) {
+            String key = String.valueOf(entry.getKey());
+            List<String> path = new ArrayList<>(prefix); path.add(key);
+            if (remaining.equals(key)) { matches.add(path); }
+            else if (remaining.startsWith(key + ".")) {
+                matchMapPaths(entry.getValue(), remaining.substring(key.length() + 1), path, matches);
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked") // Plain-data maps have String keys, enforced by the converter boundary.
+    private static void replaceMapLeaf(Object tree, List<String> path, Object value) {
+        Map<String, Object> parent = (Map<String, Object>) tree;
+        for (int i = 0; i < path.size() - 1; i++) { parent = (Map<String, Object>) parent.get(path.get(i)); }
+        parent.put(path.get(path.size() - 1), PlainData.copy(value));
+    }
+
+    // Recursive JSON shape dispatch preserves exact integral overflow before typed conversion.
+    @SuppressWarnings("PMD.NPathComplexity")
+    private static Object jsonToPlain(JsonElement element) {
+        if (element.isJsonNull()) { return null; }
+        if (element.isJsonObject()) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            for (Map.Entry<String, JsonElement> entry : element.getAsJsonObject().entrySet()) {
+                result.put(entry.getKey(), jsonToPlain(entry.getValue()));
+            }
+            return result;
+        }
+        if (element.isJsonArray()) {
+            List<Object> result = new ArrayList<>();
+            for (JsonElement child : element.getAsJsonArray()) { result.add(jsonToPlain(child)); }
+            return result;
+        }
+        JsonPrimitive primitive = element.getAsJsonPrimitive();
+        if (primitive.isBoolean()) { return primitive.getAsBoolean(); }
+        if (primitive.isString()) { return primitive.getAsString(); }
+        try {
+            java.math.BigInteger integer = primitive.getAsBigDecimal().toBigIntegerExact();
+            try { return integer.longValueExact(); }
+            catch (ArithmeticException overflow) { return integer; }
+        } catch (ArithmeticException fractional) { return primitive.getAsDouble(); }
     }
 
     /**
@@ -884,16 +1239,19 @@ public abstract class AbstractConfigEntity {
      * @return the JSON object representation of the configuration entity
      */
     public JsonObject toJsonObject() {
-        Gson gson = new Gson();
-        JsonObject jsonObject = new JsonObject();
-        Set<String> keys = config.getKeys(true);
-        for (String key : keys) {
-            if (!config.isConfigurationSection(key)) {
-                Object value = config.get(key);
-                jsonObject.add(key, gson.toJsonTree(value));
-            }
+        synchronized (this) {
+            JsonObject json = new JsonObject();
+            if (document != null) { addLeaves(json, "", document.toPlain(), new Gson()); }
+            return json;
         }
-        return jsonObject;
+    }
+
+    private static void addLeaves(JsonObject result, String prefix, Map<?, ?> values, Gson gson) {
+        for (Map.Entry<?, ?> entry : values.entrySet()) {
+            String path = prefix.isEmpty() ? String.valueOf(entry.getKey()) : prefix + "." + entry.getKey();
+            if (entry.getValue() instanceof Map) { addLeaves(result, path, (Map<?, ?>) entry.getValue(), gson); }
+            else { result.add(path, gson.toJsonTree(entry.getValue())); }
+        }
     }
 
     /**
@@ -914,7 +1272,7 @@ public abstract class AbstractConfigEntity {
                 if (path.isEmpty()) {
                     path = field.getName();
                 }
-                jsonObject.addProperty(path, annotation.comment());
+                jsonObject.addProperty(path, panelComment(field));
             }
         }
         return jsonObject;
@@ -979,8 +1337,7 @@ public abstract class AbstractConfigEntity {
     /**
      * Constructs a fresh instance of this config class through the {@code (String)} constructor, or
      * failing that the no-arg constructor - the two idioms {@link #ensureConstructable()} proves -
-     * for {@link #ensureConstructable()} and for the throwaway reader {@link
-     * #canonicalizeOnce(String, AbstractConfigEntity, java.util.List)} uses (#510).
+     * for the existing validation constructability precondition only.
      *
      * @return a new, uninitialized instance of this entity's class
      * @throws ConfigurationException if neither constructor resolves
@@ -1142,61 +1499,30 @@ public abstract class AbstractConfigEntity {
     
     /**
      * Reloads the configuration from file and notifies all listeners.
+     * <p>
+     * Since 6.3.0 a reload is all-or-nothing: if it fails for any reason (a validation
+     * violation, a conversion or I/O failure), every field value and every piece of load
+     * tracking is restored to what it was before the attempt, and the failure is rethrown
+     * without notifying listeners. A rejected file value therefore never becomes an unsaved
+     * in-memory edit that the next reload's three-way merge would keep over a corrected file.
      *
      * @throws IOException if an I/O error occurs
      */
     public void reload() throws IOException {
-        if (ultiToolsPlugin == null) {
-            throw new IllegalStateException("Config not initialized. Call init() first.");
-        }
-
+        if (!com.ultikits.ultitools.manager.ConfigManager.permitsConfigThread(ultiToolsPlugin, "reload " + configFilePath)) { return; }
+        if (ultiToolsPlugin == null) { throw new IllegalStateException("Config not initialized. Call init() first."); }
         synchronized (this) {
-            // #357: build the parser and enable comment parsing before load() runs, in the same
-            // construct -> parseComments(true) -> load order init() uses above. The bare static
-            // factory this used to call parses the file inside itself before returning, so
-            // parseComments(true) could never reach that read - a save() or updateProperties() call
-            // right after this reload() would then write back a comment-stripped view over the
-            // operator's file (D-01).
-            File file = ultiToolsPlugin.getConfigFile(configFilePath);
-            config = new YamlConfiguration();
-            config.options().parseComments(true);
-            lastLoadUnparseable = false;
+            registry().checkEntityFields(getClass(), ultiToolsPlugin.getPluginName(), configFilePath);
+            PanelCheckpoint before = new PanelCheckpoint();
+            boolean loaded = false;
             try {
-                config.load(file);
-            } catch (FileNotFoundException ignored) {
-                // Mirrors init()'s own handling above: a missing file is the normal case, not an
-                // error - config stays empty and every field below simply keeps its current value.
-            } catch (InvalidConfigurationException e) {
-                // #510: same as init() - never write over a file the framework could not read.
-                lastLoadUnparseable = true;
-                LOGGER.log(Level.SEVERE, "Cannot load " + file, e);
+                load(false);
+                loaded = true;
+            } finally {
+                // Restore on every failure, unchecked errors included, then let it propagate.
+                if (!loaded) { before.restore(); }
             }
-
-            // Update field values
-            for (Field field : ReflectionUtil.getFields(this.getClass())) {
-                if (field.isAnnotationPresent(ConfigEntry.class)) {
-                    field.setAccessible(true);
-                    ConfigEntry annotation = ReflectionUtil.getAnnotation(field, ConfigEntry.class);
-                    String path = annotation.path();
-                    if (path.isEmpty()) {
-                        path = field.getName();
-                    }
-                    Object configValue = config.get(path);
-                    if (configValue != null) {
-                        ReflectionUtil.setFieldValue(this, field, readConfigValue(field, annotation, configValue));
-                    }
-                }
-            }
-            // #510: same snapshot point as init(). A field whose key is absent from the file keeps its
-            // in-memory value above, but the snapshot is taken from the file's text, so that value is
-            // still seen as unsaved if it differs from what the file implies.
-            takeSnapshot();
         }
-
-        // Validate fields and reset invalid values to defaults
-        validateFields();
-
-        // Notify listeners
         notifyChangeListeners();
     }
 }

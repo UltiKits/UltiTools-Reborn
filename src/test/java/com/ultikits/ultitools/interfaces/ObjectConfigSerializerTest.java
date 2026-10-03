@@ -27,12 +27,16 @@ class ObjectConfigSerializerTest {
 
         @Test
         @DisplayName("Should be an interface")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void shouldBeInterface() {
             assertThat(ObjectConfigSerializer.class.isInterface()).isTrue();
         }
 
         @Test
         @DisplayName("Should have generic type parameter T")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void shouldHaveGenericTypeParameter() {
             TypeVariable<?>[] typeParams = ObjectConfigSerializer.class.getTypeParameters();
             assertThat(typeParams).hasSize(1);
@@ -41,6 +45,8 @@ class ObjectConfigSerializerTest {
 
         @Test
         @DisplayName("Should have serializeToMemorySection method")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void shouldHaveSerializeToMemorySectionMethod() throws NoSuchMethodException {
             Method method = ObjectConfigSerializer.class.getMethod("serializeToMemorySection", Object.class);
             assertThat(method).isNotNull();
@@ -50,6 +56,8 @@ class ObjectConfigSerializerTest {
 
         @Test
         @DisplayName("serializeToMemorySection should return MemorySection")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void serializeToMemorySectionShouldReturnMemorySection() throws NoSuchMethodException {
             Method method = ObjectConfigSerializer.class.getMethod("serializeToMemorySection", Object.class);
             assertThat(method.getReturnType()).isEqualTo(MemorySection.class);
@@ -57,6 +65,8 @@ class ObjectConfigSerializerTest {
 
         @Test
         @DisplayName("serializeToMemorySection should accept generic type T")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void serializeToMemorySectionShouldAcceptGenericType() throws NoSuchMethodException {
             Method method = ObjectConfigSerializer.class.getMethod("serializeToMemorySection", Object.class);
             Type[] paramTypes = method.getGenericParameterTypes();
@@ -67,6 +77,8 @@ class ObjectConfigSerializerTest {
 
         @Test
         @DisplayName("Should have exactly 1 method")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void shouldHaveExactlyOneMethod() {
             Method[] methods = ObjectConfigSerializer.class.getDeclaredMethods();
             assertThat(methods).hasSize(1);
@@ -79,6 +91,8 @@ class ObjectConfigSerializerTest {
 
         @Test
         @DisplayName("Simple string serializer should work")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void simpleStringSerializerShouldWork() {
             ObjectConfigSerializer<String> serializer = new ObjectConfigSerializer<String>() {
                 @Override
@@ -97,6 +111,8 @@ class ObjectConfigSerializerTest {
 
         @Test
         @DisplayName("Complex object serializer should work")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void complexObjectSerializerShouldWork() {
             class Person {
                 final String name;
@@ -132,6 +148,8 @@ class ObjectConfigSerializerTest {
 
         @Test
         @DisplayName("Nested object serializer should work")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void nestedObjectSerializerShouldWork() {
             class Address {
                 final String street;
@@ -163,6 +181,8 @@ class ObjectConfigSerializerTest {
 
         @Test
         @DisplayName("Serializer with list data should work")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void serializerWithListDataShouldWork() {
             class ListContainer {
                 final String name;
@@ -200,6 +220,8 @@ class ObjectConfigSerializerTest {
 
         @Test
         @DisplayName("Serializer can handle null values in object fields")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void serializerCanHandleNullValuesInObjectFields() {
             class NullableData {
                 final String required;
@@ -238,6 +260,8 @@ class ObjectConfigSerializerTest {
 
         @Test
         @DisplayName("Serializer preserves integer types")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void serializerPreservesIntegerTypes() {
             ObjectConfigSerializer<Integer> serializer = new ObjectConfigSerializer<Integer>() {
                 @Override
@@ -254,6 +278,8 @@ class ObjectConfigSerializerTest {
 
         @Test
         @DisplayName("Serializer preserves double types")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void serializerPreservesDoubleTypes() {
             ObjectConfigSerializer<Double> serializer = new ObjectConfigSerializer<Double>() {
                 @Override
@@ -270,6 +296,8 @@ class ObjectConfigSerializerTest {
 
         @Test
         @DisplayName("Serializer preserves boolean types")
+        // Exercises the frozen legacy compatibility contract until removal.
+        @SuppressWarnings("removal")
         void serializerPreservesBooleanTypes() {
             ObjectConfigSerializer<Boolean> serializer = new ObjectConfigSerializer<Boolean>() {
                 @Override
