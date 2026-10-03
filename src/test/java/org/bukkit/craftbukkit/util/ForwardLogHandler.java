@@ -23,13 +23,13 @@ public class ForwardLogHandler extends ConsoleHandler {
         String message = getFormatter().formatMessage(record);
         Throwable thrown = record.getThrown();
         Level level = record.getLevel();
-        if (level == Level.SEVERE) {
+        if (Level.SEVERE.equals(level)) {
             logger.error(message, thrown);
-        } else if (level == Level.WARNING) {
+        } else if (Level.WARNING.equals(level)) {
             logger.warn(message, thrown);
-        } else if (level == Level.INFO) {
+        } else if (Level.INFO.equals(level)) {
             logger.info(message, thrown);
-        } else if (level == Level.CONFIG) {
+        } else if (Level.CONFIG.equals(level)) {
             logger.debug(message, thrown);
         } else {
             logger.trace(message, thrown);
