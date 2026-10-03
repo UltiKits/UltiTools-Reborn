@@ -184,9 +184,11 @@ class ConfigUnreadableFileTest {
     }
 
     @Test
-    void failedPanelPersistenceRetainsLiveChangeDirtyWithoutAcknowledgingDisk() throws Exception {
+    void failedPanelPersistenceRestoresTheEntityWithoutAcknowledgingDisk() throws Exception {
+        // All-or-nothing (gate 3 session 3b): a failed replacement restores the pre-call state.
         Values config = new Values(PATH);
         config.init(plugin);
+        int limitBefore = config.limit;
         byte[] before = Files.readAllBytes(file());
         try (MockedStatic<AtomicConfigWriter> writer = Mockito.mockStatic(AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
             writer.when(() -> AtomicConfigWriter.write(Mockito.eq(file()), Mockito.anyString()))
@@ -194,9 +196,11 @@ class ConfigUnreadableFileTest {
             assertThatThrownBy(() -> config.updateProperties(panel())).isInstanceOf(IOException.class);
         }
         assertThat(Files.readAllBytes(file())).isEqualTo(before);
+        assertThat(config.limit).isEqualTo(limitBefore).isNotEqualTo(99);
+        assertThat(config.isModifiedSinceSnapshot()).isFalse();
+        config.updateProperties(panel());
         assertThat(config.limit).isEqualTo(99);
-        assertThat(config.isModifiedSinceSnapshot()).isTrue();
-        config.save();
+        assertThat(ConfigDocument.load(file()).document().get(java.util.Arrays.asList("limit"))).isEqualTo(99);
         assertThat(config.isModifiedSinceSnapshot()).isFalse();
     }
 }
