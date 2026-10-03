@@ -5,6 +5,7 @@ import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.TriggerContext;
 import com.ultikits.ultitools.manager.UltiPanelLogTransmitter;
 import com.ultikits.ultitools.utils.FrameworkText;
+import com.ultikits.ultitools.websocket.PanelConnectionLog;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -159,6 +160,39 @@ public class SystemLogHandler extends Handler {
     
     @Override
     public void publish(LogRecord record) {
+        publish(record, false);
+    }
+
+    /**
+     * The handler the early capture replays its start-up records into when the stream starts
+     * ({@code EarlyLogCapture#drainInto}, #487). It applies exactly the filters and mapping of
+     * {@link #publish(LogRecord)}, but hands each record to
+     * {@link UltiPanelLogTransmitter#replayLog} instead of {@link UltiPanelLogTransmitter#sendLog},
+     * so the replay is delivered in batches even when live batching is off (as of 6.3.0). It is
+     * never attached to a logger.
+     *
+     * @return a handler that replays into this handler's transmitter
+     */
+    public Handler replayHandler() {
+        return new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                SystemLogHandler.this.publish(record, true);
+            }
+
+            @Override
+            public void flush() {
+                // Nothing buffered here; the transmitter holds the replayed records.
+            }
+
+            @Override
+            public void close() {
+                // Nothing to release.
+            }
+        };
+    }
+
+    private void publish(LogRecord record, boolean replayed) {
         // Gate-2 finding (round 9): reentrancy guard -- see PUBLISHING's own javadoc. Checked
         // before shouldProcessRecord() so a re-entrant call is dropped as cheaply as possible.
         if (Boolean.TRUE.equals(PUBLISHING.get())) {
@@ -180,11 +214,22 @@ public class SystemLogHandler extends Handler {
             // (deliberately NOT gated by enabledLevels -- see the comment there, CR-02).
             String source = determineLogSource(record);
 
-            // Check whether the level is enabled for panel delivery
-            if (enabledLevels.contains(level)) {
+            // Check whether the level is enabled for panel delivery. A line about the panel
+            // connection itself is never sent back to the panel (as of 6.3.0): the panel's error
+            // reply to a rejected message, logged and streamed, is rejected again and replied to
+            // again -- a feedback loop measured at 42,066 lines in one run. See PanelConnectionLog
+            // for why a mark on the record, not the logger-name filter, catches it. The error
+            // report below still runs for such a record: a SEVERE line with an exception (a
+            // failure while handling a panel message) is a framework fault worth collecting, and
+            // the panel's own error replies carry no exception, so they cannot loop through it.
+            if (enabledLevels.contains(level) && !PanelConnectionLog.isPanelConnectionRecord(record)) {
                 // Format the message and send the log
                 String message = formatLogMessage(record);
-                logTransmitter.sendLog(level, message, source, record.getThrown());
+                if (replayed) {
+                    logTransmitter.replayLog(level, message, source, record.getThrown(), record.getMillis());
+                } else {
+                    logTransmitter.sendLog(level, message, source, record.getThrown());
+                }
             }
 
             // Report error-level logs with exceptions to ErrorReportCollector, regardless of

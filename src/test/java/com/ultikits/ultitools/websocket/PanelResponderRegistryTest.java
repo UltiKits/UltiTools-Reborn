@@ -4,9 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -375,7 +372,7 @@ class PanelResponderRegistryTest {
 
             invokeHandleInboundMessage(message);
 
-            verify(mockLogger, atLeastOnce()).log(eq(Level.WARNING), anyString());
+            assertThat(com.ultikits.ultitools.testutil.LoggedLines.at(mockLogger, Level.WARNING)).isNotEmpty();
             verify(mockPanelWs, never()).sendMessage(any());
         }
 
@@ -565,7 +562,7 @@ class PanelResponderRegistryTest {
 
                 invokeHandleInboundMessage(message);
 
-                verify(mockLogger, atLeastOnce()).log(eq(Level.WARNING), anyString());
+                assertThat(com.ultikits.ultitools.testutil.LoggedLines.at(mockLogger, Level.WARNING)).isNotEmpty();
                 verify(mockPanelWs, never()).sendMessage(any());
             } finally {
                 setPanelWs(previous);

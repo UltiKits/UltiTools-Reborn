@@ -31,6 +31,7 @@ import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.utils.CredentialStore;
 import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
+import com.ultikits.ultitools.websocket.PanelConnectionLog;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -951,12 +952,12 @@ public class FileOperationManager {
             
             webSocketClient.sendMessage(resultMessage);
             
-            UltiTools.getInstance().getLogger().log(Level.INFO, 
+            PanelConnectionLog.log(Level.INFO, 
                 FrameworkText.format("文件操作结果已发送 (ID: %s, 操作: %s, 成功: %s)", 
                 operationId, operation, success));
             
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.format("发送文件操作结果失败: %s", e.getMessage()));
+            PanelConnectionLog.log(Level.WARNING, FrameworkText.format("发送文件操作结果失败: %s", e.getMessage()));
         }
     }
 }

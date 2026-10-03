@@ -15,6 +15,7 @@ import java.util.logging.Logger;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.ultikits.ultitools.entities.Capability;
+import com.ultikits.ultitools.websocket.PanelConnectionLog;
 
 /**
  * Holds the log records written between {@code UltiTools#onLoad()} and the moment the panel's log
@@ -24,8 +25,11 @@ import com.ultikits.ultitools.entities.Capability;
  * the panel connection is open, so everything the server logged before it -- module loading,
  * dependency resolution, the framework's own start-up diagnostics -- never reached the panel. This
  * handler is attached to the {@code java.util.logging} root logger in {@code onLoad()}; when the
- * stream starts, {@link #drainInto} replays what it kept to the live handler, oldest first, attaches
- * the live handler, and detaches itself, so the early records arrive before any live one.
+ * stream starts, {@link #drainInto} replays what it kept, oldest first, attaches the live handler,
+ * and detaches itself. {@code LogStreamManager} replays into the stream handler's replay path, so
+ * the transmitter delivers the early records in batches of the configured batch size, one per batch
+ * interval, even with live batching off (as of 6.3.0); a live record can therefore arrive before the
+ * last early batches.
  * <p>
  * The buffer is bounded three ways, so a server that never connects to the panel cannot grow it:
  * by record count, by an estimate of the bytes it holds, and by time -- after
@@ -190,7 +194,9 @@ public final class EarlyLogCapture extends Handler {
 
     @Override
     public void publish(LogRecord record) {
-        if (record == null || !isLoggable(record) || isExcluded(record.getLoggerName())) {
+        // A panel-connection line is never sent to the panel, so it is not kept for it either.
+        if (record == null || !isLoggable(record) || isExcluded(record.getLoggerName())
+                || PanelConnectionLog.isPanelConnectionRecord(record)) {
             return;
         }
         synchronized (LOCK) {

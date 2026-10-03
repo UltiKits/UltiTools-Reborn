@@ -123,7 +123,7 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     @Override
     public void connect() {
         if (isConnected) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.text("WebSocket已经连接，请勿重复连接"));
+            PanelConnectionLog.log(Level.WARNING, FrameworkText.text("WebSocket已经连接，请勿重复连接"));
             return;
         }
         super.connect();
@@ -306,7 +306,7 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
 
         if (!isAlive(PONG_TIMEOUT_MS)) {
             long silentFor = clock.getAsLong() - lastPongTime;
-            UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.format(
+            PanelConnectionLog.log(Level.WARNING, FrameworkText.format(
                 "WebSocket 已 %d 秒未收到 pong（阈值 %d 秒），判定为静默失效，主动重连",
                 silentFor / 1000, PONG_TIMEOUT_MS / 1000));
             // Do not set intentionalDisconnect - this is not an "intentional disconnect";
@@ -316,7 +316,7 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
         }
 
         sendPing();
-        UltiTools.getInstance().getLogger().log(Level.FINE, latencyMs >= 0
+        PanelConnectionLog.log(Level.FINE, latencyMs >= 0
             ? FrameworkText.format("发送心跳ping消息（上次往返 %dms）", latencyMs)
             : FrameworkText.text("发送心跳ping消息"));
     }
@@ -386,7 +386,7 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     public void onOpen(ServerHandshake handshakedata) {
         isConnected = true;
         reconnectAttempts = 0;
-        UltiTools.getInstance().getLogger().log(Level.INFO, UltiTools.getInstance().i18n("成功连接到UltiPanel WebSocket服务器！"));
+        PanelConnectionLog.log(Level.INFO, UltiTools.getInstance().i18n("成功连接到UltiPanel WebSocket服务器！"));
         
         if (onConnectHandler != null) {
             onConnectHandler.run();
@@ -413,7 +413,7 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
             // swallowed before it ever reached the real dispatch logic. See issue #234.
             String messageType = jsonMessage.has("type") && jsonMessage.get("type").isJsonPrimitive()
                 ? jsonMessage.get("type").getAsString() : null;
-            UltiTools.getInstance().getLogger().log(Level.FINE,
+            PanelConnectionLog.log(Level.FINE,
                 FrameworkText.format("[WebSocket接收] 类型: %s", messageType != null ? messageType : FrameworkText.text("未知")));
 
             // The pong is recorded before dispatch. It is a link-layer fact and should not
@@ -427,14 +427,14 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
                 messageHandler.accept(jsonMessage);
             }
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.format("WebSocket消息解析失败: %s", e.getMessage()));
+            PanelConnectionLog.log(Level.WARNING, FrameworkText.format("WebSocket消息解析失败: %s", e.getMessage()));
         }
     }
 
     @Override
     public void onClose(int code, String reason, boolean remote) {
         isConnected = false;
-        UltiTools.getInstance().getLogger().log(Level.INFO,
+        PanelConnectionLog.log(Level.INFO,
             UltiTools.getInstance().i18n("已与UltiPanel WebSocket服务器断开连接！") + " Reason: " + reason);
 
         if (onDisconnectHandler != null) {
@@ -445,24 +445,24 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
             if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
                 reconnectAttempts++;
                 long delay = INITIAL_RECONNECT_DELAY_MS * reconnectAttempts;
-                UltiTools.getInstance().getLogger().log(Level.INFO,
+                PanelConnectionLog.log(Level.INFO,
                     String.format("Attempting WebSocket reconnection %d/%d in %ds...",
                         reconnectAttempts, MAX_RECONNECT_ATTEMPTS, delay / 1000));
                 heartbeatExecutor.schedule(() -> {
                     try {
                         reconnect();
                     } catch (Exception e) {
-                        UltiTools.getInstance().getLogger().log(Level.WARNING, "WebSocket reconnection failed: " + e.getMessage());
+                        PanelConnectionLog.log(Level.WARNING, "WebSocket reconnection failed: " + e.getMessage());
                     }
                 }, delay, TimeUnit.MILLISECONDS);
             } else if (onReconnectExhaustedHandler != null) {
-                UltiTools.getInstance().getLogger().log(Level.WARNING,
+                PanelConnectionLog.log(Level.WARNING,
                     "All WebSocket reconnection attempts exhausted, attempting token refresh and re-initialization...");
                 heartbeatExecutor.schedule(() -> {
                     try {
                         onReconnectExhaustedHandler.run();
                     } catch (Exception e) {
-                        UltiTools.getInstance().getLogger().log(Level.WARNING,
+                        PanelConnectionLog.log(Level.WARNING,
                             "WebSocket re-initialization after reconnect exhaustion failed: " + e.getMessage());
                     }
                 }, INITIAL_RECONNECT_DELAY_MS, TimeUnit.MILLISECONDS);
@@ -474,7 +474,7 @@ public class UltiPanelWebSocketClient extends WebSocketClient {
     public void onError(Exception ex) {
         isConnected = false;
         String errorMessage = FrameworkText.format("WebSocket连接失败: %s", ex.getMessage());
-        UltiTools.getInstance().getLogger().log(Level.WARNING, UltiTools.getInstance().i18n("无法连接到UltiPanel WebSocket服务器：") + ex.getMessage());
+        PanelConnectionLog.log(Level.WARNING, UltiTools.getInstance().i18n("无法连接到UltiPanel WebSocket服务器：") + ex.getMessage());
         
         if (onErrorHandler != null) {
             onErrorHandler.accept(errorMessage);

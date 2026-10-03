@@ -20,7 +20,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 
 import com.ultikits.ultitools.UltiTools;
@@ -102,9 +101,8 @@ class CloudReconnectStateMachineTest {
 
     /** 取出以指定级别记录的全部日志正文。 */
     private java.util.List<String> loggedAt(Level level) {
-        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
-        Mockito.verify(mockLogger, Mockito.atLeast(0)).log(Mockito.eq(level), captor.capture());
-        return captor.getAllValues();
+        // Both forms: the reconnect lines are panel-connection lines, logged as marked records.
+        return com.ultikits.ultitools.testutil.LoggedLines.at(mockLogger, level);
     }
 
     @Nested

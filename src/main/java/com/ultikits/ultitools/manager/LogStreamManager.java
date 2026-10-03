@@ -8,6 +8,7 @@ import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.handler.SystemLogHandler;
 import com.ultikits.ultitools.utils.FrameworkText;
+import com.ultikits.ultitools.websocket.PanelConnectionLog;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import lombok.Getter;
 import org.bukkit.Bukkit;
@@ -24,6 +25,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -138,11 +140,19 @@ public class LogStreamManager implements Listener {
 
         // Add the system log handler to the root Logger -- after replaying, oldest first, what
         // the early capture attached in UltiTools#onLoad() kept, so the lines logged before the
-        // panel connection opened reach the stream ahead of any live line (#487). On a reconnect
-        // there is no capture any more and this only attaches the handler.
+        // panel connection opened reach the stream too (#487). On a reconnect there is no capture
+        // any more and this only attaches the handler.
+        //
+        // The replay goes through the handler's replay path and is delivered in batches -- one
+        // batch.size-record message per batch.interval, the first at once -- even when live
+        // batching is off (as of 6.3.0). Replayed one message per record, about 350 start-up
+        // records at connect exceeded the panel's per-client quota (50 messages in 10 seconds) on a
+        // real server. Records a previous transmitter could not deliver (#486) are not part of
+        // this replay: they were adopted into the queue above and follow the live batching path.
         Logger rootLogger = Logger.getLogger("");
         SystemLogHandler liveHandler = systemLogHandler;
-        int notKept = EarlyLogCapture.drainInto(liveHandler, () -> rootLogger.addHandler(liveHandler));
+        int notKept = EarlyLogCapture.drainInto(liveHandler.replayHandler(), () -> rootLogger.addHandler(liveHandler));
+        logTransmitter.startReplay();
         if (notKept > 0) {
             UltiTools.getInstance().getLogger().info(String.format(
                     "[UltiPanel] %d start-up log record(s) were not kept for the panel: the start-up buffer "
@@ -645,7 +655,7 @@ public class LogStreamManager implements Listener {
             webSocketClient.sendMessage(response);
 
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().warning(
+            PanelConnectionLog.log(Level.WARNING, 
                 FrameworkText.format("LogStreamManager: 发送流响应失败: %s", e.getMessage()));
         }
     }
@@ -673,7 +683,7 @@ public class LogStreamManager implements Listener {
             webSocketClient.sendMessage(response);
             
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().warning(
+            PanelConnectionLog.log(Level.WARNING, 
                 FrameworkText.format("LogStreamManager: 发送错误响应失败: %s", e.getMessage()));
         }
     }

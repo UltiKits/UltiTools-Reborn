@@ -2,6 +2,8 @@ package com.ultikits.ultitools.manager;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -19,6 +21,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.utils.CommonUtils;
 import com.ultikits.ultitools.utils.FrameworkText;
+import com.ultikits.ultitools.websocket.PanelConnectionLog;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 import lombok.Getter;
@@ -157,6 +160,22 @@ public class UltiPanelLogTransmitter {
     private volatile ScheduledFuture<?> batchSenderTask;
 
     /**
+     * The start-up records the early capture replayed into this transmitter (#487), oldest first,
+     * not yet delivered. Guarded by {@link #batchModeLock}.
+     * <p>
+     * Kept apart from {@link #logQueue} because the replay is always delivered in batches, one
+     * {@link #batchSize}-record {@code log_batch} message per {@link #intervalMs}, whether or not
+     * live batching is on (as of 6.3.0). With live batching off, every replayed record used to be its
+     * own message -- about 350 at once on connect on a real server -- and the panel's per-client
+     * quota (50 messages in 10 seconds) rejected them. It is not bounded here: the early capture
+     * already bounds what it replays (2,000 records, about 512 KiB).
+     */
+    private final Deque<JsonObject> replayQueue = new ArrayDeque<>();
+
+    /** The scheduled replay-send task, or {@code null} when nothing is left to replay. */
+    private volatile ScheduledFuture<?> replaySenderTask;
+
+    /**
      * Constructor.
      *
      * @param webSocketClient the WebSocket client
@@ -189,32 +208,8 @@ public class UltiPanelLogTransmitter {
             return;
         }
         
-        String logLevel = level;
-        String logSource = source;
-        if (logLevel == null || logLevel.trim().isEmpty()) {
-            logLevel = "info";
-        }
-        if (logSource == null || logSource.trim().isEmpty()) {
-            logSource = "server";
-        }
-        
         try {
-            JsonObject logData = new JsonObject();
-            logData.addProperty("level", logLevel);
-            logData.addProperty("message", message != null ? message : "");
-            logData.addProperty("timestamp", System.currentTimeMillis());
-            logData.addProperty("source", logSource);
-            logData.addProperty("thread", Thread.currentThread().getName());
-
-            // Add the logger name (optional)
-            logData.addProperty("logger", determineLoggerName(logSource));
-
-            // If there is an exception, add the stack trace
-            if (throwable != null) {
-                logData.addProperty("stackTrace", getStackTrace(throwable));
-            } else {
-                logData.add("stackTrace", null);
-            }
+            JsonObject logData = buildLogData(level, message, source, throwable, System.currentTimeMillis());
 
             // Gate-2 finding (round 6): held across the read of batchEnabled AND the resulting
             // call, matching setBatchEnabled(false)'s own lock -- see batchModeLock's javadoc.
@@ -231,6 +226,129 @@ public class UltiPanelLogTransmitter {
         } catch (Exception e) {
             // Avoid a logging loop -- print to the console only (do not use the logger, to avoid the loop)
             System.err.println(FrameworkText.format("[UltiPanel] 发送日志失败: %s - %s", e.getMessage(), e.getClass().getSimpleName()));
+        }
+    }
+
+    /**
+     * Builds one log entry as the panel receives it.
+     *
+     * @param level     the log level, {@code info} when blank
+     * @param message   the message
+     * @param source    the log source, {@code server} when blank
+     * @param throwable the exception, or {@code null}
+     * @param timestamp the entry's time, in milliseconds since the epoch
+     * @return the entry
+     */
+    private JsonObject buildLogData(String level, String message, String source, Throwable throwable,
+                                    long timestamp) {
+        String logLevel = level == null || level.trim().isEmpty() ? "info" : level;
+        String logSource = source == null || source.trim().isEmpty() ? "server" : source;
+        JsonObject logData = new JsonObject();
+        logData.addProperty("level", logLevel);
+        logData.addProperty("message", message != null ? message : "");
+        logData.addProperty("timestamp", timestamp);
+        logData.addProperty("source", logSource);
+        logData.addProperty("thread", Thread.currentThread().getName());
+
+        // Add the logger name (optional)
+        logData.addProperty("logger", determineLoggerName(logSource));
+
+        // If there is an exception, add the stack trace
+        if (throwable != null) {
+            logData.addProperty("stackTrace", getStackTrace(throwable));
+        } else {
+            logData.add("stackTrace", null);
+        }
+        return logData;
+    }
+
+    /**
+     * Queues one start-up record the early capture replays (#487) for delivery in batches; nothing
+     * is sent until {@link #startReplay()}. The same gate as {@link #sendLog} applies: nothing is
+     * queued while transmission is off or the panel is not connected.
+     *
+     * @param level     the log level (info, warning, error, debug)
+     * @param message   the log message
+     * @param source    the log source (e.g.: "server", "plugin:name")
+     * @param throwable the exception object (optional)
+     * @param timestamp when the record was logged -- kept, so the panel can place a replayed line
+     *                  among the live ones that may arrive while the replay is still being sent
+     */
+    public void replayLog(String level, String message, String source, Throwable throwable, long timestamp) {
+        if (!logTransmissionEnabled.get() || webSocketClient == null || !webSocketClient.isConnected()) {
+            return;
+        }
+        JsonObject logData = buildLogData(level, message, source, throwable, timestamp);
+        synchronized (batchModeLock) {
+            replayQueue.addLast(logData);
+        }
+    }
+
+    /**
+     * Starts delivering the queued replay: the first batch now, then one batch of {@link #batchSize}
+     * records every {@link #intervalMs} until none is left. The batch settings apply whether or not
+     * live batching is on; with batching off they keep their configured or default values. A batch
+     * that does not go out is kept, at the front, for the next attempt.
+     * <p>
+     * Live records are not held back while the replay is sent: with live batching off they still go
+     * out one by one at once, so a live line can reach the panel before the last replayed batches.
+     * Each replayed entry keeps the time its record was logged.
+     */
+    public void startReplay() {
+        sendReplayBatch();
+        synchronized (batchModeLock) {
+            if (!replayQueue.isEmpty() && replaySenderTask == null) {
+                replaySenderTask = batchScheduler.scheduleWithFixedDelay(this::sendReplayBatch,
+                        intervalMs, intervalMs, TimeUnit.MILLISECONDS);
+            }
+        }
+    }
+
+    /**
+     * Sends the next replay batch, if the panel is connected; stops the replay task once nothing is
+     * left. Package-private for tests.
+     */
+    void sendReplayBatch() {
+        synchronized (batchModeLock) {
+            if (replayQueue.isEmpty()) {
+                stopReplaySender();
+                return;
+            }
+            if (!webSocketClient.isConnected()) {
+                return;
+            }
+            JsonArray logs = new JsonArray();
+            for (int i = 0; i < batchSize && !replayQueue.isEmpty(); i++) {
+                logs.add(replayQueue.pollFirst());
+            }
+            if (!deliverBatch(logs)) {
+                for (int i = logs.size() - 1; i >= 0; i--) {
+                    replayQueue.addFirst(logs.get(i).getAsJsonObject());
+                }
+                return;
+            }
+            if (replayQueue.isEmpty()) {
+                stopReplaySender();
+            }
+        }
+    }
+
+    private void stopReplaySender() {
+        ScheduledFuture<?> task = replaySenderTask;
+        if (task != null) {
+            task.cancel(false);
+            replaySenderTask = null;
+        }
+    }
+
+    /**
+     * How many replayed records are still waiting to be sent.
+     *
+     * @return the number of replayed records not yet delivered
+     */
+    public int getReplayQueueSize() {
+        synchronized (batchModeLock) {
+            return replayQueue.size();
         }
     }
 
@@ -340,12 +458,10 @@ public class UltiPanelLogTransmitter {
         if (discarded == 0 || !Capability.LOGS.isEnabled()) {
             return;
         }
-        UltiTools instance = UltiTools.getInstance();
-        if (instance != null) {
-            instance.getLogger().log(Level.WARNING, String.format(
-                    "[UltiPanel] The log stream queue was full (%d records): discarded %d record(s) since the "
-                            + "last report, so the panel's log view has a gap there.", MAX_QUEUE_SIZE, discarded));
-        }
+        // A panel-connection line: logged locally, never streamed (it describes the stream itself).
+        PanelConnectionLog.log(Level.WARNING, String.format(
+                "[UltiPanel] The log stream queue was full (%d records): discarded %d record(s) since the "
+                        + "last report, so the panel's log view has a gap there.", MAX_QUEUE_SIZE, discarded));
     }
 
     /**
@@ -623,9 +739,10 @@ public class UltiPanelLogTransmitter {
     }
 
     /**
-     * Removes and returns every record this transmitter has not sent -- the held batch first, then
-     * the queue, oldest first -- so {@code LogStreamManager} can hand them to the transmitter that
-     * replaces this one when the panel reconnects on a new client (#486). Call it after
+     * Removes and returns every record this transmitter has not sent -- replayed start-up records
+     * not yet delivered first, then the held batch, then the queue, oldest first -- so
+     * {@code LogStreamManager} can hand them to the transmitter that replaces this one when the
+     * panel reconnects on a new client (#486). Call it after
      * {@link #shutdown()}, whose flush sends what the old connection still can.
      *
      * @return the unsent records, oldest first; empty when there are none
@@ -634,6 +751,12 @@ public class UltiPanelLogTransmitter {
     public JsonArray takePending() {
         synchronized (batchModeLock) {
             JsonArray pending = new JsonArray();
+            // Replayed start-up records not yet sent are the oldest of all, so they go first.
+            JsonObject replayed;
+            while ((replayed = replayQueue.pollFirst()) != null) {
+                pending.add(replayed);
+            }
+            stopReplaySender();
             JsonArray held = heldBatch.getAndSet(null);
             if (held != null) {
                 pending.addAll(held);
@@ -763,9 +886,9 @@ public class UltiPanelLogTransmitter {
         this.logTransmissionEnabled.set(enabled);
 
         if (enabled) {
-            UltiTools.getInstance().getLogger().info(FrameworkText.text("[UltiPanel] 日志传输已启用"));
+            PanelConnectionLog.log(Level.INFO, FrameworkText.text("[UltiPanel] 日志传输已启用"));
         } else {
-            UltiTools.getInstance().getLogger().info(FrameworkText.text("[UltiPanel] 日志传输已禁用"));
+            PanelConnectionLog.log(Level.INFO, FrameworkText.text("[UltiPanel] 日志传输已禁用"));
         }
     }
 
@@ -878,7 +1001,7 @@ public class UltiPanelLogTransmitter {
             }
 
             logTransmissionEnabled.set(false);
-            UltiTools.getInstance().getLogger().info(FrameworkText.text("[UltiPanel] 日志传输器已关闭"));
+            PanelConnectionLog.log(Level.INFO, FrameworkText.text("[UltiPanel] 日志传输器已关闭"));
 
         } catch (InterruptedException e) {
             batchScheduler.shutdownNow();
