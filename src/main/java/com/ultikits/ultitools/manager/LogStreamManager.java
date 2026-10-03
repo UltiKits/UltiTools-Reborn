@@ -143,9 +143,9 @@ public class LogStreamManager implements Listener {
         // panel connection opened reach the stream too (#487). On a reconnect there is no capture
         // any more and this only attaches the handler.
         //
-        // The replay goes through the handler's replay path and is delivered in batches -- one
-        // batch.size-record message per batch.interval, the first at once -- even when live
-        // batching is off (as of 6.3.0). Replayed one message per record, about 350 start-up
+        // The replay goes through the handler's replay path and is delivered in log_batch messages
+        // of at most 64 KiB, the first at once and then about one per second, whatever the live
+        // batch settings (as of 6.3.0; UltiPanelLogTransmitter#REPLAY_CHUNK_MAX_BYTES). Replayed one message per record, about 350 start-up
         // records at connect exceeded the panel's per-client quota (50 messages in 10 seconds) on a
         // real server. Records a previous transmitter could not deliver (#486) are not part of
         // this replay: they were adopted into the queue above and follow the live batching path.

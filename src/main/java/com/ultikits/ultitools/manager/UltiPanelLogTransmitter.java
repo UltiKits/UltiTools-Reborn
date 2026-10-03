@@ -2,6 +2,7 @@ package com.ultikits.ultitools.manager;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -14,6 +15,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -163,14 +166,42 @@ public class UltiPanelLogTransmitter {
      * The start-up records the early capture replayed into this transmitter (#487), oldest first,
      * not yet delivered. Guarded by {@link #batchModeLock}.
      * <p>
-     * Kept apart from {@link #logQueue} because the replay is always delivered in batches, one
-     * {@link #batchSize}-record {@code log_batch} message per {@link #intervalMs}, whether or not
-     * live batching is on (as of 6.3.0). With live batching off, every replayed record used to be its
-     * own message -- about 350 at once on connect on a real server -- and the panel's per-client
-     * quota (50 messages in 10 seconds) rejected them. It is not bounded here: the early capture
-     * already bounds what it replays (2,000 records, about 512 KiB).
+     * Kept apart from {@link #logQueue} because the replay has its own fixed chunking, independent
+     * of the live batch settings (as of 6.3.0): {@code log_batch} messages of at most
+     * {@link #REPLAY_CHUNK_MAX_BYTES}, the first at once and then one every
+     * {@link #REPLAY_SPACING_MS}. With live batching off, every replayed record used to be its own
+     * message -- about 350 at once on connect on a real server -- and the panel's per-client quota
+     * (50 messages in 10 seconds) rejected them. It is not bounded here: the early capture already
+     * bounds what it replays (2,000 records, about 512 KiB).
      */
     private final Deque<JsonObject> replayQueue = new ArrayDeque<>();
+
+    /**
+     * The most bytes one replay message may take, serialized as the client sends it.
+     * <p>
+     * Measured against the UltiPanel Worker ({@code websocket-server.ts}): its quota counts messages,
+     * 50 per 10 seconds per client, and a rejected message counts too; its {@code log_batch} handler
+     * accepts an array of any length and sets no size limit of its own; the Cloudflare platform caps
+     * one received WebSocket message at 1 MiB. 64 KiB stays a sixteenth of that cap, also for the copy
+     * the Worker broadcasts to each subscribed panel, and holds a few hundred typical start-up lines,
+     * so a full start-up buffer drains in about ten messages.
+     */
+    static final int REPLAY_CHUNK_MAX_BYTES = 64 * 1024;
+
+    /**
+     * The time between two replay messages: at most 10 of the panel's 50 messages per 10 seconds,
+     * leaving the rest for live traffic.
+     */
+    static final long REPLAY_SPACING_MS = 1000L;
+
+    /** Room kept in each replay message for its envelope: type, server ID, timestamp, brackets. */
+    private static final int REPLAY_FRAME_RESERVE_BYTES = 1024;
+
+    /** Appended to an entry shortened to fit one replay message. */
+    private static final String TRUNCATED_MARK = " [truncated]";
+
+    /** Serializes as {@code UltiPanelWebSocketClient} does, to measure what goes on the wire. */
+    private static final Gson WIRE_GSON = new GsonBuilder().disableHtmlEscaping().create();
 
     /** The scheduled replay-send task, or {@code null} when nothing is left to replay. */
     private volatile ScheduledFuture<?> replaySenderTask;
@@ -278,20 +309,47 @@ public class UltiPanelLogTransmitter {
         if (!logTransmissionEnabled.get() || webSocketClient == null || !webSocketClient.isConnected()) {
             return;
         }
-        JsonObject logData = buildLogData(level, message, source, throwable, timestamp);
+        JsonObject logData = fitReplayEntry(buildLogData(level, message, source, throwable, timestamp));
         synchronized (batchModeLock) {
             replayQueue.addLast(logData);
         }
     }
 
+    private static int wireBytes(JsonElement element) {
+        return WIRE_GSON.toJson(element).getBytes(StandardCharsets.UTF_8).length;
+    }
+
     /**
-     * Starts delivering the queued replay: the first batch now, then one batch of {@link #batchSize}
-     * records every {@link #intervalMs} until none is left. The batch settings apply whether or not
-     * live batching is on; with batching off they keep their configured or default values. A batch
-     * that does not go out is kept, at the front, for the next attempt.
+     * Shortens an entry that would not fit one replay message on its own -- the stack trace first,
+     * then the message -- so it is sent shortened rather than not at all.
+     */
+    private static JsonObject fitReplayEntry(JsonObject entry) {
+        int limit = REPLAY_CHUNK_MAX_BYTES - REPLAY_FRAME_RESERVE_BYTES;
+        for (String field : new String[] {"stackTrace", "message"}) {
+            int excess = wireBytes(entry) - limit;
+            if (excess <= 0) {
+                return entry;
+            }
+            JsonElement value = entry.get(field);
+            if (value == null || !value.isJsonPrimitive()) {
+                continue;
+            }
+            String text = value.getAsString();
+            // Each removed character removes at least one byte; the mark and JSON escaping need room too.
+            int keep = Math.max(0, text.length() - excess - TRUNCATED_MARK.length() * 2 - 16);
+            entry.addProperty(field, text.substring(0, keep) + TRUNCATED_MARK);
+        }
+        return entry;
+    }
+
+    /**
+     * Starts delivering the queued replay: the first message now, then one every
+     * {@link #REPLAY_SPACING_MS} until none is left, each holding as many records, oldest first, as
+     * fit in {@link #REPLAY_CHUNK_MAX_BYTES}. The live {@code batch.size} and {@code batch.interval}
+     * do not apply. A message that does not go out is kept, at the front, for the next attempt.
      * <p>
      * Live records are not held back while the replay is sent: with live batching off they still go
-     * out one by one at once, so a live line can reach the panel before the last replayed batches.
+     * out one by one at once, so a live line can reach the panel before the last replayed messages.
      * Each replayed entry keeps the time its record was logged.
      */
     public void startReplay() {
@@ -299,14 +357,15 @@ public class UltiPanelLogTransmitter {
         synchronized (batchModeLock) {
             if (!replayQueue.isEmpty() && replaySenderTask == null) {
                 replaySenderTask = batchScheduler.scheduleWithFixedDelay(this::sendReplayBatch,
-                        intervalMs, intervalMs, TimeUnit.MILLISECONDS);
+                        REPLAY_SPACING_MS, REPLAY_SPACING_MS, TimeUnit.MILLISECONDS);
             }
         }
     }
 
     /**
-     * Sends the next replay batch, if the panel is connected; stops the replay task once nothing is
-     * left. Package-private for tests.
+     * Sends the next replay message -- as many queued records, oldest first, as fit in
+     * {@link #REPLAY_CHUNK_MAX_BYTES} -- if the panel is connected; stops the replay task once
+     * nothing is left. Package-private for tests.
      */
     void sendReplayBatch() {
         synchronized (batchModeLock) {
@@ -318,8 +377,16 @@ public class UltiPanelLogTransmitter {
                 return;
             }
             JsonArray logs = new JsonArray();
-            for (int i = 0; i < batchSize && !replayQueue.isEmpty(); i++) {
+            int budget = REPLAY_CHUNK_MAX_BYTES - REPLAY_FRAME_RESERVE_BYTES;
+            int used = 0;
+            while (!replayQueue.isEmpty()) {
+                // + 1 for the comma between array elements.
+                int size = wireBytes(replayQueue.peekFirst()) + 1;
+                if (logs.size() > 0 && used + size > budget) {
+                    break;
+                }
                 logs.add(replayQueue.pollFirst());
+                used += size;
             }
             if (!deliverBatch(logs)) {
                 for (int i = logs.size() - 1; i >= 0; i--) {

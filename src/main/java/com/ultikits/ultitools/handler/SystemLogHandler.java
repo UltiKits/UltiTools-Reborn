@@ -168,7 +168,7 @@ public class SystemLogHandler extends Handler {
      * ({@code EarlyLogCapture#drainInto}, #487). It applies exactly the filters and mapping of
      * {@link #publish(LogRecord)}, but hands each record to
      * {@link UltiPanelLogTransmitter#replayLog} instead of {@link UltiPanelLogTransmitter#sendLog},
-     * so the replay is delivered in batches even when live batching is off (as of 6.3.0). It is
+     * so the replay is delivered in chunked messages even when live batching is off (as of 6.3.0). It is
      * never attached to a logger.
      *
      * @return a handler that replays into this handler's transmitter

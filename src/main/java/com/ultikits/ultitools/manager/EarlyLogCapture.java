@@ -27,9 +27,9 @@ import com.ultikits.ultitools.websocket.PanelConnectionLog;
  * handler is attached to the {@code java.util.logging} root logger in {@code onLoad()}; when the
  * stream starts, {@link #drainInto} replays what it kept, oldest first, attaches the live handler,
  * and detaches itself. {@code LogStreamManager} replays into the stream handler's replay path, so
- * the transmitter delivers the early records in batches of the configured batch size, one per batch
- * interval, even with live batching off (as of 6.3.0); a live record can therefore arrive before the
- * last early batches.
+ * the transmitter delivers the early records in {@code log_batch} messages of at most 64 KiB, about
+ * one per second, whatever the live batch settings (as of 6.3.0); a live record can therefore arrive
+ * before the last early messages.
  * <p>
  * The buffer is bounded three ways, so a server that never connects to the panel cannot grow it:
  * by record count, by an estimate of the bytes it holds, and by time -- after
