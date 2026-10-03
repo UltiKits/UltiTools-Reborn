@@ -870,8 +870,8 @@ public abstract class AbstractConfigEntity {
      * runs. A violating value refuses with {@link ConfigurationException} instead of being
      * written: the operator's file is left byte-identical, and every field this call touched is
      * restored to the value it held before the call, so memory never disagrees with disk (D-01,
-     * D-04). Unlike {@link #reload()}, this entity keeps running after a refusal, so its
-     * in-memory state must not be left holding a rejected value.
+     * D-04). The entity keeps running after a refusal, so its in-memory state must not be left
+     * holding a rejected value; {@link #reload()} follows the same all-or-nothing rule.
      *
      * @param jsonObject the JSON object containing the new properties
      * @throws IOException            if an I/O error occurs
@@ -925,7 +925,7 @@ public abstract class AbstractConfigEntity {
         }
     }
 
-    /** Complete entity state before a panel candidate, including raw and effective acknowledgments. */
+    /** Complete entity state before a panel candidate or a reload attempt, including raw and effective acknowledgments. */
     private final class PanelCheckpoint {
         private final List<Field> fields = configEntryFields();
         private final List<Object> values = new ArrayList<>();
@@ -1494,6 +1494,12 @@ public abstract class AbstractConfigEntity {
     
     /**
      * Reloads the configuration from file and notifies all listeners.
+     * <p>
+     * Since 6.3.0 a reload is all-or-nothing: if it fails for any reason (a validation
+     * violation, a conversion or I/O failure), every field value and every piece of load
+     * tracking is restored to what it was before the attempt, and the failure is rethrown
+     * without notifying listeners. A rejected file value therefore never becomes an unsaved
+     * in-memory edit that the next reload's three-way merge would keep over a corrected file.
      *
      * @throws IOException if an I/O error occurs
      */
@@ -1502,7 +1508,15 @@ public abstract class AbstractConfigEntity {
         if (ultiToolsPlugin == null) { throw new IllegalStateException("Config not initialized. Call init() first."); }
         synchronized (this) {
             registry().checkEntityFields(getClass(), ultiToolsPlugin.getPluginName(), configFilePath);
-            load(false);
+            PanelCheckpoint before = new PanelCheckpoint();
+            boolean loaded = false;
+            try {
+                load(false);
+                loaded = true;
+            } finally {
+                // Restore on every failure, unchecked errors included, then let it propagate.
+                if (!loaded) { before.restore(); }
+            }
         }
         notifyChangeListeners();
     }
