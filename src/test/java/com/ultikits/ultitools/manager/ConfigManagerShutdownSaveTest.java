@@ -480,6 +480,27 @@ class ConfigManagerShutdownSaveTest {
         assertThat(read(listFile)).isEqualTo(onDisk);
     }
 
+    @Test
+    @DisplayName("8b. A 6.2-written integer list stored as quoted text is not rewritten by load, reload or shutdown")
+    void saveAll_doesNotRewriteQuotedIntegerListWrittenBy62() throws IOException {
+        // 6.2's DefaultConfigParser stored every list element as text, so a 6.2-saved List<Integer>
+        // reads "- '60'". The entity binds 60 (an approved coercion); the bytes must stay as they are
+        // until module code or a panel edit actually saves the file (wfufw-s2 compat-62 row, cleaner.yml).
+        File listFile = file("config/list.yml");
+        String onDisk = "ids:\n- '60'\n- '70'\n";
+        write(listFile, onDisk);
+        ListConfig config = new ListConfig("config/list.yml");
+        configManager.register(plugin, config);
+        assertThat(config.ids).containsExactly(60, 70);
+
+        configManager.saveAll();
+        assertThat(read(listFile)).isEqualTo(onDisk);
+
+        configManager.reloadConfigs(plugin);
+        configManager.saveAll();
+        assertThat(read(listFile)).isEqualTo(onDisk);
+    }
+
     // ==================== 9. explicit save() stays unconditional ====================
 
     @Test
