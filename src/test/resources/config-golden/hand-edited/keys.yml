@@ -1,0 +1,11 @@
+keys:
+  yes: boolean key
+  1: integer key
+  1.0: float key
+  ~: null key
+  on: on key
+  'no': quoted no key
+  "o.O": quoted dotted key
+  g.m: plain dotted key
+  wave.: trailing dot key
+  a.b.c: two dots

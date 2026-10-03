@@ -102,7 +102,7 @@ import lombok.Getter;
 public class PluginManager {
     /**
      * The name of the JVM system property that opts back into the pre-6.3.0 degraded load
-     * order (D-10): every module in filesystem/classpath order, with no dependency resolution
+     * order (D-10): every module in discovery order (file-name order, #476), with no dependency resolution
      * at all. Modeled on Paper's own {@code -Dpaper.useLegacyPluginLoading=true} precedent -- a
      * one-shot, consumed-at-bootstrap decision, which is why it is a system property rather than
      * a reloadable {@code config.yml} key. The literal name is repeated (rather than referenced
@@ -148,6 +148,14 @@ public class PluginManager {
     private final List<UltiToolsPlugin> pluginList = new CopyOnWriteArrayList<>();
 
     private final List<Class<? extends UltiToolsPlugin>> pluginClassList = new ArrayList<>();
+
+    /**
+     * What the start-up scan read: per declared main class, every JAR in the modules folder that
+     * declares it, and the JAR its class was loaded from (#516). {@code /upm uninstall} reads it to
+     * find every file of a loaded module.
+     */
+    @Getter
+    private final ModuleJarIndex moduleJarIndex = new ModuleJarIndex();
     private ClassLoader classLoader;
     @Getter
     private TaskManager taskManager;
@@ -225,22 +233,12 @@ public class PluginManager {
         registerFrameworkScheduledOwners();
         registerPlayerQuitListener();
         registerPluginDisableListener();
-        String currentPath = System.getProperty("user.dir");
-        String path = currentPath + File.separator + "plugins" + File.separator + "UltiTools" + File.separator + "plugins";
-        File pluginFolder = new File(path);
-        File[] plugins = pluginFolder.listFiles((file) -> file.getName().endsWith(".jar"));
-
-        if (plugins == null) {
+        // #517: the same folder the module class loader was built over, from the one method that
+        // computes it -- not the JVM's working directory, which a launcher may set anywhere.
+        File pluginFolder = com.ultikits.ultitools.utils.ModuleFileTransactions.modulesFolder(
+                UltiTools.getInstance().getDataFolder());
+        if (!discoverModuleClasses(pluginFolder)) {
             return;
-        }
-
-        Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Found " + plugins.length + " file(s):");
-
-        for (File file : plugins) {
-            Class<? extends UltiToolsPlugin> pluginClass = loadPluginMainClass(classLoader, file);
-            if (pluginClass != null) {
-                pluginClassList.add(pluginClass);
-            }
         }
         int success = 0;
         if (pluginClassList.isEmpty()) {
@@ -262,6 +260,80 @@ public class PluginManager {
                 Level.INFO,
                 String.format("[UltiTools-API] Succeeded loaded %d, Failed %d.", success, sortedPlugins.size() - success)
         );
+    }
+
+    /**
+     * Lists the modules folder once and reads each module JAR's declared main class, adding every
+     * class that loads to {@code pluginClassList}. Package-private so a test can drive the scan over
+     * a folder of its own.
+     *
+     * @param pluginFolder the modules folder
+     * @return {@code false} when the folder could not be listed
+     */
+    boolean discoverModuleClasses(File pluginFolder) {
+        File[] plugins = com.ultikits.ultitools.utils.ModuleFileTransactions.moduleJars(pluginFolder);
+        if (plugins == null) {
+            return false;
+        }
+
+        Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Found " + plugins.length + " file(s):");
+
+        for (File file : plugins) {
+            Class<? extends UltiToolsPlugin> pluginClass = loadPluginMainClass(classLoader, file);
+            if (pluginClass != null) {
+                pluginClassList.add(pluginClass);
+            }
+        }
+        warnOnDuplicateModuleJars();
+        return true;
+    }
+
+    /**
+     * One warning per module main class that two or more JARs in the modules folder declare,
+     * naming every one of them and the JAR the module's classes load from (UltiTools-Dev-Doc#96).
+     *
+     * <p>All module JARs share one class loader, so the copies are not loaded side by side and no
+     * version comparison runs between them: the class comes from the first JAR on the class path
+     * that carries it -- in file-name order (#476) -- and the other copies are refused. Without this
+     * line an operator who dropped a new version next to the old one would see the old one keep
+     * running with nothing saying why.
+     *
+     * <p>A main class none of whose copies loaded gets no line here: each copy has already been
+     * refused with its own line saying why.
+     */
+    private void warnOnDuplicateModuleJars() {
+        for (Map.Entry<String, List<File>> duplicate : moduleJarIndex.duplicates().entrySet()) {
+            File supplier = moduleJarIndex.supplierOf(duplicate.getKey());
+            if (supplier == null) {
+                continue;
+            }
+            List<String> names = new ArrayList<>();
+            for (File jar : duplicate.getValue()) {
+                names.add(jar.getName());
+            }
+            Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + String.format(UltiTools.getInstance().i18n(
+                    "以下 JAR 文件都声明了同一个模块主类 %s：%s。该模块的类只从 %s 加载，其余副本不会加载；请只保留其中一个。"),
+                    duplicate.getKey(), String.join(", ", names), supplier.getName()));
+        }
+    }
+
+    /**
+     * Whether a JAR whose declared main class was loaded from another JAR is another copy of that
+     * module: the other JAR is in the same modules folder and its own {@code plugin.yml} declares
+     * the same {@code main:}. Anything else is a class borrowed from a JAR that is not this module,
+     * which stays refused with its own SEVERE line. Reads only {@code plugin.yml}.
+     *
+     * @param pluginJar     the JAR being scanned
+     * @param supplier      the JAR its declared main class was loaded from
+     * @param mainClassName the main class it declares
+     * @return {@code true} when it is a duplicate copy
+     */
+    private static boolean isDuplicateCopy(File pluginJar, File supplier, String mainClassName) {
+        File folder = pluginJar.getAbsoluteFile().getParentFile();
+        File supplierFolder = supplier.getAbsoluteFile().getParentFile();
+        return folder != null && supplierFolder != null
+                && canonicalPath(folder).equals(canonicalPath(supplierFolder))
+                && mainClassName.equals(PluginYmlReader.readFromJarFile(supplier).getMain());
     }
 
     /**
@@ -298,6 +370,7 @@ public class PluginManager {
         // The gate runs first: this path's instance is caller-supplied and the container hasn't
         // been built yet, so if it's refused, not a single bean gets constructed. See issue #184.
         if (!passesCompatibilityGates(plugin)) {
+            releaseConfigEntities(plugin);
             return false;
         }
         try {
@@ -310,6 +383,7 @@ public class PluginManager {
             SimpleContainer pluginContext = new SimpleContainer();
             assemblePluginContainer(pluginContext, plugin, plugin.getClass(), classLoader);
         } catch (Exception | Error e) {
+            releaseConfigEntities(plugin);
             logPluginInitializationFailure(plugin.getPluginName(), e);
             return false;
         }
@@ -391,8 +465,10 @@ public class PluginManager {
      * <p>
      * The last two always run, in that order, even when the unload hook throws; the hook's failure
      * is then rethrown to the caller. Since 6.3.0 (#507) this method delists the module itself, by
-     * identity, so no caller has to. The module's configuration entities stay registered with the
-     * {@link ConfigManager}; releasing them belongs to the configuration layer.
+     * identity, so no caller has to. After the container is closed and before the module is
+     * delisted, the configuration layer releases the module's configuration entities through
+     * {@link ConfigManager#unregisterAll(UltiToolsPlugin)} (#507); when the unload is part of
+     * {@link #close()}, their shutdown save runs first.
      *
      * <p>
      * The three registries a module can file registrations in by name -- tab-completion
@@ -405,7 +481,7 @@ public class PluginManager {
      * @param plugin UltiTools plugin instance
      */
     public void unregister(UltiToolsPlugin plugin) {
-        unregister(plugin, isNameInUseByAnotherLoadedCopy(plugin));
+        unregister(plugin, isNameInUseByAnotherLoadedCopy(plugin), false);
     }
 
     /**
@@ -431,8 +507,10 @@ public class PluginManager {
      * @param nameStillInUse whether another copy of the module -- listed, or being activated as
      *                       this copy's replacement -- shares its name, so that name-only
      *                       registrations must not be released by name (#506)
+     * @param shutdown       whether this unload is part of {@link #close()}, so the module's
+     *                       configuration is saved for shutdown before its entities are released
      */
-    private void unregister(UltiToolsPlugin plugin, boolean nameStillInUse) {
+    private void unregister(UltiToolsPlugin plugin, boolean nameStillInUse, boolean shutdown) {
         // Each registry-cleanup step below is isolated from every other step's failure
         // (Codex review on #457, round 4: "Run all registry cleanup after an earlier
         // failure") -- an Error from one owner registry (e.g. TaskManager.cancelAll() not
@@ -500,9 +578,25 @@ public class PluginManager {
                     plugin.getContext().close();
                 }
             } finally {
-                // #507: the delisting lives here, not at each caller. By identity: two copies of
-                // one module share a name and may be equal to nothing but themselves.
-                pluginList.removeIf(listed -> listed == plugin);
+                try {
+                    try {
+                        if (shutdown) {
+                            runUnregisterStep(plugin, "save shutdown teardown configuration", () -> {
+                                ConfigManager configs = UltiTools.getInstance().getConfigManager();
+                                if (configs != null) { configs.saveForShutdown(plugin); }
+                            });
+                        }
+                    } finally {
+                        runUnregisterStep(plugin, "release configuration entities", () -> {
+                            ConfigManager configs = UltiTools.getInstance().getConfigManager();
+                            if (configs != null) { configs.unregisterAll(plugin); }
+                        });
+                    }
+                } finally {
+                    // #507: the delisting lives here, not at each caller. By identity: two copies of
+                    // one module share a name and may be equal to nothing but themselves.
+                    pluginList.removeIf(listed -> listed == plugin);
+                }
             }
         }
     }
@@ -616,6 +710,9 @@ public class PluginManager {
      * Unregister all plugins.
      */
     public void close() {
+        // Save while all module entities are still registered, before any unload can release them.
+        ConfigManager configs = UltiTools.getInstance().getConfigManager();
+        if (configs != null) { configs.saveAll(); }
         // Disconnect all external plugins first
         UltiToolsAPI.disconnectAll();
 
@@ -629,7 +726,7 @@ public class PluginManager {
             // UltiTools.onDisable() and skip configManager.saveAll() (WR-01,
             // 16-REVIEW-lifecycle.md) -- mirrors the register() convention above.
             try {
-                unregister(plugin, isNameInUseByAnotherLoadedCopy(plugin));
+                unregister(plugin, isNameInUseByAnotherLoadedCopy(plugin), true);
             } catch (Exception | Error e) {
                 logPluginUnregistrationFailure(plugin.getPluginName(), e);
             }
@@ -1130,6 +1227,9 @@ public class PluginManager {
                     + "module jar must declare 'main: <fully.qualified.MainClass>' in plugin.yml.");
             return null;
         }
+        // #516: kept per main class, whether or not the class loads, so an uninstall can find every
+        // JAR that declares a loaded module -- the loader's own read, not a second scan.
+        moduleJarIndex.record(mainClassName, pluginJar);
 
         try {
             // GEN-07 (D-14): records what the removed classload filter layers would have refused
@@ -1166,12 +1266,27 @@ public class PluginManager {
             // mismatch is a confirmed cross-jar class and is refused.
             File actualJarFile = resolveOwnJarFile(aClass);
             if (actualJarFile != null && !canonicalPath(actualJarFile).equals(canonicalPath(pluginJar))) {
+                if (isDuplicateCopy(pluginJar, actualJarFile, mainClassName)) {
+                    // UltiTools-Dev-Doc#96: another copy of the same module -- the JAR the class
+                    // came from declares this very main: too. It is still not loaded twice, and it
+                    // is reported once for every copy together after the scan
+                    // (warnOnDuplicateModuleJars), not here once per copy.
+                    moduleJarIndex.record(mainClassName, actualJarFile);
+                    moduleJarIndex.recordSupplier(mainClassName, actualJarFile);
+                    Bukkit.getLogger().log(Level.FINE, "[UltiTools-API] Module '" + pluginJar.getName()
+                            + "' is another copy of " + mainClassName + ", whose classes load from '"
+                            + actualJarFile.getName() + "'");
+                    return null;
+                }
                 Bukkit.getLogger().log(Level.SEVERE,
                     "[UltiTools-API] Module '" + pluginJar.getName() + "' declares main: '"
                         + mainClassName + "', but that class actually belongs to a different "
                         + "already-installed module jar ('" + actualJarFile.getName() + "') -- "
                         + "refusing to load a module whose declared main class is not its own.");
                 return null;
+            }
+            if (actualJarFile != null) {
+                moduleJarIndex.recordSupplier(mainClassName, actualJarFile);
             }
             return aClass.asSubclass(UltiToolsPlugin.class);
         } catch (ClassNotFoundException | LinkageError e) {
@@ -1882,17 +1997,26 @@ public class PluginManager {
                 continue;
             }
             if (plugin.isNewerVersionThan(existing)) {
+                ConfigManager configs = UltiTools.getInstance().getConfigManager();
+                List<String> dropped = configs == null ? Collections.emptyList() : configs.unsavedPaths(existing);
+                if (!dropped.isEmpty()) {
+                    Bukkit.getLogger().log(Level.WARNING, "Superseded module " + existing.getPluginName()
+                            + " configuration changes dropped (incoming copy already read its files): "
+                            + String.join(", ", dropped));
+                }
                 // #528: the outgoing copy's cleanup is isolated from the incoming registration.
                 // unregister() has closed the old copy's container and delisted it whether or not
-                // its hook threw, so a failure here is the old copy's, is reported against it, and
-                // the new copy goes on loading -- close()'s policy, Errors included.
+                // its hook threw, and has released its configuration entities -- the configuration
+                // layer's #507 release, run by unregister() itself -- so a failure here is the old
+                // copy's, is reported against it, and the new copy goes on loading -- close()'s
+                // policy, Errors included.
                 // #506: the incoming copy shares the old name only if its plugin.yml says so; a
                 // renamed successor cannot own registrations filed under the old name (Codex review
                 // of #564, round 6). The incoming copy is not listed yet, so it is compared here.
                 boolean nameStillInUse = Objects.equals(existing.getPluginName(), plugin.getPluginName())
                         || isNameInUseByAnotherLoadedCopy(existing);
                 try {
-                    unregister(existing, nameStillInUse);
+                    unregister(existing, nameStillInUse, false);
                 } catch (Exception | Error e) {
                     Bukkit.getLogger().log(Level.WARNING, String.format(
                             "[UltiTools-API] Version %s of %s, superseded by version %s, threw while unloading: %s. "
@@ -1938,7 +2062,8 @@ public class PluginManager {
                 unregisterSupersededVersions(plugin);
                 onPluginRegistered(plugin);
             } else {
-                plugin.getContext().close();
+                try { plugin.getContext().close(); }
+                finally { releaseConfigEntities(plugin); }
                 Bukkit.getLogger().log(Level.WARNING,
                         String.format("[UltiTools-API] %s load failed！Version: %s。", plugin.getPluginName(), plugin.getVersion()));
             }
@@ -1977,6 +2102,7 @@ public class PluginManager {
                     // test class's unregisterFailureDuringTeardownIsHandledAndPluginStillRemoved.
                 }
             }
+            releaseConfigEntities(plugin);
             return false;
         }
     }
@@ -2265,6 +2391,58 @@ public class PluginManager {
                 Transactional.class, transactionInterceptor, 100, transactionalCache));
     }
 
+    private static void releaseConfigEntities(UltiToolsPlugin plugin) {
+        ConfigManager configs = UltiTools.getInstance().getConfigManager();
+        if (configs != null) { configs.unregisterAll(plugin); }
+    }
+
+    private void saveIdentifiedSupersededCopies(Class<? extends UltiToolsPlugin> incomingClass) {
+        String[] identity = readConstructionIdentity(incomingClass);
+        if (identity == null) { return; }
+        List<UltiToolsPlugin> superseded = new ArrayList<>();
+        for (UltiToolsPlugin existing : pluginList) {
+            if (identity[0].equals(existing.getMainClass()) && existing.getVersion() != null
+                    && identity[1] != null && com.ultikits.ultitools.utils.VersionComparatorUtil.compare(
+                            identity[1], existing.getVersion()) > 0) {
+                superseded.add(existing);
+            }
+        }
+        superseded.sort(java.util.Comparator.comparing(UltiToolsPlugin::getPluginName)
+                .thenComparing(UltiToolsPlugin::getVersion));
+        ConfigManager configs = UltiTools.getInstance().getConfigManager();
+        if (configs == null) { return; }
+        for (UltiToolsPlugin existing : superseded) {
+            try { configs.saveBeforeReplacement(existing); }
+            catch (IOException failure) {
+                throw new IllegalStateException("Cannot save configuration before constructing replacement for "
+                        + existing.getPluginName(), failure);
+            }
+        }
+    }
+
+    /** Reads the exact own-JAR input and defaults used by UltiToolsPlugin's constructor. */
+    private static String[] readConstructionIdentity(Class<?> incomingClass) {
+        try {
+            java.security.CodeSource source = incomingClass.getProtectionDomain().getCodeSource();
+            if (source == null || source.getLocation() == null) { return null; }
+            String path = source.getLocation().getPath();
+            path = path.startsWith("/") ? path : path.substring(1);
+            java.net.URL entry = new java.net.URI("jar:file:" + path + "!/plugin.yml").toURL();
+            java.net.JarURLConnection connection = (java.net.JarURLConnection) entry.openConnection();
+            try (java.io.InputStream stream = connection.getInputStream();
+                    java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(stream))) {
+                org.bukkit.configuration.file.YamlConfiguration metadata =
+                        new org.bukkit.configuration.file.YamlConfiguration();
+                metadata.load(reader);
+                if (!metadata.contains("name")) { return null; }
+                return new String[]{metadata.getString("main", "unknown"), metadata.getString("version", "unknown")};
+            }
+        } catch (Exception unavailable) {
+            // Unidentifiable targets use the no-save, key-naming fallback only after successful activation.
+            return null;
+        }
+    }
+
     /**
      * Initialize module using its default (zero-argument) constructor. This is the live,
      * undeprecated construction path -- {@link #register(Class)} calls it directly.
@@ -2274,13 +2452,23 @@ public class PluginManager {
      * @return the initialized module, or {@code null} if a compatibility gate rejected it
      */
     private UltiToolsPlugin initializePlugin(ClassLoader classLoader, Class<? extends UltiToolsPlugin> pluginClass) {
+        saveIdentifiedSupersededCopies(pluginClass);
+        ConfigManager configs = UltiTools.getInstance().getConfigManager();
+        Set<UltiToolsPlugin> before = configs == null ? Collections.emptySet() : configs.registeredOwners(pluginClass);
         UltiToolsPlugin plugin;
         try {
-            // Use the default constructor
             Constructor<? extends UltiToolsPlugin> constructor = pluginClass.getDeclaredConstructor();
             plugin = constructor.newInstance();
-        } catch (Exception e) {
-            throw new IllegalStateException("Failed to initialize plugin: " + pluginClass.getName(), e);
+        } catch (Exception | Error failure) {
+            if (configs != null) {
+                for (UltiToolsPlugin candidate : configs.registeredOwners(pluginClass)) {
+                    if (!before.contains(candidate) && !pluginList.contains(candidate)) {
+                        releaseConfigEntities(candidate);
+                    }
+                }
+            }
+            if (failure instanceof Error) { throw (Error) failure; }
+            throw new IllegalStateException("Failed to initialize plugin: " + pluginClass.getName(), failure);
         }
         return finishInitializingPlugin(classLoader, pluginClass, plugin);
     }
@@ -2300,6 +2488,7 @@ public class PluginManager {
         // incompatible bean graph runs first -- exactly where it would blow up. See
         // passesCompatibilityGates.
         if (!passesCompatibilityGates(plugin)) {
+            releaseConfigEntities(plugin);
             return null;
         }
 
@@ -2316,8 +2505,10 @@ public class PluginManager {
             // field's default null.
             assemblePluginContainer(pluginContext, plugin, pluginClass, classLoader);
             return plugin;
-        } catch (Exception e) {
-            throw new IllegalStateException("Failed to initialize plugin: " + pluginClass.getName(), e);
+        } catch (Exception | Error failure) {
+            releaseConfigEntities(plugin);
+            if (failure instanceof Error) { throw (Error) failure; }
+            throw new IllegalStateException("Failed to initialize plugin: " + pluginClass.getName(), failure);
         }
     }
 
@@ -2843,7 +3034,7 @@ public class PluginManager {
             Bukkit.getLogger().log(Level.SEVERE,
                 "[UltiTools-API] Legacy unsorted plugin load order is ACTIVE because "
                     + "-Dultitools.useLegacyPluginLoading=true is set on the command line. "
-                    + "Dependency resolution is skipped entirely - modules load in filesystem "
+                    + "Dependency resolution is skipped entirely - modules load in file-name "
                     + "order and may fail to initialize if they rely on load order.");
             return new ArrayList<>(plugins);
         }

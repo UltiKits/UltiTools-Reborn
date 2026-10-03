@@ -1,0 +1,9 @@
+# Economy (Windows editor)
+
+economy:
+  # Starting balance
+  start: 100.0 # dollars
+  currency: "$"
+  banks:
+    - central
+    - local # second bank

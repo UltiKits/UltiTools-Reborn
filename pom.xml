@@ -363,6 +363,9 @@
                                  never processed. -->
                             <exclude>com.ultikits.ultitools.context.ContextHolder</exclude>
                             <exclude>com.ultikits.ultitools.context.UltiToolsBean</exclude>
+                            <!-- Follow-up 14: entity getConfig removed under the 6.3.0 carve-out;
+                                 use isPresentInFile for file-presence queries. -->
+                            <exclude>com.ultikits.ultitools.abstracts.AbstractConfigEntity#getConfig()</exclude>
                             <!-- Members removed from a class that otherwise survives: fully-
                                  qualified parameter types are required by japicmp's own filter
                                  parser (JApiCmpException otherwise). -->

@@ -3,7 +3,9 @@ package com.ultikits.ultitools.commands;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -71,7 +73,8 @@ class PluginInstallCommandsEnhancedTest {
         config.set("api-url", "http://localhost");
         mockedUltiTools.when(UltiTools::getEnv).thenReturn(config);
         
-        File dataFolder = new File("target/test-data");
+        // A server layout: the update records live under the data folder's grandparent (the server root).
+        File dataFolder = new File("target/test-data/plugins/UltiTools");
         dataFolder.mkdirs();
         when(instance.getDataFolder()).thenReturn(dataFolder);
         when(instance.i18n(anyString())).thenAnswer(i -> i.getArgument(0));
@@ -128,7 +131,7 @@ class PluginInstallCommandsEnhancedTest {
                     .thenReturn(true);
             mockedUtils.when(() -> PluginInstallUtils.getPluginVersions(anyString()))
                     .thenReturn(Arrays.asList("1.0.0", "1.0.1", "1.1.0"));
-            mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(anyString()))
+            mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(anyString(), anyList()))
                     .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
             
             executor = new PluginInstallCommands();
@@ -568,7 +571,7 @@ class PluginInstallCommandsEnhancedTest {
     void testUninstallPluginSuccess() throws IOException {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("remove-plugin"))
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("remove-plugin"), anyList()))
                 .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
         
         executor.onCommand(player, mockCommand, "upm", 
@@ -591,7 +594,7 @@ class PluginInstallCommandsEnhancedTest {
     void testUninstallPluginNotFound() throws IOException {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("missing-plugin"))
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("missing-plugin"), anyList()))
                 .thenReturn(PluginInstallUtils.UninstallReport.of(false, Collections.emptyList()));
         
         executor.onCommand(player, mockCommand, "upm", 
@@ -607,7 +610,7 @@ class PluginInstallCommandsEnhancedTest {
     void testUninstallPluginIOException() throws IOException {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("io-error-plugin"))
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("io-error-plugin"), anyList()))
                 .thenThrow(new IOException("File access error"));
         
         executor.onCommand(player, mockCommand, "upm", 
@@ -627,7 +630,7 @@ class PluginInstallCommandsEnhancedTest {
     void testUninstallFromConsole() throws IOException {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting("console-uninstall"))
+        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("console-uninstall"), anyList()))
                 .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
         
         boolean result = executor.onCommand(console, mockCommand, "upm", 

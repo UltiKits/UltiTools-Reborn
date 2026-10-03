@@ -24,6 +24,7 @@ import com.ultikits.ultitools.entities.PluginEntity;
 import com.ultikits.ultitools.entities.UpdateInfo;
 import com.ultikits.ultitools.manager.UpdateManager;
 import com.ultikits.ultitools.utils.MessageUtils;
+import com.ultikits.ultitools.utils.ModuleFileTransactions;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
 
 import net.kyori.adventure.text.Component;
@@ -216,8 +217,13 @@ public class PluginInstallCommands extends BaseCommandExecutor {
     // a handful of modules the scan costs a fraction of a tick (gate 1, IN-12).
     @CmdMapping(format = "uninstall <plugin>")
     public void uninstallPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin) {
+        // The uninstall itself cancels any update of the module still waiting for the next start, on
+        // every outcome but a refusal, matched on the identity it resolved (#505, round-10 review);
+        // this collects the versions so the reply can say so.
+        List<String> cancelledUpdates = new ArrayList<>();
         try {
-            PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(plugin);
+            PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(plugin,
+                    cancelledUpdates);
             if (report.jarsDeleted()) {
                 // uninstallPlugin returns true only after every JAR identified as the module's is
                 // deleted (#501), so there is nothing left for the operator to remove by hand. The
@@ -249,13 +255,41 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             // spelling hint would be false here (#501).
             sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n("模块已卸载，但在 %s 中没有识别出属于它的 JAR 文件。"), e.getFile()));
             sendUnreadableEntriesOf(sender, e);
+        } catch (PluginInstallUtils.RemovalDeferredException e) {
+            // The JARs could not be deleted now and were recorded for the next start (#518).
+            sendDeferredRemoval(sender, e);
+            sendUnreadableEntriesOf(sender, e);
         } catch (FileSystemException e) {
             sendUndeletedJars(sender, e);
             sendUnreadableEntriesOf(sender, e);
         } catch (IOException e) {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("删除失败！文件访问错误！请手动删除！"));
-            sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"));
+            sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), modulesFolderPath()));
+        } finally {
+            // In a finally, like the cancellation itself: an unexpected exception from the uninstall
+            // leaves with the update already cancelled, and the operator is still told (gate 1, I-04).
+            for (String version : cancelledUpdates) {
+                sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
+                        "已取消模块 %s 已暂存、尚未应用的更新（版本 %s）。"), plugin, version));
+            }
         }
+    }
+
+    /**
+     * The JARs the uninstall could not delete now -- held open by the running server, as Windows
+     * does with every loaded module JAR, or in a folder that is not writable -- and has recorded for
+     * the next start, which deletes them before any module loads (#518). Not "delete them by hand":
+     * on Windows the running server prevents exactly that.
+     */
+    private static void sendDeferredRemoval(CommandSender sender, PluginInstallUtils.RemovalDeferredException deferred) {
+        sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
+                "以下模块 JAR 暂时无法删除（被占用或不可写：%s），已记录：下次启动会在加载模块之前删除它们，仍无法删除时会在启动日志中报告：%s"),
+                deferred.getReason(), String.join(", ", deferred.deferredFiles())));
+    }
+
+    /** The modules folder, as the uninstall replies name it -- the one the loader reads (#517). */
+    private static String modulesFolderPath() {
+        return ModuleFileTransactions.modulesFolder(UltiTools.getInstance().getDataFolder()).getAbsolutePath();
     }
 
     /**
@@ -319,13 +353,17 @@ public class PluginInstallCommands extends BaseCommandExecutor {
                 sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n("模块已卸载，但在 %s 中没有识别出属于它的 JAR 文件。"), ((NoSuchFileException) jarFailure).getFile()));
                 return;
             }
+            if (jarFailure instanceof PluginInstallUtils.RemovalDeferredException) {
+                sendDeferredRemoval(sender, (PluginInstallUtils.RemovalDeferredException) jarFailure);
+                return;
+            }
             if (jarFailure instanceof FileSystemException) {
                 sendUndeletedJars(sender, (FileSystemException) jarFailure);
                 return;
             }
             if (jarFailure instanceof IOException) {
                 sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("删除失败！文件访问错误！请手动删除！"));
-                sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"));
+                sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), modulesFolderPath()));
                 return;
             }
         }
@@ -379,7 +417,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         files.removeAll(undeterminedOf(failure));
         sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("卸载失败！以下模块 JAR 文件无法删除，重启后模块会再次加载，请手动删除：%s"),
                 files.isEmpty()
-                        ? UltiTools.getInstance().getDataFolder().getAbsolutePath() + "/plugins"
+                        ? modulesFolderPath()
                         : String.join(", ", files)));
     }
 
@@ -458,11 +496,56 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         }
         sender.sendMessage(ChatColor.YELLOW + String.format(
             UltiTools.getInstance().i18n("正在更新 %s..."), pluginName));
-        if (PluginInstallUtils.updatePlugin(info.getIdentifyString())) {
-            sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("更新成功！请重启服务器以应用更新。"));
-        } else {
-            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("更新失败！"));
+        sendStageResult(sender, pluginName, PluginInstallUtils.stageUpdate(info.getIdentifyString()));
+    }
+
+    /**
+     * Tells the operator what staging an update did (#505): staged to take effect at the next start
+     * -- never "updated", which is decided only by what that start observes -- or why nothing was
+     * staged.
+     *
+     * @param sender     who asked
+     * @param pluginName the module, as the operator named it
+     * @param result     what staging did
+     * @return whether the update was staged
+     */
+    private static boolean sendStageResult(CommandSender sender, String pluginName,
+                                           ModuleFileTransactions.StageResult result) {
+        if (result.getPreviousFailure() != null) {
+            // A start could not apply the previous update of this module; the operator hears about
+            // it here as well as in that start's log, before anything else.
+            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n(
+                    "上一次 %s 的更新没有应用：%s"), pluginName, result.getPreviousFailure()));
         }
+        switch (result.getOutcome()) {
+            case STAGED:
+                sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n(
+                        "已暂存 %s 的更新（%s → %s）。更新将在下次启动时生效：只有新版本确实加载后才会保留，否则恢复为 %s。"),
+                        pluginName, result.getOldVersion(), result.getNewVersion(), result.getOldVersion()));
+                return true;
+            case ALREADY_STAGED:
+                sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
+                        "%s 已有一个暂存的更新（版本 %s），将在下次启动时生效；没有做任何改动。"),
+                        pluginName, result.getNewVersion()));
+                return false;
+            case BUSY:
+                if (result.getNewVersion() == null) {
+                    // Another /upm command is downloading an update of this module right now.
+                    sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
+                            "%s 的另一个更新正在进行中，请稍后再试；没有做任何改动。"), pluginName));
+                } else {
+                    sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
+                            "%s 的上一次更新（版本 %s）还没有处理完，请先重启服务器；没有做任何改动。"),
+                            pluginName, result.getNewVersion()));
+                }
+                return false;
+            default:
+                break;
+        }
+        String reason = String.format(UltiTools.getInstance().i18n(result.getReasonKey()), result.getReasonArgs());
+        sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n(
+                "%s 的更新未能暂存：%s。没有做任何改动。"), pluginName, reason));
+        return false;
     }
 
     private void updateAllPlugins(CommandSender sender) {
@@ -471,20 +554,20 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("没有可用的更新。"));
             return;
         }
-        int success = 0;
-        int failed = 0;
+        int staged = 0;
+        int notStaged = 0;
         for (UpdateInfo info : updateManager.getModuleUpdates().values()) {
             sender.sendMessage(ChatColor.YELLOW + String.format(
                 UltiTools.getInstance().i18n("正在更新 %s..."), info.getPluginName()));
-            if (PluginInstallUtils.updatePlugin(info.getIdentifyString())) {
-                success++;
+            if (sendStageResult(sender, info.getPluginName(), PluginInstallUtils.stageUpdate(info.getIdentifyString()))) {
+                staged++;
             } else {
-                failed++;
+                notStaged++;
             }
         }
         sender.sendMessage(ChatColor.GREEN + String.format(
-            UltiTools.getInstance().i18n("全部更新完成！%d个成功，%d个失败。请重启服务器。"),
-            success, failed));
+            UltiTools.getInstance().i18n("全部处理完成：%d 个已暂存，%d 个未能暂存。已暂存的更新将在下次启动时生效。"),
+            staged, notStaged));
     }
 
     /**

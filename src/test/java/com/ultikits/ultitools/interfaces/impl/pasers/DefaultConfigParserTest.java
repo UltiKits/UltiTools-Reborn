@@ -19,6 +19,8 @@ import org.junit.jupiter.api.Test;
 class DefaultConfigParserTest {
 
     @Test
+    // Exercises the frozen legacy compatibility contract until removal.
+    @SuppressWarnings("removal")
     void testParseList() {
         DefaultConfigParser parser = new DefaultConfigParser();
         List<Object> input = Arrays.asList("a", 1, true);
@@ -34,6 +36,8 @@ class DefaultConfigParserTest {
     }
 
     @Test
+    // Exercises the frozen legacy compatibility contract until removal.
+    @SuppressWarnings("removal")
     void testParseBasicType() {
         DefaultConfigParser parser = new DefaultConfigParser();
         
@@ -43,7 +47,8 @@ class DefaultConfigParserTest {
     }
 
     @Test
-    @SuppressWarnings("unchecked")
+    // Exercises the frozen legacy compatibility contract until removal.
+    @SuppressWarnings({"unchecked", "removal"})
     void testParseConfigurationSection() {
         DefaultConfigParser parser = new DefaultConfigParser();
         ConfigurationSection section = mock(ConfigurationSection.class);
@@ -62,6 +67,8 @@ class DefaultConfigParserTest {
     }
 
     @Test
+    // Exercises the frozen legacy compatibility contract until removal.
+    @SuppressWarnings("removal")
     void testSerializeToMemorySection() {
         DefaultConfigParser parser = new DefaultConfigParser();
         TestObject obj = new TestObject("test", 123);
@@ -100,6 +107,8 @@ class DefaultConfigParserTest {
      * must read back as an equal map - not just "no exception".
      */
     @Test
+    // Exercises the frozen legacy compatibility contract until removal.
+    @SuppressWarnings("removal")
     void testSerializeMapWalksEntriesAndRoundTripsThroughParse() {
         DefaultConfigParser parser = new DefaultConfigParser();
         Map<String, String> input = new LinkedHashMap<>();

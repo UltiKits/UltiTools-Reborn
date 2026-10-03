@@ -7,8 +7,9 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.ConfigEntity;
+import com.ultikits.ultitools.config.convert.ConverterRegistry;
+import com.ultikits.ultitools.utils.DependencyUtils;
 import com.ultikits.ultitools.exceptions.ConfigurationException;
-import com.ultikits.ultitools.utils.PackageScanUtils;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
 import java.io.File;
@@ -26,6 +27,61 @@ import java.util.logging.Level;
 public class ConfigManager {
 
     private final Map<UltiToolsPlugin, Map<String, AbstractConfigEntity>> pluginConfigMap = new HashMap<>();
+    private final ThreadLocal<InitializationBatch> initializationBatch = new ThreadLocal<>();
+
+    private static final class InitializationBatch {
+        private int depth;
+        private final Map<UltiToolsPlugin, Map<String, AbstractConfigEntity>> before = new LinkedHashMap<>();
+        private final Set<AbstractConfigEntity> entities = new LinkedHashSet<>();
+    }
+
+    /** Shared refusal guard, checked before any configuration monitor or registry access.
+     * @param plugin module, possibly absent for an uninitialized entity
+     * @param operation operation name or entity path
+     * @return whether the current caller may perform the operation
+     */
+    @org.jetbrains.annotations.ApiStatus.Internal
+    public static boolean permitsConfigThread(UltiToolsPlugin plugin, String operation) {
+        if (org.bukkit.Bukkit.getServer() == null || org.bukkit.Bukkit.isPrimaryThread()) { return true; }
+        org.bukkit.Bukkit.getLogger().log(Level.WARNING, "Configuration " + operation + " for module "
+                + (plugin == null ? "<uninitialized>" : plugin.getPluginName()) + " called off the server thread ("
+                + Thread.currentThread().getName() + "); operation refused");
+        return false;
+    }
+
+    private static void requireConfigThread(UltiToolsPlugin plugin, String operation) {
+        if (!permitsConfigThread(plugin, operation)) {
+            throw new IllegalStateException("Configuration " + operation + " requires the server thread");
+        }
+    }
+
+    private void beginBatch(UltiToolsPlugin plugin) {
+        InitializationBatch batch = initializationBatch.get();
+        if (batch == null) { batch = new InitializationBatch(); initializationBatch.set(batch); }
+        batch.depth++;
+        batch.before.computeIfAbsent(plugin, this::snapshotRegisteredEntities);
+    }
+
+    private void endBatch(boolean accepted) {
+        InitializationBatch batch = initializationBatch.get();
+        if (batch == null) { return; }
+        if (!accepted) {
+            initializationBatch.remove();
+            batch.entities.forEach(AbstractConfigEntity::discardInitializationWrite);
+            batch.before.forEach(this::rollBackRegisteredEntities);
+            return;
+        }
+        if (--batch.depth != 0) { return; }
+        initializationBatch.remove();
+        for (AbstractConfigEntity entity : batch.entities) {
+            try { entity.flushInitializationWrite(); }
+            catch (IOException failure) {
+                java.util.logging.Logger.getLogger(ConfigManager.class.getName()).warning(
+                        "Configuration initialization write failed: " + entity.getConfigFilePath()
+                        + "; file will not be overwritten until reload: " + failure.getClass().getSimpleName());
+            }
+        }
+    }
 
     /**
      * Register config entity.
@@ -34,6 +90,17 @@ public class ConfigManager {
      * @param configEntity    Config entity
      */
     public void register(UltiToolsPlugin ultiToolsPlugin, AbstractConfigEntity configEntity) throws IOException {
+        if (!permitsConfigThread(ultiToolsPlugin, "register")) { return; }
+        ConfigEntity annotation = ReflectionUtil.getAnnotation(configEntity.getClass(), ConfigEntity.class);
+        boolean directory = annotation != null && new File(ultiToolsPlugin.getResourceFolderPath(), annotation.value()).isDirectory();
+        if (!directory) { registerImmediate(ultiToolsPlugin, configEntity); return; }
+        beginBatch(ultiToolsPlugin);
+        boolean accepted = false;
+        try { registerImmediate(ultiToolsPlugin, configEntity); accepted = true; }
+        finally { endBatch(accepted); }
+    }
+
+    private void registerImmediate(UltiToolsPlugin ultiToolsPlugin, AbstractConfigEntity configEntity) throws IOException {
         ConfigEntity annotation = ReflectionUtil.getAnnotation(configEntity.getClass(), ConfigEntity.class);
         if (annotation == null) {
             return;
@@ -41,6 +108,8 @@ public class ConfigManager {
         if (annotation.value().isEmpty()) {
             return;
         }
+        ConverterRegistry registry = prepareConverters(ultiToolsPlugin);
+        registry.checkEntityFields(configEntity.getClass(), ultiToolsPlugin.getPluginName(), annotation.value());
         File file = new File(ultiToolsPlugin.getResourceFolderPath(), annotation.value());
         if (file.isDirectory()) {
             if (!file.exists()) {
@@ -77,9 +146,24 @@ public class ConfigManager {
         }
     }
 
+    private ConverterRegistry prepareConverters(UltiToolsPlugin plugin) {
+        if (ConverterRegistry.hasModule(plugin)) {
+            return ConverterRegistry.forModule(plugin);
+        }
+        return ConverterRegistry.prepareModule(plugin, DependencyUtils.getPluginPackages(plugin),
+                plugin.getClass().getClassLoader());
+    }
+
     private void addConfigEntity(UltiToolsPlugin ultiToolsPlugin, AbstractConfigEntity configEntity) {
+        prepareConverters(ultiToolsPlugin).checkEntityFields(configEntity.getClass(),
+                ultiToolsPlugin.getPluginName(), configEntity.getConfigFilePath());
         try {
-            configEntity.init(ultiToolsPlugin);
+            InitializationBatch batch = initializationBatch.get();
+            if (batch == null) { configEntity.init(ultiToolsPlugin); }
+            else {
+                batch.entities.add(configEntity);
+                configEntity.initForBatch(ultiToolsPlugin);
+            }
         } catch (IOException e) {
             UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration initialization failed！File path：" + configEntity.getConfigFilePath());
         }
@@ -144,11 +228,16 @@ public class ConfigManager {
      * @param classLoader Class loader
      */
     public void registerAll(UltiToolsPlugin plugin, String packageName, ClassLoader classLoader) {
-        Set<Class<?>> classes = PackageScanUtils.scanAnnotatedClasses(
-                ConfigEntity.class,
-                packageName,
-                classLoader
-        );
+        if (!permitsConfigThread(plugin, "registerAll")) { return; }
+        beginBatch(plugin);
+        boolean accepted = false;
+        try { registerAllImmediate(plugin, packageName, classLoader); accepted = true; }
+        finally { endBatch(accepted); }
+    }
+
+    private void registerAllImmediate(UltiToolsPlugin plugin, String packageName, ClassLoader classLoader) {
+        Set<Class<?>> classes = ConverterRegistry.prepareSelectedConfigs(
+                plugin, new String[]{packageName}, classLoader);
         // #358 Part 1: a package can carry more than one @ConfigEntity class, and
         // PackageScanUtils.scanAnnotatedClasses returns them in an unspecified (HashSet) order.
         // A validation refusal on any one of them must not leave a sibling that already
@@ -224,6 +313,15 @@ public class ConfigManager {
      * @param classLoader  Class loader
      */
     public void registerAll(UltiToolsPlugin plugin, String[] packageNames, ClassLoader classLoader) {
+        if (!permitsConfigThread(plugin, "registerAll")) { return; }
+        beginBatch(plugin);
+        boolean accepted = false;
+        try { registerAllPackages(plugin, packageNames, classLoader); accepted = true; }
+        finally { endBatch(accepted); }
+    }
+
+    private void registerAllPackages(UltiToolsPlugin plugin, String[] packageNames, ClassLoader classLoader) {
+        ConverterRegistry.prepareSelectedConfigs(plugin, packageNames, classLoader);
         Map<String, AbstractConfigEntity> registeredBeforeThisPlugin = snapshotRegisteredEntities(plugin);
         try {
             for (String packageName : packageNames) {
@@ -244,6 +342,7 @@ public class ConfigManager {
      * @return Config entity
      */
     public <T extends AbstractConfigEntity> T getConfigEntity(UltiToolsPlugin plugin, Class<T> type) {
+        requireConfigThread(plugin, "getConfigEntity");
         Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(plugin);
         if (configMap == null) {
             return null;
@@ -266,6 +365,7 @@ public class ConfigManager {
      * @return Config entity
      */
     public <T extends AbstractConfigEntity> T getConfigEntity(UltiToolsPlugin plugin, String path, Class<T> type) {
+        requireConfigThread(plugin, "getConfigEntity " + path);
         Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(plugin);
         if (configMap == null) {
             return null;
@@ -286,6 +386,7 @@ public class ConfigManager {
      * @return Config entity list
      */
     public <T extends AbstractConfigEntity> List<T> getConfigEntities(UltiToolsPlugin plugin, Class<T> type) {
+        requireConfigThread(plugin, "getConfigEntities");
         Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(plugin);
         if (configMap == null) {
             return Collections.emptyList();
@@ -306,7 +407,59 @@ public class ConfigManager {
      * @return All config entities
      */
     public Map<String, AbstractConfigEntity> getAllConfigEntities(UltiToolsPlugin plugin) {
-        return pluginConfigMap.get(plugin);
+        requireConfigThread(plugin, "getAllConfigEntities");
+        Map<String, AbstractConfigEntity> registered = pluginConfigMap.get(plugin);
+        return registered == null ? null : Collections.unmodifiableMap(new LinkedHashMap<>(registered));
+    }
+
+    /** Releases one module's configuration entities after unload.
+     * @param plugin unloaded module instance
+     */
+    @org.jetbrains.annotations.ApiStatus.Internal
+    public void unregisterAll(UltiToolsPlugin plugin) {
+        if (!permitsConfigThread(plugin, "unregisterAll")) { return; }
+        pluginConfigMap.remove(plugin);
+    }
+
+    Set<UltiToolsPlugin> registeredOwners(Class<?> moduleClass) {
+        requireConfigThread(null, "registeredOwners");
+        Set<UltiToolsPlugin> owners = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (UltiToolsPlugin owner : pluginConfigMap.keySet()) {
+            if (owner.getClass() == moduleClass) { owners.add(owner); }
+        }
+        return owners;
+    }
+
+    void saveBeforeReplacement(UltiToolsPlugin plugin) throws IOException {
+        requireConfigThread(plugin, "saveBeforeReplacement");
+        Map<String, AbstractConfigEntity> entities = pluginConfigMap.get(plugin);
+        if (entities == null) { return; }
+        for (String path : new TreeSet<>(entities.keySet())) {
+            AbstractConfigEntity entity = entities.get(path);
+            synchronized (entity) {
+                if (entity.isLastLoadUnparseable()) {
+                    throw new IOException("Cannot save superseded module " + plugin.getPluginName()
+                            + " configuration " + path + ": file is protected until reload");
+                }
+                if (entity.isModifiedSinceSnapshot()) { entity.save(); }
+                if (entity.isModifiedSinceSnapshot()) {
+                    throw new IOException("Superseded module " + plugin.getPluginName()
+                            + " configuration " + path + " remains unsaved");
+                }
+            }
+        }
+    }
+
+    List<String> unsavedPaths(UltiToolsPlugin plugin) {
+        requireConfigThread(plugin, "unsavedPaths");
+        List<String> paths = new ArrayList<>();
+        Map<String, AbstractConfigEntity> entities = pluginConfigMap.get(plugin);
+        if (entities != null) {
+            for (String path : new TreeSet<>(entities.keySet())) {
+                for (String key : entities.get(path).unsavedEntryPaths()) { paths.add(path + ":" + key); }
+            }
+        }
+        return paths;
     }
 
     /**
@@ -315,13 +468,14 @@ public class ConfigManager {
      * @param plugin UltiTools module
      */
     public void reloadConfigs(UltiToolsPlugin plugin) {
+        if (!permitsConfigThread(plugin, "reloadConfigs")) { return; }
         Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(plugin);
         if (configMap == null) {
             return;
         }
         for (AbstractConfigEntity configEntity : configMap.values()) {
             try {
-                configEntity.init(plugin);
+                configEntity.reload();
             } catch (IOException e) {
                 UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration initialization failed！File path：" + configEntity.getConfigFilePath());
             }
@@ -343,39 +497,46 @@ public class ConfigManager {
      * <p>
      * If an entity was changed in memory and its file was also changed on disk since that snapshot,
      * the in-memory state still wins and is written, and a WARNING names the file whose edits were
-     * overwritten. The only caller is {@code UltiTools#onDisable()}; an explicit {@link
-     * AbstractConfigEntity#save()} is unaffected and always writes.
+     * overwritten by the entity's successful write. The only caller is {@code UltiTools#onDisable()};
+     * explicit {@link AbstractConfigEntity#save()} uses the same semantic overwrite reporting.
      * <p>
-     * Each entity's check-then-save runs under that entity's own monitor, the lock its read, write
-     * and snapshot paths also hold, so a panel write still in flight on the WebSocket thread is
-     * applied either wholly before or wholly after this entity's shutdown save. A save failure, or
+     * Registry access and whole panel callbacks run on the server thread; the guard runs before
+     * any entity monitor. Each entity's check-then-save also retains its own monitor. A save failure, or
      * any unchecked exception from one entity, is logged and does not stop the remaining entities
      * from being saved.
      */
     public void saveAll() {
+        if (!permitsConfigThread(null, "saveAll")) { return; }
         for (Map<String, AbstractConfigEntity> configMap : pluginConfigMap.values()) {
-            for (AbstractConfigEntity config : configMap.values()) {
-                try {
-                    synchronized (config) {
-                        if (config.isLastLoadUnparseable()) {
-                            warnUnparseableFileLeftAlone(config);
-                            continue;
-                        }
-                        if (!config.isModifiedSinceSnapshot()) {
-                            continue;
-                        }
-                        // Read before save(): a successful save refreshes the file fingerprint.
-                        boolean overwritesOperatorEdit = config.isFileModifiedSinceSnapshot();
-                        config.save();
-                        if (overwritesOperatorEdit) {
-                            warnOperatorEditOverwritten(config);
-                        }
+            saveRegisteredEntities(configMap);
+        }
+    }
+
+    // Shutdown only: persist this exact owner's post-hook state before releasing its registry entry.
+    void saveForShutdown(UltiToolsPlugin plugin) {
+        if (!permitsConfigThread(plugin, "saveForShutdown")) { return; }
+        Map<String, AbstractConfigEntity> entities = pluginConfigMap.get(plugin);
+        if (entities != null) { saveRegisteredEntities(entities); }
+    }
+
+    private void saveRegisteredEntities(Map<String, AbstractConfigEntity> configMap) {
+        for (AbstractConfigEntity config : configMap.values()) {
+            try {
+                synchronized (config) {
+                    if (config.isLastLoadUnparseable()) {
+                        warnUnparseableFileLeftAlone(config);
+                        continue;
                     }
-                } catch (IOException e) {
-                    UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration save failed！File path：" + config.getConfigFilePath());
-                } catch (RuntimeException e) {
-                    UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration save failed！File path：" + config.getConfigFilePath(), e);
+                    if (!config.isModifiedSinceSnapshot()) {
+                        continue;
+                    }
+                    // The entity owns semantic overwritten-key reporting after a successful write.
+                    config.save();
                 }
+            } catch (IOException e) {
+                UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration save failed！File path：" + config.getConfigFilePath());
+            } catch (RuntimeException e) {
+                UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration save failed！File path：" + config.getConfigFilePath(), e);
             }
         }
     }
@@ -394,22 +555,6 @@ public class ConfigManager {
                 + file.getAbsolutePath() + " could not be parsed the last time it was read, so it was left"
                 + " untouched and module " + owner.getPluginName() + "'s in-memory changes to this"
                 + " configuration were not saved. Fix the file, then reload or restart.");
-    }
-
-    /**
-     * Logs that the shutdown save wrote an in-memory change over a file that was changed or removed
-     * on disk while the server was running (#510). The overwrite itself is the documented contract -
-     * a value set from code is saved on disable - but it must not be silent.
-     *
-     * @param config the entity that was just saved
-     */
-    private void warnOperatorEditOverwritten(AbstractConfigEntity config) {
-        UltiToolsPlugin owner = config.getUltiToolsPlugin();
-        File file = new File(owner.getResourceFolderPath(), config.getConfigFilePath());
-        UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration file "
-                + file.getAbsolutePath() + " was changed or removed on disk while the server was running, but module "
-                + owner.getPluginName() + " also changed this configuration in memory. The in-memory"
-                + " configuration was saved, so the changes made to the file while the server ran were overwritten.");
     }
 
     /**
@@ -437,6 +582,7 @@ public class ConfigManager {
      * @return all comments
      */
     public final String getComments() {
+        requireConfigThread(null, "getComments");
         return buildJsonFromConfigs(AbstractConfigEntity::getComments);
     }
 
@@ -446,6 +592,7 @@ public class ConfigManager {
      * @return config in JSON format
      */
     public final String toJson() {
+        requireConfigThread(null, "toJson");
         return buildJsonFromConfigs(AbstractConfigEntity::toJsonObject);
     }
 
@@ -458,37 +605,23 @@ public class ConfigManager {
      * instead of being written - the operator's file is not modified for that config entity
      * (SILENT-14).
      * <p>
-     * Since gate-1 CR-02 (#358 Part 2), the WHOLE batch this call touches - potentially several
-     * config entities across several plugins in one JSON payload - is VALIDATED before any of
-     * them is persisted: a first pass calls {@link AbstractConfigEntity#validateProposedProperties}
-     * on every touched entity (applying nothing to disk, restoring every field it touched
-     * regardless of outcome), and only once every entity in the batch has passed does a second
-     * pass call {@link AbstractConfigEntity#updateProperties} on each to actually apply and
-     * persist. A validation refusal on entity N therefore leaves entities 1..N-1 exactly as they
-     * were before this call - none of them written to disk - rather than the pre-CR-02 behaviour
-     * where files 1..N-1 were already applied and persisted by the time entity N's refusal was
-     * discovered.
-     * <p>
-     * This guarantee covers VALIDATION refusals only, not a physical I/O failure during the
-     * second pass's own persist step (gate-1 review, line 425): if entity K's own {@code
-     * config.save(File)} throws {@link IOException} - a disk-full or permissions failure, not a
-     * validation constraint - entities 1..K-1 have already been applied and persisted by that
-     * point, and this call still throws, leaving a partially-applied batch. Making the persist
-     * phase itself durable against a physical write failure across N independent files would
-     * need staged writes (temp file + atomic rename) or a byte-level undo log for every touched
-     * file, which is a materially larger change than this fix's scope (see the follow-up issue
-     * filed for it). This is the same shape as #469 (WR-01): the registry-level guarantee this
-     * class makes is not a filesystem-durability guarantee.
+     * Every touched entity is validated before persistence. All changed files are staged before
+     * any replacement; effective and raw acknowledgments advance only after every commit succeeds.
+     * An I/O or preparation refusal restores attempted files and every entity checkpoint, discards
+     * temporaries, and rethrows the original failure. Recovery failures are attached as suppressed
+     * exceptions: persistently unavailable storage can prevent restoration and is not reported as success.
+     * This is in-process recovery, not crash-safe multi-file storage; a JVM crash between moves remains
+     * outside this guarantee (UltiKits/UltiTools-Reborn#545).
      *
      * @param json JSON string
-     * @throws IOException              if an I/O error occurs while persisting - entities already
-     *                                 persisted earlier in this batch are NOT rolled back
+     * @throws IOException              if staging or replacement fails; recovery failures are suppressed
      * @throws com.ultikits.ultitools.exceptions.ConfigurationException if a value violates its
      *                                 validation constraint - nothing in this call's batch is
      *                                 persisted when this is thrown, since validation runs to
      *                                 completion across the whole batch before persistence starts
      */
     public final void loadFromJson(String json) throws IOException {
+        requireConfigThread(null, "loadFromJson");
         Gson gson = new Gson();
         Type mapType = new TypeToken<Map<String, Map<String, JsonObject>>>() {}.getType();
         Map<String, Map<String, JsonObject>> parseObject = gson.fromJson(json, mapType);
@@ -509,7 +642,6 @@ public class ConfigManager {
                     if (pluginParseData.containsKey(configPath)) {
                         AbstractConfigEntity config = configEntityMap.get(configPath);
                         JsonObject payload = pluginParseData.get(configPath);
-                        config.validateProposedProperties(payload);
                         touchedEntities.add(config);
                         touchedPayloads.add(payload);
                     }
@@ -517,15 +649,42 @@ public class ConfigManager {
             }
         }
 
-        // Phase two: every entity in this batch passed validation - apply and persist each for
-        // real. updateProperties() re-validates (cheap on the documented construction idiom,
-        // per #363) before it writes, so this is never the first validation an entity sees.
-        // NOT covered here: a physical IOException from an individual save() partway through
-        // this loop still leaves entities already processed persisted - see this method's own
-        // javadoc and #469's sibling finding (WR-01) for why that is out of this fix's scope.
-        for (int i = 0; i < touchedEntities.size(); i++) {
-            touchedEntities.get(i).updateProperties(touchedPayloads.get(i));
+        List<AbstractConfigEntity> monitors = new ArrayList<>(new LinkedHashSet<>(touchedEntities));
+        monitors.sort(Comparator.comparing((AbstractConfigEntity entity) -> entity.getUltiToolsPlugin().getPluginName())
+                .thenComparing(AbstractConfigEntity::getConfigFilePath));
+        withPanelMonitors(monitors, 0, touchedEntities, touchedPayloads);
+    }
+
+    private void withPanelMonitors(List<AbstractConfigEntity> monitors, int index,
+            List<AbstractConfigEntity> entities, List<JsonObject> payloads) throws IOException {
+        if (index < monitors.size()) {
+            synchronized (monitors.get(index)) { withPanelMonitors(monitors, index + 1, entities, payloads); }
+            return;
         }
+        persistPanelBatch(entities, payloads);
+    }
+
+    private void persistPanelBatch(List<AbstractConfigEntity> touchedEntities, List<JsonObject> touchedPayloads) throws IOException {
+        for (int i = 0; i < touchedEntities.size(); i++) {
+            touchedEntities.get(i).validateProposedProperties(touchedPayloads.get(i));
+        }
+        List<AbstractConfigEntity.PanelWrite> writes = new ArrayList<>();
+        try {
+            for (int i = 0; i < touchedEntities.size(); i++) {
+                AbstractConfigEntity.PanelWrite write = touchedEntities.get(i).preparePanelWrite(touchedPayloads.get(i));
+                if (write != null) { writes.add(write); }
+            }
+            for (AbstractConfigEntity.PanelWrite write : writes) { write.commit(); }
+        } catch (IOException | RuntimeException failure) {
+            for (int i = writes.size() - 1; i >= 0; i--) {
+                try { writes.get(i).rollback(); }
+                catch (IOException | RuntimeException recovery) { failure.addSuppressed(recovery); }
+            }
+            throw failure;
+        } finally {
+            for (AbstractConfigEntity.PanelWrite write : writes) { write.discard(); }
+        }
+        for (AbstractConfigEntity.PanelWrite write : writes) { write.acknowledge(); }
     }
 
     /**
@@ -558,6 +717,7 @@ public class ConfigManager {
      * @since 6.2.5
      */
     public final void loadFromJson(String configFilePath, String json) throws IOException {
+        requireConfigThread(null, "loadFromJson");
         if (configFilePath == null || configFilePath.trim().isEmpty()) {
             throw new IOException("Config file path is required");
         }

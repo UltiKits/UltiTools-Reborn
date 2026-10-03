@@ -6,8 +6,8 @@ import com.ultikits.ultitools.interfaces.impl.data.json.JsonStore;
 import org.bukkit.Bukkit;
 
 import java.io.File;
-import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import org.jetbrains.annotations.ApiStatus;
@@ -17,7 +17,12 @@ import org.jetbrains.annotations.ApiStatus;
  */
 @ApiStatus.Internal
 public class DataStoreManager {
-    private static final Map<String, DataStore> dataMap = new HashMap<>();
+    /**
+     * Registered stores by type. A {@link ConcurrentHashMap} because {@link #getDatastore(String)}
+     * reads it without the writers' lock (#515): a plain {@code HashMap} read during a writer's
+     * resize could miss a present key, and nothing ordered the read after the write.
+     */
+    private static final Map<String, DataStore> dataMap = new ConcurrentHashMap<>();
 
     /**
      * Register data store.
@@ -56,13 +61,19 @@ public class DataStoreManager {
      * @return Data store
      */
     public static DataStore getDatastore(String type) {
-        if (type == null) {
-            type = "json";
+        String key = type == null ? "json" : type;
+        // Each key is read once and the value read is the value returned (#515). The previous
+        // version read the map up to three times per call, so a type registered when the call
+        // started could be unregistered between the null check and the return, and the call
+        // returned null instead of either that store or the json fallback.
+        DataStore store = dataMap.get(key);
+        if (store != null) {
+            return store;
         }
-        if ("json".equals(type) && dataMap.get(type) == null) {
+        if ("json".equals(key)) {
             return new JsonStore(UltiTools.getInstance().getDataFolder().getAbsolutePath() + File.separator + "data");
         }
-        return dataMap.get(type) == null ? dataMap.get("json") : dataMap.get(type);
+        return dataMap.get("json");
     }
 
     /**

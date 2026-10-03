@@ -73,7 +73,7 @@ class AbstractConfigEntityTest {
         entity.init(mockPlugin);
 
         assertThat(entity.getUltiToolsPlugin()).isEqualTo(mockPlugin);
-        assertThat(entity.getConfig()).isNotNull();
+        assertThat(ConfigFileView.read(entity)).isNotNull();
 
         // The file didn't exist before init() - every @ConfigEntry key on it is newly added, so
         // each one arrives with its default value AND its comment (D-07/D-09).
@@ -230,7 +230,7 @@ class AbstractConfigEntityTest {
         entity.init(mockPlugin);
 
         // 配置应该被创建
-        assertThat(entity.getConfig()).isNotNull();
+        assertThat(ConfigFileView.read(entity)).isNotNull();
         assertThat(nonExistentFile).exists();
 
         // Every @ConfigEntry key on a freshly-created file is newly added, so each one carries

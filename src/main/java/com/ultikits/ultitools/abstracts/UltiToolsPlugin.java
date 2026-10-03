@@ -47,6 +47,7 @@ import com.google.gson.reflect.TypeToken;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
+import com.ultikits.ultitools.config.convert.ConverterRegistry;
 import com.ultikits.ultitools.context.ConditionalRegistrationEvaluator;
 import com.ultikits.ultitools.context.MergedAnnotationResolver;
 import com.ultikits.ultitools.context.SimpleContainer;
@@ -112,6 +113,13 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * (#529). Package-private for the same catalogue-coverage test as that key.
      */
     static final String RELOAD_PARTIAL_LOG_MESSAGE_KEY = "Module '%s' reloaded partially; not reloaded: %s";
+    /**
+     * The partial reason in the report {@link #reloadWithReport()} returns when the call was
+     * refused because it was made off the server thread (#538). Not an i18n key: nothing
+     * reaches the operator through it on the framework's own reload paths, which run on the
+     * server thread; it is for a module that calls {@link #reloadWithReport()} itself.
+     */
+    static final String RELOAD_REFUSED_OFF_THREAD_REASON = "the reload was refused: it was called off the server thread";
     /**
      * Framework i18n key for the partial-reload reason a per-module reload records when the
      * {@code language} setting in the framework's {@code config.yml} on disk differs from the one
@@ -238,6 +246,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         identifyString = pluginConfig.getString("identify-string", null);
 
         resourceFolderPath = UltiTools.getInstance().getDataFolder().getAbsolutePath() + File.separator + "pluginConfig" + File.separator + this.getPluginName();
+        prepareConfigConverters();
         language = initializeLanguage();
         saveResources();
         try{
@@ -1214,6 +1223,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         this.mainClass = mainClass;
         this.identifyString = null; // Connector plugins don't have identify-string
         this.resourceFolderPath = resourceFolderPath;
+        prepareConfigConverters();
         language = createLanguageFromPath(resourceFolderPath);
         saveResources();
         try {
@@ -1291,6 +1301,19 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      */
     public static PluginManager getPluginManager() {
         return UltiTools.getInstance().getPluginManager();
+    }
+
+    /**
+     * Prepares converters and checks only enabled auto-config entities before resources are extracted.
+     */
+    private void prepareConfigConverters() {
+        String[] packages = DependencyUtils.getPluginPackages(this);
+        ClassLoader loader = this.getClass().getClassLoader();
+        ConverterRegistry.prepareModule(this, packages, loader);
+        EnableAutoRegister annotation = MergedAnnotationResolver.find(this.getClass(), EnableAutoRegister.class);
+        if (annotation != null && annotation.config()) {
+            ConverterRegistry.prepareSelectedConfigs(this, packages, loader);
+        }
     }
 
     /**
@@ -1757,11 +1780,20 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * The body of {@link #reloadSelf()} and {@link #reloadWithReport()}. Private, so both public
      * entry points always run exactly this.
      *
-     * @return the report the module's hook filled in
+     * @return the report the module's hook filled in; when the call was refused off the server
+     *         thread (#538), a report whose only partial reason is that refusal
      */
     @SuppressWarnings("PMD.AvoidCatchingGenericException") // logged and rethrown unchanged -- see reloadSelf()
     private ReloadReport performReload() {
         ReloadReport report = new ReloadReport();
+        // #538: off the server thread both entry points are refused before anything runs --
+        // the guard logs its one warning and nothing else is logged, read or changed. The
+        // returned report names the refusal, so reloadWithReport() never presents a reload
+        // that did not run as a complete one.
+        if (!ConfigManager.permitsConfigThread(this, "reloadSelf")) {
+            report.partial(RELOAD_REFUSED_OFF_THREAD_REASON);
+            return report;
+        }
         try {
             runReloadSteps(report);
         } catch (Exception | Error e) {
