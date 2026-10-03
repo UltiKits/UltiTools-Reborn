@@ -245,7 +245,13 @@ public class PluginManager {
     public boolean register(Class<? extends UltiToolsPlugin> pluginClass) {
         // #483: before construction only the class is known; a module's name is its plugin.yml
         // name: (the no-argument constructor refuses a module without one, D-16).
-        String name = PluginYmlReader.read(pluginClass).getName();
+        PluginYmlReader.PluginYmlInfo pluginYml = PluginYmlReader.read(pluginClass);
+        String name = pluginYml.getName();
+        // #554: a module whose required plugin is not installed is refused before it is
+        // initialized, constructed, extracted or scanned.
+        if (refusesForUninstalledRequiredPlugin(pluginYml, pluginClass.getName())) {
+            return false;
+        }
         Map.Entry<String, Class<? extends UltiToolsPlugin>> previous = beginRegistration(
                 name != null ? name : pluginClass.getSimpleName(), pluginClass);
         try {
@@ -290,6 +296,11 @@ public class PluginManager {
     }
 
     private boolean registerInstance(UltiToolsPlugin plugin) {
+        // #554: the caller constructed this instance; nothing more of it runs -- no gate, no
+        // container, no scan -- when a plugin it requires is not installed.
+        if (refusesForUninstalledRequiredPlugin(PluginYmlReader.read(plugin.getClass()), plugin.getPluginName())) {
+            return false;
+        }
         // The gate runs first: this path's instance is caller-supplied and the container hasn't
         // been built yet, so if it's refused, not a single bean gets constructed. See issue #184.
         if (!passesCompatibilityGates(plugin)) {
@@ -318,6 +329,45 @@ public class PluginManager {
     }
 
     /**
+     * Refuses a module before anything of it runs when a plugin its {@code plugin.yml} lists under
+     * {@code depend:} is not installed on this server (#554): logs the one WARNING naming the module
+     * and those plugins and returns {@code true}; the caller returns without initializing,
+     * constructing, extracting or scanning anything of the module, so a class that belongs to the
+     * missing plugin is never loaded and never logs a trace.
+     * <p>
+     * Only a plugin that is not installed at all counts here. A plugin that is installed but not
+     * enabled yet may still be enabled after UltiTools -- Bukkit enables in its own order, and only
+     * the plugins UltiTools itself lists under {@code depend:} or {@code softdepend:} are guaranteed
+     * to come first -- so refusing it here would refuse a module that loads today. That case keeps
+     * the late check in {@link #logPluginInitializationFailure(Class, String, Throwable)}.
+     *
+     * @param pluginYml    the module's own {@code plugin.yml}
+     * @param fallbackName the name to log when the {@code plugin.yml} has no {@code name:}
+     * @return {@code true} when the module was refused and the line logged
+     */
+    private static boolean refusesForUninstalledRequiredPlugin(PluginYmlReader.PluginYmlInfo pluginYml,
+            String fallbackName) {
+        List<String> missing = new ArrayList<>();
+        for (String required : pluginYml.getDepend()) {
+            if (required != null && !required.trim().isEmpty()
+                    && Bukkit.getPluginManager().getPlugin(required) == null) {
+                missing.add(required);
+            }
+        }
+        if (missing.isEmpty()) {
+            return false;
+        }
+        logMissingRequiredPlugins(pluginYml.getName() != null ? pluginYml.getName() : fallbackName, missing);
+        return true;
+    }
+
+    /** Logs the one {@link #MISSING_REQUIRED_PLUGIN_LOG_KEY} line, without a trace (#554). */
+    private static void logMissingRequiredPlugins(String moduleName, List<String> missing) {
+        Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + String.format(
+                UltiTools.getInstance().i18n(MISSING_REQUIRED_PLUGIN_LOG_KEY), moduleName, String.join(", ", missing)));
+    }
+
+    /**
      * Logs a module's initialization failure (#554): when the failure is a class-not-found kind
      * ({@link NoClassDefFoundError} or {@link ClassNotFoundException} anywhere in the cause chain)
      * and at least one plugin the module lists under {@code depend:} is not installed or not
@@ -326,6 +376,10 @@ public class PluginManager {
      * case, including a class-not-found failure while every {@code depend:} plugin is present,
      * {@link #logPluginInitializationFailure(String, Throwable)} logs the existing message and
      * trace unchanged.
+     * <p>
+     * A plugin that is not installed at all is refused earlier, before construction, by {@link
+     * #refusesForUninstalledRequiredPlugin}; this late check still serves a required plugin that is
+     * installed but not enabled, which the early check deliberately leaves alone.
      *
      * @param pluginClass the module's main class, whose own jar's {@code plugin.yml} is read
      * @param moduleName  the module refusing to load, however the caller identifies it
@@ -341,9 +395,7 @@ public class PluginManager {
                 }
             }
             if (!missing.isEmpty()) {
-                String name = pluginYml.getName() != null ? pluginYml.getName() : moduleName;
-                Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + String.format(
-                        UltiTools.getInstance().i18n(MISSING_REQUIRED_PLUGIN_LOG_KEY), name, String.join(", ", missing)));
+                logMissingRequiredPlugins(pluginYml.getName() != null ? pluginYml.getName() : moduleName, missing);
                 return;
             }
         }
