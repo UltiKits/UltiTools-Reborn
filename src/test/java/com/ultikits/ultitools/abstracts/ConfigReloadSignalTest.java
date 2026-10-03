@@ -209,7 +209,8 @@ class ConfigReloadSignalTest {
         assertThatThrownBy(() -> manager.reloadConfigs(plugin))
                 .isInstanceOf(ConfigurationException.class)
                 .hasMessageContaining("config/disk.yml")
-                .hasMessageContaining("disk gone")
+                .hasMessageContaining("IOException")
+                .hasMessageNotContaining("disk gone")
                 .hasCauseInstanceOf(IOException.class);
     }
 

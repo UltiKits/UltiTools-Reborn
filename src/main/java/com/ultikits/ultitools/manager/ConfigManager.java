@@ -488,7 +488,7 @@ public class ConfigManager {
                 configEntity.reload();
             } catch (IOException e) {
                 throw new ConfigurationException(ErrorCode.CONFIG_LOAD_FAILED,
-                        "Cannot reload " + configEntity.getConfigFilePath() + ": " + e, e);
+                        "Cannot reload " + configEntity.getConfigFilePath() + ": " + e.getClass().getSimpleName(), e);
             }
         }
     }
