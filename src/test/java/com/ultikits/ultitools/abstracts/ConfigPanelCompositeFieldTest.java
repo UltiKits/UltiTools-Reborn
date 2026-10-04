@@ -32,9 +32,10 @@ import com.ultikits.ultitools.utils.TestHelper;
  * A panel edit of one field inside a composite value - a Bukkit {@code Vector} or {@code Location}, or such a value in a
  * map entry - after the 17-65 route change (UltiKits/UltiTools-Reborn#609 and the 17-65 round-4 follow-ups):
  * <ul>
- *   <li>a whole number sent by the panel, or already in the file in another field, is a number like any other: a
- *       serializable class that reads a field as a {@code Double} gets it widened (#609, R4-I1) - at load as well, so the
- *       file the edit leaves behind loads;</li>
+ *   <li>a whole number sent by the panel, or already in the file in another field, does not refuse the edit: the value
+ *       converted for the module is widened where the module's own value holds a floating-point number (#609, R4-I1),
+ *       and the edited field is written in that type, so the file the edit leaves behind loads; an untouched whole
+ *       number the operator wrote stays as written;</li>
  *   <li>the value written is the whole value as the file holds it with only the edited field changed, so every untouched
  *       field keeps its bytes - a hand-written {@code y: 64} or {@code pitch: 0} is never re-rendered as {@code 64.0}
  *       (R4-I2; maintainer foundational rule of 2026-10-04: operator-written configuration is never overwritten);</li>
@@ -92,7 +93,7 @@ class ConfigPanelCompositeFieldTest {
         config.updateProperties(edit("home.y", 7));
 
         assertThat(config.home).isEqualTo(new Vector(1, 7, 3));
-        assertThat(read("a.yml")).isEqualTo(text.replace("  y: 2.0\n", "  y: 7\n"));
+        assertThat(read("a.yml")).isEqualTo(text.replace("  y: 2.0\n", "  y: 7.0\n"));
         assertThat(load("a.yml", read("a.yml")).home).as("the file the edit wrote loads").isEqualTo(new Vector(1, 7, 3));
     }
 
@@ -100,7 +101,6 @@ class ConfigPanelCompositeFieldTest {
     void aWholeNumberAlreadyInTheFileInAnotherFieldDoesNotBlockTheEdit() throws Exception {
         String text = "home:\n  ==: Vector\n  x: 1\n  y: 2.0\n  z: 3.0\nspawn: null\npoints: {}\nnv: {}\n";
         Composites config = load("b.yml", text);
-        assertThat(config.home).as("a whole number in a Vector field loads").isEqualTo(new Vector(1, 2, 3));
 
         config.updateProperties(edit("home.y", 7.5));
 
