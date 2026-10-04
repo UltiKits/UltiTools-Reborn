@@ -675,7 +675,7 @@ public class PluginManager {
      * @param plugin UltiTools plugin instance
      */
     public void unregister(UltiToolsPlugin plugin) {
-        unregister(plugin, isNameInUseByAnotherLoadedCopy(plugin), false);
+        unregister(plugin, isNameInUseByAnotherLoadedCopy(plugin), true);
     }
 
     /**
@@ -701,10 +701,12 @@ public class PluginManager {
      * @param nameStillInUse whether another copy of the module -- listed, or being activated as
      *                       this copy's replacement -- shares its name, so that name-only
      *                       registrations must not be released by name (#506)
-     * @param shutdown       whether this unload is part of {@link #close()}, so the module's
-     *                       configuration is saved for shutdown before its entities are released
+     * @param reportUnsaved  whether the module's never-saved configuration changes are named, once, before its
+     *                       entities are released - at shutdown and at a normal unload or uninstall; a superseded
+     *                       copy passes {@code false} because the replacement has already named them as dropped.
+     *                       Nothing is written either way (17-65; review round 1 R65-I5)
      */
-    private void unregister(UltiToolsPlugin plugin, boolean nameStillInUse, boolean shutdown) {
+    private void unregister(UltiToolsPlugin plugin, boolean nameStillInUse, boolean reportUnsaved) {
         // Each registry-cleanup step below is isolated from every other step's failure
         // (Codex review on #457, round 4: "Run all registry cleanup after an earlier
         // failure") -- an Error from one owner registry (e.g. TaskManager.cancelAll() not
@@ -774,8 +776,8 @@ public class PluginManager {
             } finally {
                 try {
                     try {
-                        if (shutdown) {
-                            runUnregisterStep(plugin, "report unsaved configuration at shutdown", () -> {
+                        if (reportUnsaved) {
+                            runUnregisterStep(plugin, "report unsaved configuration", () -> {
                                 ConfigManager configs = UltiTools.getInstance().getConfigManager();
                                 if (configs != null) { configs.saveForShutdown(plugin); }
                             });

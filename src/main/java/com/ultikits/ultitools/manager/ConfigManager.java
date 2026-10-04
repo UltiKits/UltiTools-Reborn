@@ -533,8 +533,9 @@ public class ConfigManager {
         }
     }
 
-    // Shutdown only: reports this exact owner's never-saved changes, after its unload hook and before its release.
-    // Writes nothing (maintainer decision 2026-10-04); the name is historical.
+    // At shutdown and at a normal unload or uninstall (17-65 review round 1 R65-I5): reports this exact owner's
+    // never-saved changes, after its unload hook and before its release. Writes nothing (maintainer decision
+    // 2026-10-04); the name is historical.
     void saveForShutdown(UltiToolsPlugin plugin) {
         if (!permitsConfigThread(plugin, "saveForShutdown")) { return; }
         Map<String, AbstractConfigEntity> entities = pluginConfigMap.get(plugin);
@@ -560,7 +561,7 @@ public class ConfigManager {
                     // Values are deliberately omitted: any key may hold a credential.
                     UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration file " + file.getAbsolutePath()
                             + " holds module " + owner.getPluginName() + " changes that were never saved; they are not"
-                            + " written at server stop: " + String.join(", ", keys));
+                            + " written and are dropped as the module is unloaded: " + String.join(", ", keys));
                 }
             } catch (RuntimeException e) {
                 UltiTools.getInstance().getLogger().log(Level.WARNING,
