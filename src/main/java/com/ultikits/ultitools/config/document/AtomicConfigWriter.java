@@ -20,6 +20,7 @@ import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -117,6 +118,25 @@ public final class AtomicConfigWriter {
     }
 
     static StagedWrite stage(Path target, String text, FileOperations files) throws IOException {
+        return stage(target, text.getBytes(StandardCharsets.UTF_8), files);
+    }
+
+    /**
+     * As {@link #stage(Path, String)}, for content that is not UTF-8 text: the bytes are written exactly as given. Used
+     * for a file whose reader is not UTF-8 only ({@code server.properties}, which the server reads as ISO-8859-1 when
+     * it is not valid UTF-8), so its other lines can keep their bytes.
+     *
+     * @param target the file to replace later; its parent directory must exist
+     * @param data   the complete new content
+     * @return the staged write
+     * @throws IOException if the temporary file cannot be written; nothing is then left behind
+     */
+    public static StagedWrite stage(Path target, byte[] data) throws IOException {
+        return stage(target, data, FILES);
+    }
+
+    static StagedWrite stage(Path target, byte[] content, FileOperations files) throws IOException {
+        byte[] data = content.clone();
         Path destination = resolve(target);
         Path temporary = destination.resolveSibling(temporaryName(destination.getFileName().toString()));
         Path identity = temporaryIdentity(temporary);
@@ -125,7 +145,6 @@ public final class AtomicConfigWriter {
             LIVE_TEMPORARIES.add(identity);
         }
         try {
-            byte[] data = text.getBytes(StandardCharsets.UTF_8);
             FileAttribute<?>[] attributes = files.temporaryAttributes(destination);
             FileChannel opened;
             try {
@@ -396,6 +415,34 @@ public final class AtomicConfigWriter {
                     release(identity);
                 }
                 syncDirectory(target.getParent());
+            }
+        }
+
+        /**
+         * Commits only while the target still holds exactly {@code expected}, re-read under the lock every config load
+         * and write holds, immediately before the replacement; otherwise the staged file is released and nothing is
+         * replaced. This is the last-moment check for a caller that verified its edit against bytes it read earlier:
+         * an edit saved meanwhile is kept, never overwritten.
+         *
+         * @param expected the bytes the caller read and verified its edit against
+         * @return whether the target was replaced
+         * @throws IOException if reading the target or the replacement fails (see {@link #commit()})
+         */
+        public boolean commitIfUnchanged(byte[] expected) throws IOException {
+            synchronized (WRITE_LOAD_LOCK) {
+                byte[] now;
+                try {
+                    now = Files.exists(target, LinkOption.NOFOLLOW_LINKS) ? files.read(target) : null;
+                } catch (IOException failure) {
+                    discard();
+                    throw failure;
+                }
+                if (now == null || !Arrays.equals(now, expected)) {
+                    discard();
+                    return false;
+                }
+                commit();
+                return true;
             }
         }
 

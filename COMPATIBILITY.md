@@ -1372,6 +1372,14 @@ Each corrects a declared behaviour the stream did not deliver. The panel protoco
   this server's server.properties` instead of `This server version has no such key` (#473): nothing
   tells a key the running version lacks from one the file omits. A panel or tool that matched on the
   old text must match the new one; the UltiPanel worker and frontend do not match on it.
+- **A panel edit of `server.properties` changes only the line of the key it names** (#607). Before
+  6.3.0 the file was read as ISO-8859-1 and re-emitted whole: every comment dropped, keys reordered,
+  and UTF-8 values of other keys (a `motd` with `§` or Chinese text) turned into mojibake. The value
+  text of that one line is now replaced - key, separator, comments, order and every other byte kept -
+  decoded and encoded as the server reads the file (strict UTF-8, ISO-8859-1 when it is not UTF-8),
+  checked, and written atomically. A key defined on more than one line, or continued onto the next
+  line, is refused with a reason naming the lines (no value); `set_all` lists it under `failed`.
+  The server itself still re-writes the whole file when it next starts, as every Paper version does.
 
 ### Framework text follows `language`; the class-load audit is quiet on a clean start (6.3.0) that need no migration period
 
