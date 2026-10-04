@@ -89,6 +89,11 @@ public final class ConfigDocument {
 
     private static final Pattern YAML_LINE_BREAK = Pattern.compile("\r\n|[\r\n\u0085\u2028\u2029]");
     private static final Pattern WHITESPACE_ONLY_LINE = Pattern.compile("(?m)^ +$");
+    /**
+     * Private-use mark put before a comment line that follows a blank line while it is serialized (review round 1
+     * R1-01); never left in the output, and not used on a document whose text already holds it.
+     */
+    private static final String AFTER_BLANK = "\uE000\uE001\uE002";
 
     private final DocumentStyle style;
     private final boolean anchored;
@@ -450,8 +455,13 @@ public final class ConfigDocument {
         }
         StringWriter writer = new StringWriter();
         normalizeMultilineStrings(out, new IdentityHashMap<Node, Node>(), !style.finalLineBreak());
-        dumper(style).serialize(out, writer);
-        String text = WHITESPACE_ONLY_LINE.matcher(writer.toString()).replaceAll("");
+        Map<Node, List<CommentLine>[]> marked = source.contains(AFTER_BLANK) ? null : markCommentsAfterBlankLines(out);
+        try {
+            dumper(style).serialize(out, writer);
+        } finally {
+            restoreComments(marked);
+        }
+        String text = WHITESPACE_ONLY_LINE.matcher(realignMarkedComments(writer.toString())).replaceAll("");
         if (style.upperCaseHex() || style.latin1AsUnicodeEscape()) {
             text = normalizeEscapes(text, style.upperCaseHex(), style.latin1AsUnicodeEscape());
         }
@@ -462,6 +472,119 @@ public final class ConfigDocument {
             text = text.replace("\n", style.lineBreak());
         }
         return style.byteOrderMark() ? "\uFEFF" + text : text;
+    }
+
+    /**
+     * Marks, in copies of the comment lists, every comment line that follows a blank line and a comment line of the
+     * same list (review round 1 R1-01). SnakeYAML's emitter writes such a line after a blank line at its current
+     * indentation plus the list's own column again - doubled indentation in a nested block - so the marked lines are
+     * realigned after serialization ({@link #realignMarkedComments}). The original lists are restored afterwards.
+     *
+     * @return the original block and end comment lists by node, to restore
+     */
+    @SuppressWarnings("unchecked")
+    private static Map<Node, List<CommentLine>[]> markCommentsAfterBlankLines(Node root) {
+        Map<Node, List<CommentLine>[]> originals = new IdentityHashMap<>();
+        List<Node> pending = new ArrayList<>();
+        pending.add(root);
+        Set<Node> seen = Collections.newSetFromMap(new IdentityHashMap<Node, Boolean>());
+        while (!pending.isEmpty()) {
+            Node node = pending.remove(pending.size() - 1);
+            if (node == null || !seen.add(node)) {
+                continue;
+            }
+            List<CommentLine> block = markedCopy(node.getBlockComments());
+            List<CommentLine> end = markedCopy(node.getEndComments());
+            if (block != null || end != null) {
+                originals.put(node, new List[] {node.getBlockComments(), node.getEndComments()});
+                if (block != null) {
+                    node.setBlockComments(block);
+                }
+                if (end != null) {
+                    node.setEndComments(end);
+                }
+            }
+            if (node instanceof MappingNode) {
+                for (NodeTuple tuple : ((MappingNode) node).getValue()) {
+                    pending.add(tuple.getKeyNode());
+                    pending.add(tuple.getValueNode());
+                }
+            } else if (node instanceof SequenceNode) {
+                pending.addAll(((SequenceNode) node).getValue());
+            }
+        }
+        return originals;
+    }
+
+    /** A copy of {@code lines} with the comment lines after a blank line marked, or {@code null} when none is. */
+    private static List<CommentLine> markedCopy(List<CommentLine> lines) {
+        if (lines == null) {
+            return null;
+        }
+        List<CommentLine> copy = new ArrayList<>(lines.size());
+        boolean comment = false;
+        boolean blank = false;
+        boolean changed = false;
+        for (CommentLine line : lines) {
+            if (line.getCommentType() == CommentType.BLANK_LINE) {
+                blank = comment;
+                copy.add(line);
+            } else if (line.getCommentType() == CommentType.BLOCK && blank) {
+                copy.add(new CommentLine(line.getStartMark(), line.getEndMark(), AFTER_BLANK + line.getValue(),
+                        line.getCommentType()));
+                changed = true;
+                blank = false;
+            } else {
+                comment = comment || line.getCommentType() == CommentType.BLOCK;
+                copy.add(line);
+            }
+        }
+        return changed ? copy : null;
+    }
+
+    private static void restoreComments(Map<Node, List<CommentLine>[]> originals) {
+        if (originals == null) {
+            return;
+        }
+        for (Map.Entry<Node, List<CommentLine>[]> entry : originals.entrySet()) {
+            entry.getKey().setBlockComments(entry.getValue()[0]);
+            entry.getKey().setEndComments(entry.getValue()[1]);
+        }
+    }
+
+    /**
+     * Writes every marked comment line at the indentation of the comment line before it in the same group - the
+     * column its list's lines are written at - and removes the mark. Without a comment line before it (the line
+     * shares its line with other content) only the mark is removed.
+     */
+    private static String realignMarkedComments(String text) {
+        if (!text.contains(AFTER_BLANK)) {
+            return text;
+        }
+        StringBuilder result = new StringBuilder(text.length());
+        String indent = null;
+        int start = 0;
+        while (start < text.length()) {
+            int end = text.indexOf('\n', start);
+            end = end < 0 ? text.length() : end + 1;
+            String line = text.substring(start, end);
+            String content = line.trim();
+            int marker = line.indexOf("#" + AFTER_BLANK);
+            if (marker >= 0 && line.substring(0, marker).trim().isEmpty()) {
+                String unmarked = line.substring(marker, marker + 1) + line.substring(marker + 1 + AFTER_BLANK.length());
+                line = (indent != null ? indent : line.substring(0, marker)) + unmarked;
+            } else if (marker >= 0) {
+                line = line.substring(0, marker + 1) + line.substring(marker + 1 + AFTER_BLANK.length());
+            }
+            if (content.startsWith("#")) {
+                indent = line.substring(0, line.indexOf('#'));
+            } else if (!content.isEmpty()) {
+                indent = null;
+            }
+            result.append(line);
+            start = end;
+        }
+        return result.toString();
     }
 
     /** Escapes preserve NEL (which the scanner normalizes) and no-EOF multiline string content. */
