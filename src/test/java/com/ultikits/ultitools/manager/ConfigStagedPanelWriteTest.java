@@ -121,7 +121,9 @@ class ConfigStagedPanelWriteTest {
                     .isInstanceOf(IOException.class).hasMessage("one transient target-open failure")
                     .satisfies(failure -> assertThat(failure.getSuppressed()).isEmpty());
         }
-        assertThat(opens.get()).as("two commits attempted and both attempted files restored").isEqualTo(4);
+        // Two commits attempted; the first file is restored, the second still holds its original bytes after its failed
+        // open, so the gated restore has nothing to put back (17-65 review round 1 R65-I3).
+        assertThat(opens.get()).as("two commits attempted and the replaced file restored").isEqualTo(3);
         for (int i = 0; i < entities.size(); i++) {
             Values value = entities.get(i);
             assertThat(Files.readAllBytes(directory.resolve(value.getConfigFilePath()))).isEqualTo(originals.get(i));
