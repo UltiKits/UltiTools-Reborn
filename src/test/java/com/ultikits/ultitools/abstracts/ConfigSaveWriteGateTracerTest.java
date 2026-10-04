@@ -86,6 +86,17 @@ class ConfigSaveWriteGateTracerTest {
         }
     }
 
+    public static class Composite extends AbstractConfigEntity {
+        @ConfigEntry(path = "home")
+        org.bukkit.util.Vector home = new org.bukkit.util.Vector(1, 2, 3);
+        @ConfigEntry(path = "points")
+        Map<String, org.bukkit.util.Vector> points = new LinkedHashMap<>();
+
+        public Composite(String path) {
+            super(path);
+        }
+    }
+
     public static class BlockScalar extends AbstractConfigEntity {
         @ConfigEntry(path = "motd")
         String motd = "a\nb\n";
@@ -276,6 +287,77 @@ class ConfigSaveWriteGateTracerTest {
 
         assertThat(read(MAP_PATH)).isEqualTo("emojis:\n  smile: ':)'\n  wave: o/\n  o:\n    O: x\n");
         assertThat(warnings()).isEmpty();
+    }
+
+    private static final String COMPOSITE = "home:\n  ==: Vector\n  x: 1.0\n  y: 2.0\n  z: 3.0\n"
+            + "points:\n  a:\n    ==: Vector\n    x: 1.0\n    y: 1.0\n    z: 1.0\n";
+
+    private static double coordinate(String text, java.util.List<String> path) throws Exception {
+        Object value = com.ultikits.ultitools.config.document.ConfigDocument.parse(text).get(path);
+        return ((Number) value).doubleValue();
+    }
+
+    /**
+     * R65-01 (17-65 review round 1; save rule revision 1): a value whose declared type is not a {@link Map} - a
+     * {@code ConfigurationSerializable} such as a Bukkit {@code Vector} - is one value, like a list. When the operator
+     * edited one of its coordinates on disk, the module's whole new value is not written (no value mixed from both);
+     * the operator's edit stays and one warning names the setting.
+     */
+    @Test
+    @DisplayName("R65-01: a serializable value is written whole or not at all; never mixed with the operator's edit")
+    void serializableValueIsNeverMixedWithTheOperatorsEdit() throws Exception {
+        put("composite.yml", COMPOSITE);
+        Composite config = new Composite("composite.yml");
+        config.init(plugin);
+        String edited = COMPOSITE.replace("y: 2.0", "y: 99.0");
+        put("composite.yml", edited);
+
+        config.home = new org.bukkit.util.Vector(10, 20, 30);
+        countFromHere();
+        config.save();
+
+        assertThat(read("composite.yml")).isEqualTo(edited);
+        assertThat(warnings()).hasSize(1).allSatisfy(warning -> assertThat(warning).contains("'home'").doesNotContain("home.y"));
+    }
+
+    @Test
+    @DisplayName("R65-01: without an operator edit the module's whole serializable value is written")
+    void serializableValueIsWrittenWhole() throws Exception {
+        put("composite.yml", COMPOSITE);
+        Composite config = new Composite("composite.yml");
+        config.init(plugin);
+
+        config.home = new org.bukkit.util.Vector(10, 20, 30);
+        countFromHere();
+        config.save();
+
+        String text = read("composite.yml");
+        assertThat(coordinate(text, java.util.Arrays.asList("home", "x"))).isEqualTo(10.0);
+        assertThat(coordinate(text, java.util.Arrays.asList("home", "y"))).isEqualTo(20.0);
+        assertThat(coordinate(text, java.util.Arrays.asList("home", "z"))).isEqualTo(30.0);
+        assertThat(warnings()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("R65-01: a typed map is split by entry only; a serializable entry the operator edited is not written, another entry is")
+    void typedMapEntryWithASerializableValueIsOneValue() throws Exception {
+        put("composite.yml", COMPOSITE);
+        Composite config = new Composite("composite.yml");
+        config.init(plugin);
+        String edited = COMPOSITE.replace("    y: 1.0\n", "    y: 7.0\n");
+        put("composite.yml", edited);
+
+        config.points.put("a", new org.bukkit.util.Vector(5, 5, 5));
+        config.points.put("b", new org.bukkit.util.Vector(2, 2, 2));
+        countFromHere();
+        config.save();
+
+        String text = read("composite.yml");
+        assertThat(text).startsWith(edited);
+        assertThat(coordinate(text, java.util.Arrays.asList("points", "a", "x"))).isEqualTo(1.0);
+        assertThat(coordinate(text, java.util.Arrays.asList("points", "a", "y"))).isEqualTo(7.0);
+        assertThat(coordinate(text, java.util.Arrays.asList("points", "b", "x"))).isEqualTo(2.0);
+        assertThat(warnings()).hasSize(1).allSatisfy(warning -> assertThat(warning).contains("'points.a'").doesNotContain("points.a.y"));
     }
 
     /**
