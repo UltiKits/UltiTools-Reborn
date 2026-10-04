@@ -29,6 +29,8 @@ public final class FrameworkLanguageCharsetProbe {
     }
 
     public static void main(String[] args) throws Exception {
+        // Run only by FrameworkLanguageFileTest, whose only argument is that test's @TempDir data folder.
+        // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
         File dataFolder = new File(args[0]);
         YamlConfiguration config = new YamlConfiguration();
         Logger logger = Mockito.mock(Logger.class);

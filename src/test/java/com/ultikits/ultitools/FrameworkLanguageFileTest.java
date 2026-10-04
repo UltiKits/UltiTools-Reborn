@@ -92,6 +92,8 @@ class FrameworkLanguageFileTest {
     }
 
     private File lang(String name) {
+        // Test-only path under the JUnit @TempDir; names are compile-time constants of this class.
+        // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
         return new File(new File(dataFolder, "lang"), name);
     }
 
@@ -284,12 +286,16 @@ class FrameworkLanguageFileTest {
     void frameworkLanguageIsReadAsUtf8UnderANonUtf8Default() throws Exception {
         write(lang("zh-myserver.json"), "{\"" + KEY + "\":\"本服：模块 '%s' 已重载\"}");
         List<String> command = new ArrayList<>();
+        // The JDK running this test (java.home) launches the probe; no external input reaches the path.
+        // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
         command.add(new File(System.getProperty("java.home"), "bin" + File.separator + "java").getPath());
         command.add("-Dfile.encoding=ISO-8859-1");
         command.add("-cp");
         command.add(System.getProperty("java.class.path"));
         command.add(FrameworkLanguageCharsetProbe.class.getName());
         command.add(dataFolder.getAbsolutePath());
+        // Fixed argument list: this JVM, a fixed flag, this classpath, a constant class name and a @TempDir path.
+        // nosemgrep: java.lang.security.audit.command-injection-process-builder.command-injection-process-builder
         Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
         String output;
         try (InputStream in = process.getInputStream()) {

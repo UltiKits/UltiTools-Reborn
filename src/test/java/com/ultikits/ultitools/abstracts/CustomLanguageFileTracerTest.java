@@ -86,6 +86,8 @@ class CustomLanguageFileTracerTest {
     @DisplayName("framework: plugins/UltiTools/lang/zh-myserver.json renders the custom text and fills the missing key from official zh")
     void frameworkSelectsTheCustomFileAndFillsGapsFromItsOfficialBase() throws Exception {
         File dataFolder = new File(tempDir, "UltiTools");
+        // Test-only path under the JUnit @TempDir; the name is a constant.
+        // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
         File custom = new File(dataFolder, "lang" + File.separator + "zh-myserver.json");
         Files.createDirectories(custom.getParentFile().toPath());
         Files.write(custom.toPath(),

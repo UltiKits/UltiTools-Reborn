@@ -279,6 +279,8 @@ class CustomLanguageFileTest {
 
         UltiToolsPlugin plugin = start();
 
+        // Test-only path beside the fixture file under the JUnit @TempDir; the name is a constant.
+        // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
         File backup = new File(fixture.disk("lang/zh.yml").getParentFile(), "zh.yml.bak");
         assertThat(BootLanguageFixture.bytesOf(fixture.disk("lang/zh.yml"))).isEqualTo(utf8(ZH));
         assertThat(BootLanguageFixture.bytesOf(backup)).isEqualTo(utf8(edited));
