@@ -870,6 +870,52 @@ public abstract class AbstractConfigEntity {
     }
 
     /**
+     * Rewrites this configuration's framework comment lines in the owning module's language as it is now (#594).
+     * <p>
+     * A reload reads the module's configurations before it rebuilds the module's language, so the comment pass of
+     * that read resolved the tokens with the catalogue of the language the module ran with until then.
+     * {@code UltiToolsPlugin}'s reload calls this, through {@code ConfigManager}, right after the rebuild and before
+     * the module's own reload hook, so a {@code language} switch applied by {@code /ul reload} reaches the comments
+     * too (maintainer decision 2026-10-04, "the framework only refreshes comments on reload").
+     * <p>
+     * <b>Why it cannot overwrite operator content.</b> It reads the file afresh and hands the config write gate
+     * ({@link OperatorFileWriter}) a comment-only write that owns just the comment lines the framework identifies
+     * as its own above token-commented keys ({@link #frameworkCommentRun}, #604), checked against the bytes of that
+     * fresh read: no value, no key and no other comment line can change, so an operator's invalid value, a key
+     * deleted to reset it, a hand-written note and an edit saved after the reload read the file all stay as typed,
+     * and a file that changed again before publishing, uses anchors or has a layout the renderer would normalize is
+     * refused with the gate's one warning. Nothing is attempted when the last load refused the file as unreadable
+     * or unparseable (it is never written), while a first-start write is still pending, or when no framework
+     * comment differs from the current language. A refusal or a failure logs one warning and changes no save
+     * state, so no later save or shutdown write follows from it (#603, #597 review F2). Only when the fresh read
+     * still held exactly the bytes this entity bound does the entity record what the gate wrote as its last read;
+     * otherwise the operator's newer file stays a change on disk.
+     * <p>
+     * Framework-internal: {@code public} solely because {@code ConfigManager} lives in another package. Module
+     * code should not call it.
+     *
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public final void refreshFrameworkComments() {
+        if (!com.ultikits.ultitools.manager.ConfigManager.permitsConfigThread(ultiToolsPlugin,
+                "refresh comments " + configFilePath)) { return; }
+        synchronized (this) {
+            if (document == null || ultiToolsPlugin == null || lastLoadUnparseable || pendingInitialization != null) {
+                return;
+            }
+            ConfigLoadResult fresh = ConfigDocument.load(ultiToolsPlugin.getConfigFile(configFilePath).toPath());
+            if (fresh.state() != ConfigLoadResult.State.LOADED || !tokenCommentsDiffer(fresh.document())) { return; }
+            OperatorFileWriter.Result result = rewriteTokenComments(fresh);
+            if (result != null && result.applied() && entityFingerprint(fresh.fingerprint()).equals(savedFileFingerprint)) {
+                // The file held exactly the bytes this entity bound; it now holds them with the refreshed comments.
+                document = result.document();
+                savedFileFingerprint = entityFingerprint(result.fingerprint());
+            }
+        }
+    }
+
+    /**
      * Writes an initialization - the declared keys {@code init} found missing, each with its comment, and the
      * framework's token comments - through the config write gate ({@link OperatorFileWriter}), at once or from
      * the batch flush. This cannot overwrite operator content: the write owns only the inserted keys and the

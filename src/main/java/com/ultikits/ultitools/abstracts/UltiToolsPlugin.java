@@ -2193,6 +2193,9 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         // module. It records the change instead, so the operator is told a full /ul reload
         // applies it (#502).
         language = createLanguageFromPath(resourceFolderPath);
+        // #594: the configs were read above with the old catalogue; now that the language is rebuilt, the framework's
+        // own comment lines follow it - comment lines only, through the config write gate, before the module's hook.
+        getConfigManager().refreshFrameworkComments(this);
         String pendingLanguage = pendingLanguageSetting();
         if (pendingLanguage != null) {
             report.partial(String.format(UltiTools.getInstance().i18n(LANGUAGE_CHANGE_PENDING_KEY),

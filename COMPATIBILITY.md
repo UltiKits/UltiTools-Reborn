@@ -211,6 +211,9 @@ and warn with the located key and discarded value, redacting secret-shaped value
 and explicit null differ. Missing whole declared fields retain their live values with the inherited
 declared-default baseline. This planner-selected file-wins policy can be overturned by the maintainer.
 Unreadable/unparseable reloads keep live values and protect the file as before.
+After a module's language is rebuilt in the reload steps, and before its own reload hook, the framework rewrites
+only its own comment lines of that module's configurations in the new language, through the write gate over a fresh
+read; no value, key or other comment line is written ([#594](https://github.com/UltiKits/UltiTools-Reborn/issues/594)).
 
 ### Panel edits inside map entries
 
@@ -380,7 +383,7 @@ separate crash-safe multi-file transaction limit.
 - `getConfig()` 在 6.2.5 确实可用，不能冒称符合两个同版删除例外；维护者通过 6.3.0 一次性 carve-out 删除它。改用 `isPresentInFile` 查询上次成功加载时的存在性，修改声明字段后 `save()`。两个已知官方调用在 UltiEssentials 与 UltiRemoteBag；第三方用量未知。
 - 六个旧解析器相关声明在 6.3.0 首次带 `forRemoval`，公告 6.4.0 删除。显式非默认 parser 暂时保留冻结的旧行为；默认 parser 改走注册表。迁移示例见上方，转换器必须满足两条互逆等式，不能单向加值或悄悄丢字段。
 - 注册批次验证完成才开始独立写文件；面板批次先验证并暂存全部文件，在进程内失败时回滚，持久存储故障可能阻止恢复。面板唯一映射路径走整字段类型转换，歧义和未知变更拒绝整个请求；无关内存/磁盘兄弟项保留。
-- 重载三方合并，内存独有改动保留且仍脏，磁盘独有采用，冲突磁盘胜。仅磁盘该映射未变时保证内存顺序保留，不写文件。初始化、重载和注册表在服务器主线程执行；异步面板回调整体排队，不能阻塞等待。
+- 重载三方合并，内存独有改动保留且仍脏，磁盘独有采用，冲突磁盘胜。重载重建模块语言之后、模块自己的重载钩子之前，框架经写入闸门、按重新读取的文件，只把它能认出的自己的注释行改成新语言，不写任何值、键或其它注释行（#594）。仅磁盘该映射未变时保证内存顺序保留，不写文件。初始化、重载和注册表在服务器主线程执行；异步面板回调整体排队，不能阻塞等待。
 - 可以提前识别的新副本先保存旧副本配置再构造；失败保留旧副本。不能识别时成功替换后只警告丢弃的键，不事后保存。卸载释放实体，关闭先保存后释放。已知限制 #578、#580 和多文件崩溃限制 #545 仍存在。
 
 ## What the version number means

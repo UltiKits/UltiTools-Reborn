@@ -483,6 +483,37 @@ public class ConfigManager {
     }
 
     /**
+     * Rewrites the framework comment lines of every configuration of {@code plugin} in the module's current
+     * language (#594), through {@link AbstractConfigEntity#refreshFrameworkComments()}: a comment-only write
+     * through the config write gate, owning only the comment lines the framework identifies as its own, never a
+     * value, a key or another comment line. The module's reload calls this right after it rebuilds the module's
+     * language, which happens after {@link #reloadConfigs} read the files, and before the module's own reload
+     * hook. One entity's failure is one warning naming its file and the failure's class, and the others still run.
+     *
+     * @param plugin UltiTools module
+     * @since 6.3.0
+     */
+    @org.jetbrains.annotations.ApiStatus.Internal
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // one entity's failure must not stop the others or the reload
+    public void refreshFrameworkComments(UltiToolsPlugin plugin) {
+        if (!permitsConfigThread(plugin, "refreshFrameworkComments")) { return; }
+        Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(plugin);
+        if (configMap == null) {
+            return;
+        }
+        for (AbstractConfigEntity configEntity : configMap.values()) {
+            try {
+                configEntity.refreshFrameworkComments();
+            } catch (RuntimeException failure) {
+                // Values are deliberately omitted: the failure's message may quote file content.
+                UltiTools.getInstance().getLogger().log(Level.WARNING, "Cannot refresh comments in "
+                        + configEntity.getConfigFilePath() + ": " + failure.getClass().getSimpleName()
+                        + "; the file keeps its comments");
+            }
+        }
+    }
+
+    /**
      * Saves, at shutdown, every registered configuration that module code changed in memory.
      * <p>
      * Since 6.3.0 (#510) this writes only the entities whose {@link
