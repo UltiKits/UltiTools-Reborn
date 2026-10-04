@@ -1176,8 +1176,10 @@ public abstract class AbstractConfigEntity {
         String bound = expectedBase(loaded);
         if (!inserted.isEmpty() && !deferInitialization) {
             // On a refusal the declared defaults run in memory and the raw acknowledgement keeps the keys absent.
-            OperatorFileWriter.Result result = writeInitialization(inserted, bound, next);
-            if (result.applied()) { document = result.document(); bound = result.fingerprint(); }
+            OperatorFileWriter.Result result = null;
+            try { result = writeInitialization(inserted, bound, next); }
+            catch (RuntimeException failure) { warnGateFailure("insert the missing keys into", failure); }
+            if (result != null && result.applied()) { document = result.document(); bound = result.fingerprint(); }
         } else if (deferInitialization) {
             if (!inserted.isEmpty() || tokenCommentsDiffer(next)) {
                 // The flush writes through the gate against the bytes read here, never over a later edit (#602).
@@ -1232,6 +1234,16 @@ public abstract class AbstractConfigEntity {
             current = ((Map<?, ?>) current).get(key);
         }
         return true;
+    }
+
+    /**
+     * An unchecked failure inside the configuration write gate during start-up never refuses the module: one warning
+     * names the file and the failure's class (never a message, which may quote file content), the declared defaults run
+     * in memory, and the file is not changed (17-65 review round 2 R2-02).
+     */
+    private void warnGateFailure(String action, RuntimeException failure) {
+        LOGGER.warning("Cannot " + action + " " + configFilePath + ": " + failure.getClass().getSimpleName()
+                + "; the declared defaults are used in memory and the file is unchanged");
     }
 
     private static String expectedBase(ConfigLoadResult loaded) {
@@ -1294,7 +1306,7 @@ public abstract class AbstractConfigEntity {
             OperatorFileWriter.Result result = OperatorFileWriter.write(ultiToolsPlugin.getConfigFile(configFilePath).toPath(),
                     owned.build(), expectedBase(loaded), this::updateTokenComments);
             return result;
-        } catch (IOException failure) {
+        } catch (IOException | RuntimeException failure) {
             LOGGER.warning("Cannot rewrite comments in " + configFilePath + ": "
                     + failure.getClass().getSimpleName() + "; the file keeps its comments");
             return null;
@@ -1451,6 +1463,14 @@ public abstract class AbstractConfigEntity {
             OperatorFileWriter.Result result;
             try { result = writeInitialization(pending.inserted, pending.expected, pending.read); }
             catch (IOException failure) { lastLoadUnparseable = true; throw failure; }
+            catch (RuntimeException failure) {
+                warnGateFailure("insert the missing keys into", failure);
+                document = pending.read;
+                savedSnapshot = pending.baseline;
+                acknowledgeRaw(document, configEntryFields());
+                savedFileFingerprint = entityFingerprint(pending.expected);
+                return;
+            }
             // Not written (file changed since initForBatch, or refused): the defaults run in memory, the file stays,
             // and the entity records the bytes it bound - never the operator's newer file - as last read (#602).
             document = result.applied() ? result.document() : pending.read;

@@ -631,10 +631,14 @@ public final class OperatorFileWriter {
         }
         Node before = compose(text);
         Node after = compose(rendered);
-        if (before == null || after == null) {
+        // An empty document (a 0-byte, blank or comment-only file, or one the edit empties) has no node tree; it is
+        // compared as an empty mapping (owned-span self-check revision 2, 17-65 review round 2 R2-02/R2-04).
+        if (before == null && !original.toPlain().isEmpty() || after == null && !candidate.toPlain().isEmpty()) {
             return "the rendered text would not parse back";
         }
-        if (hasByteOrderMark(text) != hasByteOrderMark(rendered) || endsWithLineBreak(text) != endsWithLineBreak(rendered)) {
+        // A 0-byte file has no last line, so it has no final line break to keep (same revision as above).
+        if (hasByteOrderMark(text) != hasByteOrderMark(rendered)
+                || !text.isEmpty() && endsWithLineBreak(text) != endsWithLineBreak(rendered)) {
             return "the file's layout would change (byte-order mark or final line break)";
         }
         Side left = new Side(original, before, lines(text));
@@ -1050,9 +1054,9 @@ public final class OperatorFileWriter {
         return result;
     }
 
-    /** Anchors, aliases (a node reached twice) and merge keys. */
+    /** Anchors, aliases (a node reached twice) and merge keys; an empty document ({@code null} tree) has none. */
     private static boolean usesAnchors(Node tree) {
-        return usesAnchors(tree, Collections.newSetFromMap(new IdentityHashMap<Node, Boolean>()));
+        return tree != null && usesAnchors(tree, Collections.newSetFromMap(new IdentityHashMap<Node, Boolean>()));
     }
 
     private static boolean usesAnchors(Node node, Set<Node> seen) {
