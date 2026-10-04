@@ -5,20 +5,27 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.lang.reflect.Type;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import org.jetbrains.annotations.ApiStatus;
 
+import com.google.gson.Gson;
 import com.google.gson.JsonParseException;
+import com.google.gson.reflect.TypeToken;
 
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.interfaces.Localized;
 
@@ -59,6 +66,9 @@ public final class OfficialLanguageFiles {
 
     /** Upper bound on backup names tried for one file, so a full directory cannot loop forever. */
     public static final int MAX_BACKUP_NAMES = 1000;
+
+    private static final Gson GSON = new Gson();
+    private static final Type DICTIONARY_TYPE = new TypeToken<Map<String, String>>() { }.getType();
 
     private OfficialLanguageFiles() {
     }
@@ -188,14 +198,21 @@ public final class OfficialLanguageFiles {
      * nothing in the framework ever writes, replaces or backs up a custom-named file. A name that is not a safe
      * language-code token ({@link Localized#isSafeLanguageCode}) is never turned into a path, so it cannot name a
      * file outside {@code lang/}.
+     * <p>
+     * A key whose custom value lost a placeholder relative to the bundled value of {@code officialCode} uses the
+     * bundled value, in memory, with one warning naming the file and the key, never either value (the module
+     * guard of #441/#524, {@link UltiToolsPlugin#overrideLostPlaceholders}; gate-1 review R1-2 of plan 17-69).
      *
-     * @param dataFolder the framework's data folder
-     * @param name       the configured custom language name
-     * @param logger     the framework logger
+     * @param dataFolder   the framework's data folder
+     * @param name         the configured custom language name
+     * @param officialCode the official language the name is based on
+     * @param loader       the class loader that reads the framework jar's {@code lang/} resources
+     * @param logger       the framework logger
      * @return the custom language, or {@code null} when the name is unsafe, the file does not exist or it cannot
-     *         be parsed (the reason is logged)
+     *         be read or parsed (the reason is logged)
      */
-    public static Language readFrameworkCustomFile(File dataFolder, String name, Logger logger) {
+    public static Language readFrameworkCustomFile(File dataFolder, String name, String officialCode,
+                                                   ClassLoader loader, Logger logger) {
         if (dataFolder == null || name == null || !Localized.isSafeLanguageCode(name)) {
             return null;
         }
@@ -204,12 +221,23 @@ public final class OfficialLanguageFiles {
             return null;
         }
         try {
-            return new Language(file);
-        } catch (JsonParseException unreadable) {
+            Map<String, String> custom = readJson(Files.readAllBytes(file.toPath()));
+            byte[] bundled = loader == null || officialCode == null ? null
+                    : readResource(loader, "lang/" + officialCode + ".json");
+            Map<String, String> official = bundled == null ? Collections.<String, String>emptyMap() : readJson(bundled);
+            return new Language(UltiToolsPlugin.overrideLostPlaceholders(custom, official, (key, reason) ->
+                    logger.warning("Language key '" + key + "' in '" + file.getPath() + "' for module 'UltiTools' "
+                            + reason + "; using the current bundled version's value for this key.")));
+        } catch (IOException | JsonParseException unreadable) {
             logger.log(Level.WARNING, "Could not read the custom language file '" + file.getPath()
                     + "'; framework messages use the official language instead.", unreadable);
             return null;
         }
+    }
+
+    private static Map<String, String> readJson(byte[] bytes) {
+        Map<String, String> parsed = GSON.fromJson(new String(bytes, StandardCharsets.UTF_8), DICTIONARY_TYPE);
+        return parsed != null ? parsed : Collections.<String, String>emptyMap();
     }
 
     private static byte[] readResource(ClassLoader loader, String resourcePath) throws IOException {

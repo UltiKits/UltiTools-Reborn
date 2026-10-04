@@ -364,10 +364,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
                 getClass().getClassLoader(), getLogger());
         String configured = getConfig().getString("language");
         String official = Localized.officialLanguageOf(configured, shipped);
-        Language bundled = readBundledLanguage(official != null ? official : "en");
+        String baseCode = official != null ? official : "en";
+        Language bundled = readBundledLanguage(baseCode);
         boolean custom = configured != null && !configured.equals(official);
-        Language customLanguage = custom
-                ? OfficialLanguageFiles.readFrameworkCustomFile(getDataFolder(), configured, getLogger()) : null;
+        Language customLanguage = custom ? OfficialLanguageFiles.readFrameworkCustomFile(getDataFolder(), configured,
+                baseCode, getClass().getClassLoader(), getLogger()) : null;
         this.language = customLanguage != null ? customLanguage.withFallback(bundled) : bundled;
         if (official == null) {
             getLogger().warning("The language setting '" + configured + "' in config.yml is neither a shipped "

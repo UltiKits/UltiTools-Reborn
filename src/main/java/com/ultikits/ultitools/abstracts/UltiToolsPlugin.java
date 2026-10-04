@@ -30,6 +30,7 @@ import java.util.Arrays;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.logging.Level;
@@ -424,11 +425,18 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             return official;
         }
         String fallback = supportedCodes.contains("en") ? "en" : supportedCodes.get(0);
-        if (warn) {
+        if (warn && configured != null && Localized.isSafeLanguageCode(configured)) {
+            // Gate-1 R1-3: the custom file is still used; only what it lacks comes from the fallback.
             languageLog().warn("Module '" + getPluginName() + "' is configured for language '" + configured
-                    + "' but only ships " + supportedCodes + " - falling back to '" + fallback + "'. A custom "
-                    + "language name must start with one of these codes and a hyphen, for example '"
-                    + supportedCodes.get(0) + "-myserver'.");
+                    + "', which is neither a language it ships " + supportedCodes + " nor starts with one of them "
+                    + "and a hyphen: its custom file lang/" + configured + ".* is still used where it exists, and "
+                    + "every message that file does not provide uses '" + fallback + "'. A custom language name "
+                    + "must start with one of these codes and a hyphen, for example '" + supportedCodes.get(0)
+                    + "-myserver'.");
+        } else if (warn) {
+            languageLog().warn("Module '" + getPluginName() + "' is configured for language '" + configured
+                    + "', which is not a valid language name (only ASCII letters, digits, '_' and '-'); it ships "
+                    + supportedCodes + " and uses '" + fallback + "'.");
         }
         return fallback;
     }
@@ -456,16 +464,28 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * anything. The module jar never ships a file under a custom name either, so {@link
      * #saveResources()} and {@link #migrateBundledLanguageFiles()} never reach one. The canonical
      * {@code lang/} containment guard applies as for every other language read.
+     * <p>
+     * A key whose custom value lost a placeholder relative to the official base's bundled value uses the
+     * bundled value, with one warning naming the file and the key ({@link #overrideLostPlaceholders}; gate-1
+     * review R1-2 of plan 17-69): a custom file written for an older release must not make a message fail to
+     * format after an upgrade.
      *
      * @return the custom language, or {@code null} when no such file exists or none is readable
      */
-    private Language readCustomLanguageFile(String folderPath, String name) {
+    private Language readCustomLanguageFile(String folderPath, String name, String officialCode) {
         File langDir = new File(folderPath, "lang");
         for (String extension : LANGUAGE_EXTENSIONS) {
             File file = new File(langDir, name + extension);
             if (isWithinDirectory(langDir, file) && file.isFile()) {
                 try {
-                    return readLanguageFile(file, extension);
+                    // Parsed through the regular reader first, so a malformed file is reported below.
+                    readLanguageFile(file, extension);
+                    // Gate-1 R1-2: the placeholder guard (#441, #524) that protected an operator's
+                    // customisation in an edited official file applies to the custom file too, against
+                    // the official base's bundled values -- in memory; the file is never written.
+                    return new Language(overrideLostPlaceholders(readFlatDictionary(file, extension),
+                            bundledDictionary(officialCode),
+                            (key, reason) -> warnLostPlaceholder(key, file.getPath(), reason)));
                 } catch (JsonParseException unreadable) {
                     languageLog().error(unreadable, "Could not read custom language file '" + file.getPath()
                             + "' of module '" + getPluginName() + "'; using the official language instead.");
@@ -487,7 +507,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     private Language createLanguageFromPath(String folderPath) {
         String resolvedCode = resolveLanguageCode();
         String customName = customLanguageName(getConfiguredLanguage(), resolvedCode);
-        Language custom = customName != null ? readCustomLanguageFile(folderPath, customName) : null;
+        Language custom = customName != null ? readCustomLanguageFile(folderPath, customName, resolvedCode) : null;
         Language official = createOfficialLanguage(folderPath, resolvedCode, custom == null);
         if (custom != null) {
             return custom.withFallback(official);
@@ -555,6 +575,23 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             }
         }
         return null;
+    }
+
+    /**
+     * The jar-bundled dictionary of {@code code}, from the first of {@link #LANGUAGE_EXTENSIONS} the jar ships,
+     * for the placeholder comparison of a custom file; empty when the jar ships none.
+     */
+    private Map<String, String> bundledDictionary(String code) {
+        if (code == null) {
+            return Collections.emptyMap();
+        }
+        for (String extension : LANGUAGE_EXTENSIONS) {
+            byte[] bytes = readEmbeddedResourceBytes("lang/" + code + extension);
+            if (bytes != null) {
+                return readFlatDictionary(bytes, extension);
+            }
+        }
+        return Collections.emptyMap();
     }
 
     /**
@@ -1107,52 +1144,81 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             // Migration of a language not in use: the file decision is made, no dictionary is needed.
             return new Language("{}");
         }
-        Map<String, String> diskDictionary = readFlatDictionary(file, extension);
-        Map<String, String> jarDictionary = readFlatDictionary(jarBytes, extension);
-        Map<String, String> resolved = new LinkedHashMap<>(diskDictionary);
-        for (Map.Entry<String, String> jarEntry : jarDictionary.entrySet()) {
-            String key = jarEntry.getKey();
-            String diskValue = diskDictionary.get(key);
-            if (diskValue == null) {
-                // Missing from disk entirely: Language.withFallback already covers this key.
+        Map<String, String> resolved = overrideLostPlaceholders(readFlatDictionary(file, extension),
+                readFlatDictionary(jarBytes, extension), (key, reason) -> warnLostPlaceholder(key, resourcePath, reason));
+        return new Language(resolved);
+    }
+
+    /**
+     * The two-detector placeholder comparison of {@link #applyPlaceholderArityOverride} (#441, #524), as a pure
+     * function shared with an operator's custom language file (#608) and the framework's own custom file: every
+     * key of {@code own} whose value lost a placeholder relative to {@code official}'s value for the same key --
+     * a different {@code %s}/{@code %d} arity ({@link #placeholderArity}), a malformed format-argument index, or
+     * a {@code {TOKEN}} the official value has and {@code own}'s lacks ({@link #missingBracePlaceholder}) -- is
+     * replaced by the official value, and {@code mismatch} is told the key and the reason phrase (never either
+     * value). Keys {@code own} lacks are left out: {@link Language#withFallback} resolves them. In memory only:
+     * nothing is read or written here.
+     * <p>
+     * Not part of the module-facing API. Public only because the framework class reads its own custom file in
+     * another package.
+     *
+     * @param own      the operator's dictionary (an edited official file, or a custom language file)
+     * @param official the bundled dictionary of the same, or the base, language
+     * @param mismatch receives {@code (key, reason)} for each replaced key; the reason completes the sentence
+     *                 "Language key 'k' in 'file' ... " ({@code "has a different placeholder count than the
+     *                 current bundled version"} and the like)
+     * @return {@code own} with each such key replaced by the official value
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public static Map<String, String> overrideLostPlaceholders(Map<String, String> own, Map<String, String> official,
+                                                               BiConsumer<String, String> mismatch) {
+        Map<String, String> resolved = new LinkedHashMap<>(own);
+        for (Map.Entry<String, String> officialEntry : official.entrySet()) {
+            String key = officialEntry.getKey();
+            String ownValue = own.get(key);
+            if (ownValue == null) {
+                // Missing from own entirely: Language.withFallback already covers this key.
                 continue;
             }
-            String jarValue = jarEntry.getValue();
-            boolean arityMismatch;
-            try {
-                arityMismatch = placeholderArity(diskValue) != placeholderArity(jarValue);
-            } catch (NumberFormatException e) {
-                // Codex round 3, P2: an explicit format-argument index too large for int (e.g.
-                // "%999999999999999999$s") overflows Integer.parseInt inside placeholderArity.
-                // Before this fix, that exception propagated out of THIS method, out of
-                // resolveLanguageWithProvenance, and aborted the whole module's construction --
-                // over a single malformed, possibly never-formatted translation value, whereas
-                // before D-05/D-06 existed only the affected key would have failed at format
-                // time. Treat a malformed index the same conservative way a genuine arity
-                // mismatch is already handled below: fall back to the bundled version's value
-                // for this key, and say why (never either value) in the warning.
-                resolved.put(key, jarValue);
-                languageLog().warn("Language key '" + key + "' in '" + resourcePath + "' for module '"
-                        + getPluginName() + "' has a malformed format-argument index and could "
-                        + "not be compared; using the current bundled version's value for this key.");
-                continue;
-            }
-            // #524: the %s/%d check above never sees this module population's actual dialect --
-            // see PLACEHOLDER_PATTERN's javadoc for the install-wide measurement. Only evaluated
-            // when the symmetric %-check above found no mismatch: either detector firing is
-            // sufficient reason to prefer the bundled value, so there is nothing more to learn by
-            // also running the brace check once arityMismatch is already true.
-            boolean braceTokenLost = !arityMismatch && missingBracePlaceholder(diskValue, jarValue);
-            if (arityMismatch || braceTokenLost) {
-                resolved.put(key, jarValue);
-                languageLog().warn("Language key '" + key + "' in '" + resourcePath + "' for module '"
-                        + getPluginName() + "' " + (arityMismatch
-                                ? "has a different placeholder count than the current bundled version"
-                                : "is missing a placeholder that the current bundled version has")
-                        + "; using the current bundled version's value for this key.");
+            String officialValue = officialEntry.getValue();
+            String reason = lostPlaceholderReason(ownValue, officialValue);
+            if (reason != null) {
+                resolved.put(key, officialValue);
+                mismatch.accept(key, reason);
             }
         }
-        return new Language(resolved);
+        return resolved;
+    }
+
+    /**
+     * Why {@code ownValue} lost a placeholder relative to {@code officialValue}, or {@code null} if it did not.
+     */
+    private static String lostPlaceholderReason(String ownValue, String officialValue) {
+        boolean arityMismatch;
+        try {
+            arityMismatch = placeholderArity(ownValue) != placeholderArity(officialValue);
+        } catch (NumberFormatException e) {
+            // Codex round 3, P2: an explicit format-argument index too large for int (e.g.
+            // "%999999999999999999$s") overflows Integer.parseInt inside placeholderArity. Before
+            // that fix the exception aborted the whole module's construction over a single
+            // malformed, possibly never-formatted value. A malformed index is handled the same
+            // conservative way as a genuine mismatch: the bundled value is used for this key.
+            return "has a malformed format-argument index and could not be compared";
+        }
+        if (arityMismatch) {
+            return "has a different placeholder count than the current bundled version";
+        }
+        // #524: the %s/%d check above never sees this module population's actual dialect -- see
+        // PLACEHOLDER_PATTERN's javadoc for the install-wide measurement. Only evaluated when the
+        // symmetric %-check found no mismatch: either detector firing is reason enough.
+        return missingBracePlaceholder(ownValue, officialValue)
+                ? "is missing a placeholder that the current bundled version has" : null;
+    }
+
+    private void warnLostPlaceholder(String key, String fileLabel, String reason) {
+        languageLog().warn("Language key '" + key + "' in '" + fileLabel + "' for module '" + getPluginName() + "' "
+                + reason + "; using the current bundled version's value for this key.");
     }
 
     /**
