@@ -121,7 +121,8 @@ class ConfigBatchBufferingTest {
                 MockedStatic<com.ultikits.ultitools.config.document.AtomicConfigWriter> writer =
                         Mockito.mockStatic(com.ultikits.ultitools.config.document.AtomicConfigWriter.class,
                                 Mockito.CALLS_REAL_METHODS)) {
-            writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.write(
+            // Automatic writes publish through the write gate, which stages before its last-moment re-read (17-63 IN-01).
+            writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.stage(
                     Mockito.eq(directory.resolve("second.yml")), anyString()))
                     .thenThrow(new java.io.IOException("injected second-file refusal"));
             manager.registerAll(plugin, "batch", getClass().getClassLoader());
@@ -132,8 +133,10 @@ class ConfigBatchBufferingTest {
             assertThat(failed).isNotNull();
             assertThat(failed.isModifiedSinceSnapshot()).isFalse();
             failed.save();
-            writer.verify(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.write(
+            writer.verify(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.stage(
                     Mockito.eq(directory.resolve("second.yml")), anyString()), Mockito.times(1));
+            writer.verify(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.write(
+                    Mockito.eq(directory.resolve("second.yml")), anyString()), Mockito.never());
             registry.verify(() -> ConverterRegistry.prepareSelectedConfigs(plugin,
                     new String[]{"batch"}, getClass().getClassLoader()));
         }

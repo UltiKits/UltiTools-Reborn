@@ -125,7 +125,8 @@ class ConfigCommentTokenSafetyTest {
         byte[] before = Files.readAllBytes(file());
         try (org.mockito.MockedStatic<com.ultikits.ultitools.config.document.AtomicConfigWriter> writer =
                 Mockito.mockStatic(com.ultikits.ultitools.config.document.AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
-            writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.write(
+            // Automatic writes publish through the write gate, which stages before its last-moment re-read (17-63 IN-01).
+            writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.stage(
                     Mockito.eq(file()), Mockito.anyString())).thenThrow(new IOException("injected write failure"));
             SafetyConfig config = new SafetyConfig(PATH);
             try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {

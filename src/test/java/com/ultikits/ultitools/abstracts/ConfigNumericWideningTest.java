@@ -291,7 +291,8 @@ class ConfigNumericWideningTest {
         // Atomic replacement can replace a read-only target in a writable parent; inject real I/O failure.
         try (org.mockito.MockedStatic<com.ultikits.ultitools.config.document.AtomicConfigWriter> writer =
                 Mockito.mockStatic(com.ultikits.ultitools.config.document.AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
-            writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.write(
+            // Automatic writes publish through the write gate, which stages before its last-moment re-read (17-63 IN-01).
+            writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.stage(
                     Mockito.eq(file()), Mockito.anyString())).thenThrow(new IOException("injected write failure"));
             assertThatThrownBy(() -> config.init(plugin)).isInstanceOf(IOException.class);
             assertThat(config.isLastInitIncomplete()).as("after a failed write-back").isTrue();

@@ -154,7 +154,8 @@ class ConfigAutomaticWriteGateTest {
         language = ZH;
         byte[] before = bytes();
         try (MockedStatic<AtomicConfigWriter> writer = Mockito.mockStatic(AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
-            writer.when(() -> AtomicConfigWriter.write(Mockito.eq(file()), Mockito.anyString()))
+            // Automatic writes publish through the write gate, which stages before its last-moment re-read (17-63 IN-01).
+            writer.when(() -> AtomicConfigWriter.stage(Mockito.eq(file()), Mockito.anyString()))
                     .thenThrow(new IOException("injected write failure"));
 
             config.reload();

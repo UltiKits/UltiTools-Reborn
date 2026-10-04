@@ -324,7 +324,8 @@ class ConfigBoundLongRoundTripTest {
         try (org.mockito.MockedStatic<com.ultikits.ultitools.config.document.AtomicConfigWriter> writer =
                 org.mockito.Mockito.mockStatic(com.ultikits.ultitools.config.document.AtomicConfigWriter.class,
                         org.mockito.Mockito.CALLS_REAL_METHODS)) {
-            writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.write(
+            // Automatic writes publish through the write gate, which stages before its last-moment re-read (17-63 IN-01).
+            writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.stage(
                     org.mockito.Mockito.eq(file), org.mockito.Mockito.anyString()))
                     .thenThrow(new IOException("injected write failure"));
             ConfigManager secondBoot = boot();
