@@ -1,0 +1,5 @@
+# Interval in seconds
+interval: 300
+motd: |-
+  first line
+  second line

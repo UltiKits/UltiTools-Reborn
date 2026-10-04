@@ -115,6 +115,19 @@ class ConfigAutomaticWriteGateTest {
         return Files.readAllBytes(file());
     }
 
+    private void putFixture(String name) throws IOException {
+        try (java.io.InputStream in = ConfigAutomaticWriteGateTest.class.getResourceAsStream("/config-golden/hand-edited/" + name)) {
+            assertThat(in).as("fixture " + name).isNotNull();
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            byte[] buffer = new byte[4096];
+            for (int n = in.read(buffer); n >= 0; n = in.read(buffer)) {
+                out.write(buffer, 0, n);
+            }
+            Files.write(file(), out.toByteArray());
+            Files.setLastModifiedTime(file(), OLD);
+        }
+    }
+
     private List<String> warningsNamingTheFile() {
         List<String> result = new ArrayList<>();
         synchronized (warnings) {
@@ -186,5 +199,92 @@ class ConfigAutomaticWriteGateTest {
         assertThat(new String(bytes(), StandardCharsets.UTF_8))
                 .isEqualTo("# " + EN + "\ninterval: 300\n# Whether the feature is enabled\nenabled: true\n");
         assertThat(warnings).isEmpty();
+    }
+
+    /**
+     * #600 (inventory P5/A14): a file using anchors is never written automatically - not by the first-start
+     * insert - and is named once per server run however many entities and reloads touch it.
+     */
+    @Test
+    void anchoredFileMissingAKeyIsNeverWrittenAndWarnedOncePerRun() throws Exception {
+        putFixture("anchored-missing-key.yml");
+        byte[] before = bytes();
+
+        Gate config = new Gate(PATH);
+        config.init(plugin);
+        assertThat(bytes()).isEqualTo(before);
+        assertThat(config.enabled).as("the declared default runs in memory").isTrue();
+        assertThat(warningsNamingTheFile()).hasSize(1);
+        assertThat(warningsNamingTheFile().get(0)).contains("anchors").contains("enabled");
+
+        new Gate(PATH).init(plugin);
+        for (int i = 0; i < 10; i++) {
+            config.reload();
+        }
+        assertThat(bytes()).isEqualTo(before);
+        assertThat(Files.getLastModifiedTime(file())).isEqualTo(OLD);
+        assertThat(warningsNamingTheFile()).as("one warning per file per server run").hasSize(1);
+    }
+
+    /**
+     * #600 (#597 review F1, second-reload probe; #598 item 1): a comment-only write at start-up or reload after
+     * a language switch never rewrites an anchored file; the anchors survive any number of reloads.
+     */
+    @Test
+    void anchoredFileSurvivesSecondReload() throws Exception {
+        put("# " + EN + "\ninterval: 300\n# Whether the feature is enabled\nenabled: true\nbase: &b {x: 1}\ncopy: *b\n");
+        byte[] before = bytes();
+
+        language = ZH;
+        Gate config = new Gate(PATH);
+        config.init(plugin);
+        assertThat(bytes()).as("start-up after a language switch").isEqualTo(before);
+
+        language = "Interval (a further switch)";
+        config.reload();
+        config.reload();
+        assertThat(bytes()).as("two reloads after a further switch").isEqualTo(before);
+        assertThat(Files.getLastModifiedTime(file())).isEqualTo(OLD);
+        assertThat(warningsNamingTheFile()).hasSize(1);
+        assertThat(warningsNamingTheFile().get(0)).contains("anchors");
+    }
+
+    /** #600 (inventory A15): a multi-line string in a file without a final line break is never re-quoted. */
+    @Test
+    void multiLineStringWithoutFinalNewlineAndMissingKeyIsRefused() throws Exception {
+        putFixture("multiline-no-final-newline.yml");
+        byte[] before = bytes();
+
+        Gate config = new Gate(PATH);
+        config.init(plugin);
+
+        assertThat(bytes()).isEqualTo(before);
+        assertThat(Files.getLastModifiedTime(file())).isEqualTo(OLD);
+        assertThat(config.enabled).isTrue();
+        assertThat(warningsNamingTheFile()).hasSize(1);
+        assertThat(warningsNamingTheFile().get(0)).contains("layout").contains("enabled");
+    }
+
+    /**
+     * #600 (inventory P4/A13/A15): on a hand-aligned file whose list carries item comments, neither the insert
+     * nor a comment-only write changes a byte; each refusal is one warning.
+     */
+    @Test
+    void handAlignedFileWithListItemCommentsIsTouchedByNeitherInsertNorCommentWrite() throws Exception {
+        putFixture("hand-aligned.yml");
+        byte[] before = bytes();
+
+        Gate config = new Gate(PATH);
+        config.init(plugin);
+        assertThat(bytes()).as("the insert").isEqualTo(before);
+        assertThat(warningsNamingTheFile()).hasSize(1);
+
+        language = ZH;
+        config.reload();
+        assertThat(bytes()).as("the comment-only write").isEqualTo(before);
+        assertThat(Files.getLastModifiedTime(file())).isEqualTo(OLD);
+        assertThat(warningsNamingTheFile()).hasSize(2);
+        assertThat(warningsNamingTheFile().get(1)).contains("layout").contains("interval (comment)");
+        assertThat(config.isModifiedSinceSnapshot()).isFalse();
     }
 }
