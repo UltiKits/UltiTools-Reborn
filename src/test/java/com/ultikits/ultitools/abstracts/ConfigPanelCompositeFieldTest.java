@@ -59,6 +59,8 @@ class ConfigPanelCompositeFieldTest {
         Map<String, Vector> points = new LinkedHashMap<>();
         @ConfigEntry(path = "nv")
         Map<String, Map<String, Integer>> nv = new LinkedHashMap<>();
+        @ConfigEntry(path = "spots")
+        Map<String, Location> spots = new LinkedHashMap<>();
 
         public Composites(String configFilePath) {
             super(configFilePath);
@@ -87,7 +89,7 @@ class ConfigPanelCompositeFieldTest {
 
     @Test
     void aWholeNumberSentByThePanelIntoAVectorFieldIsAccepted() throws Exception {
-        String text = "home:\n  ==: Vector\n  x: 1.0\n  y: 2.0\n  z: 3.0\nspawn: null\npoints: {}\nnv: {}\n";
+        String text = "home:\n  ==: Vector\n  x: 1.0\n  y: 2.0\n  z: 3.0\nspawn: null\npoints: {}\nnv: {}\nspots: {}\n";
         Composites config = load("a.yml", text);
 
         config.updateProperties(edit("home.y", 7));
@@ -99,7 +101,7 @@ class ConfigPanelCompositeFieldTest {
 
     @Test
     void aWholeNumberAlreadyInTheFileInAnotherFieldDoesNotBlockTheEdit() throws Exception {
-        String text = "home:\n  ==: Vector\n  x: 1\n  y: 2.0\n  z: 3.0\nspawn: null\npoints: {}\nnv: {}\n";
+        String text = "home:\n  ==: Vector\n  x: 1\n  y: 2.0\n  z: 3.0\nspawn: null\npoints: {}\nnv: {}\nspots: {}\n";
         Composites config = load("b.yml", text);
 
         config.updateProperties(edit("home.y", 7.5));
@@ -111,7 +113,7 @@ class ConfigPanelCompositeFieldTest {
     @Test
     void untouchedFieldsOfAnEditedLocationKeepTheirBytes() throws Exception {
         String text = "spawn:\n  ==: org.bukkit.Location\n  world: world\n  x: 100\n  y: 64\n  z: 2\n  pitch: 0\n  yaw: 0\n"
-                + "home:\n  ==: Vector\n  x: 1.0\n  y: 2.0\n  z: 3.0\npoints: {}\nnv: {}\n";
+                + "home:\n  ==: Vector\n  x: 1.0\n  y: 2.0\n  z: 3.0\npoints: {}\nnv: {}\nspots: {}\n";
         Composites config = load("c.yml", text);
 
         config.updateProperties(edit("spawn.x", 9.5));
@@ -122,20 +124,23 @@ class ConfigPanelCompositeFieldTest {
     }
 
     @Test
-    void untouchedFieldsOfAnEditedVectorInAMapEntryKeepTheirBytes() throws Exception {
-        String text = "points:\n  a:\n    ==: Vector\n    x: 4\n    y: 5\n    z: 6\n  b:\n    ==: Vector\n    x: 0.5\n"
-                + "    y: 0.5\n    z: 0.5\nhome:\n  ==: Vector\n  x: 1.0\n  y: 2.0\n  z: 3.0\nspawn: null\nnv: {}\n";
+    void untouchedFieldsOfAnEditedLocationInAMapEntryKeepTheirBytes() throws Exception {
+        String text = "spots:\n  a:\n    ==: org.bukkit.Location\n    world: world\n    x: 4\n    y: 5\n    z: 6\n"
+                + "    pitch: 0\n    yaw: 0\n  b:\n    ==: org.bukkit.Location\n    world: world\n    x: 0.5\n"
+                + "    y: 0.5\n    z: 0.5\n    pitch: 0.0\n    yaw: 0.0\nhome:\n  ==: Vector\n  x: 1.0\n  y: 2.0\n  z: 3.0\n"
+                + "spawn: null\npoints: {}\nnv: {}\n";
         Composites config = load("d.yml", text);
 
-        config.updateProperties(edit("points.a.y", 6.5));
+        config.updateProperties(edit("spots.a.y", 6.5));
 
-        assertThat(config.points.get("a")).isEqualTo(new Vector(4, 6.5, 6));
+        assertThat(config.spots.get("a").getY()).isEqualTo(6.5);
+        assertThat(config.spots.get("a").getX()).isEqualTo(4.0);
         assertThat(read("d.yml")).isEqualTo(text.replace("    y: 5\n", "    y: 6.5\n"));
     }
 
     @Test
     void anEditBelowAGroupTheModuleRemovedInMemoryIsRefusedWithAReason() throws Exception {
-        String text = "nv:\n  g:\n    a: 1\nhome:\n  ==: Vector\n  x: 1.0\n  y: 2.0\n  z: 3.0\nspawn: null\npoints: {}\n";
+        String text = "nv:\n  g:\n    a: 1\nhome:\n  ==: Vector\n  x: 1.0\n  y: 2.0\n  z: 3.0\nspawn: null\npoints: {}\nspots: {}\n";
         Composites config = load("e.yml", text);
         config.nv.remove("g");
 
