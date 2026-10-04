@@ -186,7 +186,6 @@
   "config-bound @CmdCD %s was not updated: %s; the running %ds is kept": "config-bound @CmdCD %s was not updated: %s; the running %ds is kept",
   "applying the reloaded config-bound %s values failed: %s; the running values are kept": "applying the reloaded config-bound %s values failed: %s; the running values are kept",
   "config-bound @Scheduled and @CmdCD values were not applied: the reload ran off the main thread": "config-bound @Scheduled and @CmdCD values were not applied: the reload ran off the main thread",
-  "Language file '%s' of module '%s' had no provenance record and differed from the version bundled with this release, so it was replaced by the bundled version: this release cannot tell whether it had been edited. The previous file was kept as '%s'; to restore it, stop the server and rename it back.": "Language file '%s' of module '%s' had no provenance record and differed from the version bundled with this release, so it was replaced by the bundled version: this release cannot tell whether it had been edited. The previous file was kept as '%s'; to restore it, stop the server and rename it back.",
   "Module '%s' requires %s, which is not installed or not enabled; the module is not loaded.": "Module '%s' requires %s, which is not installed or not enabled; the module is not loaded.",
   "命令执行出错: %s": "Command execution failed: %s",
   "处理中...": "Processing...",
