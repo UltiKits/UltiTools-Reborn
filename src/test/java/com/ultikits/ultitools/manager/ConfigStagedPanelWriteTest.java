@@ -350,7 +350,7 @@ class ConfigStagedPanelWriteTest {
     private static Map<String, Object> state(Values value) throws Exception {
         Map<String, Object> result = new LinkedHashMap<>();
         for (String name : Arrays.asList("document", "savedSnapshot", "lastLoadedPresence", "acknowledgedRaw",
-                "savedFileFingerprint", "lastLoadUnparseable", "lastInitIncomplete", "pendingCommentWrite",
+                "savedFileFingerprint", "lastLoadUnparseable", "lastInitIncomplete",
                 "pendingInitialization", "deferInitialization", "warnedCommentKeys")) {
             Field field = AbstractConfigEntity.class.getDeclaredField(name); field.setAccessible(true);
             Object data = field.get(value);
