@@ -160,9 +160,12 @@ public abstract class AbstractConfigEntity {
      * <p>
      * A setting is written only when all three hold: the module changed it since the last load or save; the file
      * still holds at that path exactly the value the framework last read or wrote there; and that value is the one
-     * the module started from (it converts to the setting's value as last loaded or saved). A map setting is compared
-     * and written entry by entry (a list is one value): only the entries the module added, changed or removed are set
-     * or removed. Everything else in the file stays as it is: a save never inserts a key the file lacks, never
+     * the module started from (it converts to the setting's value as last loaded or saved). A setting declared as a
+     * {@link Map} is compared and written entry by entry, following the declared map types into nested maps: only the
+     * entries the module added, changed or removed are set or removed. Any other value - a list, a
+     * {@code ConfigurationSerializable} such as a Bukkit {@code Location}, the value of a typed map entry that is not
+     * itself a map - is one value, written whole or not at all, so the file never holds a value mixed from the
+     * module's and the operator's. Everything else in the file stays as it is: a save never inserts a key the file lacks, never
      * rewrites a comment and never removes a map entry the module did not remove. When nothing needs writing, the file
      * is not touched (bytes and modification time stay).
      * <p>
@@ -277,7 +280,7 @@ public abstract class AbstractConfigEntity {
             Object base = savedSnapshot.get(field);
             Object mine = current.get(field);
             List<List<String>> leaves = new ArrayList<>();
-            changedLeaves(base, mine, new ArrayList<>(), leaves);
+            changedLeaves(base, mine, declaredType(field), new ArrayList<>(), leaves);
             if (leaves.isEmpty()) {
                 // Equal content (at most a different map order): nothing a file write could carry.
                 savedSnapshot.put(field, mine);
@@ -379,22 +382,37 @@ public abstract class AbstractConfigEntity {
     }
 
     /**
-     * Collects the paths, relative to a setting, at which {@code current} differs from {@code base}: two maps are
-     * compared key by key (an added or removed key is one path), anything else - a list included - is one value.
+     * Collects the paths, relative to a setting, at which {@code current} differs from {@code base}. Only a value
+     * declared as a {@link Map} is compared key by key (an added or removed key is one path), following the declared
+     * value type into nested maps; anything else - a list, a {@code ConfigurationSerializable} such as a Bukkit
+     * {@code Location} or {@code Vector}, a typed map's value of a non-map type - is one value, written whole or not at
+     * all, so a save never leaves on disk a value mixed from the module's and the operator's (save rule revision 1,
+     * 17-65 review round 1 R65-01).
      */
-    private static void changedLeaves(Object base, Object current, List<String> prefix, List<List<String>> out) {
-        if (base instanceof Map && current instanceof Map) {
+    private static void changedLeaves(Object base, Object current, Type declared, List<String> prefix, List<List<String>> out) {
+        if (splitsByEntry(declared, base, current)) {
             Map<?, ?> before = (Map<?, ?>) base;
             Map<?, ?> after = (Map<?, ?>) current;
+            Type valueType = TypeToken.of(declared).resolveType(Map.class.getTypeParameters()[1]).getType();
             Set<Object> names = new java.util.LinkedHashSet<>(after.keySet()); names.addAll(before.keySet());
             for (Object name : names) {
                 List<String> path = new ArrayList<>(prefix); path.add(String.valueOf(name));
                 if (!before.containsKey(name) || !after.containsKey(name)) { out.add(path); }
-                else { changedLeaves(before.get(name), after.get(name), path, out); }
+                else { changedLeaves(before.get(name), after.get(name), valueType, path, out); }
             }
             return;
         }
         if (!PlainData.plainEquals(base, current)) { out.add(prefix); }
+    }
+
+    /**
+     * Whether a value is compared entry by entry: it is declared as a {@link Map} and both plain forms are maps that are
+     * not a serialized object (Bukkit's {@code ==} type key).
+     */
+    private static boolean splitsByEntry(Type declared, Object base, Object current) {
+        return base instanceof Map && current instanceof Map
+                && Map.class.isAssignableFrom(TypeToken.of(declared).getRawType())
+                && !((Map<?, ?>) base).containsKey("==") && !((Map<?, ?>) current).containsKey("==");
     }
 
     /** The key a warning names for a change: the setting's path, then the map keys, any key below a secret-shaped one redacted. */
