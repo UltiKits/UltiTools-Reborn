@@ -1620,7 +1620,6 @@ public abstract class AbstractConfigEntity {
         private final java.nio.file.Path target;
         private final OperatorFileWriter.Staged staged;
         private OperatorFileWriter.Result committed;
-        private boolean attempted;
         private final Map<Field, Object> bound;
         private PanelWrite(PanelCheckpoint before, List<ModuleChange> changes, java.nio.file.Path target,
                 OperatorFileWriter.Staged staged, Map<Field, Object> bound) {
@@ -1635,11 +1634,8 @@ public abstract class AbstractConfigEntity {
          */
         public void commit() throws IOException {
             if (staged == null) { return; }
-            OperatorFileWriter.Result result;
-            try { result = staged.commit(); }
-            catch (IOException | RuntimeException failure) { attempted = true; throw failure; }
+            OperatorFileWriter.Result result = staged.commit();
             if (!result.applied()) { throw refused(result.reason()); }
-            attempted = result.outcome() == OperatorFileWriter.Outcome.WRITTEN;
             committed = result;
         }
         /** Acknowledges only after every manager-owned replacement succeeds. */
@@ -1653,17 +1649,16 @@ public abstract class AbstractConfigEntity {
                 }
             }
         }
-        /** Restores a target this write replaced to exactly the bytes it was verified against, and all entity state;
-         * always discards its staged file.
+        /** Restores a target this write replaced to exactly the bytes it was verified against - through the gate's
+         * last-moment check, so a file the operator saved after this write replaced it is kept and named once
+         * ({@link OperatorFileWriter.Staged#restore()}, 17-65 review round 1 R65-I3) - and all entity state; always
+         * discards its staged file.
          * @throws IOException if physical recovery fails
          */
         public void rollback() throws IOException {
             synchronized (AbstractConfigEntity.this) {
                 try {
-                    if (attempted) {
-                        if (staged.readText() == null) { Files.deleteIfExists(target); }
-                        else { AtomicConfigWriter.write(target, staged.readText()); }
-                    }
+                    if (staged != null) { staged.restore(); }
                 } finally {
                     before.restore(); discard();
                 }

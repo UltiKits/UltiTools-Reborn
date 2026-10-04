@@ -306,6 +306,10 @@ public final class OperatorFileWriter {
         private final String readText;
         private final AtomicConfigWriter.StagedWrite temporary;
         private boolean finished;
+        /** Whether this write replaced or created the target. */
+        private boolean published;
+        /** Whether the replacement itself failed part-way, so the target may hold neither the old nor the new text. */
+        private boolean commitFailed;
 
         private Staged(Path file, Path absolute, OwnedPaths owned, List<String> keys, String rendered,
                 ConfigDocument candidate, String read, String readText, AtomicConfigWriter.StagedWrite temporary) {
@@ -386,18 +390,22 @@ public final class OperatorFileWriter {
             }
             finished = true;
             boolean creating = ABSENT.equals(read);
-            boolean published = false;
             synchronized (AtomicConfigWriter.WRITE_LOAD_LOCK) {
                 try {
                     byte[] now = readOrNull(file);
                     if (creating && now == null) {
+                        commitFailed = true;
                         temporary.commitAsNewFile();
+                        commitFailed = false;
                         published = true;
                     } else if (!creating && now != null && ConfigDocument.sha256(now).equals(read)) {
+                        commitFailed = true;
                         temporary.commit();
+                        commitFailed = false;
                         published = true;
                     }
                 } catch (FileAlreadyExistsException appeared) {
+                    commitFailed = false;
                     // A file appeared at the target after the re-read: it is left as it is, and this is reported below.
                     LOGGER.fine("Config creation lost the race to an existing file at " + absolute);
                 } finally {
@@ -411,6 +419,44 @@ public final class OperatorFileWriter {
             }
             return changed(absolute, owned, keys, creating ? "a file appeared while the new content was being prepared"
                     : "the file changed while the new content was being prepared");
+        }
+
+        /**
+         * Undoes this write after its batch failed: puts back exactly the text the write was verified against (or removes
+         * the file it created), through the same last-moment check as the commit - only while the file still holds exactly
+         * what this write put there, or when this write's own replacement failed part-way. A file that changed after this
+         * write replaced it - an operator's save - is kept as it is, and one WARNING names it (17-65 review round 1
+         * R65-I3). Does nothing when this write did not touch the file.
+         *
+         * @return whether the file now holds what it held before this write (also when nothing needed undoing)
+         * @throws IOException if putting the text back fails
+         */
+        public boolean restore() throws IOException {
+            if (!published && !commitFailed) {
+                return true;
+            }
+            synchronized (AtomicConfigWriter.WRITE_LOAD_LOCK) {
+                byte[] now = readOrNull(file);
+                String nowFingerprint = now == null ? ABSENT : ConfigDocument.sha256(now);
+                if (nowFingerprint.equals(read)) {
+                    return true;
+                }
+                String writtenFingerprint = ConfigDocument.sha256(rendered.getBytes(StandardCharsets.UTF_8));
+                if (!commitFailed && !nowFingerprint.equals(writtenFingerprint)) {
+                    LOGGER.warning("Configuration file " + absolute + " was not restored after a failed write: it changed"
+                            + " after this write replaced it, so it is kept as it is now. Keys this write had changed: "
+                            + String.join(", ", keys.isEmpty() ? describe(owned.values(), owned.comments()) : keys) + ".");
+                    return false;
+                }
+                if (readText == null) {
+                    Files.deleteIfExists(file);
+                } else {
+                    AtomicConfigWriter.write(file, readText);
+                }
+                published = false;
+                commitFailed = false;
+                return true;
+            }
         }
 
         /**
