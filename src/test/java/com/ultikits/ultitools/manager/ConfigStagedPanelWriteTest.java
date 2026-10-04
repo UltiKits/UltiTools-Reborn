@@ -371,6 +371,57 @@ class ConfigStagedPanelWriteTest {
         assertNoTemporaries();
     }
 
+    /**
+     * 17-65 review round 1 R65-I3: the batch rollback restores a file it already replaced only while that file still holds
+     * exactly what this write put there; a file the operator saved after its commit is kept, and one warning names it.
+     */
+    @Test
+    void rollbackKeepsAFileTheOperatorSavedAfterItsCommit() throws Exception {
+        List<Path> moved = new ArrayList<>();
+        List<String> warnings = new ArrayList<>();
+        java.util.logging.Logger logger = java.util.logging.Logger.getLogger("com.ultikits.ultitools");
+        java.util.logging.Handler capture = new java.util.logging.Handler() {
+            @Override public void publish(java.util.logging.LogRecord record) {
+                if (record.getLevel().intValue() >= java.util.logging.Level.WARNING.intValue()) { warnings.add(record.getMessage()); }
+            }
+            @Override public void flush() { /* No buffer. */ }
+            @Override public void close() { /* No resource. */ }
+        };
+        logger.addHandler(capture);
+        try (MockedStatic<AtomicConfigWriter> writer = Mockito.mockStatic(
+                AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
+            writer.when(() -> AtomicConfigWriter.stage(any(Path.class), anyString())).thenAnswer(call -> {
+                Path target = call.getArgument(0);
+                AtomicConfigWriter.StagedWrite observed = Mockito.spy((AtomicConfigWriter.StagedWrite) call.callRealMethod());
+                Mockito.doAnswer(commit -> {
+                    if (moved.size() == 1) { throw new IOException("injected move2"); }
+                    Object result = commit.callRealMethod();
+                    moved.add(target);
+                    // The operator saves this file after the batch replaced it and before the batch fails.
+                    Files.write(target, operatorEdit(target));
+                    return result;
+                }).when(observed).commit();
+                return observed;
+            });
+            assertThatThrownBy(() -> manager.loadFromJson(payload()))
+                    .isInstanceOf(IOException.class).hasMessageContaining("injected move2");
+        } finally { logger.removeHandler(capture); }
+        assertThat(moved).hasSize(1);
+        Path kept = moved.get(0);
+        for (int i = 0; i < entities.size(); i++) {
+            Path target = directory.resolve(entities.get(i).getConfigFilePath());
+            if (target.equals(kept)) {
+                assertThat(Files.readAllBytes(target)).as("the operator's save after the commit is kept").isEqualTo(operatorEdit(target));
+            } else {
+                assertThat(Files.readAllBytes(target)).isEqualTo(originals.get(i));
+            }
+            assertThat(state(entities.get(i))).isEqualTo(checkpoints.get(i));
+        }
+        assertThat(warnings).filteredOn(text -> text.contains(kept.getFileName().toString()) && text.contains("not restored"))
+                .hasSize(1);
+        assertNoTemporaries();
+    }
+
     private static byte[] operatorEdit(Path target) {
         return ("# operator header\nvalue: 7\nother: edited after staging " + target.getFileName() + "\nunknown: keep\n")
                 .getBytes(StandardCharsets.UTF_8);
