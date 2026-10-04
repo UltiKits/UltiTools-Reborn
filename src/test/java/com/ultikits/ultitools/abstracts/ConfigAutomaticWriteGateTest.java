@@ -155,4 +155,36 @@ class ConfigAutomaticWriteGateTest {
         assertThat(bytes()).isEqualTo(before);
         assertThat(config.interval).isEqualTo(300);
     }
+
+    /**
+     * #602: the batch flush writes the candidate computed at {@code initForBatch} only while the file still
+     * holds the bytes read then; an operator edit saved during module start-up is never written over.
+     */
+    @Test
+    void batchFlushOfAFileEditedAfterItWasReadWritesNothing() throws Exception {
+        put("# " + EN + "\ninterval: 300\n");
+        Gate config = new Gate(PATH);
+        config.initForBatch(plugin);
+        String edited = "# " + EN + "\ninterval: 450\n";
+        put(edited);
+
+        config.flushInitializationWrite();
+
+        assertThat(new String(bytes(), StandardCharsets.UTF_8)).isEqualTo(edited);
+        assertThat(Files.getLastModifiedTime(file())).isEqualTo(OLD);
+        assertThat(warningsNamingTheFile()).hasSize(1);
+        assertThat(warningsNamingTheFile().get(0)).contains("changed after it was read").contains("enabled");
+        assertThat(config.enabled).as("the declared default runs in memory").isTrue();
+    }
+
+    /** #602: first-time creation with no interference writes every declared key with its comment. */
+    @Test
+    void firstTimeCreationHoldsEveryDeclaredKeyWithItsComment() throws Exception {
+        Gate config = new Gate(PATH);
+        config.init(plugin);
+
+        assertThat(new String(bytes(), StandardCharsets.UTF_8))
+                .isEqualTo("# " + EN + "\ninterval: 300\n# Whether the feature is enabled\nenabled: true\n");
+        assertThat(warnings).isEmpty();
+    }
 }
