@@ -212,6 +212,43 @@ class ConfigTokenCommentReloadRefreshTest {
     }
 
     @Test
+    @DisplayName("a file using YAML anchors or aliases is not refreshed: a rewrite would expand them, so it stays byte for byte")
+    void anchoredFileIsNotRefreshed() throws Exception {
+        FixturePlugin plugin = moduleWithConfig();
+        Files.write(file(), (text() + "templates:\n  base: &base\n    value: 1\n  other: *base\n")
+                .getBytes(StandardCharsets.UTF_8));
+        plugin.reloadWithReport();
+        byte[] before = Files.readAllBytes(file());
+
+        switchServerLanguageTo("en");
+        plugin.reloadWithReport();
+
+        assertThat(Files.readAllBytes(file())).isEqualTo(before);
+        assertThat(text()).contains("&base").contains("*base");
+    }
+
+    @Test
+    @DisplayName("a refresh whose write fails leaves nothing for the shutdown save to write over the operator's values")
+    void failedRefreshWriteMarksNothingForShutdown() throws Exception {
+        FixturePlugin plugin = moduleWithConfig();
+        edit("interval: 300", "interval: 3O0");
+        plugin.reloadWithReport();
+        DemoConfig config = configManager.getConfigEntity(plugin, DemoConfig.class);
+        File folder = file().getParent().toFile();
+
+        switchServerLanguageTo("en");
+        assertThat(folder.setWritable(false)).as("precondition: the config folder can be made read-only").isTrue();
+        try {
+            plugin.reloadWithReport();
+            assertThat(config.isModifiedSinceSnapshot())
+                    .as("a shutdown save would write the in-memory default over the operator's 3O0").isFalse();
+        } finally {
+            folder.setWritable(true);
+        }
+        assertThat(text()).contains("interval: 3O0");
+    }
+
+    @Test
     @DisplayName("a file that cannot be parsed is not refreshed: it stays byte for byte")
     @SuppressWarnings("PMD.EmptyCatchBlock") // either outcome of the reload is fine; the file is what is asserted
     void unparseableFileIsNotRefreshed() throws Exception {
