@@ -185,6 +185,61 @@ class ConfigVectorWholeNumberTest {
         assertThat(read()).isEqualTo(TEXT.replace("    x: 1\n    y: 64\n", "    x: 7.5\n    y: 64\n"));
     }
 
+    @Test
+    void aReloadOfAnUnchangedFileOrOfAValueEqualEditChangesNothingAndWritesNothing() throws Exception {
+        // 17-66 review round 2 R66-R2-I3: 64 and 64.0 are the same value for the reload merge.
+        Vectors config = load();
+
+        config.reload();
+        assertThat(config.unsavedEntryPaths()).isEmpty();
+        assertThat(read()).isEqualTo(TEXT);
+
+        String operatorText = TEXT.replace("  x: 1.0\n  y: 64\n", "  x: 1.0\n  y: 64.0\n")
+                .replace("    x: 1\n    y: 64\n", "    x: 1\n    y: 64.00\n");
+        write(operatorText);
+        config.reload();
+        config.save();
+
+        assertThat(config.home).isEqualTo(new Vector(1, 64, 3));
+        assertThat(config.unsavedEntryPaths()).isEmpty();
+        assertThat(read()).as("the operator's 64.0 and 64.00 stay as written").isEqualTo(operatorText);
+        assertThat(records).isEmpty();
+    }
+
+    @Test
+    void aReloadKeepsAModuleChangeOverAValueEqualDiskEditWithoutAConflict() throws Exception {
+        Vectors config = load();
+        config.home = new Vector(5, 6, 7);
+        write(TEXT.replace("  x: 1.0\n  y: 64\n", "  x: 1.0\n  y: 64.0\n"));
+
+        config.reload();
+
+        assertThat(config.home).as("the module's change survives as unsaved").isEqualTo(new Vector(5, 6, 7));
+        assertThat(config.unsavedEntryPaths()).containsExactly("home");
+        assertThat(records).as("no conflict line: the file's value did not change").isEmpty();
+    }
+
+    @Test
+    void aReloadAdoptsADiskChangeAndASaveThenWritesOnlyTheModulesAddedEntry() throws Exception {
+        Vectors config = load();
+        config.points.put("c", new Vector(0.5, 0.5, 0.5));
+        String operatorText = TEXT.replace("  x: 1.0\n  y: 64\n", "  x: 1.0\n  y: 70\n");
+        write(operatorText);
+
+        config.reload();
+        config.save();
+
+        assertThat(config.home).isEqualTo(new Vector(1, 70, 3));
+        assertThat(config.points).containsKeys("a", "b", "c");
+        assertThat(read()).startsWith(operatorText.substring(0, operatorText.indexOf("counter:")))
+                .contains("  c:\n").contains("  y: 70\n").contains("    x: 1\n    y: 64\n    z: 2\n");
+        assertThat(records).isEmpty();
+    }
+
+    private void write(String text) throws Exception {
+        Files.write(tempDir.resolve("v.yml"), text.getBytes(StandardCharsets.UTF_8));
+    }
+
     private Vectors load() throws Exception {
         Files.write(tempDir.resolve("v.yml"), TEXT.getBytes(StandardCharsets.UTF_8));
         Vectors config = new Vectors("v.yml");
