@@ -235,8 +235,10 @@ class UltiToolsPluginLanguagePerKeyFallbackTest {
         // "disk wins for a key it has" is unambiguous.
         Files.write(diskLangFile.toPath(),
                 "{\"known\":\"&cDisk-customised translation.\"}".getBytes(StandardCharsets.UTF_8));
-        // Recorded as the copy extracted earlier, so this file is an operator's customisation that
-        // is kept; without a record it would be replaced by the jar's copy on this start (#459).
+        // Recorded as the copy extracted earlier, so this file was edited in place. Since #608
+        // (maintainer decision 2026-10-04) such an official file is restored at every start; the
+        // language folder is made unwritable below so the restore cannot happen, the file is kept,
+        // and the per-key merge this test pins is what resolves it.
         ResourceHashSidecar.record(diskResourceFolder, "lang/en.json", "hash-of-the-extracted-copy");
 
         ClassLoader isolatingBase = new LangResourceHidingClassLoader(
@@ -244,7 +246,13 @@ class UltiToolsPluginLanguagePerKeyFallbackTest {
         directoryLoader = new ChildFirstClassLoader(new URL[]{explodedRoot.toURI().toURL()}, isolatingBase);
         Object plugin = newModuleFixtureInstance(directoryLoader);
 
-        return invokeCreateLanguageFromPath(plugin, diskResourceFolder.getAbsolutePath());
+        File diskLangDir = diskLangFile.getParentFile();
+        assertThat(diskLangDir.setWritable(false)).isTrue();
+        try {
+            return invokeCreateLanguageFromPath(plugin, diskResourceFolder.getAbsolutePath());
+        } finally {
+            diskLangDir.setWritable(true);
+        }
     }
 
     /**
