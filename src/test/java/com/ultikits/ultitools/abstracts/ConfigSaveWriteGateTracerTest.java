@@ -125,6 +125,12 @@ class ConfigSaveWriteGateTracerTest {
         return new String(Files.readAllBytes(tempDir.resolve(name)), StandardCharsets.UTF_8);
     }
 
+    /** Forgets every warning logged so far (a load's conversion warnings), so only the save's own are counted. */
+    private void countFromHere() {
+        records.clear();
+        Mockito.clearInvocations(frameworkLogger);
+    }
+
     /** Every WARNING logged through the framework logger or any logger of the framework's packages. */
     private List<String> warnings() {
         List<String> result = new ArrayList<>();
@@ -153,6 +159,7 @@ class ConfigSaveWriteGateTracerTest {
         put(PATH, TEXT.replace("interval: 300", "interval: 450"));
 
         config.message = "welcome";
+        countFromHere();
         config.save();
 
         assertThat(read(PATH)).isEqualTo(TEXT.replace("interval: 300", "interval: 450").replace("message: hi", "message: welcome"));
@@ -170,6 +177,7 @@ class ConfigSaveWriteGateTracerTest {
         put(PATH, edited);
 
         config.interval = 600;
+        countFromHere();
         config.save();
 
         assertThat(read(PATH)).isEqualTo(edited);
@@ -191,6 +199,7 @@ class ConfigSaveWriteGateTracerTest {
 
         config.interval = 600;
         config.message = "welcome";
+        countFromHere();
         config.save();
 
         assertThat(read(PATH)).isEqualTo(TEXT.replace("interval: 300", "interval: 450").replace("message: hi", "message: welcome"));
@@ -206,6 +215,7 @@ class ConfigSaveWriteGateTracerTest {
         String edited = TEXT.replace("interval: 300", "interval:   450").replace("message: hi", "message: hello there");
         put(PATH, edited);
 
+        countFromHere();
         config.save();
 
         assertThat(read(PATH)).isEqualTo(edited);
@@ -224,6 +234,7 @@ class ConfigSaveWriteGateTracerTest {
         put(MAP_PATH, handEdited);
 
         config.emojis.put("heart", "love");
+        countFromHere();
         config.save();
 
         assertThat(read(MAP_PATH)).isEqualTo(handEdited + "  heart: love\n");
@@ -238,6 +249,7 @@ class ConfigSaveWriteGateTracerTest {
         put(MAP_PATH, "emojis:\n  smile: ':)'\n  frown: ':('\n  wave: o/\n  o:\n    O: x\n");
 
         config.emojis.remove("frown");
+        countFromHere();
         config.save();
 
         assertThat(read(MAP_PATH)).isEqualTo("emojis:\n  smile: ':)'\n  wave: o/\n  o:\n    O: x\n");
@@ -254,6 +266,7 @@ class ConfigSaveWriteGateTracerTest {
         put(MAP_PATH, edited);
 
         config.emojis.put("smile", "(:");
+        countFromHere();
         config.save();
 
         assertThat(read(MAP_PATH)).isEqualTo(edited);
