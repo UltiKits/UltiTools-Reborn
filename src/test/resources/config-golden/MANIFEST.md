@@ -80,3 +80,4 @@ Bundled module config files: 14 (control: 29 resource files listed, `plugin.yml`
 | hand-edited/hand-aligned.yml | hand-written operator-style file (plan 17-63) | - | 86828d9945537d32eada586b273df700521e5914fb1d3cd3ebc50d9370fee0ea |
 | hand-edited/anchored-missing-key.yml | hand-written operator-style file (plan 17-63) | - | adcdcfc577bbcbe3464654cc2b4078766ec90f16cb16433ff30da96e3c596fa4 |
 | hand-edited/multiline-no-final-newline.yml | hand-written operator-style file (plan 17-63) | - | 6f49ccca404e28f408f98f3dcfc663b459cb18951c610cf2208a3bc75ead0b09 |
+| hand-edited/block-scalar-blank-separator.yml | hand-written operator-style file (plan 17-63 review round 1) | - | 3d521a4780909ede12b2b61bab4c9981f9d2990e60069947b65c2db2221c1e2b |

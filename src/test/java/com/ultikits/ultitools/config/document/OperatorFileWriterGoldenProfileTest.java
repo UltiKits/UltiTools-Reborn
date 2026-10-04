@@ -102,7 +102,7 @@ class OperatorFileWriterGoldenProfileTest {
         edit.accept(expected);
         assertThat(PlainData.plainEquals(ConfigDocument.parse(afterText).toPlain(), expected.toPlain()))
                 .as("the file holds the original values with only the edit applied").isTrue();
-        independentlyCheck(beforeText, afterText, check);
+        independentlyCheck(beforeText, afterText, check, owned);
         return "WRITTEN";
     }
 
@@ -111,7 +111,7 @@ class OperatorFileWriterGoldenProfileTest {
      * the write could own - the added key (and the separator after an old last line without a line break),
      * one contiguous changed block for the value (a multi-line value may grow or shrink), or comment lines.
      */
-    private static void independentlyCheck(String before, String after, Check check) {
+    private static void independentlyCheck(String before, String after, Check check, OwnedPaths owned) {
         LineDiff diff = LineDiff.of(before, after);
         if (check == Check.INSERT) {
             for (String added : diff.added) {
@@ -122,6 +122,13 @@ class OperatorFileWriterGoldenProfileTest {
             assertThat(diff.removed).isNotEmpty();
             assertThat(diff.removedIsContiguous()).as("one changed block").isTrue();
             assertThat(diff.added).isNotEmpty();
+            // Review round 1 IN-04: the changed block is the key's own lines - from its key line to the last line of
+            // its value, never a blank or comment line between the value and the next key.
+            int[] region = valueRegion(before, owned.values().get(0));
+            for (int line : diff.removedAt) {
+                assertThat(line).as("removed line inside the key's own lines " + region[0] + ".." + region[1])
+                        .isBetween(region[0], region[1]);
+            }
         } else {
             for (String line : diff.removed) {
                 assertThat(line.trim()).as("removed comment line").startsWith("#");
@@ -130,7 +137,59 @@ class OperatorFileWriterGoldenProfileTest {
                 assertThat(line.trim()).as("added comment line").startsWith("#");
             }
             assertThat(diff.added).anySatisfy(line -> assertThat(line).contains(COMMENT));
+            // Review round 1 IN-04: the rewritten comment lines sit directly above the owned key.
+            if (!diff.removedAt.isEmpty()) {
+                int keyLine = valueRegion(before, owned.comments().get(0))[0];
+                assertThat(diff.removedIsContiguous()).isTrue();
+                assertThat(diff.removedAt.get(diff.removedAt.size() - 1)).as("directly above the owned key").isEqualTo(keyLine - 1);
+            }
         }
+    }
+
+    /**
+     * The key line of {@code path} and the last line of its value, found with SnakeYAML's own composer (not the
+     * gate's span logic): the value ends at the last line before the next key that is not blank and not a comment
+     * at or left of the key's column (a block scalar's content is indented deeper than its key).
+     */
+    private static int[] valueRegion(String text, List<String> path) {
+        org.yaml.snakeyaml.nodes.Node node = new org.yaml.snakeyaml.Yaml(ConfigDocument.loaderOptions())
+                .compose(new java.io.StringReader(text.startsWith("\uFEFF") ? text.substring(1) : text));
+        ConfigDocument.NodeConstructor keys = new ConfigDocument.NodeConstructor();
+        org.yaml.snakeyaml.nodes.Node key = null;
+        for (String segment : path) {
+            org.yaml.snakeyaml.nodes.Node found = null;
+            for (org.yaml.snakeyaml.nodes.NodeTuple tuple : ((org.yaml.snakeyaml.nodes.MappingNode) node).getValue()) {
+                if (segment.equals(String.valueOf(keys.construct(tuple.getKeyNode())))) {
+                    key = tuple.getKeyNode();
+                    found = tuple.getValueNode();
+                }
+            }
+            node = found;
+        }
+        assertThat(key).as("key " + path).isNotNull();
+        int keyLine = key.getStartMark().getLine();
+        int keyColumn = key.getStartMark().getColumn();
+        List<String> lines = LineDiff.lines(text.startsWith("\uFEFF") ? text.substring(1) : text);
+        int next = lines.size();
+        for (int i = keyLine + 1; i < lines.size(); i++) {
+            String line = lines.get(i);
+            int indent = line.length() - line.replaceAll("^[ \t]+", "").length();
+            String content = line.trim();
+            if (!content.isEmpty() && !content.startsWith("#") && indent <= keyColumn) {
+                next = i;
+                break;
+            }
+        }
+        int last = keyLine;
+        for (int i = keyLine + 1; i < next; i++) {
+            String line = lines.get(i);
+            int indent = line.length() - line.replaceAll("^[ \t]+", "").length();
+            String content = line.trim();
+            if (!content.isEmpty() && !(content.startsWith("#") && indent <= keyColumn)) {
+                last = i;
+            }
+        }
+        return new int[]{keyLine, last};
     }
 
     private static boolean isSeparatorOf(List<String> removed, String added) {

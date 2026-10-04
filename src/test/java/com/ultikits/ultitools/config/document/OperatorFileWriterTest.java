@@ -275,4 +275,51 @@ class OperatorFileWriterTest {
         assertThat(read(target)).isEqualTo(edited);
         assertThat(directory()).containsExactly("staged.yml");
     }
+
+    /**
+     * #600, review round 1 IN-02: a block scalar's owned span ends at its last content line, so the blank or
+     * whitespace-only separator lines after it are the operator's and are never removed by a set or a remove.
+     */
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0}")
+    @org.junit.jupiter.params.provider.CsvSource(delimiter = ';', value = {
+        "set-blank-after;a: |\\n  x\\n\\nb: 2\\n;a",
+        "set-spaces-line;a: |\\n  x\\n   \\nb: 2\\n;a",
+        "set-blank-then-comment;a: |\\n  x\\n\\n# about b\\nb: 2\\n;a",
+        "set-folded-strip;a: >-\\n  x\\n\\nb: 2\\n;a",
+        "set-nested;s:\\n  a: |\\n    x\\n\\n  b: 2\\n;s.a",
+        "remove-two-blanks;a: |\\n  x\\n\\n\\nb: 2\\n;a"})
+    void blockScalarSeparatorLinesAreNeverRemoved(String name, String escaped, String dotted) throws Exception {
+        String text = escaped.replace("\\n", "\n");
+        java.util.List<String> path = java.util.Arrays.asList(dotted.split("\\."));
+        Path target = tempDir.resolve(name + ".yml");
+        Files.write(target, text.getBytes(StandardCharsets.UTF_8));
+        boolean remove = name.startsWith("remove");
+
+        OperatorFileWriter.Result result = OperatorFileWriter.write(target, OwnedPaths.builder().value(path).build(), null,
+                document -> {
+                    if (remove) {
+                        document.remove(path);
+                    } else {
+                        document.set(path, "y\n");
+                    }
+                });
+
+        String after = read(target);
+        if (result.outcome() != OperatorFileWriter.Outcome.WRITTEN) {
+            assertThat(after).isEqualTo(text);
+        }
+        assertThat(separatorLines(after)).as("blank or whitespace-only lines").isEqualTo(separatorLines(text));
+    }
+
+    private static long separatorLines(String text) {
+        String[] lines = text.split("\n", -1);
+        long count = 0;
+        for (int i = 0; i < lines.length; i++) {
+            boolean finalEmpty = i == lines.length - 1 && lines[i].isEmpty();
+            if (!finalEmpty && lines[i].trim().isEmpty()) {
+                count++;
+            }
+        }
+        return count;
+    }
 }
