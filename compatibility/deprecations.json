@@ -546,6 +546,16 @@
     "removedIn": "6.3.0"
   },
   {
+    "key": "com.ultikits.ultitools.manager.ConfigManager#saveAll()",
+    "className": "com.ultikits.ultitools.manager.ConfigManager",
+    "memberName": "saveAll",
+    "kind": "METHOD",
+    "since": "6.3.0",
+    "forRemoval": false,
+    "replacement": "as of 6.3.0 this writes nothing; persist changes with AbstractConfigEntity#save() or AbstractConfigEntity#saveOperatorChange(String...) when they are made",
+    "status": "DEPRECATED"
+  },
+  {
     "key": "com.ultikits.ultitools.manager.ListenerManager#register(com.ultikits.ultitools.abstracts.UltiToolsPlugin,org.bukkit.event.Listener)",
     "className": "com.ultikits.ultitools.manager.ListenerManager",
     "memberName": "register",
