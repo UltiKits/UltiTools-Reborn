@@ -6,6 +6,7 @@ import java.io.Reader;
 import java.io.StringReader;
 import java.io.StringWriter;
 import java.io.UncheckedIOException;
+import java.io.Writer;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
@@ -32,6 +33,8 @@ import org.yaml.snakeyaml.comments.CommentLine;
 import org.yaml.snakeyaml.comments.CommentType;
 import org.yaml.snakeyaml.constructor.SafeConstructor;
 import org.yaml.snakeyaml.error.YAMLException;
+import org.yaml.snakeyaml.emitter.Emitter;
+import org.yaml.snakeyaml.events.CommentEvent;
 import org.yaml.snakeyaml.events.Event;
 import org.yaml.snakeyaml.events.ScalarEvent;
 import org.yaml.snakeyaml.nodes.AnchorNode;
@@ -43,6 +46,8 @@ import org.yaml.snakeyaml.nodes.SequenceNode;
 import org.yaml.snakeyaml.nodes.Tag;
 import org.yaml.snakeyaml.reader.UnicodeReader;
 import org.yaml.snakeyaml.representer.Representer;
+import org.yaml.snakeyaml.resolver.Resolver;
+import org.yaml.snakeyaml.serializer.Serializer;
 
 /**
  * One config file as a document: SnakeYAML's own node tree (comments, quoting and layout as they are in
@@ -89,11 +94,6 @@ public final class ConfigDocument {
 
     private static final Pattern YAML_LINE_BREAK = Pattern.compile("\r\n|[\r\n\u0085\u2028\u2029]");
     private static final Pattern WHITESPACE_ONLY_LINE = Pattern.compile("(?m)^ +$");
-    /**
-     * Private-use mark put before a comment line that follows a blank line while it is serialized (review round 1
-     * R1-01); never left in the output, and not used on a document whose text already holds it.
-     */
-    private static final String AFTER_BLANK = "\uE000\uE001\uE002";
 
     private final DocumentStyle style;
     private final boolean anchored;
@@ -488,13 +488,8 @@ public final class ConfigDocument {
         }
         StringWriter writer = new StringWriter();
         normalizeMultilineStrings(out, new IdentityHashMap<Node, Node>(), !style.finalLineBreak());
-        Map<Node, List<CommentLine>[]> marked = source.contains(AFTER_BLANK) ? null : markCommentsAfterBlankLines(out);
-        try {
-            dumper(style).serialize(out, writer);
-        } finally {
-            restoreComments(marked);
-        }
-        String text = WHITESPACE_ONLY_LINE.matcher(realignMarkedComments(writer.toString())).replaceAll("");
+        List<Event> events = serialize(out, writer, style);
+        String text = WHITESPACE_ONLY_LINE.matcher(realignCommentsAfterBlankLines(writer.toString(), events)).replaceAll("");
         if (style.upperCaseHex() || style.latin1AsUnicodeEscape()) {
             text = normalizeEscapes(text, style.upperCaseHex(), style.latin1AsUnicodeEscape());
         }
@@ -508,114 +503,124 @@ public final class ConfigDocument {
     }
 
     /**
-     * Marks, in copies of the comment lists, every comment line that follows a blank line and a comment line of the
-     * same list (review round 1 R1-01). SnakeYAML's emitter writes such a line after a blank line at its current
-     * indentation plus the list's own column again - doubled indentation in a nested block - so the marked lines are
-     * realigned after serialization ({@link #realignMarkedComments}). The original lists are restored afterwards.
+     * Serializes {@code out} exactly as {@code Yaml#serialize(Node, Writer)} does (the same {@link Serializer},
+     * {@link Emitter}, options and resolver), recording every event the emitter receives, so the comment lines it
+     * writes can be located afterwards by position (17-64 route change (i)).
      *
-     * @return the original block and end comment lists by node, to restore
+     * @return the events, in the order the emitter wrote them
      */
-    @SuppressWarnings("unchecked")
-    private static Map<Node, List<CommentLine>[]> markCommentsAfterBlankLines(Node root) {
-        Map<Node, List<CommentLine>[]> originals = new IdentityHashMap<>();
-        List<Node> pending = new ArrayList<>();
-        pending.add(root);
-        Set<Node> seen = Collections.newSetFromMap(new IdentityHashMap<Node, Boolean>());
-        while (!pending.isEmpty()) {
-            Node node = pending.remove(pending.size() - 1);
-            if (node == null || !seen.add(node)) {
-                continue;
-            }
-            List<CommentLine> block = markedCopy(node.getBlockComments());
-            List<CommentLine> end = markedCopy(node.getEndComments());
-            if (block != null || end != null) {
-                originals.put(node, new List[] {node.getBlockComments(), node.getEndComments()});
-                if (block != null) {
-                    node.setBlockComments(block);
-                }
-                if (end != null) {
-                    node.setEndComments(end);
-                }
-            }
-            if (node instanceof MappingNode) {
-                for (NodeTuple tuple : ((MappingNode) node).getValue()) {
-                    pending.add(tuple.getKeyNode());
-                    pending.add(tuple.getValueNode());
-                }
-            } else if (node instanceof SequenceNode) {
-                pending.addAll(((SequenceNode) node).getValue());
-            }
+    private static List<Event> serialize(Node out, Writer writer, DocumentStyle style) {
+        DumperOptions options = dumperOptions(style);
+        Emitter emitter = new Emitter(writer, options);
+        List<Event> events = new ArrayList<>();
+        Serializer serializer = new Serializer(event -> {
+            events.add(event);
+            emitter.emit(event);
+        }, new Resolver(), options, null);
+        try {
+            serializer.open();
+            serializer.serialize(out);
+            serializer.close();
+        } catch (IOException e) {
+            throw new YAMLException(e);
         }
-        return originals;
-    }
-
-    /** A copy of {@code lines} with the comment lines after a blank line marked, or {@code null} when none is. */
-    private static List<CommentLine> markedCopy(List<CommentLine> lines) {
-        if (lines == null) {
-            return null;
-        }
-        List<CommentLine> copy = new ArrayList<>(lines.size());
-        boolean comment = false;
-        boolean blank = false;
-        boolean changed = false;
-        for (CommentLine line : lines) {
-            if (line.getCommentType() == CommentType.BLANK_LINE) {
-                blank = comment;
-                copy.add(line);
-            } else if (line.getCommentType() == CommentType.BLOCK && blank) {
-                copy.add(new CommentLine(line.getStartMark(), line.getEndMark(), AFTER_BLANK + line.getValue(),
-                        line.getCommentType()));
-                changed = true;
-                blank = false;
-            } else {
-                comment = comment || line.getCommentType() == CommentType.BLOCK;
-                copy.add(line);
-            }
-        }
-        return changed ? copy : null;
-    }
-
-    private static void restoreComments(Map<Node, List<CommentLine>[]> originals) {
-        if (originals == null) {
-            return;
-        }
-        for (Map.Entry<Node, List<CommentLine>[]> entry : originals.entrySet()) {
-            entry.getKey().setBlockComments(entry.getValue()[0]);
-            entry.getKey().setEndComments(entry.getValue()[1]);
-        }
+        return events;
     }
 
     /**
-     * Writes every marked comment line at the indentation of the comment line before it in the same group - the
-     * column its list's lines are written at - and removes the mark. Without a comment line before it (the line
-     * shares its line with other content) only the mark is removed.
+     * Puts back every comment line SnakeYAML's emitter misplaces after a blank line (17-64 review round 1 R1-01,
+     * route change (i)). The emitter ({@code Emitter#writeCommentLines}, SnakeYAML 2.2) writes the first comment
+     * line after a blank line of a comment run at its current indentation plus the run's own column again - doubled
+     * indentation in a nested block - and every other line of the run at the run's column.
+     * <p>
+     * Nothing is injected into the document's text: the lines are located by position. The comment events the
+     * emitter received (in order, each carrying its original line's position) are matched one to one with the comment
+     * events of the emitted text read back; when the two sequences differ in length, type or text, the emitted text
+     * is returned unchanged. Each misplaced line - a comment line right after a blank line, with an earlier comment
+     * line in the same run - is written at its own original column, or, for a line added in memory (it has no
+     * position), at the column of the run's first comment line as emitted. Only the spaces before the {@code #} are
+     * changed, and only when nothing but spaces precedes it.
      */
-    private static String realignMarkedComments(String text) {
-        if (!text.contains(AFTER_BLANK)) {
+    private static String realignCommentsAfterBlankLines(String text, List<Event> events) {
+        List<CommentEvent> written = new ArrayList<>();
+        for (Event event : events) {
+            if (event instanceof CommentEvent) {
+                written.add((CommentEvent) event);
+            }
+        }
+        if (written.isEmpty()) {
             return text;
         }
+        List<CommentEvent> read = new ArrayList<>();
+        try (Reader reader = new StringReader(text)) {
+            for (Event event : new Yaml(loaderOptions()).parse(reader)) {
+                if (event instanceof CommentEvent) {
+                    read.add((CommentEvent) event);
+                }
+            }
+        } catch (IOException | YAMLException e) {
+            return text;
+        }
+        if (read.size() != written.size()) {
+            return text;
+        }
+        for (int i = 0; i < read.size(); i++) {
+            if (read.get(i).getCommentType() != written.get(i).getCommentType()
+                    || !read.get(i).getValue().equals(written.get(i).getValue())) {
+                return text;
+            }
+        }
+        Map<Integer, int[]> moves = new LinkedHashMap<>();
+        int index = 0;
+        int firstColumn = -1;
+        boolean afterBlank = false;
+        for (Event event : events) {
+            if (!(event instanceof CommentEvent) || ((CommentEvent) event).getCommentType() == CommentType.IN_LINE) {
+                index += event instanceof CommentEvent ? 1 : 0;
+                firstColumn = -1;
+                afterBlank = false;
+                continue;
+            }
+            CommentEvent comment = (CommentEvent) event;
+            org.yaml.snakeyaml.error.Mark at = read.get(index++).getStartMark();
+            if (comment.getCommentType() == CommentType.BLANK_LINE) {
+                afterBlank = firstColumn >= 0;
+                continue;
+            }
+            if (firstColumn < 0) {
+                firstColumn = at.getColumn();
+            } else if (afterBlank) {
+                int column = comment.getStartMark() != null ? comment.getStartMark().getColumn() : firstColumn;
+                if (column != at.getColumn()) {
+                    moves.put(at.getLine(), new int[] {at.getColumn(), column});
+                }
+            }
+            afterBlank = false;
+        }
+        return moves.isEmpty() ? text : move(text, moves);
+    }
+
+    /** Re-indents the given lines (line index to {current column, new column}); others are copied unchanged. */
+    private static String move(String text, Map<Integer, int[]> moves) {
         StringBuilder result = new StringBuilder(text.length());
-        String indent = null;
+        int line = 0;
         int start = 0;
         while (start < text.length()) {
             int end = text.indexOf('\n', start);
             end = end < 0 ? text.length() : end + 1;
-            String line = text.substring(start, end);
-            String content = line.trim();
-            int marker = line.indexOf("#" + AFTER_BLANK);
-            if (marker >= 0 && line.substring(0, marker).trim().isEmpty()) {
-                String unmarked = line.substring(marker, marker + 1) + line.substring(marker + 1 + AFTER_BLANK.length());
-                line = (indent != null ? indent : line.substring(0, marker)) + unmarked;
-            } else if (marker >= 0) {
-                line = line.substring(0, marker + 1) + line.substring(marker + 1 + AFTER_BLANK.length());
+            String content = text.substring(start, end);
+            int[] move = moves.get(line);
+            if (move != null && move[0] < content.length() && content.charAt(move[0]) == '#'
+                    && content.substring(0, move[0]).trim().isEmpty()) {
+                StringBuilder indent = new StringBuilder();
+                for (int i = 0; i < move[1]; i++) {
+                    indent.append(' ');
+                }
+                content = indent + content.substring(move[0]);
             }
-            if (content.startsWith("#")) {
-                indent = line.substring(0, line.indexOf('#'));
-            } else if (!content.isEmpty()) {
-                indent = null;
-            }
-            result.append(line);
+            result.append(content);
             start = end;
+            line++;
         }
         return result.toString();
     }
@@ -1112,11 +1117,11 @@ public final class ConfigDocument {
         return new PlainRepresenter(DocumentStyle.defaults().dumperOptions());
     }
 
-    private static Yaml dumper(DocumentStyle style) {
+    private static DumperOptions dumperOptions(DocumentStyle style) {
         DumperOptions options = style.dumperOptions();
         // Keep the anchor names the file uses; only nodes shared by an alias are anchored on output.
         options.setAnchorGenerator(node -> node.getAnchor() != null ? node.getAnchor() : "id" + System.identityHashCode(node));
-        return new Yaml(new NodeConstructor(), new PlainRepresenter(options), options, loaderOptions());
+        return options;
     }
 
     /** A {@link SafeConstructor} that constructs single nodes and flattens merge keys on request. */
