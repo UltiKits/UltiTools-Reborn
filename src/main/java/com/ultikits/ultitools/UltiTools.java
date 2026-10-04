@@ -644,7 +644,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
         getCommandManager().close();
         DataStoreManager.close();
         if (configManager != null) {
-            configManager.saveAll();
+            // Writes nothing: names, once, configuration changes still registered that were never saved (17-65).
+            configManager.reportUnsavedAtStop();
         }
         Bukkit.getServicesManager().unregisterAll(this);
         if (ultiToolsClassLoader != null) {

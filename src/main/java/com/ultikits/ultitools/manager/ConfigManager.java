@@ -430,26 +430,6 @@ public class ConfigManager {
         return owners;
     }
 
-    void saveBeforeReplacement(UltiToolsPlugin plugin) throws IOException {
-        requireConfigThread(plugin, "saveBeforeReplacement");
-        Map<String, AbstractConfigEntity> entities = pluginConfigMap.get(plugin);
-        if (entities == null) { return; }
-        for (String path : new TreeSet<>(entities.keySet())) {
-            AbstractConfigEntity entity = entities.get(path);
-            synchronized (entity) {
-                if (entity.isLastLoadUnparseable()) {
-                    throw new IOException("Cannot save superseded module " + plugin.getPluginName()
-                            + " configuration " + path + ": file is protected until reload");
-                }
-                if (entity.isModifiedSinceSnapshot()) { entity.save(); }
-                if (entity.isModifiedSinceSnapshot()) {
-                    throw new IOException("Superseded module " + plugin.getPluginName()
-                            + " configuration " + path + " remains unsaved");
-                }
-            }
-        }
-    }
-
     List<String> unsavedPaths(UltiToolsPlugin plugin) {
         requireConfigThread(plugin, "unsavedPaths");
         List<String> paths = new ArrayList<>();
@@ -514,43 +494,55 @@ public class ConfigManager {
     }
 
     /**
-     * Saves, at shutdown, every registered configuration that module code changed in memory.
+     * Writes nothing; reports, as {@link #reportUnsavedAtStop()} does, every registered configuration that holds module
+     * changes never saved.
      * <p>
-     * Since 6.3.0 (#510) this writes only the entities whose {@link
-     * AbstractConfigEntity#isModifiedSinceSnapshot()} is {@code true} - whose current state differs
-     * from the state they last loaded or saved. A configuration no code changed is left alone, so an
-     * operator's edit to its file made while the server was running survives the restart. Before
-     * 6.3.0 every file was rewritten from memory and such edits were silently discarded.
-     * <p>
-     * A configuration whose file failed to parse the last time it was read is never written: the
-     * framework does not know what that file holds, so overwriting it would destroy an operator's
-     * broken file. One WARNING per such file says so, and any in-memory change to it is not written.
-     * <p>
-     * If an entity was changed in memory and its file was also changed on disk since that snapshot,
-     * the in-memory state still wins and is written, and a WARNING names the file whose edits were
-     * overwritten by the entity's successful write. The only caller is {@code UltiTools#onDisable()};
-     * explicit {@link AbstractConfigEntity#save()} uses the same semantic overwrite reporting.
-     * <p>
-     * Registry access and whole panel callbacks run on the server thread; the guard runs before
-     * any entity monitor. Each entity's check-then-save also retains its own monitor. A save failure, or
-     * any unchecked exception from one entity, is logged and does not stop the remaining entities
-     * from being saved.
+     * Until 6.3.0 this saved every changed configuration at server stop. As of 6.3.0 nothing writes configuration at
+     * server stop, module unload or module replacement (maintainer decision of 2026-10-04, "what code may write, by file
+     * type": no shutdown save of whole entities), because a lifecycle event is not an operator's request to write and a
+     * whole-entity save at stop could write over what the operator changed on disk. A module persists a change when it
+     * makes it: {@link AbstractConfigEntity#save()} for a change the operator asked for through the module (it writes
+     * only what the module changed, where the file still holds what was read), or
+     * {@link AbstractConfigEntity#saveOperatorChange(String...)} to write exactly the settings an operator's command names.
+     *
+     * @deprecated as of 6.3.0 this writes nothing; persist changes with {@link AbstractConfigEntity#save()} or
+     *             {@link AbstractConfigEntity#saveOperatorChange(String...)} when they are made
      */
+    @Deprecated(since = "6.3.0")
     public void saveAll() {
-        if (!permitsConfigThread(null, "saveAll")) { return; }
+        reportUnsavedAtStop();
+    }
+
+    /**
+     * Reports, at server stop, every registered configuration that holds module changes never saved: one WARNING per
+     * configuration names its file and the changed entry keys, never a value, and says they are not written. Nothing is
+     * written - no configuration file is touched at server stop (maintainer decision of 2026-10-04). A configuration whose
+     * file could not be read or parsed the last time it was loaded is named once instead, as before (#510).
+     * <p>
+     * Framework-internal: {@code UltiTools#onDisable()} calls it for configurations still registered after every module
+     * was unloaded; each module's own configurations are reported once, just before their release, during its unload at
+     * stop. Registry access runs on the server thread; one entity's failure is logged and the others are still reported.
+     *
+     * @since 6.3.0
+     */
+    @org.jetbrains.annotations.ApiStatus.Internal
+    public void reportUnsavedAtStop() {
+        if (!permitsConfigThread(null, "reportUnsavedAtStop")) { return; }
         for (Map<String, AbstractConfigEntity> configMap : pluginConfigMap.values()) {
-            saveRegisteredEntities(configMap);
+            reportUnsaved(configMap);
         }
     }
 
-    // Shutdown only: persist this exact owner's post-hook state before releasing its registry entry.
+    // Shutdown only: reports this exact owner's never-saved changes, after its unload hook and before its release.
+    // Writes nothing (maintainer decision 2026-10-04); the name is historical.
     void saveForShutdown(UltiToolsPlugin plugin) {
         if (!permitsConfigThread(plugin, "saveForShutdown")) { return; }
         Map<String, AbstractConfigEntity> entities = pluginConfigMap.get(plugin);
-        if (entities != null) { saveRegisteredEntities(entities); }
+        if (entities != null) { reportUnsaved(entities); }
     }
 
-    private void saveRegisteredEntities(Map<String, AbstractConfigEntity> configMap) {
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // one entity's failure must not stop the others' reports
+    private void reportUnsaved(Map<String, AbstractConfigEntity> configMap) {
         for (AbstractConfigEntity config : configMap.values()) {
             try {
                 synchronized (config) {
@@ -561,19 +553,24 @@ public class ConfigManager {
                     if (!config.isModifiedSinceSnapshot()) {
                         continue;
                     }
-                    // The entity owns semantic overwritten-key reporting after a successful write.
-                    config.save();
+                    List<String> keys = new ArrayList<>();
+                    for (String key : config.unsavedEntryPaths()) { keys.add("'" + key + "'"); }
+                    UltiToolsPlugin owner = config.getUltiToolsPlugin();
+                    File file = new File(owner.getResourceFolderPath(), config.getConfigFilePath());
+                    // Values are deliberately omitted: any key may hold a credential.
+                    UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration file " + file.getAbsolutePath()
+                            + " holds module " + owner.getPluginName() + " changes that were never saved; they are not"
+                            + " written at server stop: " + String.join(", ", keys));
                 }
-            } catch (IOException e) {
-                UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration save failed! File path: " + config.getConfigFilePath());
             } catch (RuntimeException e) {
-                UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration save failed! File path: " + config.getConfigFilePath(), e);
+                UltiTools.getInstance().getLogger().log(Level.WARNING,
+                        "Cannot report unsaved configuration changes: " + config.getConfigFilePath(), e);
             }
         }
     }
 
     /**
-     * Logs that the shutdown save left a configuration file alone because the framework could not
+     * Logs, at server stop, that a configuration file was left alone because the framework could not
      * parse it the last time it read it (#510), and that any in-memory change to that configuration
      * was therefore not written.
      *

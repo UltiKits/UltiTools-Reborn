@@ -200,14 +200,14 @@ a module transaction API.
 
 ### Superseded-copy configuration ordering
 
-As of 6.3.0, before framework construction of an identifiable newer module copy, the framework
-reads its own JAR plugin.yml using the constructor's main/version defaults and existing version
-comparator, and saves the loaded old copy's dirty configurations in sorted file-path order.
-A failed or protected old save refuses incoming construction and retains the old active copy.
-The old copy is not unloaded before incoming activation succeeds. If identity is unavailable
-before construction, or an already-constructed instance is supplied, there is no late old save:
-successful supersede warns once with the dropped file/entry keys (never values), then releases
-old configuration entities. Failed incoming construction, compatibility, assembly or activation
+As of 6.3.0 no configuration of a loaded older module copy is saved before, during or after a newer copy replaces it
+(maintainer decision of 2026-10-04, "what code may write, by file type": no replacement save of whole entities, because a
+module update is not an operator's request to write). The newer copy is constructed and reads the files as they are; the old
+copy's unsaved changes or a protected (unreadable or unparseable) old file no longer refuse the replacement. The old copy is
+not unloaded before incoming activation succeeds; once it does, one warning names the dropped file/entry keys (never values)
+and the old configuration entities are released. This replaces the earlier 6.3.0 behaviour of saving an identifiable old
+copy's changed configurations before construction (and refusing construction when that save failed); its "no save, warn
+naming the keys" fallback is now the only path. Failed incoming construction, compatibility, assembly or activation
 releases only refused incoming configuration owners; existing owners remain registered.
 No constructor deferral, early unload or public storage/transaction API is introduced.
 
@@ -230,13 +230,21 @@ panel response fields/types are unchanged.
 ### Configuration release and shutdown save
 
 As of 6.3.0, module unload releases that module instance's configuration registry entry even
-when its unload hook or context close throws. Later shutdown saves neither retain nor write
-unloaded entities. PluginManager.close saves all registered dirty configurations before unloading
-any module. After each module's unload hook and container `@PreDestroy` callbacks, shutdown saves
-that same owner's dirty configurations again before releasing the owner, even when cleanup throws.
-The final save retains protected-file refusal and per-entity failure isolation. Normal runtime unload itself does
-not save; superseded-copy preparation follows the separate preconstruction rule. Public existing
-signatures are unchanged; no module migration is required.
+when its unload hook or context close throws. **Nothing writes configuration at server stop, at
+module unload or uninstall, or at module replacement** (maintainer decision of 2026-10-04: no
+shutdown or replacement save of whole entities; a lifecycle event is not an operator's request to
+write). At stop, after each module's unload hook and container `@PreDestroy` callbacks and just before
+its release, every configuration of that module holding module changes that were never saved is named
+in one WARNING - the file and the changed keys, never values - and the changes are dropped; the
+framework's final step names, the same way, anything still registered. A configuration whose file
+could not be read or parsed at its last load is named once instead, as before. An operator's edit made
+while the server runs is never touched at stop. A module persists a change when it makes it, with
+`save()` (only what the module changed, where the file still holds what was read) or
+`saveOperatorChange`/`saveOperatorMapEntry` (exactly what an operator's command names).
+`ConfigManager#saveAll()` keeps its signature, writes nothing, reports as above and is
+`@Deprecated(since = "6.3.0")`. Public existing signatures are unchanged. This removes the earlier
+6.3.0 shutdown saves (before unload and again per module after its callbacks) without a migration
+period; see "Behavioral changes that need no migration period".
 
 ### Configuration init and reload thread contract
 
@@ -405,9 +413,8 @@ decimal as a plain `Double`. This is not a promise of exact binary representatio
 
 ### Shutdown and known limits
 
-Shutdown saves dirty registered entities before module release. An operator-only disk edit does
-not make a clean live entity dirty and survives shutdown untouched; a pending code change is saved
-by the save rule above - written only where the file still holds what it was read with, otherwise named in its warning. A partial panel save cannot acknowledge an
+Nothing is written at shutdown: an operator-only disk edit survives untouched, and a pending code change is named in
+one warning and dropped (see "Configuration release and shutdown save"). A partial panel save cannot acknowledge an
 unrelated pending field. Async module field mutation itself is not protected by registry confinement:
 module authors must arrange server-thread mutations. Initialization batches and panel transactions
 are different: accepted initialization files persist independently, while the panel stages all
@@ -435,7 +442,7 @@ separate crash-safe multi-file transaction limit.
 - 六个旧解析器相关声明在 6.3.0 首次带 `forRemoval`，公告 6.4.0 删除。显式非默认 parser 暂时保留冻结的旧行为；默认 parser 改走注册表。迁移示例见上方，转换器必须满足两条互逆等式，不能单向加值或悄悄丢字段。
 - 注册批次验证完成才开始独立写文件；面板批次先验证并经写入闸门暂存全部文件，在进程内失败时回滚，持久存储故障可能阻止恢复；每个文件替换前再核对一次字节，期间被服主保存的文件整批拒绝（`ConfigWriteRefusedException` 注明文件）、服主的保存保留，已替换的文件恢复为核对时的原字节。面板唯一映射路径走整字段类型转换，歧义和未知变更拒绝整个请求；无关内存/磁盘兄弟项保留。
 - 重载三方合并，内存独有改动保留且仍脏，磁盘独有采用，冲突磁盘胜。重载重建模块语言之后、模块自己的重载钩子之前，框架经写入闸门、按重新读取的文件，只把它能认出的自己的注释行改成新语言，不写任何值、键或其它注释行（#594）。仅磁盘该映射未变时保证内存顺序保留，不写文件。初始化、重载和注册表在服务器主线程执行；异步面板回调整体排队，不能阻塞等待。
-- 可以提前识别的新副本先保存旧副本配置再构造；失败保留旧副本。不能识别时成功替换后只警告丢弃的键，不事后保存。卸载释放实体，关闭先保存后释放。已知限制 #578、#580 和多文件崩溃限制 #545 仍存在。
+- 服务器关闭、模块卸载或卸载删除、模块被新版本替换时，一律不写任何配置（维护者 2026-10-04 决定：生命周期事件不是服主的写入请求，不做整对象的关闭保存或替换保存）。关闭时，每个模块在卸载钩子和 `@PreDestroy` 之后、释放之前，凡有从未保存的模块改动的配置各警告一次（列文件和键，不列值），改动随之丢弃；框架最后一步对仍注册的配置同样处理。上次加载无法读取或解析的文件照旧只提示一次。新版本副本直接读取现有文件，旧副本的未保存改动或受保护文件不再阻止替换；新副本激活后警告一次丢弃的键。`ConfigManager#saveAll()` 签名不变、不再写入、改为报告并标记 `@Deprecated(since = "6.3.0")`。模块应在改动发生时用 `save()` 或 `saveOperatorChange`/`saveOperatorMapEntry` 保存。卸载照旧释放实体。已知限制 #578、#580 和多文件崩溃限制 #545 仍存在。
 
 ## What the version number means
 
@@ -1171,6 +1178,17 @@ This section governs the third kind.
   unparseable one, never overwritten). A module that already handles the declared `IOException`
   needs no change. Separately, each credential write now forces the file and its directory to disk
   around the atomic rename, a performance change of a few milliseconds per write.
+- Configuration writes follow the maintainer's rule that operator-written configuration is never
+  overwritten automatically (2026-10-04, "what code may write, by file type";
+  [#599](https://github.com/UltiKits/UltiTools-Reborn/issues/599)). Changed without a migration period,
+  because a migration period would mean continuing to overwrite operators' files: a module's `save()`
+  writes only what the module changed, where the file still holds what was read, and never writes over an
+  operator's disk edit, deleted key or unusable value (it names the change as not written instead of
+  overwriting with a warning); a panel edit writes only what it touches; and nothing writes configuration at
+  server stop, module unload or module replacement - a never-saved module change is named at stop and
+  dropped, and `ConfigManager#saveAll()` is deprecated and writes nothing. A module that relied on the stop
+  to persist an in-memory change must call `save()` (or `saveOperatorChange`) when it makes the change; the
+  stop warning names any configuration that still holds one.
 
 ### Behavioral changes that do need one
 

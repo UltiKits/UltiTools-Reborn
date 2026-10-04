@@ -822,10 +822,11 @@ public abstract class AbstractConfigEntity {
     }
 
     /**
-     * Whether serialized fields differ from their last bound/persisted effective values.
+     * Whether serialized fields differ from their last bound/persisted effective values - module changes not yet saved.
      * Map iteration order is significant here; the storage equality used for no-op saves is not.
-     * Protected files and uninitialized entities are never saved by shutdown.
-     * @return whether shutdown should persist this entity
+     * Nothing writes them at server stop: they are reported, by key, and dropped (maintainer decision 2026-10-04).
+     * Protected files and uninitialized entities report {@code false}.
+     * @return whether the entity holds module changes that were never saved
      * @since 6.3.0
      */
     @ApiStatus.Internal
@@ -902,8 +903,9 @@ public abstract class AbstractConfigEntity {
 
     /**
      * Whether the file on disk differs from the file as it was at the last snapshot point (#510) -
-     * in practice, whether someone edited, replaced or removed it while the server was running. Used
-     * by the shutdown save to warn that an in-memory change overwrote that file.
+     * in practice, whether someone edited, replaced or removed it while the server was running. The
+     * snapshot is the bytes this entity last bound or wrote itself, never a fresh read, so an
+     * operator's edit stays visible here until the next load.
      * <p>
      * Framework-internal: this method is called only by {@code ConfigManager#saveAll()} and is
      * {@code public} solely because {@code ConfigManager} lives in another package. Module code
