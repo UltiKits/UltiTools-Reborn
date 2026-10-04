@@ -322,6 +322,62 @@ class ConfigStagedPanelWriteTest {
         assertNoTemporaries();
     }
 
+    /**
+     * #600: the staged batch keeps its prepare-then-commit shape through the config write gate, and each file's bytes are
+     * checked again immediately before its move: a file the operator saved between staging and commit is kept, the files
+     * already committed are restored, and every entity is left as it was.
+     */
+    @Test
+    void fileChangedBetweenStagingAndCommitRollsTheWholeBatchBack() throws Exception {
+        byte[] operatorEdit = "# operator header\nvalue: 2\nother: edited after staging\nunknown: keep\n"
+                .getBytes(StandardCharsets.UTF_8);
+        AtomicInteger moved = new AtomicInteger();
+        try (MockedStatic<AtomicConfigWriter> writer = Mockito.mockStatic(
+                AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
+            writer.when(() -> AtomicConfigWriter.stage(any(Path.class), anyString())).thenAnswer(call -> {
+                AtomicConfigWriter.StagedWrite observed = Mockito.spy((AtomicConfigWriter.StagedWrite) call.callRealMethod());
+                Mockito.doAnswer(commit -> {
+                    Object result = commit.callRealMethod();
+                    if (moved.incrementAndGet() == 1) { Files.write(directory.resolve("file2.yml"), operatorEdit); }
+                    return result;
+                }).when(observed).commit();
+                return observed;
+            });
+            assertThatThrownBy(() -> manager.loadFromJson(payload()))
+                    .isInstanceOf(com.ultikits.ultitools.config.ConfigWriteRefusedException.class)
+                    .hasMessageContaining("file2.yml");
+        }
+        assertThat(moved.get()).as("only the first file was moved").isEqualTo(1);
+        assertThat(Files.readAllBytes(directory.resolve("file1.yml"))).as("restored").isEqualTo(originals.get(0));
+        assertThat(Files.readAllBytes(directory.resolve("file2.yml"))).as("the operator's save is kept").isEqualTo(operatorEdit);
+        assertThat(Files.readAllBytes(directory.resolve("file3.yml"))).isEqualTo(originals.get(2));
+        for (int i = 0; i < entities.size(); i++) {
+            assertThat(entities.get(i).value).isEqualTo(i + 1);
+            assertThat(state(entities.get(i))).isEqualTo(checkpoints.get(i));
+        }
+        assertNoTemporaries();
+    }
+
+    /** #600: one file the gate refuses (anchors) refuses the whole batch with the reason, before any file is written. */
+    @Test
+    void anchoredFileRefusesTheWholeBatchBeforeAnyWrite() throws Exception {
+        byte[] anchored = "# operator header\nbase: &v 2\nvalue: *v\nother: disk\nunknown: keep\n"
+                .getBytes(StandardCharsets.UTF_8);
+        Files.write(directory.resolve("file2.yml"), anchored);
+        entities.get(1).reload();
+        Map<String, Object> anchoredState = state(entities.get(1));
+        assertThatThrownBy(() -> manager.loadFromJson(payload()))
+                .isInstanceOf(com.ultikits.ultitools.config.ConfigWriteRefusedException.class)
+                .hasMessageContaining("anchors").hasMessageContaining("file2.yml");
+        assertThat(Files.readAllBytes(directory.resolve("file1.yml"))).isEqualTo(originals.get(0));
+        assertThat(Files.readAllBytes(directory.resolve("file2.yml"))).isEqualTo(anchored);
+        assertThat(Files.readAllBytes(directory.resolve("file3.yml"))).isEqualTo(originals.get(2));
+        assertThat(state(entities.get(0))).isEqualTo(checkpoints.get(0));
+        assertThat(state(entities.get(1))).isEqualTo(anchoredState);
+        assertThat(state(entities.get(2))).isEqualTo(checkpoints.get(2));
+        assertNoTemporaries();
+    }
+
     private String payload() {
         JsonObject files = new JsonObject();
         for (Values entity : entities) {

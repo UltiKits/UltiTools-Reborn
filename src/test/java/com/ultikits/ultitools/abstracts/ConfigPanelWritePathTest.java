@@ -152,6 +152,66 @@ class ConfigPanelWritePathTest {
         assertThat(Files.readAllBytes(file)).isEqualTo(malformed);
         assertThatThrownBy(() -> assertBukkitMapsLoaded(fresh, expected)).isInstanceOf(AssertionError.class);
     }
+    @ConfigEntity("gated.yml")
+    public static class Gated extends AbstractConfigEntity {
+        @ConfigEntry(path = "limits") Map<String, Integer> limits = new LinkedHashMap<>();
+        @ConfigEntry(path = "name") String name = "server";
+        public Gated(String path) { super(path); limits.put("a", 1); limits.put("b", 2); }
+    }
+
+    /**
+     * #600 / maintainer decision 2026-10-04 (item 3 of "what code may write, by file type"): a panel edit writes exactly
+     * the leaf it touches through the config write gate; the operator's edit of another leaf since the load, and every
+     * other byte, stay.
+     */
+    @Test void panelLeafEditWritesThatLeafOnlyAndKeepsEveryOtherByte() throws Exception {
+        java.nio.file.Path file = directory.resolve("gated.yml");
+        String text = "# Limits per group\nlimits:\n  a: 1\n  b: 2\n# Server name\nname: server\n";
+        Files.write(file, text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        Gated gated = new Gated("gated.yml");
+        ConfigManager manager = new ConfigManager(); manager.register(plugin, gated);
+        String edited = text.replace("b: 2", "b: 3").replace("name: server", "name: hand-edited");
+        Files.write(file, edited.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        manager.loadFromJson("gated.yml", "{\"limits.a\": 5}");
+
+        assertThat(new String(Files.readAllBytes(file), java.nio.charset.StandardCharsets.UTF_8))
+                .isEqualTo(edited.replace("a: 1", "a: 5"));
+        assertThat(gated.limits.get("a")).isEqualTo(5);
+    }
+
+    /** #600: on a file the gate cannot write (anchors), the panel edit is refused with the reason; nothing changes. */
+    @Test void panelEditOfAnAnchoredFileIsRefusedWithTheReason() throws Exception {
+        java.nio.file.Path file = directory.resolve("gated.yml");
+        String anchored = "base: &b 1\nlimits:\n  a: *b\n  b: 2\nname: server\n";
+        Files.write(file, anchored.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        Gated gated = new Gated("gated.yml");
+        ConfigManager manager = new ConfigManager(); manager.register(plugin, gated);
+
+        assertThatThrownBy(() -> manager.loadFromJson("gated.yml", "{\"name\": \"panel\"}"))
+                .isInstanceOf(com.ultikits.ultitools.config.ConfigWriteRefusedException.class)
+                .hasMessageContaining("anchors").hasMessageContaining("gated.yml");
+
+        assertThat(new String(Files.readAllBytes(file), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo(anchored);
+        assertThat(gated.name).as("a refused panel edit leaves the entity as it was").isEqualTo("server");
+    }
+
+    /** #600: a panel edit on a hand-aligned file is refused with the layout reason instead of normalizing it. */
+    @Test void panelEditOfAHandAlignedFileIsRefusedInsteadOfNormalized() throws Exception {
+        java.nio.file.Path file = directory.resolve("gated.yml");
+        String aligned = "limits:\n  a:   1    # aligned\n  b: 2\nname: server\n";
+        Files.write(file, aligned.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        Gated gated = new Gated("gated.yml");
+        ConfigManager manager = new ConfigManager(); manager.register(plugin, gated);
+
+        com.google.gson.JsonObject edit = new com.google.gson.JsonObject(); edit.addProperty("name", "panel");
+        assertThatThrownBy(() -> gated.updateProperties(edit))
+                .isInstanceOf(com.ultikits.ultitools.config.ConfigWriteRefusedException.class).hasMessageContaining("layout");
+
+        assertThat(new String(Files.readAllBytes(file), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo(aligned);
+        assertThat(gated.name).isEqualTo("server");
+    }
+
     @Test void panelAndSaveProduceIdenticalLoadableText() throws Exception {
         Values saved = new Values("save.yml"); saved.init(plugin); edit(saved); saved.save();
         Values panel = new Values("panel.yml");
