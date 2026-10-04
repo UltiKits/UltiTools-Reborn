@@ -67,8 +67,9 @@ import org.yaml.snakeyaml.representer.Representer;
  * <p>
  * When the caller passes the fingerprint of the bytes it last read and the file no longer holds them, the
  * outcome is {@link Outcome#FILE_CHANGED}. Immediately before publishing, after rendering and verifying, the
- * gate reads the target again and abandons the write when the bytes moved; the residual window between that
- * read and the atomic replacement cannot be closed between an editor and the JVM. Publication goes through
+ * gate reads the target again - after the new content is staged, under the lock every load and write holds - and
+ * abandons the write when the bytes moved; the residual window between that read and the atomic rename cannot be
+ * closed between an editor and the JVM. Publication goes through
  * {@link AtomicConfigWriter}; a file the gate read absent is created exclusively (a hard link of the staged file,
  * or a re-check and a move that does not replace where links are refused), so a file that appeared meanwhile
  * is never replaced. Files that are unreadable or unparseable are never written.
@@ -242,21 +243,31 @@ public final class OperatorFileWriter {
             this.files = files;
         }
 
-        /** Replaces the file only while it still holds the bytes the gate verified against. */
+        /**
+         * Replaces the file only while it still holds the bytes the gate verified against. The new content is staged
+         * (written and forced to a temporary file) first; the last-moment re-read then runs under the lock every load
+         * and write holds, immediately before the replacement, so an edit saved while the temporary file was being
+         * written is seen and kept (review round 1 IN-01).
+         */
         Result replace(String fingerprint, String rendered, ConfigDocument candidate) throws IOException {
+            AtomicConfigWriter.StagedWrite staged = files == null ? AtomicConfigWriter.stage(file, rendered)
+                    : AtomicConfigWriter.stage(file, rendered, files);
+            boolean published = false;
             synchronized (AtomicConfigWriter.WRITE_LOAD_LOCK) {
-                // The last-moment check: after rendering and verifying, under the lock every load and write holds.
-                byte[] now = readOrNull(file);
-                if (now == null || !ConfigDocument.sha256(now).equals(fingerprint)) {
-                    return changed(absolute, owned, keys, "the file changed while the new content was being prepared");
-                }
-                if (files == null) {
-                    AtomicConfigWriter.write(file, rendered);
-                } else {
-                    AtomicConfigWriter.write(file, rendered, files);
+                try {
+                    byte[] now = readOrNull(file);
+                    if (now != null && ConfigDocument.sha256(now).equals(fingerprint)) {
+                        staged.commit();
+                        published = true;
+                    }
+                } finally {
+                    if (!published) {
+                        staged.discard();
+                    }
                 }
             }
-            return written(rendered, candidate);
+            return published ? written(rendered, candidate)
+                    : changed(absolute, owned, keys, "the file changed while the new content was being prepared");
         }
 
         /** Creates the file without ever replacing one that appeared after the gate read it absent. */
