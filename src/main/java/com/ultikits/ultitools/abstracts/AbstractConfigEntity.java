@@ -706,10 +706,11 @@ public abstract class AbstractConfigEntity {
                 inserted.put(field, value); baseline.put(field, value);
             }
         }
+        String bound = expectedBase(loaded);
         if (!inserted.isEmpty() && !deferInitialization) {
             // On a refusal the declared defaults run in memory and the raw acknowledgement keeps the keys absent.
-            ConfigDocument written = writeInitialization(inserted, expectedBase(loaded));
-            if (written != null) { document = written; }
+            OperatorFileWriter.Result result = writeInitialization(inserted, bound);
+            if (result.applied()) { document = result.document(); bound = result.fingerprint(); }
         } else if (deferInitialization) {
             if (!inserted.isEmpty() || tokenCommentsDiffer(next)) {
                 // The flush writes through the gate against the bytes read here, never over a later edit (#602).
@@ -719,13 +720,14 @@ public abstract class AbstractConfigEntity {
             }
         } else if (tokenCommentsDiffer(next)) {
             // On a refusal or a failure the file keeps its comments and no save state changes (#603).
-            ConfigDocument written = rewriteTokenComments(loaded);
-            if (written != null) { document = written; }
+            OperatorFileWriter.Result result = rewriteTokenComments(loaded);
+            if (result != null && result.applied()) { document = result.document(); bound = result.fingerprint(); }
         }
         lastLoadedPresence = loadedPresence;
         savedSnapshot = baseline;
         acknowledgeRaw(document, configEntryFields());
-        savedFileFingerprint = fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath));
+        // The bytes this entity bound or the gate wrote, never a fresh read: a later edit stays a change on disk.
+        savedFileFingerprint = entityFingerprint(bound);
         for (String conflict : conflicts) { LOGGER.warning("Configuration " + configFilePath + ": " + conflict); }
     }
 
@@ -763,9 +765,9 @@ public abstract class AbstractConfigEntity {
      * save state, so no later save or shutdown write follows from it (#603).
      *
      * @param loaded the load being bound (LOADED)
-     * @return the document now on disk, or {@code null} when nothing was written
+     * @return the gate's result, or {@code null} after an I/O failure
      */
-    private ConfigDocument rewriteTokenComments(ConfigLoadResult loaded) {
+    private OperatorFileWriter.Result rewriteTokenComments(ConfigLoadResult loaded) {
         OwnedPaths.Builder owned = OwnedPaths.builder();
         for (Field field : configEntryFields()) {
             if (isTokenComment(field)) { owned.comment(keys(field)); }
@@ -773,7 +775,7 @@ public abstract class AbstractConfigEntity {
         try {
             OperatorFileWriter.Result result = OperatorFileWriter.write(ultiToolsPlugin.getConfigFile(configFilePath).toPath(),
                     owned.build(), expectedBase(loaded), this::updateTokenComments);
-            return result.applied() ? result.document() : null;
+            return result;
         } catch (IOException failure) {
             LOGGER.warning("Cannot rewrite comments in " + configFilePath + ": "
                     + failure.getClass().getSimpleName() + "; the file keeps its comments");
@@ -793,10 +795,10 @@ public abstract class AbstractConfigEntity {
      *
      * @param inserted the missing fields and their declared default values, as plain data
      * @param expected the fingerprint of the bytes the init read, or {@link OperatorFileWriter#ABSENT}
-     * @return the document now on disk, or {@code null} when nothing was written
+     * @return the gate's result; when it applied the edit, its document and fingerprint are what the file holds
      * @throws IOException if publishing the verified text fails
      */
-    private ConfigDocument writeInitialization(Map<Field, Object> inserted, String expected) throws IOException {
+    private OperatorFileWriter.Result writeInitialization(Map<Field, Object> inserted, String expected) throws IOException {
         boolean absent = OperatorFileWriter.ABSENT.equals(expected);
         OwnedPaths owned = OwnedPaths.wholeFile();
         if (!absent) {
@@ -815,7 +817,20 @@ public abstract class AbstractConfigEntity {
                     }
                     updateTokenComments(candidate);
                 });
-        return result.applied() ? result.document() : null;
+        return result;
+    }
+
+    /**
+     * The fingerprint form {@link #fingerprintOf} uses, for a storage-layer SHA-256 in lower-case hex (or
+     * {@link OperatorFileWriter#ABSENT}): what the entity records as the bytes it last bound or wrote (#602).
+     */
+    private static String entityFingerprint(String sha256Hex) {
+        if (OperatorFileWriter.ABSENT.equals(sha256Hex)) { return "absent"; }
+        byte[] digest = new byte[sha256Hex.length() / 2];
+        for (int i = 0; i < digest.length; i++) {
+            digest[i] = (byte) Integer.parseInt(sha256Hex.substring(2 * i, 2 * i + 2), 16);
+        }
+        return Base64.getEncoder().encodeToString(digest);
     }
 
     @SuppressWarnings("PMD.NPathComplexity") // The recursive three-way merge explicitly distinguishes absence, order and secret-valued conflicts.
@@ -851,14 +866,15 @@ public abstract class AbstractConfigEntity {
             PendingInitialization pending = pendingInitialization;
             pendingInitialization = null;
             if (pending == null || lastLoadUnparseable) { return; }
-            ConfigDocument written;
-            try { written = writeInitialization(pending.inserted, pending.expected); }
+            OperatorFileWriter.Result result;
+            try { result = writeInitialization(pending.inserted, pending.expected); }
             catch (IOException failure) { lastLoadUnparseable = true; throw failure; }
-            // Not written (file changed since initForBatch, or refused): the defaults run in memory, the file stays.
-            document = written != null ? written : pending.read;
+            // Not written (file changed since initForBatch, or refused): the defaults run in memory, the file stays,
+            // and the entity records the bytes it bound - never the operator's newer file - as last read (#602).
+            document = result.applied() ? result.document() : pending.read;
             savedSnapshot = pending.baseline;
             acknowledgeRaw(document, configEntryFields());
-            savedFileFingerprint = fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath));
+            savedFileFingerprint = entityFingerprint(result.applied() ? result.fingerprint() : pending.expected);
         }
     }
 

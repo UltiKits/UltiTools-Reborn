@@ -109,11 +109,17 @@ public final class OperatorFileWriter {
         private final Outcome outcome;
         private final String reason;
         private final ConfigDocument document;
+        private final String fingerprint;
 
         private Result(Outcome outcome, String reason, ConfigDocument document) {
+            this(outcome, reason, document, null);
+        }
+
+        private Result(Outcome outcome, String reason, ConfigDocument document, String fingerprint) {
             this.outcome = outcome;
             this.reason = reason;
             this.document = document;
+            this.fingerprint = fingerprint;
         }
 
         /**
@@ -142,6 +148,17 @@ public final class OperatorFileWriter {
          */
         public ConfigDocument document() {
             return document;
+        }
+
+        /**
+         * The SHA-256 (lower-case hex, as {@link ConfigLoadResult#fingerprint()}) of the bytes the gate wrote, or of
+         * the bytes it read when nothing needed writing; {@code null} when it did not apply the edit. A caller records
+         * this, never a fresh read of the file, as the bytes it last saw, so an edit made after them stays visible.
+         *
+         * @return the fingerprint or {@code null}
+         */
+        public String fingerprint() {
+            return fingerprint;
         }
 
         /**
@@ -190,12 +207,12 @@ public final class OperatorFileWriter {
         List<String> keys = describe(changes.values, changes.comments);
         if (!owned.isWholeFile() && changes.isEmpty()) {
             return PlainData.plainEquals(snapshot.original.toPlain(), candidate.toPlain())
-                    ? new Result(Outcome.UNCHANGED, "", candidate)
+                    ? new Result(Outcome.UNCHANGED, "", candidate, snapshot.fingerprint)
                     : refuse(absolute, owned, keys, "the write would change keys it does not own");
         }
         String rendered = candidate.render();
         if (rendered.equals(snapshot.text)) {
-            return new Result(Outcome.UNCHANGED, "", candidate);
+            return new Result(Outcome.UNCHANGED, "", candidate, snapshot.fingerprint);
         }
         String failure = owned.isWholeFile()
                 ? verifyValues(snapshot.original, candidate, rendered, Collections.<List<String>>emptyList(), true)
@@ -239,7 +256,7 @@ public final class OperatorFileWriter {
                     AtomicConfigWriter.write(file, rendered, files);
                 }
             }
-            return new Result(Outcome.WRITTEN, "", candidate);
+            return written(rendered, candidate);
         }
 
         /** Creates the file without ever replacing one that appeared after the gate read it absent. */
@@ -266,9 +283,13 @@ public final class OperatorFileWriter {
                     }
                 }
             }
-            return published ? new Result(Outcome.WRITTEN, "", candidate)
+            return published ? written(rendered, candidate)
                     : changed(absolute, owned, keys, "a file appeared while the new content was being prepared");
         }
+    }
+
+    private static Result written(String rendered, ConfigDocument candidate) {
+        return new Result(Outcome.WRITTEN, "", candidate, ConfigDocument.sha256(rendered.getBytes(StandardCharsets.UTF_8)));
     }
 
     private static Result fail(Outcome outcome, Path absolute, OwnedPaths owned, List<String> keys, String reason) {
