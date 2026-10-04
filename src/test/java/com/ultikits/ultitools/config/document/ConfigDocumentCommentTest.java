@@ -247,6 +247,37 @@ class ConfigDocumentCommentTest {
         assertThat(ConfigDocument.parse(text).render()).isEqualTo(text);
     }
 
+    /**
+     * 17-64 review round 2 R2-01: the renderer injects nothing into document text, so a value or comment holding any
+     * characters - here {@code #} followed by U+E000..U+E002 - renders byte for byte, unchanged or after an edit.
+     */
+    @Test
+    @DisplayName("a value and a comment holding '#' and private-use characters render byte for byte")
+    void privateUseCharactersAfterAHashSurviveRendering() throws Exception {
+        String text = "item:\n  # note\n\n  # a#\uE000\uE001\uE002b\n  v: a#\uE000\uE001\uE002b\n  w: 1\n";
+        assertThat(ConfigDocument.parse(text).render()).isEqualTo(text);
+        ConfigDocument edited = ConfigDocument.parse(text);
+        edited.set(path("item", "w"), 2);
+        assertThat(edited.render()).isEqualTo(text.replace("w: 1", "w: 2"));
+        ConfigDocument inMemory = ConfigDocument.parse("item:\n  # note\n\n  # x\n  w: 1\n");
+        inMemory.set(path("item", "w"), "#\uE000\uE001\uE002x");
+        assertThat(ConfigDocument.parse(inMemory.render()).get(path("item", "w"))).isEqualTo("#\uE000\uE001\uE002x");
+    }
+
+    /**
+     * 17-64 review round 2 R2-02: a comment line the emitter misplaces after a blank line goes back to its own column,
+     * not to the column of the line before it - an operator's deeper comment stays where the operator put it.
+     */
+    @Test
+    @DisplayName("an operator's deeper comment after a blank line keeps its own column")
+    void deeperCommentAfterABlankLineKeepsItsOwnColumn() throws Exception {
+        String text = "item:\n  # a\n\n    # b deeper\n  n: 1\n";
+        assertThat(ConfigDocument.parse(text).render()).isEqualTo(text);
+        ConfigDocument edited = ConfigDocument.parse(text);
+        edited.set(path("item", "n"), 2);
+        assertThat(edited.render()).isEqualTo(text.replace("n: 1", "n: 2"));
+    }
+
     @Test
     @DisplayName("a framework comment rewritten below a note and a blank line in a nested block is not shifted")
     void rewrittenRunBelowABlankLineIsNotShifted() throws Exception {

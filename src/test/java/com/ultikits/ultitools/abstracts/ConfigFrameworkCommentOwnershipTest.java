@@ -103,6 +103,17 @@ class ConfigFrameworkCommentOwnershipTest {
 
     @SuppressWarnings("unused") // read reflectively by the binder
     @ConfigEntity(PATH)
+    static class DeepConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "deep.item.interval", comment = "{config.item.interval}")
+        int interval = 300;
+
+        public DeepConfig(String path) {
+            super(path);
+        }
+    }
+
+    @SuppressWarnings("unused") // read reflectively by the binder
+    @ConfigEntity(PATH)
     static class UnknownConfig extends AbstractConfigEntity {
         @ConfigEntry(path = "item.unknown", comment = UNKNOWN_TOKEN)
         boolean unknown = true;
@@ -358,6 +369,55 @@ class ConfigFrameworkCommentOwnershipTest {
 
         assertThat(text()).as("one character more, and a previous text on a literal entry, are both kept").isEqualTo(edited);
         assertThat(mtime()).isEqualTo(OLD);
+    }
+
+    /**
+     * 17-64 review round 1 R1-01 and route change (i): the framework's line after an operator note and a blank line
+     * stays at the key's column, so it stays identifiable and keeps following the language across en, fr, zh, en - at
+     * depth 1 and depth 2, LF and CRLF.
+     */
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0}")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"depth1-lf", "depth1-crlf", "depth2-lf"})
+    @DisplayName("a framework line after a note and a blank line stays at the key's column and follows every switch")
+    void frameworkLineAfterABlankLineFollowsEverySwitch(String shape) throws Exception {
+        shipped.put("fr", new LinkedHashMap<String, String>());
+        shipped.get("fr").put("config.item.interval", "Intervalle des annonces");
+        String nl = shape.endsWith("crlf") ? "\r\n" : "\n";
+        String indent = shape.startsWith("depth2") ? "    " : "  ";
+        String head = shape.startsWith("depth2") ? "deep:" + nl + "  item:" + nl : "item:" + nl;
+        put(head + indent + "# my note" + nl + nl + indent + "# " + ZH_INTERVAL + nl + indent + "interval: 300" + nl);
+        String[] languages = {"en", "fr", "zh", "en"};
+        String[] texts = {EN_INTERVAL, "Intervalle des annonces", ZH_INTERVAL, EN_INTERVAL};
+        for (int i = 0; i < languages.length; i++) {
+            language = languages[i];
+            if (shape.startsWith("depth2")) {
+                new DeepConfig(PATH).init(plugin);
+            } else {
+                new TokenConfig(PATH).init(plugin);
+            }
+            assertThat(text()).as("after the switch to " + languages[i]).isEqualTo(head + indent + "# my note" + nl + nl
+                    + indent + "# " + texts[i] + nl + indent + "interval: 300" + nl);
+        }
+    }
+
+    /**
+     * 17-64 review round 2 R2-01: an operator value holding {@code #} and private-use characters is never changed - not
+     * by the gated comment write next to it, not by a module save.
+     */
+    @Test
+    @DisplayName("a value holding '#' and private-use characters survives the comment write and a save byte for byte")
+    void valueWithPrivateUseCharactersSurvivesCommentWriteAndSave() throws Exception {
+        String value = "a#\uE000\uE001\uE002b";
+        put("item:\n  # note\n\n  # " + ZH_INTERVAL + "\n  interval: 300\n  message: " + value + "\n");
+
+        P3Config config = new P3Config(PATH);
+        config.init(plugin);
+        assertThat(text()).isEqualTo("item:\n  # note\n\n  # " + EN_INTERVAL + "\n  interval: 300\n  message: " + value + "\n");
+
+        config.interval = 450;
+        config.save();
+        assertThat(text()).isEqualTo("item:\n  # note\n\n  # " + EN_INTERVAL + "\n  interval: 450\n  message: " + value + "\n");
+        assertThat(config.message).isEqualTo(value);
     }
 
     @Test
