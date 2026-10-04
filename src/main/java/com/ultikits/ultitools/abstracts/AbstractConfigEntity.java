@@ -93,8 +93,6 @@ public abstract class AbstractConfigEntity {
     @Getter(AccessLevel.NONE)
     private boolean defaultsCaptured;
     @Getter(AccessLevel.NONE)
-    private boolean pendingCommentWrite;
-    @Getter(AccessLevel.NONE)
     private boolean deferInitialization;
     @Getter(AccessLevel.NONE)
     private PendingInitialization pendingInitialization;
@@ -298,7 +296,6 @@ public abstract class AbstractConfigEntity {
 
     private void acknowledgeSave(PreparedSave prepared) {
         if (prepared.changed && !prepared.overwritten.isEmpty()) { warnOverwritten(prepared.overwritten); }
-        pendingCommentWrite = false;
         document = prepared.candidate;
         if (savedSnapshot == null) { savedSnapshot = new LinkedHashMap<>(declaredDefaults); }
         savedSnapshot.putAll(prepared.values);
@@ -426,7 +423,7 @@ public abstract class AbstractConfigEntity {
     public final boolean isModifiedSinceSnapshot() {
         synchronized (this) {
             if (document == null || ultiToolsPlugin == null || lastLoadUnparseable) { return false; }
-            if (savedSnapshot == null || pendingCommentWrite) { return true; }
+            if (savedSnapshot == null) { return true; }
             try { return !orderedEquals(savedSnapshot, currentPlain(configEntryFields())); }
             catch (RuntimeException failure) {
                 LOGGER.warning("Cannot compare the state of " + configFilePath + "; treating it as changed");
@@ -709,7 +706,6 @@ public abstract class AbstractConfigEntity {
                 inserted.put(field, value); baseline.put(field, value);
             }
         }
-        pendingCommentWrite = false;
         if (!inserted.isEmpty() && !deferInitialization) {
             // On a refusal the declared defaults run in memory and the raw acknowledgement keeps the keys absent.
             ConfigDocument written = writeInitialization(inserted, expectedBase(loaded));
@@ -721,16 +717,10 @@ public abstract class AbstractConfigEntity {
                 lastLoadedPresence = loadedPresence;
                 return;
             }
-        } else {
-            boolean commentsChanged = updateTokenComments(next);
-            if (commentsChanged) {
-                try { write(next); }
-                catch (IOException failure) {
-                    pendingCommentWrite = true;
-                    LOGGER.warning("Cannot rewrite comments in " + configFilePath + ": "
-                            + failure.getClass().getSimpleName() + "; pending for retry");
-                }
-            }
+        } else if (tokenCommentsDiffer(next)) {
+            // On a refusal or a failure the file keeps its comments and no save state changes (#603).
+            ConfigDocument written = rewriteTokenComments(loaded);
+            if (written != null) { document = written; }
         }
         lastLoadedPresence = loadedPresence;
         savedSnapshot = baseline;
@@ -762,6 +752,33 @@ public abstract class AbstractConfigEntity {
             if (!current.equals(rendered.blockComment(keys(field)))) { return true; }
         }
         return false;
+    }
+
+    /**
+     * Rewrites the framework's token comments in the current language through the config write gate
+     * ({@link OperatorFileWriter}), at start-up and on reload. This cannot overwrite operator content: the write
+     * owns only the comment lines of token-commented keys, the gate verifies that every other byte of the file
+     * is unchanged after rendering and writes nothing when the file no longer holds the bytes {@code loaded}
+     * read, and it refuses a file using anchors. A refusal or an I/O failure logs one warning and changes no
+     * save state, so no later save or shutdown write follows from it (#603).
+     *
+     * @param loaded the load being bound (LOADED)
+     * @return the document now on disk, or {@code null} when nothing was written
+     */
+    private ConfigDocument rewriteTokenComments(ConfigLoadResult loaded) {
+        OwnedPaths.Builder owned = OwnedPaths.builder();
+        for (Field field : configEntryFields()) {
+            if (isTokenComment(field)) { owned.comment(keys(field)); }
+        }
+        try {
+            OperatorFileWriter.Result result = OperatorFileWriter.write(ultiToolsPlugin.getConfigFile(configFilePath).toPath(),
+                    owned.build(), expectedBase(loaded), this::updateTokenComments);
+            return result.applied() ? result.document() : null;
+        } catch (IOException failure) {
+            LOGGER.warning("Cannot rewrite comments in " + configFilePath + ": "
+                    + failure.getClass().getSimpleName() + "; the file keeps its comments");
+            return null;
+        }
     }
 
     /**
@@ -1018,7 +1035,6 @@ public abstract class AbstractConfigEntity {
         private final String fingerprint = savedFileFingerprint;
         private final boolean protectedFile = lastLoadUnparseable;
         private final boolean incomplete = lastInitIncomplete;
-        private final boolean comments = pendingCommentWrite;
         private final boolean deferred = deferInitialization;
         private final PendingInitialization initialization = pendingInitialization;
         private final Set<String> warningKeys = new java.util.LinkedHashSet<>(warnedCommentKeys);
@@ -1030,7 +1046,7 @@ public abstract class AbstractConfigEntity {
             document = oldDocument; savedSnapshot = baseline; lastLoadedPresence = presence;
             acknowledgedRaw.clear(); acknowledgedRaw.putAll(raw); savedFileFingerprint = fingerprint;
             lastLoadUnparseable = protectedFile; lastInitIncomplete = incomplete;
-            pendingCommentWrite = comments; deferInitialization = deferred; pendingInitialization = initialization;
+            deferInitialization = deferred; pendingInitialization = initialization;
             warnedCommentKeys.clear(); warnedCommentKeys.addAll(warningKeys);
         }
     }
