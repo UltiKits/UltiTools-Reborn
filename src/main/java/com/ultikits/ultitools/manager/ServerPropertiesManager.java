@@ -695,17 +695,37 @@ public class ServerPropertiesManager {
          * which is the failure mode this whole change exists to remove.
          */
         public String describeFailure() {
+            return describe(true);
+        }
+
+        /**
+         * As {@link #describeFailure()}, but without the failed keys that carry a refusal reason: the manager has
+         * already logged each of those once, with its reason, when it refused the key (17-66 review R66-I1), so the
+         * batch summary line names only what nothing else has reported. Returns {@code null} when nothing is left.
+         */
+        String describeUnreportedFailure() {
+            return describe(false);
+        }
+
+        private String describe(boolean includeRefusedWithReason) {
             if (isSuccess()) return null;
+            List<String> named = new ArrayList<>();
+            for (String key : failed) {
+                String reason = failureReasons.get(key);
+                if (reason == null) {
+                    named.add(key);
+                } else if (includeRefusedWithReason) {
+                    named.add(key + " (" + reason + ")");
+                }
+            }
+            if (rejected.isEmpty() && named.isEmpty() && malformed.isEmpty() && notPresentOnServer.isEmpty()) {
+                return null;
+            }
             StringBuilder sb = new StringBuilder(FrameworkText.text("server.properties 批量设置未完全生效"));
             if (!rejected.isEmpty()) {
                 sb.append(FrameworkText.text("；不在白名单因而被拒的键: ")).append(String.join(", ", rejected));
             }
-            if (!failed.isEmpty()) {
-                List<String> named = new ArrayList<>();
-                for (String key : failed) {
-                    String reason = failureReasons.get(key);
-                    named.add(reason == null ? key : key + " (" + reason + ")");
-                }
+            if (!named.isEmpty()) {
                 sb.append(FrameworkText.text("；写入失败的键: ")).append(String.join(", ", named));
             }
             if (!malformed.isEmpty()) {
@@ -862,6 +882,13 @@ public class ServerPropertiesManager {
         response.add("skipped", toJsonArray(result.getSkipped()));
         response.add("malformed", toJsonArray(result.getMalformed()));
         response.add("notPresentOnServer", toJsonArray(result.getNotPresentOnServer()));
+        // Additive (17-66 review R66-I1): why each failed key was refused, as the single-key "set" reply's
+        // "reason" already says. A key that failed on I/O has no entry. Reasons never carry a value.
+        JsonObject reasons = new JsonObject();
+        for (Map.Entry<String, String> reason : result.getFailureReasons().entrySet()) {
+            reasons.addProperty(reason.getKey(), reason.getValue());
+        }
+        response.add("failureReasons", reasons);
         return response;
     }
 
@@ -879,7 +906,8 @@ public class ServerPropertiesManager {
      * finds nothing on either side.
      */
     private void warnIfIncomplete(SetAllResult result) {
-        String failure = result.describeFailure();
+        // A key refused with a reason was already logged once by refuse(); this line names only the rest.
+        String failure = result.describeUnreportedFailure();
         if (failure == null) return;
         // This manager is constructed by initWebSocketManagers() in onEnable, so in
         // production the singleton is always ready by the time this runs; the null check

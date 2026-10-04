@@ -1420,7 +1420,8 @@ Each corrects a declared behaviour the stream did not deliver. The panel protoco
   text of that one line is now replaced - key, separator, comments, order and every other byte kept -
   decoded and encoded as the server reads the file (strict UTF-8, ISO-8859-1 when it is not UTF-8),
   checked, and written atomically. A key defined on more than one line, or continued onto the next
-  line, is refused with a reason naming the lines (no value); `set_all` lists it under `failed`.
+  line, is refused with a reason naming the lines (no value); `set_all` lists it under `failed` and, as an added
+  field, gives its reason under `failureReasons` (key to reason); the server log names each refused key once.
   The server itself still re-writes the whole file when it next starts, as every Paper version does.
 
 ### Framework text follows `language`; the class-load audit is quiet on a clean start (6.3.0) that need no migration period
