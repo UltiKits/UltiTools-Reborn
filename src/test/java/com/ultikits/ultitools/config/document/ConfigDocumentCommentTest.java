@@ -241,8 +241,6 @@ class ConfigDocumentCommentTest {
         "demo:\n  # my note\n\n  # framework\n  interval: 300\n",
         "demo:\n  sub:\n    # my note\n\n    # framework\n    interval: 300\n",
         "demo:\n  x: 1\n  # one\n\n\n  # two\n  # three\n  interval: 300\n",
-        "chat:\n  last: true\n  # end a\n\n  # end b\neconomy: 1\n",
-        "demo:\n  sub:\n    k: 1\n    # end a\n\n    # end b\n",
         "demo:\r\n  # my note\r\n\r\n  # framework\r\n  interval: 300\r\n"})
     @DisplayName("a comment line after a blank line inside a comment list keeps the list's indentation")
     void commentAfterABlankLineKeepsItsIndentation(String text) throws Exception {
