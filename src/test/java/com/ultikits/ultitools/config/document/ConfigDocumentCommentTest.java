@@ -191,6 +191,46 @@ class ConfigDocumentCommentTest {
         assertThat(reread.get(path("a"))).isEqualTo(1);
     }
 
+    /**
+     * #604: the framework rewrites only the trailing run of a key's comment it identified as its own; every line
+     * above that run - an operator's note, blank lines - is kept as it is (maintainer decision 2026-10-04).
+     */
+    @Test
+    @DisplayName("replaceFrameworkComment replaces only the trailing run and keeps every line above it")
+    void replaceFrameworkCommentKeepsTheLinesAboveTheRun() throws Exception {
+        ConfigDocument document = ConfigDocument.parse("a: 1\n\n# operator\n\n# old one\n# old two\nkey: 2\n");
+
+        document.replaceFrameworkComment(path("key"), 2, Collections.singletonList("new\nframework"));
+
+        assertThat(document.render()).isEqualTo("a: 1\n\n# operator\n\n# new\n# framework\nkey: 2\n");
+        assertThat(ConfigDocument.parse(document.render()).blockComment(path("key")))
+                .containsExactly(null, "operator", null, "new", "framework");
+    }
+
+    @Test
+    @DisplayName("replaceFrameworkComment with an empty run appends below a key that has no comment")
+    void replaceFrameworkCommentWithAnEmptyRunAppends() throws Exception {
+        ConfigDocument document = ConfigDocument.parse("a: 1\nkey: 2\n");
+
+        document.replaceFrameworkComment(path("key"), 0, Collections.singletonList("framework"));
+
+        assertThat(document.render()).isEqualTo("a: 1\n# framework\nkey: 2\n");
+    }
+
+    @Test
+    @DisplayName("replaceFrameworkComment refuses a run longer than the comment or one that includes a blank line")
+    void replaceFrameworkCommentRefusesAnImpossibleRun() throws Exception {
+        ConfigDocument document = ConfigDocument.parse("a: 1\n# note\n\n# framework\nkey: 2\n");
+
+        assertThatThrownBy(() -> document.replaceFrameworkComment(path("key"), 5, Collections.singletonList("x")))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> document.replaceFrameworkComment(path("key"), 2, Collections.singletonList("x")))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> document.replaceFrameworkComment(path("absent"), 0, Collections.singletonList("x")))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(document.render()).isEqualTo("a: 1\n# note\n\n# framework\nkey: 2\n");
+    }
+
     @Test
     @DisplayName("a framework comment written into a new document reads back")
     void frameworkCommentReadsBack() throws Exception {
