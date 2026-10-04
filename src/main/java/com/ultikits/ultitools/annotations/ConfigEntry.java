@@ -40,6 +40,20 @@ public @interface ConfigEntry {
     String comment() default "";
 
     /**
+     * Comment texts earlier versions of the module shipped for this entry - for example the literal
+     * comment it had before {@link #comment()} became a {@code {key}} token whose catalogue wording
+     * then changed. On a token entry, a comment in a server's file that equals one of these texts in
+     * the exact form the framework writes (the entry's column, {@code "# "} and the text) counts as
+     * written by the framework: it is replaced by the current catalogue text and follows the server's
+     * language from then on. A comment that differs in any character stays the operator's and is kept
+     * byte for byte. Ignored on an entry whose comment is literal, which is never rewritten.
+     *
+     * @return the texts earlier versions shipped, one element per comment (a text may span lines)
+     * @since 6.3.0
+     */
+    String[] previousComments() default {};
+
+    /**
      * The default selects the declared-type converter registry. An explicit non-default
      * parser selects the frozen legacy adapter, including its old dotted-key behavior.
      * @return the legacy parser override, or the registry-selecting default

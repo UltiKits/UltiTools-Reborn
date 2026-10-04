@@ -375,8 +375,9 @@ public abstract class AbstractConfigEntity {
      * in the byte form it is written in ({@link ConfigDocument#blockCommentAsWritten(List)}), without the blank
      * lines above it - is the framework's when it equals, as a whole or as its trailing run of lines, the exact
      * form the framework writes (the key's column, {@code "# "} and the text; identification revision 1, 17-64
-     * review round 1 R1-02) of the token's text in a catalogue the module's jar ships, of the text the module
-     * resolves now, or of the bare {@code {key}} token. Equality is the only test: no prefix, similarity, spacing
+     * review round 1 R1-02) of the token's text in a catalogue the module's jar ships, of a text an earlier module
+     * version shipped for the entry ({@link ConfigEntry#previousComments()}), of the text the module resolves now,
+     * or of the bare {@code {key}} token. Equality is the only test: no prefix, similarity, spacing
      * or language tolerance, so a note the operator wrote above the framework's lines, a framework comment the
      * operator edited, or the framework's text written at another column or without the space after {@code #}
      * is never taken in. Of several matching texts the longest run counts, so a whole-comment match comes first.
@@ -401,8 +402,9 @@ public abstract class AbstractConfigEntity {
 
     /**
      * Every rendering of a token comment the framework may have written above {@code field}'s key: the token's text
-     * in each catalogue the module's jar ships (read without any language-file side effect), the text the module
-     * resolves now, and the bare token - each in the byte form {@link ConfigDocument#setFrameworkComment} writes
+     * in each catalogue the module's jar ships (read without any language-file side effect), the texts earlier module
+     * versions shipped for the entry ({@link ConfigEntry#previousComments()}), the text the module resolves now, and
+     * the bare token - each in the byte form {@link ConfigDocument#setFrameworkComment} writes
      * it, as {@link ConfigDocument#blockCommentAsWritten(List)} reports it. An empty text is not a rendering: the
      * framework writes no comment for it, so it can never identify an operator's bare {@code #} line.
      */
@@ -417,6 +419,8 @@ public abstract class AbstractConfigEntity {
         }
         List<String> texts = new ArrayList<>();
         if (shipped != null) { texts.addAll(shipped); }
+        // Texts earlier module versions shipped for this entry (maintainer decision 2026-10-04: registered as the framework's).
+        texts.addAll(Arrays.asList(field.getAnnotation(ConfigEntry.class).previousComments()));
         texts.add(resolvedComment(field));
         texts.add(token);
         for (String text : texts) {
