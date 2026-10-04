@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.abstracts;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
@@ -226,6 +227,23 @@ class ConfigDottedSettingPathTest {
         assertThat(config.chat).isTrue();
         assertThat(config.emoji).containsExactly(entry("o.O", "blink"));
         assertThat(text()).isEqualTo("features.chat: true\nlimits.max: 7\na.b:\n  c: 3\nchat.emoji:\n  o.O: blink\n");
+    }
+
+    @Test void aPanelEditAfterAnOperatorChangeToAFormChangedSinceTheLoadFindsTheEntry() throws IOException {
+        String nested = "features:\n  chat: false\nlimits:\n  max: 7\na:\n  b:\n    c: 3\nchat:\n  emoji:\n    o.O: wink\n";
+        write(nested);
+        Features config = new Features(PATH);
+        config.init(plugin);
+        // The operator rewrites the map in flat form by hand, without a reload, then adds an entry by command.
+        write("features:\n  chat: false\nlimits:\n  max: 7\na:\n  b:\n    c: 3\nchat.emoji:\n  o.O: wink\n");
+        config.emoji.put("new", "n");
+        config.saveOperatorMapEntry("chat.emoji", "new");
+        assertThat(text()).endsWith("chat.emoji:\n  o.O: wink\n  new: n\n");
+        JsonObject edit = new JsonObject();
+        edit.addProperty("chat.emoji.new", "m");
+        assertThatCode(() -> config.updateProperties(edit)).doesNotThrowAnyException();
+        assertThat(config.emoji).containsEntry("new", "m");
+        assertThat(text()).endsWith("chat.emoji:\n  o.O: wink\n  new: m\n").doesNotContain("chat:\n");
     }
 
     @Test void dottedKeysInsideAMapValueKeepTheirLiteralMeaning() throws IOException {
