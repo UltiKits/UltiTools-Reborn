@@ -62,41 +62,42 @@ class ConfigRegistryReleaseTest {
         assertThat(configs.getAllConfigEntities(owner)).isNull();
         configs.saveAll(); assertThat(disk()).contains("value: disk");
     }
-    @Test void closeSavesBeforeUnloadAndLaterSaveCannotUndoIt() throws Exception {
+    // 17-65 (maintainer decision 2026-10-04, superseding Follow-up 26.2's final shutdown save): nothing below writes.
+    @Test void closeWritesNothingBeforeOrAfterUnloadAndLaterReportCannotWriteEither() throws Exception {
         doAnswer(call -> {
-            assertThat(disk()).contains("value: pending");
+            assertThat(disk()).contains("value: disk");
             assertThat(configs.getAllConfigEntities(owner)).containsValue(entity);
             return null;
         }).when(owner).unregisterSelf();
         plugins.close();
         verify(owner).unregisterSelf();
         assertThat(configs.getAllConfigEntities(owner)).isNull();
-        entity.value = "after-release"; configs.saveAll(); assertThat(disk()).contains("value: pending");
+        entity.value = "after-release"; configs.saveAll(); assertThat(disk()).isEqualTo("value: disk\n");
     }
-    @Test void shutdownPersistsActualUnloadHookMutationAfterInitialSave() throws Exception {
-        HookOwner hook = callbackOwner(false, false);
+    @Test void shutdownWritesNoUnloadHookMutation() throws Exception {
+        HookOwner hook = callbackOwner(false, false); hook.checkInitialSave = false;
         plugins.close();
         assertThat(hook.ran).isTrue();
-        assertThat(disk()).contains("value: hook");
+        assertThat(disk()).isEqualTo("value: disk\n");
         assertThat(configs.getAllConfigEntities(hook)).isNull();
     }
 
-    @Test void shutdownPersistsActualPreDestroyAfterActualUnloadHook() throws Exception {
-        HookOwner hook = callbackOwner(false, true);
+    @Test void shutdownWritesNoPreDestroyMutationAfterTheUnloadHook() throws Exception {
+        HookOwner hook = callbackOwner(false, true); hook.checkInitialSave = false;
         plugins.close();
         assertThat(hook.ran).isTrue();
         assertThat(hook.bean.ran).isTrue();
-        assertThat(disk()).contains("value: destroyed");
+        assertThat(disk()).isEqualTo("value: disk\n");
         assertThat(configs.getAllConfigEntities(hook)).isNull();
         entity.value = "released"; configs.saveAll();
-        assertThat(disk()).contains("value: destroyed");
+        assertThat(disk()).isEqualTo("value: disk\n");
     }
 
-    @Test void throwingActualHookStillRunsPreDestroySavesAndReleases() throws Exception {
-        HookOwner hook = callbackOwner(true, true);
+    @Test void throwingActualHookStillRunsPreDestroyAndReleasesWithoutWriting() throws Exception {
+        HookOwner hook = callbackOwner(true, true); hook.checkInitialSave = false;
         plugins.close();
         assertThat(hook.ran).isTrue(); assertThat(hook.bean.ran).isTrue();
-        assertThat(disk()).contains("value: destroyed");
+        assertThat(disk()).isEqualTo("value: disk\n");
         assertThat(configs.getAllConfigEntities(hook)).isNull();
     }
 
@@ -158,20 +159,19 @@ class ConfigRegistryReleaseTest {
         assertThat(configs.getAllConfigEntities(hook)).isNull();
     }
 
-    @Test void finalSaveFailureIsIsolatedAndReleaseStillRuns() throws Exception {
-        HookOwner hook = callbackOwner(false, true);
+    @Test void shutdownNeverSavesAnyEntityAndReleaseStillRuns() throws Exception {
+        HookOwner hook = callbackOwner(false, true); hook.checkInitialSave = false;
         Values failing = spy(entity); configs.register(hook, failing); failing.value = "pending";
         hook.value = failing; hook.bean.value = failing;
-        doAnswer(call -> {
-            if ("destroyed".equals(failing.value)) { throw new java.io.IOException("final save failure"); }
-            return call.callRealMethod();
-        }).when(failing).save();
+        doThrow(new java.io.IOException("a save must not be attempted")).when(failing).save();
         Values healthy = new Values("healthy.yml"); configs.register(hook, healthy);
+        String healthyAtInit = new String(Files.readAllBytes(directory.resolve("healthy.yml")), StandardCharsets.UTF_8);
         hook.bean.healthy = healthy;
         plugins.close();
-        assertThat(disk()).contains("value: pending");
+        verify(failing, never()).save();
+        assertThat(disk()).isEqualTo("value: disk\n");
         assertThat(new String(Files.readAllBytes(directory.resolve("healthy.yml")), StandardCharsets.UTF_8))
-                .contains("value: healthy-destroyed");
+                .isEqualTo(healthyAtInit);
         assertThat(configs.getAllConfigEntities(hook)).isNull();
     }
 

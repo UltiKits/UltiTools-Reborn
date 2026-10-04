@@ -91,7 +91,8 @@ class PluginManagerUnloadReleasesConfigAndDelistsTest {
         pluginManager.close();
 
         InOrder order = inOrder(configManager);
-        order.verify(configManager).saveAll();
+        // 17-65: close() writes nothing up front; each module's never-saved changes are named before its release.
+        verify(configManager, never()).saveAll();
         order.verify(configManager).saveForShutdown(first);
         order.verify(configManager).unregisterAll(first);
         order.verify(configManager).saveForShutdown(second);

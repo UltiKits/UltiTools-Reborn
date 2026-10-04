@@ -129,16 +129,31 @@ class ConfigOverwriteWarningTest {
         assertThat(warnings()).isEmpty();
     }
 
+    /** Never-saved changes named at server stop (17-65: nothing is written at stop). */
+    private List<String> stopReports() {
+        ArgumentCaptor<Level> levels = ArgumentCaptor.forClass(Level.class);
+        ArgumentCaptor<String> messages = ArgumentCaptor.forClass(String.class);
+        Mockito.verify(frameworkLogger, Mockito.atLeast(0)).log(levels.capture(), messages.capture());
+        List<String> result = new ArrayList<>();
+        for (int i = 0; i < messages.getAllValues().size(); i++) {
+            if (levels.getAllValues().get(i) == Level.WARNING && messages.getAllValues().get(i).contains("never saved")) {
+                result.add(messages.getAllValues().get(i));
+            }
+        }
+        return result;
+    }
+
     @Test
-    void shutdownSaveKeepsTheOperatorEditAndHasExactlyOneEntityOwnedWarning() throws Exception {
+    void shutdownKeepsTheOperatorEditAndNamesTheUnsavedKeyOnce() throws Exception {
         Values config = registered();
         String operator = "a: operator-a\nb: original-b\napiToken: original-token\n";
         put(operator);
         config.a = "code-a";
         manager.saveAll();
         assertThat(new String(Files.readAllBytes(file()), StandardCharsets.UTF_8)).isEqualTo(operator);
-        assertThat(warnings()).hasSize(1);
-        assertThat(warnings().get(0)).contains(PATH, "'a'");
+        assertThat(warnings()).isEmpty();
+        assertThat(stopReports()).hasSize(1);
+        assertThat(stopReports().get(0)).contains(PATH, "'a'").doesNotContain("code-a");
     }
 
     @Test
@@ -222,8 +237,9 @@ class ConfigOverwriteWarningTest {
         config.b = "code-b";
         manager.saveAll();
         assertThat(new String(Files.readAllBytes(file()), StandardCharsets.UTF_8)).contains("b: operator-b");
-        assertThat(warnings()).hasSize(1);
-        assertThat(warnings().get(0)).contains("'b'").doesNotContain("'a'");
+        assertThat(warnings()).isEmpty();
+        assertThat(stopReports()).hasSize(1);
+        assertThat(stopReports().get(0)).contains("'b'").doesNotContain("'a'");
     }
 
     @Test

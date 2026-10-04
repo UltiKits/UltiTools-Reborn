@@ -201,7 +201,7 @@ class ConfigSaveKeepsOperatorTextTest {
     }
 
     @Test
-    @DisplayName("the shutdown save of an entity changed elsewhere keeps the unconvertible value")
+    @DisplayName("the server stop writes nothing: the unconvertible value and the module's unsaved change both stay off disk")
     void shutdownSaveKeepsTheUnconvertibleValue() throws Exception {
         ConfigManager manager = new ConfigManager();
         Cfg config = new Cfg(PATH);
@@ -212,7 +212,8 @@ class ConfigSaveKeepsOperatorTextTest {
         config.message = "changed in memory";
         manager.saveAll();
 
-        assertThat(read()).contains("interval: 3O0").contains("message: changed in memory");
+        // 17-65 task 3 (maintainer decision 2026-10-04): no shutdown save of whole entities.
+        assertThat(read()).contains("interval: 3O0").contains("message: hello").doesNotContain("changed in memory");
     }
 
     @Test

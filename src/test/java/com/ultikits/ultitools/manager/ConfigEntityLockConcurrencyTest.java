@@ -121,7 +121,7 @@ class ConfigEntityLockConcurrencyTest {
     }
 
     @Test
-    @DisplayName("Off-thread save refuses while an entity is held; later server-thread save persists only the code change")
+    @DisplayName("Off-thread stop report refuses while an entity is held; a later server-thread stop writes nothing (17-65)")
     void saveAll_duringInFlightPanelWrite_savesWholeCodeChange() throws Exception {
         File limitFile = new File(tempDir, "config/limit.yml");
         Files.createDirectories(limitFile.getParentFile().toPath());
@@ -168,8 +168,9 @@ class ConfigEntityLockConcurrencyTest {
         }
         assertThat(panelOutcome.get()).isInstanceOf(ConfigurationException.class);
         saveOnControlledServerThread();
+        // 17-65 (maintainer decision 2026-10-04): nothing is written at server stop; the code change is only named.
         assertThat(new String(Files.readAllBytes(limitFile.toPath()), StandardCharsets.UTF_8))
-                .contains("limit: 5")
+                .contains("limit: 1")
                 .doesNotContain("99");
     }
 }

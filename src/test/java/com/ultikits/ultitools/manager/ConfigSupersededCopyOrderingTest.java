@@ -90,27 +90,27 @@ class ConfigSupersededCopyOrderingTest {
         PluginListSeeding.add(plugins, old); Bukkit.getLogger().addHandler(capture);
     }
     @AfterEach void cleanup() { Bukkit.getLogger().removeHandler(capture); MockBukkitHelper.safeUnmock(); }
-    @Test void ownMetadataSavePrecedesIncomingConstructorAndOldStaysActiveOnRefusal() throws Exception {
+    // 17-65 (maintainer decision 2026-10-04, superseding Follow-up 23's save-before-construct): no save first.
+    @Test void incomingConstructorReadsTheFilesUnsavedAndOldStaysActiveOnRefusal() throws Exception {
         try (URLClassLoader loader = incomingJar(true)) {
             Class<?> type = loader.loadClass(Incoming.class.getName());
             initialize(type);
             assertThat(Probe.constructions).isEqualTo(1);
-            assertThat(Probe.observed).contains("value: pending");
-            assertThat(entity.isModifiedSinceSnapshot()).isFalse();
+            assertThat(Probe.observed).contains("value: disk");
+            assertThat(entity.isModifiedSinceSnapshot()).isTrue();
             verify(old, never()).unregisterSelf();
             assertThat(plugins.getPluginList()).contains(old);
         }
     }
-    @Test void failedOldSaveRefusesConstructionAndKeepsOldDirty() throws Exception {
-        Values refused = spy(entity);
-        doThrow(new java.io.IOException("injected old save refusal")).when(refused).save();
-        // Replace the registered path with the fault-injecting entity, retaining the same live state.
-        configs.register(old, refused); refused.value = "pending";
+    @Test void protectedOldFileNoLongerRefusesConstruction() throws Exception {
+        String broken = "value: [broken\n";
+        Files.write(Probe.file, broken.getBytes(StandardCharsets.UTF_8));
+        entity.reload();
+        assertThat(entity.isLastLoadUnparseable()).isTrue();
         try (URLClassLoader loader = incomingJar(true)) {
-            assertThatThrownBy(() -> initialize(loader.loadClass(Incoming.class.getName())))
-                    .hasRootCauseMessage("injected old save refusal");
-            assertThat(Probe.constructions).isZero();
-            assertThat(refused.isModifiedSinceSnapshot()).isTrue();
+            initialize(loader.loadClass(Incoming.class.getName()));
+            assertThat(Probe.constructions).isEqualTo(1);
+            assertThat(Probe.observed).isEqualTo(broken);
             verify(old, never()).unregisterSelf();
             assertThat(plugins.getPluginList()).contains(old);
         }
