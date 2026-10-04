@@ -32,7 +32,12 @@ import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.TestHelper;
 
-/** Every successful entity persistence owns one semantic overwrite warning (#527). */
+/**
+ * A save never writes over what the operator changed on disk (maintainer decision 2026-10-04, "what code may write, by
+ * file type", which supersedes #527's overwrite-and-warn): a module change whose setting the file no longer holds as
+ * it was read is not written, and one warning names those keys, never a value. Panel writes keep the #527 warning
+ * until plan 17-65 task 2 routes them through the gate.
+ */
 class ConfigOverwriteWarningTest {
     private static final String PATH = "overwrite.yml";
     @TempDir Path tempDir;
@@ -72,6 +77,7 @@ class ConfigOverwriteWarningTest {
         manager.register(plugin, config);
         return config;
     }
+    /** #527 overwrite warnings (panel writes) and the save rule's not-written warnings. */
     private List<String> warnings() {
         ArgumentCaptor<Level> levels = ArgumentCaptor.forClass(Level.class);
         ArgumentCaptor<String> messages = ArgumentCaptor.forClass(String.class);
@@ -79,7 +85,8 @@ class ConfigOverwriteWarningTest {
         List<String> result = new ArrayList<>();
         for (int i = 0; i < messages.getAllValues().size(); i++) {
             String message = messages.getAllValues().get(i);
-            if (levels.getAllValues().get(i) == Level.WARNING && message.contains("overwritten")) {
+            if (levels.getAllValues().get(i) == Level.WARNING
+                    && (message.contains("overwritten") || message.contains("were not written"))) {
                 result.add(message);
             }
         }
@@ -87,25 +94,29 @@ class ConfigOverwriteWarningTest {
     }
 
     @Test
-    void explicitSaveWarnsOnceNamingEveryReplacedKeyWithoutValues() throws Exception {
+    void explicitSaveKeepsOperatorEditsAndNamesEveryUnwrittenKeyOnceWithoutValues() throws Exception {
         Values config = registered();
-        put("a: operator-a\nb: operator-b\napiToken: secret-specimen\n");
+        String operator = "a: operator-a\nb: operator-b\napiToken: secret-specimen\n";
+        put(operator);
         config.a = "code-a";
         config.b = "code-b";
+        config.apiToken = "code-token";
         config.save();
+        assertThat(new String(Files.readAllBytes(file()), StandardCharsets.UTF_8)).isEqualTo(operator);
         assertThat(warnings()).hasSize(1);
-        assertThat(warnings().get(0)).contains(PATH, "a", "b", "apiToken")
-                .doesNotContain("operator-a", "operator-b", "secret-specimen", "original-token");
+        assertThat(warnings().get(0)).contains(PATH, "'a'", "'b'", "'apiToken'")
+                .doesNotContain("operator-a", "operator-b", "secret-specimen", "original-token", "code-");
     }
 
     @Test
-    void cleanExplicitSaveStillWarnsWhenReplacingChangedDiskValue() throws Exception {
+    void cleanExplicitSaveLeavesAChangedDiskValueWithoutWarning() throws Exception {
         Values config = registered();
         assertThat(config.isModifiedSinceSnapshot()).isFalse();
         put("a: operator-a\nb: original-b\napiToken: original-token\n");
+        byte[] before = Files.readAllBytes(file());
         config.save();
-        assertThat(warnings()).hasSize(1);
-        assertThat(warnings().get(0)).contains(PATH, "a");
+        assertThat(Files.readAllBytes(file())).isEqualTo(before);
+        assertThat(warnings()).isEmpty();
     }
 
     @Test
@@ -119,23 +130,24 @@ class ConfigOverwriteWarningTest {
     }
 
     @Test
-    void shutdownSaveHasExactlyOneEntityOwnedWarning() throws Exception {
+    void shutdownSaveKeepsTheOperatorEditAndHasExactlyOneEntityOwnedWarning() throws Exception {
         Values config = registered();
-        put("a: operator-a\nb: original-b\napiToken: original-token\n");
+        String operator = "a: operator-a\nb: original-b\napiToken: original-token\n";
+        put(operator);
         config.a = "code-a";
         manager.saveAll();
+        assertThat(new String(Files.readAllBytes(file()), StandardCharsets.UTF_8)).isEqualTo(operator);
         assertThat(warnings()).hasSize(1);
-        assertThat(warnings().get(0)).contains(PATH, "a");
+        assertThat(warnings().get(0)).contains(PATH, "'a'");
     }
 
     @Test
-    void failedSaveDoesNotClaimOverwriteAndRetryDoes() throws Exception {
+    void failedSaveWarnsNothingAndRetryWrites() throws Exception {
         Values config = registered();
-        put("a: operator-a\nb: original-b\napiToken: original-token\n");
         byte[] before = Files.readAllBytes(file());
         config.a = "code-a";
         try (MockedStatic<AtomicConfigWriter> writer = Mockito.mockStatic(AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
-            writer.when(() -> AtomicConfigWriter.write(Mockito.eq(file()), Mockito.anyString()))
+            writer.when(() -> AtomicConfigWriter.stage(Mockito.eq(file()), Mockito.anyString()))
                     .thenThrow(new IOException("injected write failure"));
             assertThatThrownBy(config::save).isInstanceOf(IOException.class);
         }
@@ -143,7 +155,9 @@ class ConfigOverwriteWarningTest {
         assertThat(warnings()).isEmpty();
         assertThat(config.isModifiedSinceSnapshot()).isTrue();
         config.save();
-        assertThat(warnings()).hasSize(1);
+        assertThat(new String(Files.readAllBytes(file()), StandardCharsets.UTF_8)).contains("a: code-a");
+        assertThat(warnings()).isEmpty();
+        assertThat(config.isModifiedSinceSnapshot()).isFalse();
     }
 
     @Test
@@ -169,14 +183,18 @@ class ConfigOverwriteWarningTest {
         assertThat(new String(Files.readAllBytes(file()), StandardCharsets.UTF_8))
                 .contains("# Operator header", "unknown: kept");
         assertThat(config.isFileModifiedSinceSnapshot()).isFalse();
+        byte[] afterPanel = Files.readAllBytes(file());
         config.b = "code-b";
         config.save();
+        // The file never held the value the module started from at 'b': not written, named each time it is tried.
+        assertThat(Files.readAllBytes(file())).isEqualTo(afterPanel);
         assertThat(warnings()).hasSize(1);
         assertThat(warnings().get(0)).contains("'b'").doesNotContain("'a'", "operator-b", "code-b");
         config.b = "later-code-b";
         config.save();
-        assertThat(warnings()).hasSize(1);
-        assertThat(config.isModifiedSinceSnapshot()).isFalse();
+        assertThat(Files.readAllBytes(file())).isEqualTo(afterPanel);
+        assertThat(warnings()).hasSize(2);
+        assertThat(config.isModifiedSinceSnapshot()).isTrue();
     }
 
     @Test
@@ -200,6 +218,7 @@ class ConfigOverwriteWarningTest {
         config.updateProperties(panel);
         config.b = "code-b";
         manager.saveAll();
+        assertThat(new String(Files.readAllBytes(file()), StandardCharsets.UTF_8)).contains("b: operator-b");
         assertThat(warnings()).hasSize(1);
         assertThat(warnings().get(0)).contains("'b'").doesNotContain("'a'");
     }

@@ -265,12 +265,17 @@ class ConfigPanelMapEntryEditTest {
             assertThat(values.isModifiedSinceSnapshot()).isTrue();
             disk = ConfigDocument.parse(new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
             assertThat(disk.get(target)).isEqualTo(5); assertThat(disk.get(sibling)).isEqualTo(7);
-            values.save(); assertThat(values.isModifiedSinceSnapshot()).isFalse();
+            // 17-65 save rule (maintainer decision 2026-10-04, superseding #527's overwrite-and-warn): the operator
+            // changed the sibling on disk since it was read, so the module's pending sibling is not written and is named.
+            values.save(); assertThat(values.isModifiedSinceSnapshot()).isTrue();
             assertThat(warnings).containsExactly("Configuration file " + file.toAbsolutePath()
-                    + " had operator-edited keys overwritten: '" + shape + "'");
+                    + ": the module's changes to '" + String.join(".", sibling) + "' were not written, because the file"
+                    + " does not hold the value they were made from there (edited, deleted or unusable since it was read)."
+                    + " The file keeps its text; the module's values stay in memory.");
             disk = ConfigDocument.parse(new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
-            assertThat(disk.get(sibling)).isEqualTo(9);
+            assertThat(disk.get(sibling)).isEqualTo(7); assertThat(disk.get(target)).isEqualTo(5);
             ShapeValues restarted = new ShapeValues("shapes.yml"); restarted.init(plugin);
+            published.set(sibling, 7);
             assertThat(registry.toPlain(field.get(restarted), type, "shapes.yml", Arrays.asList(shape)))
                     .isEqualTo(published.get(Arrays.asList(shape)));
             assertThat(restarted.isModifiedSinceSnapshot()).isFalse();

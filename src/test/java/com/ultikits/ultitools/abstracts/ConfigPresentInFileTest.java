@@ -65,7 +65,8 @@ class ConfigPresentInFileTest {
         Values value = new Values("values.yml"); value.init(plugin);
         Files.write(file, "values: {}\nexternal: null\n".getBytes(StandardCharsets.UTF_8));
         value.save();
-        assertThat(value.toJsonObject().has("external")).isTrue();
+        // A save with no module change neither writes nor re-reads anything into the entity (17-65 save rule).
+        assertThat(value.toJsonObject().has("external")).isFalse();
         assertThat(present(value, "external")).isFalse();
         assertThat(present(value, "old")).isTrue();
         com.google.gson.JsonObject panel = new com.google.gson.JsonObject();

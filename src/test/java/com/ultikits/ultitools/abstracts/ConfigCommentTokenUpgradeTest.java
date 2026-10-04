@@ -230,18 +230,21 @@ class ConfigCommentTokenUpgradeTest {
     }
 
     @Test
-    @DisplayName("an explicit save() and a panel write carry the framework's comment and keep one the operator edited (#604)")
+    @DisplayName("an explicit save() rewrites no comment, and a panel write keeps one the operator edited (#604)")
     void explicitSaveAndPanelWriteCarryTheComment() throws Exception {
         writeFile(UPGRADED_FILE);
         UpgradeConfig config = new UpgradeConfig(PATH);
         config.init(plugin);
 
         writeFile(readFile().replace("# " + EN_LIMIT, "# " + ZH_LIMIT));
+        byte[] beforeSave = Files.readAllBytes(file());
         config.save();
-        assertThat(parse().getComments("demo.limit")).as("the framework's line follows the language")
-                .containsExactly(EN_LIMIT);
+        // 17-65 save rule (maintainer decision 2026-10-04): a save writes only what the module changed and never a
+        // comment; the framework's line follows the language at the next start or /ul reload.
+        assertThat(Files.readAllBytes(file())).isEqualTo(beforeSave);
+        assertThat(parse().getComments("demo.limit")).containsExactly(ZH_LIMIT);
 
-        writeFile(readFile().replace("# " + EN_LIMIT, "# edited by the operator"));
+        writeFile(readFile().replace("# " + ZH_LIMIT, "# edited by the operator"));
         JsonObject payload = new JsonObject();
         payload.addProperty("demo.other", 4);
         config.updateProperties(payload);
