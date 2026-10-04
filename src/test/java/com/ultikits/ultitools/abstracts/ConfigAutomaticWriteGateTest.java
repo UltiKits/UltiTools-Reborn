@@ -341,4 +341,21 @@ class ConfigAutomaticWriteGateTest {
 
         assertThat(config.isFileModifiedSinceSnapshot()).isFalse();
     }
+
+    /**
+     * #600, review round 1 IN-03: a write refused because the file changed after it was read names only the keys it
+     * would have changed - not a token comment that already matches the language.
+     */
+    @Test
+    void fileChangedRefusalNamesOnlyKeysThatWouldChange() throws Exception {
+        put("# " + EN + "\ninterval: 300\n");
+        Gate config = new Gate(PATH);
+        config.initForBatch(plugin);
+        put("# " + EN + "\ninterval: 450\n");
+
+        config.flushInitializationWrite();
+
+        assertThat(warningsNamingTheFile()).hasSize(1);
+        assertThat(warningsNamingTheFile().get(0)).contains("enabled").doesNotContain("interval (comment)");
+    }
 }
