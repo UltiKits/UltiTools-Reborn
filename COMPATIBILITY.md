@@ -712,10 +712,12 @@ This section governs the third kind.
   kept whatever an older jar first extracted, forever — a defect (#441), not a documented
   guarantee that the file would stay frozen. As of 6.3.0, a `lang/` file whose recorded extraction
   hash still matches its on-disk bytes is replaced by the current jar's copy on the next start,
-  with one INFO line naming the file; a file the operator has edited since it was recorded is left
-  alone exactly as before, with only the individual keys whose placeholder count moved resolved
-  from the jar instead (see `ultitools.language.file-refresh`/`ultitools.language.file-preserve` in
-  `FEATURES.md`). A file with no record at all is handled by the next entry.
+  with one INFO line naming the file. A file the operator has edited since it was recorded is
+  restored as well since #608 (see the entry on official language files below); only when that
+  restore cannot be written (a read-only or symbolic-link file) is the edited file kept, with the
+  individual keys whose placeholder count moved resolved from the jar instead (see
+  `ultitools.language.file-refresh`/`ultitools.language.file-preserve` in `FEATURES.md`). A file
+  with no record at all is handled by the next entry.
 - **Upgrade note — language files without a provenance record are replaced on the first 6.3.0
   start, including files an operator edited (#459).** Every `lang/` file extracted before 6.3.0
   has no provenance record, so 6.3.0 cannot tell an operator's edit from a file that is merely an
@@ -729,26 +731,74 @@ This section governs the third kind.
     and so on; an existing file is never overwritten. No backup name ends in `.json`, `.yml` or
     `.yaml`, so a backup is never loaded as a catalogue;
   - one WARNING per replaced file names the file and its backup;
-  - **to restore your edit**, stop the server, delete or move the new `lang/<file>` and rename
-    `<file>.bak` back to `<file>`, then start. The restored file now differs from the recorded
-    hash, so it is treated as your customisation and kept on every later start (the
-    `ultitools.language.file-preserve` rule);
+  - **to keep your edit, move it into a custom language file — do not rename the backup back.**
+    As of #608 an official language file is restored at every start (see the entry on official
+    language files below), so a `.bak` renamed back to `<file>` is replaced again on the next start.
+    Copy the `.bak` to a new name that starts with the language code and a hyphen, keeping the
+    extension — for example `lang/en-myserver.json` — and select that name as described there;
   - a file byte-identical to the jar's copy is only recorded, with no backup and no log line; a
     file that already has a record keeps the rule in the previous entry; a second start changes
     nothing;
   - if the backup, the replacement or the record cannot be written (a read-only or symbolic-link
     file, a folder that is not writable), the original file stays in place, nothing is recorded,
     no backup is left behind, and the file is used as before, with the placeholder-count guard.
-  The framework's own `lang/` catalogue is read from the framework jar and has never been
-  extracted, so no framework file is affected. No per-release fingerprint list is used to spare
+  The framework's own `lang/` catalogue was never extracted before 6.3.0, so no framework file is
+  affected by this note; as of 6.3.0 the framework writes its official files to
+  `plugins/UltiTools/lang/` (see the entry below). No per-release fingerprint list is used to spare
   edited files; that alternative was offered and not chosen. See
   `ultitools.language.unrecorded-replace` in `FEATURES.md`.
 
   中文补充：升级到 6.3.0 后第一次启动时，所有没有来源记录、且与新版模块 jar 自带版本不同的语言文件都会被替换为新版，
   服主改过的文件也会被替换（维护者于 2026-09-29 书面接受）。旧文件保留在同一个 `lang/` 目录下，名为 `<文件名>.bak`
   （名字已被占用时依次为 `<文件名>.1.bak`、`<文件名>.2.bak`……，绝不覆盖已有文件，也不会被当作语言文件读取），
-  每替换一个文件，日志里有一行写明文件和备份。要恢复自己的修改：停服，把新文件移走，把 `.bak` 改回原名，再启动；
-  恢复后的文件与记录不一致，会被当作服主的修改一直保留。
+  每替换一个文件，日志里有一行写明文件和备份。要保留自己的修改，请不要把 `.bak` 改回原名：自 #608 起官方语言文件
+  每次启动都会恢复，改回原名的文件下次启动会再次被替换。请把 `.bak` 复制为以语言代码加连字符开头的新名称（保留扩展名，
+  例如 `lang/en-myserver.json`），再按下一条的说明在主配置中选择它。
+- **Official language files are framework-owned; customise by copy, rename, select (#608,
+  maintainer decisions of 2026-10-04).** The framework now writes its official language files,
+  `en.json` and `zh.json`, to `plugins/UltiTools/lang/`, and every module keeps writing its own to
+  `plugins/UltiTools/pluginConfig/<module>/lang/`. These official files belong to UltiTools:
+  - **an official file edited in place is restored.** At every start, an official file whose bytes
+    differ from the bundled version is restored to it, the previous file is kept as `<file>.bak`
+    (named as in the previous entry), and one WARNING names both and tells you to customise as
+    below instead. `/ul reload` does the same for the framework's two files and for each module's
+    file of the language in use. A file an earlier release wrote and nobody edited is brought up to
+    date without a backup or a line. A read-only or symbolic-link file is left as it is, with a
+    line saying so. A second start changes nothing;
+  - **to customise messages**: (1) in the folder whose messages you want to change, copy an official
+    file under a new name that starts with its language code and a hyphen, keeping the extension —
+    `zh.json` to `zh-myserver.json`; (2) edit the copy; (3) set `language: zh-myserver` in
+    `plugins/UltiTools/config.yml` and restart or run `/ul reload`. That one setting selects the
+    language for the framework and every module — there is no per-module setting — so make the copy
+    in each folder whose messages you want to change;
+  - **missing messages**: every message your copy does not contain comes from the official file its
+    name starts with (`zh` for `zh-myserver`; the longest shipped code wins, so `zh-CN-myserver`
+    uses `zh-CN` when a module ships it). You may delete everything you do not change, and a module
+    with no `zh-myserver` file simply uses its official `zh`. A name that starts with no shipped
+    code, such as `myserver`, uses English for what it lacks and logs one WARNING. A name with any
+    character other than ASCII letters, digits, `_` and `-` is never used as a file name;
+  - **your custom file is never written**, replaced, backed up or recorded by any start, reload,
+    upgrade or module update;
+  - **for module authors**: `UltiToolsPlugin#getLanguageCode()` now returns the official language
+    the module's messages are based on — `zh` for `zh-myserver`, and the fallback the module actually
+    uses for a name it does not ship — so behaviour that depends on the language (shipped text
+    written into configuration files, example content) keeps working. The new
+    `UltiToolsPlugin#getConfiguredLanguage()` returns the configured name. Before 6.3.0
+    `getLanguageCode()` returned the configured name, which is the same value for every official
+    code, so only a server using a custom or unshipped name sees a different value;
+  - the framework's official texts are now read as UTF-8 on every platform; before 6.3.0 they were
+    decoded with the platform default charset.
+  See `ultitools.language.custom-file-framework`, `custom-file-module`, `custom-file-missing-keys`,
+  `custom-file-never-written` and `official-file-edit` in `FEATURES.md`.
+
+  中文补充：官方语言文件归 UltiTools 所有。框架现在会把官方语言文件 `en.json`、`zh.json` 写到
+  `plugins/UltiTools/lang/`，各模块的官方语言文件仍在 `plugins/UltiTools/pluginConfig/<模块>/lang/`。直接修改官方文件，
+  每次启动都会被恢复为自带版本，修改过的文件保留为 `<文件名>.bak`，日志里有一行提示改用自定义文件（`/ul reload` 也会恢复框架的两个文件和各模块当前语言的文件）。
+  自定义方法：在要修改的目录里把官方文件复制为以语言代码加连字符开头的新名称（保留扩展名，例如 `zh.json` → `zh-myserver.json`），
+  修改这个副本，然后在 `plugins/UltiTools/config.yml` 中设置 `language: zh-myserver` 并重启或执行 `/ul reload`。这一个设置同时作用于框架和所有模块，没有按模块的设置。
+  副本里缺少的文本使用名称开头对应的官方文件（`zh-myserver` 对应 `zh`）补充，所以只需保留要改的条目；没有 `zh-myserver` 文件的模块直接使用官方 `zh`。
+  名称不以已有语言代码开头（如 `myserver`）时，缺少的文本使用英文，并记录一行警告。自定义文件在任何启动、重载、升级或模块更新中都不会被写入、替换、备份或登记。
+  模块作者注意：`getLanguageCode()` 现在返回自定义名称所基于的官方语言代码（`zh-myserver` 返回 `zh`），新增的 `getConfiguredLanguage()` 返回配置的名称。
 - Resolving a module's language only after its resources are extracted (#540). Before 6.3.0 the
   constructors resolved the language first and extracted the bundled resources second. With the
   multi-extension lookup added in 6.3.0 (#389), an operator who deleted `lang/<code>.json` to get a

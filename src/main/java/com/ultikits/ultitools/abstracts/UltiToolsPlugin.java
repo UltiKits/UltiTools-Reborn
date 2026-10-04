@@ -16,9 +16,7 @@ import java.net.JarURLConnection;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
-import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
-import java.nio.file.LinkOption;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.security.CodeSource;
@@ -70,6 +68,7 @@ import com.ultikits.ultitools.manager.ListenerManager;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.utils.DependencyUtils;
 import com.ultikits.ultitools.utils.FileUtils;
+import com.ultikits.ultitools.utils.OfficialLanguageFiles;
 import com.ultikits.ultitools.utils.PosixAttributePreserver;
 import com.ultikits.ultitools.utils.ResourceHashSidecar;
 import com.ultikits.ultitools.utils.VersionComparatorUtil;
@@ -113,25 +112,14 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     static final String RELOAD_LOG_MESSAGE_KEY = "Module '%s' reloaded.";
 
     /**
-     * Framework i18n key for the one line logged per language file replaced on the upgrade start
-     * (#459, maintainer 2026-09-29, question 3 option 2). Arguments: the replaced file, the module,
-     * the backup. Package-private so a test can assert both shipped catalogues translate it.
+     * Framework i18n key for the one line logged per official language file restored to the
+     * bundled version (#459; #608 and the maintainer decision of 2026-10-04, "official language
+     * file edited in place": restored at every start, the edited copy backed up, the operator told
+     * to copy, rename and select instead). Arguments: the restored file, the module, the backup.
+     * Package-private so a test can assert both shipped catalogues translate it.
      */
-    static final String LANGUAGE_REPLACED_LOG_KEY = "Language file '%s' of module '%s' had no provenance "
-            + "record and differed from the version bundled with this release, so it was replaced by the "
-            + "bundled version: this release cannot tell whether it had been edited. The previous file was "
-            + "kept as '%s'; to restore it, stop the server and rename it back.";
+    static final String LANGUAGE_REPLACED_LOG_KEY = OfficialLanguageFiles.RESTORED_LOG_KEY;
 
-    /**
-     * Suffix of the backup kept when an unrecorded language file is replaced (#459). A backup is
-     * named {@code <file>.bak}, then {@code <file>.1.bak}, {@code <file>.2.bak} and so on, so no
-     * name ends in a catalogue extension the loader resolves ({@code .json}, {@code .yml}, {@code
-     * .yaml}) and an existing file is never overwritten.
-     */
-    private static final String BACKUP_SUFFIX = ".bak";
-
-    /** Upper bound on backup names tried for one file, so a full directory cannot loop forever. */
-    private static final int MAX_BACKUP_NAMES = 1000;
     /**
      * Framework i18n key for the SEVERE line {@link #reloadSelf()} logs, naming the module and the
      * cause, when any of its steps or the module's own {@link #onReload()} throws (#509). The success
@@ -406,37 +394,114 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
-     * Resolves which language code to actually load, consulting {@link Localized#supported()}
-     * before {@link #createLanguageFromPath(String)} picks a file (D-20/D-21/WIRE-10). Prefers
-     * the configured code; if it is absent from a non-empty {@code supported()}, prefers
-     * {@code "en"} when {@code supported()} contains it, otherwise the first entry in
-     * {@code supported()}'s iteration order. An empty {@code supported()} is "no information" -
-     * the configured code is returned unchanged and nothing is logged.
+     * Resolves the official language code to load, consulting {@link Localized#supported()}
+     * before {@link #createLanguageFromPath(String)} picks a file (D-20/D-21/WIRE-10), and logs a
+     * warning when the configured name has no official base. See {@link
+     * #officialLanguageFor(String, boolean)} for the rule.
      *
-     * @return the language code to actually load
+     * @return the official language code to load
      */
     private String resolveLanguageCode() {
-        String configured = getLanguageCode();
+        return officialLanguageFor(getConfiguredLanguage(), true);
+    }
+
+    /**
+     * The official language {@code configured} is based on (#608). An official code this module
+     * ships ({@link Localized#supported()}) is its own base; a custom name is based on the shipped
+     * code it starts with followed by a hyphen ({@code zh-myserver} on {@code zh}, see {@link
+     * Localized#officialLanguageOf}); any other name falls back to {@code "en"} when the module ships
+     * it, otherwise to the first shipped code, with one warning when {@code warn} is set. An empty
+     * {@code supported()} is "no information": {@code configured} is returned unchanged and nothing
+     * is logged, as before 6.3.0.
+     */
+    private String officialLanguageFor(String configured, boolean warn) {
         List<String> supportedCodes = this.supported();
         if (supportedCodes == null || supportedCodes.isEmpty()) {
             return configured;
         }
-        if (configured != null && supportedCodes.contains(configured)) {
-            return configured;
+        String official = Localized.officialLanguageOf(configured, supportedCodes);
+        if (official != null) {
+            return official;
         }
         String fallback = supportedCodes.contains("en") ? "en" : supportedCodes.get(0);
-        languageLog().warn("Module '" + getPluginName() + "' is configured for language '" + configured
-                + "' but only ships " + supportedCodes + " - falling back to '" + fallback + "'.");
+        if (warn) {
+            languageLog().warn("Module '" + getPluginName() + "' is configured for language '" + configured
+                    + "' but only ships " + supportedCodes + " - falling back to '" + fallback + "'. A custom "
+                    + "language name must start with one of these codes and a hyphen, for example '"
+                    + supportedCodes.get(0) + "-myserver'.");
+        }
         return fallback;
     }
 
     /**
-     * Creates a Language object from the given resource folder path
+     * The custom language name in use (#608): the configured name when it is not the official
+     * language it resolves to and is a safe language-code token ({@link
+     * Localized#isSafeLanguageCode}), so it can never name a path outside {@code lang/}; otherwise
+     * {@code null}. A module that ships no languages has no official base and no custom name.
+     */
+    private static String customLanguageName(String configured, String official) {
+        if (configured == null || configured.equals(official) || !Localized.isSafeLanguageCode(configured)) {
+            return null;
+        }
+        return configured;
+    }
+
+    /**
+     * Reads the operator's custom language file {@code <folderPath>/lang/<name><extension>}, trying
+     * each of {@link #LANGUAGE_EXTENSIONS} in order (#608).
+     * <p>
+     * Read-only by construction: a custom file belongs to the operator (maintainer decision
+     * 2026-10-04), so this method never calls {@link #loadLanguageFromDisk} -- whose provenance step
+     * can refresh, restore or back up a file -- and never writes, renames, backs up or records
+     * anything. The module jar never ships a file under a custom name either, so {@link
+     * #saveResources()} and {@link #migrateBundledLanguageFiles()} never reach one. The canonical
+     * {@code lang/} containment guard applies as for every other language read.
+     *
+     * @return the custom language, or {@code null} when no such file exists or none is readable
+     */
+    private Language readCustomLanguageFile(String folderPath, String name) {
+        File langDir = new File(folderPath, "lang");
+        for (String extension : LANGUAGE_EXTENSIONS) {
+            File file = new File(langDir, name + extension);
+            if (isWithinDirectory(langDir, file) && file.isFile()) {
+                try {
+                    return readLanguageFile(file, extension);
+                } catch (JsonParseException unreadable) {
+                    languageLog().error(unreadable, "Could not read custom language file '" + file.getPath()
+                            + "' of module '" + getPluginName() + "'; using the official language instead.");
+                    return null;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Creates the language from the given resource folder: the operator's custom language file
+     * when one is selected and present, falling back key by key to the official language it is
+     * based on -- the official file on disk, falling back to the jar's copy (#608).
+     *
      * @param folderPath the resource folder path
      * @return Language object
      */
     private Language createLanguageFromPath(String folderPath) {
         String resolvedCode = resolveLanguageCode();
+        String customName = customLanguageName(getConfiguredLanguage(), resolvedCode);
+        Language custom = customName != null ? readCustomLanguageFile(folderPath, customName) : null;
+        Language official = createOfficialLanguage(folderPath, resolvedCode, custom == null);
+        if (custom != null) {
+            return custom.withFallback(official);
+        }
+        return official != null ? official : new Language("{}");
+    }
+
+    /**
+     * Resolves the official language {@code resolvedCode} from disk and jar, as before #608.
+     *
+     * @param warnIfMissing whether to log that no language is loadable (not when a custom file is in use)
+     * @return the official language, or {@code null} when none is loadable
+     */
+    private Language createOfficialLanguage(String folderPath, String resolvedCode, boolean warnIfMissing) {
         // Round 5 (own deep review of 0ddc95f, finding 1): the disk and jar catalogues are now
         // resolved independently of each other's extension. Resolving them together, one shared
         // extension per loop iteration, meant a module that shipped an old jar's lang/en.json
@@ -464,12 +529,14 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         // what a player sees, and what nobody sees in the log. Eight of sixteen modules were in
         // this state for a whole release because they ship lang/*.yml and only .json was looked
         // for. Whatever the cause next time, it will say so.
-        languageLog().warn("Module '" + getPluginName() + "' has no loadable language file for '"
-                + resolvedCode + "'. Looked for lang/" + resolvedCode + " with extensions "
-                + Arrays.toString(LANGUAGE_EXTENSIONS) + ", on disk under " + folderPath
-                + " and inside the module jar. Every i18n(...) call in this module will render its "
-                + "own key until one is added.");
-        return new Language("{}");
+        if (warnIfMissing) {
+            languageLog().warn("Module '" + getPluginName() + "' has no loadable language file for '"
+                    + resolvedCode + "'. Looked for lang/" + resolvedCode + " with extensions "
+                    + Arrays.toString(LANGUAGE_EXTENSIONS) + ", on disk under " + folderPath
+                    + " and inside the module jar. Every i18n(...) call in this module will render its "
+                    + "own key until one is added.");
+        }
+        return null;
     }
 
     /**
@@ -585,9 +652,11 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      *       the operator since extraction: overwrite the disk file with the current jar's bytes,
      *       re-record the new (jar) hash as the baseline, and log one informative line.</li>
      *   <li>Recorded hash present and different from the disk file's current hash: this by
-     *       ITSELF is NOT evidence of operator customisation -- see the branch-2 code comment
-     *       below (Codex finding, thread {@code PRRT_kwDOIcF9Es6i2kao}, P2) for why, and for the
-     *       content-comparison this branch now performs before concluding either way.</li>
+     *       ITSELF is NOT evidence of an edit -- see the branch-2 code comment below (Codex
+     *       finding, thread {@code PRRT_kwDOIcF9Es6i2kao}, P2) for why. When the disk bytes equal
+     *       the jar's the record is repaired; when they differ, the official file was edited in
+     *       place and is restored like branch 4 (#608, maintainer decision 2026-10-04: restored at
+     *       every start, edited copy backed up, one log line).</li>
      *   <li>No recorded hash, but the disk bytes already equal the jar's -- provably unmodified,
      *       unknown provenance only because an older jar (pre-#441) extracted it: record the hash
      *       as the new baseline and enter the normal mechanism, with no overwrite this pass
@@ -596,18 +665,20 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      *   <li>No recorded hash and the disk bytes differ from the jar's -- unknown provenance: the
      *       file is replaced by the jar's copy and recorded, the old file kept as a backup and named
      *       in the log (#459, maintainer 2026-09-29, question 3 option 2; see {@link
-     *       #replaceUnrecordedLanguageFile}). If the replacement fails the file is kept and the
+     *       #restoreOfficialLanguageFile}). If the replacement fails the file is kept and the
      *       per-key placeholder-arity override applies, as before.</li>
      * </ol>
      * A jar entry absent for this exact {@code resourcePath} (D-05's stated exception) short-
      * circuits before any of the four branches: the disk file is left alone and nothing is
-     * recorded, since there is nothing to compare against.
+     * recorded, since there is nothing to compare against. This is also why an operator's custom
+     * language file (#608) can never reach any branch: a custom name is by definition not a
+     * language the jar ships, and custom files are read only by {@link #readCustomLanguageFile}.
      * <p>
      * Every branch above derives its conclusion from an ACTUAL disk-bytes-vs-jar-bytes comparison,
      * never from the record alone -- branches 3 and 4 already did (their own classification IS a
      * content comparison); branch 2 was corrected to do the same (see its own code comment). Since
-     * #459, branch 4 no longer concludes "customisation" at all: an unrecorded differing file is
-     * replaced, with a backup, by the committing pass. The record is provenance BOOKKEEPING, not the source of
+     * #459, branch 4 no longer concludes "customisation" at all, and since #608 neither does branch
+     * 2: an official file whose bytes differ from the jar's is restored, with a backup. The record is provenance BOOKKEEPING, not the source of
      * truth for whether a file has been customised; it can go stale (most deterministically, since
      * the previous round, when the sidecar itself is symlinked or read-only and its own write is
      * refused) without that staleness ever being able to cause a PERMANENT misclassification.
@@ -696,14 +767,17 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             // opportunistically re-record the correct hash (best-effort; record() already
             // degrades silently on its own write failure per its own contract, and that failure
             // must not change this classification or fail the boot) and proceed on the up-to-date
-            // path, exactly like branch 1's own jarHash.equals(diskHash) short-circuit above. Only
-            // fall through to "operator customisation" -- unchanged from before -- when the disk
-            // bytes are ACTUALLY different from the bundle.
+            // path, exactly like branch 1's own jarHash.equals(diskHash) short-circuit above.
             if (diskHash.equals(jarHash)) {
                 recordUnlessDryRun(resourceFolder, resourcePath, diskHash);
                 return readLanguageFile(file, extension);
             }
-            return applyPlaceholderArityOverride(file, jarBytes, extension, resourcePath);
+            // The disk bytes differ from both the record and the bundle: the official file was edited
+            // in place. Until #608 this was kept as a customisation. The maintainer decided on
+            // 2026-10-04 that official language files are framework-owned and an in-place edit is
+            // restored at every start, the edited copy backed up and the operator told to copy,
+            // rename and select a custom file instead -- the same replacement branch 4 performs.
+            return restoreOfficialLanguageFile(file, jarBytes, resourceFolder, resourcePath, extension);
         }
 
         // Branch-audit (Codex finding thread PRRT_kwDOIcF9Es6i2kao, P2): branches 3 and 4 below
@@ -727,7 +801,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         // kept its old wording forever. The maintainer decided on 2026-09-29 (question 3, option 2)
         // to replace it by the jar's copy, keeping the old file as a backup and saying so in the
         // log -- an operator-edited file included, accepted in writing.
-        return replaceUnrecordedLanguageFile(file, jarBytes, resourceFolder, resourcePath, extension);
+        return restoreOfficialLanguageFile(file, jarBytes, resourceFolder, resourcePath, extension);
     }
 
     /**
@@ -741,11 +815,15 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
-     * Branch 4 of {@link #resolveLanguageWithProvenance} (#459, maintainer
-     * 2026-09-29, question 3 option 2): a language file with no provenance record whose bytes differ
-     * from the jar's copy is replaced by the jar's copy and recorded; the previous file is kept as a
-     * backup beside it and one catalogue line names both. During the construction-time pass (#460)
-     * it writes nothing and returns the jar's dictionary, the language a replacement yields.
+     * Branches 2 and 4 of {@link #resolveLanguageWithProvenance}: an official language file whose
+     * bytes differ from the jar's copy -- an unrecorded one (#459, maintainer 2026-09-29, question 3
+     * option 2) or one edited in place after it was recorded (#608, maintainer decision 2026-10-04:
+     * official language files are framework-owned and restored at every start) -- is replaced by the
+     * jar's copy and recorded; the previous file is kept as a backup beside it and one catalogue line
+     * names both and tells the operator to copy, rename and select a custom file instead. It is only
+     * ever called for a resource the jar ships, so it can never touch an operator's custom-named
+     * file. During the construction-time pass (#460) it writes nothing and returns the jar's
+     * dictionary, the language a replacement yields.
      * <p>
      * Steps, each undone if a later one fails, so a failure at any step leaves the original file in
      * place, byte-identical, with nothing recorded and no backup left behind:
@@ -764,7 +842,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * The language returned is the jar's dictionary after a replacement, and the kept file's
      * dictionary with the placeholder-arity guard (the pre-#459 behaviour) after a failure.
      */
-    private Language replaceUnrecordedLanguageFile(File file, byte[] jarBytes, File resourceFolder,
+    private Language restoreOfficialLanguageFile(File file, byte[] jarBytes, File resourceFolder,
                                                    String resourcePath, String extension) {
         if (languageDryRun) {
             // #460: construction only computes the decision; the committing pass replaces the file.
@@ -790,31 +868,25 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * skipped when any file or link exists there, and the copy itself refuses an existing target,
      * so a name taken in between is skipped too.
      *
+     * The naming is shared with the framework's own language files ({@link
+     * OfficialLanguageFiles#copyToFreshBackup}).
+     *
      * @return the backup created, or {@code null} if none could be (the reason is logged)
      */
     private File copyToFreshBackup(File file) {
-        for (int index = 0; index < MAX_BACKUP_NAMES; index++) {
-            String name = index == 0 ? file.getName() + BACKUP_SUFFIX
-                    : file.getName() + "." + index + BACKUP_SUFFIX;
-            File candidate = new File(file.getParentFile(), name);
-            if (Files.exists(candidate.toPath(), LinkOption.NOFOLLOW_LINKS)) {
-                continue;
+        try {
+            File backup = OfficialLanguageFiles.copyToFreshBackup(file);
+            if (backup == null) {
+                languageLog().error("No free backup name for language file '" + file.getPath() + "' of module '"
+                        + getPluginName() + "' after " + OfficialLanguageFiles.MAX_BACKUP_NAMES
+                        + " tries; leaving it unchanged.");
             }
-            try {
-                Files.copy(file.toPath(), candidate.toPath(), StandardCopyOption.COPY_ATTRIBUTES);
-                return candidate;
-            } catch (FileAlreadyExistsException takenMeanwhile) {
-                // Created by someone else between the check and the copy: try the next name.
-                continue;
-            } catch (IOException e) {
-                languageLog().error(e, "Could not back up language file '" + file.getPath() + "' of module '"
-                        + getPluginName() + "'; leaving it unchanged instead of replacing it without a backup.");
-                return null;
-            }
+            return backup;
+        } catch (IOException e) {
+            languageLog().error(e, "Could not back up language file '" + file.getPath() + "' of module '"
+                    + getPluginName() + "'; leaving it unchanged instead of replacing it without a backup.");
+            return null;
         }
-        languageLog().error("No free backup name for language file '" + file.getPath() + "' of module '"
-                + getPluginName() + "' after " + MAX_BACKUP_NAMES + " tries; leaving it unchanged.");
-        return null;
     }
 
     /**
@@ -1873,9 +1945,38 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
-     * @return language code
+     * The official language this module's messages are based on: a language code this module
+     * ships, such as {@code en} or {@code zh}.
+     * <p>
+     * Use it for behaviour that depends on the language, such as choosing which shipped text to
+     * write into a configuration file or which example content to create. An operator may select a
+     * custom language file in {@code plugins/UltiTools/config.yml}: a copy of an official file under
+     * a new name that starts with the official code and a hyphen, such as {@code zh-myserver}. For
+     * that setting this method returns {@code zh}. A name that starts with no shipped code resolves
+     * to {@code en} when the module ships it, otherwise to its first shipped code. A module that
+     * ships no language files gets the configured name unchanged. The configured name itself is
+     * {@link #getConfiguredLanguage()}.
+     *
+     * @return the official language code, or {@code null} if no language is configured and the
+     *         module ships no language files
+     * @since 6.3.0 returns the official base of a custom language name (#608); before 6.3.0 it
+     *        returned the configured name
      */
     public final String getLanguageCode() {
+        return officialLanguageFor(getConfiguredLanguage(), false);
+    }
+
+    /**
+     * The {@code language} setting of {@code plugins/UltiTools/config.yml} as the framework runs
+     * with it: an official code such as {@code zh}, or the name of an operator's custom language
+     * file such as {@code zh-myserver}. Messages come from {@code lang/<name>.*} in this module's
+     * folder when that file exists, and from the official language {@link #getLanguageCode()}
+     * returns for every key the file lacks.
+     *
+     * @return the configured language name, or {@code null} if none is configured
+     * @since 6.3.0
+     */
+    public final String getConfiguredLanguage() {
         return UltiTools.getInstance().getConfig().getString("language");
     }
 
@@ -2139,7 +2240,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         String pendingLanguage = pendingLanguageSetting();
         if (pendingLanguage != null) {
             report.partial(String.format(UltiTools.getInstance().i18n(LANGUAGE_CHANGE_PENDING_KEY),
-                    getLanguageCode(), pendingLanguage));
+                    getConfiguredLanguage(), pendingLanguage));
         }
         // @ConditionalOnConfig is evaluated once at component-scan time; a reload can only
         // report drift on a watched key, never re-register or rebuild anything (#392, D-01).
@@ -2174,7 +2275,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             return null;
         }
         String diskLanguage = onDisk.getString("language");
-        return diskLanguage != null && !diskLanguage.equals(getLanguageCode()) ? diskLanguage : null;
+        return diskLanguage != null && !diskLanguage.equals(getConfiguredLanguage()) ? diskLanguage : null;
     }
 
     /**
