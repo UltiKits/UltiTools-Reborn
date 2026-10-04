@@ -232,4 +232,21 @@ class ConfigSaveKeepsOperatorTextTest {
         assertThat(read()).contains("interval: 120");
         assertThat(unwrittenWarnings()).isEmpty();
     }
+
+    @Test
+    @DisplayName("R3-I3: a reload conflict over a list names the key only, never the discarded values")
+    void reloadConflictOverAListNamesTheKeyOnly() throws Exception {
+        put("item:\n  interval: 300\n  warn-times: [60, 30, 10]\n  message: hello\n");
+        Cfg config = new Cfg(PATH);
+        config.init(plugin);
+        config.warnTimes.add(5);
+        put("item:\n  interval: 300\n  warn-times: [60, 30, 99]\n  message: hello\n");
+
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            config.reload();
+            assertThat(warnings.messagesContaining("'item.warn-times'")).hasSize(1)
+                    .allSatisfy(message -> assertThat(message).contains("file wins").doesNotContain("60", "30", "5]", "99"));
+        }
+        assertThat(config.warnTimes).containsExactly(60, 30, 99);
+    }
 }
