@@ -146,7 +146,9 @@ class ConfigDottedSettingPathTest {
         assertThatThrownBy(() -> new Features(PATH).init(plugin))
                 .isInstanceOf(ConfigurationException.class)
                 .hasMessageContaining(PATH).hasMessageContaining("'features.chat'").hasMessageContaining("'limits.max'")
-                .satisfies(refusal -> assertThat(refusal.getMessage()).doesNotContain("77").doesNotContain("99"));
+                .hasMessageContaining("two forms")
+                .satisfies(refusal -> assertThat(refusal.getMessage()).doesNotContain("77").doesNotContain("99")
+                        .doesNotContain("fix the value"));
         assertThat(Files.readAllBytes(file())).isEqualTo(before);
     }
 
@@ -172,7 +174,7 @@ class ConfigDottedSettingPathTest {
     @Test void conditionalRefusesASettingWrittenInTwoForms() throws IOException {
         write("features.chat: false\nfeatures:\n  chat: true\n");
         assertThatThrownBy(this::chatListenerRegistered).isInstanceOf(ConfigurationException.class)
-                .hasMessageContaining(PATH).hasMessageContaining("'features.chat'");
+                .hasMessageContaining(PATH).hasMessageContaining("'features.chat'").hasMessageContaining("two forms");
     }
 
     @Test void aModuleSaveOfAFlatHeldSettingWritesTheFlatLineOnly() throws IOException {
