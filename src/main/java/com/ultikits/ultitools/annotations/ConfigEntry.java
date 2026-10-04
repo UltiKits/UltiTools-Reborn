@@ -29,7 +29,8 @@ public @interface ConfigEntry {
      * the framework can identify as its own are rewritten: the entry's comment, as a whole or as
      * its trailing run of lines, equal byte for byte (at the entry's column, {@code "# "} and the
      * text) to the framework's rendering of the token in a catalogue
-     * the module's jar ships, of the text the module resolves now, or of the bare token. Any other
+     * the module's jar ships, of a text an earlier module version shipped and listed in
+     * {@link #previousComments()}, of the text the module resolves now, or of the bare token. Any other
      * comment line above the entry - an operator's note, a framework comment the operator edited -
      * is kept byte for byte, permanently. Literal comments are only supplied for new entries and
      * existing operator comments are retained.
