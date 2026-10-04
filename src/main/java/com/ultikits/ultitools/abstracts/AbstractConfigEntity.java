@@ -393,7 +393,7 @@ public abstract class AbstractConfigEntity {
         if (splitsByEntry(declared, base, current)) {
             Map<?, ?> before = (Map<?, ?>) base;
             Map<?, ?> after = (Map<?, ?>) current;
-            Type valueType = TypeToken.of(declared).resolveType(Map.class.getTypeParameters()[1]).getType();
+            Type valueType = mapValueType(declared);
             Set<Object> names = new java.util.LinkedHashSet<>(after.keySet()); names.addAll(before.keySet());
             for (Object name : names) {
                 List<String> path = new ArrayList<>(prefix); path.add(String.valueOf(name));
@@ -409,6 +409,25 @@ public abstract class AbstractConfigEntity {
      * Whether a value is compared entry by entry: it is declared as a {@link Map} and both plain forms are maps that are
      * not a serialized object (Bukkit's {@code ==} type key).
      */
+    /** The declared value type of a map type ({@code Object} when it is raw). */
+    private static Type mapValueType(Type declared) {
+        return TypeToken.of(declared).resolveType(Map.class.getTypeParameters()[1]).getType();
+    }
+
+    /**
+     * How many of {@code keys}, from the start, address entries of declared maps: the keys after them would reach inside a
+     * value that is one value (17-65 review round 2 R2-01).
+     */
+    private static int splitDepth(Type declared, List<String> keys) {
+        Type type = declared;
+        int depth = 0;
+        for (int i = 0; i < keys.size() && Map.class.isAssignableFrom(TypeToken.of(type).getRawType()); i++) {
+            depth++;
+            type = mapValueType(type);
+        }
+        return depth;
+    }
+
     private static boolean splitsByEntry(Type declared, Object base, Object current) {
         return base instanceof Map && current instanceof Map
                 && Map.class.isAssignableFrom(TypeToken.of(declared).getRawType())
@@ -519,6 +538,11 @@ public abstract class AbstractConfigEntity {
             for (String key : mapKeys) {
                 if (key == null) { throw new IllegalArgumentException("A map key of '" + entryPath + "' cannot be null"); }
                 leaf.add(key);
+            }
+            if (splitDepth(declaredType(field), leaf) < leaf.size()) {
+                // The entry is one value - a serializable or a list - and is written whole (17-65 review round 2 R2-01).
+                throw new IllegalArgumentException("The map keys " + leaf + " of '" + entryPath + "' in " + configFilePath
+                        + " reach inside an entry that is not a map; name the entry itself");
             }
             List<String> path = new ArrayList<>(keys(field)); path.addAll(leaf);
             writeOperatorChanges(Collections.singletonList(
@@ -1131,7 +1155,7 @@ public abstract class AbstractConfigEntity {
             Object theirs = plainValue(field);
             baseline.put(field, theirs);
             if (!initialize && savedSnapshot != null && savedSnapshot.containsKey(field)) {
-                Object merged = mergeReload(savedSnapshot.get(field), mine.get(field), theirs,
+                Object merged = mergeReload(savedSnapshot.get(field), mine.get(field), theirs, declaredType(field),
                         fieldPath(field), isSecretShapedFieldName(field.getName()), conflicts);
                 try {
                     Object value = registry().fromPlainResult(merged, declaredType(field), configFilePath,
@@ -1377,22 +1401,36 @@ public abstract class AbstractConfigEntity {
         return Base64.getEncoder().encodeToString(digest);
     }
 
+    /**
+     * The #511 three-way reload merge of one setting. Only a value declared as a {@link Map} is merged key by key,
+     * following the declared value types into nested maps; any other value - a list, a {@code ConfigurationSerializable}
+     * such as a Bukkit {@code Location} or {@code Vector}, a typed map's value that is not a map - is one value: the
+     * module's, the file's, or on a conflict the file's whole, never a value mixed from both (17-65 review round 2 R2-01,
+     * the same rule as the save's {@link #changedLeaves}). A conflict over a composite value names the key only.
+     */
     @SuppressWarnings("PMD.NPathComplexity") // The recursive three-way merge explicitly distinguishes absence, order and secret-valued conflicts.
-    private Object mergeReload(Object base, Object mine, Object theirs, String path, boolean secret, List<String> conflicts) {
+    private Object mergeReload(Object base, Object mine, Object theirs, Type declared, String path, boolean secret,
+            List<String> conflicts) {
         if (orderedEquals(mine, base)) { return theirs; }
         if (orderedEquals(theirs, base) || orderedEquals(mine, theirs)) { return mine; }
-        if (base instanceof Map && mine instanceof Map && theirs instanceof Map) {
+        if (theirs instanceof Map && !((Map<?, ?>) theirs).containsKey("==") && splitsByEntry(declared, base, mine)) {
+            Type valueType = mapValueType(declared);
             Map<?, ?> b = (Map<?, ?>) base; Map<?, ?> m = (Map<?, ?>) mine; Map<?, ?> t = (Map<?, ?>) theirs;
             Set<Object> keys = new java.util.LinkedHashSet<>(); keys.addAll(t.keySet()); keys.addAll(m.keySet()); keys.addAll(b.keySet());
             Map<String, Object> merged = new LinkedHashMap<>();
             for (Object key : keys) {
                 Object value = mergeReload(b.containsKey(key) ? b.get(key) : ABSENT_RELOAD_VALUE,
                         m.containsKey(key) ? m.get(key) : ABSENT_RELOAD_VALUE,
-                        t.containsKey(key) ? t.get(key) : ABSENT_RELOAD_VALUE,
+                        t.containsKey(key) ? t.get(key) : ABSENT_RELOAD_VALUE, valueType,
                         path + "." + key, secret || isSecretShapedFieldName(String.valueOf(key)), conflicts);
                 if (value != ABSENT_RELOAD_VALUE) { merged.put(String.valueOf(key), value); }
             }
             return merged;
+        }
+        if (mine instanceof Map) {
+            // A composite value is replaced whole; its fields are not listed (they may hold anything).
+            conflicts.add("reload conflict at '" + path + "': discarded the in-memory value; file wins");
+            return theirs;
         }
         String value = secret || isSecretShapedFieldName(path) || containsSecret(mine) ? "<redacted>"
                 : mine == ABSENT_RELOAD_VALUE ? "<absent>" : String.valueOf(mine);
@@ -1752,11 +1790,36 @@ public abstract class AbstractConfigEntity {
                 refused.add("'" + path + "': " + (matches.isEmpty() ? "not found" : "ambiguous " + matches));
                 continue;
             }
+            List<String> match = matches.get(0);
+            int depth = splitDepth(declaredType(owner), match);
+            if (depth < match.size()) {
+                // An edit inside a value that is one value (a serializable, a list): the unit edited is that whole value, as
+                // the panel shows it with this field changed, so a module's unsaved change of the same value is not mixed
+                // in (17-65 review round 2 R2-01).
+                List<String> unit = new ArrayList<>(match.subList(0, depth));
+                List<String> inside = match.subList(depth, match.size());
+                if (unit.isEmpty()) {
+                    Object shown = whole.contains(owner) && proposed.containsKey(owner) ? proposed.get(owner) : source;
+                    proposed.put(owner, patchedMap(shown, inside, raw)); leaves.remove(owner); whole.add(owner);
+                    continue;
+                }
+                Object tree = proposed.containsKey(owner) ? proposed.get(owner) : plainValue(owner);
+                if (!(tree instanceof Map)) { refused.add("'" + path + "': not a map entry"); continue; }
+                List<List<String>> touched = leaves.get(owner);
+                Object shown = whole.contains(owner) || touched != null && touched.contains(unit) ? mapLeaf(tree, unit)
+                        : mapLeaf(source, unit);
+                replaceMapLeaf(tree, unit, patchedMap(shown, inside, raw));
+                proposed.put(owner, tree);
+                if (!whole.contains(owner) && (touched == null || !touched.contains(unit))) {
+                    leaves.computeIfAbsent(owner, ignored -> new ArrayList<>()).add(unit);
+                }
+                continue;
+            }
             Object tree = proposed.containsKey(owner) ? proposed.get(owner) : plainValue(owner);
             if (!(tree instanceof Map)) { refused.add("'" + path + "': not a map entry"); continue; }
-            replaceMapLeaf(tree, matches.get(0), raw);
+            replaceMapLeaf(tree, match, raw);
             proposed.put(owner, tree);
-            if (!whole.contains(owner)) { leaves.computeIfAbsent(owner, ignored -> new ArrayList<>()).add(matches.get(0)); }
+            if (!whole.contains(owner)) { leaves.computeIfAbsent(owner, ignored -> new ArrayList<>()).add(match); }
         }
         Map<Field, Object> converted = new LinkedHashMap<>();
         for (Map.Entry<Field, Object> proposal : proposed.entrySet()) {
