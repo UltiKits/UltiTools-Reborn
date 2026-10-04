@@ -27,12 +27,18 @@ at each start, until the operator adds it. A file using anchors, aliases or merg
 named once per server run. A file the framework creates is created exclusively and never replaces a file that appeared
 meanwhile. The residual window between the gate's last read and the replacement cannot be closed between an editor and the JVM.
 
-Explicit saves and panel edits still render the whole document until they are routed through the same gate
-([#599](https://github.com/UltiKits/UltiTools-Reborn/issues/599)): there, operator layout may be normalized (aligned inline
-comments, flow spacing, extra spaces after a colon, document markers, mixed indentation and trailing spaces), and changed
-anchored documents expand aliases and merge keys from their plain values while retaining comments on surviving keys. Comments on
-individual list items are kept only while the list keeps its length — the same as Bukkit, which keeps none. The storage API
-signatures are unchanged.
+A module's explicit save goes through the same gate, owning only the settings it writes (see "Declared types, whole map keys
+and persistence", [#599](https://github.com/UltiKits/UltiTools-Reborn/issues/599)). Panel edits still render the whole document
+until they are routed through the gate: there, operator layout may be normalized (aligned inline comments, flow spacing, extra
+spaces after a colon, document markers, mixed indentation and trailing spaces), and changed anchored documents expand aliases and
+merge keys from their plain values while retaining comments on surviving keys. Comments on individual list items are kept only
+while the list keeps its length — the same as Bukkit, which keeps none. The storage API signatures are unchanged.
+
+Two layouts are refused by every gated write - a first-start insert, a comment rewrite or a save - whichever setting it
+changes, because the renderer cannot write them back byte for byte: a block scalar value (`|` or `>`) followed by a blank line,
+and a comment that closes a section after a blank line, indented deeper than the key that follows it. The file keeps its bytes,
+the warning names the keys and the layout reason, and the values run in memory; removing that blank line (or moving the comment
+to the following key's column) lets the next write through.
 
 Saving first attempts a forced same-directory temporary file and atomic replacement. Only an unsupported atomic move, EBUSY,
 EXDEV, or a permission/read-only refusal to create the temporary file allows the narrow fallback: exclusively create a backup
@@ -73,15 +79,16 @@ normalization is stable: `fromPlain(toPlain(fromPlain(q)))` equals `fromPlain(q)
 (number to String, numeric text to int/float, `"false"` to boolean and duplicate elements to a Set)
 remain unchanged. 6.2's default parser stored every list element as text, so a 6.2-saved
 `List<Integer>` reads `- '60'`; 6.3.0 binds it as the number 60 and writes `- 60` the next time
-that file is saved by its module or a panel edit. Loading, reloading and the shutdown check never
-rewrite such a file on their own. Equality is semantic value comparison, not object identity; numeric plain values
+its module changes that setting and saves it, or a panel edit sets it. Loading, reloading, a save that
+did not change that setting and the shutdown check never rewrite such a file on their own. Equality is semantic value comparison, not object identity; numeric plain values
 compare by value. Reload merges and panel leaf edits rely on forward equality. A converter that adds
 a value during reading without undoing that change during writing violates this contract.
 
 Whole map keys, including `g.m`, `o.O` and `wave.`, are supported as of 6.3.0.
 `@ConfigEntry.path` still splits at every dot: `chat.aliases` selects nested settings, whereas a
 key `o.O` inside the bound map is one whole key. These are different path conventions. Legacy 6.2 files in which Bukkit
-split a dotted key into nested mappings are read as they are, never automatically merged or renamed.
+split a dotted key into nested mappings are read as they are, never automatically merged or renamed, and a save never removes
+such an entry: it stays until the operator removes it (maintainer decision of 2026-10-04).
 For a `Map<String, String>` the wrongly shaped nested value is skipped with a warning.
 Explicit `null` is stored and binds to reference fields (primitive null is a mismatch). UUIDs, enums,
 sets and registered Bukkit values use converter plain output, not Java class tags. A Bukkit value
@@ -96,11 +103,25 @@ runs before any missing-key or panel persistence. Snapshots track successful eff
 separately from the raw document and byte fingerprint. Reordering a map is dirty, but an order-only
 save acknowledges its new effective order without changing operator file order, comments or bytes.
 
-An explicit save compares its candidates with the current disk document, not only the saved
-baseline, so it may replace an operator's changed value even when the entity was clean. Semantic
-no-op saves invoke no writer and preserve bytes and modification time. Edited saves use the full
-emitter described above, retaining untargeted data, key order and comment text subject to the list-item
-length limit above, while allowing layout normalization. A failed write never acknowledges the pending effective values as saved.
+As of 6.3.0 a module's `save()` writes only what the module changed in memory since the last load or save, and only
+where the file still holds what it was read with ([#599](https://github.com/UltiKits/UltiTools-Reborn/issues/599);
+maintainer decision of 2026-10-04, "what code may write, by file type"). A setting is written when all three hold: the
+module changed it; the file still holds at that key exactly the value the framework last read or wrote there; and that
+value is the one the module started from - it converts, without a conversion warning, to the setting's value as last loaded
+or saved. A map setting is written entry by entry: only the entries the module added, changed or removed are set or
+removed (a map that is empty, or that the module empties, is written as a whole, because its key line changes with its first
+or last entry); a list is one value. A save never inserts a key the file lacks, never rewrites a comment and never removes a
+map entry the module did not remove. So a value the operator edited on disk since it was read, a key the operator deleted, a
+value or list element the framework could not use (`interval: 3O0`, `[60, 30, 10, abc]`) and a 6.2 split map entry are
+never written over by a save, whether or not the module changed that setting
+([#596](https://github.com/UltiKits/UltiTools-Reborn/issues/596)). A change that is not written stays in memory, and one
+warning per save names the file and those keys, never values; a key the write gate refuses is named in the gate's warning
+instead, with its reason. The write goes through the write gate above, so every other line of the file stays byte for byte,
+or nothing is written. With nothing to write the file is not touched (bytes and modification time stay). A failed write
+never acknowledges the pending effective values as saved. Use `save()` for a change the operator asked for through the
+module, or for shipped text the module re-renders after a language switch. Before this change an explicit save compared
+its values with the file and replaced an operator's changed value with a warning (#527); that is removed in 6.3.0 without
+a migration period, by the maintainer's rule that operator-written configuration is never overwritten automatically.
 
 Unreadable, unparseable and non-UTF-8 files are protected on every entity write path. Initial load
 keeps declared defaults; failed reload keeps running fields. One SEVERE names the file and safe cause.
@@ -108,8 +129,8 @@ Explicit save does not clear protection; only a later successful load permits wr
 Parser diagnostics expose only numeric line/column metadata, never source snippets or scalar values.
 
 An annotation comment that is exactly one `{key}` token (surrounding whitespace ignored) is resolved
-from the module catalogue. Every load and write rewrites, in the current language, only the comment
-lines above a token entry that the framework can identify as its own: the entry's comment, as a whole
+from the module catalogue. Start-up, reload and panel writes rewrite, in the current language, only the comment
+lines above a token entry that the framework can identify as its own (a module's `save()` rewrites no comment): the entry's comment, as a whole
 or as its trailing run of lines, equal byte for byte to what the framework writes (the entry's
 column, `# ` and the text) for the token's text in a catalogue the module's jar ships, for the text the
 module resolves now, or for the bare token. Equality is the only test; the same text without the space
@@ -127,10 +148,10 @@ uses the document's YAML line-break/control-character sanitation, including the 
 A failed comment-only rewrite does not fail load or discard bound values, logs one warning and marks
 nothing for a later save. No-op comparison includes these comments.
 
-A successful entity write that replaces an operator-edited value warns once, naming the file and
-only the keys actually replaced, never values. Explicit saves, partial panel writes and shutdown
-share this reporting. Comment/layout-only edits, equal candidate values and failed writes do not
-claim an overwrite. The check and write run under the same entity monitor.
+A successful partial panel write that replaces an operator-edited value warns once, naming the file and
+only the keys actually replaced, never values. A save never replaces an operator-edited value (above).
+Comment/layout-only edits, equal candidate values and failed writes do not claim an overwrite. The check
+and write run under the same entity monitor.
 
 ### Removed mutable configuration accessor
 
@@ -362,7 +383,7 @@ decimal as a plain `Double`. This is not a promise of exact binary representatio
 
 Shutdown saves dirty registered entities before module release. An operator-only disk edit does
 not make a clean live entity dirty and survives shutdown untouched; a pending code change is saved
-and may replace operator values with the warning above. A partial panel save cannot acknowledge an
+by the save rule above - written only where the file still holds what it was read with, otherwise named in its warning. A partial panel save cannot acknowledge an
 unrelated pending field. Async module field mutation itself is not protected by registry confinement:
 module authors must arrange server-thread mutations. Initialization batches and panel transactions
 are different: accepted initialization files persist independently, while the panel stages all
@@ -380,10 +401,11 @@ separate crash-safe multi-file transaction limit.
 ### 中文补充：6.3.0 配置层迁移
 
 - 新扩展点是 `ConfigConverter<T>` 和 `@ConfigConverterFor`，转换器必须是扫描包内带 public 无参构造器的 public 顶层类；扫描器不发现嵌套转换器。它不是 IoC bean。未知声明类型在读取或创建文件前拒绝模块加载；官方 UltiRecipe 的配方对象需要模块自己的转换器。
-- 注解 `path` 中的点仍表示嵌套路径；映射里的 `g.m`、`o.O`、`wave.` 从 6.3.0 起按完整键保存。6.2 已经拆开的文件原样读取，不会自动合并。完整泛型参与绑定；无效集合元素跳过，无效字段用声明默认值，缺失的重载字段保留运行值。允许 null 的引用类型可往返；`Object` 中的 Bukkit 序列化对象读取后仍是普通映射。
-- 保存内容、注释文字、键顺序和支持的文件风格。6.3.0 起，所有自动写入（创建不存在的文件、补写缺失的声明键、启动或重载时改写框架自己的令牌注释、注册批次落盘）都经过同一个写入闸门：每次写入声明自己拥有的键，渲染后其余每一行必须与读取时逐字节相同（含换行符、BOM 和末尾换行），且文件仍是读取时的内容；否则不写，警告一次（只列文件、键和原因，不列值），内存中使用声明默认值。这些写入不会规整排版：手工对齐的文件缺少的键会一直缺少，每次启动警告一次，直到服主自己补上。使用锚点、别名或合并键的文件不会被自动写入，每次运行只提示一次。框架新建文件时独占创建，绝不替换期间出现的文件。显式保存和面板编辑暂时仍整份经过 SnakeYAML 输出（#599），运维排版可以规整。语义无变化不写文件，字节和修改时间不变。浮点数按最短可回读十进制判断，不要求二进制精确。
+- 注解 `path` 中的点仍表示嵌套路径；映射里的 `g.m`、`o.O`、`wave.` 从 6.3.0 起按完整键保存。6.2 已经拆开的文件原样读取，不会自动合并，保存也不会删除这些条目，留给服主自己删（维护者 2026-10-04 决定）。完整泛型参与绑定；无效集合元素跳过，无效字段用声明默认值，缺失的重载字段保留运行值。允许 null 的引用类型可往返；`Object` 中的 Bukkit 序列化对象读取后仍是普通映射。
+- 保存内容、注释文字、键顺序和支持的文件风格。6.3.0 起，所有自动写入（创建不存在的文件、补写缺失的声明键、启动或重载时改写框架自己的令牌注释、注册批次落盘）都经过同一个写入闸门：每次写入声明自己拥有的键，渲染后其余每一行必须与读取时逐字节相同（含换行符、BOM 和末尾换行），且文件仍是读取时的内容；否则不写，警告一次（只列文件、键和原因，不列值），内存中使用声明默认值。这些写入不会规整排版：手工对齐的文件缺少的键会一直缺少，每次启动警告一次，直到服主自己补上。使用锚点、别名或合并键的文件不会被自动写入，每次运行只提示一次。框架新建文件时独占创建，绝不替换期间出现的文件。模块的显式保存同样经过写入闸门，只拥有它要写的设置（#599，见下）；面板编辑暂时仍整份经过 SnakeYAML 输出，运维排版可以规整。有两种排版任何经闸门的写入（启动补键、改写注释、保存）都会拒绝，无论改的是哪个设置，因为渲染器无法逐字节写回：块标量（`|` 或 `>`）后面跟空行；以及一节末尾、空行之后、缩进比下一个键更深的注释。文件保持原样，警告列出键和排版原因，内存中使用相应值；删掉那个空行（或把注释移到下一个键的缩进）后，下一次写入即可通过。语义无变化不写文件，字节和修改时间不变。浮点数按最短可回读十进制判断，不要求二进制精确。
 - 先临时文件、force、原子替换；仅已允许的原子替换/临时创建拒绝才走备份后原地写。备份文件名为 `<文件名>.ultitools-backup-<16 位小写十六进制>`，独占创建；本次运行已为同一文件写过、且内容未变的备份先从当前文件刷新并原子替换，之后才打开目标。写入器不读取、不写入、不删除任何其它文件，服主自己的 `<文件>.bak` 不受影响。失败保留备份，只有成功严格加载当前文件、且备份内容仍与记录一致时才清理；本次运行未写过或已被改动的同类备份保留，并以 INFO 提示一次。不自动还原，不保证多文件崩溃事务。
-- 不能读取、不能解析、非 UTF-8 文件不会被任何实体写入路径覆盖；初次失败用默认值，重载失败保留运行值。成功加载才解除保护。单独 `{key}` 注释按模块当前语言目录更新，但只改框架能认出是自己写的注释行：该项注释整体或末尾连续几行，与框架对模块 jar 自带任一语言目录中的文字、模块当前解析出的文字或原样 `{key}` 写出的形式逐字节相同（该项的缩进、`# ` 加文字；只按相等判断，`#` 后缺空格或缩进不同即视为服主所写）；服主在令牌项上方手写的注释、改过的框架注释和字面注释逐字节永久保留（#604，维护者 2026-10-04 决定，取代此前“令牌项上的服主注释会被替换”）。已不在任何自带目录中的旧版措辞，只有模块在新增的 `@ConfigEntry(previousComments = {...})`（增量属性，默认为空）中登记了该文字时才算框架所写：逐字节相同即替换为当前目录文字并从此随语言切换（维护者 2026-10-04 决定）；未登记的原样保留。成功覆盖运维值时一条警告只列文件和键，不列值。
+- 不能读取、不能解析、非 UTF-8 文件不会被任何实体写入路径覆盖；初次失败用默认值，重载失败保留运行值。成功加载才解除保护。单独 `{key}` 注释按模块当前语言目录更新，但只改框架能认出是自己写的注释行：该项注释整体或末尾连续几行，与框架对模块 jar 自带任一语言目录中的文字、模块当前解析出的文字或原样 `{key}` 写出的形式逐字节相同（该项的缩进、`# ` 加文字；只按相等判断，`#` 后缺空格或缩进不同即视为服主所写）；服主在令牌项上方手写的注释、改过的框架注释和字面注释逐字节永久保留（#604，维护者 2026-10-04 决定，取代此前“令牌项上的服主注释会被替换”）。已不在任何自带目录中的旧版措辞，只有模块在新增的 `@ConfigEntry(previousComments = {...})`（增量属性，默认为空）中登记了该文字时才算框架所写：逐字节相同即替换为当前目录文字并从此随语言切换（维护者 2026-10-04 决定）；未登记的原样保留。面板部分写入成功覆盖运维值时一条警告只列文件和键，不列值。
+- 6.3.0 起模块 `save()` 只写模块自上次加载或保存以来改过的设置，并且只在文件该处仍是框架上次读到或写入的值、且该值正是模块的起始值（能无转换警告地转换为上次加载或保存时的设置值）时才写（#599，维护者 2026-10-04 决定）。映射按条目写，只设置或删除模块增、改、删的条目（空映射或被模块删空的映射整体写，因为它的键行随首条或末条一起变）；列表整体算一个值。保存从不补写文件缺少的键、从不改写注释、从不删除模块没删的映射条目。因此服主在磁盘上改过的值、删掉的键、框架无法使用的值或列表元素（`interval: 3O0`、`[60, 30, 10, abc]`）以及 6.2 拆开的映射条目，无论模块是否改了该设置，保存都不会覆盖（#596）。没写成的改动留在内存，每次保存一条警告列出文件和这些键，不列值；被写入闸门拒绝的键由闸门的警告连同原因列出。其余每一行逐字节不变，否则不写；没有可写内容时不碰文件。`save()` 用于服主通过模块要求的改动，或语言切换后重新渲染出厂文字。此前显式保存会把服主改过的值连同警告一起覆盖（#527），该行为在 6.3.0 依维护者“服主写的配置绝不被自动覆盖”的规则直接取消，没有过渡期。
 - `getConfig()` 在 6.2.5 确实可用，不能冒称符合两个同版删除例外；维护者通过 6.3.0 一次性 carve-out 删除它。改用 `isPresentInFile` 查询上次成功加载时的存在性，修改声明字段后 `save()`。两个已知官方调用在 UltiEssentials 与 UltiRemoteBag；第三方用量未知。
 - 六个旧解析器相关声明在 6.3.0 首次带 `forRemoval`，公告 6.4.0 删除。显式非默认 parser 暂时保留冻结的旧行为；默认 parser 改走注册表。迁移示例见上方，转换器必须满足两条互逆等式，不能单向加值或悄悄丢字段。
 - 注册批次验证完成才开始独立写文件；面板批次先验证并暂存全部文件，在进程内失败时回滚，持久存储故障可能阻止恢复。面板唯一映射路径走整字段类型转换，歧义和未知变更拒绝整个请求；无关内存/磁盘兄弟项保留。

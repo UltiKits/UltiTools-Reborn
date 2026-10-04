@@ -1807,6 +1807,19 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         return getConfigManager().getConfigEntities(this, configType);
     }
 
+    /**
+     * Saves this module's configuration registered at {@code path} through {@link AbstractConfigEntity#save()}: only the
+     * settings the module changed since the last load or save are written, and only where the file still holds the
+     * value the module started from; every other byte of the file stays as the operator left it, and a change that
+     * cannot be written stays in memory and is named in one warning. It cannot overwrite operator content: a value the
+     * operator edited, deleted or wrote unusably is never written over (maintainer decision 2026-10-04). Use it for a
+     * change the operator asked for through the module, or for shipped text re-rendered after a language switch.
+     *
+     * @param path       the registered configuration file path, for example {@code config/config.yml}
+     * @param configType the configuration entity class
+     * @param <T>        the configuration entity type
+     * @throws IOException if publishing the verified file fails
+     */
     public <T extends AbstractConfigEntity> void saveConfig(String path, Class<T> configType) throws IOException {
         getConfigManager().getConfigEntity(this, path, configType).save();
     }

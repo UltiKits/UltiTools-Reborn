@@ -154,17 +154,267 @@ public abstract class AbstractConfigEntity {
     }
 
     /**
-     * Persists all fields, preserving current operator comments and unknown keys. Semantically
-     * equal data performs no writer call (bytes and modification time stay unchanged). An explicit
-     * save still replaces disk values differing from the entity, even when the entity was clean.
-     * A failed write leaves the previous effective baseline in place.
-     * @throws IOException if persistence fails
+     * Writes the settings this module changed in memory since the last load or save - and nothing else - through the
+     * config write gate.
+     * <p>
+     * A setting is written only when all three hold: the module changed it since the last load or save; the file
+     * still holds at that path exactly the value the framework last read or wrote there; and that value is the one
+     * the module started from (it converts to the setting's value as last loaded or saved). A map setting is compared
+     * and written entry by entry (a list is one value): only the entries the module added, changed or removed are set
+     * or removed. Everything else in the file stays as it is: a save never inserts a key the file lacks, never
+     * rewrites a comment and never removes a map entry the module did not remove. When nothing needs writing, the file
+     * is not touched (bytes and modification time stay).
+     * <p>
+     * <b>Why it cannot overwrite operator content.</b> A value the operator edited on disk since it was read, a key
+     * the operator deleted, a value the framework could not use ({@code interval: 3O0}, a list element {@code abc})
+     * and a map entry left in the 6.2 split form ({@code o: {O: x}}) are never the value the module started from at
+     * that path, so they are never written - whether or not the module changed that setting. The config write gate
+     * ({@link OperatorFileWriter}) then verifies, after rendering, that every line outside the written settings is
+     * byte-identical to the file as it is at write time, or writes nothing. A change that is not written stays in
+     * memory, and one WARNING names the file and those keys, never a value (maintainer decision 2026-10-04, "what
+     * code may write, by file type", which supersedes the earlier "a save warns and overwrites").
+     * <p>
+     * Use it for a change the operator asked for through the module, or for shipped text the module re-renders after
+     * a language switch. A failed write leaves the effective baseline as it was, so the change is still unsaved.
+     *
+     * @throws IOException if publishing the verified file fails
      */
     public void save() throws IOException {
         synchronized (this) {
             if (lastLoadUnparseable) { return; }
-            persist(configEntryFields());
+            saveModuleChanges();
         }
+    }
+
+    /**
+     * One setting, or one entry of a map setting, the module changed since the last load or save: where it is in the
+     * file, what the module holds there now, and what the framework last read or wrote there.
+     */
+    private static final class ModuleChange {
+        private final Field field;
+        private final List<String> leaf;
+        private final List<String> path;
+        private final boolean present;
+        private final Object value;
+        private final boolean readPresent;
+        private final Object readValue;
+
+        private ModuleChange(Field field, List<String> leaf, List<String> path, Object mine, RawEntry read) {
+            this.field = field; this.leaf = leaf; this.path = path;
+            this.present = leaf.isEmpty() || mapContains(mine, leaf);
+            this.value = leaf.isEmpty() ? PlainData.copy(mine) : PlainData.copy(mapLeaf(mine, leaf));
+            this.readPresent = read != null && read.present && (leaf.isEmpty() || mapContains(read.value, leaf));
+            this.readValue = read == null ? null : leaf.isEmpty() ? PlainData.copy(read.value) : PlainData.copy(mapLeaf(read.value, leaf));
+        }
+
+        private boolean holds(boolean isPresent, Object at, boolean wantPresent, Object want) {
+            return isPresent == wantPresent && (!isPresent || PlainData.plainEquals(at, want));
+        }
+    }
+
+    /** Sets the module's value, or removes the map entry the module removed, at each change's path. */
+    private static void apply(ConfigDocument target, List<ModuleChange> changes) {
+        for (ModuleChange change : changes) {
+            if (change.present) { target.set(change.path, change.value); } else { target.remove(change.path); }
+        }
+    }
+
+    /**
+     * What a save owns at the config write gate: each change's whole key, except that a map which is empty in the file
+     * as read ({@code {}}), or which the changes empty, is owned as a whole - its key line must change with its first
+     * or last entry, and an empty map holds nothing of the operator's that could be lost.
+     */
+    private static OwnedPaths saveOwnership(List<ModuleChange> changes, ConfigDocument read) {
+        Map<List<String>, Map<String, Object>> after = new LinkedHashMap<>();
+        Set<List<String>> emptied = new java.util.LinkedHashSet<>();
+        for (ModuleChange change : changes) {
+            if (change.path.size() < 2) { continue; }
+            List<String> parent = change.path.subList(0, change.path.size() - 1);
+            Object now = read.get(parent);
+            if (!(now instanceof Map)) { continue; }
+            if (((Map<?, ?>) now).isEmpty()) { emptied.add(parent); }
+            Map<String, Object> state = after.get(parent);
+            if (state == null) {
+                state = new LinkedHashMap<>();
+                for (Map.Entry<?, ?> entry : ((Map<?, ?>) now).entrySet()) { state.put(String.valueOf(entry.getKey()), entry.getValue()); }
+                after.put(parent, state);
+            }
+            String last = change.path.get(change.path.size() - 1);
+            if (change.present) { state.put(last, change.value); } else { state.remove(last); }
+        }
+        for (Map.Entry<List<String>, Map<String, Object>> entry : after.entrySet()) {
+            if (entry.getValue().isEmpty()) { emptied.add(entry.getKey()); }
+        }
+        OwnedPaths.Builder owned = OwnedPaths.builder();
+        for (ModuleChange change : changes) {
+            List<String> parent = change.path.size() < 2 ? null : change.path.subList(0, change.path.size() - 1);
+            owned.value(parent != null && emptied.contains(parent) ? parent : change.path);
+        }
+        return owned.build();
+    }
+
+    /**
+     * The save rule of {@link #save()}: collects the module's changes against the effective baseline; keeps those whose
+     * last-read file value is the value the module started from; checks each on one read of the file, which must still
+     * hold there what the framework last read (a file already holding the module's value needs nothing); writes the
+     * rest through the config write gate against exactly that read; advances the baseline and the last-read entry only
+     * for what the file now holds; and names every change that was not written in one warning.
+     */
+    private void saveModuleChanges() throws IOException {
+        java.nio.file.Path target = ultiToolsPlugin.getConfigFile(configFilePath).toPath();
+        ConfigLoadResult loaded = ConfigDocument.load(target);
+        if (protectFailedLoad(loaded)) {
+            throw new IOException("Cannot save " + configFilePath + ": current file is " + loaded.state());
+        }
+        ConfigDocument read = loaded.state() == ConfigLoadResult.State.LOADED ? loaded.document() : ConfigDocument.empty();
+        List<Field> fields = configEntryFields();
+        Map<Field, Object> current = currentPlain(fields, true);
+        if (savedSnapshot == null) { savedSnapshot = new LinkedHashMap<>(declaredDefaults); }
+        List<ModuleChange> writable = new ArrayList<>();
+        List<String> unwritten = new ArrayList<>();
+        for (Field field : fields) {
+            Object base = savedSnapshot.get(field);
+            Object mine = current.get(field);
+            List<List<String>> leaves = new ArrayList<>();
+            changedLeaves(base, mine, new ArrayList<>(), leaves);
+            if (leaves.isEmpty()) {
+                // Equal content (at most a different map order): nothing a file write could carry.
+                savedSnapshot.put(field, mine);
+                continue;
+            }
+            for (List<String> leaf : leaves) {
+                List<String> path = new ArrayList<>(keys(field)); path.addAll(leaf);
+                ModuleChange change = new ModuleChange(field, leaf, path, mine, acknowledgedRaw.get(field));
+                if (startedFromFile(field, leaf, base)) { writable.add(change); } else { unwritten.add(describeKey(field, leaf)); }
+            }
+        }
+        List<ModuleChange> onDisk = new ArrayList<>();
+        List<ModuleChange> toWrite = new ArrayList<>();
+        for (ModuleChange change : writable) {
+            boolean present = read.contains(change.path);
+            Object now = read.get(change.path);
+            boolean parentIsMapping = change.path.size() == 1
+                    || read.get(change.path.subList(0, change.path.size() - 1)) instanceof Map;
+            if (change.holds(present, now, change.present, change.value)) { onDisk.add(change); }
+            else if (parentIsMapping && change.holds(present, now, change.readPresent, change.readValue)) { toWrite.add(change); }
+            else { unwritten.add(describeKey(change.field, change.leaf)); }
+        }
+        if (!toWrite.isEmpty()) {
+            // Against exactly the bytes checked above: a file that changed since is abandoned by the gate, named once.
+            OperatorFileWriter.Result result = OperatorFileWriter.write(target, saveOwnership(toWrite, read),
+                    expectedBase(loaded), candidate -> apply(candidate, toWrite));
+            if (result.applied()) {
+                onDisk.addAll(toWrite);
+                acknowledgeWritten(result.readFingerprint(), result.fingerprint(), result.document(), onDisk);
+            }
+        } else if (!onDisk.isEmpty()) {
+            acknowledgeWritten(loaded.fingerprint(), loaded.fingerprint(), read, onDisk);
+        }
+        if (!unwritten.isEmpty()) { warnNotWritten(unwritten); }
+    }
+
+    /**
+     * Advances the effective baseline and the last-read entry of exactly the changes the file now holds. The entity
+     * records the bytes the gate wrote as last read only when the gate's read held exactly the bytes this entity last
+     * bound; otherwise the operator's newer edit stays a change on disk (never a fresh read: 17-63 review WR-01).
+     *
+     * @param readFingerprint the bytes the write was checked against (storage-layer SHA-256 hex)
+     * @param fingerprint     the bytes the file holds now (the gate's written bytes, or the bytes read when nothing was written)
+     * @param onDisk          the document the file holds now
+     * @param applied         the changes the file now holds
+     */
+    private void acknowledgeWritten(String readFingerprint, String fingerprint, ConfigDocument onDisk, List<ModuleChange> applied) {
+        boolean bound = savedFileFingerprint != null && readFingerprint != null
+                && entityFingerprint(readFingerprint).equals(savedFileFingerprint);
+        for (ModuleChange change : applied) {
+            Field field = change.field;
+            RawEntry read = acknowledgedRaw.get(field);
+            if (change.leaf.isEmpty()) {
+                savedSnapshot.put(field, PlainData.copy(change.value));
+                acknowledgedRaw.put(field, new RawEntry(true, change.value));
+            } else {
+                Object base = savedSnapshot.get(field);
+                savedSnapshot.put(field, change.present ? patchedMap(base, change.leaf, change.value) : withoutLeaf(base, change.leaf));
+                Object raw = read == null ? null : read.value;
+                acknowledgedRaw.put(field, new RawEntry(true, change.present ? patchedMap(raw, change.leaf, change.value)
+                        : withoutLeaf(raw, change.leaf)));
+            }
+            if (!bound && document != null) {
+                if (change.present) { document.set(change.path, change.value); } else { document.remove(change.path); }
+            }
+        }
+        if (bound) {
+            document = onDisk;
+            savedFileFingerprint = entityFingerprint(fingerprint);
+        }
+    }
+
+    /**
+     * Whether the value the framework last read for {@code field} at {@code leaf} is the value the module started from
+     * there: it is present, and the setting's last loaded or saved value with that entry taken from the file converts,
+     * without a conversion failure, back to exactly that value. An unconvertible value or element, a key the operator
+     * deleted and a 6.2 split map entry are therefore never "started from".
+     */
+    private boolean startedFromFile(Field field, List<String> leaf, Object base) {
+        RawEntry read = acknowledgedRaw.get(field);
+        if (read == null || !read.present) { return false; }
+        Object probe;
+        if (leaf.isEmpty()) {
+            probe = read.value;
+        } else {
+            if (!(read.value instanceof Map) || !(base instanceof Map)) { return false; }
+            probe = mapContains(read.value, leaf) ? patchedMap(base, leaf, mapLeaf(read.value, leaf)) : withoutLeaf(base, leaf);
+        }
+        ConfigEntry entry = field.getAnnotation(ConfigEntry.class);
+        try {
+            ConversionResult<Object> converted = registry().fromPlainResult(PlainData.copy(probe), declaredType(field),
+                    configFilePath, keys(field), entry);
+            if (!converted.failures().isEmpty()) { return false; }
+            Object plain = registry().toPlainResult(converted.value(), declaredType(field), configFilePath, keys(field), entry).value();
+            return PlainData.plainEquals(PlainData.copy(plain), base);
+        } catch (ConversionException | RuntimeException unusable) {
+            return false;
+        }
+    }
+
+    /**
+     * Collects the paths, relative to a setting, at which {@code current} differs from {@code base}: two maps are
+     * compared key by key (an added or removed key is one path), anything else - a list included - is one value.
+     */
+    private static void changedLeaves(Object base, Object current, List<String> prefix, List<List<String>> out) {
+        if (base instanceof Map && current instanceof Map) {
+            Map<?, ?> before = (Map<?, ?>) base;
+            Map<?, ?> after = (Map<?, ?>) current;
+            Set<Object> names = new java.util.LinkedHashSet<>(after.keySet()); names.addAll(before.keySet());
+            for (Object name : names) {
+                List<String> path = new ArrayList<>(prefix); path.add(String.valueOf(name));
+                if (!before.containsKey(name) || !after.containsKey(name)) { out.add(path); }
+                else { changedLeaves(before.get(name), after.get(name), path, out); }
+            }
+            return;
+        }
+        if (!PlainData.plainEquals(base, current)) { out.add(prefix); }
+    }
+
+    /** The key a warning names for a change: the setting's path, then the map keys, any key below a secret-shaped one redacted. */
+    private String describeKey(Field field, List<String> leaf) {
+        StringBuilder text = new StringBuilder(fieldPath(field));
+        boolean secret = isSecretShapedFieldName(field.getName());
+        for (String key : keys(field)) { secret |= isSecretShapedFieldName(key); }
+        for (String key : leaf) {
+            text.append('.').append(secret ? "<redacted>" : key);
+            secret |= isSecretShapedFieldName(key);
+        }
+        return "'" + text + "'";
+    }
+
+    private void warnNotWritten(List<String> keys) {
+        // Values are deliberately omitted: any key may hold a credential.
+        Logger logger = UltiTools.getInstance() == null ? LOGGER : UltiTools.getInstance().getLogger();
+        logger.log(Level.WARNING, "Configuration file " + ultiToolsPlugin.getConfigFile(configFilePath).getAbsolutePath()
+                + ": the module's changes to " + String.join(", ", keys) + " were not written, because the file does"
+                + " not hold the value they were made from there (edited, deleted or unusable since it was read)."
+                + " The file keeps its text; the module's values stay in memory.");
     }
 
     private ConverterRegistry registry() { return ConverterRegistry.forModule(ultiToolsPlugin); }
@@ -220,12 +470,6 @@ public abstract class AbstractConfigEntity {
         }
     }
 
-    private void persist(List<Field> fields) throws IOException {
-        PreparedSave prepared = prepareSave(fields);
-        if (prepared.changed) { write(prepared.candidate); }
-        acknowledgeSave(prepared);
-    }
-
     private static final class PreparedSave {
         private final ConfigDocument candidate;
         private final Map<Field, Object> values;
@@ -237,10 +481,6 @@ public abstract class AbstractConfigEntity {
             this.candidate = candidate; this.values = values;
             this.overwritten = overwritten; this.changed = changed;
         }
-    }
-
-    private PreparedSave prepareSave(List<Field> fields) throws IOException {
-        return prepareSave(fields, Collections.emptyMap());
     }
 
     @SuppressWarnings("PMD.NPathComplexity") // Keep candidate conversion, leaf ownership and disk comparison in their established order.
@@ -1397,6 +1637,19 @@ public abstract class AbstractConfigEntity {
             value = ((Map<?, ?>) value).get(key);
         }
         return true;
+    }
+
+    /** A copy of {@code tree} without the entry at {@code path} (a copy of {@code tree} when it has none). */
+    private static Object withoutLeaf(Object tree, List<String> path) {
+        if (!(tree instanceof Map)) { return PlainData.copy(tree); }
+        Map<String, Object> copy = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : ((Map<?, ?>) tree).entrySet()) {
+            copy.put(String.valueOf(entry.getKey()), PlainData.copy(entry.getValue()));
+        }
+        String key = path.get(0);
+        if (path.size() == 1) { copy.remove(key); }
+        else if (copy.containsKey(key)) { copy.put(key, withoutLeaf(copy.get(key), path.subList(1, path.size()))); }
+        return copy;
     }
 
     private static Object patchedMap(Object tree, List<String> path, Object value) {

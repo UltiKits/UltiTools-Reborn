@@ -114,16 +114,18 @@ public final class OperatorFileWriter {
         private final String reason;
         private final ConfigDocument document;
         private final String fingerprint;
+        private final String readFingerprint;
 
         private Result(Outcome outcome, String reason, ConfigDocument document) {
-            this(outcome, reason, document, null);
+            this(outcome, reason, document, null, null);
         }
 
-        private Result(Outcome outcome, String reason, ConfigDocument document, String fingerprint) {
+        private Result(Outcome outcome, String reason, ConfigDocument document, String fingerprint, String readFingerprint) {
             this.outcome = outcome;
             this.reason = reason;
             this.document = document;
             this.fingerprint = fingerprint;
+            this.readFingerprint = readFingerprint;
         }
 
         /**
@@ -163,6 +165,18 @@ public final class OperatorFileWriter {
          */
         public String fingerprint() {
             return fingerprint;
+        }
+
+        /**
+         * The SHA-256 (lower-case hex, or {@link OperatorFileWriter#ABSENT}) of the bytes the gate read and verified the edit against -
+         * for {@link Outcome#WRITTEN}, the bytes the file held immediately before it was replaced; {@code null} when
+         * it did not apply the edit. A caller that compares this with the bytes it last bound can tell whether the
+         * file it wrote still held only what the caller had read, or also an edit made since.
+         *
+         * @return the fingerprint of the bytes read, or {@code null}
+         */
+        public String readFingerprint() {
+            return readFingerprint;
         }
 
         /**
@@ -220,12 +234,12 @@ public final class OperatorFileWriter {
         List<String> keys = describe(changes.values, changes.comments);
         if (!owned.isWholeFile() && changes.isEmpty()) {
             return PlainData.plainEquals(snapshot.original.toPlain(), candidate.toPlain())
-                    ? new Result(Outcome.UNCHANGED, "", candidate, snapshot.fingerprint)
+                    ? new Result(Outcome.UNCHANGED, "", candidate, snapshot.fingerprint, snapshot.fingerprint)
                     : refuse(absolute, owned, keys, "the write would change keys it does not own");
         }
         String rendered = candidate.render();
         if (rendered.equals(snapshot.text)) {
-            return new Result(Outcome.UNCHANGED, "", candidate, snapshot.fingerprint);
+            return new Result(Outcome.UNCHANGED, "", candidate, snapshot.fingerprint, snapshot.fingerprint);
         }
         String failure = owned.isWholeFile()
                 ? verifyValues(snapshot.original, candidate, rendered, Collections.<List<String>>emptyList(), true)
@@ -278,7 +292,7 @@ public final class OperatorFileWriter {
                     }
                 }
             }
-            return published ? written(rendered, candidate)
+            return published ? written(rendered, candidate, fingerprint)
                     : changed(absolute, owned, keys, "the file changed while the new content was being prepared");
         }
 
@@ -306,13 +320,13 @@ public final class OperatorFileWriter {
                     }
                 }
             }
-            return published ? written(rendered, candidate)
+            return published ? written(rendered, candidate, ABSENT)
                     : changed(absolute, owned, keys, "a file appeared while the new content was being prepared");
         }
     }
 
-    private static Result written(String rendered, ConfigDocument candidate) {
-        return new Result(Outcome.WRITTEN, "", candidate, ConfigDocument.sha256(rendered.getBytes(StandardCharsets.UTF_8)));
+    private static Result written(String rendered, ConfigDocument candidate, String read) {
+        return new Result(Outcome.WRITTEN, "", candidate, ConfigDocument.sha256(rendered.getBytes(StandardCharsets.UTF_8)), read);
     }
 
     private static Result fail(Outcome outcome, Path absolute, OwnedPaths owned, List<String> keys, String reason) {
