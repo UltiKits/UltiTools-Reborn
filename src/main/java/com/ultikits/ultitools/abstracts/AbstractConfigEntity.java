@@ -33,6 +33,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonPrimitive;
 import com.google.common.reflect.TypeToken;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.config.ConfigWriteRefusedException;
 import com.ultikits.ultitools.config.document.ConfigDocument;
 import com.ultikits.ultitools.config.document.ConfigLoadResult;
 import com.ultikits.ultitools.config.document.AtomicConfigWriter;
@@ -406,6 +407,145 @@ public abstract class AbstractConfigEntity {
             secret |= isSecretShapedFieldName(key);
         }
         return "'" + text + "'";
+    }
+
+    /**
+     * Writes exactly the named settings, as the module holds them now, because the operator explicitly asked for that
+     * change - a command such as {@code /setspawn}, which names the six {@code spawn.location.*} entries.
+     * <p>
+     * The operator's request is their consent to replace what the file holds at those settings: the module's value is
+     * written there even when the operator also edited that key by hand since it was read (the command wins at the key
+     * it names), and a named setting the file lacks is inserted with its comment. Nothing else is written - not another
+     * setting, not even one the module changed and did not name - and no other key, value, comment or byte of the file
+     * moves (maintainer decision of 2026-10-04, "what code may write, by file type": write exactly the item the
+     * operator explicitly asked to change).
+     * <p>
+     * <b>Why it cannot overwrite other operator content.</b> The write goes through the framework's configuration write
+     * gate owning only the named settings' keys: after rendering, every line outside them must be byte-identical to the
+     * file as it is at write time, or nothing is written. When the gate refuses - the file cannot be read or parsed,
+     * uses anchors, aliases or merge keys, has a layout the write could not keep byte for byte outside the named keys,
+     * or changed while the write was being prepared - this throws {@link ConfigWriteRefusedException} naming the reason;
+     * the file keeps its bytes and the in-memory values stay as the module set them, still unsaved.
+     *
+     * @param entryPaths the {@link ConfigEntry#path()} of each setting to write (the field name for an entry declared
+     *                   without a path), at least one
+     * @throws IllegalArgumentException     if no path is given, or a path is not a declared entry of this configuration;
+     *                                      nothing is written
+     * @throws IllegalStateException        if called before {@code init}, or off the server thread while a server runs
+     * @throws ConfigWriteRefusedException  if the configuration write gate refused the write; nothing is written
+     * @throws IOException                  if publishing the verified file fails
+     * @since 6.3.0
+     */
+    public final void saveOperatorChange(String... entryPaths) throws IOException {
+        requireOperatorWriteThread("saveOperatorChange");
+        synchronized (this) {
+            if (entryPaths == null || entryPaths.length == 0) {
+                throw new IllegalArgumentException("Name at least one configuration entry of " + configFilePath + " to write");
+            }
+            List<Field> named = new ArrayList<>();
+            for (String entryPath : entryPaths) {
+                Field field = declaredEntry(entryPath);
+                if (!named.contains(field)) { named.add(field); }
+            }
+            List<ModuleChange> changes = new ArrayList<>();
+            for (Field field : named) {
+                changes.add(new ModuleChange(field, Collections.<String>emptyList(), keys(field), plainValue(field, true),
+                        acknowledgedRaw.get(field)));
+            }
+            writeOperatorChanges(changes);
+        }
+    }
+
+    /**
+     * Writes exactly one entry of a map setting, as the module holds it now, because the operator explicitly asked for
+     * that change - a command such as {@code /autoreply add}, which names one rule of {@code autoreply.rules}.
+     * <p>
+     * The entry is set to the module's value, inserted when the file lacks it; when the module's map no longer holds the
+     * entry, the entry is removed from the file. The operator's request is their consent to replace what the file holds
+     * at that entry. Every other entry - one the operator added or edited by hand since the file was read, a 6.2 split
+     * entry - and every other key, value, comment and byte of the file stay (maintainer decision of 2026-10-04: write
+     * exactly the item the operator explicitly asked to change). Each map key is one whole key: a rule named
+     * {@code play.example} is the single key {@code play.example}.
+     * <p>
+     * <b>Why it cannot overwrite other operator content.</b> As {@link #saveOperatorChange(String...)}: the write owns
+     * only that entry's key at the configuration write gate, which refuses any change to another byte of the file and
+     * then throws {@link ConfigWriteRefusedException} naming the reason, leaving the file and the in-memory value as
+     * they are. A map that is empty in the file ({@code {}}), or that the change empties, is owned as a whole, since its
+     * key line changes with its first or last entry.
+     *
+     * @param entryPath the {@link ConfigEntry#path()} of a setting declared as a {@link Map}
+     * @param mapKeys   the keys from that map down to the entry, one whole key each; usually just the entry's key
+     * @throws IllegalArgumentException     if {@code entryPath} is not a declared entry of this configuration, the
+     *                                      setting is not declared as a map, or no key is given; nothing is written
+     * @throws IllegalStateException        if called before {@code init}, or off the server thread while a server runs
+     * @throws ConfigWriteRefusedException  if the configuration write gate refused the write; nothing is written
+     * @throws IOException                  if publishing the verified file fails
+     * @since 6.3.0
+     */
+    public final void saveOperatorMapEntry(String entryPath, String... mapKeys) throws IOException {
+        requireOperatorWriteThread("saveOperatorMapEntry");
+        synchronized (this) {
+            Field field = declaredEntry(entryPath);
+            if (!Map.class.isAssignableFrom(TypeToken.of(declaredType(field)).getRawType())) {
+                throw new IllegalArgumentException("Configuration entry '" + entryPath + "' of " + configFilePath
+                        + " is not a map setting");
+            }
+            if (mapKeys == null || mapKeys.length == 0) {
+                throw new IllegalArgumentException("Name the map entry of '" + entryPath + "' in " + configFilePath + " to write");
+            }
+            List<String> leaf = new ArrayList<>();
+            for (String key : mapKeys) {
+                if (key == null) { throw new IllegalArgumentException("A map key of '" + entryPath + "' cannot be null"); }
+                leaf.add(key);
+            }
+            List<String> path = new ArrayList<>(keys(field)); path.addAll(leaf);
+            writeOperatorChanges(Collections.singletonList(
+                    new ModuleChange(field, leaf, path, plainValue(field, true), acknowledgedRaw.get(field))));
+        }
+    }
+
+    private void requireOperatorWriteThread(String operation) {
+        if (ultiToolsPlugin == null) { throw new IllegalStateException("Config not initialized. Call init() first."); }
+        if (!com.ultikits.ultitools.manager.ConfigManager.permitsConfigThread(ultiToolsPlugin, operation + " " + configFilePath)) {
+            throw new IllegalStateException("Configuration " + operation + " of " + configFilePath + " requires the server thread");
+        }
+    }
+
+    /** The field declared at {@code entryPath} ({@link ConfigEntry#path()}, or the field name for an empty path). */
+    private Field declaredEntry(String entryPath) {
+        for (Field field : configEntryFields()) {
+            if (fieldPath(field).equals(entryPath)) { return field; }
+        }
+        throw new IllegalArgumentException("'" + entryPath + "' is not a declared configuration entry of " + configFilePath);
+    }
+
+    /**
+     * Writes an operator's explicit changes through the configuration write gate - the module's value at each change's
+     * path, whatever the file holds there now (the operator's consent), each owned as a whole key - against one read
+     * of the file, and advances the baseline and the last-read entry of exactly those paths. A refusal throws
+     * {@link ConfigWriteRefusedException}; nothing is acknowledged then.
+     */
+    private void writeOperatorChanges(List<ModuleChange> changes) throws IOException {
+        java.nio.file.Path target = ultiToolsPlugin.getConfigFile(configFilePath).toPath();
+        String shown = target.toAbsolutePath().toString();
+        if (lastLoadUnparseable) {
+            throw new ConfigWriteRefusedException(shown, "the file could not be read or parsed when it was last loaded;"
+                    + " reload a valid file first");
+        }
+        ConfigLoadResult loaded = ConfigDocument.load(target);
+        if (protectFailedLoad(loaded)) { throw new ConfigWriteRefusedException(shown, "the file cannot be read or parsed"); }
+        ConfigDocument read = loaded.state() == ConfigLoadResult.State.LOADED ? loaded.document() : ConfigDocument.empty();
+        List<Field> inserted = new ArrayList<>();
+        for (ModuleChange change : changes) {
+            if (change.leaf.isEmpty() && !read.contains(change.path)) { inserted.add(change.field); }
+        }
+        OperatorFileWriter.Result result = OperatorFileWriter.write(target, saveOwnership(changes, read), expectedBase(loaded),
+                candidate -> {
+                    apply(candidate, changes);
+                    for (Field field : inserted) { addEntryComment(candidate, field); }
+                });
+        if (!result.applied()) { throw new ConfigWriteRefusedException(shown, result.reason()); }
+        acknowledgeWritten(result.readFingerprint(), result.fingerprint(), result.document(), changes);
     }
 
     private void warnNotWritten(List<String> keys) {
