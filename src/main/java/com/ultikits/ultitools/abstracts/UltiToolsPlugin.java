@@ -435,8 +435,9 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                     + "-myserver'.");
         } else if (warn) {
             languageLog().warn("Module '" + getPluginName() + "' is configured for language '" + configured
-                    + "', which is not a valid language name (only ASCII letters, digits, '_' and '-'); it ships "
-                    + supportedCodes + " and uses '" + fallback + "'.");
+                    + "', which is not a valid language name (an ASCII letter or digit first, then only ASCII "
+                    + "letters, digits, '_' and '-'), so no custom file is read; it ships " + supportedCodes
+                    + " and uses '" + fallback + "'.");
         }
         return fallback;
     }

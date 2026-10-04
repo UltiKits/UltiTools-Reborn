@@ -777,8 +777,9 @@ This section governs the third kind.
     with no `zh-myserver` file simply uses its official `zh`. A name that starts with no shipped
     code, such as `myserver`, uses English for what it lacks and logs one WARNING. A name with any
     character other than ASCII letters, digits, `_` and `-` is never used as a file name. A value in
-    your copy whose `%s`/`%d` placeholder count or `{TOKEN}`s no longer match the official value —
-    typically after an upgrade changed that message — is replaced by the official value for that key
+    your copy whose `%s`/`%d` placeholder count differs from the official value, or which lacks a
+    `{TOKEN}` the official value has (tokens of your own are kept) — typically after an upgrade
+    changed that message — is replaced by the official value for that key
     in memory, with one WARNING naming the file and the key; your file is not changed, so update the
     value there;
   - **choose a name no module ships.** A module that does not ship the configured official code
@@ -806,7 +807,7 @@ This section governs the third kind.
   自定义方法：在要修改的目录里把官方文件复制为以语言代码加连字符开头的新名称（保留扩展名，例如 `zh.json` → `zh-myserver.json`），
   修改这个副本，然后在 `plugins/UltiTools/config.yml` 中设置 `language: zh-myserver` 并重启或执行 `/ul reload`。这一个设置同时作用于框架和所有模块，没有按模块的设置。
   副本里缺少的文本使用名称开头对应的官方文件（`zh-myserver` 对应 `zh`）补充，所以只需保留要改的条目；没有 `zh-myserver` 文件的模块直接使用官方 `zh`。
-  名称不以已有语言代码开头（如 `myserver`）时，缺少的文本使用英文，并记录一行警告。副本中占位符（`%s`/`%d` 个数或 `{TOKEN}`）与官方文本不再一致的条目（通常是升级后该消息变了），在内存中改用官方文本并记录一行警告（写明文件和键），文件本身不会被修改。
+  名称不以已有语言代码开头（如 `myserver`）时，缺少的文本使用英文，并记录一行警告。副本中 `%s`/`%d` 个数与官方文本不同、或缺少官方文本中某个 `{TOKEN}` 的条目（自己添加的占位符会保留）（通常是升级后该消息变了），在内存中改用官方文本并记录一行警告（写明文件和键），文件本身不会被修改。
   请使用模块不会自带的名称（如 `zh-myserver`）：不自带所配置官方语言的模块会把它当作自定义名称，日后版本若开始自带你用过的名称，该文件会变成官方文件并被恢复。自定义文件在任何启动、重载、升级或模块更新中都不会被写入、替换、备份或登记。
   模块作者注意：`getLanguageCode()` 现在返回自定义名称所基于的官方语言代码（`zh-myserver` 返回 `zh`），新增的 `getConfiguredLanguage()` 返回配置的名称。
 - Resolving a module's language only after its resources are extracted (#540). Before 6.3.0 the

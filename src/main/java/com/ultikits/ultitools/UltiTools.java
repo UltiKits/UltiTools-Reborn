@@ -370,7 +370,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
         Language customLanguage = custom ? OfficialLanguageFiles.readFrameworkCustomFile(getDataFolder(), configured,
                 baseCode, getClass().getClassLoader(), getLogger()) : null;
         this.language = customLanguage != null ? customLanguage.withFallback(bundled) : bundled;
-        if (official == null) {
+        if (official == null && (configured == null || !Localized.isSafeLanguageCode(configured))) {
+            getLogger().warning("The language setting '" + configured + "' in config.yml is not a valid language "
+                    + "name (an ASCII letter or digit first, then only ASCII letters, digits, '_' and '-'), so no "
+                    + "custom file is read; framework messages use 'en'.");
+        } else if (official == null) {
             getLogger().warning("The language setting '" + configured + "' in config.yml is neither a shipped "
                     + "language " + shipped + " nor a custom name that starts with one of them and a hyphen, "
                     + "such as zh-myserver; messages it does not provide use 'en'.");
