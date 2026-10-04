@@ -122,7 +122,7 @@ class UltiToolsPluginLanguageFallbackTest {
     @DisplayName("配置的代码在 supported() 中 -- 直接使用，不告警")
     void configuredCodeSupportedIsUsedWithoutWarning() throws Throwable {
         UltiToolsPlugin plugin = mock(FixturePlugin.class);
-        when(plugin.getLanguageCode()).thenReturn("en");
+        when(plugin.getConfiguredLanguage()).thenReturn("en");
         when(plugin.supported()).thenReturn(Arrays.asList("en", "zh"));
         PluginLogger mockLogger = mock(PluginLogger.class);
         when(plugin.getLogger()).thenReturn(mockLogger);
@@ -137,7 +137,7 @@ class UltiToolsPluginLanguageFallbackTest {
     @DisplayName("配置了不支持的代码，但 supported() 里有 en -- 回退到 en 并告警，命名模块/请求代码/可用代码")
     void unsupportedCodeFallsBackToEnglishWithNamingWarning() throws Throwable {
         UltiToolsPlugin plugin = mock(FixturePlugin.class);
-        when(plugin.getLanguageCode()).thenReturn("fr");
+        when(plugin.getConfiguredLanguage()).thenReturn("fr");
         when(plugin.supported()).thenReturn(Arrays.asList("en", "zh"));
         when(plugin.getPluginName()).thenReturn("TestModule");
         PluginLogger mockLogger = mock(PluginLogger.class);
@@ -154,7 +154,7 @@ class UltiToolsPluginLanguageFallbackTest {
     @DisplayName("配置了不支持的代码，且 supported() 不含 en -- 回退到第一个条目并告警")
     void unsupportedCodeWithoutEnglishFallsBackToFirstEntry() throws Throwable {
         UltiToolsPlugin plugin = mock(FixturePlugin.class);
-        when(plugin.getLanguageCode()).thenReturn("fr");
+        when(plugin.getConfiguredLanguage()).thenReturn("fr");
         when(plugin.supported()).thenReturn(Collections.singletonList("zh"));
         when(plugin.getPluginName()).thenReturn("TestModule");
         PluginLogger mockLogger = mock(PluginLogger.class);
@@ -170,7 +170,7 @@ class UltiToolsPluginLanguageFallbackTest {
     @DisplayName("配置代码为 null -- 与不支持的代码走相同的回退和告警路径")
     void nullConfiguredCodeFallsBackSameAsUnsupported() throws Throwable {
         UltiToolsPlugin plugin = mock(FixturePlugin.class);
-        when(plugin.getLanguageCode()).thenReturn(null);
+        when(plugin.getConfiguredLanguage()).thenReturn(null);
         when(plugin.supported()).thenReturn(Arrays.asList("en", "zh"));
         when(plugin.getPluginName()).thenReturn("TestModule");
         PluginLogger mockLogger = mock(PluginLogger.class);
@@ -186,7 +186,7 @@ class UltiToolsPluginLanguageFallbackTest {
     @DisplayName("supported() 为空列表 -- 视为无信息，不告警，不改变原有代码")
     void emptySupportedProducesNoWarningAndNoChange() throws Throwable {
         UltiToolsPlugin plugin = mock(FixturePlugin.class);
-        when(plugin.getLanguageCode()).thenReturn("fr");
+        when(plugin.getConfiguredLanguage()).thenReturn("fr");
         when(plugin.supported()).thenReturn(Collections.emptyList());
         PluginLogger mockLogger = mock(PluginLogger.class);
         when(plugin.getLogger()).thenReturn(mockLogger);
@@ -203,7 +203,7 @@ class UltiToolsPluginLanguageFallbackTest {
         writeLangFile("zh", "{\"greeting\":\"\\u4f60\\u597d\"}");
 
         UltiToolsPlugin plugin = mock(FixturePlugin.class);
-        when(plugin.getLanguageCode()).thenReturn("fr");
+        when(plugin.getConfiguredLanguage()).thenReturn("fr");
         when(plugin.supported()).thenReturn(Collections.singletonList("zh"));
         when(plugin.getPluginName()).thenReturn("TestModule");
         PluginLogger mockLogger = mock(PluginLogger.class);
@@ -233,7 +233,7 @@ class UltiToolsPluginLanguageFallbackTest {
         String hostileCode = "../" + marker;
 
         UltiToolsPlugin plugin = mock(FixturePlugin.class);
-        when(plugin.getLanguageCode()).thenReturn(hostileCode);
+        when(plugin.getConfiguredLanguage()).thenReturn(hostileCode);
         when(plugin.supported()).thenReturn(Collections.emptyList());
         when(plugin.getPluginName()).thenReturn("TestModule");
         PluginLogger mockLogger = mock(PluginLogger.class);
@@ -263,7 +263,7 @@ class UltiToolsPluginLanguageFallbackTest {
         // Simulates a subclass override: supported() is a public, overridable default method, and
         // stubbing it on the mock is virtual-dispatch-equivalent to a real override.
         when(plugin.supported()).thenReturn(Collections.singletonList("ja"));
-        when(plugin.getLanguageCode()).thenReturn("en");
+        when(plugin.getConfiguredLanguage()).thenReturn("en");
         when(plugin.getPluginName()).thenReturn("TestModule");
         PluginLogger mockLogger = mock(PluginLogger.class);
         when(plugin.getLogger()).thenReturn(mockLogger);
@@ -280,7 +280,7 @@ class UltiToolsPluginLanguageFallbackTest {
         writeLangFile("en", "{\"greeting\":\"Hi\"}");
 
         UltiToolsPlugin plugin = mock(FixturePlugin.class);
-        when(plugin.getLanguageCode()).thenReturn("fr");
+        when(plugin.getConfiguredLanguage()).thenReturn("fr");
         when(plugin.supported()).thenReturn(Arrays.asList("en", "zh"));
         when(plugin.getPluginName()).thenReturn("TestModule");
         PluginLogger mockLogger = mock(PluginLogger.class);

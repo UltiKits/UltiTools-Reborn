@@ -89,6 +89,7 @@ class UltiToolsPluginLanguageChangeReloadTest {
         doCallRealMethod().when(plugin).reloadWithReport();
         doCallRealMethod().when(plugin).onReload(any(ReloadReport.class));
         doCallRealMethod().when(plugin).getLanguageCode();
+        doCallRealMethod().when(plugin).getConfiguredLanguage();
         doCallRealMethod().when(plugin).getLanguage();
         return plugin;
     }
