@@ -7,6 +7,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
@@ -67,7 +68,9 @@ import org.yaml.snakeyaml.representer.Representer;
  * outcome is {@link Outcome#FILE_CHANGED}. Immediately before publishing, after rendering and verifying, the
  * gate reads the target again and abandons the write when the bytes moved; the residual window between that
  * read and the atomic replacement cannot be closed between an editor and the JVM. Publication goes through
- * {@link AtomicConfigWriter}. Files that are unreadable or unparseable are never written.
+ * {@link AtomicConfigWriter}; a file the gate read absent is created exclusively (a hard link of the staged file,
+ * or a re-check and a move that does not replace where links are refused), so a file that appeared meanwhile
+ * is never replaced. Files that are unreadable or unparseable are never written.
  *
  * @since 6.3.0
  */
@@ -163,6 +166,12 @@ public final class OperatorFileWriter {
      */
     public static Result write(Path file, OwnedPaths owned, String expectedFingerprint, Consumer<ConfigDocument> edit)
             throws IOException {
+        return write(file, owned, expectedFingerprint, edit, null);
+    }
+
+    /** As {@link #write(Path, OwnedPaths, String, Consumer)}, with the publication steps as a test seam ({@code null}: real). */
+    static Result write(Path file, OwnedPaths owned, String expectedFingerprint, Consumer<ConfigDocument> edit,
+            AtomicConfigWriter.FileOperations files) throws IOException {
         Path absolute = file.toAbsolutePath();
         Snapshot snapshot = Snapshot.read(file, owned, expectedFingerprint);
         if (snapshot.failure != null) {
@@ -187,25 +196,72 @@ public final class OperatorFileWriter {
         if (failure != null) {
             return refuse(absolute, owned, keys, failure);
         }
-        return publish(file, absolute, owned, keys, snapshot.fingerprint, rendered, candidate);
+        Publication publication = new Publication(file, absolute, owned, keys, files);
+        return ABSENT.equals(snapshot.fingerprint) ? publication.create(rendered, candidate)
+                : publication.replace(snapshot.fingerprint, rendered, candidate);
     }
 
-    private static Result publish(Path file, Path absolute, OwnedPaths owned, List<String> keys, String fingerprint,
-            String rendered, ConfigDocument candidate) throws IOException {
-        Path parent = absolute.getParent();
-        if (ABSENT.equals(fingerprint) && parent != null) {
-            Files.createDirectories(parent);
+    /** Publishing verified text: the last-moment re-read, then a replacement or an exclusive creation. */
+    private static final class Publication {
+
+        private final Path file;
+        private final Path absolute;
+        private final OwnedPaths owned;
+        private final List<String> keys;
+        private final AtomicConfigWriter.FileOperations files;
+
+        Publication(Path file, Path absolute, OwnedPaths owned, List<String> keys, AtomicConfigWriter.FileOperations files) {
+            this.file = file;
+            this.absolute = absolute;
+            this.owned = owned;
+            this.keys = keys;
+            this.files = files;
         }
-        synchronized (AtomicConfigWriter.WRITE_LOAD_LOCK) {
-            // The last-moment check: after rendering and verifying, under the lock every load and write holds.
-            byte[] now = readOrNull(file);
-            String current = now == null ? ABSENT : ConfigDocument.sha256(now);
-            if (!current.equals(fingerprint)) {
-                return changed(absolute, owned, keys, "the file changed while the new content was being prepared");
+
+        /** Replaces the file only while it still holds the bytes the gate verified against. */
+        Result replace(String fingerprint, String rendered, ConfigDocument candidate) throws IOException {
+            synchronized (AtomicConfigWriter.WRITE_LOAD_LOCK) {
+                // The last-moment check: after rendering and verifying, under the lock every load and write holds.
+                byte[] now = readOrNull(file);
+                if (now == null || !ConfigDocument.sha256(now).equals(fingerprint)) {
+                    return changed(absolute, owned, keys, "the file changed while the new content was being prepared");
+                }
+                if (files == null) {
+                    AtomicConfigWriter.write(file, rendered);
+                } else {
+                    AtomicConfigWriter.write(file, rendered, files);
+                }
             }
-            AtomicConfigWriter.write(file, rendered);
+            return new Result(Outcome.WRITTEN, "", candidate);
         }
-        return new Result(Outcome.WRITTEN, "", candidate);
+
+        /** Creates the file without ever replacing one that appeared after the gate read it absent. */
+        Result create(String rendered, ConfigDocument candidate) throws IOException {
+            Path parent = absolute.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            AtomicConfigWriter.StagedWrite staged = files == null ? AtomicConfigWriter.stage(file, rendered)
+                    : AtomicConfigWriter.stage(file, rendered, files);
+            boolean published = false;
+            synchronized (AtomicConfigWriter.WRITE_LOAD_LOCK) {
+                try {
+                    if (readOrNull(file) == null) {
+                        staged.commitAsNewFile();
+                        published = true;
+                    }
+                } catch (FileAlreadyExistsException appeared) {
+                    // A file appeared at the target after the re-read: it is left as it is, and this is reported below.
+                    LOGGER.fine("Config creation lost the race to an existing file at " + absolute);
+                } finally {
+                    if (!published) {
+                        staged.discard();
+                    }
+                }
+            }
+            return published ? new Result(Outcome.WRITTEN, "", candidate)
+                    : changed(absolute, owned, keys, "a file appeared while the new content was being prepared");
+        }
     }
 
     private static Result fail(Outcome outcome, Path absolute, OwnedPaths owned, List<String> keys, String reason) {

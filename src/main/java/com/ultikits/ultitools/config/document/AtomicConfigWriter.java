@@ -9,7 +9,9 @@ import java.nio.file.AccessDeniedException;
 import java.nio.file.FileSystemException;
 import java.nio.file.CopyOption;
 import java.nio.file.DirectoryStream;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.StandardCopyOption;
@@ -383,6 +385,39 @@ public final class AtomicConfigWriter {
         }
 
         /**
+         * Publishes the staged text as a new file, for a target that did not exist when it was read: never
+         * replaces a file that exists by then. The temporary file is hard-linked onto the target, which fails if
+         * the target exists; where the file system refuses links, the target is checked again immediately before
+         * a move that does not replace. The temporary name is removed either way.
+         *
+         * @throws FileAlreadyExistsException if a file appeared at the target; it is left as it is
+         * @throws IOException                if publishing fails otherwise; no file was replaced
+         */
+        void commitAsNewFile() throws IOException {
+            synchronized (WRITE_LOAD_LOCK) {
+                try {
+                    if (data != null) {
+                        throw deferredCause;
+                    }
+                    try {
+                        files.link(target, temporary);
+                    } catch (FileAlreadyExistsException appeared) {
+                        throw appeared;
+                    } catch (UnsupportedOperationException | FileSystemException noLinks) {
+                        if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+                            throw new FileAlreadyExistsException(target.toString());
+                        }
+                        files.move(temporary, target);
+                    }
+                } finally {
+                    deleteQuietly(temporary);
+                    release(identity);
+                }
+                syncDirectory(target.getParent());
+            }
+        }
+
+        /**
          * Removes the temporary file without touching the target.
          *
          * @return whether the temporary file is gone
@@ -445,6 +480,10 @@ public final class AtomicConfigWriter {
 
         default void move(Path source, Path destination, CopyOption... options) throws IOException {
             Files.move(source, destination, options);
+        }
+
+        default void link(Path link, Path existing) throws IOException {
+            Files.createLink(link, existing);
         }
 
         default byte[] read(Path file) throws IOException {

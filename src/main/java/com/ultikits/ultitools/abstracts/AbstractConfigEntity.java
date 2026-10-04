@@ -131,11 +131,15 @@ public abstract class AbstractConfigEntity {
         }
     }
 
+    /** A batch initialization write: what to insert, and the bytes it was read from (#602). */
     private static final class PendingInitialization {
-        private final ConfigDocument candidate;
+        private final ConfigDocument read;
         private final Map<Field, Object> baseline;
-        private PendingInitialization(ConfigDocument candidate, Map<Field, Object> baseline) {
-            this.candidate = candidate; this.baseline = baseline;
+        private final Map<Field, Object> inserted;
+        private final String expected;
+        private PendingInitialization(ConfigDocument read, Map<Field, Object> baseline, Map<Field, Object> inserted,
+                String expected) {
+            this.read = read; this.baseline = baseline; this.inserted = inserted; this.expected = expected;
         }
     }
 
@@ -708,18 +712,17 @@ public abstract class AbstractConfigEntity {
         pendingCommentWrite = false;
         if (!inserted.isEmpty() && !deferInitialization) {
             // On a refusal the declared defaults run in memory and the raw acknowledgement keeps the keys absent.
-            ConfigDocument written = insertMissingKeys(loaded, inserted);
+            ConfigDocument written = writeInitialization(inserted, expectedBase(loaded));
             if (written != null) { document = written; }
-        } else {
-            for (Map.Entry<Field, Object> entry : inserted.entrySet()) {
-                next.set(keys(entry.getKey()), entry.getValue()); addEntryComment(next, entry.getKey());
-            }
-            boolean commentsChanged = updateTokenComments(next);
-            if (deferInitialization && (!inserted.isEmpty() || commentsChanged)) {
-                pendingInitialization = new PendingInitialization(next, baseline);
+        } else if (deferInitialization) {
+            if (!inserted.isEmpty() || tokenCommentsDiffer(next)) {
+                // The flush writes through the gate against the bytes read here, never over a later edit (#602).
+                pendingInitialization = new PendingInitialization(next, baseline, inserted, expectedBase(loaded));
                 lastLoadedPresence = loadedPresence;
                 return;
             }
+        } else {
+            boolean commentsChanged = updateTokenComments(next);
             if (commentsChanged) {
                 try { write(next); }
                 catch (IOException failure) {
@@ -736,21 +739,48 @@ public abstract class AbstractConfigEntity {
         for (String conflict : conflicts) { LOGGER.warning("Configuration " + configFilePath + ": " + conflict); }
     }
 
+    private static String expectedBase(ConfigLoadResult loaded) {
+        return loaded.state() == ConfigLoadResult.State.LOADED ? loaded.fingerprint() : OperatorFileWriter.ABSENT;
+    }
+
     /**
-     * Inserts the declared keys {@code init} found missing, each with its comment, through the config write
-     * gate ({@link OperatorFileWriter}). This cannot overwrite operator content: the write owns only the
-     * inserted keys and the framework's token comments, the gate verifies that every other byte of the file
-     * is unchanged after rendering (layout included) and writes nothing when the file no longer holds the
-     * bytes {@code loaded} read. When it refuses, the gate has logged one warning naming the file and the keys,
+     * Whether a framework token comment in {@code target} differs from what the current language renders,
+     * without changing {@code target}: the comparison {@link #addEntryComment} makes, on the comment text
+     * {@link ConfigDocument#blockComment(List)} reports (blank lines above a comment are kept by every write).
+     *
+     * @param target the document as read
+     * @return whether a comment-only write would change a comment
+     */
+    private boolean tokenCommentsDiffer(ConfigDocument target) {
+        for (Field field : configEntryFields()) {
+            if (!isTokenComment(field) || !target.contains(keys(field))) { continue; }
+            ConfigDocument rendered = ConfigDocument.empty();
+            rendered.set(keys(field), null);
+            rendered.setFrameworkComment(keys(field), Collections.singletonList(resolvedComment(field)));
+            List<String> current = new ArrayList<>(target.blockComment(keys(field)));
+            while (!current.isEmpty() && current.get(0) == null) { current.remove(0); }
+            if (!current.equals(rendered.blockComment(keys(field)))) { return true; }
+        }
+        return false;
+    }
+
+    /**
+     * Writes an initialization - the declared keys {@code init} found missing, each with its comment, and the
+     * framework's token comments - through the config write gate ({@link OperatorFileWriter}), at once or from
+     * the batch flush. This cannot overwrite operator content: the write owns only the inserted keys and the
+     * token comments (or the whole file when it was absent, created exclusively so a file that appeared
+     * meanwhile is never replaced), the gate verifies that every other byte of the file is unchanged after
+     * rendering (layout included), and it writes nothing when the file no longer holds the bytes read at
+     * {@code expected}. When it does not write, the gate has logged one warning naming the file and the keys,
      * the fields keep their declared defaults in memory, and the file keeps its bytes.
      *
-     * @param loaded   the load this init bound (LOADED or ABSENT)
      * @param inserted the missing fields and their declared default values, as plain data
+     * @param expected the fingerprint of the bytes the init read, or {@link OperatorFileWriter#ABSENT}
      * @return the document now on disk, or {@code null} when nothing was written
      * @throws IOException if publishing the verified text fails
      */
-    private ConfigDocument insertMissingKeys(ConfigLoadResult loaded, Map<Field, Object> inserted) throws IOException {
-        boolean absent = loaded.state() != ConfigLoadResult.State.LOADED;
+    private ConfigDocument writeInitialization(Map<Field, Object> inserted, String expected) throws IOException {
+        boolean absent = OperatorFileWriter.ABSENT.equals(expected);
         OwnedPaths owned = OwnedPaths.wholeFile();
         if (!absent) {
             OwnedPaths.Builder builder = OwnedPaths.builder();
@@ -761,7 +791,7 @@ public abstract class AbstractConfigEntity {
             owned = builder.build();
         }
         OperatorFileWriter.Result result = OperatorFileWriter.write(ultiToolsPlugin.getConfigFile(configFilePath).toPath(),
-                owned, absent ? OperatorFileWriter.ABSENT : loaded.fingerprint(), candidate -> {
+                owned, expected, candidate -> {
                     for (Map.Entry<Field, Object> entry : inserted.entrySet()) {
                         candidate.set(keys(entry.getKey()), entry.getValue());
                         addEntryComment(candidate, entry.getKey());
@@ -794,7 +824,8 @@ public abstract class AbstractConfigEntity {
         return theirs;
     }
 
-    /** Flushes only a validated manager batch's initialization candidate.
+    /** Flushes only a validated manager batch's initialization write, through the config write gate and only
+     * while the file still holds the bytes {@code initForBatch} read (#602); see {@link #writeInitialization}.
      * @throws IOException when replacement fails; the entity is then protected until reload
      */
     @ApiStatus.Internal
@@ -803,9 +834,11 @@ public abstract class AbstractConfigEntity {
             PendingInitialization pending = pendingInitialization;
             pendingInitialization = null;
             if (pending == null || lastLoadUnparseable) { return; }
-            try { write(pending.candidate); }
+            ConfigDocument written;
+            try { written = writeInitialization(pending.inserted, pending.expected); }
             catch (IOException failure) { lastLoadUnparseable = true; throw failure; }
-            document = pending.candidate;
+            // Not written (file changed since initForBatch, or refused): the defaults run in memory, the file stays.
+            document = written != null ? written : pending.read;
             savedSnapshot = pending.baseline;
             acknowledgeRaw(document, configEntryFields());
             savedFileFingerprint = fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath));
