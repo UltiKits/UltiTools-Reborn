@@ -112,6 +112,14 @@ public abstract class AbstractConfigEntity {
     private final Map<Field, Map<List<String>, RawEntry>> compositeReads = new LinkedHashMap<>();
 
     /**
+     * The whole composite values a panel edit writes, per setting and unit: the value as last read with only the edited
+     * fields changed, so every untouched field keeps the bytes the operator wrote (#609, 17-65 round 4 R4-I2); set by
+     * {@code applyAndValidate} and consumed by {@code panelChanges} under the entity monitor, like {@link #compositeReads}.
+     */
+    @Getter(AccessLevel.NONE)
+    private final Map<Field, Map<List<String>, Object>> compositeWrites = new LinkedHashMap<>();
+
+    /**
      * The value ranges a config binding (#531) imposes on this entity's keys, by {@code @ConfigEntry}
      * path, then by rule text. A panel write ({@link #updateProperties}, {@link
      * #validateProposedProperties}) is refused when it sets a bound key outside its range, the same
@@ -205,8 +213,8 @@ public abstract class AbstractConfigEntity {
         private final Field field;
         private final List<String> leaf;
         private final List<String> path;
-        private final boolean present;
-        private final Object value;
+        private boolean present;
+        private Object value;
         private final boolean readPresent;
         private final Object readValue;
         /**
@@ -225,6 +233,15 @@ public abstract class AbstractConfigEntity {
 
         private boolean holds(boolean isPresent, Object at, boolean wantPresent, Object want) {
             return isPresent == wantPresent && (!isPresent || PlainData.plainEquals(at, want));
+        }
+
+        /**
+         * Writes {@code unit} - the whole composite value as last read with only the panel's fields changed - instead of
+         * the module's serialization of it, so the untouched fields keep their bytes (#609, R4-I2).
+         */
+        private void writeWhole(Object unit) {
+            this.present = true;
+            this.value = PlainData.copy(unit);
         }
     }
 
@@ -643,10 +660,14 @@ public abstract class AbstractConfigEntity {
             Object mine = plainValue(field, true);
             RawEntry read = acknowledgedRaw.get(field);
             Map<List<String>, RawEntry> required = compositeReads.get(field);
+            Map<List<String>, Object> wholes = compositeWrites.get(field);
             List<List<String>> fieldLeaves = leaves.get(field);
             if (fieldLeaves == null) {
                 ModuleChange change = new ModuleChange(field, Collections.<String>emptyList(), keys(field), mine, read);
                 change.required = required == null ? null : required.get(Collections.<String>emptyList());
+                if (change.required != null && wholes != null && wholes.containsKey(Collections.<String>emptyList())) {
+                    change.writeWhole(wholes.get(Collections.<String>emptyList()));
+                }
                 changes.add(change);
                 continue;
             }
@@ -654,10 +675,14 @@ public abstract class AbstractConfigEntity {
                 List<String> path = new ArrayList<>(keys(field)); path.addAll(leaf);
                 ModuleChange change = new ModuleChange(field, leaf, path, mine, read);
                 change.required = required == null ? null : required.get(leaf);
+                if (change.required != null && wholes != null && wholes.containsKey(leaf)) {
+                    change.writeWhole(wholes.get(leaf));
+                }
                 changes.add(change);
             }
         }
         compositeReads.clear();
+        compositeWrites.clear();
         return changes;
     }
 
@@ -1816,6 +1841,7 @@ public abstract class AbstractConfigEntity {
         Map<Field, Object> proposed = new LinkedHashMap<>();
         Map<Field, List<List<String>>> leaves = new LinkedHashMap<>();
         compositeReads.clear();
+        compositeWrites.clear();
         Set<Field> whole = new java.util.LinkedHashSet<>();
         List<String> refused = new ArrayList<>();
         JsonObject displayed = toJsonObject();
@@ -1858,17 +1884,22 @@ public abstract class AbstractConfigEntity {
                 Object readUnit = unit.isEmpty() ? lastRead.value : mapLeaf(lastRead.value, unit);
                 compositeReads.computeIfAbsent(owner, ignored -> new LinkedHashMap<>())
                         .putIfAbsent(unit, new RawEntry(true, readUnit));
+                // The edited field takes the number type the module's own value holds there (a whole number sent for a
+                // Vector coordinate becomes 7.0), so the value written is one the module reads back (#609).
+                Object edited = isSerializedMap(readUnit) ? widenLike(raw, mapLeaf(mapLeaf(plainValue(owner), unit), inside))
+                        : raw;
                 if (unit.isEmpty()) {
                     Object shown = whole.contains(owner) && proposed.containsKey(owner) ? proposed.get(owner) : readUnit;
-                    proposed.put(owner, patchedMap(shown, inside, raw)); leaves.remove(owner); whole.add(owner);
+                    proposed.put(owner, patchedMap(shown, inside, edited)); leaves.remove(owner); whole.add(owner);
                     continue;
                 }
                 Object tree = proposed.containsKey(owner) ? proposed.get(owner) : plainValue(owner);
                 if (!(tree instanceof Map)) { refused.add("'" + path + "': not a map entry"); continue; }
+                if (!parentInMemory(tree, unit)) { refused.add("'" + path + "': not found in memory"); continue; }
                 List<List<String>> touched = leaves.get(owner);
                 Object shown = whole.contains(owner) || touched != null && touched.contains(unit) ? mapLeaf(tree, unit)
                         : readUnit;
-                replaceMapLeaf(tree, unit, patchedMap(shown, inside, raw));
+                replaceMapLeaf(tree, unit, patchedMap(shown, inside, edited));
                 proposed.put(owner, tree);
                 if (!whole.contains(owner) && (touched == null || !touched.contains(unit))) {
                     leaves.computeIfAbsent(owner, ignored -> new ArrayList<>()).add(unit);
@@ -1877,15 +1908,30 @@ public abstract class AbstractConfigEntity {
             }
             Object tree = proposed.containsKey(owner) ? proposed.get(owner) : plainValue(owner);
             if (!(tree instanceof Map)) { refused.add("'" + path + "': not a map entry"); continue; }
+            // A group the module removed in memory (unsaved) is not there to edit: refused, never a runtime error (R4-I3).
+            if (!parentInMemory(tree, match)) { refused.add("'" + path + "': not found in memory"); continue; }
             replaceMapLeaf(tree, match, raw);
             proposed.put(owner, tree);
             if (!whole.contains(owner)) { leaves.computeIfAbsent(owner, ignored -> new ArrayList<>()).add(match); }
+        }
+        for (Map.Entry<Field, Map<List<String>, RawEntry>> reads : compositeReads.entrySet()) {
+            Object proposal = proposed.get(reads.getKey());
+            Map<List<String>, Object> wholes = new LinkedHashMap<>();
+            for (List<String> unit : reads.getValue().keySet()) {
+                // The whole value as last read with only the edited fields changed: what the file gets (R4-I2).
+                wholes.put(unit, PlainData.copy(mapLeaf(proposal, unit)));
+            }
+            compositeWrites.put(reads.getKey(), wholes);
         }
         Map<Field, Object> converted = new LinkedHashMap<>();
         for (Map.Entry<Field, Object> proposal : proposed.entrySet()) {
             Field field = proposal.getKey();
             try {
-                ConversionResult<Object> result = registry().fromPlainResult(proposal.getValue(), declaredType(field),
+                // Whole numbers inside a serialized composite are widened where the module's own value holds a
+                // floating-point number there, for the conversion only (#609, R4-I1): Bukkit's Vector reads its
+                // coordinates as Double without widening; the bytes the operator wrote are not changed by this.
+                Object candidate = widenLike(proposal.getValue(), plainValue(field), false);
+                ConversionResult<Object> result = registry().fromPlainResult(candidate, declaredType(field),
                         configFilePath, keys(field), field.getAnnotation(ConfigEntry.class));
                 if (!result.failures().isEmpty()) {
                     for (ConversionFailure failure : result.failures()) {
@@ -1909,6 +1955,41 @@ public abstract class AbstractConfigEntity {
         validateFields();
         validateBindingRanges(touchedFieldsOut);
         return leaves;
+    }
+
+    /** Whether the map holding the last key of {@code path} exists in {@code tree} (the module's value in memory). */
+    private static boolean parentInMemory(Object tree, List<String> path) {
+        return (path.size() == 1 ? tree : mapLeaf(tree, path.subList(0, path.size() - 1))) instanceof Map;
+    }
+
+    /** Whether {@code value} is a serialized Bukkit value: a map carrying the {@code ==} type key. */
+    private static boolean isSerializedMap(Object value) {
+        return value instanceof Map && ((Map<?, ?>) value).containsKey("==");
+    }
+
+    /**
+     * {@code value} with each whole number inside a serialized Bukkit value ({@link #isSerializedMap}) widened to a
+     * {@code Double} where {@code guide} - the module's own value, as plain data - holds a floating-point number at the
+     * same place; everything else as it is. A whole number given directly ({@code guide} a floating-point number) is
+     * widened too. Used for a panel edit's conversion and for the edited field it writes (#609, R4-I1).
+     */
+    private static Object widenLike(Object value, Object guide) {
+        return widenLike(value, guide, true);
+    }
+
+    private static Object widenLike(Object value, Object guide, boolean inSerialized) {
+        if (inSerialized && (guide instanceof Double || guide instanceof Float) && (value instanceof Integer
+                || value instanceof Long || value instanceof Short || value instanceof Byte)) {
+            return ((Number) value).doubleValue();
+        }
+        if (!(value instanceof Map) || !(guide instanceof Map)) { return value; }
+        boolean serialized = isSerializedMap(value);
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : ((Map<?, ?>) value).entrySet()) {
+            Object nested = ((Map<?, ?>) guide).get(entry.getKey());
+            result.put(String.valueOf(entry.getKey()), widenLike(entry.getValue(), nested, serialized));
+        }
+        return result;
     }
 
     private static Object mapLeaf(Object tree, List<String> path) {
