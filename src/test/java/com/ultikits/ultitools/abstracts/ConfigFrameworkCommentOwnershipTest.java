@@ -281,6 +281,28 @@ class ConfigFrameworkCommentOwnershipTest {
         assertThat(comments("item.multi")).containsExactly("kept note", "First line", "Second line");
     }
 
+    /**
+     * 17-64 review round 1 R1-02 (comment-identification revision 1): only the framework's exact written form is its
+     * own - the key's own indentation, then {@code "# "} and the text. The same text without the space after
+     * {@code #}, or at another column, was written by the operator and is kept byte for byte.
+     */
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0}")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+        "item:\n  #Announcement interval in seconds\n  interval: 300\n",
+        "item:\n# Announcement interval in seconds\n  interval: 300\n",
+        "item:\n    # Announcement interval in seconds\n  interval: 300\n",
+        "item:\n  # note\n# Announcement interval in seconds\n  interval: 300\n"})
+    @DisplayName("the framework's text in a byte form the framework never writes is the operator's and is kept")
+    void frameworkTextInAnotherByteFormIsKept(String operatorForm) throws Exception {
+        put(operatorForm);
+
+        language = "zh";
+        new TokenConfig(PATH).init(plugin);
+
+        assertThat(text()).isEqualTo(operatorForm);
+        assertThat(mtime()).isEqualTo(OLD);
+    }
+
     @Test
     @DisplayName("an empty catalogue text identifies nothing: an operator's bare '#' line above the setting is kept")
     void emptyCatalogueTextIdentifiesNoLine() throws Exception {
