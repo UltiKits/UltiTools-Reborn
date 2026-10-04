@@ -63,7 +63,10 @@ effort and cannot turn a successful load into a failure. No automatic restoratio
 explicit saves and panel updates. Typed collections resolve their full inherited generic types:
 convertible values bind, invalid collection/map elements are skipped with a located warning, and an
 invalid field value falls back to its initially declared default. Invalid reload values use that
-default too; a missing reload key instead retains its live field and is not added to the file.
+default too. A key missing on reload binds its declared default - with one warning naming the key when the previous load
+still found it, so an operator who deletes a key to reset it is told - unless the module changed that setting since the
+last load or save, which keeps the module's value; the file is not changed either way, and
+no later save re-adds the key ([#596](https://github.com/UltiKits/UltiTools-Reborn/issues/596)).
 Warnings name the file, key and failed position/type; secret-shaped values and nested credentials
 are redacted. Unsupported declared types fail preflight before the file is read or created; register
 `@ConfigConverterFor` or declare a supported plain-data shape. The built-in Bukkit serialization
@@ -247,8 +250,9 @@ As of 6.3.0, reload compares the last effective disk baseline, current serialize
 incoming disk values. Memory-only changes survive and stay dirty; disk-only changes are adopted.
 Maps merge recursively by whole keys; lists and scalars are atomic. Conflicts take the file's value
 and warn with the located key and discarded value, redacting secret-shaped values. Absent map keys
-and explicit null differ. Missing whole declared fields retain their live values with the inherited
-declared-default baseline. This planner-selected file-wins policy can be overturned by the maintainer.
+and explicit null differ. A whole declared field missing from the file binds its declared default with one warning
+when the module had not changed it, and keeps its live value when the module had (both with the declared-default
+baseline); the file is not written. This planner-selected file-wins policy can be overturned by the maintainer.
 Unreadable/unparseable reloads keep live values and protect the file as before.
 After a module's language is rebuilt in the reload steps, and before its own reload hook, the framework rewrites
 only its own comment lines of that module's configurations in the new language, through the write gate over a fresh
@@ -415,7 +419,7 @@ separate crash-safe multi-file transaction limit.
 ### 中文补充：6.3.0 配置层迁移
 
 - 新扩展点是 `ConfigConverter<T>` 和 `@ConfigConverterFor`，转换器必须是扫描包内带 public 无参构造器的 public 顶层类；扫描器不发现嵌套转换器。它不是 IoC bean。未知声明类型在读取或创建文件前拒绝模块加载；官方 UltiRecipe 的配方对象需要模块自己的转换器。
-- 注解 `path` 中的点仍表示嵌套路径；映射里的 `g.m`、`o.O`、`wave.` 从 6.3.0 起按完整键保存。6.2 已经拆开的文件原样读取，不会自动合并，保存也不会删除这些条目，留给服主自己删（维护者 2026-10-04 决定）。完整泛型参与绑定；无效集合元素跳过，无效字段用声明默认值，缺失的重载字段保留运行值。允许 null 的引用类型可往返；`Object` 中的 Bukkit 序列化对象读取后仍是普通映射。
+- 注解 `path` 中的点仍表示嵌套路径；映射里的 `g.m`、`o.O`、`wave.` 从 6.3.0 起按完整键保存。6.2 已经拆开的文件原样读取，不会自动合并，保存也不会删除这些条目，留给服主自己删（维护者 2026-10-04 决定）。完整泛型参与绑定；无效集合元素跳过，无效字段用声明默认值；重载时文件里缺少的键改用声明默认值（上次加载时还在、即服主刚删掉的键警告一次）（模块自上次加载或保存后改过该设置时保留模块的值），两种情况都不改文件，之后的保存也不会补回该键（#596）。允许 null 的引用类型可往返；`Object` 中的 Bukkit 序列化对象读取后仍是普通映射。
 - 保存内容、注释文字、键顺序和支持的文件风格。6.3.0 起，所有自动写入（创建不存在的文件、补写缺失的声明键、启动或重载时改写框架自己的令牌注释、注册批次落盘）都经过同一个写入闸门：每次写入声明自己拥有的键，渲染后其余每一行必须与读取时逐字节相同（含换行符、BOM 和末尾换行），且文件仍是读取时的内容；否则不写，警告一次（只列文件、键和原因，不列值），内存中使用声明默认值。这些写入不会规整排版：手工对齐的文件缺少的键会一直缺少，每次启动警告一次，直到服主自己补上。使用锚点、别名或合并键的文件不会被自动写入，每次运行只提示一次。框架新建文件时独占创建，绝不替换期间出现的文件。模块的显式保存同样经过写入闸门，只拥有它要写的设置（#599，见下）；面板编辑暂时仍整份经过 SnakeYAML 输出，运维排版可以规整。有两种排版任何经闸门的写入（启动补键、改写注释、保存）都会拒绝，无论改的是哪个设置，因为渲染器无法逐字节写回：块标量（`|` 或 `>`）后面跟空行；以及一节末尾、空行之后、缩进比下一个键更深的注释。文件保持原样，警告列出键和排版原因，内存中使用相应值；删掉那个空行（或把注释移到下一个键的缩进）后，下一次写入即可通过。语义无变化不写文件，字节和修改时间不变。浮点数按最短可回读十进制判断，不要求二进制精确。
 - 先临时文件、force、原子替换；仅已允许的原子替换/临时创建拒绝才走备份后原地写。备份文件名为 `<文件名>.ultitools-backup-<16 位小写十六进制>`，独占创建；本次运行已为同一文件写过、且内容未变的备份先从当前文件刷新并原子替换，之后才打开目标。写入器不读取、不写入、不删除任何其它文件，服主自己的 `<文件>.bak` 不受影响。失败保留备份，只有成功严格加载当前文件、且备份内容仍与记录一致时才清理；本次运行未写过或已被改动的同类备份保留，并以 INFO 提示一次。不自动还原，不保证多文件崩溃事务。
 - 不能读取、不能解析、非 UTF-8 文件不会被任何实体写入路径覆盖；初次失败用默认值，重载失败保留运行值。成功加载才解除保护。单独 `{key}` 注释按模块当前语言目录更新，但只改框架能认出是自己写的注释行：该项注释整体或末尾连续几行，与框架对模块 jar 自带任一语言目录中的文字、模块当前解析出的文字或原样 `{key}` 写出的形式逐字节相同（该项的缩进、`# ` 加文字；只按相等判断，`#` 后缺空格或缩进不同即视为服主所写）；服主在令牌项上方手写的注释、改过的框架注释和字面注释逐字节永久保留（#604，维护者 2026-10-04 决定，取代此前“令牌项上的服主注释会被替换”）。已不在任何自带目录中的旧版措辞，只有模块在新增的 `@ConfigEntry(previousComments = {...})`（增量属性，默认为空）中登记了该文字时才算框架所写：逐字节相同即替换为当前目录文字并从此随语言切换（维护者 2026-10-04 决定）；未登记的原样保留。面板部分写入成功覆盖运维值时一条警告只列文件和键，不列值。

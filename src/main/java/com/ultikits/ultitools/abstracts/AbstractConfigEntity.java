@@ -1130,7 +1130,16 @@ public abstract class AbstractConfigEntity {
         List<Field> missing = new ArrayList<>();
         for (Field field : configEntryFields()) {
             field.setAccessible(true);
-            if (!next.contains(keys(field))) { missing.add(field); continue; }
+            if (!next.contains(keys(field))) {
+                missing.add(field);
+                // #596 item 2: a key the operator deleted, for a setting the module did not change, resets to its
+                // declared default; a setting the module changed keeps the module's value (#511 three-way rule).
+                if (!initialize && savedSnapshot != null && savedSnapshot.containsKey(field)
+                        && orderedEquals(savedSnapshot.get(field), mine.get(field))) {
+                    bindDeclaredDefault(field, presentIn(lastLoadedPresence, keys(field)));
+                }
+                continue;
+            }
             Object raw = next.get(keys(field));
             try {
                 ConversionResult<Object> converted = registry().fromPlainResult(raw, declaredType(field),
@@ -1195,6 +1204,41 @@ public abstract class AbstractConfigEntity {
         // The bytes this entity bound or the gate wrote, never a fresh read: a later edit stays a change on disk.
         savedFileFingerprint = entityFingerprint(bound);
         for (String conflict : conflicts) { LOGGER.warning("Configuration " + configFilePath + ": " + conflict); }
+    }
+
+    /**
+     * Binds {@code field}'s initially declared default because a reload found its key missing from the file and the
+     * module had not changed the setting since the last load or save (#596 item 2): deleting a key resets that setting,
+     * as an unusable value already does (#523). Memory only - the file is not changed, and a later save does not re-add
+     * the key. When the key was in the file at the previous load - the operator deleted it - one warning names the file
+     * and the key, never a value; a key the file already lacked (one a refused insert could not add, already named
+     * when that write was refused) is not named again at every reload.
+     *
+     * @param field   the setting whose key is missing
+     * @param deleted whether the previous load found the key in the file
+     */
+    private void bindDeclaredDefault(Field field, boolean deleted) {
+        try {
+            Object value = registry().fromPlainResult(declaredDefaults.get(field), declaredType(field), configFilePath,
+                    keys(field), field.getAnnotation(ConfigEntry.class)).value();
+            ReflectionUtil.setFieldValue(this, field, value);
+        } catch (ConversionException invalidDefault) {
+            throw new ConfigurationException(invalidDefault.getMessage(), invalidDefault);
+        }
+        if (deleted) {
+            LOGGER.warning("File " + configFilePath + ", key '" + fieldPath(field) + "': missing from the file; using the"
+                    + " declared default (the file is not changed)");
+        }
+    }
+
+    /** Whether {@code presence} (a load's plain tree) holds {@code path}, an explicit null included. */
+    private static boolean presentIn(Map<String, Object> presence, List<String> path) {
+        Object current = presence;
+        for (String key : path) {
+            if (!(current instanceof Map) || !((Map<?, ?>) current).containsKey(key)) { return false; }
+            current = ((Map<?, ?>) current).get(key);
+        }
+        return true;
     }
 
     private static String expectedBase(ConfigLoadResult loaded) {
