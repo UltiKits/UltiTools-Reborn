@@ -200,7 +200,14 @@ public final class OperatorFileWriter {
             if (ANCHORED.equals(snapshot.reason)) {
                 return refuseAnchored(absolute, owned);
             }
-            return fail(snapshot.failure, absolute, owned, Collections.<String>emptyList(), snapshot.reason);
+            List<String> wouldChange = Collections.emptyList();
+            if (snapshot.parsed && snapshot.failure == Outcome.FILE_CHANGED && !owned.isWholeFile()) {
+                // Name only what the write would have changed in the file as it is now; nothing is written.
+                edit.accept(snapshot.candidate);
+                Changes changes = Changes.of(snapshot.original, snapshot.candidate, owned);
+                wouldChange = describe(changes.values, changes.comments);
+            }
+            return fail(snapshot.failure, absolute, owned, wouldChange, snapshot.reason);
         }
         ConfigDocument candidate = snapshot.candidate;
         edit.accept(candidate);
@@ -359,6 +366,8 @@ public final class OperatorFileWriter {
         private ConfigDocument original = ConfigDocument.empty();
         private ConfigDocument candidate = ConfigDocument.empty();
         private boolean absent = true;
+        /** Whether the file was read and parsed (original and candidate are the file's, not empty placeholders). */
+        private boolean parsed;
         private Outcome failure;
         private String reason;
 
@@ -398,6 +407,7 @@ public final class OperatorFileWriter {
                 return;
             }
             original = loaded.document();
+            parsed = true;
         }
 
         private void checkPreconditions(OwnedPaths owned, String expectedFingerprint) {
