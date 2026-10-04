@@ -211,11 +211,38 @@ public final class OperatorFileWriter {
     /** As {@link #write(Path, OwnedPaths, String, Consumer)}, with the publication steps as a test seam ({@code null}: real). */
     static Result write(Path file, OwnedPaths owned, String expectedFingerprint, Consumer<ConfigDocument> edit,
             AtomicConfigWriter.FileOperations files) throws IOException {
+        return stage(file, owned, expectedFingerprint, edit, files).commit();
+    }
+
+    /**
+     * As {@link #write(Path, OwnedPaths, String, Consumer)}, but stops once the verified content is staged (written and
+     * forced to a temporary file beside the target), so several files can be prepared before any of them is replaced.
+     * {@link Staged#commit()} then performs the last-moment check - the target must still hold exactly the bytes the
+     * write was verified against, read again under the lock every load and write holds - and the replacement or the
+     * exclusive creation; {@link Staged#discard()} releases a staged file that will not be committed. Every check of the
+     * class description applies unchanged, so a staged write cannot overwrite operator content either: a file saved
+     * between staging and commit is kept and the commit reports {@link Outcome#FILE_CHANGED}.
+     *
+     * @param file                the config file
+     * @param owned               what this write may change
+     * @param expectedFingerprint as for {@link #write(Path, OwnedPaths, String, Consumer)}
+     * @param edit                the change, applied to a freshly read document; it must change only owned paths
+     * @return the staged write; when nothing needed staging, it already holds its result ({@link Staged#isPending()} is
+     *         {@code false}) - a refusal or a changed file has then already been logged once
+     * @throws IOException if staging the verified text fails
+     */
+    public static Staged stage(Path file, OwnedPaths owned, String expectedFingerprint, Consumer<ConfigDocument> edit)
+            throws IOException {
+        return stage(file, owned, expectedFingerprint, edit, null);
+    }
+
+    static Staged stage(Path file, OwnedPaths owned, String expectedFingerprint, Consumer<ConfigDocument> edit,
+            AtomicConfigWriter.FileOperations files) throws IOException {
         Path absolute = file.toAbsolutePath();
         Snapshot snapshot = Snapshot.read(file, owned, expectedFingerprint);
         if (snapshot.failure != null) {
             if (ANCHORED.equals(snapshot.reason)) {
-                return refuseAnchored(absolute, owned);
+                return Staged.settled(refuseAnchored(absolute, owned));
             }
             List<String> wouldChange = Collections.emptyList();
             if (snapshot.parsed && snapshot.failure == Outcome.FILE_CHANGED && !owned.isWholeFile()
@@ -226,89 +253,148 @@ public final class OperatorFileWriter {
                 Changes changes = Changes.of(snapshot.original, snapshot.candidate, owned);
                 wouldChange = describe(changes.values, changes.comments);
             }
-            return fail(snapshot.failure, absolute, owned, wouldChange, snapshot.reason);
+            return Staged.settled(fail(snapshot.failure, absolute, owned, wouldChange, snapshot.reason));
         }
         ConfigDocument candidate = snapshot.candidate;
         edit.accept(candidate);
         Changes changes = Changes.of(snapshot.original, candidate, owned);
         List<String> keys = describe(changes.values, changes.comments);
         if (!owned.isWholeFile() && changes.isEmpty()) {
-            return PlainData.plainEquals(snapshot.original.toPlain(), candidate.toPlain())
+            return Staged.settled(PlainData.plainEquals(snapshot.original.toPlain(), candidate.toPlain())
                     ? new Result(Outcome.UNCHANGED, "", candidate, snapshot.fingerprint, snapshot.fingerprint)
-                    : refuse(absolute, owned, keys, "the write would change keys it does not own");
+                    : refuse(absolute, owned, keys, "the write would change keys it does not own"));
         }
         String rendered = candidate.render();
         if (rendered.equals(snapshot.text)) {
-            return new Result(Outcome.UNCHANGED, "", candidate, snapshot.fingerprint, snapshot.fingerprint);
+            return Staged.settled(new Result(Outcome.UNCHANGED, "", candidate, snapshot.fingerprint, snapshot.fingerprint));
         }
         String failure = owned.isWholeFile()
                 ? verifyValues(snapshot.original, candidate, rendered, Collections.<List<String>>emptyList(), true)
                 : verify(snapshot.text, rendered, snapshot.original, candidate, changes, owned);
         if (failure != null) {
-            return refuse(absolute, owned, keys, failure);
+            return Staged.settled(refuse(absolute, owned, keys, failure));
         }
-        Publication publication = new Publication(file, absolute, owned, keys, files);
-        return ABSENT.equals(snapshot.fingerprint) ? publication.create(rendered, candidate)
-                : publication.replace(snapshot.fingerprint, rendered, candidate);
-    }
-
-    /** Publishing verified text: the last-moment re-read, then a replacement or an exclusive creation. */
-    private static final class Publication {
-
-        private final Path file;
-        private final Path absolute;
-        private final OwnedPaths owned;
-        private final List<String> keys;
-        private final AtomicConfigWriter.FileOperations files;
-
-        Publication(Path file, Path absolute, OwnedPaths owned, List<String> keys, AtomicConfigWriter.FileOperations files) {
-            this.file = file;
-            this.absolute = absolute;
-            this.owned = owned;
-            this.keys = keys;
-            this.files = files;
-        }
-
-        /**
-         * Replaces the file only while it still holds the bytes the gate verified against. The new content is staged
-         * (written and forced to a temporary file) first; the last-moment re-read then runs under the lock every load
-         * and write holds, immediately before the replacement, so an edit saved while the temporary file was being
-         * written is seen and kept (review round 1 IN-01).
-         */
-        Result replace(String fingerprint, String rendered, ConfigDocument candidate) throws IOException {
-            AtomicConfigWriter.StagedWrite staged = files == null ? AtomicConfigWriter.stage(file, rendered)
-                    : AtomicConfigWriter.stage(file, rendered, files);
-            boolean published = false;
-            synchronized (AtomicConfigWriter.WRITE_LOAD_LOCK) {
-                try {
-                    byte[] now = readOrNull(file);
-                    if (now != null && ConfigDocument.sha256(now).equals(fingerprint)) {
-                        staged.commit();
-                        published = true;
-                    }
-                } finally {
-                    if (!published) {
-                        staged.discard();
-                    }
-                }
-            }
-            return published ? written(rendered, candidate, fingerprint)
-                    : changed(absolute, owned, keys, "the file changed while the new content was being prepared");
-        }
-
-        /** Creates the file without ever replacing one that appeared after the gate read it absent. */
-        Result create(String rendered, ConfigDocument candidate) throws IOException {
+        if (ABSENT.equals(snapshot.fingerprint)) {
             Path parent = absolute.getParent();
             if (parent != null) {
                 Files.createDirectories(parent);
             }
-            AtomicConfigWriter.StagedWrite staged = files == null ? AtomicConfigWriter.stage(file, rendered)
-                    : AtomicConfigWriter.stage(file, rendered, files);
+        }
+        AtomicConfigWriter.StagedWrite temporary = files == null ? AtomicConfigWriter.stage(file, rendered)
+                : AtomicConfigWriter.stage(file, rendered, files);
+        return new Staged(file, absolute, owned, keys, rendered, candidate, snapshot.fingerprint,
+                ABSENT.equals(snapshot.fingerprint) ? null : snapshot.text, temporary);
+    }
+
+    /**
+     * A verified write whose content is staged and not yet published - or, when nothing needed staging, the write's
+     * settled result. Publishing re-reads the target under the lock every load and write holds, immediately before the
+     * replacement, and replaces it only while it still holds exactly the bytes the write was verified against (an edit
+     * saved while the content was being staged or while other files were being prepared is seen and kept: review round
+     * 1 IN-01, plan 17-65); a file the gate read absent is created exclusively, never replacing one that appeared.
+     */
+    public static final class Staged {
+
+        private final Result settled;
+        private final Path file;
+        private final Path absolute;
+        private final OwnedPaths owned;
+        private final List<String> keys;
+        private final String rendered;
+        private final ConfigDocument candidate;
+        private final String read;
+        private final String readText;
+        private final AtomicConfigWriter.StagedWrite temporary;
+        private boolean finished;
+
+        private Staged(Path file, Path absolute, OwnedPaths owned, List<String> keys, String rendered,
+                ConfigDocument candidate, String read, String readText, AtomicConfigWriter.StagedWrite temporary) {
+            this.settled = null;
+            this.file = file;
+            this.absolute = absolute;
+            this.owned = owned;
+            this.keys = keys;
+            this.rendered = rendered;
+            this.candidate = candidate;
+            this.read = read;
+            this.readText = readText;
+            this.temporary = temporary;
+        }
+
+        private Staged(Result settled) {
+            this.settled = settled;
+            this.file = null;
+            this.absolute = null;
+            this.owned = null;
+            this.keys = null;
+            this.rendered = null;
+            this.candidate = null;
+            this.read = null;
+            this.readText = null;
+            this.temporary = null;
+            this.finished = true;
+        }
+
+        static Staged settled(Result result) {
+            return new Staged(result);
+        }
+
+        /**
+         * Whether verified content is staged and waits for {@link #commit()}.
+         *
+         * @return {@code false} when the write was settled without staging (refused, file changed, or unchanged)
+         */
+        public boolean isPending() {
+            return settled == null;
+        }
+
+        /**
+         * The text the staged content was verified against - exactly what the file held when the gate read it - so a
+         * caller undoing a published write can put back precisely those bytes.
+         *
+         * @return the text read, or {@code null} when the file was absent or nothing is staged
+         */
+        public String readText() {
+            return readText;
+        }
+
+        /**
+         * The settled result of a write that needed no staging, or {@code null} while content is staged.
+         *
+         * @return the result or {@code null}
+         */
+        public Result settledResult() {
+            return settled;
+        }
+
+        /**
+         * Publishes the staged content when the target still holds exactly the bytes the write was verified against
+         * (or, for a file the gate read absent, while no file exists there); otherwise the staged file is released and
+         * the result is {@link Outcome#FILE_CHANGED}, logged once. A write that needed no staging returns its settled
+         * result. A staged write is committed at most once.
+         *
+         * @return the outcome: {@link Outcome#WRITTEN} when published
+         * @throws IOException if the replacement or the creation fails (the target is then as
+         *                     {@link AtomicConfigWriter} leaves it)
+         */
+        public Result commit() throws IOException {
+            if (settled != null) {
+                return settled;
+            }
+            if (finished) {
+                throw new IllegalStateException("A staged config write is committed or discarded only once");
+            }
+            finished = true;
+            boolean creating = ABSENT.equals(read);
             boolean published = false;
             synchronized (AtomicConfigWriter.WRITE_LOAD_LOCK) {
                 try {
-                    if (readOrNull(file) == null) {
-                        staged.commitAsNewFile();
+                    byte[] now = readOrNull(file);
+                    if (creating && now == null) {
+                        temporary.commitAsNewFile();
+                        published = true;
+                    } else if (!creating && now != null && ConfigDocument.sha256(now).equals(read)) {
+                        temporary.commit();
                         published = true;
                     }
                 } catch (FileAlreadyExistsException appeared) {
@@ -316,12 +402,29 @@ public final class OperatorFileWriter {
                     LOGGER.fine("Config creation lost the race to an existing file at " + absolute);
                 } finally {
                     if (!published) {
-                        staged.discard();
+                        temporary.discard();
                     }
                 }
             }
-            return published ? written(rendered, candidate, ABSENT)
-                    : changed(absolute, owned, keys, "a file appeared while the new content was being prepared");
+            if (published) {
+                return written(rendered, candidate, read);
+            }
+            return changed(absolute, owned, keys, creating ? "a file appeared while the new content was being prepared"
+                    : "the file changed while the new content was being prepared");
+        }
+
+        /**
+         * Releases staged content that will not be committed; nothing on disk other than the staged temporary file is
+         * touched. Does nothing after {@link #commit()} or for a settled write.
+         *
+         * @return whether no staged temporary file is left behind
+         */
+        public boolean discard() {
+            if (finished) {
+                return true;
+            }
+            finished = true;
+            return temporary.discard();
         }
     }
 

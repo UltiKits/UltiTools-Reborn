@@ -526,26 +526,63 @@ public abstract class AbstractConfigEntity {
      * {@link ConfigWriteRefusedException}; nothing is acknowledged then.
      */
     private void writeOperatorChanges(List<ModuleChange> changes) throws IOException {
+        if (changes.isEmpty()) { return; }
+        OperatorFileWriter.Result result = stageOperatorChanges(changes).commit();
+        if (!result.applied()) { throw refused(result.reason()); }
+        acknowledgeWritten(result.readFingerprint(), result.fingerprint(), result.document(), changes);
+    }
+
+    /**
+     * Prepares an operator's explicit changes for the configuration write gate and stages the verified file (see
+     * {@link #writeOperatorChanges}); a write the gate settles as refused, or a file that cannot be read or parsed,
+     * throws {@link ConfigWriteRefusedException} here, before anything is staged.
+     */
+    private OperatorFileWriter.Staged stageOperatorChanges(List<ModuleChange> changes) throws IOException {
         java.nio.file.Path target = ultiToolsPlugin.getConfigFile(configFilePath).toPath();
-        String shown = target.toAbsolutePath().toString();
         if (lastLoadUnparseable) {
-            throw new ConfigWriteRefusedException(shown, "the file could not be read or parsed when it was last loaded;"
-                    + " reload a valid file first");
+            throw refused("the file could not be read or parsed when it was last loaded; reload a valid file first");
         }
         ConfigLoadResult loaded = ConfigDocument.load(target);
-        if (protectFailedLoad(loaded)) { throw new ConfigWriteRefusedException(shown, "the file cannot be read or parsed"); }
+        if (protectFailedLoad(loaded)) { throw refused("the file cannot be read or parsed"); }
         ConfigDocument read = loaded.state() == ConfigLoadResult.State.LOADED ? loaded.document() : ConfigDocument.empty();
         List<Field> inserted = new ArrayList<>();
         for (ModuleChange change : changes) {
             if (change.leaf.isEmpty() && !read.contains(change.path)) { inserted.add(change.field); }
         }
-        OperatorFileWriter.Result result = OperatorFileWriter.write(target, saveOwnership(changes, read), expectedBase(loaded),
+        OperatorFileWriter.Staged staged = OperatorFileWriter.stage(target, saveOwnership(changes, read), expectedBase(loaded),
                 candidate -> {
                     apply(candidate, changes);
                     for (Field field : inserted) { addEntryComment(candidate, field); }
                 });
-        if (!result.applied()) { throw new ConfigWriteRefusedException(shown, result.reason()); }
-        acknowledgeWritten(result.readFingerprint(), result.fingerprint(), result.document(), changes);
+        if (!staged.isPending() && !staged.settledResult().applied()) { throw refused(staged.settledResult().reason()); }
+        return staged;
+    }
+
+    private ConfigWriteRefusedException refused(String reason) {
+        return new ConfigWriteRefusedException(ultiToolsPlugin.getConfigFile(configFilePath).getAbsolutePath(), reason);
+    }
+
+    /**
+     * A panel edit's changes: each touched setting as a whole, or - for a map setting edited leaf by leaf - each touched
+     * leaf, at the value the edit applied. The operator named exactly these in the panel (maintainer decision of
+     * 2026-10-04: write exactly the item the operator explicitly asked to change).
+     */
+    private List<ModuleChange> panelChanges(List<Field> touched, Map<Field, List<List<String>>> leaves) {
+        List<ModuleChange> changes = new ArrayList<>();
+        for (Field field : touched) {
+            Object mine = plainValue(field, true);
+            RawEntry read = acknowledgedRaw.get(field);
+            List<List<String>> fieldLeaves = leaves.get(field);
+            if (fieldLeaves == null) {
+                changes.add(new ModuleChange(field, Collections.<String>emptyList(), keys(field), mine, read));
+                continue;
+            }
+            for (List<String> leaf : fieldLeaves) {
+                List<String> path = new ArrayList<>(keys(field)); path.addAll(leaf);
+                changes.add(new ModuleChange(field, leaf, path, mine, read));
+            }
+        }
+        return changes;
     }
 
     private void warnNotWritten(List<String> keys) {
@@ -610,100 +647,8 @@ public abstract class AbstractConfigEntity {
         }
     }
 
-    private static final class PreparedSave {
-        private final ConfigDocument candidate;
-        private final Map<Field, Object> values;
-        private final List<String> overwritten;
-        private final boolean changed;
-        private Map<Field, RawEntry> raw;
-        private PreparedSave(ConfigDocument candidate, Map<Field, Object> values,
-                List<String> overwritten, boolean changed) {
-            this.candidate = candidate; this.values = values;
-            this.overwritten = overwritten; this.changed = changed;
-        }
-    }
-
-    @SuppressWarnings("PMD.NPathComplexity") // Keep candidate conversion, leaf ownership and disk comparison in their established order.
-    private PreparedSave prepareSave(List<Field> fields, Map<Field, List<List<String>>> leaves) throws IOException {
-        // Convert every candidate before reading or mutating the presentation document.
-        Map<Field, Object> values = currentPlain(fields, true);
-        ConfigLoadResult loaded = ConfigDocument.load(ultiToolsPlugin.getConfigFile(configFilePath).toPath());
-        if (protectFailedLoad(loaded)) {
-            throw new IOException("Cannot save " + configFilePath + ": current file is " + loaded.state());
-        }
-        ConfigDocument candidate = loaded.state() == ConfigLoadResult.State.LOADED
-                ? loaded.document() : ConfigDocument.empty();
-        boolean changed = false;
-        List<String> overwritten = new ArrayList<>();
-        Map<Field, RawEntry> raw = new LinkedHashMap<>();
-        for (Map.Entry<Field, Object> entry : values.entrySet()) {
-            Field field = entry.getKey();
-            List<String> path = keys(field);
-            if (leaves.containsKey(field)) {
-                Object baseline = savedSnapshot == null ? declaredDefaults.get(field) : savedSnapshot.get(field);
-                RawEntry previous = acknowledgedRaw.get(field);
-                Object rawBaseline = previous == null ? null : previous.value;
-                for (List<String> leaf : leaves.get(field)) {
-                    List<String> diskPath = new ArrayList<>(path); diskPath.addAll(leaf);
-                    Object next = mapLeaf(entry.getValue(), leaf);
-                    boolean existed = candidate.contains(diskPath);
-                    if (!existed || !PlainData.plainEquals(candidate.get(diskPath), next)) {
-                        if (previous != null && (mapContains(previous.value, leaf) != existed
-                                || !PlainData.plainEquals(mapLeaf(previous.value, leaf), candidate.get(diskPath)))) {
-                            overwritten.add("'" + String.join(".", diskPath) + "'");
-                        }
-                        candidate.set(diskPath, next); changed = true;
-                    }
-                    baseline = patchedMap(baseline, leaf, next);
-                    rawBaseline = patchedMap(rawBaseline, leaf, next);
-                }
-                entry.setValue(baseline);
-                raw.put(field, new RawEntry(true, rawBaseline));
-                continue;
-            }
-            boolean missing = !candidate.contains(path);
-            if (missing || !PlainData.plainEquals(candidate.get(path), entry.getValue())) {
-                RawEntry previous = acknowledgedRaw.get(entry.getKey());
-                if (previous != null && !previous.matches(candidate, path)) {
-                    overwritten.add("'" + fieldPath(entry.getKey()) + "'");
-                }
-                candidate.set(path, entry.getValue()); changed = true;
-            }
-            if (missing && !isTokenComment(entry.getKey())) { changed |= addEntryComment(candidate, entry.getKey()); }
-        }
-        changed |= updateTokenComments(candidate);
-        PreparedSave prepared = new PreparedSave(candidate, values, overwritten, changed);
-        prepared.raw = raw;
-        return prepared;
-    }
-
-    private void acknowledgeSave(PreparedSave prepared) {
-        if (prepared.changed && !prepared.overwritten.isEmpty()) { warnOverwritten(prepared.overwritten); }
-        document = prepared.candidate;
-        if (savedSnapshot == null) { savedSnapshot = new LinkedHashMap<>(declaredDefaults); }
-        savedSnapshot.putAll(prepared.values);
-        for (Field field : prepared.values.keySet()) {
-            RawEntry raw = prepared.raw == null ? null : prepared.raw.get(field);
-            acknowledgedRaw.put(field, raw == null ? new RawEntry(prepared.candidate, keys(field)) : raw);
-        }
-        savedFileFingerprint = fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath));
-    }
-
     private void acknowledgeRaw(ConfigDocument source, List<Field> fields) {
         for (Field field : fields) { acknowledgedRaw.put(field, new RawEntry(source, keys(field))); }
-    }
-
-    private void warnOverwritten(List<String> paths) {
-        // Values are deliberately omitted: even an ordinary field may hold a credential.
-        Logger logger = UltiTools.getInstance() == null ? LOGGER : UltiTools.getInstance().getLogger();
-        logger.log(Level.WARNING, "Configuration file " + ultiToolsPlugin.getConfigFile(configFilePath).getAbsolutePath()
-                + " had operator-edited keys overwritten: " + String.join(", ", paths));
-    }
-
-    private void write(ConfigDocument candidate) throws IOException {
-        File file = ultiToolsPlugin.getConfigFile(configFilePath);
-        Files.createDirectories(file.toPath().toAbsolutePath().getParent());
-        AtomicConfigWriter.write(file.toPath(), candidate.render());
     }
 
     private boolean isTokenComment(Field field) {
@@ -1549,6 +1494,15 @@ public abstract class AbstractConfigEntity {
      * field was silently skipped while persistence still ran and the caller still
      * received success.
      * <p>
+     * Since 6.3.0 a panel edit writes exactly the settings it touches - or, inside a map setting, exactly the touched
+     * entries - through the framework's configuration write gate: the operator named them, so their values replace
+     * what the file holds there, and every other key, value, comment and byte of the file stays as it is (maintainer
+     * decision of 2026-10-04, "what code may write, by file type"). It cannot overwrite other operator content: the
+     * gate owns only the touched keys and writes nothing unless every other line comes out byte-identical. When the
+     * gate refuses (anchors, a layout it cannot keep, a file that cannot be read or parsed, or one that changed while
+     * the write was prepared), this throws {@link ConfigWriteRefusedException} naming the reason and the entity is left
+     * exactly as before the call.
+     * <p>
      * Since 6.3.0 (SILENT-14, closing CR-01) this method validates the full post-update field
      * state - the same {@link #validateFields()} {@link #init(UltiToolsPlugin)}/{@link
      * #reload()} already use - before either document mutation or file persistence
@@ -1561,7 +1515,8 @@ public abstract class AbstractConfigEntity {
      * tracking is restored to its state before the call, and the {@code IOException} is rethrown.
      *
      * @param jsonObject the JSON object containing the new properties
-     * @throws IOException            if an I/O error occurs; the entity is then left as it was
+     * @throws IOException            if an I/O error occurs, or the write gate refused the write
+     *                                 ({@link ConfigWriteRefusedException}); the entity is then left as it was
      * @throws ConfigurationException with {@link com.ultikits.ultitools.exceptions.ErrorCode#CONFIG_VALIDATION_FAILED}
      *                                 if the post-update field state violates a {@code @Range}/
      *                                 {@code @NotEmpty}/{@code @Size}/{@code @Pattern} constraint
@@ -1574,9 +1529,7 @@ public abstract class AbstractConfigEntity {
             try {
                 List<Field> touchedFields = new ArrayList<>();
                 Map<Field, List<List<String>>> leaves = applyAndValidate(jsonObject, touchedFields, new ArrayList<>());
-                PreparedSave prepared = prepareSave(touchedFields, leaves);
-                if (prepared.changed) { write(prepared.candidate); }
-                acknowledgeSave(prepared);
+                writeOperatorChanges(panelChanges(touchedFields, leaves));
                 saved = true;
             } finally {
                 // A refusal or a failed file replacement leaves the entity exactly as before.
@@ -1585,10 +1538,12 @@ public abstract class AbstractConfigEntity {
         }
     }
 
-    /** Prepares one panel entity without acknowledging or replacing its file.
+    /** Prepares one panel entity without acknowledging or replacing its file: the touched settings or leaves are
+     * verified and staged through the configuration write gate (see {@link #updateProperties}); the commit re-checks
+     * the file's bytes immediately before its move.
      * @param properties proposed panel values
      * @return manager-owned write
-     * @throws IOException if reading or staging fails
+     * @throws IOException if reading or staging fails, or the gate refused the write ({@link ConfigWriteRefusedException})
      */
     @ApiStatus.Internal
     public final PanelWrite preparePanelWrite(JsonObject properties) throws IOException {
@@ -1597,18 +1552,13 @@ public abstract class AbstractConfigEntity {
             try {
                 List<Field> touched = new ArrayList<>();
                 Map<Field, List<List<String>>> leaves = applyAndValidate(properties, touched, new ArrayList<>());
-                PreparedSave prepared = prepareSave(touched, leaves);
+                List<ModuleChange> changes = panelChanges(touched, leaves);
                 java.nio.file.Path target = ultiToolsPlugin.getConfigFile(configFilePath).toPath();
-                byte[] original = Files.exists(target) ? Files.readAllBytes(target) : null;
-                AtomicConfigWriter.StagedWrite staged = null;
-                if (prepared.changed) {
-                    Files.createDirectories(target.toAbsolutePath().getParent());
-                    staged = AtomicConfigWriter.stage(target, prepared.candidate.render());
-                }
+                OperatorFileWriter.Staged staged = changes.isEmpty() ? null : stageOperatorChanges(changes);
                 Map<Field, Object> bound = new LinkedHashMap<>();
                 for (Field field : touched) { bound.put(field, ReflectionUtil.getFieldValue(this, field)); }
                 before.restore();
-                return new PanelWrite(before, prepared, target, original, staged, bound);
+                return new PanelWrite(before, changes, target, staged, bound);
             } catch (IOException | RuntimeException failure) {
                 before.restore(); throw failure;
             }
@@ -1646,20 +1596,31 @@ public abstract class AbstractConfigEntity {
     @ApiStatus.Internal
     public final class PanelWrite {
         private final PanelCheckpoint before;
-        private final PreparedSave prepared;
+        private final List<ModuleChange> changes;
         private final java.nio.file.Path target;
-        private final byte[] original;
-        private final AtomicConfigWriter.StagedWrite staged;
+        private final OperatorFileWriter.Staged staged;
+        private OperatorFileWriter.Result committed;
         private boolean attempted;
         private final Map<Field, Object> bound;
-        private PanelWrite(PanelCheckpoint before, PreparedSave prepared, java.nio.file.Path target,
-                byte[] original, AtomicConfigWriter.StagedWrite staged, Map<Field, Object> bound) {
-            this.before = before; this.prepared = prepared; this.target = target;
-            this.original = original; this.staged = staged; this.bound = bound;
+        private PanelWrite(PanelCheckpoint before, List<ModuleChange> changes, java.nio.file.Path target,
+                OperatorFileWriter.Staged staged, Map<Field, Object> bound) {
+            this.before = before; this.changes = changes; this.target = target;
+            this.staged = staged; this.bound = bound;
         }
-        /** @throws IOException if the existing atomic writer cannot replace this file */
+        /**
+         * Publishes this file through the configuration write gate only while it still holds exactly the bytes the
+         * write was verified against; a file the operator saved after staging is kept and refused.
+         * @throws IOException if the replacement fails, or {@link ConfigWriteRefusedException} when the file changed
+         *                     since it was staged (nothing was moved)
+         */
         public void commit() throws IOException {
-            if (staged != null) { attempted = true; staged.commit(); }
+            if (staged == null) { return; }
+            OperatorFileWriter.Result result;
+            try { result = staged.commit(); }
+            catch (IOException | RuntimeException failure) { attempted = true; throw failure; }
+            if (!result.applied()) { throw refused(result.reason()); }
+            attempted = result.outcome() == OperatorFileWriter.Outcome.WRITTEN;
+            committed = result;
         }
         /** Acknowledges only after every manager-owned replacement succeeds. */
         public void acknowledge() {
@@ -1667,18 +1628,21 @@ public abstract class AbstractConfigEntity {
                 for (Map.Entry<Field, Object> entry : bound.entrySet()) {
                     ReflectionUtil.setFieldValue(AbstractConfigEntity.this, entry.getKey(), entry.getValue());
                 }
-                acknowledgeSave(prepared);
+                if (committed != null) {
+                    acknowledgeWritten(committed.readFingerprint(), committed.fingerprint(), committed.document(), changes);
+                }
             }
         }
-        /** Restores an attempted target and all entity state; always discards its staged file.
+        /** Restores a target this write replaced to exactly the bytes it was verified against, and all entity state;
+         * always discards its staged file.
          * @throws IOException if physical recovery fails
          */
         public void rollback() throws IOException {
             synchronized (AbstractConfigEntity.this) {
                 try {
                     if (attempted) {
-                        if (original == null) { Files.deleteIfExists(target); }
-                        else { AtomicConfigWriter.write(target, new String(original, java.nio.charset.StandardCharsets.UTF_8)); }
+                        if (staged.readText() == null) { Files.deleteIfExists(target); }
+                        else { AtomicConfigWriter.write(target, staged.readText()); }
                     }
                 } finally {
                     before.restore(); discard();
