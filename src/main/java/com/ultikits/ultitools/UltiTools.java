@@ -465,6 +465,13 @@ public final class UltiTools extends JavaPlugin implements Localized {
      * the file must still hold the bytes read. Otherwise nothing is written and the gate logs one WARNING naming the
      * keys and the reason. A key the operator set, even to an explicit null, is never touched. A file that cannot be read
      * or parsed is never written (logged at SEVERE, as before).
+     * <p>
+     * The server reads this file through Bukkit's {@link YamlConfiguration}, which splits a flat dotted key
+     * ({@code ultipanel.capabilities.logs: false}) into a path, while the document layer keeps it one whole key. So a key
+     * counts as present when either reading holds it, and the edit is first rendered and read the way Bukkit reads it:
+     * if any value Bukkit reads for an existing key would change - a nested section added after a flat dotted key
+     * replaces it - nothing is written, and one WARNING names the file and that key, never a value (PR #611 local Codex
+     * run 2).
      *
      * @param configFile the {@code config.yml} file to migrate
      * @param logger     where to log a load or write failure
@@ -482,22 +489,26 @@ public final class UltiTools extends JavaPlugin implements Localized {
         }
 
         ConfigDocument document = loaded.document();
+        YamlConfiguration server = bukkitReading(configFile, loaded.fingerprint());
+        if (server == null) {
+            return false;
+        }
         Map<List<String>, Object> missing = new LinkedHashMap<>();
         Map<List<String>, List<String>> comments = new LinkedHashMap<>();
         for (Capability capability : Capability.values()) {
             if (capability.getConfigKey() == null) {
                 continue; // NONE — never written to config.yml
             }
-            addIfAbsent(document, missing, comments, capability.getConfigPath(), capability.getDefaultEnabled(),
+            addIfAbsent(document, server, missing, comments, capability.getConfigPath(), capability.getDefaultEnabled(),
                     capability.getCommentLines());
         }
-        addIfAbsent(document, missing, comments, "ultipanel.commands.blocklist",
+        addIfAbsent(document, server, missing, comments, "ultipanel.commands.blocklist",
                 DEFAULT_COMMAND_BLOCKLIST, COMMAND_BLOCKLIST_COMMENT);
-        addIfAbsent(document, missing, comments, "ultipanel.files.editable-roots",
+        addIfAbsent(document, server, missing, comments, "ultipanel.files.editable-roots",
                 DEFAULT_EDITABLE_ROOTS, EDITABLE_ROOTS_COMMENT);
-        addIfAbsent(document, missing, comments, "ultipanel.logging.action-log.max-size-bytes",
+        addIfAbsent(document, server, missing, comments, "ultipanel.logging.action-log.max-size-bytes",
                 1_048_576, ACTION_LOG_SIZE_COMMENT);
-        addIfAbsent(document, missing, comments, "ultipanel.logging.action-log.max-files",
+        addIfAbsent(document, server, missing, comments, "ultipanel.logging.action-log.max-files",
                 5, ACTION_LOG_FILES_COMMENT);
         if (missing.isEmpty()) {
             return false;
@@ -507,14 +518,23 @@ public final class UltiTools extends JavaPlugin implements Localized {
         for (List<String> path : missing.keySet()) {
             owned.value(path);
         }
+        java.util.function.Consumer<ConfigDocument> insert = candidate -> {
+            for (Map.Entry<List<String>, Object> entry : missing.entrySet()) {
+                candidate.set(entry.getKey(), entry.getValue());
+                candidate.setFrameworkComment(entry.getKey(), comments.get(entry.getKey()));
+            }
+        };
         try {
+            String changed = keyBukkitWouldReadDifferently(configFile, loaded.fingerprint(), server, insert);
+            if (changed != null) {
+                logger.warning("Configuration file " + configFile.getAbsolutePath() + " was not written: inserting the"
+                        + " missing panel keys would change how the server reads '" + changed + "' (a flat dotted key"
+                        + " and a nested section name the same setting). The built-in defaults answer for the missing"
+                        + " keys; the file is unchanged.");
+                return false;
+            }
             OperatorFileWriter.Result result = OperatorFileWriter.write(configFile.toPath(), owned.build(),
-                    loaded.fingerprint(), candidate -> {
-                        for (Map.Entry<List<String>, Object> entry : missing.entrySet()) {
-                            candidate.set(entry.getKey(), entry.getValue());
-                            candidate.setFrameworkComment(entry.getKey(), comments.get(entry.getKey()));
-                        }
-                    });
+                    loaded.fingerprint(), insert);
             return result.outcome() == OperatorFileWriter.Outcome.WRITTEN;
         } catch (IOException | RuntimeException e) {
             logger.log(Level.SEVERE, "Failed to persist capability migration: " + e.getMessage(), e);
@@ -522,15 +542,79 @@ public final class UltiTools extends JavaPlugin implements Localized {
         }
     }
 
-    /** Records {@code dottedPath} (framework keys, no key contains a dot) as missing when the document lacks it. */
-    private static void addIfAbsent(ConfigDocument document, Map<List<String>, Object> missing,
+    /**
+     * Records {@code dottedPath} (framework keys, no key contains a dot) as missing when neither the document nor the
+     * server's Bukkit reading of the same bytes holds it (a flat dotted key is present only in the latter).
+     */
+    private static void addIfAbsent(ConfigDocument document, YamlConfiguration server, Map<List<String>, Object> missing,
                                     Map<List<String>, List<String>> comments, String dottedPath, Object value,
                                     List<String> commentLines) {
         List<String> path = Arrays.asList(dottedPath.split("\\."));
-        if (!document.contains(path)) {
+        if (!document.contains(path) && !server.contains(dottedPath)) {
             missing.put(path, value);
             comments.put(path, commentLines);
         }
+    }
+
+    /**
+     * The file as the server reads it - Bukkit's {@link YamlConfiguration} over the same bytes the document was loaded
+     * from - or {@code null} when those bytes cannot be read again unchanged or Bukkit cannot parse them (nothing is
+     * written then; the next start tries again).
+     */
+    private static YamlConfiguration bukkitReading(File configFile, String fingerprint) {
+        String text = textIfUnchanged(configFile, fingerprint);
+        if (text == null) {
+            return null;
+        }
+        YamlConfiguration reading = new YamlConfiguration();
+        try {
+            reading.loadFromString(text);
+        } catch (InvalidConfigurationException | RuntimeException unparseable) {
+            return null;
+        }
+        return reading;
+    }
+
+    /** The file's text when its bytes still have {@code fingerprint}, else {@code null}. */
+    private static String textIfUnchanged(File configFile, String fingerprint) {
+        ConfigLoadResult again = ConfigDocument.load(configFile.toPath());
+        if (again.state() != ConfigLoadResult.State.LOADED || !again.fingerprint().equals(fingerprint)) {
+            return null;
+        }
+        try {
+            return new String(java.nio.file.Files.readAllBytes(configFile.toPath()), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (IOException unreadable) {
+            return null;
+        }
+    }
+
+    /**
+     * Renders {@code insert} on a fresh copy of the file and reads the result the way the server does: the first key
+     * whose value Bukkit would read differently than {@code before} does, or {@code null} when every existing key reads
+     * the same. A file that changed meanwhile, or a rendering Bukkit cannot read, names the whole file.
+     */
+    private static String keyBukkitWouldReadDifferently(File configFile, String fingerprint, YamlConfiguration before,
+                                                        java.util.function.Consumer<ConfigDocument> insert) {
+        ConfigLoadResult fresh = ConfigDocument.load(configFile.toPath());
+        if (fresh.state() != ConfigLoadResult.State.LOADED || !fresh.fingerprint().equals(fingerprint)) {
+            return "the whole file";
+        }
+        ConfigDocument candidate = fresh.document();
+        insert.accept(candidate);
+        YamlConfiguration after = new YamlConfiguration();
+        try {
+            after.loadFromString(candidate.render());
+        } catch (InvalidConfigurationException | RuntimeException unreadable) {
+            return "the whole file";
+        }
+        for (String key : before.getKeys(true)) {
+            Object was = before.get(key);
+            if (!(was instanceof org.bukkit.configuration.ConfigurationSection)
+                    && !java.util.Objects.equals(was, after.get(key))) {
+                return key;
+            }
+        }
+        return null;
     }
 
     /**
