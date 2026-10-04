@@ -25,8 +25,9 @@ import com.ultikits.ultitools.annotations.ConfigEntry;
  * UltiKits/UltiTools-Reborn#542, maintainer answer of 2026-09-29 ("rewrite in the current language
  * on every save"): on every framework write, a one-token comment is written in the server's current
  * language - keys already in the file included - and an upgraded server's existing file follows the
- * server's language after one start even when no value changed. Under Follow-up 21, edited writes
- * preserve untargeted content, order, comments and supported style, while layout may normalize.
+ * server's language after one start even when no value changed. Since the maintainer decision of
+ * 2026-10-04 ("what code may write, by file type"), the comment-only write at start-up goes through the
+ * config write gate: every byte outside the rewritten comment lines stays, or nothing is written.
  * A start with nothing semantically changed writes nothing (bytes and modification time unchanged).
  */
 @DisplayName("AbstractConfigEntity - one-token comments follow the server language on an existing file (#542)")
@@ -42,8 +43,9 @@ class ConfigCommentTokenUpgradeTest {
 
     /**
      * What an older build wrote, then an operator edited: header, values, own comments, a blank line.
-     * Edited writes may normalize this layout, but must preserve values, key order and untargeted
-     * comment text. No-op writes still preserve every byte.
+     * The blank line is a true blank line: a line of spaces would be normalized by the renderer, so under
+     * the 2026-10-04 decision the gate refuses the comment write on such a file
+     * ({@link #whitespaceOnlyBlankLineBlocksTheCommentRewrite}).
      */
     private static final String UPGRADED_FILE = "# Operator header line\n"
             + "\n"
@@ -52,7 +54,7 @@ class ConfigCommentTokenUpgradeTest {
             + "  limit: 25\n"
             + "  # My own note on the name\n"
             + "  name: Custom\n"
-            + "  \n"
+            + "\n"
             + "  # operator note on other\n"
             + "  other: 3\n";
 
@@ -123,7 +125,7 @@ class ConfigCommentTokenUpgradeTest {
         return configuration;
     }
 
-    // Follow-up 21 permits layout normalization on an edited write, not data/comment loss.
+    // The token comment line is the only line the comment-only write owns.
     private void assertPreserved(String limitComment) throws Exception {
         YamlConfiguration parsed = parse();
         assertThat(parsed.getInt("demo.limit")).isEqualTo(25);
@@ -150,6 +152,22 @@ class ConfigCommentTokenUpgradeTest {
         assertThat(config.name).isEqualTo("Custom");
         assertThat(config.other).isEqualTo(3);
         assertThat(config.isModifiedSinceSnapshot()).as("the shutdown save sees no change").isFalse();
+    }
+
+    @Test
+    @DisplayName("a line of spaces outside the comment: the comment write is refused and the file keeps every byte")
+    void whitespaceOnlyBlankLineBlocksTheCommentRewrite() throws Exception {
+        String spaced = UPGRADED_FILE.replace("Custom\n\n", "Custom\n  \n");
+        writeFile(spaced);
+        long mtime = pinModificationTime();
+
+        UpgradeConfig config = new UpgradeConfig(PATH);
+        config.init(plugin);
+
+        assertThat(readFile()).isEqualTo(spaced);
+        assertThat(file().toFile().lastModified()).isEqualTo(mtime);
+        assertThat(config.limit).isEqualTo(25);
+        assertThat(config.isModifiedSinceSnapshot()).isFalse();
     }
 
     @Test

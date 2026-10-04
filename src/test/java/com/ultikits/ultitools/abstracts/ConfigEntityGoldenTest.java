@@ -267,6 +267,12 @@ class ConfigEntityGoldenTest {
         }
         assertThat(config.setting).isEqualTo("inherited");
         String rendered = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
+        if (operation.equals("init") || operation.equals("reload")) {
+            // Maintainer 2026-10-04 (inventory A14, #600): a file using anchors or merge keys is never written
+            // automatically; the comment-only write at start-up and reload is refused and the bytes stay.
+            assertThat(rendered).isEqualTo(original);
+            return;
+        }
         assertThat(PlainData.plainEquals(read(rendered), expected)).isTrue();
         assertOrderOutsideTarget(read(rendered), expected, new ArrayList<>(), Arrays.asList("group", "setting"));
         assertThat(comments(rendered)).containsAll(comments(original));
