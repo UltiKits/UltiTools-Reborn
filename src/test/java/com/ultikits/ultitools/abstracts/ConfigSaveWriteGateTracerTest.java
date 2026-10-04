@@ -97,6 +97,15 @@ class ConfigSaveWriteGateTracerTest {
         }
     }
 
+    public static class SpawnPoint extends AbstractConfigEntity {
+        @ConfigEntry(path = "spawn")
+        org.bukkit.Location spawn = null;
+
+        public SpawnPoint(String path) {
+            super(path);
+        }
+    }
+
     public static class BlockScalar extends AbstractConfigEntity {
         @ConfigEntry(path = "motd")
         String motd = "a\nb\n";
@@ -358,6 +367,106 @@ class ConfigSaveWriteGateTracerTest {
         assertThat(coordinate(text, java.util.Arrays.asList("points", "a", "y"))).isEqualTo(7.0);
         assertThat(coordinate(text, java.util.Arrays.asList("points", "b", "x"))).isEqualTo(2.0);
         assertThat(warnings()).hasSize(1).allSatisfy(warning -> assertThat(warning).contains("'points.a'").doesNotContain("points.a.y"));
+    }
+
+    /**
+     * R2-01 (17-65 review round 2, sweep of R65-01's class): the reload merge treats a serializable value as one value
+     * too. The module changed {@code home} without saving and the operator edited one coordinate on disk: the reload
+     * takes the file's whole value (file wins, one conflict line naming the key, no value) - never a value mixed from
+     * both - and the next save writes nothing.
+     */
+    @Test
+    @DisplayName("R2-01: a reload never merges a serializable value field by field; the next save writes nothing mixed")
+    void reloadNeverMixesASerializableValue() throws Exception {
+        put("composite.yml", COMPOSITE);
+        Composite config = new Composite("composite.yml");
+        config.init(plugin);
+        config.home = new org.bukkit.util.Vector(10, 20, 30);
+        String edited = COMPOSITE.replace("y: 2.0", "y: 99.0");
+        put("composite.yml", edited);
+
+        countFromHere();
+        config.reload();
+
+        assertThat(config.home).isEqualTo(new org.bukkit.util.Vector(1, 99, 3));
+        String file = tempDir.resolve("composite.yml").toAbsolutePath().toString();
+        assertThat(warnings()).filteredOn(warning -> warning.contains("'home'")).hasSize(1)
+                .allSatisfy(warning -> assertThat(warning.replace(file, "")).doesNotContain("10.0", "20.0", "30.0"));
+        assertThat(warnings()).noneMatch(warning -> warning.contains("home.y"));
+        countFromHere();
+        config.save();
+        assertThat(read("composite.yml")).isEqualTo(edited);
+        assertThat(warnings()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("R2-01: a Location moved by the module and re-worlded by the operator is never merged into the operator's world")
+    void reloadNeverMixesALocation() throws Exception {
+        org.mockbukkit.mockbukkit.ServerMock server = MockBukkit.getMock();
+        org.bukkit.World world = server.addSimpleWorld("world");
+        server.addSimpleWorld("nether");
+        String text = "spawn:\n  ==: org.bukkit.Location\n  world: world\n  x: 0.5\n  y: 64.0\n  z: 0.5\n"
+                + "  pitch: 0.0\n  yaw: 0.0\n";
+        put("spawn.yml", text);
+        SpawnPoint config = new SpawnPoint("spawn.yml");
+        config.init(plugin);
+        config.spawn = new org.bukkit.Location(world, 100, 70, 100);
+        String edited = text.replace("world: world", "world: nether");
+        put("spawn.yml", edited);
+
+        countFromHere();
+        config.reload();
+
+        assertThat(config.spawn.getWorld().getName()).isEqualTo("nether");
+        assertThat(config.spawn.getX()).isEqualTo(0.5);
+        assertThat(config.spawn.getY()).isEqualTo(64.0);
+        assertThat(warnings()).filteredOn(warning -> warning.contains("'spawn'")).hasSize(1);
+        countFromHere();
+        config.save();
+        assertThat(read("spawn.yml")).isEqualTo(edited);
+        assertThat(warnings()).isEmpty();
+    }
+
+    /**
+     * R2-01 sweep, panel site: a panel edit of one field inside a serializable value edits that value as a whole - the
+     * value as the panel shows it (the file's) with the edited field - so the module's unsaved change of the same value
+     * is not mixed in, neither in memory nor by a later save.
+     */
+    @Test
+    @DisplayName("R2-01: a panel edit inside a serializable value replaces the shown value whole; no later save mixes it")
+    void panelEditInsideASerializableValueIsAWholeValueEdit() throws Exception {
+        put("composite.yml", COMPOSITE);
+        Composite config = new Composite("composite.yml");
+        config.init(plugin);
+        config.home = new org.bukkit.util.Vector(10, 20, 30);
+
+        com.google.gson.JsonObject edit = new com.google.gson.JsonObject();
+        edit.addProperty("home.y", 7.5);
+        countFromHere();
+        config.updateProperties(edit);
+
+        String expected = COMPOSITE.replace("y: 2.0", "y: 7.5");
+        assertThat(read("composite.yml")).isEqualTo(expected);
+        assertThat(config.home).isEqualTo(new org.bukkit.util.Vector(1, 7.5, 3));
+        config.save();
+        assertThat(read("composite.yml")).isEqualTo(expected);
+        assertThat(warnings()).isEmpty();
+    }
+
+    /** R2-01 sweep, operator-change site: map keys may not reach inside a value that is not a map. */
+    @Test
+    @DisplayName("R2-01: saveOperatorMapEntry refuses keys inside a serializable entry and writes nothing")
+    void operatorMapEntryKeysStopAtTheDeclaredMaps() throws Exception {
+        put("composite.yml", COMPOSITE);
+        Composite config = new Composite("composite.yml");
+        config.init(plugin);
+        config.points.put("a", new org.bukkit.util.Vector(5, 5, 5));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> config.saveOperatorMapEntry("points", "a", "y"))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("points");
+        assertThat(read("composite.yml")).isEqualTo(COMPOSITE);
+        config.saveOperatorMapEntry("points", "a");
+        assertThat(coordinate(read("composite.yml"), java.util.Arrays.asList("points", "a", "y"))).isEqualTo(5.0);
     }
 
     /**
