@@ -413,55 +413,6 @@ public abstract class AbstractConfigEntity {
     }
 
     /**
-     * Re-renders this configuration's token comments ({@code @ConfigEntry(comment = "{key}")},
-     * #542) with the owning module's catalogue as it is now, and writes them (#594).
-     * <p>
-     * A reload reads the module's configurations before it rebuilds the module's language, so the
-     * comment pass of that read resolved the tokens with the catalogue of the language the module ran
-     * with until then. {@code UltiToolsPlugin}'s reload calls this, through {@code ConfigManager},
-     * right after the rebuild, so a {@code language} switch applied by {@code /ul reload} reaches the
-     * comments too.
-     * <p>
-     * It is the comment-only write {@code load()} already performs: the document it writes is the
-     * one the last load read from the file, with only the token comment lines replaced. No value and
-     * no key is changed, so an operator's invalid value and a key deleted to reset it stay exactly as
-     * typed. Nothing is written when no token comment changed, when the last load could not read or
-     * parse the file, when the file changed on disk since this entity last read or wrote it (the next
-     * reload reads that edit first), or when the file uses YAML anchors, aliases or merge keys: the
-     * document layer re-renders such a file from its plain data once changed, which would expand
-     * them (one INFO line names the file). A failed write is logged only; unlike at load it does not
-     * mark the entity for the shutdown save, which writes in-memory values and so would replace an
-     * operator's invalid value or restore a deleted key.
-     * <p>
-     * Framework-internal: {@code public} solely because {@code ConfigManager} lives in another
-     * package. Module code should not call it.
-     *
-     * @since 6.3.0
-     */
-    @ApiStatus.Internal
-    public final void refreshTokenComments() {
-        if (!com.ultikits.ultitools.manager.ConfigManager.permitsConfigThread(ultiToolsPlugin, "refresh comments " + configFilePath)) { return; }
-        synchronized (this) {
-            if (document == null || ultiToolsPlugin == null || lastLoadUnparseable || pendingInitialization != null) { return; }
-            if (isFileModifiedSinceSnapshot()) { return; }
-            if (document.isAnchored()) {
-                LOGGER.info("Comments in " + configFilePath + " were not refreshed on reload: the file uses YAML "
-                        + "anchors, aliases or merge keys, which rewriting it would expand");
-                return;
-            }
-            if (!updateTokenComments(document)) { return; }
-            try {
-                write(document);
-                pendingCommentWrite = false;
-                savedFileFingerprint = fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath));
-            } catch (IOException failure) {
-                LOGGER.warning("Cannot rewrite comments in " + configFilePath + ": "
-                        + failure.getClass().getSimpleName() + "; they are rewritten by the next reload or save");
-            }
-        }
-    }
-
-    /**
      * Runs {@link #validateFields()} on the values a load just bound. A reload's refusal says that
      * fixing the file and reloading again is enough (#595); a refusal at load keeps its wording.
      */

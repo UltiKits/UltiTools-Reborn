@@ -386,17 +386,6 @@ public final class ConfigDocument {
     }
 
     /**
-     * Whether the document holds an anchor, an alias or a merge key. Such a document is re-rendered
-     * from its plain data once changed, which expands them (see the class description), so a caller
-     * that must change nothing but comments checks this first (#594).
-     *
-     * @return {@code true} if the file uses anchors, aliases or merge keys
-     */
-    public boolean isAnchored() {
-        return anchored;
-    }
-
-    /**
      * Serializes the document in the file's own style.
      *
      * @return the file text
