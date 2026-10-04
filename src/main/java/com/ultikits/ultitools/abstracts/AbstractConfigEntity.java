@@ -646,7 +646,7 @@ public abstract class AbstractConfigEntity {
         for (ModuleChange change : changes) {
             // Written on the line the file holds the setting on - a flat dotted key stays flat - and refused when the file
             // now holds it twice, since writing one form would leave the other (#612).
-            if (heldTwice(read, change.field)) { throw refused(heldTwiceReason(change.field) + ", then reload"); }
+            if (heldTwice(read, change.field)) { throw refused(heldTwiceReason(change.field) + "; delete one of them, then reload"); }
             change.relocate(keysIn(read, change.field));
         }
         for (ModuleChange change : changes) {
@@ -749,8 +749,8 @@ public abstract class AbstractConfigEntity {
 
     /** The refusal text for a setting held in more than one form: the setting path, never a value (#612). */
     private String heldTwiceReason(Field field) {
-        return "setting '" + fieldPath(field) + "' is written more than once (as a flat dotted key and as nested keys,"
-                + " or in two splits of its dots); keep one";
+        return "setting '" + fieldPath(field) + "' is written in two forms (as a flat dotted key and as nested keys,"
+                + " or in two splits of its dots)";
     }
 
     private Type declaredType(Field field) {
@@ -1225,7 +1225,11 @@ public abstract class AbstractConfigEntity {
             if (heldTwice(next, field)) { heldTwice.add(heldTwiceReason(field)); }
         }
         if (!heldTwice.isEmpty()) {
-            throw ConfigurationException.validationFailed(ultiToolsPlugin.getPluginName(), configFilePath, heldTwice);
+            // Not a value violation: the operator chooses which form stays (gate-1 R613-04).
+            throw new ConfigurationException(com.ultikits.ultitools.exceptions.ErrorCode.CONFIG_VALIDATION_FAILED,
+                    "Module '" + ultiToolsPlugin.getPluginName() + "' refused to load: configuration file '" + configFilePath
+                            + "' writes a setting in two forms: " + String.join("; ", heldTwice)
+                            + ". The file was not modified - delete one of the two forms and restart.");
         }
         // Presence describes the load input, never defaults/comment writes or a later save read.
         Map<String, Object> loadedPresence = next.toPlain();

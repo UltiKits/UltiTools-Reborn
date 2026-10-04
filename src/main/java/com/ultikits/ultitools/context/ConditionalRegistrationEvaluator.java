@@ -178,8 +178,8 @@ public final class ConditionalRegistrationEvaluator {
         if (readings.size() > 1) {
             throw new ConfigurationException(ErrorCode.CONFIG_VALIDATION_FAILED, "Configuration file '"
                     + configFile.getPath() + "': setting '" + condition.path() + "' read by @ConditionalOnConfig is"
-                    + " written more than once (as a flat dotted key and as nested keys, or in two splits of its dots);"
-                    + " keep one. The file was not modified.");
+                    + " written in two forms (as a flat dotted key and as nested keys, or in two splits of its dots);"
+                    + " delete one of them and restart. The file was not modified.");
         }
         return !readings.isEmpty() && Boolean.TRUE.equals(document.get(readings.get(0)));
     }
