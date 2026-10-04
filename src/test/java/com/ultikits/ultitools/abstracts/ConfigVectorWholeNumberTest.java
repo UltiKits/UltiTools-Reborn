@@ -236,6 +236,49 @@ class ConfigVectorWholeNumberTest {
         assertThat(records).isEmpty();
     }
 
+    @Test
+    void aPanelEditOfASettingRecordsTheLoadedValueSoALaterModuleChangeIsWritten() throws Exception {
+        // PR #611 local Codex run 1 (P2): the panel writes the file's value with one field changed (y: 64 kept as
+        // written), but the setting's baseline must be the value the module holds (64.0), or the setting stays
+        // "unsaved" and the module's next change of it is refused as not started from the file.
+        Vectors config = load();
+        JsonObject edit = new JsonObject();
+        edit.addProperty("home.x", 2);
+
+        config.updateProperties(edit);
+
+        assertThat(read()).contains("home:\n  ==: Vector\n  x: 2.0\n  y: 64\n  z: 3.0\n");
+        assertThat(config.unsavedEntryPaths()).isEmpty();
+        assertThat(config.isModifiedSinceSnapshot()).isFalse();
+
+        config.home = new Vector(5, 6, 7);
+        config.save();
+
+        assertThat(read()).contains("home:\n  ==: Vector\n  x: 5.0\n  y: 6.0\n  z: 7.0\n");
+        assertThat(config.unsavedEntryPaths()).isEmpty();
+        assertThat(records).isEmpty();
+    }
+
+    @Test
+    void aPanelEditOfAMapEntryRecordsTheLoadedValueSoALaterModuleChangeIsWritten() throws Exception {
+        // Same finding, map-entry branch: points.a keeps y: 64 / z: 2 on disk; the baseline holds the module's doubles.
+        Vectors config = load();
+        JsonObject edit = new JsonObject();
+        edit.addProperty("points.a.x", 7.5);
+
+        config.updateProperties(edit);
+
+        assertThat(config.unsavedEntryPaths()).isEmpty();
+        assertThat(config.isModifiedSinceSnapshot()).isFalse();
+
+        config.points.put("a", new Vector(8, 8, 8));
+        config.save();
+
+        assertThat(read()).contains("  a:\n    ==: Vector\n    x: 8.0\n    y: 8.0\n    z: 8.0\n");
+        assertThat(config.unsavedEntryPaths()).isEmpty();
+        assertThat(records).isEmpty();
+    }
+
     private void write(String text) throws Exception {
         Files.write(tempDir.resolve("v.yml"), text.getBytes(StandardCharsets.UTF_8));
     }
