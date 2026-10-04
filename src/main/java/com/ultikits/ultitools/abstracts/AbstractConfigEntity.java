@@ -438,6 +438,10 @@ public abstract class AbstractConfigEntity {
      * moves (maintainer decision of 2026-10-04, "what code may write, by file type": write exactly the item the
      * operator explicitly asked to change).
      * <p>
+     * Naming a setting declared as a {@link Map} writes the whole map as the module holds it: every entry the operator
+     * added or edited by hand in that map since it was read is replaced or dropped. For a command that changes one
+     * entry - one rule, one warp - use {@link #saveOperatorMapEntry(String, String...)}, which writes only that entry.
+     * <p>
      * <b>Why it cannot overwrite other operator content.</b> The write goes through the framework's configuration write
      * gate owning only the named settings' keys: after rendering, every line outside them must be byte-identical to the
      * file as it is at write time, or nothing is written. When the gate refuses - the file cannot be read or parsed,
