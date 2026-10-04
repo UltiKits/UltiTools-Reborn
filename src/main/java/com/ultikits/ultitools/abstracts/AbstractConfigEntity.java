@@ -105,6 +105,13 @@ public abstract class AbstractConfigEntity {
     private final Set<String> warnedCommentKeys = ConcurrentHashMap.newKeySet();
 
     /**
+     * The composite values a panel edit is about to rewrite whole, as last read, per setting and unit; set by
+     * {@code applyAndValidate} and consumed by {@code panelChanges} under the entity monitor (route change, R3-01).
+     */
+    @Getter(AccessLevel.NONE)
+    private final Map<Field, Map<List<String>, RawEntry>> compositeReads = new LinkedHashMap<>();
+
+    /**
      * The value ranges a config binding (#531) imposes on this entity's keys, by {@code @ConfigEntry}
      * path, then by rule text. A panel write ({@link #updateProperties}, {@link
      * #validateProposedProperties}) is refused when it sets a bound key outside its range, the same
@@ -202,6 +209,11 @@ public abstract class AbstractConfigEntity {
         private final Object value;
         private final boolean readPresent;
         private final Object readValue;
+        /**
+         * For a panel edit inside a composite value: the whole value the entity last read there, which the file must still
+         * hold at write time (17-65 route change, R3-01); {@code null} when the file's value is not a precondition.
+         */
+        private RawEntry required;
 
         private ModuleChange(Field field, List<String> leaf, List<String> path, Object mine, RawEntry read) {
             this.field = field; this.leaf = leaf; this.path = path;
@@ -591,6 +603,15 @@ public abstract class AbstractConfigEntity {
         ConfigLoadResult loaded = ConfigDocument.load(target);
         if (protectFailedLoad(loaded)) { throw refused("the file cannot be read or parsed"); }
         ConfigDocument read = loaded.state() == ConfigLoadResult.State.LOADED ? loaded.document() : ConfigDocument.empty();
+        for (ModuleChange change : changes) {
+            // A field edited inside a composite value is written as the whole value built from what was last read: only
+            // while the file still holds exactly that value - observed on the read the gate verifies against - never
+            // rebuilt over an edit made since (17-65 route change after review round 3, R3-01).
+            if (change.required != null && !change.holds(read.contains(change.path), read.get(change.path),
+                    change.required.present, change.required.value)) {
+                throw refused(describeKey(change.field, change.leaf) + ": the file changed since it was read; reload first");
+            }
+        }
         List<Field> inserted = new ArrayList<>();
         for (ModuleChange change : changes) {
             if (change.leaf.isEmpty() && !read.contains(change.path)) { inserted.add(change.field); }
@@ -618,16 +639,22 @@ public abstract class AbstractConfigEntity {
         for (Field field : touched) {
             Object mine = plainValue(field, true);
             RawEntry read = acknowledgedRaw.get(field);
+            Map<List<String>, RawEntry> required = compositeReads.get(field);
             List<List<String>> fieldLeaves = leaves.get(field);
             if (fieldLeaves == null) {
-                changes.add(new ModuleChange(field, Collections.<String>emptyList(), keys(field), mine, read));
+                ModuleChange change = new ModuleChange(field, Collections.<String>emptyList(), keys(field), mine, read);
+                change.required = required == null ? null : required.get(Collections.<String>emptyList());
+                changes.add(change);
                 continue;
             }
             for (List<String> leaf : fieldLeaves) {
                 List<String> path = new ArrayList<>(keys(field)); path.addAll(leaf);
-                changes.add(new ModuleChange(field, leaf, path, mine, read));
+                ModuleChange change = new ModuleChange(field, leaf, path, mine, read);
+                change.required = required == null ? null : required.get(leaf);
+                changes.add(change);
             }
         }
+        compositeReads.clear();
         return changes;
     }
 
@@ -1784,6 +1811,7 @@ public abstract class AbstractConfigEntity {
         }
         Map<Field, Object> proposed = new LinkedHashMap<>();
         Map<Field, List<List<String>>> leaves = new LinkedHashMap<>();
+        compositeReads.clear();
         Set<Field> whole = new java.util.LinkedHashSet<>();
         List<String> refused = new ArrayList<>();
         JsonObject displayed = toJsonObject();
@@ -1804,6 +1832,7 @@ public abstract class AbstractConfigEntity {
                 proposed.put(owner, raw); leaves.remove(owner); whole.add(owner); continue;
             }
             Object source = document == null ? null : document.get(keys(owner));
+            RawEntry lastRead = acknowledgedRaw.get(owner);
             List<List<String>> matches = new ArrayList<>();
             matchMapPaths(source, path.substring(fieldPath(owner).length() + 1), new ArrayList<>(), matches);
             if (matches.size() != 1) {
@@ -1818,8 +1847,15 @@ public abstract class AbstractConfigEntity {
                 // in (17-65 review round 2 R2-01).
                 List<String> unit = new ArrayList<>(match.subList(0, depth));
                 List<String> inside = match.subList(depth, match.size());
+                // The unit is built from the whole value as last read, and that value becomes a precondition checked on
+                // the file at write time (route change, R3-01): an edit made on disk since is refused, never rebuilt over.
+                boolean readHolds = lastRead != null && lastRead.present && (unit.isEmpty() || mapContains(lastRead.value, unit));
+                if (!readHolds) { refused.add("'" + path + "': the file changed since it was read; reload first"); continue; }
+                Object readUnit = unit.isEmpty() ? lastRead.value : mapLeaf(lastRead.value, unit);
+                compositeReads.computeIfAbsent(owner, ignored -> new LinkedHashMap<>())
+                        .putIfAbsent(unit, new RawEntry(true, readUnit));
                 if (unit.isEmpty()) {
-                    Object shown = whole.contains(owner) && proposed.containsKey(owner) ? proposed.get(owner) : source;
+                    Object shown = whole.contains(owner) && proposed.containsKey(owner) ? proposed.get(owner) : readUnit;
                     proposed.put(owner, patchedMap(shown, inside, raw)); leaves.remove(owner); whole.add(owner);
                     continue;
                 }
@@ -1827,7 +1863,7 @@ public abstract class AbstractConfigEntity {
                 if (!(tree instanceof Map)) { refused.add("'" + path + "': not a map entry"); continue; }
                 List<List<String>> touched = leaves.get(owner);
                 Object shown = whole.contains(owner) || touched != null && touched.contains(unit) ? mapLeaf(tree, unit)
-                        : mapLeaf(source, unit);
+                        : readUnit;
                 replaceMapLeaf(tree, unit, patchedMap(shown, inside, raw));
                 proposed.put(owner, tree);
                 if (!whole.contains(owner) && (touched == null || !touched.contains(unit))) {
