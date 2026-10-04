@@ -662,7 +662,8 @@ public class PluginManager {
      * identity, so no caller has to. After the container is closed and before the module is
      * delisted, the configuration layer releases the module's configuration entities through
      * {@link ConfigManager#unregisterAll(UltiToolsPlugin)} (#507); when the unload is part of
-     * {@link #close()}, their shutdown save runs first.
+     * {@link #close()}, their never-saved changes are first named in one warning and dropped - nothing is
+     * written at stop, unload or replacement as of 6.3.0.
      *
      * <p>
      * The three registries a module can file registrations in by name -- tab-completion

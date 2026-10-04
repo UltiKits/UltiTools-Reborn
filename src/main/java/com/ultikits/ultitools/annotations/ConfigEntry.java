@@ -24,8 +24,10 @@ public @interface ConfigEntry {
     String path() default "";
 
     /**
-     * A single trimmed {@code {key}} token resolves through the module catalogue on every
-     * load and write, so the entry's comment follows the server's language. Only comment lines
+     * A single trimmed {@code {key}} token resolves through the module catalogue, so the entry's
+     * comment follows the server's language: start-up and {@code /ul reload} rewrite the framework's
+     * own comment lines in the current language, and a write that inserts the entry writes its comment;
+     * a save, an operator change or a panel edit rewrites no comment. Only comment lines
      * the framework can identify as its own are rewritten: the entry's comment, as a whole or as
      * its trailing run of lines, equal byte for byte (at the entry's column, {@code "# "} and the
      * text) to the framework's rendering of the token in a catalogue

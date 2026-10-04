@@ -69,11 +69,15 @@ import org.yaml.snakeyaml.serializer.Serializer;
  * only what differs: an equal value keeps its node, a changed map is merged key by key, a
  * same-size list element by element, a changed string keeps its quote style, and every replaced node keeps
  * its comments. {@link #render()} serializes the whole node tree through SnakeYAML, preserving content,
- * comments and document style while normalizing operator spacing. Comments on individual list items are
- * kept only while the list keeps its length - the same as Bukkit, which keeps none.
+ * comments and document style; the rendering itself may normalize operator spacing. Comments on individual
+ * list items are kept only while the list keeps its length - the same as Bukkit, which keeps none.
  * A document holding an anchor, an alias
  * or a merge key is re-rendered from its plain data once changed (every value equal, anchors expanded, the
  * comments of keys that still exist carried over), as Bukkit renders every file.
+ * <p>
+ * No caller publishes a rendering as it is: every write to a configuration file goes through
+ * {@link OperatorFileWriter}, which refuses a rendering that would change any byte outside the keys the write
+ * owns (so normalized spacing or an expanded anchor is never written) and never writes an anchored file.
  * <p>
  * <b>Comments.</b> SnakeYAML attaches a comment to the node after it. Two placements are adjusted when the
  * file is read, without changing the rendered text: the file header (the comment lines before the first

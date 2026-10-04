@@ -1018,10 +1018,11 @@ public abstract class AbstractConfigEntity {
      */
     /**
      * Whether the last attempt to read this configuration's file failed to parse (#510) - in
-     * practice, whether the file on disk holds invalid YAML. The shutdown save skips such a
-     * configuration and says so, instead of overwriting a file the framework could not read.
+     * practice, whether the file on disk holds invalid YAML. Nothing writes configuration at server
+     * stop as of 6.3.0; the stop report names such a configuration once as left alone, instead of
+     * listing unsaved keys, and no write path ever replaces a file the framework could not read.
      * <p>
-     * Framework-internal: this method is called only by {@code ConfigManager#saveAll()} and is
+     * Framework-internal: this method is called only by {@code ConfigManager}'s stop and unload report and is
      * {@code public} solely because {@code ConfigManager} lives in another package. Module code
      * should not call it.
      *
@@ -1103,7 +1104,7 @@ public abstract class AbstractConfigEntity {
      * of the same length ({@code 60} to {@code 90}, {@code true} to {@code TRUE}), which size alone
      * cannot see, and modification time is coarse or preserved on common paths (two-second
      * resolution on FAT and many network shares, {@code cp -p}, {@code rsync -t}, editors that
-     * restore it). Configuration files are small and this runs only at load, save and shutdown.
+     * restore it). Configuration files are small and this runs only at load, reload and write time.
      *
      * @param file the configuration file, possibly {@code null} or missing
      * @return {@code "absent"} for a missing file, {@code "unreadable"} if it cannot be read, or the
@@ -1349,7 +1350,7 @@ public abstract class AbstractConfigEntity {
      * operator's comment, or the lines above the framework's run, are not owned), the gate verifies that every
      * other byte of the file is unchanged after rendering and writes nothing when the file no longer holds the
      * bytes {@code loaded} read, and it refuses a file using anchors. A refusal or an I/O failure logs one warning
-     * and changes no save state, so no later save or shutdown write follows from it (#603).
+     * and changes no save state, so no later save follows from it (#603); nothing is written at stop.
      *
      * @param loaded the load being bound (LOADED)
      * @return the gate's result, or {@code null} after an I/O failure
@@ -1388,7 +1389,7 @@ public abstract class AbstractConfigEntity {
      * comment differs from the current language, nor when this reload's own load already attempted a comment write
      * that was refused or failed: that attempt logged the file's one warning for this reload, and the next reload
      * tries again (17-64 review round 1 R1-03). A refusal or a failure logs one warning and changes no save
-     * state, so no later save or shutdown write follows from it (#603, #597 review F2). Only when the fresh read
+     * state, so no later save follows from it (#603, #597 review F2); nothing is written at stop. Only when the fresh read
      * still held exactly the bytes this entity bound does the entity record what the gate wrote as its last read;
      * otherwise the operator's newer file stays a change on disk.
      * <p>
