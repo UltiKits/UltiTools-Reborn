@@ -264,23 +264,12 @@ class ConfigEntityGoldenTest {
         }
         assertThat(config.setting).isEqualTo("inherited");
         String rendered = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
-        if (operation.equals("init") || operation.equals("reload") || operation.equals("save")) {
-            // Maintainer 2026-10-04 (inventory A14, #600): a file using anchors or merge keys is never written
-            // automatically; the comment-only write at start-up and reload is refused and the bytes stay. A save
-            // writes only what the module changed and never a comment (17-65 save rule), so with nothing changed
-            // it writes nothing either.
-            assertThat(rendered).isEqualTo(original);
-            return;
-        }
+        // Maintainer 2026-10-04 (inventory A14, #600): a file using anchors or merge keys is never written
+        // automatically; the comment-only write at start-up and reload is refused and the bytes stay. A save writes
+        // only what the module changed and never a comment, and a panel edit writes only what it changes (17-65), so
+        // with nothing changed neither writes anything either - the merge-key file keeps every byte.
+        assertThat(rendered).isEqualTo(original);
         assertThat(PlainData.plainEquals(read(rendered), expected)).isTrue();
-        assertOrderOutsideTarget(read(rendered), expected, new ArrayList<>(), Arrays.asList("group", "setting"));
-        assertThat(comments(rendered)).containsAll(comments(original));
-        com.ultikits.ultitools.config.document.ConfigDocument document =
-                com.ultikits.ultitools.config.document.ConfigDocument.load(file).document();
-        assertThat(document.blockComment(Arrays.asList("group", "setting"))).containsExactly("Owned setting note");
-        assertThat(document.blockComment(Arrays.asList("defaults"))).contains("Anchor owner note");
-        assertThat(document.blockComment(Arrays.asList("defaults", "setting"))).isEmpty();
-        assertThat(document.blockComment(Arrays.asList("defaults", "sibling"))).isEmpty();
         byte[] bytes = Files.readAllBytes(file);
         Files.setLastModifiedTime(file, FileTime.fromMillis(946684800000L));
         FileTime time = Files.getLastModifiedTime(file);

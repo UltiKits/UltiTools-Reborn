@@ -192,7 +192,8 @@ class ConfigUnreadableFileTest {
         int limitBefore = config.limit;
         byte[] before = Files.readAllBytes(file());
         try (MockedStatic<AtomicConfigWriter> writer = Mockito.mockStatic(AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
-            writer.when(() -> AtomicConfigWriter.write(Mockito.eq(file()), Mockito.anyString()))
+            // A panel edit publishes through the config write gate, which stages before it replaces (17-65).
+            writer.when(() -> AtomicConfigWriter.stage(Mockito.eq(file()), Mockito.anyString()))
                     .thenThrow(new IOException("injected write failure"));
             assertThatThrownBy(() -> config.updateProperties(panel())).isInstanceOf(IOException.class);
         }

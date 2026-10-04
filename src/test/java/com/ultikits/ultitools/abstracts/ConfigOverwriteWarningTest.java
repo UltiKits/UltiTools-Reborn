@@ -35,8 +35,8 @@ import com.ultikits.ultitools.utils.TestHelper;
 /**
  * A save never writes over what the operator changed on disk (maintainer decision 2026-10-04, "what code may write, by
  * file type", which supersedes #527's overwrite-and-warn): a module change whose setting the file no longer holds as
- * it was read is not written, and one warning names those keys, never a value. Panel writes keep the #527 warning
- * until plan 17-65 task 2 routes them through the gate.
+ * it was read is not written, and one warning names those keys, never a value. A panel edit writes exactly the keys
+ * the operator named in it, with their consent, and warns about nothing.
  */
 class ConfigOverwriteWarningTest {
     private static final String PATH = "overwrite.yml";
@@ -77,7 +77,7 @@ class ConfigOverwriteWarningTest {
         manager.register(plugin, config);
         return config;
     }
-    /** #527 overwrite warnings (panel writes) and the save rule's not-written warnings. */
+    /** The save rule's not-written warnings (and any #527 "overwritten" warning, which must no longer occur). */
     private List<String> warnings() {
         ArgumentCaptor<Level> levels = ArgumentCaptor.forClass(Level.class);
         ArgumentCaptor<String> messages = ArgumentCaptor.forClass(String.class);
@@ -161,15 +161,16 @@ class ConfigOverwriteWarningTest {
     }
 
     @Test
-    void partialPanelWriteWarnsOnlyForTheFieldItActuallyReplaces() throws Exception {
+    void partialPanelWriteReplacesOnlyTheKeyTheOperatorNamedWithoutWarning() throws Exception {
         Values config = registered();
         put("a: operator-a\nb: operator-b\napiToken: original-token\n");
         JsonObject panel = new JsonObject();
         panel.addProperty("b", "panel-b");
         config.updateProperties(panel);
-        assertThat(warnings()).hasSize(1);
-        assertThat(warnings().get(0)).contains(PATH, "'b'").doesNotContain("'a'");
-        assertThat(new String(Files.readAllBytes(file()), StandardCharsets.UTF_8)).contains("a: operator-a");
+        // The panel edit is the operator's consent for 'b' (maintainer decision 2026-10-04, item 3); 'a' stays.
+        assertThat(warnings()).isEmpty();
+        assertThat(new String(Files.readAllBytes(file()), StandardCharsets.UTF_8))
+                .isEqualTo("a: operator-a\nb: panel-b\napiToken: original-token\n");
     }
 
     @org.junit.jupiter.params.ParameterizedTest
@@ -182,7 +183,9 @@ class ConfigOverwriteWarningTest {
         assertThat(warnings()).isEmpty();
         assertThat(new String(Files.readAllBytes(file()), StandardCharsets.UTF_8))
                 .contains("# Operator header", "unknown: kept");
-        assertThat(config.isFileModifiedSinceSnapshot()).isFalse();
+        // The panel write saw a file the operator had edited since the load: the entity keeps the bytes it bound as
+        // last read, so that edit stays visible as a change on disk (17-63 review WR-01 rule; never a fresh read).
+        assertThat(config.isFileModifiedSinceSnapshot()).isTrue();
         byte[] afterPanel = Files.readAllBytes(file());
         config.b = "code-b";
         config.save();
