@@ -868,7 +868,7 @@ public final class ConfigDocument {
         return result.append(text, copied, text.length()).toString();
     }
 
-    private static String sha256(byte[] bytes) {
+    static String sha256(byte[] bytes) {
         try {
             StringBuilder hex = new StringBuilder(64);
             for (byte b : MessageDigest.getInstance("SHA-256").digest(bytes)) {

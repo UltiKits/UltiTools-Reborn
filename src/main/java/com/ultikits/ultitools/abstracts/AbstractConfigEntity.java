@@ -36,6 +36,8 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.config.document.ConfigDocument;
 import com.ultikits.ultitools.config.document.ConfigLoadResult;
 import com.ultikits.ultitools.config.document.AtomicConfigWriter;
+import com.ultikits.ultitools.config.document.OperatorFileWriter;
+import com.ultikits.ultitools.config.document.OwnedPaths;
 import com.ultikits.ultitools.config.document.PlainData;
 import com.ultikits.ultitools.config.convert.ConverterRegistry;
 import com.ultikits.ultitools.config.convert.ConversionResult;
@@ -696,35 +698,77 @@ public abstract class AbstractConfigEntity {
         }
         validateFields();
         document = next;
-        boolean changed = false;
+        Map<Field, Object> inserted = new LinkedHashMap<>();
         if (initialize) {
             for (Field field : missing) {
                 Object value = plainValue(field, true);
-                next.set(keys(field), value); addEntryComment(next, field);
-                baseline.put(field, value); changed = true;
+                inserted.put(field, value); baseline.put(field, value);
             }
         }
-        boolean commentsChanged = updateTokenComments(next);
         pendingCommentWrite = false;
-        if (deferInitialization && (changed || commentsChanged)) {
-            pendingInitialization = new PendingInitialization(next, baseline);
-            lastLoadedPresence = loadedPresence;
-            return;
-        }
-        if (changed) { write(next); }
-        else if (commentsChanged) {
-            try { write(next); }
-            catch (IOException failure) {
-                pendingCommentWrite = true;
-                LOGGER.warning("Cannot rewrite comments in " + configFilePath + ": "
-                        + failure.getClass().getSimpleName() + "; pending for retry");
+        if (!inserted.isEmpty() && !deferInitialization) {
+            // On a refusal the declared defaults run in memory and the raw acknowledgement keeps the keys absent.
+            ConfigDocument written = insertMissingKeys(loaded, inserted);
+            if (written != null) { document = written; }
+        } else {
+            for (Map.Entry<Field, Object> entry : inserted.entrySet()) {
+                next.set(keys(entry.getKey()), entry.getValue()); addEntryComment(next, entry.getKey());
+            }
+            boolean commentsChanged = updateTokenComments(next);
+            if (deferInitialization && (!inserted.isEmpty() || commentsChanged)) {
+                pendingInitialization = new PendingInitialization(next, baseline);
+                lastLoadedPresence = loadedPresence;
+                return;
+            }
+            if (commentsChanged) {
+                try { write(next); }
+                catch (IOException failure) {
+                    pendingCommentWrite = true;
+                    LOGGER.warning("Cannot rewrite comments in " + configFilePath + ": "
+                            + failure.getClass().getSimpleName() + "; pending for retry");
+                }
             }
         }
         lastLoadedPresence = loadedPresence;
         savedSnapshot = baseline;
-        acknowledgeRaw(next, configEntryFields());
+        acknowledgeRaw(document, configEntryFields());
         savedFileFingerprint = fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath));
         for (String conflict : conflicts) { LOGGER.warning("Configuration " + configFilePath + ": " + conflict); }
+    }
+
+    /**
+     * Inserts the declared keys {@code init} found missing, each with its comment, through the config write
+     * gate ({@link OperatorFileWriter}). This cannot overwrite operator content: the write owns only the
+     * inserted keys and the framework's token comments, the gate verifies that every other byte of the file
+     * is unchanged after rendering (layout included) and writes nothing when the file no longer holds the
+     * bytes {@code loaded} read. When it refuses, the gate has logged one warning naming the file and the keys,
+     * the fields keep their declared defaults in memory, and the file keeps its bytes.
+     *
+     * @param loaded   the load this init bound (LOADED or ABSENT)
+     * @param inserted the missing fields and their declared default values, as plain data
+     * @return the document now on disk, or {@code null} when nothing was written
+     * @throws IOException if publishing the verified text fails
+     */
+    private ConfigDocument insertMissingKeys(ConfigLoadResult loaded, Map<Field, Object> inserted) throws IOException {
+        boolean absent = loaded.state() != ConfigLoadResult.State.LOADED;
+        OwnedPaths owned = OwnedPaths.wholeFile();
+        if (!absent) {
+            OwnedPaths.Builder builder = OwnedPaths.builder();
+            for (Field field : inserted.keySet()) { builder.value(keys(field)); }
+            for (Field field : configEntryFields()) {
+                if (isTokenComment(field)) { builder.comment(keys(field)); }
+            }
+            owned = builder.build();
+        }
+        OperatorFileWriter.Result result = OperatorFileWriter.write(ultiToolsPlugin.getConfigFile(configFilePath).toPath(),
+                owned, absent ? OperatorFileWriter.ABSENT : loaded.fingerprint(), candidate -> {
+                    for (Map.Entry<Field, Object> entry : inserted.entrySet()) {
+                        candidate.set(keys(entry.getKey()), entry.getValue());
+                        addEntryComment(candidate, entry.getKey());
+                    }
+                    updateTokenComments(candidate);
+                });
+        return result.applied() ? result.document() : null;
     }
 
     @SuppressWarnings("PMD.NPathComplexity") // The recursive three-way merge explicitly distinguishes absence, order and secret-valued conflicts.
