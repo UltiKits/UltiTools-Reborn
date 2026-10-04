@@ -3,6 +3,7 @@ package com.ultikits.ultitools.abstracts;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.mock;
@@ -421,7 +422,7 @@ class ConfigTokenCommentReloadRefreshTest {
         doAnswer(invocation -> {
             edit("interval: 300", "interval: 450");
             return null;
-        }).when(pluginManager).applyReloadedConfigBindings(plugin);
+        }).when(pluginManager).applyReloadedConfigBindings(eq(plugin), any(ReloadReport.class));
 
         switchServerLanguageTo("en");
         plugin.reloadWithReport();

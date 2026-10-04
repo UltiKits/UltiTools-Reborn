@@ -9,6 +9,7 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.TestHelper;
 import java.io.InputStream;
@@ -105,7 +106,8 @@ class ConfigSupersededCopyOrderingTest {
     @Test void protectedOldFileNoLongerRefusesConstruction() throws Exception {
         String broken = "value: [broken\n";
         Files.write(Probe.file, broken.getBytes(StandardCharsets.UTF_8));
-        entity.reload();
+        // #589 (PR #591): a reload of an unparseable file throws; the file stays protected.
+        assertThatThrownBy(entity::reload).isInstanceOf(ConfigurationException.class);
         assertThat(entity.isLastLoadUnparseable()).isTrue();
         try (URLClassLoader loader = incomingJar(true)) {
             initialize(loader.loadClass(Incoming.class.getName()));
