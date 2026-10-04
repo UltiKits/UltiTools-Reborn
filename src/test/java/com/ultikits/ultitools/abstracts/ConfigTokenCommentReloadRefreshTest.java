@@ -335,6 +335,28 @@ class ConfigTokenCommentReloadRefreshTest {
         assertThat(text()).contains("interval: 3O0");
     }
 
+    /**
+     * 17-64 review round 1 R1-03: a file the gate refuses (here a value the operator spaced by hand) is named once per
+     * {@code /ul reload}, not once by the reload's own comment write and again by the refresh.
+     */
+    @Test
+    @DisplayName("a file the gate refuses is warned about once per reload, whichever write was refused")
+    void aRefusedFileIsWarnedOncePerReload() throws Exception {
+        FixturePlugin plugin = moduleWithConfig();
+        edit("interval: 300", "interval:  300");
+        plugin.reloadWithReport();
+        byte[] before = Files.readAllBytes(file());
+
+        switchServerLanguageTo("en");
+        for (int reload = 1; reload <= 3; reload++) {
+            warnings.clear();
+            plugin.reloadWithReport();
+            assertThat(warningsNamingTheFile()).as("refusal warnings in reload " + reload)
+                    .filteredOn(message -> message.contains("was not written")).hasSize(1);
+        }
+        assertThat(Files.readAllBytes(file())).isEqualTo(before);
+    }
+
     @Test
     @DisplayName("F2: a failed refresh write followed by a second reload leaves isModifiedSinceSnapshot() false")
     void failedRefreshThenSecondReloadMarksNothing() throws Exception {
