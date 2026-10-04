@@ -86,6 +86,28 @@ class ConfigSaveWriteGateTracerTest {
         }
     }
 
+    public static class BlockScalar extends AbstractConfigEntity {
+        @ConfigEntry(path = "motd")
+        String motd = "a\nb\n";
+        @ConfigEntry(path = "other")
+        int other = 1;
+
+        public BlockScalar(String path) {
+            super(path);
+        }
+    }
+
+    public static class SectionNote extends AbstractConfigEntity {
+        @ConfigEntry(path = "a.x")
+        int x = 1;
+        @ConfigEntry(path = "b")
+        int b = 2;
+
+        public SectionNote(String path) {
+            super(path);
+        }
+    }
+
     @ConfigEntity(MAP_PATH)
     public static class Emojis extends AbstractConfigEntity {
         @ConfigEntry(path = "emojis")
@@ -254,6 +276,45 @@ class ConfigSaveWriteGateTracerTest {
 
         assertThat(read(MAP_PATH)).isEqualTo("emojis:\n  smile: ':)'\n  wave: o/\n  o:\n    O: x\n");
         assertThat(warnings()).isEmpty();
+    }
+
+    /**
+     * Two layouts the renderer cannot reproduce byte for byte - a block scalar followed by a blank line, and a section's
+     * deeper-indented trailing comment after a blank line (carried obligations 2 and 3 of plans 17-63/17-64) - make the
+     * gate refuse every write to the file, whichever setting it changes: the file keeps its bytes and the gate names the
+     * key and the reason. Documented as a refusal in COMPATIBILITY.md (the renderer is not changed by this plan).
+     */
+    @Test
+    @DisplayName("a file with a block scalar followed by a blank line is not written by a save; the gate names the key")
+    void blockScalarFollowedByABlankLineRefusesTheSave() throws Exception {
+        String text = "motd: |\n  a\n  b\n\nother: 1\n";
+        put("block.yml", text);
+        BlockScalar config = new BlockScalar("block.yml");
+        config.init(plugin);
+
+        config.other = 5;
+        countFromHere();
+        config.save();
+
+        assertThat(read("block.yml")).isEqualTo(text);
+        assertThat(config.other).isEqualTo(5);
+        assertThat(warnings()).hasSize(1).allSatisfy(warning -> assertThat(warning).contains("block.yml", "other", "layout"));
+    }
+
+    @Test
+    @DisplayName("a file with a section's trailing comment after a blank line is not written by a save; the gate names the key")
+    void sectionTrailingCommentAfterABlankLineRefusesTheSave() throws Exception {
+        String text = "a:\n  x: 1\n\n  # trailing section note\nb: 2\n";
+        put("section.yml", text);
+        SectionNote config = new SectionNote("section.yml");
+        config.init(plugin);
+
+        config.b = 3;
+        countFromHere();
+        config.save();
+
+        assertThat(read("section.yml")).isEqualTo(text);
+        assertThat(warnings()).hasSize(1).allSatisfy(warning -> assertThat(warning).contains("section.yml", "b", "layout"));
     }
 
     @Test
