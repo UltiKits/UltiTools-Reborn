@@ -317,6 +317,19 @@ This is not a crash-safe multi-file transaction: a JVM crash between moves remai
 The panel message shape and public `loadFromJson` signatures are unchanged. Internal staged-entity
 coordination bridges are not a module transaction API.
 
+### Writing operator files a module manages
+
+As of 6.3.0, `com.ultikits.ultitools.config.OperatorFiles` (additive) is the way a module writes a YAML file it
+manages on an operator's behalf - a kit file, a menu file - on an explicit operator edit (maintainer decision of
+2026-10-04: such a file gets only the edited part; comments and other keys are kept). `OperatorFiles.read(File)`
+returns the file's text (strict UTF-8) and the SHA-256 of its bytes; `OperatorFiles.write(Snapshot, Map<List<String>,
+Object>)` writes only the named whole keys (a key containing `.` is one key), through the configuration write gate,
+only while the file still holds the snapshot's bytes, and returns `WRITTEN`, `UNCHANGED`, `FILE_CHANGED` or `REFUSED`
+(a layout the gate cannot keep byte for byte, or anchors, with one WARNING naming the file, the keys and the reason).
+Values must be plain data - serialize an `ItemStack` first; anything else throws `IllegalArgumentException` before
+the file is touched. It never creates, deletes or renames a file, is not a general file API (UltiKits/UltiTools-Reborn#545
+stays a later feature), and is not for `@ConfigEntity` files, which keep their own save rules.
+
 ### Migrating legacy parsers to converters
 
 The six deprecated announcements are `ConfigEntry#parser()`, `interfaces.Parser`,
@@ -463,6 +476,7 @@ separate crash-safe multi-file transaction limit.
 - 重载三方合并，内存独有改动保留且仍脏，磁盘独有采用，冲突磁盘胜。重载重建模块语言之后、模块自己的重载钩子之前，框架经写入闸门、按重新读取的文件，只把它能认出的自己的注释行改成新语言，不写任何值、键或其它注释行（#594）。仅磁盘该映射未变时保证内存顺序保留，不写文件。初始化、重载和注册表在服务器主线程执行；异步面板回调整体排队，不能阻塞等待。
 - 框架自己的 `plugins/UltiTools/config.yml` 启动时补入缺少的面板键（能力开关、`ultipanel.commands.blocklist`、`ultipanel.files.editable-roots`、操作日志轮转键）同样经过写入闸门，只插入（#605）。此前启动迁移会整份重写文件：十六进制数变成十进制、锚点被展开、`o.O` 这样的含点键被拆成嵌套映射、显式 `null` 被替换。现在其余每个字节保持不变（已在每个已发布的 6.2.x `config.yml` 上实测）；闸门无法逐字节写回的文件（手工对齐、锚点）保持原样，警告一次列出这些键，由 jar 自带 `config.yml` 中的默认值（现在也列出命令黑名单和可编辑根目录）生效。
 - UltiTools 只在 `plugins/bStats/config.yml` 不存在、或已含 `serverUuid` 时启动 bStats（#606）。该文件由所有使用 bStats 的插件共用；此前无法解析的文件被当作空文件，bStats 的默认值会写在它上面。现在无法读取、无法解析或缺少 `serverUuid` 的文件逐字节保持不变，记一行日志说明，本次运行 UltiTools 不发送统计。
+- 6.3.0 新增 `com.ultikits.ultitools.config.OperatorFiles`（增量 API），供模块在服主明确编辑时写入它代为管理的 YAML 文件（礼包、菜单文件）：只写编辑的部分，注释和其它键保留（维护者 2026-10-04 决定）。`read(File)` 返回文件文本（严格 UTF-8）和字节的 SHA-256；`write(Snapshot, Map<List<String>, Object>)` 只写指定的完整键（含点的键是一个键），经写入闸门，且仅当文件仍是快照时的字节，返回 `WRITTEN`、`UNCHANGED`、`FILE_CHANGED` 或 `REFUSED`（排版无法逐字节保留或使用锚点，警告一次列出文件、键和原因）。值必须是普通数据（`ItemStack` 先序列化），否则在碰文件之前抛 `IllegalArgumentException`。它从不创建、删除或重命名文件，不是通用文件 API（#545 仍是以后的功能），也不用于 `@ConfigEntity` 文件。
 - 服务器关闭、模块卸载或卸载删除、模块被新版本替换时，一律不写任何配置（维护者 2026-10-04 决定：生命周期事件不是服主的写入请求，不做整对象的关闭保存或替换保存）。关闭时以及正常卸载或卸载删除时，每个模块在卸载钩子和 `@PreDestroy` 之后、释放之前，凡有从未保存的模块改动的配置各警告一次（列文件和键，不列值），改动随之丢弃；框架最后一步对仍注册的配置同样处理。上次加载无法读取或解析的文件照旧只提示一次。新版本副本直接读取现有文件，旧副本的未保存改动或受保护文件不再阻止替换；新副本激活后警告一次丢弃的键。`ConfigManager#saveAll()` 签名不变、不再写入、改为报告并标记 `@Deprecated(since = "6.3.0")`。模块应在改动发生时用 `save()` 或 `saveOperatorChange`/`saveOperatorMapEntry` 保存。卸载照旧释放实体。已知限制 #578、#580 和多文件崩溃限制 #545 仍存在。
 
 ## What the version number means
