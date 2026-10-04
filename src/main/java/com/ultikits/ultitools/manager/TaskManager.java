@@ -15,6 +15,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
 
+import com.ultikits.ultitools.abstracts.ReloadReport;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Scheduled;
 import com.ultikits.ultitools.aop.ProxyFactory;
@@ -368,6 +369,19 @@ public class TaskManager {
      * @since 6.3.0
      */
     public void rescheduleBound(UltiToolsPlugin plugin) {
+        rescheduleBound(plugin, new ReloadReport());
+    }
+
+    /**
+     * {@link #rescheduleBound(UltiToolsPlugin)}, also recording in {@code report} one partial reason
+     * per bound value kept in place of a refused one (#595), so the module's reload is not reported
+     * as complete while a task kept its old timing.
+     *
+     * @param plugin the module whose configuration was just reloaded
+     * @param report the module's reload report
+     * @since 6.3.0
+     */
+    public void rescheduleBound(UltiToolsPlugin plugin, ReloadReport report) {
         if (!Bukkit.isPrimaryThread()) {
             throw new IllegalStateException("TaskManager.rescheduleBound must run on the main thread, where the "
                     + "task registry lives; it was called from '" + Thread.currentThread().getName() + "'");
@@ -377,14 +391,14 @@ public class TaskManager {
             return;
         }
         for (BoundTask handle : handles) {
-            rescheduleOne(plugin, handle);
+            rescheduleOne(plugin, handle, report);
         }
     }
 
-    private void rescheduleOne(UltiToolsPlugin plugin, BoundTask handle) {
+    private void rescheduleOne(UltiToolsPlugin plugin, BoundTask handle, ReloadReport report) {
         Set<String> warnedKeys = new TreeSet<>();
-        long newPeriodTicks = reloadedTicks(plugin, handle, handle.periodSource, handle.periodTicks, warnedKeys);
-        long newDelayTicks = reloadedTicks(plugin, handle, handle.delaySource, handle.delayTicks, warnedKeys);
+        long newPeriodTicks = reloadedTicks(plugin, handle, handle.periodSource, handle.periodTicks, warnedKeys, report);
+        long newDelayTicks = reloadedTicks(plugin, handle, handle.delaySource, handle.delayTicks, warnedKeys, report);
         if (newPeriodTicks == handle.periodTicks && newDelayTicks == handle.delayTicks) {
             return;
         }
@@ -419,10 +433,10 @@ public class TaskManager {
 
     /**
      * @return the reloaded value of {@code source} in ticks, or {@code currentTicks} if it is
-     *         unbound or its new value is out of range (then warned once per key)
+     *         unbound or its new value is out of range (then warned and reported once per key)
      */
     private static long reloadedTicks(UltiToolsPlugin plugin, BoundTask handle, ConfigBindings.Source source,
-                                      long currentTicks, Set<String> warnedKeys) {
+                                      long currentTicks, Set<String> warnedKeys, ReloadReport report) {
         if (source == null) {
             return currentTicks;
         }
@@ -434,6 +448,9 @@ public class TaskManager {
                                 + "keeping %ds",
                         plugin.getPluginName(), handle.owner, source.configName(), source.key,
                         source.entity.getConfigFilePath(), currentTicks / ConfigBindings.TICKS_PER_SECOND));
+                report.partial(ConfigBindings.reloadReason(ConfigBindings.SCHEDULED_NOT_VALIDATED_KEY, handle.owner,
+                        source.entity.getConfigFilePath(), source.configName(), source.key,
+                        currentTicks / ConfigBindings.TICKS_PER_SECOND));
             }
             return currentTicks;
         }
@@ -447,6 +464,9 @@ public class TaskManager {
                             + "keeping %ds",
                     plugin.getPluginName(), handle.owner, source.configName(), source.key, seconds,
                     ConfigBindings.TIMER_RULE, currentTicks / ConfigBindings.TICKS_PER_SECOND));
+            report.partial(ConfigBindings.reloadReason(ConfigBindings.SCHEDULED_KEPT_KEY, handle.owner,
+                    source.configName(), source.key, seconds, ConfigBindings.TIMER_RULE,
+                    currentTicks / ConfigBindings.TICKS_PER_SECOND));
         }
         return currentTicks;
     }

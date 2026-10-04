@@ -72,12 +72,59 @@ final class ConfigBindings {
     static final String COOLDOWN_RULE = "a bound @CmdCD cooldown must be a whole number of seconds "
             + "from 0 (no cooldown) to " + Integer.MAX_VALUE;
 
+    /**
+     * Reload-report reason (#595): a bound {@code @Scheduled} value refused on reload. Arguments: the
+     * task, the config class, the key, the refused value, the rule, the running seconds kept.
+     */
+    static final String SCHEDULED_KEPT_KEY =
+            "config-bound @Scheduled %s: %s key '%s' has value %s after the reload (%s); the running %ds is kept";
+
+    /**
+     * Reload-report reason (#595): a bound {@code @Scheduled} value not applied because its config's
+     * reload did not complete. Arguments: the task, the config file, the config class, the key, the
+     * running seconds kept.
+     */
+    static final String SCHEDULED_NOT_VALIDATED_KEY =
+            "config-bound @Scheduled %s: the reload of %s did not complete, so %s key '%s' was not applied; "
+                    + "the running %ds is kept";
+
+    /**
+     * Reload-report reason (#595): a bound {@code @CmdCD} value not applied. Arguments: the binding
+     * (config class and key), why, the running seconds kept.
+     */
+    static final String COOLDOWN_KEPT_KEY = "config-bound @CmdCD %s was not updated: %s; the running %ds is kept";
+
+    /**
+     * Reload-report reason (#595): one half of the binding step failed. Arguments: {@code @Scheduled}
+     * or {@code @CmdCD}, the failure.
+     */
+    static final String BINDING_STEP_FAILED_KEY =
+            "applying the reloaded config-bound %s values failed: %s; the running values are kept";
+
+    /** Reload-report reason (#595): the binding step was called off the main thread and did nothing. */
+    static final String BINDING_OFF_THREAD_KEY =
+            "config-bound @Scheduled and @CmdCD values were not applied: the reload ran off the main thread";
+
     /** The field types a binding may read. */
     private static final Set<Class<?>> INTEGRAL_FIELD_TYPES = Collections.unmodifiableSet(
             new HashSet<>(Arrays.<Class<?>>asList(int.class, long.class, Integer.class, Long.class)));
 
     private ConfigBindings() {
         // Static rules only.
+    }
+
+    /**
+     * Formats a reload-report reason through the framework's language catalogue (#595), falling back
+     * to the English key when no catalogue answers.
+     *
+     * @param key  one of the {@code *_KEY} reason constants
+     * @param args the reason's arguments
+     * @return the reason to record with {@code ReloadReport.partial}
+     */
+    static String reloadReason(String key, Object... args) {
+        UltiTools framework = UltiTools.getInstance();
+        String pattern = framework == null ? null : framework.i18n(key);
+        return String.format(pattern == null ? key : pattern, args);
     }
 
     /**

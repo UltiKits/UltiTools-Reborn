@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -38,6 +40,7 @@ import org.mockito.Answers;
 import org.mockbukkit.mockbukkit.MockBukkit;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.ReloadReport;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.abstracts.command.ConfigBoundCooldownState;
@@ -1010,7 +1013,8 @@ class ConfigBindingValidationTest {
             PluginManager.validateConfigBindings(module, container);
             PluginManager pluginManager = new PluginManager();
             TaskManager taskManager = mock(TaskManager.class);
-            doThrow(new RuntimeException("simulated reschedule failure")).when(taskManager).rescheduleBound(module);
+            doThrow(new RuntimeException("simulated reschedule failure")).when(taskManager)
+                    .rescheduleBound(eq(module), any(ReloadReport.class));
             Field field = PluginManager.class.getDeclaredField("taskManager");
             field.setAccessible(true);
             field.set(pluginManager, taskManager);
@@ -1188,7 +1192,7 @@ class ConfigBindingValidationTest {
 
             pluginManager.applyReloadedConfigBindings(module);
 
-            verify(taskManager).rescheduleBound(module);
+            verify(taskManager).rescheduleBound(eq(module), any(ReloadReport.class));
         }
 
         @Test

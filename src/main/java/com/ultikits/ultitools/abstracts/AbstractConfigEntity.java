@@ -92,6 +92,9 @@ public abstract class AbstractConfigEntity {
     private boolean defaultsCaptured;
     @Getter(AccessLevel.NONE)
     private boolean pendingCommentWrite;
+    /** Set only while a reload validates the values it read, for the refusal's wording (#595). */
+    @Getter(AccessLevel.NONE)
+    private boolean validatingReload;
     @Getter(AccessLevel.NONE)
     private boolean deferInitialization;
     @Getter(AccessLevel.NONE)
@@ -410,6 +413,60 @@ public abstract class AbstractConfigEntity {
     }
 
     /**
+     * Re-renders this configuration's token comments ({@code @ConfigEntry(comment = "{key}")},
+     * #542) with the owning module's catalogue as it is now, and writes them (#594).
+     * <p>
+     * A reload reads the module's configurations before it rebuilds the module's language, so the
+     * comment pass of that read resolved the tokens with the catalogue of the language the module ran
+     * with until then. {@code UltiToolsPlugin}'s reload calls this, through {@code ConfigManager},
+     * right after the rebuild, so a {@code language} switch applied by {@code /ul reload} reaches the
+     * comments too.
+     * <p>
+     * It is the comment-only write {@code load()} already performs: the document it writes is the
+     * one the last load read from the file, with only the token comment lines replaced. No value and
+     * no key is changed, so an operator's invalid value and a key deleted to reset it stay exactly as
+     * typed. Nothing is written when no token comment changed, when the last load could not read or
+     * parse the file, or when the file changed on disk since this entity last read or wrote it (the
+     * next reload reads that edit first). A failed write is logged and left for the next save, the
+     * same as at load.
+     * <p>
+     * Framework-internal: {@code public} solely because {@code ConfigManager} lives in another
+     * package. Module code should not call it.
+     *
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public final void refreshTokenComments() {
+        if (!com.ultikits.ultitools.manager.ConfigManager.permitsConfigThread(ultiToolsPlugin, "refresh comments " + configFilePath)) { return; }
+        synchronized (this) {
+            if (document == null || ultiToolsPlugin == null || lastLoadUnparseable || pendingInitialization != null) { return; }
+            if (isFileModifiedSinceSnapshot() || !updateTokenComments(document)) { return; }
+            try {
+                write(document);
+                pendingCommentWrite = false;
+                savedFileFingerprint = fingerprintOf(ultiToolsPlugin.getConfigFile(configFilePath));
+            } catch (IOException failure) {
+                pendingCommentWrite = true;
+                LOGGER.warning("Cannot rewrite comments in " + configFilePath + ": "
+                        + failure.getClass().getSimpleName() + "; pending for retry");
+            }
+        }
+    }
+
+    /**
+     * Runs {@link #validateFields()} on the values a load just bound. A reload's refusal says that
+     * fixing the file and reloading again is enough (#595); a refusal at load keeps its wording.
+     */
+    private void validateLoaded(boolean initialize) {
+        validatingReload = !initialize;
+        try {
+            validateFields();
+        } finally {
+            validatingReload = false;
+        }
+    }
+
+    /**
      * Whether serialized fields differ from their last bound/persisted effective values.
      * Map iteration order is significant here; the storage equality used for no-op saves is not.
      * Protected files and uninitialized entities are never saved by shutdown.
@@ -694,7 +751,7 @@ public abstract class AbstractConfigEntity {
                 } catch (ConversionException failure) { throw new ConfigurationException(failure.getMessage(), failure); }
             }
         }
-        validateFields();
+        validateLoaded(initialize);
         document = next;
         boolean changed = false;
         if (initialize) {
@@ -1284,7 +1341,8 @@ public abstract class AbstractConfigEntity {
      * Validates all fields annotated with validation annotations (@Range, @NotEmpty, @Size, @Pattern).
      * A violation refuses this config's module instead of rewriting the value - the operator's
      * file is never modified (D-01). Every violating field is collected and named in a single
-     * refusal; the module author must fix the value(s) on disk and restart.
+     * refusal. At load the operator fixes the value(s) on disk and restarts; on a reload the running
+     * values are kept and fixing the file and reloading again is enough (#595).
      *
      * @throws ConfigurationException with {@link com.ultikits.ultitools.exceptions.ErrorCode#CONFIG_VALIDATION_FAILED}
      *                                 if any field violates its validation constraint, or if this
@@ -1316,7 +1374,9 @@ public abstract class AbstractConfigEntity {
 
         if (!violations.isEmpty()) {
             String moduleName = ultiToolsPlugin != null ? ultiToolsPlugin.getPluginName() : this.getClass().getSimpleName();
-            throw ConfigurationException.validationFailed(moduleName, configFilePath, violations);
+            throw validatingReload
+                    ? ConfigurationException.reloadValidationFailed(moduleName, configFilePath, violations)
+                    : ConfigurationException.validationFailed(moduleName, configFilePath, violations);
         }
     }
 

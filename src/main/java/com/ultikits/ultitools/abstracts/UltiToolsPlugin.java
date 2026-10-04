@@ -2040,7 +2040,11 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * watched key has changed direction since then -- it never registers, unregisters, or
      * rebuilds anything (issue #392, D-01). Right after the configuration reload, and only if it
      * succeeded, the module's config-bound {@code @Scheduled} tasks and {@code @CmdCD} cooldowns
-     * pick up their reloaded values (#531; see {@code PluginManager#applyReloadedConfigBindings}).
+     * pick up their reloaded values (#531; see {@code PluginManager#applyReloadedConfigBindings});
+     * a value that step refuses and keeps, or a part of it that fails, is recorded in the
+     * {@link ReloadReport} as a part that did not reload (#595). After the module's language is
+     * rebuilt, its configurations' {@code {key}} comment tokens are re-rendered in that language,
+     * comment lines only (#594).
      * {@code final} and always runs its own steps, then calls {@link #onReload()} -- a module can
      * no longer skip any of this by overriding {@code reloadSelf()} itself, because that override
      * point no longer exists (D-01). The hook it calls is {@link #onReload(ReloadReport)}, whose
@@ -2127,7 +2131,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         // reloadConfigs did not throw, so a refused reload leaves the running timings alone.
         PluginManager pluginManager = UltiTools.getInstance().getPluginManager();
         if (pluginManager != null) {
-            pluginManager.applyReloadedConfigBindings(this);
+            // #595: a value the step keeps, or a part of it that fails, is recorded in the report.
+            pluginManager.applyReloadedConfigBindings(this, report);
         }
         // Rebuild the catalogue from this module's language files, re-read from disk and jar, in
         // the language the framework runs with. The `language` setting is one value for the
@@ -2136,6 +2141,9 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         // module. It records the change instead, so the operator is told a full /ul reload
         // applies it (#502).
         language = createLanguageFromPath(resourceFolderPath);
+        // #594: reloadConfigs rendered the {key} comment tokens with the catalogue as it was before
+        // this rebuild; re-render them with the rebuilt one. Comment lines only, never a value.
+        getConfigManager().refreshTokenComments(this);
         String pendingLanguage = pendingLanguageSetting();
         if (pendingLanguage != null) {
             report.partial(String.format(UltiTools.getInstance().i18n(LANGUAGE_CHANGE_PENDING_KEY),

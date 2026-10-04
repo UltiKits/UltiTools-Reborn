@@ -483,6 +483,27 @@ public class ConfigManager {
     }
 
     /**
+     * Re-renders the token comments of every configuration of {@code plugin} in the module's current
+     * language (#594), through {@link AbstractConfigEntity#refreshTokenComments()}: comment lines
+     * only, never a value or a key. The module's reload calls this right after it rebuilds the
+     * module's language, which happens after {@link #reloadConfigs} read the files.
+     *
+     * @param plugin UltiTools module
+     * @since 6.3.0
+     */
+    @org.jetbrains.annotations.ApiStatus.Internal
+    public void refreshTokenComments(UltiToolsPlugin plugin) {
+        if (!permitsConfigThread(plugin, "refreshTokenComments")) { return; }
+        Map<String, AbstractConfigEntity> configMap = pluginConfigMap.get(plugin);
+        if (configMap == null) {
+            return;
+        }
+        for (AbstractConfigEntity configEntity : configMap.values()) {
+            configEntity.refreshTokenComments();
+        }
+    }
+
+    /**
      * Saves, at shutdown, every registered configuration that module code changed in memory.
      * <p>
      * Since 6.3.0 (#510) this writes only the entities whose {@link

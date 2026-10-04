@@ -25,7 +25,9 @@ public @interface ConfigEntry {
 
     /**
      * A single trimmed {@code {key}} token resolves through the module catalogue on every
-     * load and write. That entry's block comment is framework-owned; literal comments are
+     * load and write, and again after {@code /ul reload} rebuilds the module's language, so a
+     * {@code language} switch reaches the file's comments without a restart; that refresh writes
+     * comment lines only, never a value or a key (#594). That entry's block comment is framework-owned; literal comments are
      * only supplied for new entries and existing operator comments are retained.
      * Comments on individual list items are kept only while the list keeps its length
      * - the same as Bukkit, which keeps none.

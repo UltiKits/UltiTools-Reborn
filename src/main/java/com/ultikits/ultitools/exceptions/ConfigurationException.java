@@ -134,6 +134,27 @@ public class ConfigurationException extends UltiToolsException {
     }
 
     /**
+     * Creates the exception for a reload refused because one or more of the reloaded values violate
+     * their validation annotations (#595). Unlike {@link #validationFailed(String, String, List)},
+     * the module is still running with its previous values, so the message says that fixing the
+     * file and reloading again is enough; no restart is needed.
+     *
+     * @param moduleName     the module whose reload was refused
+     * @param configFilePath the path of the violating configuration file
+     * @param violations     one description per violating field - field name, actual value, and
+     *                       the constraint it broke
+     * @return a new ConfigurationException
+     * @since 6.3.0
+     */
+    public static ConfigurationException reloadValidationFailed(String moduleName, String configFilePath,
+                                                                List<String> violations) {
+        return new ConfigurationException(ErrorCode.CONFIG_VALIDATION_FAILED, "Module '" + moduleName
+                + "' did not reload configuration file '" + configFilePath + "': it violates its validation constraints ("
+                + violations.size() + "): " + String.join("; ", violations)
+                + ". The file was not modified and the running values are kept - fix the value(s) and reload again.");
+    }
+
+    /**
      * Creates an exception for a config class the framework cannot construct through either of
      * its two supported idioms - a {@code (String)} constructor or an accessible no-arg
      * constructor that hardcodes its path via {@code super(path)}.

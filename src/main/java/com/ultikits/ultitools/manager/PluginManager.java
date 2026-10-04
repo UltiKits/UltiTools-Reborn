@@ -1028,39 +1028,60 @@ public class PluginManager {
      * failure is logged against the module and swallowed, so one module's binding problem never
      * aborts {@code /ul reload} for the modules after it, and never skips this module's
      * {@code onReload()}.
+     * <p>
+     * <b>Reported, not only logged (#595).</b> Every value kept in place of a refused one, every half
+     * that failed, and a call refused off the main thread is also recorded as one partial reason in
+     * {@code report}, so {@code /ul reload}, {@code /ul reload <name>} and a module's own reload
+     * command do not reply plain success while a timing was not updated.
+     *
+     * @param plugin the module whose configuration was just reloaded
+     * @param report the module's reload report, receiving one partial reason per value not applied
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public void applyReloadedConfigBindings(UltiToolsPlugin plugin, ReloadReport report) {
+        if (Bukkit.getServer() != null && !Bukkit.isPrimaryThread()) {
+            Bukkit.getLogger().log(Level.WARNING, String.format(
+                    "[UltiTools-API] %s: reload was called off the main thread (%s); config-bound @Scheduled and "
+                            + "@CmdCD values were not applied. Run /ul reload from the console or in game.",
+                    plugin.getPluginName(), Thread.currentThread().getName()));
+            report.partial(ConfigBindings.reloadReason(ConfigBindings.BINDING_OFF_THREAD_KEY));
+            return;
+        }
+        runReloadHalf(plugin, "@Scheduled", report, () -> {
+            if (taskManager != null) {
+                taskManager.rescheduleBound(plugin, report);
+            }
+        });
+        runReloadHalf(plugin, "@CmdCD", report, () -> refreshCooldownBindings(plugin, report));
+    }
+
+    /**
+     * {@link #applyReloadedConfigBindings(UltiToolsPlugin, ReloadReport)} with a report nobody reads:
+     * the values not applied are only logged.
      *
      * @param plugin the module whose configuration was just reloaded
      * @since 6.3.0
      */
     @ApiStatus.Internal
     public void applyReloadedConfigBindings(UltiToolsPlugin plugin) {
-        if (Bukkit.getServer() != null && !Bukkit.isPrimaryThread()) {
-            Bukkit.getLogger().log(Level.WARNING, String.format(
-                    "[UltiTools-API] %s: reload was called off the main thread (%s); config-bound @Scheduled and "
-                            + "@CmdCD values were not applied. Run /ul reload from the console or in game.",
-                    plugin.getPluginName(), Thread.currentThread().getName()));
-            return;
-        }
-        runReloadHalf(plugin, "@Scheduled", () -> {
-            if (taskManager != null) {
-                taskManager.rescheduleBound(plugin);
-            }
-        });
-        runReloadHalf(plugin, "@CmdCD", () -> refreshCooldownBindings(plugin));
+        applyReloadedConfigBindings(plugin, new ReloadReport());
     }
 
     @SuppressWarnings("PMD.AvoidCatchingGenericException") // per-module isolation barrier -- see applyReloadedConfigBindings
-    private static void runReloadHalf(UltiToolsPlugin plugin, String what, Runnable half) {
+    private static void runReloadHalf(UltiToolsPlugin plugin, String what, ReloadReport report, Runnable half) {
         try {
             half.run();
         } catch (RuntimeException e) {
             Bukkit.getLogger().log(Level.WARNING, String.format(
                     "[UltiTools-API] %s: applying reloaded config-bound %s values failed: %s; the running values "
                             + "are kept", plugin.getPluginName(), what, e.getMessage()), e);
+            String cause = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            report.partial(ConfigBindings.reloadReason(ConfigBindings.BINDING_STEP_FAILED_KEY, what, cause));
         }
     }
 
-    private static void refreshCooldownBindings(UltiToolsPlugin plugin) {
+    private static void refreshCooldownBindings(UltiToolsPlugin plugin, ReloadReport report) {
         SimpleContainer context = plugin.getContext();
         if (context == null) {
             return;
@@ -1077,7 +1098,8 @@ public class PluginManager {
             Map<String, Integer> running = ConfigBoundCooldownState.seconds(executor);
             Map<String, Integer> next = new HashMap<>();
             for (Map.Entry<String, Supplier<Long>> source : owned.entrySet()) {
-                refreshOne(plugin, source.getKey(), source.getValue(), running.get(source.getKey()), next, reported);
+                refreshOne(plugin, report, source.getKey(), source.getValue(), running.get(source.getKey()), next,
+                        reported);
             }
             ConfigBoundCooldownState.setSeconds(executor, next);
         }
@@ -1087,17 +1109,17 @@ public class PluginManager {
      * Re-reads one bound cooldown into {@code next}: the new value when it is valid, otherwise the
      * running one with one WARNING per binding key -- also when the config's own reload failed.
      */
-    private static void refreshOne(UltiToolsPlugin plugin, String bindingKey, Supplier<Long> source, Integer before,
-                                   Map<String, Integer> next, Set<String> reported) {
+    private static void refreshOne(UltiToolsPlugin plugin, ReloadReport report, String bindingKey, Supplier<Long> source,
+                                   Integer before, Map<String, Integer> next, Set<String> reported) {
         Long seconds;
         try {
             seconds = source.get();
         } catch (ConfigBindings.ReloadFailedException failed) {
-            keepRunning(plugin, bindingKey, before, next, reported, failed.getMessage());
+            keepRunning(plugin, report, bindingKey, before, next, reported, failed.getMessage());
             return;
         }
         if (!ConfigBindings.isValidCooldownSeconds(seconds)) {
-            keepRunning(plugin, bindingKey, before, next, reported,
+            keepRunning(plugin, report, bindingKey, before, next, reported,
                     "it has value " + seconds + " after the reload; " + ConfigBindings.COOLDOWN_RULE);
             return;
         }
@@ -1110,8 +1132,8 @@ public class PluginManager {
         }
     }
 
-    private static void keepRunning(UltiToolsPlugin plugin, String bindingKey, Integer before, Map<String, Integer> next,
-                                    Set<String> reported, String why) {
+    private static void keepRunning(UltiToolsPlugin plugin, ReloadReport report, String bindingKey, Integer before,
+                                    Map<String, Integer> next, Set<String> reported, String why) {
         if (before != null) {
             next.put(bindingKey, before);
         }
@@ -1119,6 +1141,9 @@ public class PluginManager {
             Bukkit.getLogger().log(Level.WARNING, String.format(
                     "[UltiTools-API] %s: @CmdCD bound to %s is not updated: %s; keeping %ds",
                     plugin.getPluginName(), describeBindingKey(bindingKey), why, before));
+            // #595: one reason per binding key, like the warning.
+            report.partial(ConfigBindings.reloadReason(ConfigBindings.COOLDOWN_KEPT_KEY,
+                    describeBindingKey(bindingKey), why, before));
         }
     }
 
