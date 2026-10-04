@@ -34,6 +34,7 @@ import com.ultikits.ultitools.exceptions.ConfigurationException;
  */
 class ConfigDottedSettingPathTest {
     private static final String PATH = "config/dotted-setting.yml";
+    private static final String COMPLETE_FLAT = "features.chat: false\nlimits.max: 7\na.b:\n  c: 3\nchat.emoji:\n  o.O: wink\n";
     @TempDir Path tempDir;
     private UltiToolsPlugin plugin;
     private SimpleContainer container;
@@ -81,8 +82,6 @@ class ConfigDottedSettingPathTest {
     private boolean chatListenerRegistered() {
         return ConditionalRegistrationEvaluator.shouldRegister(ChatListener.class, container);
     }
-
-    private static final String COMPLETE_FLAT = "features.chat: false\nlimits.max: 7\na.b:\n  c: 3\nchat.emoji:\n  o.O: wink\n";
 
     @Test void aFlatDottedKeyIsTheSettingAndTheFileIsNotChanged() throws IOException {
         write(COMPLETE_FLAT);
