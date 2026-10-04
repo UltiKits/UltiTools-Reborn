@@ -40,7 +40,8 @@ class ConfigPresentInFileTest {
         Files.write(file, "values: {}\na:\n  b: null\nwave.: z\n".getBytes(StandardCharsets.UTF_8));
         Values value = new Values("values.yml"); value.init(plugin);
         assertThat(present(value, "a.b")).isTrue(); assertThat(present(value, "absent")).isFalse();
-        assertThat(present(value, "wave.")).isFalse();
+        // #612: a path is read the way a declared setting path is, so the single key `wave.` is one of its readings.
+        assertThat(present(value, "wave.")).isTrue(); assertThat(present(value, "wave")).isFalse();
         Files.write(file, "values: {}\n".getBytes(StandardCharsets.UTF_8));
         assertThat(present(value, "a.b")).isTrue();
         value.reload(); assertThat(present(value, "a.b")).isFalse();
