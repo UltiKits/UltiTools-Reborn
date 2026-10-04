@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.config.convert.builtin;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -8,6 +9,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.World;
 import org.bukkit.configuration.serialization.ConfigurationSerializable;
 import org.bukkit.configuration.serialization.ConfigurationSerialization;
+import org.bukkit.util.Vector;
 import org.jetbrains.annotations.ApiStatus;
 import com.ultikits.ultitools.config.convert.ConfigConverter;
 import com.ultikits.ultitools.config.convert.ConversionContext;
@@ -50,6 +52,7 @@ public final class BukkitConverters {
             if (!(plain instanceof Map<?, ?>)) { throw ctx.failure("Expected a serialized Bukkit map", null); }
             Map<String, Object> values = hydrateValues((Map<?, ?>) plain, ctx);
             Object alias = values.get(ConfigurationSerialization.SERIALIZED_TYPE_KEY);
+            widenVectorCoordinates(values, alias);
             try {
                 ConfigurationSerializable result = ConfigurationSerialization.deserializeObject(values);
                 if (result == null || !ConversionTypes.raw(ctx.declaredType()).isInstance(result)) {
@@ -61,6 +64,27 @@ public final class BukkitConverters {
             }
         }
     };
+
+    /**
+     * Bukkit's {@code Vector#deserialize} (and {@code BlockVector}'s, Bukkit 1.21.11) casts each coordinate to
+     * {@code Double}, so a whole number an operator wrote ({@code y: 64}) failed with a ClassCastException that Bukkit
+     * logs at SEVERE, and the module ran on its declared default (17-66 review round 1 R66-W1, #609). The coordinates
+     * {@code x}, {@code y} and {@code z} of a {@code Vector} (or subclass) are widened to {@code double} in this
+     * in-memory copy only: the file is never touched, so the operator's text stays as written, and no other
+     * serializable type is widened (several Bukkit types read their numbers as {@code Integer}).
+     */
+    private static void widenVectorCoordinates(Map<String, Object> values, Object alias) {
+        Class<? extends ConfigurationSerializable> type = alias instanceof String
+                ? ConfigurationSerialization.getClassByAlias((String) alias) : null;
+        if (type == null || !Vector.class.isAssignableFrom(type)) { return; }
+        for (String axis : new String[]{"x", "y", "z"}) {
+            Object value = values.get(axis);
+            if (value instanceof Integer || value instanceof Long || value instanceof Short || value instanceof Byte
+                    || value instanceof BigInteger) {
+                values.put(axis, ((Number) value).doubleValue());
+            }
+        }
+    }
 
     private static Map<String, Object> hydrateValues(Map<?, ?> plain, Context ctx) throws ConversionException {
         Map<String, Object> result = new LinkedHashMap<>();
