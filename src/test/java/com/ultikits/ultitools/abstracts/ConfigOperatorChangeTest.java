@@ -213,7 +213,7 @@ class ConfigOperatorChangeTest {
     }
 
     @Test
-    @DisplayName("the first rule goes into an empty rules map")
+    @DisplayName("the first rule goes into an empty rules map, which keeps the flow style it was written in")
     void firstEntryGoesIntoAnEmptyMap() throws Exception {
         put(RULES, "autoreply:\n  enabled: true\n  rules: {}\n");
         AutoReply config = new AutoReply(RULES);
@@ -222,8 +222,7 @@ class ConfigOperatorChangeTest {
         config.rules.put("server-ip", rule("ip", "here"));
         config.saveOperatorMapEntry("autoreply.rules", "server-ip");
 
-        assertThat(read(RULES)).isEqualTo("autoreply:\n  enabled: true\n  rules:\n"
-                + "    server-ip:\n      keyword: ip\n      response: here\n");
+        assertThat(read(RULES)).isEqualTo("autoreply:\n  enabled: true\n  rules: {server-ip: {keyword: ip, response: here}}\n");
     }
 
     @Test
