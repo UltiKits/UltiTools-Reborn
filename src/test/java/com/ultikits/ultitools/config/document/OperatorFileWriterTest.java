@@ -198,6 +198,32 @@ class OperatorFileWriterTest {
         assertThat(warnings.get(0).getMessage()).contains("anchors").contains("added");
     }
 
+    /**
+     * #600, review round 2 IN-R2-01: when the file changed after it was read and the newer file uses anchors, aliases
+     * or merge keys, the caller's edit never runs on it - not even in memory to name the keys a refusal would have
+     * changed - and the file keeps its bytes.
+     */
+    @Test
+    void editNeverRunsOnAnAnchoredFileThatChangedAfterItWasRead() throws Exception {
+        Path target = tempDir.resolve("changed-anchored.yml");
+        Files.write(target, "a: 1\n".getBytes(StandardCharsets.UTF_8));
+        String read = ConfigDocument.sha256("a: 1\n".getBytes(StandardCharsets.UTF_8));
+        String anchored = "a: 1\nbase: &b {x: 1}\ncopy: *b\nmerged:\n  <<: *b\n  y: 2\n";
+        Files.write(target, anchored.getBytes(StandardCharsets.UTF_8));
+        AtomicInteger edits = new AtomicInteger();
+
+        OperatorFileWriter.Result result = OperatorFileWriter.write(target,
+                OwnedPaths.builder().value(Collections.singletonList("added")).build(), read, document -> {
+                    edits.incrementAndGet();
+                    document.set(Collections.singletonList("added"), 1);
+                });
+
+        assertThat(result.applied()).isFalse();
+        assertThat(edits.get()).as("the edit never runs on an anchored document").isZero();
+        assertThat(read(target)).isEqualTo(anchored);
+        assertThat(warnings).hasSize(1);
+    }
+
     /** A comment-only write changes exactly the owned comment lines. */
     @Test
     void commentOnlyWriteChangesOnlyTheOwnedCommentLines() throws Exception {
