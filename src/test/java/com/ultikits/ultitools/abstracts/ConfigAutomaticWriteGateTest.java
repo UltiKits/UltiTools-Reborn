@@ -287,4 +287,57 @@ class ConfigAutomaticWriteGateTest {
         assertThat(warningsNamingTheFile().get(1)).contains("layout").contains("interval (comment)");
         assertThat(config.isModifiedSinceSnapshot()).isFalse();
     }
+
+    /**
+     * #602, review round 1 WR-01 (flush): when the gate does not write because the operator edited the file after
+     * {@code initForBatch} read it, the entity records the bytes it bound as "last read", not the operator's new
+     * file - so the edit is still visible as a change on disk to every later check.
+     */
+    @Test
+    void refusedFlushDoesNotRecordTheOperatorsNewBytesAsLastRead() throws Exception {
+        put("# " + EN + "\ninterval: 300\n");
+        Gate config = new Gate(PATH);
+        config.initForBatch(plugin);
+        put("# " + EN + "\ninterval: 450\n");
+
+        config.flushInitializationWrite();
+
+        assertThat(config.interval).as("bound from the bytes initForBatch read").isEqualTo(300);
+        assertThat(config.isFileModifiedSinceSnapshot()).as("the operator's edit is a change on disk").isTrue();
+    }
+
+    /**
+     * #602, review round 1 WR-01 (load): the same for an init whose insert the gate does not write because the file
+     * changed between the entity's read and the gate's read.
+     */
+    @Test
+    void refusedInitInsertDoesNotRecordTheOperatorsNewBytesAsLastRead() throws Exception {
+        put("# " + EN + "\ninterval: 300\n");
+        String edited = "# " + EN + "\ninterval: 450\n";
+        try (MockedStatic<com.ultikits.ultitools.config.document.OperatorFileWriter> gate =
+                Mockito.mockStatic(com.ultikits.ultitools.config.document.OperatorFileWriter.class, Mockito.CALLS_REAL_METHODS)) {
+            gate.when(() -> com.ultikits.ultitools.config.document.OperatorFileWriter.write(Mockito.any(Path.class),
+                    Mockito.any(), Mockito.any(), Mockito.any())).thenAnswer(call -> {
+                        put(edited);
+                        return call.callRealMethod();
+                    });
+            Gate config = new Gate(PATH);
+            config.init(plugin);
+
+            assertThat(new String(bytes(), StandardCharsets.UTF_8)).isEqualTo(edited);
+            assertThat(config.interval).isEqualTo(300);
+            assertThat(config.isFileModifiedSinceSnapshot()).as("the operator's edit is a change on disk").isTrue();
+        }
+    }
+
+    /** A refusal with no concurrent edit records the file as read: nothing changed on disk. */
+    @Test
+    void refusedInitInsertWithoutAnEditLeavesTheFileUnmodifiedSinceRead() throws Exception {
+        putFixture("hand-aligned.yml");
+
+        Gate config = new Gate(PATH);
+        config.init(plugin);
+
+        assertThat(config.isFileModifiedSinceSnapshot()).isFalse();
+    }
 }

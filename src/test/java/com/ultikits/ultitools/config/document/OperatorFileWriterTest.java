@@ -247,4 +247,32 @@ class OperatorFileWriterTest {
         assertThat(read(target)).isEqualTo(text);
         assertThat(warnings.get(0).getMessage()).contains("does not own").doesNotContain(": 5").doesNotContain(": 6");
     }
+
+    /**
+     * #602, review round 1 IN-01: an operator edit saved while the gate writes and forces its temporary file is never
+     * overwritten - the last-moment re-read comes after staging, immediately before the replacement.
+     */
+    @Test
+    void editSavedWhileTheNewContentIsStagedIsNeverOverwritten() throws Exception {
+        Path target = tempDir.resolve("staged.yml");
+        Files.write(target, "a: 1\nz: x\n".getBytes(StandardCharsets.UTF_8));
+        String edited = "a: 1\nz: operator\n";
+        AtomicConfigWriter.FileOperations editWhileStaging = new AtomicConfigWriter.FileOperations() {
+            @Override
+            public java.nio.channels.FileChannel open(Path temporary, java.nio.file.attribute.FileAttribute<?>... attributes)
+                    throws IOException {
+                Files.write(target, edited.getBytes(StandardCharsets.UTF_8));
+                return AtomicConfigWriter.FileOperations.super.open(temporary, attributes);
+            }
+        };
+
+        OperatorFileWriter.Result result = OperatorFileWriter.write(target,
+                OwnedPaths.builder().comment(Collections.singletonList("z")).build(), null,
+                document -> document.setFrameworkComment(Collections.singletonList("z"),
+                        Collections.singletonList("framework comment")), editWhileStaging);
+
+        assertThat(result.outcome()).isEqualTo(OperatorFileWriter.Outcome.FILE_CHANGED);
+        assertThat(read(target)).isEqualTo(edited);
+        assertThat(directory()).containsExactly("staged.yml");
+    }
 }
