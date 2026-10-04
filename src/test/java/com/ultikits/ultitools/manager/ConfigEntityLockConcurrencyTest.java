@@ -122,7 +122,7 @@ class ConfigEntityLockConcurrencyTest {
 
     @Test
     @DisplayName("Off-thread stop report refuses while an entity is held; a later server-thread stop writes nothing (17-65)")
-    void saveAll_duringInFlightPanelWrite_savesWholeCodeChange() throws Exception {
+    void saveAll_duringInFlightPanelWrite_writesNothingAtStop() throws Exception {
         File limitFile = new File(tempDir, "config/limit.yml");
         Files.createDirectories(limitFile.getParentFile().toPath());
         Files.write(limitFile.toPath(), "limit: 1\n".getBytes(StandardCharsets.UTF_8));
