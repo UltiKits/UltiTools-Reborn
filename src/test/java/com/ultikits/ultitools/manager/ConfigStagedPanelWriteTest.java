@@ -99,7 +99,8 @@ class ConfigStagedPanelWriteTest {
         Object files = Mockito.mock(operations, invocation -> {
             if ("move".equals(invocation.getMethod().getName())) {
                 Path destination = invocation.getArgument(1);
-                if (!destination.getFileName().toString().endsWith(".bak")) {
+                // The fallback's backup refresh moves onto <file name>.ultitools-backup-<16 hex> (#601).
+                if (!destination.getFileName().toString().contains(".ultitools-backup-")) {
                     throw new java.nio.file.AtomicMoveNotSupportedException("source", destination.toString(), "injected fallback");
                 }
             }
@@ -128,10 +129,12 @@ class ConfigStagedPanelWriteTest {
             assertThat(value.value).isEqualTo(i + 1); assertThat(value.other).isEqualTo("unsaved");
         }
         try (java.util.stream.Stream<Path> paths = Files.list(directory)) {
-            List<Path> backups = paths.filter(path -> path.getFileName().toString().endsWith(".bak")).collect(Collectors.toList());
+            List<Path> backups = paths.filter(path -> path.getFileName().toString().matches(".*\\.ultitools-backup-[0-9a-f]{16}"))
+                    .collect(Collectors.toList());
             assertThat(backups).hasSize(2);
             for (Path backup : backups) {
-                Path target = backup.resolveSibling(backup.getFileName().toString().replace(".bak", ""));
+                String name = backup.getFileName().toString();
+                Path target = backup.resolveSibling(name.substring(0, name.indexOf(".ultitools-backup-")));
                 assertThat(ConfigDocument.load(target).state())
                         .isEqualTo(com.ultikits.ultitools.config.document.ConfigLoadResult.State.LOADED);
                 assertThat(Files.exists(backup)).isFalse();
