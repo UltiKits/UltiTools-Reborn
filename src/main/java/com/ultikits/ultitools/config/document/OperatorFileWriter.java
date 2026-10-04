@@ -525,7 +525,7 @@ public final class OperatorFileWriter {
             this.tree = tree;
             this.lines = lines;
             this.owned = new boolean[lines.size()];
-            this.nodes = nodesByLine(tree);
+            this.nodes = nodesByLine(tree, lines);
         }
 
         /**
@@ -539,7 +539,7 @@ public final class OperatorFileWriter {
                 return "a key this write owns cannot be located in the file";
             }
             int keyLine = tuple.getKeyNode().getStartMark().getLine();
-            int last = Math.max(lastLine(tuple.getKeyNode()), lastLine(tuple.getValueNode()));
+            int last = Math.max(lastLine(tuple.getKeyNode(), lines), lastLine(tuple.getValueNode(), lines));
             int first = keyLine - (withComment ? commentLineCount(document, path) : 0);
             if (!commentOrBlank(lines, first, keyLine)) {
                 return "the comment of a key this write owns cannot be located in the file";
@@ -712,22 +712,51 @@ public final class OperatorFileWriter {
         return true;
     }
 
-    private static int lastLine(Node node) {
+    /**
+     * The last line of {@code node} in {@code lines}. A block scalar ({@code |}, {@code >}) ends at its last content
+     * line: SnakeYAML's end mark lies after the line breaks it consumed, which include the blank or whitespace-only
+     * lines that follow a clipped or stripped value; those lines are the operator's separators, not the value, and are
+     * never owned. With keep chomping ({@code |+}, {@code >+}) the blank lines the value keeps stay part of it (owned-span
+     * rule revision 1, review round 1 IN-02).
+     */
+    private static int lastLine(Node node, List<String> lines) {
         if (node instanceof ScalarNode || isFlow(node)) {
+            int start = node.getStartMark().getLine();
             int line = node.getEndMark().getLine();
-            return node.getEndMark().getColumn() == 0 && line > node.getStartMark().getLine() ? line - 1 : line;
+            line = node.getEndMark().getColumn() == 0 && line > start ? line - 1 : line;
+            return node instanceof ScalarNode ? withoutSeparatorLines((ScalarNode) node, start, line, lines) : line;
         }
         int last = node.getStartMark().getLine();
         if (node instanceof MappingNode) {
             for (NodeTuple tuple : ((MappingNode) node).getValue()) {
-                last = Math.max(last, Math.max(lastLine(tuple.getKeyNode()), lastLine(tuple.getValueNode())));
+                last = Math.max(last, Math.max(lastLine(tuple.getKeyNode(), lines), lastLine(tuple.getValueNode(), lines)));
             }
         } else if (node instanceof SequenceNode) {
             for (Node element : ((SequenceNode) node).getValue()) {
-                last = Math.max(last, lastLine(element));
+                last = Math.max(last, lastLine(element, lines));
             }
         }
         return last;
+    }
+
+    private static int withoutSeparatorLines(ScalarNode scalar, int start, int end, List<String> lines) {
+        if (scalar.getScalarStyle() != DumperOptions.ScalarStyle.LITERAL
+                && scalar.getScalarStyle() != DumperOptions.ScalarStyle.FOLDED) {
+            return end;
+        }
+        // The value keeps one trailing line break per kept blank line, plus the content's own (keep chomping).
+        String value = scalar.getValue();
+        int kept = 0;
+        for (int i = value.length() - 1; i >= 0 && value.charAt(i) == '\n'; i--) {
+            kept++;
+        }
+        int keptBlankLines = Math.max(0, kept - 1);
+        int last = Math.min(end, lines.size() - 1);
+        int blank = 0;
+        while (last - blank > start && lines.get(last - blank).trim().isEmpty()) {
+            blank++;
+        }
+        return last - Math.max(0, blank - keptBlankLines);
     }
 
     private static boolean isFlow(Node node) {
@@ -758,35 +787,36 @@ public final class OperatorFileWriter {
     }
 
     /** For every line, the paths of the nodes on it: keys, scalars and flow collections (a list index is an Integer). */
-    private static Map<Integer, List<List<Object>>> nodesByLine(Node tree) {
+    private static Map<Integer, List<List<Object>>> nodesByLine(Node tree, List<String> lines) {
         Map<Integer, List<List<Object>>> result = new LinkedHashMap<>();
-        collect(tree, new ArrayList<Object>(), result);
+        collect(tree, new ArrayList<Object>(), result, lines);
         return result;
     }
 
-    private static void collect(Node node, List<Object> path, Map<Integer, List<List<Object>>> result) {
+    private static void collect(Node node, List<Object> path, Map<Integer, List<List<Object>>> result, List<String> lines) {
         if (node instanceof ScalarNode || isFlow(node)) {
-            record(node, path, result);
+            record(node, path, result, lines);
         }
         if (node instanceof MappingNode) {
             for (NodeTuple tuple : ((MappingNode) node).getValue()) {
                 List<Object> child = new ArrayList<>(path);
                 child.add(identity(tuple.getKeyNode()));
-                record(tuple.getKeyNode(), child, result);
-                collect(tuple.getValueNode(), child, result);
+                record(tuple.getKeyNode(), child, result, lines);
+                collect(tuple.getValueNode(), child, result, lines);
             }
         } else if (node instanceof SequenceNode) {
             List<Node> elements = ((SequenceNode) node).getValue();
             for (int i = 0; i < elements.size(); i++) {
                 List<Object> child = new ArrayList<>(path);
                 child.add(i);
-                collect(elements.get(i), child, result);
+                collect(elements.get(i), child, result, lines);
             }
         }
     }
 
-    private static void record(Node node, List<Object> path, Map<Integer, List<List<Object>>> result) {
-        for (int line = node.getStartMark().getLine(); line <= lastLine(node); line++) {
+    private static void record(Node node, List<Object> path, Map<Integer, List<List<Object>>> result, List<String> lines) {
+        int last = lastLine(node, lines);
+        for (int line = node.getStartMark().getLine(); line <= last; line++) {
             List<List<Object>> here = result.get(line);
             if (here == null) {
                 here = new ArrayList<>();
