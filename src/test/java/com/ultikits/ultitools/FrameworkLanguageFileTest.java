@@ -317,4 +317,24 @@ class FrameworkLanguageFileTest {
         }
         throw new AssertionError("no " + prefix + " line in the probe output:\n" + output);
     }
+
+    @Test
+    @DisplayName("R1-2: a framework custom value whose placeholder count no longer matches the official one uses the official value, in memory, with one warning naming file and key")
+    void frameworkCustomValueWithLostPlaceholdersUsesTheOfficialValue() throws Exception {
+        config.set("language", "zh-myserver");
+        String missing = "All %d modules reloaded.";
+        String custom = "{\"" + KEY + "\":\"本服：模块已重载\",\"" + missing + "\":\"本服：已重载全部 %d 个模块\"}";
+        write(lang("zh-myserver.json"), custom);
+
+        Language language = initLanguage();
+
+        assertThat(language.getLocalizedText(KEY)).isEqualTo(bundledText("zh", KEY));
+        assertThat(language.getLocalizedText(missing)).isEqualTo("本服：已重载全部 %d 个模块");
+        verify(logger, times(1)).warning(anyString());
+        verify(logger).warning(argThat((String message) -> message.contains("'" + KEY + "'")
+                && message.contains(lang("zh-myserver.json").getPath())
+                && message.contains("different placeholder count") && !message.contains("本服")));
+        assertThat(new String(Files.readAllBytes(lang("zh-myserver.json").toPath()), StandardCharsets.UTF_8))
+                .isEqualTo(custom);
+    }
 }

@@ -152,8 +152,10 @@ class CustomLanguageFileTest {
         assertThat(plugin.i18n("farewell")).isEqualTo("Goodbye");
         assertThat(plugin.getLanguageCode()).isEqualTo("en");
         verify(fixture.logger(), times(1)).warning(anyString());
-        verify(fixture.logger()).warning(argThat((String message) ->
-                message.contains("'myserver'") && message.contains("falling back to 'en'")));
+        // R1-3: the warning says the custom file is still used and only what it lacks comes from 'en'.
+        verify(fixture.logger()).warning(argThat((String message) -> message.contains("'myserver'")
+                && message.contains("lang/myserver.* is still used") && message.contains("uses 'en'")
+                && !message.contains("falling back")));
     }
 
     @Test
@@ -293,5 +295,41 @@ class CustomLanguageFileTest {
         assertThat(BootLanguageFixture.bytesOf(fixture.provenanceRecord())).isEqualTo(recordAfterFirst);
         assertThat(langListing()).containsExactly("en.yml", "zh.yml", "zh.yml.bak");
         verify(fixture.logger(), never()).warning(anyString());
+    }
+
+    @Test
+    @DisplayName("R1-2: a custom value whose placeholders no longer match the official one uses the official value for that key, in memory, with one warning naming file and key; the file is never written")
+    void customValueWithLostPlaceholdersUsesTheOfficialValueInMemory() throws Exception {
+        fixture.jarEntry("lang/zh.yml", "items: \"你有 %s 个物品，位于 %s\"\n"
+                        + "teleport: \"传送 {PLAYER} 到 {WORLD}\"\n"
+                        + "greeting: \"你好 %s\"\n"
+                        + "note: \"{PLAYER} 的备注\"\n")
+                .language("zh-myserver");
+        String custom = "items: \"本服：你有 %s 个物品\"\n"
+                + "teleport: \"本服传送 {PLAYER}\"\n"
+                + "greeting: \"本服欢迎 %s\"\n"
+                + "note: \"{PLAYER} 的备注 {EXTRA}\"\n";
+        fixture.onDisk(CUSTOM_PATH, custom);
+        File customFile = fixture.disk(CUSTOM_PATH);
+        FileTime pinnedTime = FileTime.fromMillis(1_000_000_000_000L);
+        Files.setLastModifiedTime(customFile.toPath(), pinnedTime);
+
+        UltiToolsPlugin plugin = start();
+
+        assertThat(plugin.i18n("items")).isEqualTo("你有 %s 个物品，位于 %s");
+        assertThat(plugin.i18n("teleport")).isEqualTo("传送 {PLAYER} 到 {WORLD}");
+        // Controls: a reworded value of the same shape, and one that adds a token of its own, are kept.
+        assertThat(plugin.i18n("greeting")).isEqualTo("本服欢迎 %s");
+        assertThat(plugin.i18n("note")).isEqualTo("{PLAYER} 的备注 {EXTRA}");
+        verify(fixture.logger(), times(2)).warning(anyString());
+        verify(fixture.logger()).warning(argThat((String message) -> message.contains("'items'")
+                && message.contains(customFile.getPath()) && message.contains("different placeholder count")
+                && !message.contains("%s")));
+        verify(fixture.logger()).warning(argThat((String message) -> message.contains("'teleport'")
+                && message.contains(customFile.getPath()) && message.contains("missing a placeholder")
+                && !message.contains("{WORLD}")));
+        assertThat(Files.readAllBytes(customFile.toPath())).isEqualTo(utf8(custom));
+        assertThat(Files.getLastModifiedTime(customFile.toPath())).isEqualTo(pinnedTime);
+        assertThat(langListing()).noneMatch(name -> name.startsWith("zh-myserver.yml."));
     }
 }
