@@ -1445,7 +1445,7 @@ public abstract class AbstractConfigEntity {
      * following the declared value types into nested maps; any other value - a list, a {@code ConfigurationSerializable}
      * such as a Bukkit {@code Location} or {@code Vector}, a typed map's value that is not a map - is one value: the
      * module's, the file's, or on a conflict the file's whole, never a value mixed from both (17-65 review round 2 R2-01,
-     * the same rule as the save's {@link #changedLeaves}). A conflict over a composite value names the key only.
+     * the same rule as the save's {@link #changedLeaves}). A conflict over a composite value or a list names the key only.
      */
     @SuppressWarnings("PMD.NPathComplexity") // The recursive three-way merge explicitly distinguishes absence, order and secret-valued conflicts.
     private Object mergeReload(Object base, Object mine, Object theirs, Type declared, String path, boolean secret,
@@ -1466,8 +1466,9 @@ public abstract class AbstractConfigEntity {
             }
             return merged;
         }
-        if (mine instanceof Map) {
-            // A composite value is replaced whole; its fields are not listed (they may hold anything).
+        if (mine instanceof Map || mine instanceof List) {
+            // A composite value or a list is replaced whole; its contents are not listed (they may hold anything;
+            // 17-65 review round 3 R3-I3).
             conflicts.add("reload conflict at '" + path + "': discarded the in-memory value; file wins");
             return theirs;
         }
