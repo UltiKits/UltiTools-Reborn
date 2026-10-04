@@ -149,6 +149,7 @@ public final class OperatorFiles {
      *                                  bytes or, after a failed in-place fallback, a complete framework backup
      *                                  remains beside it)
      */
+    @SuppressWarnings("PMD.NPathComplexity") // Every argument is validated before any I/O, each with its own message.
     public static WriteResult write(Snapshot readAt, Map<List<String>, Object> values) throws IOException {
         if (readAt == null || values == null) {
             throw new IllegalArgumentException("A write needs the snapshot it was decided on and the values to write");

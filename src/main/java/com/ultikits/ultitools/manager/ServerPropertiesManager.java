@@ -116,6 +116,7 @@ public class ServerPropertiesManager {
      * The write changes only the line defining {@code key} (see the class description for why nothing else can
      * change); a refusal carries its reason.
      */
+    @SuppressWarnings("PMD.NPathComplexity") // Each refusal is checked and reported separately before the one-line write.
     private WriteResult writeProperty(String key, String value) {
         if (!SAFE_KEYS.contains(key)) return WriteResult.of(WriteOutcome.REJECTED);
 
@@ -341,7 +342,7 @@ public class ServerPropertiesManager {
         /** The new bytes: only the value text of {@code definition}'s line replaced, re-encoded in the file's charset. */
         byte[] replaceValue(Definition definition, String value) throws CharacterCodingException {
             String replaced = text.substring(0, definition.valueStart) + (definition.bareKey ? "=" : "")
-                    + escape(value, charset == StandardCharsets.UTF_8) + text.substring(definition.contentEnd);
+                    + escape(value, StandardCharsets.UTF_8.equals(charset)) + text.substring(definition.contentEnd);
             ByteBuffer encoded = charset.newEncoder()
                     .onMalformedInput(CodingErrorAction.REPORT)
                     .onUnmappableCharacter(CodingErrorAction.REPORT)
@@ -707,6 +708,7 @@ public class ServerPropertiesManager {
             return describe(false);
         }
 
+        @SuppressWarnings("PMD.NPathComplexity") // Four independent outcome lists, each named only when non-empty.
         private String describe(boolean includeRefusedWithReason) {
             if (isSuccess()) return null;
             List<String> named = new ArrayList<>();

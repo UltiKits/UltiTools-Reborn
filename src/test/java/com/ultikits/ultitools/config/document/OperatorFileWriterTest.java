@@ -316,7 +316,7 @@ class OperatorFileWriterTest {
         "remove-two-blanks;a: |\\n  x\\n\\n\\nb: 2\\n;a"})
     void blockScalarSeparatorLinesAreNeverRemoved(String name, String escaped, String dotted) throws Exception {
         String text = escaped.replace("\\n", "\n");
-        java.util.List<String> path = java.util.Arrays.asList(dotted.split("\\."));
+        List<String> path = java.util.Arrays.asList(dotted.split("\\."));
         Path target = tempDir.resolve(name + ".yml");
         Files.write(target, text.getBytes(StandardCharsets.UTF_8));
         boolean remove = name.startsWith("remove");

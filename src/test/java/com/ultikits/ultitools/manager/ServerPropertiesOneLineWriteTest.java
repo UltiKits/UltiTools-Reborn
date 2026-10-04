@@ -77,10 +77,12 @@ class ServerPropertiesOneLineWriteTest {
 
         @Override
         public void flush() {
+            // Records are kept in memory; there is nothing to flush.
         }
 
         @Override
         public void close() {
+            // No resource is held; there is nothing to close.
         }
     };
 
@@ -226,7 +228,7 @@ class ServerPropertiesOneLineWriteTest {
         // nosemgrep: java_lang_security_audit_unsafe-reflection_unsafe-reflection, java.lang.security.audit.unsafe-reflection.unsafe-reflection
         Class<?> operations = Class.forName(AtomicConfigWriter.class.getName() + "$FileOperations");
         List<String> seen = new ArrayList<>();
-        Object files = Mockito.mock(operations, invocation -> {
+        Object files = mock(operations, invocation -> {
             String name = invocation.getMethod().getName();
             if ("move".equals(name)) {
                 Path destination = invocation.getArgument(1);

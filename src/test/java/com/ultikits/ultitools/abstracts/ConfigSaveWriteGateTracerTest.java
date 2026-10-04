@@ -48,6 +48,8 @@ class ConfigSaveWriteGateTracerTest {
     private static final String PATH = "tracer.yml";
     private static final String MAP_PATH = "tracer-map.yml";
     private static final String TEXT = "# Interval in seconds\ninterval: 300\n# Greeting shown on join\nmessage: hi\n";
+    private static final String COMPOSITE = "home:\n  ==: Vector\n  x: 1.0\n  y: 2.0\n  z: 3.0\n"
+            + "points:\n  a:\n    ==: Vector\n    x: 1.0\n    y: 1.0\n    z: 1.0\n";
 
     @TempDir
     Path tempDir;
@@ -298,10 +300,7 @@ class ConfigSaveWriteGateTracerTest {
         assertThat(warnings()).isEmpty();
     }
 
-    private static final String COMPOSITE = "home:\n  ==: Vector\n  x: 1.0\n  y: 2.0\n  z: 3.0\n"
-            + "points:\n  a:\n    ==: Vector\n    x: 1.0\n    y: 1.0\n    z: 1.0\n";
-
-    private static double coordinate(String text, java.util.List<String> path) throws Exception {
+    private static double coordinate(String text, List<String> path) throws Exception {
         Object value = com.ultikits.ultitools.config.document.ConfigDocument.parse(text).get(path);
         return ((Number) value).doubleValue();
     }

@@ -165,7 +165,7 @@ class ConfigPanelWritePathTest {
      * other byte, stay.
      */
     @Test void panelLeafEditWritesThatLeafOnlyAndKeepsEveryOtherByte() throws Exception {
-        java.nio.file.Path file = directory.resolve("gated.yml");
+        Path file = directory.resolve("gated.yml");
         String text = "# Limits per group\nlimits:\n  a: 1\n  b: 2\n# Server name\nname: server\n";
         Files.write(file, text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         Gated gated = new Gated("gated.yml");
@@ -182,7 +182,7 @@ class ConfigPanelWritePathTest {
 
     /** #600: on a file the gate cannot write (anchors), the panel edit is refused with the reason; nothing changes. */
     @Test void panelEditOfAnAnchoredFileIsRefusedWithTheReason() throws Exception {
-        java.nio.file.Path file = directory.resolve("gated.yml");
+        Path file = directory.resolve("gated.yml");
         String anchored = "base: &b 1\nlimits:\n  a: *b\n  b: 2\nname: server\n";
         Files.write(file, anchored.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         Gated gated = new Gated("gated.yml");
@@ -198,13 +198,13 @@ class ConfigPanelWritePathTest {
 
     /** #600: a panel edit on a hand-aligned file is refused with the layout reason instead of normalizing it. */
     @Test void panelEditOfAHandAlignedFileIsRefusedInsteadOfNormalized() throws Exception {
-        java.nio.file.Path file = directory.resolve("gated.yml");
+        Path file = directory.resolve("gated.yml");
         String aligned = "limits:\n  a:   1    # aligned\n  b: 2\nname: server\n";
         Files.write(file, aligned.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         Gated gated = new Gated("gated.yml");
         ConfigManager manager = new ConfigManager(); manager.register(plugin, gated);
 
-        com.google.gson.JsonObject edit = new com.google.gson.JsonObject(); edit.addProperty("name", "panel");
+        JsonObject edit = new JsonObject(); edit.addProperty("name", "panel");
         assertThatThrownBy(() -> gated.updateProperties(edit))
                 .isInstanceOf(com.ultikits.ultitools.config.ConfigWriteRefusedException.class).hasMessageContaining("layout");
 

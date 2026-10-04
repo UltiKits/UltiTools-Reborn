@@ -547,6 +547,7 @@ public final class ConfigDocument {
      * line numbering ({@link #moveComments}), and every move is checked before any is applied, so a misalignment
      * leaves the output as emitted (review round 3).
      */
+    @SuppressWarnings("PMD.NPathComplexity") // Each move is located and checked against the reader's line breaks before any is applied.
     private static String realignCommentsAfterBlankLines(String text, List<Event> events) {
         List<CommentEvent> written = new ArrayList<>();
         for (Event event : events) {

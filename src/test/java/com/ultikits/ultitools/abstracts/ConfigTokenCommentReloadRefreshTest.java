@@ -451,6 +451,7 @@ class ConfigTokenCommentReloadRefreshTest {
 
     /** Resets the gate's once-per-run anchored-file warnings (package-private) from this package. */
     private static final class OperatorFileWriterResetBridge {
+        @SuppressWarnings("PMD.UnnecessaryConstructor") // Static-only bridge must not expose construction.
         private OperatorFileWriterResetBridge() {
         }
 

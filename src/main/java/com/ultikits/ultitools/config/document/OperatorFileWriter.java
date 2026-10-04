@@ -236,6 +236,7 @@ public final class OperatorFileWriter {
         return stage(file, owned, expectedFingerprint, edit, null);
     }
 
+    @SuppressWarnings("PMD.NPathComplexity") // Every refusal of the write gate is decided here, in the order the class describes.
     static Staged stage(Path file, OwnedPaths owned, String expectedFingerprint, Consumer<ConfigDocument> edit,
             AtomicConfigWriter.FileOperations files) throws IOException {
         Path absolute = file.toAbsolutePath();
@@ -648,6 +649,7 @@ public final class OperatorFileWriter {
     }
 
     /** Checks 2 and 5: marks every owned span on both sides, refusing a span that shares a line with an unowned key. */
+    @SuppressWarnings("PMD.NPathComplexity") // Value and comment spans are marked on both sides, each refusal kept separate.
     private static String markSpans(Side left, Side right, Changes changes, OwnedPaths owned) {
         for (List<String> path : changes.values) {
             boolean present = left.document.contains(path);

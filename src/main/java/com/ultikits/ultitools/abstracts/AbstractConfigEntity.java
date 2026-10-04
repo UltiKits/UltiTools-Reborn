@@ -142,10 +142,6 @@ public abstract class AbstractConfigEntity {
         private RawEntry(boolean present, Object value) {
             this.present = present; this.value = PlainData.copy(value);
         }
-
-        private boolean matches(ConfigDocument source, List<String> path) {
-            return present == source.contains(path) && PlainData.plainEquals(value, source.get(path));
-        }
     }
 
     /** A batch initialization write: what to insert, and the bytes it was read from (#602). */
@@ -266,6 +262,7 @@ public abstract class AbstractConfigEntity {
      * as read ({@code {}}), or which the changes empty, is owned as a whole - its key line must change with its first
      * or last entry, and an empty map holds nothing of the operator's that could be lost.
      */
+    @SuppressWarnings("PMD.NPathComplexity") // Map parents emptied by the changes are owned whole; every other change owns its key.
     private static OwnedPaths saveOwnership(List<ModuleChange> changes, ConfigDocument read) {
         Map<List<String>, Map<String, Object>> after = new LinkedHashMap<>();
         Set<List<String>> emptied = new java.util.LinkedHashSet<>();
@@ -302,6 +299,7 @@ public abstract class AbstractConfigEntity {
      * rest through the config write gate against exactly that read; advances the baseline and the last-read entry only
      * for what the file now holds; and names every change that was not written in one warning.
      */
+    @SuppressWarnings("PMD.NPathComplexity") // The save rule classifies every change (on disk, writable, not written) on one read.
     private void saveModuleChanges() throws IOException {
         java.nio.file.Path target = ultiToolsPlugin.getConfigFile(configFilePath).toPath();
         ConfigLoadResult loaded = ConfigDocument.load(target);
@@ -625,6 +623,7 @@ public abstract class AbstractConfigEntity {
      * {@link #writeOperatorChanges}); a write the gate settles as refused, or a file that cannot be read or parsed,
      * throws {@link ConfigWriteRefusedException} here, before anything is staged.
      */
+    @SuppressWarnings("PMD.NPathComplexity") // Each precondition refuses with its own reason before anything is staged.
     private OperatorFileWriter.Staged stageOperatorChanges(List<ModuleChange> changes) throws IOException {
         java.nio.file.Path target = ultiToolsPlugin.getConfigFile(configFilePath).toPath();
         if (lastLoadUnparseable) {

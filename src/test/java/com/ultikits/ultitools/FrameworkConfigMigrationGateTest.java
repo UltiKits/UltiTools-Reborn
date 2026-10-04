@@ -63,10 +63,12 @@ class FrameworkConfigMigrationGateTest {
 
         @Override
         public void flush() {
+            // Records are kept in memory; there is nothing to flush.
         }
 
         @Override
         public void close() {
+            // No resource is held; there is nothing to close.
         }
     };
     private final List<LogRecord> migrationLog = new ArrayList<>();
@@ -85,10 +87,12 @@ class FrameworkConfigMigrationGateTest {
 
             @Override
             public void flush() {
+                // Records are kept in memory; there is nothing to flush.
             }
 
             @Override
             public void close() {
+                // No resource is held; there is nothing to close.
             }
         });
     }

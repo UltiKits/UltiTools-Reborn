@@ -122,7 +122,7 @@ class AtomicConfigWriterBackupNameTest {
         List<String> result = new ArrayList<>();
         synchronized (records) {
             for (LogRecord record : records) {
-                if (record.getLevel() == Level.INFO && record.getMessage() != null
+                if (Level.INFO.equals(record.getLevel()) && record.getMessage() != null
                         && record.getMessage().contains(file.getFileName().toString())) {
                     result.add(record.getMessage());
                 }

@@ -57,10 +57,12 @@ class ServerPropertiesSetAllReasonTest {
 
         @Override
         public void flush() {
+            // Records are kept in memory; there is nothing to flush.
         }
 
         @Override
         public void close() {
+            // No resource is held; there is nothing to close.
         }
     };
 

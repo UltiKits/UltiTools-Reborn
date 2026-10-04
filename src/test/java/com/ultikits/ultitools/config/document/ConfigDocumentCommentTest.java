@@ -41,6 +41,9 @@ class ConfigDocumentCommentTest {
             + "    # comment after the last key of nested\n"
             + "# end of file comment\n";
 
+    private static final String SEPARATOR_TAIL = "  b:\n    # note\n\n    # framework\n    k: 1\n    # tail\n\n"
+            + "        # operator deep\n    m: 2\n";
+
     @Test
     void removingLastSectionKeyKeepsTrailingComment() throws Exception {
         ConfigDocument document = ConfigDocument.parse("chat:\n  last: true\n  # operator note\neconomy: 1\n");
@@ -278,9 +281,6 @@ class ConfigDocumentCommentTest {
         assertThat(edited.render()).isEqualTo(text.replace("n: 1", "n: 2"));
     }
 
-    private static final String SEPARATOR_TAIL = "  b:\n    # note\n\n    # framework\n    k: 1\n    # tail\n\n"
-            + "        # operator deep\n    m: 2\n";
-
     /** A file whose first value holds {@code separator}, in the form the renderer itself writes it, then comment runs. */
     private static String fileWithSeparatorValue(String separator) {
         ConfigDocument value = ConfigDocument.empty();
@@ -319,14 +319,14 @@ class ConfigDocumentCommentTest {
     void misalignedMoveLeavesTheOutputAsEmitted() {
         String emitted = "a:\n  b:\n    # note\n\n        # framework\n    k: 1\n";
         ConfigDocument.CommentMove right = new ConfigDocument.CommentMove(4, 8, 4, "# framework");
-        assertThat(ConfigDocument.moveComments(emitted, java.util.Collections.singletonList(right)))
+        assertThat(ConfigDocument.moveComments(emitted, Collections.singletonList(right)))
                 .isEqualTo("a:\n  b:\n    # note\n\n    # framework\n    k: 1\n");
 
         ConfigDocument.CommentMove otherComment = new ConfigDocument.CommentMove(2, 4, 2, "# framework");
         ConfigDocument.CommentMove wrongColumn = new ConfigDocument.CommentMove(4, 6, 4, "# framework");
         ConfigDocument.CommentMove notAComment = new ConfigDocument.CommentMove(5, 4, 2, "# framework");
-        for (ConfigDocument.CommentMove wrong : java.util.Arrays.asList(otherComment, wrongColumn, notAComment)) {
-            assertThat(ConfigDocument.moveComments(emitted, java.util.Arrays.asList(right, wrong))).isEqualTo(emitted);
+        for (ConfigDocument.CommentMove wrong : Arrays.asList(otherComment, wrongColumn, notAComment)) {
+            assertThat(ConfigDocument.moveComments(emitted, Arrays.asList(right, wrong))).isEqualTo(emitted);
         }
     }
 
@@ -335,11 +335,11 @@ class ConfigDocumentCommentTest {
     @DisplayName("a framework comment with a blank line added in memory is not left doubled")
     void inMemoryBlankLineIsMatchedByType() throws Exception {
         ConfigDocument document = ConfigDocument.parse("a:\n  b:\n    k: 1\n");
-        document.setFrameworkComment(path("a", "b", "k"), java.util.Arrays.asList("L1", null, "L2"));
+        document.setFrameworkComment(path("a", "b", "k"), Arrays.asList("L1", null, "L2"));
         assertThat(document.render()).isEqualTo("a:\n  b:\n    # L1\n\n    # L2\n    k: 1\n");
 
         ConfigDocument below = ConfigDocument.parse("a:\n  b:\n    # note\n    k: 1\n");
-        below.replaceFrameworkComment(path("a", "b", "k"), 0, java.util.Arrays.asList(null, "L2"));
+        below.replaceFrameworkComment(path("a", "b", "k"), 0, Arrays.asList(null, "L2"));
         assertThat(below.render()).isEqualTo("a:\n  b:\n    # note\n\n    # L2\n    k: 1\n");
     }
 

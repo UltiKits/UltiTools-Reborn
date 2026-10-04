@@ -75,7 +75,7 @@ class PluginManagerUnloadReleasesConfigAndDelistsTest {
         assertThatThrownBy(() -> pluginManager.unregister(target)).isSameAs(hookFailure);
 
         // 17-65 review round 1 R65-I5: a normal unload names the module's never-saved keys (writes nothing) before release.
-        org.mockito.InOrder order = inOrder(configManager);
+        InOrder order = inOrder(configManager);
         order.verify(configManager).saveForShutdown(target);
         order.verify(configManager).unregisterAll(target);
         assertThat(pluginManager.getPluginList()).containsExactly(bystander);

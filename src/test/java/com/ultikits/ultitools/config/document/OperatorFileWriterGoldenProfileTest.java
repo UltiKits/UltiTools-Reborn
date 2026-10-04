@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.config.document;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 import java.math.BigInteger;
@@ -166,6 +167,7 @@ class OperatorFileWriterGoldenProfileTest {
      * block scalar ({@code |+}, {@code >+}) also owns the blank lines it keeps (review round 2 IN-R2-02): they are
      * part of its value, up to the composer's end mark.
      */
+    @SuppressWarnings("PMD.NPathComplexity") // An independent oracle: key line, value end and kept blank lines are each derived separately.
     private static int[] valueRegion(String text, List<String> path) {
         org.yaml.snakeyaml.nodes.Node node = new org.yaml.snakeyaml.Yaml(ConfigDocument.loaderOptions())
                 .compose(new java.io.StringReader(text.startsWith("\uFEFF") ? text.substring(1) : text));
@@ -218,10 +220,10 @@ class OperatorFileWriterGoldenProfileTest {
     @org.junit.jupiter.api.Test
     void independentChecksAreBoundToTheOwnedKeyOnBothSides() {
         OwnedPaths setA = OwnedPaths.builder().value(Collections.singletonList("a")).build();
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> independentlyCheck(
+        assertThatThrownBy(() -> independentlyCheck(
                 "a: 1\nb: 2\n", "a: 2\nb: 2\nstray: 3\n", Check.SET, setA)).isInstanceOf(AssertionError.class);
         OwnedPaths commentB = OwnedPaths.builder().comment(Collections.singletonList("b")).build();
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> independentlyCheck(
+        assertThatThrownBy(() -> independentlyCheck(
                 "a: 1\nb: 2\n", "# " + COMMENT + "\na: 1\nb: 2\n", Check.COMMENT, commentB)).isInstanceOf(AssertionError.class);
         independentlyCheck("a: 1\nb: 2\n", "a: 1\n# " + COMMENT + "\nb: 2\n", Check.COMMENT, commentB);
         independentlyCheck("a: |+\n  x\n\nb: 1\n", "a: |+\n  y\nb: 1\n", Check.SET, setA);
