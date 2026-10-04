@@ -231,6 +231,34 @@ class ConfigDocumentCommentTest {
         assertThat(document.render()).isEqualTo("a: 1\n# note\n\n# framework\nkey: 2\n");
     }
 
+    /**
+     * 17-64 review round 1 R1-01: SnakeYAML's emitter writes a comment line that follows a blank line inside the same
+     * comment list at the indentation plus the list's own column again (doubled at depth 1); the renderer writes every
+     * line of a comment list at the list's column, so an unchanged nested comment block renders byte for byte.
+     */
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0}")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+        "demo:\n  # my note\n\n  # framework\n  interval: 300\n",
+        "demo:\n  sub:\n    # my note\n\n    # framework\n    interval: 300\n",
+        "demo:\n  x: 1\n  # one\n\n\n  # two\n  # three\n  interval: 300\n",
+        "chat:\n  last: true\n  # end a\n\n  # end b\neconomy: 1\n",
+        "demo:\n  sub:\n    k: 1\n    # end a\n\n    # end b\n",
+        "demo:\r\n  # my note\r\n\r\n  # framework\r\n  interval: 300\r\n"})
+    @DisplayName("a comment line after a blank line inside a comment list keeps the list's indentation")
+    void commentAfterABlankLineKeepsItsIndentation(String text) throws Exception {
+        assertThat(ConfigDocument.parse(text).render()).isEqualTo(text);
+    }
+
+    @Test
+    @DisplayName("a framework comment rewritten below a note and a blank line in a nested block is not shifted")
+    void rewrittenRunBelowABlankLineIsNotShifted() throws Exception {
+        ConfigDocument document = ConfigDocument.parse("demo:\n  # my note\n\n  # old\n  interval: 300\n");
+
+        document.replaceFrameworkComment(path("demo", "interval"), 1, Collections.singletonList("new"));
+
+        assertThat(document.render()).isEqualTo("demo:\n  # my note\n\n  # new\n  interval: 300\n");
+    }
+
     @Test
     @DisplayName("a framework comment written into a new document reads back")
     void frameworkCommentReadsBack() throws Exception {
