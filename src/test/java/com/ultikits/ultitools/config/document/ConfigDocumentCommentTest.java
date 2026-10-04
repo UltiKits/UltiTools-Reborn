@@ -278,6 +278,71 @@ class ConfigDocumentCommentTest {
         assertThat(edited.render()).isEqualTo(text.replace("n: 1", "n: 2"));
     }
 
+    private static final String SEPARATOR_TAIL = "  b:\n    # note\n\n    # framework\n    k: 1\n    # tail\n\n"
+            + "        # operator deep\n    m: 2\n";
+
+    /** A file whose first value holds {@code separator}, in the form the renderer itself writes it, then comment runs. */
+    private static String fileWithSeparatorValue(String separator) {
+        ConfigDocument value = ConfigDocument.empty();
+        value.set(path("a", "s"), "x" + separator + "y");
+        return value.render() + SEPARATOR_TAIL;
+    }
+
+    /**
+     * 17-64 review round 3 R3-01: SnakeYAML writes U+2028 and U+2029 raw inside a value and its reader counts them (and
+     * U+0085 and a lone CR) as line breaks; the realignment counts lines with exactly that set, so a comment after such
+     * a value is located on its own line: the framework line stays at the key's column and the operator's deeper line at
+     * its own, unchanged or after an edit.
+     */
+    @org.junit.jupiter.params.ParameterizedTest(name = "U+{0}")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"2028", "2028 x4", "2029", "0085", "000D"})
+    @DisplayName("comments after a value holding a line separator keep their columns")
+    void commentsAfterAValueHoldingALineSeparatorKeepTheirColumns(String code) throws Exception {
+        String one = String.valueOf((char) Integer.parseInt(code.substring(0, 4), 16));
+        String separator = code.endsWith("x4") ? one + one + one + one : one;
+        String text = fileWithSeparatorValue(separator);
+        assertThat(text).endsWith(SEPARATOR_TAIL);
+
+        assertThat(ConfigDocument.parse(text).render()).isEqualTo(text);
+        ConfigDocument edited = ConfigDocument.parse(text);
+        edited.set(path("a", "b", "m"), 3);
+        assertThat(edited.render()).isEqualTo(text.replace("m: 2", "m: 3"));
+    }
+
+    /**
+     * 17-64 review round 3 (self-check): a move is applied only when its line, after the spaces, is exactly {@code #} plus
+     * the comment it was matched to, at the expected column; any mismatch leaves the whole output as emitted, so a future
+     * misalignment can only be a no-op.
+     */
+    @Test
+    @DisplayName("a misaligned move leaves the whole output as emitted")
+    void misalignedMoveLeavesTheOutputAsEmitted() {
+        String emitted = "a:\n  b:\n    # note\n\n        # framework\n    k: 1\n";
+        ConfigDocument.CommentMove right = new ConfigDocument.CommentMove(4, 8, 4, "# framework");
+        assertThat(ConfigDocument.moveComments(emitted, java.util.Collections.singletonList(right)))
+                .isEqualTo("a:\n  b:\n    # note\n\n    # framework\n    k: 1\n");
+
+        ConfigDocument.CommentMove otherComment = new ConfigDocument.CommentMove(2, 4, 2, "# framework");
+        ConfigDocument.CommentMove wrongColumn = new ConfigDocument.CommentMove(4, 6, 4, "# framework");
+        ConfigDocument.CommentMove notAComment = new ConfigDocument.CommentMove(5, 4, 2, "# framework");
+        for (ConfigDocument.CommentMove wrong : java.util.Arrays.asList(otherComment, wrongColumn, notAComment)) {
+            assertThat(ConfigDocument.moveComments(emitted, java.util.Arrays.asList(right, wrong))).isEqualTo(emitted);
+        }
+    }
+
+    /** 17-64 review round 3 R3-02: a blank line added in memory matches the blank line read back (by type). */
+    @Test
+    @DisplayName("a framework comment with a blank line added in memory is not left doubled")
+    void inMemoryBlankLineIsMatchedByType() throws Exception {
+        ConfigDocument document = ConfigDocument.parse("a:\n  b:\n    k: 1\n");
+        document.setFrameworkComment(path("a", "b", "k"), java.util.Arrays.asList("L1", null, "L2"));
+        assertThat(document.render()).isEqualTo("a:\n  b:\n    # L1\n\n    # L2\n    k: 1\n");
+
+        ConfigDocument below = ConfigDocument.parse("a:\n  b:\n    # note\n    k: 1\n");
+        below.replaceFrameworkComment(path("a", "b", "k"), 0, java.util.Arrays.asList(null, "L2"));
+        assertThat(below.render()).isEqualTo("a:\n  b:\n    # note\n\n    # L2\n    k: 1\n");
+    }
+
     @Test
     @DisplayName("a framework comment rewritten below a note and a blank line in a nested block is not shifted")
     void rewrittenRunBelowABlankLineIsNotShifted() throws Exception {

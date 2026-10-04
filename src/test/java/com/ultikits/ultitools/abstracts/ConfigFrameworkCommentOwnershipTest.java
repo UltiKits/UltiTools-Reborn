@@ -114,6 +114,23 @@ class ConfigFrameworkCommentOwnershipTest {
 
     @SuppressWarnings("unused") // read reflectively by the binder
     @ConfigEntity(PATH)
+    static class SeparatorConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "a.s")
+        String s = "x";
+
+        @ConfigEntry(path = "a.b.k", comment = "{config.item.interval}")
+        int k = 1;
+
+        @ConfigEntry(path = "a.b.m")
+        int m = 2;
+
+        public SeparatorConfig(String path) {
+            super(path);
+        }
+    }
+
+    @SuppressWarnings("unused") // read reflectively by the binder
+    @ConfigEntity(PATH)
     static class UnknownConfig extends AbstractConfigEntity {
         @ConfigEntry(path = "item.unknown", comment = UNKNOWN_TOKEN)
         boolean unknown = true;
@@ -418,6 +435,52 @@ class ConfigFrameworkCommentOwnershipTest {
         config.save();
         assertThat(text()).isEqualTo("item:\n  # note\n\n  # " + EN_INTERVAL + "\n  interval: 450\n  message: " + value + "\n");
         assertThat(config.message).isEqualTo(value);
+    }
+
+    private static String separatorTail(String framework) {
+        return "  b:\n    # note\n\n    # " + framework + "\n    k: 1\n    # tail\n\n        # operator deep\n    m: 2\n";
+    }
+
+    /**
+     * 17-64 review round 3 R3-01: a value holding one or four U+2028 does not shift the comments after it - through a
+     * gated language switch the framework line stays at the key's column and follows en and zh; the operator's deeper
+     * line keeps its column.
+     */
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0} x U+2028")
+    @org.junit.jupiter.params.provider.ValueSource(ints = {1, 4})
+    @DisplayName("a value holding U+2028: the framework line follows en and zh at the key's column through gated writes")
+    void lineSeparatorValueThroughGatedLanguageSwitches(int count) throws Exception {
+        StringBuilder separators = new StringBuilder();
+        for (int i = 0; i < count; i++) {
+            separators.append('\u2028');
+        }
+        String head = "a:\n  s: |-\n    x" + separators + "    y\n";
+        put(head + separatorTail(ZH_INTERVAL));
+
+        language = "en";
+        new SeparatorConfig(PATH).init(plugin);
+        assertThat(text()).isEqualTo(head + separatorTail(EN_INTERVAL));
+
+        language = "zh";
+        new SeparatorConfig(PATH).init(plugin);
+        assertThat(text()).isEqualTo(head + separatorTail(ZH_INTERVAL));
+    }
+
+    @Test
+    @DisplayName("a module save of a value holding four U+2028 keeps every comment line at its column")
+    void saveOfALineSeparatorValueKeepsCommentColumns() throws Exception {
+        language = "en";
+        put("a:\n  s: x\n" + separatorTail(EN_INTERVAL));
+        SeparatorConfig config = new SeparatorConfig(PATH);
+        config.init(plugin);
+
+        config.s = "x\u2028y\u2028z\u2028w\u2028v";
+        config.save();
+
+        assertThat(text()).endsWith(separatorTail(EN_INTERVAL));
+        SeparatorConfig reread = new SeparatorConfig(PATH);
+        reread.init(plugin);
+        assertThat(reread.s).isEqualTo("x\u2028y\u2028z\u2028w\u2028v");
     }
 
     @Test
