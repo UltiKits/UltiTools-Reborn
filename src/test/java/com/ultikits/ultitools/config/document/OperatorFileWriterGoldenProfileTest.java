@@ -129,6 +129,13 @@ class OperatorFileWriterGoldenProfileTest {
                 assertThat(line).as("removed line inside the key's own lines " + region[0] + ".." + region[1])
                         .isBetween(region[0], region[1]);
             }
+            // Review round 2 IN-R2-02: the added lines too, in the new text's coordinates - a renderer that also
+            // inserted a line elsewhere is caught here, independently of the gate's own spans.
+            int[] rendered = valueRegion(after, owned.values().get(0));
+            for (int line : diff.addedAt) {
+                assertThat(line).as("added line inside the key's own lines " + rendered[0] + ".." + rendered[1])
+                        .isBetween(rendered[0], rendered[1]);
+            }
         } else {
             for (String line : diff.removed) {
                 assertThat(line.trim()).as("removed comment line").startsWith("#");
@@ -143,13 +150,21 @@ class OperatorFileWriterGoldenProfileTest {
                 assertThat(diff.removedIsContiguous()).isTrue();
                 assertThat(diff.removedAt.get(diff.removedAt.size() - 1)).as("directly above the owned key").isEqualTo(keyLine - 1);
             }
+            // Review round 2 IN-R2-02: the added comment lines, also where none was removed, are one block ending
+            // directly above the owned key in the new text.
+            int renderedKeyLine = valueRegion(after, owned.comments().get(0))[0];
+            assertThat(diff.addedIsContiguous()).as("one added comment block").isTrue();
+            assertThat(diff.addedAt.get(diff.addedAt.size() - 1)).as("added directly above the owned key")
+                    .isEqualTo(renderedKeyLine - 1);
         }
     }
 
     /**
      * The key line of {@code path} and the last line of its value, found with SnakeYAML's own composer (not the
      * gate's span logic): the value ends at the last line before the next key that is not blank and not a comment
-     * at or left of the key's column (a block scalar's content is indented deeper than its key).
+     * at or left of the key's column (a block scalar's content is indented deeper than its key). A keep-chomped
+     * block scalar ({@code |+}, {@code >+}) also owns the blank lines it keeps (review round 2 IN-R2-02): they are
+     * part of its value, up to the composer's end mark.
      */
     private static int[] valueRegion(String text, List<String> path) {
         org.yaml.snakeyaml.nodes.Node node = new org.yaml.snakeyaml.Yaml(ConfigDocument.loaderOptions())
@@ -189,7 +204,27 @@ class OperatorFileWriterGoldenProfileTest {
                 last = i;
             }
         }
+        if (node instanceof org.yaml.snakeyaml.nodes.ScalarNode && ((org.yaml.snakeyaml.nodes.ScalarNode) node).getValue().endsWith("\n\n")) {
+            org.yaml.snakeyaml.error.Mark end = node.getEndMark();
+            last = Math.max(last, Math.min(next - 1, end.getColumn() == 0 ? end.getLine() - 1 : end.getLine()));
+        }
         return new int[]{keyLine, last};
+    }
+
+    /**
+     * Review round 2 IN-R2-02: the independent checks themselves - a set that also adds a line outside the key, and a
+     * comment added away from its key, fail them; a keep-chomped value's blank lines count as the value.
+     */
+    @org.junit.jupiter.api.Test
+    void independentChecksAreBoundToTheOwnedKeyOnBothSides() {
+        OwnedPaths setA = OwnedPaths.builder().value(Collections.singletonList("a")).build();
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> independentlyCheck(
+                "a: 1\nb: 2\n", "a: 2\nb: 2\nstray: 3\n", Check.SET, setA)).isInstanceOf(AssertionError.class);
+        OwnedPaths commentB = OwnedPaths.builder().comment(Collections.singletonList("b")).build();
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> independentlyCheck(
+                "a: 1\nb: 2\n", "# " + COMMENT + "\na: 1\nb: 2\n", Check.COMMENT, commentB)).isInstanceOf(AssertionError.class);
+        independentlyCheck("a: 1\nb: 2\n", "a: 1\n# " + COMMENT + "\nb: 2\n", Check.COMMENT, commentB);
+        independentlyCheck("a: |+\n  x\n\nb: 1\n", "a: |+\n  y\nb: 1\n", Check.SET, setA);
     }
 
     private static boolean isSeparatorOf(List<String> removed, String added) {

@@ -14,6 +14,8 @@ final class LineDiff {
     final List<String> added = new ArrayList<>();
     /** Line numbers (0-based, in the old text) of the removed lines. */
     final List<Integer> removedAt = new ArrayList<>();
+    /** Line numbers (0-based, in the new text) of the added lines. */
+    final List<Integer> addedAt = new ArrayList<>();
 
     private LineDiff() {
     }
@@ -38,6 +40,7 @@ final class LineDiff {
                 diff.removedAt.add(i);
                 diff.removed.add(a.get(i++));
             } else {
+                diff.addedAt.add(j);
                 diff.added.add(b.get(j++));
             }
         }
@@ -46,6 +49,7 @@ final class LineDiff {
             diff.removed.add(a.get(i++));
         }
         while (j < b.size()) {
+            diff.addedAt.add(j);
             diff.added.add(b.get(j++));
         }
         return diff;
@@ -53,8 +57,17 @@ final class LineDiff {
 
     /** Whether the removed lines are one contiguous block of the old text. */
     boolean removedIsContiguous() {
-        for (int k = 1; k < removedAt.size(); k++) {
-            if (removedAt.get(k) != removedAt.get(k - 1) + 1) {
+        return contiguous(removedAt);
+    }
+
+    /** Whether the added lines are one contiguous block of the new text. */
+    boolean addedIsContiguous() {
+        return contiguous(addedAt);
+    }
+
+    private static boolean contiguous(List<Integer> at) {
+        for (int k = 1; k < at.size(); k++) {
+            if (at.get(k) != at.get(k - 1) + 1) {
                 return false;
             }
         }
