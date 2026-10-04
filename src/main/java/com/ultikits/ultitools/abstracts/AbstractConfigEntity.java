@@ -208,7 +208,7 @@ public abstract class AbstractConfigEntity {
     private static final class ModuleChange {
         private final Field field;
         private final List<String> leaf;
-        private final List<String> path;
+        private List<String> path;
         private boolean present;
         private Object value;
         /**
@@ -247,6 +247,13 @@ public abstract class AbstractConfigEntity {
         private void writeWhole(Object unit) {
             this.present = true;
             this.value = PlainData.copy(unit);
+        }
+
+        /** Addresses the change where the file being written holds the setting ({@code setting}, #612). */
+        private void relocate(List<String> setting) {
+            List<String> located = new ArrayList<>(setting);
+            located.addAll(leaf);
+            this.path = located;
         }
     }
 
@@ -322,10 +329,14 @@ public abstract class AbstractConfigEntity {
                 savedSnapshot.put(field, mine);
                 continue;
             }
+            // The setting is written where the file holds it (a flat dotted key stays flat); one now written twice is not
+            // the value the module started from and is not written (#612).
+            boolean twice = heldTwice(read, field);
             for (List<String> leaf : leaves) {
-                List<String> path = new ArrayList<>(keys(field)); path.addAll(leaf);
+                List<String> path = new ArrayList<>(keysIn(read, field)); path.addAll(leaf);
                 ModuleChange change = new ModuleChange(field, leaf, path, mine, acknowledgedRaw.get(field));
-                if (startedFromFile(field, leaf, base)) { writable.add(change); } else { unwritten.add(describeKey(field, leaf)); }
+                if (!twice && startedFromFile(field, leaf, base)) { writable.add(change); }
+                else { unwritten.add(describeKey(field, leaf)); }
             }
         }
         List<ModuleChange> onDisk = new ArrayList<>();
@@ -633,6 +644,12 @@ public abstract class AbstractConfigEntity {
         if (protectFailedLoad(loaded)) { throw refused("the file cannot be read or parsed"); }
         ConfigDocument read = loaded.state() == ConfigLoadResult.State.LOADED ? loaded.document() : ConfigDocument.empty();
         for (ModuleChange change : changes) {
+            // Written on the line the file holds the setting on - a flat dotted key stays flat - and refused when the file
+            // now holds it twice, since writing one form would leave the other (#612).
+            if (heldTwice(read, change.field)) { throw refused(heldTwiceReason(change.field) + ", then reload"); }
+            change.relocate(keysIn(read, change.field));
+        }
+        for (ModuleChange change : changes) {
             // A field edited inside a composite value is written as the whole value built from what was last read: only
             // while the file still holds exactly that value - observed on the read the gate verifies against - never
             // rebuilt over an edit made since (17-65 route change after review round 3, R3-01).
@@ -713,6 +730,29 @@ public abstract class AbstractConfigEntity {
 
     private List<String> keys(Field field) { return Arrays.asList(fieldPath(field).split("\\.", -1)); }
 
+    /**
+     * Where {@code doc} holds {@code field}'s setting: its one reading ({@link ConfigDocument#readings(String)}) - the
+     * nested keys, a flat dotted key such as {@code features.chat}, or a mix such as {@code a.b: {c: 1}} - or, when it
+     * holds none, the nested keys, which is where an insert puts it. One key semantics for every reader and writer of a
+     * declared setting (#612): a setting the operator wrote in flat form is read, saved and edited on that line, and
+     * never gets a nested copy. A setting held in several forms is refused first ({@link #heldTwice}).
+     */
+    private List<String> keysIn(ConfigDocument doc, Field field) {
+        List<List<String>> readings = doc.readings(fieldPath(field));
+        return readings.size() == 1 ? readings.get(0) : keys(field);
+    }
+
+    /** Whether {@code doc} holds {@code field}'s setting in more than one form (#612). */
+    private boolean heldTwice(ConfigDocument doc, Field field) {
+        return doc.readings(fieldPath(field)).size() > 1;
+    }
+
+    /** The refusal text for a setting held in more than one form: the setting path, never a value (#612). */
+    private String heldTwiceReason(Field field) {
+        return "setting '" + fieldPath(field) + "' is written more than once (as a flat dotted key and as nested keys,"
+                + " or in two splits of its dots); keep one";
+    }
+
     private Type declaredType(Field field) {
         return TypeToken.of(getClass()).resolveType(field.getGenericType()).getType();
     }
@@ -758,7 +798,7 @@ public abstract class AbstractConfigEntity {
     }
 
     private void acknowledgeRaw(ConfigDocument source, List<Field> fields) {
-        for (Field field : fields) { acknowledgedRaw.put(field, new RawEntry(source, keys(field))); }
+        for (Field field : fields) { acknowledgedRaw.put(field, new RawEntry(source, keysIn(source, field))); }
     }
 
     private boolean isTokenComment(Field field) {
@@ -797,11 +837,12 @@ public abstract class AbstractConfigEntity {
         int run = isTokenComment(field) ? frameworkCommentRun(target, field) : 0;
         // The operator's comment (#604): kept byte for byte, permanently (maintainer decision 2026-10-04).
         if (run < 0) { return false; }
-        List<String> before = target.blockComment(keys(field));
+        List<String> at = keysIn(target, field);
+        List<String> before = target.blockComment(at);
         // Merge-inherited entries exist in the plain view but need their own explicit comment owner.
-        target.set(keys(field), target.get(keys(field)));
-        target.replaceFrameworkComment(keys(field), run, Collections.singletonList(comment));
-        return !before.equals(target.blockComment(keys(field)));
+        target.set(at, target.get(at));
+        target.replaceFrameworkComment(at, run, Collections.singletonList(comment));
+        return !before.equals(target.blockComment(at));
     }
 
     /**
@@ -821,7 +862,7 @@ public abstract class AbstractConfigEntity {
      *         comment is the operator's and must not be touched
      */
     private int frameworkCommentRun(ConfigDocument target, Field field) {
-        List<String> comment = new ArrayList<>(target.blockCommentAsWritten(keys(field)));
+        List<String> comment = new ArrayList<>(target.blockCommentAsWritten(keysIn(target, field)));
         while (!comment.isEmpty() && comment.get(0) == null) { comment.remove(0); }
         if (comment.isEmpty()) { return 0; }
         int run = -1;
@@ -877,7 +918,7 @@ public abstract class AbstractConfigEntity {
     private boolean updateTokenComments(ConfigDocument target) {
         boolean changed = false;
         for (Field field : configEntryFields()) {
-            if (isTokenComment(field) && target.contains(keys(field))) {
+            if (isTokenComment(field) && target.contains(keysIn(target, field))) {
                 changed |= addEntryComment(target, field);
             }
         }
@@ -993,8 +1034,10 @@ public abstract class AbstractConfigEntity {
 
     /**
      * Reports presence in the last successfully loaded document, including explicit nulls and
-     * undeclared keys. The path splits at every dot like ConfigEntry paths; a key itself containing
-     * a dot cannot be addressed through this method. Failed loads report no presence.
+     * undeclared keys. The path is read the way a declared setting path is (#612): split at its dots
+     * as nested keys, or held as a flat dotted key such as {@code features.chat}, or any mix of the
+     * two; the key is present when the file holds it in any of these forms. Failed loads report no
+     * presence.
      * @param path dotted configuration path
      * @return whether the last load contained the key
      * @since 6.3.0
@@ -1002,12 +1045,7 @@ public abstract class AbstractConfigEntity {
     public final boolean isPresentInFile(String path) {
         synchronized (this) {
             if (lastLoadedPresence == null || lastLoadUnparseable) { return false; }
-            Object current = lastLoadedPresence;
-            for (String key : path.split("\\.", -1)) {
-                if (!(current instanceof Map) || !((Map<?, ?>) current).containsKey(key)) { return false; }
-                current = ((Map<?, ?>) current).get(key);
-            }
-            return true;
+            return !ConfigDocument.readings(lastLoadedPresence, path).isEmpty();
         }
     }
 
@@ -1180,6 +1218,15 @@ public abstract class AbstractConfigEntity {
         lastLoadUnparseable = false;
         ConfigDocument next = loaded.state() == ConfigLoadResult.State.LOADED
                 ? loaded.document() : ConfigDocument.empty();
+        // One key semantics (#612): a declared setting held in two forms - a flat dotted key and nested keys, or two
+        // splits of its dots - is refused before any value is bound, naming the file and the setting, never a value.
+        List<String> heldTwice = new ArrayList<>();
+        for (Field field : configEntryFields()) {
+            if (heldTwice(next, field)) { heldTwice.add(heldTwiceReason(field)); }
+        }
+        if (!heldTwice.isEmpty()) {
+            throw ConfigurationException.validationFailed(ultiToolsPlugin.getPluginName(), configFilePath, heldTwice);
+        }
         // Presence describes the load input, never defaults/comment writes or a later save read.
         Map<String, Object> loadedPresence = next.toPlain();
         Map<Field, Object> baseline = new LinkedHashMap<>(declaredDefaults);
@@ -1188,17 +1235,17 @@ public abstract class AbstractConfigEntity {
         List<Field> missing = new ArrayList<>();
         for (Field field : configEntryFields()) {
             field.setAccessible(true);
-            if (!next.contains(keys(field))) {
+            if (!next.contains(keysIn(next, field))) {
                 missing.add(field);
                 // #596 item 2: a key the operator deleted, for a setting the module did not change, resets to its
                 // declared default; a setting the module changed keeps the module's value (#511 three-way rule).
                 if (!initialize && savedSnapshot != null && savedSnapshot.containsKey(field)
                         && orderedEquals(savedSnapshot.get(field), mine.get(field))) {
-                    bindDeclaredDefault(field, presentIn(lastLoadedPresence, keys(field)));
+                    bindDeclaredDefault(field, !ConfigDocument.readings(lastLoadedPresence, fieldPath(field)).isEmpty());
                 }
                 continue;
             }
-            Object raw = next.get(keys(field));
+            Object raw = next.get(keysIn(next, field));
             try {
                 ConversionResult<Object> converted = registry().fromPlainResult(raw, declaredType(field),
                         configFilePath, keys(field), field.getAnnotation(ConfigEntry.class));
@@ -1291,16 +1338,6 @@ public abstract class AbstractConfigEntity {
         }
     }
 
-    /** Whether {@code presence} (a load's plain tree) holds {@code path}, an explicit null included. */
-    private static boolean presentIn(Map<String, Object> presence, List<String> path) {
-        Object current = presence;
-        for (String key : path) {
-            if (!(current instanceof Map) || !((Map<?, ?>) current).containsKey(key)) { return false; }
-            current = ((Map<?, ?>) current).get(key);
-        }
-        return true;
-    }
-
     /**
      * An unchecked failure inside the configuration write gate during start-up never refuses the module: one warning
      * names the file and the failure's class (never a message, which may quote file content), the declared defaults run
@@ -1325,10 +1362,10 @@ public abstract class AbstractConfigEntity {
      */
     private boolean tokenCommentsDiffer(ConfigDocument target) {
         for (Field field : configEntryFields()) {
-            if (!isTokenComment(field) || !target.contains(keys(field))) { continue; }
+            if (!isTokenComment(field) || !target.contains(keysIn(target, field))) { continue; }
             int run = frameworkCommentRun(target, field);
             if (run < 0 || resolvedComment(field).isEmpty()) { continue; }
-            List<String> current = target.blockCommentAsWritten(keys(field));
+            List<String> current = target.blockCommentAsWritten(keysIn(target, field));
             if (!current.subList(current.size() - run, current.size()).equals(renderedComment(resolvedComment(field)))) {
                 return true;
             }
@@ -1346,9 +1383,9 @@ public abstract class AbstractConfigEntity {
      */
     private void ownFrameworkComments(OwnedPaths.Builder owned, ConfigDocument read) {
         for (Field field : configEntryFields()) {
-            if (!isTokenComment(field) || !read.contains(keys(field))) { continue; }
+            if (!isTokenComment(field) || !read.contains(keysIn(read, field))) { continue; }
             int run = frameworkCommentRun(read, field);
-            if (run >= 0) { owned.frameworkComment(keys(field), run); }
+            if (run >= 0) { owned.frameworkComment(keysIn(read, field), run); }
         }
     }
 
@@ -1871,7 +1908,7 @@ public abstract class AbstractConfigEntity {
             if (path.equals(fieldPath(owner))) {
                 proposed.put(owner, raw); leaves.remove(owner); whole.add(owner); continue;
             }
-            Object source = document == null ? null : document.get(keys(owner));
+            Object source = document == null ? null : document.get(keysIn(document, owner));
             RawEntry lastRead = acknowledgedRaw.get(owner);
             List<List<String>> matches = new ArrayList<>();
             matchMapPaths(source, path.substring(fieldPath(owner).length() + 1), new ArrayList<>(), matches);
