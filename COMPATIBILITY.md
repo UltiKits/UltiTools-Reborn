@@ -15,22 +15,40 @@ unsupported declared field types before configuration initialization.
 ### Rendering and save fallback
 
 The internal config storage layer renders the whole YAML document through SnakeYAML, preserving content, comment text and key
-order. Its existing line-terminator, BOM, final-newline and supported indentation-style rules remain in effect. Operator layout
-may be normalized: aligned inline comments, flow spacing, extra spaces after a colon, document markers, mixed indentation and
-trailing spaces are not byte-preservation guarantees. Changed anchored documents expand aliases and merge keys from their plain
-values while retaining comments on surviving keys. Comments on individual list items are kept only while the list keeps its length — the same as Bukkit, which keeps none. The storage API signatures are unchanged.
+order. Its existing line-terminator, BOM, final-newline and supported indentation-style rules remain in effect.
+
+As of 6.3.0 every automatic write to a module configuration file - creating a file that does not exist, inserting a declared
+key the file lacks, rewriting the framework's own token comments at start-up or reload, and the registration batch flush - goes
+through one write gate. Each write declares the keys it owns; after rendering, every line outside them must be byte-identical
+to the file as read (line terminators, BOM and final line break included), and the file must still hold the bytes it was read
+from. Otherwise nothing is written, one warning names the file, the keys and the reason (never a value), and the declared
+defaults run in memory. These writes never normalize layout: on a hand-aligned file a missing key stays missing, with a warning
+at each start, until the operator adds it. A file using anchors, aliases or merge keys is never written automatically and is
+named once per server run. A file the framework creates is created exclusively and never replaces a file that appeared
+meanwhile. The residual window between the gate's last read and the replacement cannot be closed between an editor and the JVM.
+
+Explicit saves and panel edits still render the whole document until they are routed through the same gate
+([#599](https://github.com/UltiKits/UltiTools-Reborn/issues/599)): there, operator layout may be normalized (aligned inline
+comments, flow spacing, extra spaces after a colon, document markers, mixed indentation and trailing spaces), and changed
+anchored documents expand aliases and merge keys from their plain values while retaining comments on surviving keys. Comments on
+individual list items are kept only while the list keeps its length — the same as Bukkit, which keeps none. The storage API
+signatures are unchanged.
 
 Saving first attempts a forced same-directory temporary file and atomic replacement. Only an unsupported atomic move, EBUSY,
-EXDEV, or a permission/read-only refusal to create the temporary file allows the narrow fallback: exclusively create `<file>.bak`,
-copy and force the existing target's bytes, then overwrite and force the existing target in place. If a backup already exists,
-it is refreshed from the current target through a forced same-directory temporary and atomic replacement before the target is
-opened. A backup creation/write/force or refresh rename failure refuses the save before the target is touched and preserves the
-previous backup. No old-backup restoration or validation of the current target is implied by this refresh. Other staging or move
-failures refuse the save. A fallback attempt logs one warning identifying the target, backup, cause and outcome. Symbolic links
-remain links, with the backup beside the resolved target.
+EXDEV, or a permission/read-only refusal to create the temporary file allows the narrow fallback: exclusively create a backup
+named `<file name>.ultitools-backup-<16 lower-case hex>`, copy and force the existing target's bytes, then overwrite and force the
+existing target in place. If this server run already wrote such a backup for the same file and it still holds exactly the bytes
+written, it is refreshed from the current target through a forced same-directory temporary and atomic replacement before the
+target is opened. A backup creation/write/force or refresh rename failure refuses the save before the target is touched and
+preserves the previous backup. No old-backup restoration or validation of the current target is implied by this refresh. Other
+staging or move failures refuse the save. A fallback attempt logs one warning identifying the target, backup, cause and outcome.
+Symbolic links remain links, with the backup beside the resolved target. The writer reads, writes or deletes no other name: an
+operator's own `<file>.bak` (the name the fallback used before 6.3.0's #601) is never touched.
 
 After an in-place write begins, a failure may leave a partial target, but its complete forced backup remains. That backup is
-removed only after the next successful strict UTF-8 storage load; unreadable or unparseable files keep it. Backup cleanup is best
+removed only after the next successful strict UTF-8 storage load, and only while its bytes still match what the writer recorded;
+unreadable or unparseable files keep it. A file of the backup pattern that this server run did not write, or whose bytes changed
+after it was written, is kept and named once at INFO; delete it yourself once it is no longer needed. Backup cleanup is best
 effort and cannot turn a successful load into a failure. No automatic restoration policy is introduced.
 
 ### Declared types, whole map keys and persistence
@@ -123,6 +141,8 @@ As of 6.3.0, package/directory configuration registration buffers initialization
 entity binds and validates. A refused batch creates no file and changes no existing file, including
 missing-key and language-token comment rewrites. Once accepted, files persist independently; an I/O
 failure preserves earlier successful files and protects the failed entity until a successful reload.
+The flush writes through the write gate (see "Rendering and save fallback") and only while the file still
+holds the bytes read at registration; an edit made in between is kept, with one warning.
 Standalone registration still writes immediately. Framework-internal initialization bridges are not
 a module transaction API.
 
@@ -346,8 +366,8 @@ separate crash-safe multi-file transaction limit.
 
 - 新扩展点是 `ConfigConverter<T>` 和 `@ConfigConverterFor`，转换器必须是扫描包内带 public 无参构造器的 public 顶层类；扫描器不发现嵌套转换器。它不是 IoC bean。未知声明类型在读取或创建文件前拒绝模块加载；官方 UltiRecipe 的配方对象需要模块自己的转换器。
 - 注解 `path` 中的点仍表示嵌套路径；映射里的 `g.m`、`o.O`、`wave.` 从 6.3.0 起按完整键保存。6.2 已经拆开的文件原样读取，不会自动合并。完整泛型参与绑定；无效集合元素跳过，无效字段用声明默认值，缺失的重载字段保留运行值。允许 null 的引用类型可往返；`Object` 中的 Bukkit 序列化对象读取后仍是普通映射。
-- 保存内容、注释文字、键顺序和支持的文件风格；有修改时整份经过 SnakeYAML 输出，运维排版可以规整。语义无变化不写文件，字节和修改时间不变。浮点数按最短可回读十进制判断，不要求二进制精确。
-- 先临时文件、force、原子替换；仅已允许的原子替换/临时创建拒绝才走备份后原地写。已有 `.bak` 先从当前文件刷新并原子替换，之后才打开目标。失败保留备份，只有成功严格加载当前文件才清理；不自动还原，不保证多文件崩溃事务。
+- 保存内容、注释文字、键顺序和支持的文件风格。6.3.0 起，所有自动写入（创建不存在的文件、补写缺失的声明键、启动或重载时改写框架自己的令牌注释、注册批次落盘）都经过同一个写入闸门：每次写入声明自己拥有的键，渲染后其余每一行必须与读取时逐字节相同（含换行符、BOM 和末尾换行），且文件仍是读取时的内容；否则不写，警告一次（只列文件、键和原因，不列值），内存中使用声明默认值。这些写入不会规整排版：手工对齐的文件缺少的键会一直缺少，每次启动警告一次，直到服主自己补上。使用锚点、别名或合并键的文件不会被自动写入，每次运行只提示一次。框架新建文件时独占创建，绝不替换期间出现的文件。显式保存和面板编辑暂时仍整份经过 SnakeYAML 输出（#599），运维排版可以规整。语义无变化不写文件，字节和修改时间不变。浮点数按最短可回读十进制判断，不要求二进制精确。
+- 先临时文件、force、原子替换；仅已允许的原子替换/临时创建拒绝才走备份后原地写。备份文件名为 `<文件名>.ultitools-backup-<16 位小写十六进制>`，独占创建；本次运行已为同一文件写过、且内容未变的备份先从当前文件刷新并原子替换，之后才打开目标。写入器不读取、不写入、不删除任何其它文件，服主自己的 `<文件>.bak` 不受影响。失败保留备份，只有成功严格加载当前文件、且备份内容仍与记录一致时才清理；本次运行未写过或已被改动的同类备份保留，并以 INFO 提示一次。不自动还原，不保证多文件崩溃事务。
 - 不能读取、不能解析、非 UTF-8 文件不会被任何实体写入路径覆盖；初次失败用默认值，重载失败保留运行值。成功加载才解除保护。单独 `{key}` 注释归框架所有，按模块当前语言目录更新；字面注释保持。成功覆盖运维值时一条警告只列文件和键，不列值。
 - `getConfig()` 在 6.2.5 确实可用，不能冒称符合两个同版删除例外；维护者通过 6.3.0 一次性 carve-out 删除它。改用 `isPresentInFile` 查询上次成功加载时的存在性，修改声明字段后 `save()`。两个已知官方调用在 UltiEssentials 与 UltiRemoteBag；第三方用量未知。
 - 六个旧解析器相关声明在 6.3.0 首次带 `forRemoval`，公告 6.4.0 删除。显式非默认 parser 暂时保留冻结的旧行为；默认 parser 改走注册表。迁移示例见上方，转换器必须满足两条互逆等式，不能单向加值或悄悄丢字段。

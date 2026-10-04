@@ -19,8 +19,12 @@ import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.security.SecureRandom;
 import java.util.logging.Level;
@@ -35,10 +39,17 @@ import org.jetbrains.annotations.ApiStatus;
  * Normally the new UTF-8 text is written to a same-directory temporary file with the target's POSIX
  * permissions, forced to disk, and atomically moved over the target. Eligible atomic-replace failures
  * (unsupported atomic moves, EBUSY or EXDEV) and temporary-creation permission/read-only refusals use a
- * narrow fallback: exclusively create {@code <file>.bak}, copy and force the old content, then overwrite
- * and force the existing target in place. An existing backup is refreshed through a forced same-directory
- * temporary and atomic replacement before the target is opened. A complete forced backup
- * remains until the next successful strict UTF-8 load. Each fallback attempt logs its path, cause and outcome.
+ * narrow fallback: exclusively create a backup named {@code <file name>.ultitools-backup-<16 lower-case hex>},
+ * copy and force the old content, then overwrite and force the existing target in place. A backup this server
+ * run already recorded for the same target, whose bytes still match the record, is refreshed through a forced
+ * same-directory temporary and atomic replacement before the target is opened. A complete forced backup
+ * remains until the next successful strict UTF-8 load, which deletes it only while its bytes still match what
+ * the writer recorded; any other file of that pattern is kept and named once at INFO. Each fallback attempt
+ * logs its path, cause and outcome.
+ * <p>
+ * <b>Why it cannot overwrite operator content.</b> The writer reads, writes or deletes only the target it was
+ * given and names of its own two patterns, {@code <file name>.tmp-<16 lower-case hex>} and the backup pattern
+ * above; an operator's {@code <file>.bak}, or any other name, is never touched (UltiKits/UltiTools-Reborn#601).
  * <p>
  * Before the in-place target is opened, failures leave its bytes unchanged. Once that open is attempted,
  * an I/O failure may leave a partial target, but its complete forced backup is retained. No automatic
@@ -56,10 +67,15 @@ public final class AtomicConfigWriter {
     private static final Logger LOGGER = Logger.getLogger(AtomicConfigWriter.class.getName());
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final String TEMPORARY_INFIX = ".tmp-";
+    private static final String BACKUP_INFIX = ".ultitools-backup-";
     private static final Pattern TEMPORARY_SUFFIX = Pattern.compile("[0-9a-f]{16}");
     private static final Set<Path> LIVE_TEMPORARIES = new HashSet<>();
     /** Serializes replacement and successful-load backup cleanup within this JVM. */
     static final Object WRITE_LOAD_LOCK = new Object();
+    /** The backup this server run created for each target (resolved path), with its SHA-256; guarded by WRITE_LOAD_LOCK. */
+    private static final Map<Path, RecordedBackup> BACKUPS = new HashMap<>();
+    /** Backups of the framework's pattern already named at INFO this server run; guarded by WRITE_LOAD_LOCK. */
+    private static final Set<Path> NAMED_LEFTOVERS = new HashSet<>();
     private static final FileOperations FILES = new FileOperations() {
     };
     /** The real file operations, for {@link ConfigDocument#load(Path)}. */
@@ -199,7 +215,18 @@ public final class AtomicConfigWriter {
     }
 
     static String temporaryName(String fileName) {
-        StringBuilder name = new StringBuilder(fileName).append(TEMPORARY_INFIX);
+        return randomName(fileName, TEMPORARY_INFIX);
+    }
+
+    /** Whether {@code candidate} has the exact form {@code <fileName>.ultitools-backup-<16 lower-case hex>}. */
+    static boolean isBackupOf(String fileName, String candidate) {
+        return candidate.length() == fileName.length() + BACKUP_INFIX.length() + 16
+                && candidate.startsWith(fileName + BACKUP_INFIX)
+                && TEMPORARY_SUFFIX.matcher(candidate.substring(fileName.length() + BACKUP_INFIX.length())).matches();
+    }
+
+    private static String randomName(String fileName, String infix) {
+        StringBuilder name = new StringBuilder(fileName).append(infix);
         String hex = Long.toHexString(RANDOM.nextLong());
         for (int i = hex.length(); i < 16; i++) {
             name.append('0');
@@ -231,15 +258,52 @@ public final class AtomicConfigWriter {
         }
     }
 
-    static Path backupOf(Path target) {
-        return target.resolveSibling(target.getFileName() + ".bak");
-    }
-
+    /**
+     * After a successful strict load: deletes the backup this server run recorded for {@code destination} while
+     * its bytes still match the record, and names once at INFO every other file of the backup pattern beside it
+     * (left by an earlier run, or changed since it was written), which is kept. Nothing else is read or deleted.
+     * Failures are logged at FINE; the next load tries again. Called under {@link #WRITE_LOAD_LOCK}.
+     *
+     * @param destination the loaded file (a symbolic link already resolved)
+     * @param files       the file operations
+     */
     static void deleteBackupAfterLoad(Path destination, FileOperations files) {
         try {
-            files.delete(backupOf(destination));
+            Path directory = destination.getParent();
+            String name = destination.getFileName().toString();
+            if (directory == null || !Files.isDirectory(directory)) {
+                return;
+            }
+            List<Path> candidates = new ArrayList<>();
+            try (DirectoryStream<Path> entries = Files.newDirectoryStream(directory,
+                    entry -> isBackupOf(name, entry.getFileName().toString()))) {
+                for (Path candidate : entries) {
+                    candidates.add(candidate);
+                }
+            }
+            RecordedBackup recorded = BACKUPS.get(destination);
+            for (Path candidate : candidates) {
+                if (recorded != null && candidate.equals(recorded.path) && recorded.matches(files)) {
+                    deleteRecorded(destination, candidate, files);
+                } else if (NAMED_LEFTOVERS.add(candidate)) {
+                    LOGGER.info("Kept " + candidate + ": a config backup this server run did not create, or whose bytes"
+                            + " changed after it was written; delete it once it is no longer needed");
+                }
+            }
+            if (recorded != null && !candidates.contains(recorded.path)) {
+                BACKUPS.remove(destination);
+            }
         } catch (IOException | RuntimeException failure) {
-            LOGGER.log(Level.FINE, "Could not delete loaded config backup beside " + destination, failure);
+            LOGGER.log(Level.FINE, "Could not look for config backups beside " + destination, failure);
+        }
+    }
+
+    private static void deleteRecorded(Path destination, Path backup, FileOperations files) {
+        try {
+            files.delete(backup);
+            BACKUPS.remove(destination);
+        } catch (IOException | RuntimeException failure) {
+            LOGGER.log(Level.FINE, "Could not delete loaded config backup " + backup, failure);
         }
     }
 
@@ -336,7 +400,10 @@ public final class AtomicConfigWriter {
         }
 
         private void replaceInPlace(byte[] replacement, IOException cause) throws IOException {
-            Path backup = backupOf(target);
+            RecordedBackup recorded = BACKUPS.get(target);
+            boolean refresh = recorded != null && recorded.matches(files);
+            Path backup = refresh ? recorded.path
+                    : target.resolveSibling(randomName(target.getFileName().toString(), BACKUP_INFIX));
             boolean created = false;
             boolean forced = false;
             boolean success = false;
@@ -344,10 +411,11 @@ public final class AtomicConfigWriter {
                 byte[] content = replacement == null ? files.read(temporary) : replacement;
                 byte[] original = files.read(target);
                 FileAttribute<?>[] attributes = files.temporaryAttributes(target);
-                if (Files.exists(backup)) {
+                if (refresh) {
                     refreshBackup(backup, original, attributes);
                     forced = true;
                 } else {
+                    // A fresh framework-only name, created exclusively: never an existing file.
                     try (FileChannel channel = files.openBackup(backup, attributes)) {
                         created = true;
                         writeAll(files, channel, original);
@@ -355,6 +423,7 @@ public final class AtomicConfigWriter {
                         forced = true;
                     }
                 }
+                BACKUPS.put(target, new RecordedBackup(backup, ConfigDocument.sha256(original)));
                 syncDirectory(target.getParent());
                 try (FileChannel channel = files.openTarget(target)) {
                     writeAll(files, channel, content);
@@ -426,6 +495,28 @@ public final class AtomicConfigWriter {
             deleteQuietly(temporary);
             release(identity);
             return !Files.exists(temporary);
+        }
+    }
+
+    /** A backup this server run wrote, and the SHA-256 of the bytes it wrote there. */
+    private static final class RecordedBackup {
+
+        private final Path path;
+        private final String sha256;
+
+        RecordedBackup(Path path, String sha256) {
+            this.path = path;
+            this.sha256 = sha256;
+        }
+
+        /** Whether the backup is still a regular file holding exactly the recorded bytes. */
+        boolean matches(FileOperations files) {
+            try {
+                return Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)
+                        && sha256.equals(ConfigDocument.sha256(files.read(path)));
+            } catch (IOException | RuntimeException unreadable) {
+                return false;
+            }
         }
     }
 
