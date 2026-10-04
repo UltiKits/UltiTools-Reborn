@@ -282,6 +282,25 @@ class ConfigFrameworkCommentOwnershipTest {
     }
 
     @Test
+    @DisplayName("an empty catalogue text identifies nothing: an operator's bare '#' line above the setting is kept")
+    void emptyCatalogueTextIdentifiesNoLine() throws Exception {
+        shipped.get("en").put("config.item.interval", "");
+        shipped.get("zh").put("config.item.interval", "");
+        String operatorBlank = "item:\n  # note\n  #\n  interval: 300\n";
+        put(operatorBlank);
+
+        language = "zh";
+        TokenConfig config = new TokenConfig(PATH);
+        config.init(plugin);
+        language = "en";
+        shipped.get("en").put("config.item.interval", EN_INTERVAL);
+        config.reload();
+
+        assertThat(text()).as("the framework never writes an empty comment, so '#' is not its line").isEqualTo(operatorBlank);
+        assertThat(mtime()).isEqualTo(OLD);
+    }
+
+    @Test
     @DisplayName("a literal comment is never rewritten; it is written only when its key is inserted")
     void literalCommentIsWrittenOnlyWhenItsKeyIsInserted() throws Exception {
         put("item:\n  # the operator's own words\n  kept: 5\n");
