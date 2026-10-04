@@ -325,37 +325,55 @@ class ConfigStagedPanelWriteTest {
     /**
      * #600: the staged batch keeps its prepare-then-commit shape through the config write gate, and each file's bytes are
      * checked again immediately before its move: a file the operator saved between staging and commit is kept, the files
-     * already committed are restored, and every entity is left as it was.
+     * already committed are restored, and every entity is left as it was. The batch's commit order is not assumed.
      */
     @Test
     void fileChangedBetweenStagingAndCommitRollsTheWholeBatchBack() throws Exception {
-        byte[] operatorEdit = "# operator header\nvalue: 2\nother: edited after staging\nunknown: keep\n"
-                .getBytes(StandardCharsets.UTF_8);
-        AtomicInteger moved = new AtomicInteger();
+        List<Path> stagedTargets = new ArrayList<>();
+        List<Path> movedTargets = new ArrayList<>();
+        Path[] edited = new Path[1];
         try (MockedStatic<AtomicConfigWriter> writer = Mockito.mockStatic(
                 AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
             writer.when(() -> AtomicConfigWriter.stage(any(Path.class), anyString())).thenAnswer(call -> {
+                Path target = call.getArgument(0);
+                stagedTargets.add(target);
                 AtomicConfigWriter.StagedWrite observed = Mockito.spy((AtomicConfigWriter.StagedWrite) call.callRealMethod());
                 Mockito.doAnswer(commit -> {
                     Object result = commit.callRealMethod();
-                    if (moved.incrementAndGet() == 1) { Files.write(directory.resolve("file2.yml"), operatorEdit); }
+                    movedTargets.add(target);
+                    if (movedTargets.size() == 1) {
+                        // The operator saves another staged file after the first move and before its own commit.
+                        for (Path other : stagedTargets) {
+                            if (!other.equals(target)) { edited[0] = other; break; }
+                        }
+                        Files.write(edited[0], operatorEdit(edited[0]));
+                    }
                     return result;
                 }).when(observed).commit();
                 return observed;
             });
             assertThatThrownBy(() -> manager.loadFromJson(payload()))
                     .isInstanceOf(com.ultikits.ultitools.config.ConfigWriteRefusedException.class)
-                    .hasMessageContaining("file2.yml");
+                    .hasMessageContaining(edited[0].getFileName().toString());
         }
-        assertThat(moved.get()).as("only the first file was moved").isEqualTo(1);
-        assertThat(Files.readAllBytes(directory.resolve("file1.yml"))).as("restored").isEqualTo(originals.get(0));
-        assertThat(Files.readAllBytes(directory.resolve("file2.yml"))).as("the operator's save is kept").isEqualTo(operatorEdit);
-        assertThat(Files.readAllBytes(directory.resolve("file3.yml"))).isEqualTo(originals.get(2));
+        assertThat(stagedTargets).as("every file staged before the first move").hasSize(3);
+        assertThat(movedTargets).as("only the first file was moved").hasSize(1);
         for (int i = 0; i < entities.size(); i++) {
+            Path target = directory.resolve(entities.get(i).getConfigFilePath());
+            if (target.equals(edited[0])) {
+                assertThat(Files.readAllBytes(target)).as("the operator's save is kept").isEqualTo(operatorEdit(target));
+            } else {
+                assertThat(Files.readAllBytes(target)).as("restored or untouched").isEqualTo(originals.get(i));
+            }
             assertThat(entities.get(i).value).isEqualTo(i + 1);
             assertThat(state(entities.get(i))).isEqualTo(checkpoints.get(i));
         }
         assertNoTemporaries();
+    }
+
+    private static byte[] operatorEdit(Path target) {
+        return ("# operator header\nvalue: 7\nother: edited after staging " + target.getFileName() + "\nunknown: keep\n")
+                .getBytes(StandardCharsets.UTF_8);
     }
 
     /** #600: one file the gate refuses (anchors) refuses the whole batch with the reason, before any file is written. */
