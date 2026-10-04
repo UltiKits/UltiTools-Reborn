@@ -5,6 +5,7 @@ import static com.ultikits.ultitools.utils.PluginInitiationUtils.stopWebsocket;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -18,7 +19,9 @@ import java.security.ProtectionDomain;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -37,6 +40,11 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.commands.CloudLoginCommand;
 import com.ultikits.ultitools.commands.PluginInstallCommands;
 import com.ultikits.ultitools.commands.UltiToolsCommands;
+import com.ultikits.ultitools.config.document.ConfigDocument;
+import com.ultikits.ultitools.config.document.ConfigLoadResult;
+import com.ultikits.ultitools.config.document.ConfigParseException;
+import com.ultikits.ultitools.config.document.OperatorFileWriter;
+import com.ultikits.ultitools.config.document.OwnedPaths;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.exceptions.ConfigurationException;
@@ -431,10 +439,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
     }
 
     /**
-     * Migrates the framework's own {@code config.yml} in place, invoked from {@link #onEnable()}
+     * Adds the panel keys the framework's own {@code config.yml} is missing, invoked from {@link #onEnable()}
      * after {@link #saveDefaultConfig()} (called in {@link #onLoad()}) and before
-     * {@link #initWebSocketManagers()}. Reloads {@link #getConfig()} when the file changed, so
-     * every manager constructed afterward sees the merged file.
+     * {@link #initWebSocketManagers()}. Reloads {@link #getConfig()} only when the file was written, so every
+     * manager constructed afterward sees the merged file; when the write is refused nothing is reloaded and the
+     * jar's {@code config.yml}, which {@link #getConfig()} uses as its defaults, answers for the missing keys.
      */
     private void migrateCapabilitiesConfig() {
         boolean changed = migrateCapabilitiesConfig(new File(getDataFolder(), "config.yml"), getLogger());
@@ -444,78 +453,84 @@ public final class UltiTools extends JavaPlugin implements Localized {
     }
 
     /**
-     * The actual migration logic, taking explicit inputs rather than reading {@code this} — the
-     * same test-seam shape {@link #parsePluginVersion(String)} already uses, so this is callable
-     * from a plain JUnit test with no live Bukkit server. Never reaches for
-     * {@code AbstractConfigEntity}/{@code @ConfigEntity} — that mechanism is scoped to
-     * module-authored config POJOs and never adds a key to the framework's own existing
-     * {@code config.yml}. What transfers is the underlying Paper technique
-     * {@code AbstractConfigEntity.init()} uses: a {@link YamlConfiguration} with
-     * {@code options().parseComments(true)} set <b>before</b> {@code load()} — {@code load()}
-     * reads the option itself — plus {@code config.setComments(path, ...)} on the missing-key
-     * branch. Never modifies a value the operator already set and never removes or reorders
-     * existing content (04-CONTEXT D-01).
+     * The migration itself, taking explicit inputs rather than reading {@code this} - the same test-seam shape
+     * {@link #parsePluginVersion(String)} already uses, so it is callable from a plain JUnit test with no live server.
+     * <p>
+     * <b>Why it cannot overwrite operator content</b> (maintainer decisions of 2026-10-04: "operator-written
+     * configuration is never overwritten" and "what code may write, by file type" - a shipped file gets missing keys
+     * and the framework's own comments, insert only; UltiKits/UltiTools-Reborn#605). The file is read through
+     * {@link ConfigDocument#load(java.nio.file.Path)}; only keys absent from it are inserted, each with its comment, and
+     * the write goes through the config write gate ({@link OperatorFileWriter}) owning exactly those keys: every other
+     * byte of the file - values, hex numbers, dotted keys, quoting, layout, comments - must come out byte-identical, and
+     * the file must still hold the bytes read. Otherwise nothing is written and the gate logs one WARNING naming the
+     * keys and the reason. A key the operator set, even to an explicit null, is never touched. A file that cannot be read
+     * or parsed is never written (logged at SEVERE, as before).
      *
      * @param configFile the {@code config.yml} file to migrate
-     * @param logger     where to log a load failure
-     * @return {@code true} if the file was modified
+     * @param logger     where to log a load or write failure
+     * @return {@code true} if the file was written
      */
     private static boolean migrateCapabilitiesConfig(File configFile, Logger logger) {
-        YamlConfiguration config = new YamlConfiguration();
-        // D-08 (04-CONTEXT precedent, AbstractConfigEntity.init()'s technique): parseComments(true)
-        // must be set on THIS instance before load() runs — load() reads the option itself.
-        config.options().parseComments(true);
-        try {
-            config.load(configFile);
-        } catch (Exception e) {
-            logger.log(Level.SEVERE,
-                    "Cannot load config.yml for capability migration: " + e.getMessage(), e);
+        ConfigLoadResult loaded = ConfigDocument.load(configFile.toPath());
+        if (loaded.state() != ConfigLoadResult.State.LOADED) {
+            Exception cause = loaded.cause() != null ? loaded.cause()
+                    : loaded.state() == ConfigLoadResult.State.ABSENT ? new FileNotFoundException(configFile.getPath())
+                    : new ConfigParseException(String.valueOf(loaded.parserMessage()), null);
+            logger.log(Level.SEVERE, "Cannot load config.yml for capability migration; the file is not written: "
+                    + cause.getMessage(), cause);
             return false;
         }
 
-        boolean changed = false;
+        ConfigDocument document = loaded.document();
+        Map<List<String>, Object> missing = new LinkedHashMap<>();
+        Map<List<String>, List<String>> comments = new LinkedHashMap<>();
         for (Capability capability : Capability.values()) {
             if (capability.getConfigKey() == null) {
                 continue; // NONE — never written to config.yml
             }
-            changed |= migrateKeyIfAbsent(config, capability.getConfigPath(),
-                    capability.getDefaultEnabled(), capability.getCommentLines());
+            addIfAbsent(document, missing, comments, capability.getConfigPath(), capability.getDefaultEnabled(),
+                    capability.getCommentLines());
         }
-        changed |= migrateKeyIfAbsent(config, "ultipanel.commands.blocklist",
+        addIfAbsent(document, missing, comments, "ultipanel.commands.blocklist",
                 DEFAULT_COMMAND_BLOCKLIST, COMMAND_BLOCKLIST_COMMENT);
-        changed |= migrateKeyIfAbsent(config, "ultipanel.files.editable-roots",
+        addIfAbsent(document, missing, comments, "ultipanel.files.editable-roots",
                 DEFAULT_EDITABLE_ROOTS, EDITABLE_ROOTS_COMMENT);
-        changed |= migrateKeyIfAbsent(config, "ultipanel.logging.action-log.max-size-bytes",
+        addIfAbsent(document, missing, comments, "ultipanel.logging.action-log.max-size-bytes",
                 1_048_576, ACTION_LOG_SIZE_COMMENT);
-        changed |= migrateKeyIfAbsent(config, "ultipanel.logging.action-log.max-files",
+        addIfAbsent(document, missing, comments, "ultipanel.logging.action-log.max-files",
                 5, ACTION_LOG_FILES_COMMENT);
-
-        if (changed) {
-            try {
-                config.save(configFile);
-            } catch (IOException e) {
-                logger.log(Level.SEVERE,
-                        "Failed to persist capability migration: " + e.getMessage(), e);
-                return false;
-            }
-        }
-        return changed;
-    }
-
-    /**
-     * Sets {@code path} to {@code value} with {@code commentLines} only when it is absent from
-     * {@code config} — never overwrites a value the operator already set (04-CONTEXT D-01).
-     *
-     * @return {@code true} if the key was absent and was written
-     */
-    private static boolean migrateKeyIfAbsent(YamlConfiguration config, String path, Object value,
-                                                List<String> commentLines) {
-        if (config.get(path) != null) {
+        if (missing.isEmpty()) {
             return false;
         }
-        config.set(path, value);
-        config.setComments(path, commentLines);
-        return true;
+
+        OwnedPaths.Builder owned = OwnedPaths.builder();
+        for (List<String> path : missing.keySet()) {
+            owned.value(path);
+        }
+        try {
+            OperatorFileWriter.Result result = OperatorFileWriter.write(configFile.toPath(), owned.build(),
+                    loaded.fingerprint(), candidate -> {
+                        for (Map.Entry<List<String>, Object> entry : missing.entrySet()) {
+                            candidate.set(entry.getKey(), entry.getValue());
+                            candidate.setFrameworkComment(entry.getKey(), comments.get(entry.getKey()));
+                        }
+                    });
+            return result.outcome() == OperatorFileWriter.Outcome.WRITTEN;
+        } catch (IOException | RuntimeException e) {
+            logger.log(Level.SEVERE, "Failed to persist capability migration: " + e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /** Records {@code dottedPath} (framework keys, no key contains a dot) as missing when the document lacks it. */
+    private static void addIfAbsent(ConfigDocument document, Map<List<String>, Object> missing,
+                                    Map<List<String>, List<String>> comments, String dottedPath, Object value,
+                                    List<String> commentLines) {
+        List<String> path = Arrays.asList(dottedPath.split("\\."));
+        if (!document.contains(path)) {
+            missing.put(path, value);
+            comments.put(path, commentLines);
+        }
     }
 
     /**
