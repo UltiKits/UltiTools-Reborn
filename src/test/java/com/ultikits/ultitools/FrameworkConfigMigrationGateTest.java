@@ -180,6 +180,71 @@ class FrameworkConfigMigrationGateTest {
         assertThat(after).startsWith(new String(original, StandardCharsets.UTF_8).trim());
     }
 
+    /**
+     * PR #611 local Codex run 2 (P1): the server reads {@code config.yml} through Bukkit, which splits a flat dotted key.
+     * Capabilities the operator turned off as {@code ultipanel.capabilities.logs: false} must still read {@code false}
+     * after the migration: the keys count as present, and a nested {@code ultipanel} section that would replace them as
+     * Bukkit reads the file is never written.
+     */
+    @Test
+    void flatDottedCapabilityKeysTheOperatorTurnedOffStayOff() throws Exception {
+        byte[] original = "ultipanel.capabilities.logs: false\nultipanel.capabilities.monitoring: false\n"
+                .getBytes(StandardCharsets.UTF_8);
+        File file = write(original);
+        long modified = file.lastModified();
+
+        assertThat(migrate(file)).as("nothing is written, so no reload is requested").isFalse();
+
+        assertThat(Files.readAllBytes(file.toPath())).isEqualTo(original);
+        assertThat(file.lastModified()).isEqualTo(modified);
+        YamlConfiguration server = YamlConfiguration.loadConfiguration(file);
+        assertThat(server.getBoolean("ultipanel.capabilities.logs", true)).isFalse();
+        assertThat(server.getBoolean("ultipanel.capabilities.monitoring", true)).isFalse();
+        List<String> warnings = new ArrayList<>();
+        for (LogRecord record : migrationLog) {
+            if (record.getLevel().intValue() >= Level.WARNING.intValue()) {
+                warnings.add(record.getMessage());
+            }
+        }
+        assertThat(warnings).hasSize(1);
+        assertThat(warnings.get(0)).contains(file.getAbsolutePath()).contains("ultipanel.capabilities.logs")
+                .doesNotContain("false");
+        assertThat(gateWarnings).isEmpty();
+    }
+
+    @Test
+    void aFlatDottedKeyAfterTheNestedSectionCountsAsPresentAndIsNotInsertedAgain() throws Exception {
+        String original = "ultipanel:\n  capabilities:\n    commands: false\nultipanel.capabilities.logs: false\n";
+        File file = write(original.getBytes(StandardCharsets.UTF_8));
+
+        assertThat(migrate(file)).as("the genuinely missing keys are inserted").isTrue();
+
+        String after = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+        assertThat(after).contains("ultipanel.capabilities.logs: false\n").contains("    monitoring: true\n")
+                .contains("    commands: false\n");
+        assertThat(after).as("logs is present as Bukkit reads it, so no nested logs line is added")
+                .doesNotContain("    logs:");
+        YamlConfiguration server = YamlConfiguration.loadConfiguration(file);
+        assertThat(server.getBoolean("ultipanel.capabilities.logs", true)).isFalse();
+        assertThat(server.getBoolean("ultipanel.capabilities.commands", true)).isFalse();
+        assertThat(server.getBoolean("ultipanel.capabilities.monitoring", false)).isTrue();
+        assertThat(server.getStringList("ultipanel.files.editable-roots")).containsExactly("plugins", "logs");
+        assertThat(gateWarnings).isEmpty();
+    }
+
+    @Test
+    void aGenuinelyMissingCapabilityIsStillInsertedNextToTheOperatorsNestedValues() throws Exception {
+        File file = write("ultipanel:\n  capabilities:\n    logs: false\n".getBytes(StandardCharsets.UTF_8));
+
+        assertThat(migrate(file)).isTrue();
+
+        YamlConfiguration server = YamlConfiguration.loadConfiguration(file);
+        assertThat(server.getBoolean("ultipanel.capabilities.logs", true)).isFalse();
+        assertThat(server.isSet("ultipanel.capabilities.monitoring")).isTrue();
+        assertThat(server.isSet("ultipanel.logging.action-log.max-files")).isTrue();
+        assertThat(gateWarnings).isEmpty();
+    }
+
     /** Runs the migration on {@code original}; asserts written, every original line kept in order, values = original + keys. */
     private Path assertInsertedOnly(byte[] original) throws Exception {
         File file = write(original);
