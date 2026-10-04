@@ -215,6 +215,14 @@ public abstract class AbstractConfigEntity {
         private final List<String> path;
         private boolean present;
         private Object value;
+        /**
+         * The module's value at {@link #path} as plain data, which becomes the setting's baseline once written. It differs
+         * from {@link #value} only after {@link #writeWhole}: the file then holds the read composite with one field changed
+         * ({@code y: 64} kept as written), while the module holds its own conversion of it ({@code 64.0}); recording the
+         * written text as the baseline would leave the setting "unsaved" and refuse its next module change (PR #611 local
+         * Codex run 1).
+         */
+        private final Object effective;
         private final boolean readPresent;
         private final Object readValue;
         /**
@@ -227,6 +235,7 @@ public abstract class AbstractConfigEntity {
             this.field = field; this.leaf = leaf; this.path = path;
             this.present = leaf.isEmpty() || mapContains(mine, leaf);
             this.value = leaf.isEmpty() ? PlainData.copy(mine) : PlainData.copy(mapLeaf(mine, leaf));
+            this.effective = PlainData.copy(this.value);
             this.readPresent = read != null && read.present && (leaf.isEmpty() || mapContains(read.value, leaf));
             this.readValue = read == null ? null : leaf.isEmpty() ? PlainData.copy(read.value) : PlainData.copy(mapLeaf(read.value, leaf));
         }
@@ -362,12 +371,13 @@ public abstract class AbstractConfigEntity {
         for (ModuleChange change : applied) {
             Field field = change.field;
             RawEntry read = acknowledgedRaw.get(field);
+            // The baseline takes the module's value; the last-read entry and the document take the bytes now on disk.
             if (change.leaf.isEmpty()) {
-                savedSnapshot.put(field, PlainData.copy(change.value));
+                savedSnapshot.put(field, PlainData.copy(change.effective));
                 acknowledgedRaw.put(field, new RawEntry(true, change.value));
             } else {
                 Object base = savedSnapshot.get(field);
-                savedSnapshot.put(field, change.present ? patchedMap(base, change.leaf, change.value) : withoutLeaf(base, change.leaf));
+                savedSnapshot.put(field, change.present ? patchedMap(base, change.leaf, change.effective) : withoutLeaf(base, change.leaf));
                 Object raw = read == null ? null : read.value;
                 acknowledgedRaw.put(field, new RawEntry(true, change.present ? patchedMap(raw, change.leaf, change.value)
                         : withoutLeaf(raw, change.leaf)));
