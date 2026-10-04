@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 
@@ -83,6 +84,9 @@ public final class OperatorFileWriter {
     private static final Logger LOGGER = Logger.getLogger(OperatorFileWriter.class.getName());
     private static final List<String> SECRET_WORDS = Arrays.asList("password", "secret", "token", "credential",
             "apikey", "api_key", "key", "auth", "private", "cert");
+    private static final String ANCHORED = "the file uses YAML anchors, aliases or merge keys";
+    /** Files already named in an anchored-file warning this server run (canonical paths). */
+    private static final Set<Path> WARNED_ANCHORED = ConcurrentHashMap.newKeySet();
 
     private OperatorFileWriter() {
     }
@@ -175,6 +179,9 @@ public final class OperatorFileWriter {
         Path absolute = file.toAbsolutePath();
         Snapshot snapshot = Snapshot.read(file, owned, expectedFingerprint);
         if (snapshot.failure != null) {
+            if (ANCHORED.equals(snapshot.reason)) {
+                return refuseAnchored(absolute, owned);
+            }
             return fail(snapshot.failure, absolute, owned, Collections.<String>emptyList(), snapshot.reason);
         }
         ConfigDocument candidate = snapshot.candidate;
@@ -268,6 +275,26 @@ public final class OperatorFileWriter {
         return outcome == Outcome.FILE_CHANGED ? changed(absolute, owned, keys, reason) : refuse(absolute, owned, keys, reason);
     }
 
+    /** An anchored file is refused on every write but named once per file per server run. */
+    private static Result refuseAnchored(Path absolute, OwnedPaths owned) {
+        Path canonical = absolute.normalize();
+        try {
+            canonical = absolute.toRealPath();
+        } catch (IOException | SecurityException e) {
+            LOGGER.fine("Using the normalized path of " + absolute + " for its anchored-file warning");
+        }
+        if (WARNED_ANCHORED.add(canonical)) {
+            warn(absolute, owned, Collections.<String>emptyList(), ANCHORED
+                    + " (named once per server run; the declared defaults are used for keys the file lacks)");
+        }
+        return new Result(Outcome.REFUSED, ANCHORED, null);
+    }
+
+    /** Forgets which anchored files were named, for tests that start a fresh "server run". */
+    static void resetAnchorWarnings() {
+        WARNED_ANCHORED.clear();
+    }
+
     private static Result refuse(Path absolute, OwnedPaths owned, List<String> keys, String reason) {
         warn(absolute, owned, keys, reason);
         return new Result(Outcome.REFUSED, reason, null);
@@ -347,7 +374,7 @@ public final class OperatorFileWriter {
             } else if (owned.isWholeFile() && !absent) {
                 fail(Outcome.REFUSED, "the whole file may be written only when it does not exist");
             } else if (!absent && usesAnchors(compose(text))) {
-                fail(Outcome.REFUSED, "the file uses YAML anchors, aliases or merge keys");
+                fail(Outcome.REFUSED, ANCHORED);
             }
         }
 
