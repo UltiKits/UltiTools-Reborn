@@ -417,10 +417,6 @@ public abstract class AbstractConfigEntity {
         if (!PlainData.plainEquals(base, current)) { out.add(prefix); }
     }
 
-    /**
-     * Whether a value is compared entry by entry: it is declared as a {@link Map} and both plain forms are maps that are
-     * not a serialized object (Bukkit's {@code ==} type key).
-     */
     /** The declared value type of a map type ({@code Object} when it is raw). */
     private static Type mapValueType(Type declared) {
         return TypeToken.of(declared).resolveType(Map.class.getTypeParameters()[1]).getType();
@@ -440,6 +436,10 @@ public abstract class AbstractConfigEntity {
         return depth;
     }
 
+    /**
+     * Whether a value is compared entry by entry: it is declared as a {@link Map} and both plain forms are maps that are
+     * not a serialized object (Bukkit's {@code ==} type key).
+     */
     private static boolean splitsByEntry(Type declared, Object base, Object current) {
         return base instanceof Map && current instanceof Map
                 && Map.class.isAssignableFrom(TypeToken.of(declared).getRawType())
@@ -529,7 +529,10 @@ public abstract class AbstractConfigEntity {
      * @param entryPath the {@link ConfigEntry#path()} of a setting declared as a {@link Map}
      * @param mapKeys   the keys from that map down to the entry, one whole key each; usually just the entry's key
      * @throws IllegalArgumentException     if {@code entryPath} is not a declared entry of this configuration, the
-     *                                      setting is not declared as a map, or no key is given; nothing is written
+     *                                      setting is not declared as a map, no key is given, or the keys reach inside
+     *                                      an entry that is not itself a declared map (a serializable such as a
+     *                                      {@code Location}, or a list, is one value: name the entry itself); nothing
+     *                                      is written
      * @throws IllegalStateException        if called before {@code init}, or off the server thread while a server runs
      * @throws ConfigWriteRefusedException  if the configuration write gate refused the write; nothing is written
      * @throws IOException                  if publishing the verified file fails
