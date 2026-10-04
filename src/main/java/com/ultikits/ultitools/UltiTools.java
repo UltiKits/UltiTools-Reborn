@@ -295,7 +295,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         initPluginModules();
         migrateCapabilitiesConfig();
         initWebSocketManagers();
-        new Metrics(this, 8652);
+        startMetrics(this, 8652, getLogger());
 
         boolean loginSuccess = attemptCloudLogin();
         if (loginSuccess) {
@@ -516,6 +516,55 @@ public final class UltiTools extends JavaPlugin implements Localized {
         config.set(path, value);
         config.setComments(path, commentLines);
         return true;
+    }
+
+    /**
+     * Starts bStats metrics only when its shared file allows it without being written over.
+     * <p>
+     * <b>Why it cannot overwrite operator content</b> (maintainer foundational rule of 2026-10-04: a file an operator
+     * may edit is never overwritten automatically; inventory B3, UltiKits/UltiTools-Reborn#606). The vendored
+     * {@link Metrics} - not edited - saves its defaults over {@code plugins/bStats/config.yml}, a file shared by every
+     * bStats plugin on the server, whenever it cannot read {@code serverUuid}; on a server an unparseable file loads as
+     * empty, so its content would be replaced. This guard reads the file without writing it and constructs
+     * {@code Metrics} only when the file is absent (bStats then creates it) or already holds {@code serverUuid} (bStats
+     * then writes nothing). A file that cannot be read or parsed, or one without {@code serverUuid}, is left
+     * byte-identical: one line names the file and the reason, never a value, and UltiTools' metrics stay off for this
+     * run.
+     *
+     * @param plugin    the plugin bStats reports for; its data folder's parent holds {@code bStats/config.yml}
+     * @param serviceId the bStats service id
+     * @param logger    where the refusal line goes
+     * @return the started metrics, or {@code null} when the shared file was left alone
+     */
+    static Metrics startMetrics(JavaPlugin plugin, int serviceId, Logger logger) {
+        File shared = new File(new File(plugin.getDataFolder().getParentFile(), "bStats"), "config.yml");
+        String refusal = bStatsFileRefusal(shared);
+        if (refusal != null) {
+            logger.warning("bStats metrics are off for this run: " + shared.getPath() + " " + refusal
+                    + "; UltiTools leaves the file as it is.");
+            return null;
+        }
+        return new Metrics(plugin, serviceId);
+    }
+
+    /** Why {@code shared} must not be handed to bStats, or {@code null}; reads only. */
+    private static String bStatsFileRefusal(File shared) {
+        if (!shared.exists()) {
+            return null;
+        }
+        String text;
+        try {
+            text = new String(java.nio.file.Files.readAllBytes(shared.toPath()), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (IOException | RuntimeException unreadable) {
+            return "cannot be read (" + unreadable.getClass().getSimpleName() + ")";
+        }
+        YamlConfiguration config = new YamlConfiguration();
+        try {
+            config.loadFromString(text);
+        } catch (InvalidConfigurationException | RuntimeException unparseable) {
+            return "cannot be parsed";
+        }
+        return config.isSet("serverUuid") ? null : "has no serverUuid";
     }
 
     private void initWebSocketManagers() {
