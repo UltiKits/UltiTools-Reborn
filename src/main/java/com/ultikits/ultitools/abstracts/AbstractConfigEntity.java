@@ -96,6 +96,9 @@ public abstract class AbstractConfigEntity {
     private boolean deferInitialization;
     @Getter(AccessLevel.NONE)
     private PendingInitialization pendingInitialization;
+    /** Whether the last load's comment-only write was refused or failed (it has logged its one warning). */
+    @Getter(AccessLevel.NONE)
+    private boolean commentWriteNotAppliedAtLoad;
 
     @Getter(AccessLevel.NONE)
     private final Set<String> warnedCommentKeys = ConcurrentHashMap.newKeySet();
@@ -725,6 +728,7 @@ public abstract class AbstractConfigEntity {
     @SuppressWarnings("PMD.NPathComplexity") // Keep protected load, binding, three-way merge and initialization persistence under one monitor.
     private void load(boolean initialize) throws IOException {
         warnedCommentKeys.clear();
+        commentWriteNotAppliedAtLoad = false;
         ConfigLoadResult loaded = ConfigDocument.load(ultiToolsPlugin.getConfigFile(configFilePath).toPath());
         if (protectFailedLoad(loaded)) {
             if (document == null) { document = ConfigDocument.empty(); }
@@ -799,6 +803,7 @@ public abstract class AbstractConfigEntity {
             // On a refusal or a failure the file keeps its comments and no save state changes (#603).
             OperatorFileWriter.Result result = rewriteTokenComments(loaded);
             if (result != null && result.applied()) { document = result.document(); bound = result.fingerprint(); }
+            else { commentWriteNotAppliedAtLoad = true; }
         }
         lastLoadedPresence = loadedPresence;
         savedSnapshot = baseline;
@@ -892,7 +897,9 @@ public abstract class AbstractConfigEntity {
      * and a file that changed again before publishing, uses anchors or has a layout the renderer would normalize is
      * refused with the gate's one warning. Nothing is attempted when the last load refused the file as unreadable
      * or unparseable (it is never written), while a first-start write is still pending, or when no framework
-     * comment differs from the current language. A refusal or a failure logs one warning and changes no save
+     * comment differs from the current language, nor when this reload's own load already attempted a comment write
+     * that was refused or failed: that attempt logged the file's one warning for this reload, and the next reload
+     * tries again (17-64 review round 1 R1-03). A refusal or a failure logs one warning and changes no save
      * state, so no later save or shutdown write follows from it (#603, #597 review F2). Only when the fresh read
      * still held exactly the bytes this entity bound does the entity record what the gate wrote as its last read;
      * otherwise the operator's newer file stays a change on disk.
@@ -907,7 +914,8 @@ public abstract class AbstractConfigEntity {
         if (!com.ultikits.ultitools.manager.ConfigManager.permitsConfigThread(ultiToolsPlugin,
                 "refresh comments " + configFilePath)) { return; }
         synchronized (this) {
-            if (document == null || ultiToolsPlugin == null || lastLoadUnparseable || pendingInitialization != null) {
+            if (document == null || ultiToolsPlugin == null || lastLoadUnparseable || pendingInitialization != null
+                    || commentWriteNotAppliedAtLoad) {
                 return;
             }
             ConfigLoadResult fresh = ConfigDocument.load(ultiToolsPlugin.getConfigFile(configFilePath).toPath());
