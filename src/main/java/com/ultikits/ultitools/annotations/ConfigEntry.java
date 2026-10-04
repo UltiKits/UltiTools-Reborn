@@ -25,8 +25,13 @@ public @interface ConfigEntry {
 
     /**
      * A single trimmed {@code {key}} token resolves through the module catalogue on every
-     * load and write. That entry's block comment is framework-owned; literal comments are
-     * only supplied for new entries and existing operator comments are retained.
+     * load and write, so the entry's comment follows the server's language. Only comment lines
+     * the framework can identify as its own are rewritten: the entry's comment, as a whole or as
+     * its trailing run of lines, equal to the framework's rendering of the token in a catalogue
+     * the module's jar ships, of the text the module resolves now, or of the bare token. Any other
+     * comment line above the entry - an operator's note, a framework comment the operator edited -
+     * is kept byte for byte, permanently. Literal comments are only supplied for new entries and
+     * existing operator comments are retained.
      * Comments on individual list items are kept only while the list keeps its length
      * - the same as Bukkit, which keeps none.
      * @return the literal comment or single catalogue-key token

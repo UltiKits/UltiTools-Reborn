@@ -345,14 +345,85 @@ public abstract class AbstractConfigEntity {
         return token;
     }
 
+    /**
+     * Writes the framework's comment above {@code field}'s key in {@code target}: for a token comment, only the
+     * run of comment lines {@link #frameworkCommentRun} identifies as the framework's is replaced, and a comment
+     * that is the operator's is left as it is; a literal comment is written only for a key just inserted, which
+     * has no comment yet.
+     *
+     * @return whether a comment line changed
+     */
     private boolean addEntryComment(ConfigDocument target, Field field) {
         String comment = resolvedComment(field);
         if (comment.isEmpty()) { return false; }
+        int run = isTokenComment(field) ? frameworkCommentRun(target, field) : 0;
+        // The operator's comment (#604): kept byte for byte, permanently (maintainer decision 2026-10-04).
+        if (run < 0) { return false; }
         List<String> before = target.blockComment(keys(field));
         // Merge-inherited entries exist in the plain view but need their own explicit comment owner.
         target.set(keys(field), target.get(keys(field)));
-        target.setFrameworkComment(keys(field), Collections.singletonList(comment));
+        target.replaceFrameworkComment(keys(field), run, Collections.singletonList(comment));
         return !before.equals(target.blockComment(keys(field)));
+    }
+
+    /**
+     * How many of the last comment lines above {@code field}'s key in {@code target} the framework wrote (#604,
+     * maintainer decision 2026-10-04: "only the framework's own comments are rewritten"). The key's comment -
+     * as {@link ConfigDocument#blockComment(List)} reports it, without the blank lines above it - is the
+     * framework's when it equals, as a whole or as its trailing run of lines, the framework's rendering of the
+     * token's text in a catalogue the module's jar ships, of the text the module resolves now, or of the bare
+     * {@code {key}} token. Equality is the only test: no prefix, similarity or language detection, so a note the
+     * operator wrote above the framework's lines, or a framework comment the operator edited, is never taken in.
+     * Of several matching texts the longest run counts, so a whole-comment match comes first.
+     *
+     * @return the run's length; 0 when the key has no comment (the framework's comment may be inserted); -1 when the
+     *         comment is the operator's and must not be touched
+     */
+    private int frameworkCommentRun(ConfigDocument target, Field field) {
+        List<String> comment = new ArrayList<>(target.blockComment(keys(field)));
+        while (!comment.isEmpty() && comment.get(0) == null) { comment.remove(0); }
+        if (comment.isEmpty()) { return 0; }
+        int run = -1;
+        for (List<String> known : frameworkRenderings(field)) {
+            int size = known.size();
+            if (size > run && size > 0 && size <= comment.size()
+                    && comment.subList(comment.size() - size, comment.size()).equals(known)) {
+                run = size;
+            }
+        }
+        return run;
+    }
+
+    /**
+     * Every rendering of a token comment the framework may have written above {@code field}'s key: the token's text
+     * in each catalogue the module's jar ships (read without any language-file side effect), the text the module
+     * resolves now, and the bare token - each rendered exactly as {@link ConfigDocument#setFrameworkComment}
+     * renders it and {@link ConfigDocument#blockComment(List)} reads it back.
+     */
+    private List<List<String>> frameworkRenderings(Field field) {
+        String token = field.getAnnotation(ConfigEntry.class).comment().trim();
+        String key = token.substring(1, token.length() - 1);
+        Set<List<String>> known = new java.util.LinkedHashSet<>();
+        List<String> shipped = null;
+        try { shipped = ultiToolsPlugin.shippedCatalogueTexts(key); }
+        catch (RuntimeException unavailable) {
+            // Without the shipped catalogues only the current text and the bare token are recognised.
+        }
+        if (shipped != null) {
+            for (String text : shipped) { known.add(renderedComment(text)); }
+        }
+        known.add(renderedComment(resolvedComment(field)));
+        known.add(renderedComment(token));
+        return new ArrayList<>(known);
+    }
+
+    /** The comment lines {@code text} becomes when the framework writes it, as {@code blockComment} reads them. */
+    private static List<String> renderedComment(String text) {
+        ConfigDocument presentation = ConfigDocument.empty();
+        List<String> key = Collections.singletonList("key");
+        presentation.set(key, null);
+        presentation.setFrameworkComment(key, Collections.singletonList(text == null ? "" : text));
+        return presentation.blockComment(key);
     }
 
     private boolean updateTokenComments(ConfigDocument target) {
@@ -709,7 +780,7 @@ public abstract class AbstractConfigEntity {
         String bound = expectedBase(loaded);
         if (!inserted.isEmpty() && !deferInitialization) {
             // On a refusal the declared defaults run in memory and the raw acknowledgement keeps the keys absent.
-            OperatorFileWriter.Result result = writeInitialization(inserted, bound);
+            OperatorFileWriter.Result result = writeInitialization(inserted, bound, next);
             if (result.applied()) { document = result.document(); bound = result.fingerprint(); }
         } else if (deferInitialization) {
             if (!inserted.isEmpty() || tokenCommentsDiffer(next)) {
@@ -746,32 +817,47 @@ public abstract class AbstractConfigEntity {
     private boolean tokenCommentsDiffer(ConfigDocument target) {
         for (Field field : configEntryFields()) {
             if (!isTokenComment(field) || !target.contains(keys(field))) { continue; }
-            ConfigDocument rendered = ConfigDocument.empty();
-            rendered.set(keys(field), null);
-            rendered.setFrameworkComment(keys(field), Collections.singletonList(resolvedComment(field)));
-            List<String> current = new ArrayList<>(target.blockComment(keys(field)));
-            while (!current.isEmpty() && current.get(0) == null) { current.remove(0); }
-            if (!current.equals(rendered.blockComment(keys(field)))) { return true; }
+            int run = frameworkCommentRun(target, field);
+            if (run < 0 || resolvedComment(field).isEmpty()) { continue; }
+            List<String> current = target.blockComment(keys(field));
+            if (!current.subList(current.size() - run, current.size()).equals(renderedComment(resolvedComment(field)))) {
+                return true;
+            }
         }
         return false;
     }
 
     /**
+     * The token comments of {@code read} the framework may rewrite, each owning only the run of lines
+     * {@link #frameworkCommentRun} identified as the framework's in the file as read (#604): the config write gate
+     * then refuses any write that changes a comment line above that run or of a comment that is the operator's.
+     *
+     * @param owned the ownership being built
+     * @param read  the document as read, holding the bytes the write is checked against
+     */
+    private void ownFrameworkComments(OwnedPaths.Builder owned, ConfigDocument read) {
+        for (Field field : configEntryFields()) {
+            if (!isTokenComment(field) || !read.contains(keys(field))) { continue; }
+            int run = frameworkCommentRun(read, field);
+            if (run >= 0) { owned.frameworkComment(keys(field), run); }
+        }
+    }
+
+    /**
      * Rewrites the framework's token comments in the current language through the config write gate
      * ({@link OperatorFileWriter}), at start-up and on reload. This cannot overwrite operator content: the write
-     * owns only the comment lines of token-commented keys, the gate verifies that every other byte of the file
-     * is unchanged after rendering and writes nothing when the file no longer holds the bytes {@code loaded}
-     * read, and it refuses a file using anchors. A refusal or an I/O failure logs one warning and changes no
-     * save state, so no later save or shutdown write follows from it (#603).
+     * owns only the comment lines the framework identified as its own above token-commented keys (#604; an
+     * operator's comment, or the lines above the framework's run, are not owned), the gate verifies that every
+     * other byte of the file is unchanged after rendering and writes nothing when the file no longer holds the
+     * bytes {@code loaded} read, and it refuses a file using anchors. A refusal or an I/O failure logs one warning
+     * and changes no save state, so no later save or shutdown write follows from it (#603).
      *
      * @param loaded the load being bound (LOADED)
      * @return the gate's result, or {@code null} after an I/O failure
      */
     private OperatorFileWriter.Result rewriteTokenComments(ConfigLoadResult loaded) {
         OwnedPaths.Builder owned = OwnedPaths.builder();
-        for (Field field : configEntryFields()) {
-            if (isTokenComment(field)) { owned.comment(keys(field)); }
-        }
+        ownFrameworkComments(owned, loaded.document());
         try {
             OperatorFileWriter.Result result = OperatorFileWriter.write(ultiToolsPlugin.getConfigFile(configFilePath).toPath(),
                     owned.build(), expectedBase(loaded), this::updateTokenComments);
@@ -787,7 +873,8 @@ public abstract class AbstractConfigEntity {
      * Writes an initialization - the declared keys {@code init} found missing, each with its comment, and the
      * framework's token comments - through the config write gate ({@link OperatorFileWriter}), at once or from
      * the batch flush. This cannot overwrite operator content: the write owns only the inserted keys and the
-     * token comments (or the whole file when it was absent, created exclusively so a file that appeared
+     * token comment lines the framework identified as its own (#604) (or the whole file when it was absent,
+     * created exclusively so a file that appeared
      * meanwhile is never replaced), the gate verifies that every other byte of the file is unchanged after
      * rendering (layout included), and it writes nothing when the file no longer holds the bytes read at
      * {@code expected}. When it does not write, the gate has logged one warning naming the file and the keys,
@@ -795,18 +882,18 @@ public abstract class AbstractConfigEntity {
      *
      * @param inserted the missing fields and their declared default values, as plain data
      * @param expected the fingerprint of the bytes the init read, or {@link OperatorFileWriter#ABSENT}
+     * @param read     the document the init read from those bytes
      * @return the gate's result; when it applied the edit, its document and fingerprint are what the file holds
      * @throws IOException if publishing the verified text fails
      */
-    private OperatorFileWriter.Result writeInitialization(Map<Field, Object> inserted, String expected) throws IOException {
+    private OperatorFileWriter.Result writeInitialization(Map<Field, Object> inserted, String expected, ConfigDocument read)
+            throws IOException {
         boolean absent = OperatorFileWriter.ABSENT.equals(expected);
         OwnedPaths owned = OwnedPaths.wholeFile();
         if (!absent) {
             OwnedPaths.Builder builder = OwnedPaths.builder();
             for (Field field : inserted.keySet()) { builder.value(keys(field)); }
-            for (Field field : configEntryFields()) {
-                if (isTokenComment(field)) { builder.comment(keys(field)); }
-            }
+            ownFrameworkComments(builder, read);
             owned = builder.build();
         }
         OperatorFileWriter.Result result = OperatorFileWriter.write(ultiToolsPlugin.getConfigFile(configFilePath).toPath(),
@@ -867,7 +954,7 @@ public abstract class AbstractConfigEntity {
             pendingInitialization = null;
             if (pending == null || lastLoadUnparseable) { return; }
             OperatorFileWriter.Result result;
-            try { result = writeInitialization(pending.inserted, pending.expected); }
+            try { result = writeInitialization(pending.inserted, pending.expected, pending.read); }
             catch (IOException failure) { lastLoadUnparseable = true; throw failure; }
             // Not written (file changed since initForBatch, or refused): the defaults run in memory, the file stays,
             // and the entity records the bytes it bound - never the operator's newer file - as last read (#602).

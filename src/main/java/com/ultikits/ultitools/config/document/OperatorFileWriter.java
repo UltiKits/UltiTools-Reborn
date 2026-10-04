@@ -51,7 +51,9 @@ import org.yaml.snakeyaml.representer.Representer;
  *       edited values equal the file's;</li>
  *   <li>owned spans are computed on both sides from SnakeYAML node marks: a value path's span runs from its
  *       key's line to the last line of its value, plus the comment lines directly above the key when the key
- *       is inserted or removed or its comment is owned; an owned comment's span is those comment lines;</li>
+ *       is inserted or removed or its comment is owned; an owned comment's span is those comment lines - or,
+ *       for a framework comment run ({@link OwnedPaths.Builder#frameworkComment(List, int)}), only the run's last
+ *       lines, so the comment lines above the run are unowned and must come out unchanged (#604);</li>
  *   <li>the lines outside the owned spans - each compared as text including its line terminator - are the
  *       same sequence on both sides (the line diff restricted to unowned lines; stricter than a plain
  *       longest-common-subsequence diff, which could match an unowned line against an owned one);</li>
@@ -86,6 +88,7 @@ public final class OperatorFileWriter {
     private static final List<String> SECRET_WORDS = Arrays.asList("password", "secret", "token", "credential",
             "apikey", "api_key", "key", "auth", "private", "cert");
     private static final String ANCHORED = "the file uses YAML anchors, aliases or merge keys";
+    private static final String COMMENT_NOT_LOCATED = "the comment of a key this write owns cannot be located in the file";
     /** Files already named in an anchored-file warning this server run (canonical paths). */
     private static final Set<Path> WARNED_ANCHORED = ConcurrentHashMap.newKeySet();
 
@@ -224,7 +227,7 @@ public final class OperatorFileWriter {
         }
         String failure = owned.isWholeFile()
                 ? verifyValues(snapshot.original, candidate, rendered, Collections.<List<String>>emptyList(), true)
-                : verify(snapshot.text, rendered, snapshot.original, candidate, changes);
+                : verify(snapshot.text, rendered, snapshot.original, candidate, changes, owned);
         if (failure != null) {
             return refuse(absolute, owned, keys, failure);
         }
@@ -456,7 +459,7 @@ public final class OperatorFileWriter {
     // ---------------------------------------------------------------------------------------------- checks
 
     private static String verify(String text, String rendered, ConfigDocument original, ConfigDocument candidate,
-            Changes changes) {
+            Changes changes, OwnedPaths owned) {
         String failure = verifyValues(original, candidate, rendered, changes.values, false);
         if (failure != null) {
             return failure;
@@ -471,23 +474,28 @@ public final class OperatorFileWriter {
         }
         Side left = new Side(original, before, lines(text));
         Side right = new Side(candidate, after, lines(rendered));
-        failure = markSpans(left, right, changes);
+        failure = markSpans(left, right, changes, owned);
         return failure != null ? failure : compareUnowned(left, right);
     }
 
     /** Checks 2 and 5: marks every owned span on both sides, refusing a span that shares a line with an unowned key. */
-    private static String markSpans(Side left, Side right, Changes changes) {
+    private static String markSpans(Side left, Side right, Changes changes, OwnedPaths owned) {
         for (List<String> path : changes.values) {
             boolean present = left.document.contains(path);
             boolean stays = right.document.contains(path);
+            int[] comment = present && stays && changes.comments.contains(path)
+                    ? ownedCommentLines(owned, left, right, path) : new int[] {0, 0};
+            if (comment == null) {
+                return COMMENT_NOT_LOCATED;
+            }
             String failure = null;
             if (present) {
-                failure = left.markValue(path, !stays || changes.comments.contains(path));
+                failure = left.markValue(path, stays ? comment[0] : commentLineCount(left.document, path));
             }
             if (failure == null && stays) {
                 // An inserted key may have needed new parent mappings; the outermost new one is the span.
-                failure = right.markValue(present ? path : topmostAbsentPrefix(left.document, path),
-                        !present || changes.comments.contains(path));
+                List<String> span = present ? path : topmostAbsentPrefix(left.document, path);
+                failure = right.markValue(span, present ? comment[1] : commentLineCount(right.document, span));
             }
             if (failure != null) {
                 return failure;
@@ -495,9 +503,10 @@ public final class OperatorFileWriter {
         }
         for (List<String> path : changes.comments) {
             if (!changes.values.contains(path)) {
-                String failure = left.markComment(path);
+                int[] comment = ownedCommentLines(owned, left, right, path);
+                String failure = comment == null ? COMMENT_NOT_LOCATED : left.markComment(path, comment[0]);
                 if (failure == null) {
-                    failure = right.markComment(path);
+                    failure = right.markComment(path, comment[1]);
                 }
                 if (failure != null) {
                     return failure;
@@ -505,6 +514,24 @@ public final class OperatorFileWriter {
             }
         }
         return null;
+    }
+
+    /**
+     * The owned comment lines directly above the key at {@code path}, before and after the edit: the whole comment,
+     * or - for a framework comment run - the run's length in the file as read and the length of what replaced it.
+     * The comment lines above a run are the same count on both sides and unowned, so check 3 requires them unchanged.
+     *
+     * @return {@code {before, after}}, or {@code null} when the run does not fit the comment on either side
+     */
+    private static int[] ownedCommentLines(OwnedPaths owned, Side left, Side right, List<String> path) {
+        int before = commentLineCount(left.document, path);
+        int after = commentLineCount(right.document, path);
+        Integer run = owned.commentRun(path);
+        if (run == null) {
+            return new int[] {before, after};
+        }
+        int kept = before - run;
+        return kept < 0 || after < kept ? null : new int[] {run, after - kept};
     }
 
     /** Check 3: the unowned lines of both sides are the same sequence, each line with its terminator. */
@@ -539,20 +566,20 @@ public final class OperatorFileWriter {
         }
 
         /**
-         * Marks the span of the key at {@code path} - key line to the last line of its value, plus its own
-         * comment lines directly above it when {@code withComment} - and returns a reason when a line of that
+         * Marks the span of the key at {@code path} - key line to the last line of its value, plus the
+         * {@code commentLines} owned comment lines directly above it - and returns a reason when a line of that
          * span also holds a node of a path the write does not own, or the comment is not where it belongs.
          */
-        String markValue(List<String> path, boolean withComment) {
+        String markValue(List<String> path, int commentLines) {
             NodeTuple tuple = find(tree, path);
             if (tuple == null) {
                 return "a key this write owns cannot be located in the file";
             }
             int keyLine = tuple.getKeyNode().getStartMark().getLine();
             int last = Math.max(lastLine(tuple.getKeyNode(), lines), lastLine(tuple.getValueNode(), lines));
-            int first = keyLine - (withComment ? commentLineCount(document, path) : 0);
+            int first = keyLine - commentLines;
             if (!commentOrBlank(lines, first, keyLine)) {
-                return "the comment of a key this write owns cannot be located in the file";
+                return COMMENT_NOT_LOCATED;
             }
             for (int line = first; line <= last; line++) {
                 List<List<Object>> here = nodes.get(line);
@@ -566,16 +593,16 @@ public final class OperatorFileWriter {
             return null;
         }
 
-        /** Marks the comment lines directly above the key at {@code path}. */
-        String markComment(List<String> path) {
+        /** Marks the {@code commentLines} owned comment lines directly above the key at {@code path}. */
+        String markComment(List<String> path, int commentLines) {
             NodeTuple tuple = find(tree, path);
             if (tuple == null) {
                 return "a key this write owns cannot be located in the file";
             }
             int keyLine = tuple.getKeyNode().getStartMark().getLine();
-            int first = keyLine - commentLineCount(document, path);
+            int first = keyLine - commentLines;
             if (!commentOrBlank(lines, first, keyLine)) {
-                return "the comment of a key this write owns cannot be located in the file";
+                return COMMENT_NOT_LOCATED;
             }
             mark(first, keyLine);
             return null;

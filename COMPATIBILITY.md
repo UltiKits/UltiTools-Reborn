@@ -107,13 +107,21 @@ keeps declared defaults; failed reload keeps running fields. One SEVERE names th
 Explicit save does not clear protection; only a later successful load permits writes again.
 Parser diagnostics expose only numeric line/column metadata, never source snippets or scalar values.
 
-Exactly one `{key}` annotation comment (surrounding whitespace ignored) is framework-owned. Every
-load and write refreshes existing token comments from the module catalogue in the current language;
-operator block comments on token entries are replaced, while literal-entry comments are kept.
+An annotation comment that is exactly one `{key}` token (surrounding whitespace ignored) is resolved
+from the module catalogue. Every load and write rewrites, in the current language, only the comment
+lines above a token entry that the framework can identify as its own: the entry's comment, as a whole
+or as its trailing run of lines, equal to the framework's rendering of the token in a catalogue the
+module's jar ships, of the text the module resolves now, or of the bare token. Equality is the only
+test. Every other comment line - a note an operator wrote above a token entry, a framework comment the
+operator edited, a literal-entry comment - is kept byte for byte, permanently (maintainer decision of
+2026-10-04, [#604](https://github.com/UltiKits/UltiTools-Reborn/issues/604); supersedes the earlier
+6.3.0 rule that an operator's comment on a token entry is replaced). A consequence: a framework
+comment whose text no shipped catalogue holds any more - an older module version's wording - is no
+longer recognised and is kept as it is. A token entry without any comment gets the framework's.
 Catalogue lookup failure keeps the literal token and warns once per entry per load. Comment text
 uses the document's YAML line-break/control-character sanitation, including the panel payload.
-A failed comment-only rewrite does not fail load or discard bound values: the entity stays dirty
-until persistence succeeds. No-op comparison includes these authoritative comments.
+A failed comment-only rewrite does not fail load or discard bound values, logs one warning and marks
+nothing for a later save. No-op comparison includes these comments.
 
 A successful entity write that replaces an operator-edited value warns once, naming the file and
 only the keys actually replaced, never values. Explicit saves, partial panel writes and shutdown
@@ -368,7 +376,7 @@ separate crash-safe multi-file transaction limit.
 - 注解 `path` 中的点仍表示嵌套路径；映射里的 `g.m`、`o.O`、`wave.` 从 6.3.0 起按完整键保存。6.2 已经拆开的文件原样读取，不会自动合并。完整泛型参与绑定；无效集合元素跳过，无效字段用声明默认值，缺失的重载字段保留运行值。允许 null 的引用类型可往返；`Object` 中的 Bukkit 序列化对象读取后仍是普通映射。
 - 保存内容、注释文字、键顺序和支持的文件风格。6.3.0 起，所有自动写入（创建不存在的文件、补写缺失的声明键、启动或重载时改写框架自己的令牌注释、注册批次落盘）都经过同一个写入闸门：每次写入声明自己拥有的键，渲染后其余每一行必须与读取时逐字节相同（含换行符、BOM 和末尾换行），且文件仍是读取时的内容；否则不写，警告一次（只列文件、键和原因，不列值），内存中使用声明默认值。这些写入不会规整排版：手工对齐的文件缺少的键会一直缺少，每次启动警告一次，直到服主自己补上。使用锚点、别名或合并键的文件不会被自动写入，每次运行只提示一次。框架新建文件时独占创建，绝不替换期间出现的文件。显式保存和面板编辑暂时仍整份经过 SnakeYAML 输出（#599），运维排版可以规整。语义无变化不写文件，字节和修改时间不变。浮点数按最短可回读十进制判断，不要求二进制精确。
 - 先临时文件、force、原子替换；仅已允许的原子替换/临时创建拒绝才走备份后原地写。备份文件名为 `<文件名>.ultitools-backup-<16 位小写十六进制>`，独占创建；本次运行已为同一文件写过、且内容未变的备份先从当前文件刷新并原子替换，之后才打开目标。写入器不读取、不写入、不删除任何其它文件，服主自己的 `<文件>.bak` 不受影响。失败保留备份，只有成功严格加载当前文件、且备份内容仍与记录一致时才清理；本次运行未写过或已被改动的同类备份保留，并以 INFO 提示一次。不自动还原，不保证多文件崩溃事务。
-- 不能读取、不能解析、非 UTF-8 文件不会被任何实体写入路径覆盖；初次失败用默认值，重载失败保留运行值。成功加载才解除保护。单独 `{key}` 注释归框架所有，按模块当前语言目录更新；字面注释保持。成功覆盖运维值时一条警告只列文件和键，不列值。
+- 不能读取、不能解析、非 UTF-8 文件不会被任何实体写入路径覆盖；初次失败用默认值，重载失败保留运行值。成功加载才解除保护。单独 `{key}` 注释按模块当前语言目录更新，但只改框架能认出是自己写的注释行：该项注释整体或末尾连续几行，与框架对模块 jar 自带任一语言目录中的文字、模块当前解析出的文字或原样 `{key}` 的渲染结果完全相同（只按相等判断）；服主在令牌项上方手写的注释、改过的框架注释和字面注释逐字节永久保留（#604，维护者 2026-10-04 决定，取代此前“令牌项上的服主注释会被替换”）。已不在任何自带目录中的旧版措辞不再被认出，原样保留。成功覆盖运维值时一条警告只列文件和键，不列值。
 - `getConfig()` 在 6.2.5 确实可用，不能冒称符合两个同版删除例外；维护者通过 6.3.0 一次性 carve-out 删除它。改用 `isPresentInFile` 查询上次成功加载时的存在性，修改声明字段后 `save()`。两个已知官方调用在 UltiEssentials 与 UltiRemoteBag；第三方用量未知。
 - 六个旧解析器相关声明在 6.3.0 首次带 `forRemoval`，公告 6.4.0 删除。显式非默认 parser 暂时保留冻结的旧行为；默认 parser 改走注册表。迁移示例见上方，转换器必须满足两条互逆等式，不能单向加值或悄悄丢字段。
 - 注册批次验证完成才开始独立写文件；面板批次先验证并暂存全部文件，在进程内失败时回滚，持久存储故障可能阻止恢复。面板唯一映射路径走整字段类型转换，歧义和未知变更拒绝整个请求；无关内存/磁盘兄弟项保留。

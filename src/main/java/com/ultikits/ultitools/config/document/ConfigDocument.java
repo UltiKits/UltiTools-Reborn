@@ -369,6 +369,61 @@ public final class ConfigDocument {
                 result.add(line);
             }
         }
+        result.addAll(frameworkLines(lines));
+        if (!sameComments(result, key.getBlockComments())) {
+            key.setBlockComments(result.isEmpty() ? null : result);
+            modified = true;
+        }
+    }
+
+    /**
+     * Replaces only the last {@code owned} comment lines of the key at {@code path} - the run the framework
+     * identified as its own comment - with {@code lines}, rendered and sanitized exactly as
+     * {@link #setFrameworkComment(List, List)} renders them. With {@code owned} zero the lines are appended below
+     * the key's existing comment.
+     * <p>
+     * <b>Why it cannot change an operator line.</b> Every comment line above the run - an operator's note, a blank
+     * line, a framework comment the operator edited - is kept as the same comment object, in the same order, so it
+     * renders byte for byte as before; only the run's own lines are dropped. The run may not include a blank line
+     * and may not reach above the key's comment, so it can never take in a line the caller did not identify
+     * (maintainer decision 2026-10-04, "only the framework's own comments are rewritten", #604).
+     *
+     * @param path  the key path of an existing key
+     * @param owned how many of the key's last comment lines are the framework's (0 for none)
+     * @param lines the new framework comment text, one element per line
+     * @throws IllegalArgumentException if no key exists at {@code path}, or the run is negative, longer than the
+     *                                  key's comment, or includes a blank line
+     */
+    public void replaceFrameworkComment(List<String> path, int owned, List<String> lines) {
+        requireKeys(path);
+        Node key = findKey(path);
+        if (key == null) {
+            throw new IllegalArgumentException("No config key at key path " + PlainData.describePath(path));
+        }
+        List<CommentLine> current = key.getBlockComments() == null
+                ? Collections.<CommentLine>emptyList() : key.getBlockComments();
+        int first = current.size() - owned;
+        if (owned < 0 || first < 0) {
+            throw new IllegalArgumentException("The framework comment run of key path " + PlainData.describePath(path)
+                    + " is longer than the key's comment");
+        }
+        for (int i = first; i < current.size(); i++) {
+            if (current.get(i).getCommentType() == CommentType.BLANK_LINE) {
+                throw new IllegalArgumentException("The framework comment run of key path "
+                        + PlainData.describePath(path) + " includes a blank line");
+            }
+        }
+        List<CommentLine> result = new ArrayList<>(current.subList(0, first));
+        result.addAll(frameworkLines(lines));
+        if (!sameComments(result, key.getBlockComments())) {
+            key.setBlockComments(result.isEmpty() ? null : result);
+            modified = true;
+        }
+    }
+
+    /** The comment lines the framework writes for {@code lines}: split at YAML line breaks, made printable. */
+    private static List<CommentLine> frameworkLines(List<String> lines) {
+        List<CommentLine> result = new ArrayList<>();
         for (String line : lines) {
             if (line == null) {
                 result.add(new CommentLine(null, null, "", CommentType.BLANK_LINE));
@@ -379,10 +434,7 @@ public final class ConfigDocument {
                 result.add(new CommentLine(null, null, text.isEmpty() ? "" : " " + text, CommentType.BLOCK));
             }
         }
-        if (!sameComments(result, key.getBlockComments())) {
-            key.setBlockComments(result.isEmpty() ? null : result);
-            modified = true;
-        }
+        return result;
     }
 
     /**

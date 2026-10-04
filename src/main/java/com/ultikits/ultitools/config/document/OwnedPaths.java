@@ -2,7 +2,9 @@ package com.ultikits.ultitools.config.document;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.jetbrains.annotations.ApiStatus;
 
@@ -14,7 +16,10 @@ import org.jetbrains.annotations.ApiStatus;
  * <p>
  * A path is a list of whole keys, one element per mapping level; a key containing {@code .} is one key. A
  * value path owns the whole key: its key line, its value, and - when the key is inserted or removed, or its
- * comment is owned - the comment lines directly above it. Instances are immutable.
+ * comment is owned - the comment lines directly above it. An owned comment is either the key's whole comment or,
+ * for a framework comment ({@link Builder#frameworkComment(List, int)}), only its last lines: the run the
+ * framework identified as its own, so every comment line above that run stays the operator's (#604).
+ * Instances are immutable.
  *
  * @since 6.3.0
  */
@@ -22,15 +27,18 @@ import org.jetbrains.annotations.ApiStatus;
 public final class OwnedPaths {
 
     private static final OwnedPaths WHOLE_FILE = new OwnedPaths(Collections.<List<String>>emptyList(),
-            Collections.<List<String>>emptyList(), true);
+            Collections.<List<String>>emptyList(), Collections.<List<String>, Integer>emptyMap(), true);
 
     private final List<List<String>> values;
     private final List<List<String>> comments;
+    private final Map<List<String>, Integer> commentRuns;
     private final boolean wholeFile;
 
-    private OwnedPaths(List<List<String>> values, List<List<String>> comments, boolean wholeFile) {
+    private OwnedPaths(List<List<String>> values, List<List<String>> comments, Map<List<String>, Integer> commentRuns,
+            boolean wholeFile) {
         this.values = values;
         this.comments = comments;
+        this.commentRuns = commentRuns;
         this.wholeFile = wholeFile;
     }
 
@@ -72,6 +80,18 @@ public final class OwnedPaths {
     }
 
     /**
+     * How many of the last comment lines above the key at {@code path} this write owns in the file as read, when
+     * the path was declared with {@link Builder#frameworkComment(List, int)}; {@code null} when the whole comment
+     * is owned or the path's comment is not owned at all.
+     *
+     * @param path the key path
+     * @return the owned run's length in the file, or {@code null}
+     */
+    public Integer commentRun(List<String> path) {
+        return commentRuns.get(path);
+    }
+
+    /**
      * Whether this write owns the whole file (allowed only when the file is absent).
      *
      * @return whether the whole file is owned
@@ -85,6 +105,7 @@ public final class OwnedPaths {
 
         private final List<List<String>> values = new ArrayList<>();
         private final List<List<String>> comments = new ArrayList<>();
+        private final Map<List<String>, Integer> commentRuns = new LinkedHashMap<>();
 
         private Builder() {
         }
@@ -108,6 +129,26 @@ public final class OwnedPaths {
          */
         public Builder comment(List<String> path) {
             add(comments, path);
+            commentRuns.remove(path);
+            return this;
+        }
+
+        /**
+         * Owns only the last {@code linesInFile} comment lines directly above the key at {@code path} - the run the
+         * framework identified as its own comment in the file as read (0 when the key has no comment) - and the
+         * lines that replace them. Every comment line above that run is not owned, so the gate refuses a write that
+         * changes one of them (maintainer decision 2026-10-04, "only the framework's own comments are rewritten").
+         *
+         * @param path        the key path, at least one key
+         * @param linesInFile the length of the owned run in the file as read, at least 0
+         * @return this builder
+         */
+        public Builder frameworkComment(List<String> path, int linesInFile) {
+            if (linesInFile < 0) {
+                throw new IllegalArgumentException("An owned framework comment run cannot be negative");
+            }
+            add(comments, path);
+            commentRuns.put(Collections.unmodifiableList(new ArrayList<>(path)), linesInFile);
             return this;
         }
 
@@ -118,7 +159,8 @@ public final class OwnedPaths {
          */
         public OwnedPaths build() {
             return new OwnedPaths(Collections.unmodifiableList(new ArrayList<>(values)),
-                    Collections.unmodifiableList(new ArrayList<>(comments)), false);
+                    Collections.unmodifiableList(new ArrayList<>(comments)),
+                    Collections.unmodifiableMap(new LinkedHashMap<>(commentRuns)), false);
         }
 
         private static void add(List<List<String>> target, List<String> path) {
