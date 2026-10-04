@@ -204,8 +204,10 @@ public final class OperatorFileWriter {
                 return refuseAnchored(absolute, owned);
             }
             List<String> wouldChange = Collections.emptyList();
-            if (snapshot.parsed && snapshot.failure == Outcome.FILE_CHANGED && !owned.isWholeFile()) {
-                // Name only what the write would have changed in the file as it is now; nothing is written.
+            if (snapshot.parsed && snapshot.failure == Outcome.FILE_CHANGED && !owned.isWholeFile()
+                    && !usesAnchors(compose(snapshot.text))) {
+                // Name only what the write would have changed in the file as it is now; nothing is written. A newer
+                // file using anchors is never edited, not even in memory (review round 2 IN-R2-01).
                 edit.accept(snapshot.candidate);
                 Changes changes = Changes.of(snapshot.original, snapshot.candidate, owned);
                 wouldChange = describe(changes.values, changes.comments);
