@@ -175,6 +175,66 @@ class ConfigRegistryReleaseTest {
         assertThat(configs.getAllConfigEntities(hook)).isNull();
     }
 
+    @FunctionalInterface
+    private interface Action { void run() throws Exception; }
+
+    /** The "never saved" report lines logged while {@code action} runs. */
+    private java.util.List<String> reportsDuring(Action action) throws Exception {
+        java.util.List<String> reports = new java.util.ArrayList<>();
+        java.util.logging.Handler capture = new java.util.logging.Handler() {
+            @Override public void publish(java.util.logging.LogRecord record) {
+                if (record.getMessage() != null && record.getMessage().contains("never saved")) { reports.add(record.getMessage()); }
+            }
+            @Override public void flush() { /* No buffer. */ }
+            @Override public void close() { /* No resource. */ }
+        };
+        java.util.logging.Logger logger = java.util.logging.Logger.getLogger("ShutdownFixture");
+        logger.addHandler(capture);
+        try { action.run(); } finally { logger.removeHandler(capture); }
+        return reports;
+    }
+
+    /**
+     * 17-65 review round 1 R65-I5: a normal unload drops never-saved changes like the stop does - nothing is written -
+     * and names them once, the same way (file and keys, never values).
+     */
+    @Test void runtimeUnloadNamesNeverSavedKeysOnceAndWritesNothing() throws Exception {
+        java.util.List<String> reports = reportsDuring(() -> plugins.unregister(owner));
+        assertThat(disk()).isEqualTo("value: disk\n");
+        assertThat(reports).hasSize(1);
+        assertThat(reports.get(0)).contains("release.yml", "'value'").doesNotContain("pending");
+        assertThat(reportsDuring(() -> configs.saveAll())).as("released entities are not named again").isEmpty();
+    }
+
+    @Test void runtimeUninstallNamesNeverSavedKeysOnceAndWritesNothing() throws Exception {
+        HookOwner hook = callbackOwner(false, true); hook.checkInitialSave = false;
+        Path moduleDirectory = directory.resolve("plugins"); Files.createDirectories(moduleDirectory);
+        try (java.util.jar.JarOutputStream jar = new java.util.jar.JarOutputStream(
+                Files.newOutputStream(moduleDirectory.resolve("fixture.jar")))) {
+            jar.putNextEntry(new java.util.jar.JarEntry("plugin.yml"));
+            jar.write("name: ReleasedModule\n".getBytes(StandardCharsets.UTF_8)); jar.closeEntry();
+        }
+        java.util.List<String> reports = reportsDuring(
+                () -> com.ultikits.ultitools.utils.PluginInstallUtils.uninstallPluginReporting("ReleasedModule"));
+        assertThat(disk()).isEqualTo("value: disk\n");
+        assertThat(reports).hasSize(1).allSatisfy(report -> assertThat(report).contains("release.yml", "'value'")
+                .doesNotContain("destroyed"));
+    }
+
+    /** Pin: a superseded owner is named only by the replacement's own drop warning, not a second time on its release. */
+    @Test
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Exercise the existing private supersede boundary without constructing a second module.
+    void supersededOwnerIsNotNamedTwiceOnItsRelease() throws Exception {
+        HookOwner hook = callbackOwner(false, false); hook.checkInitialSave = false;
+        when(hook.getMainClass()).thenReturn("example.Module");
+        UltiToolsPlugin incoming = mock(UltiToolsPlugin.class);
+        when(incoming.getMainClass()).thenReturn("example.Module"); when(incoming.isNewerVersionThan(hook)).thenReturn(true);
+        java.lang.reflect.Method supersede = PluginManager.class.getDeclaredMethod("unregisterSupersededVersions", UltiToolsPlugin.class);
+        supersede.setAccessible(true);
+        assertThat(reportsDuring(() -> supersede.invoke(plugins, incoming))).isEmpty();
+        assertThat(disk()).isEqualTo("value: disk\n");
+    }
+
     private HookOwner callbackOwner(boolean throwing, boolean destroy) throws Exception {
         configs.unregisterAll(owner); PluginListSeeding.clear(plugins);
         HookOwner hook = mock(HookOwner.class);
