@@ -369,18 +369,20 @@ public abstract class AbstractConfigEntity {
     /**
      * How many of the last comment lines above {@code field}'s key in {@code target} the framework wrote (#604,
      * maintainer decision 2026-10-04: "only the framework's own comments are rewritten"). The key's comment -
-     * as {@link ConfigDocument#blockComment(List)} reports it, without the blank lines above it - is the
-     * framework's when it equals, as a whole or as its trailing run of lines, the framework's rendering of the
-     * token's text in a catalogue the module's jar ships, of the text the module resolves now, or of the bare
-     * {@code {key}} token. Equality is the only test: no prefix, similarity or language detection, so a note the
-     * operator wrote above the framework's lines, or a framework comment the operator edited, is never taken in.
-     * Of several matching texts the longest run counts, so a whole-comment match comes first.
+     * in the byte form it is written in ({@link ConfigDocument#blockCommentAsWritten(List)}), without the blank
+     * lines above it - is the framework's when it equals, as a whole or as its trailing run of lines, the exact
+     * form the framework writes (the key's column, {@code "# "} and the text; identification revision 1, 17-64
+     * review round 1 R1-02) of the token's text in a catalogue the module's jar ships, of the text the module
+     * resolves now, or of the bare {@code {key}} token. Equality is the only test: no prefix, similarity, spacing
+     * or language tolerance, so a note the operator wrote above the framework's lines, a framework comment the
+     * operator edited, or the framework's text written at another column or without the space after {@code #}
+     * is never taken in. Of several matching texts the longest run counts, so a whole-comment match comes first.
      *
      * @return the run's length; 0 when the key has no comment (the framework's comment may be inserted); -1 when the
      *         comment is the operator's and must not be touched
      */
     private int frameworkCommentRun(ConfigDocument target, Field field) {
-        List<String> comment = new ArrayList<>(target.blockComment(keys(field)));
+        List<String> comment = new ArrayList<>(target.blockCommentAsWritten(keys(field)));
         while (!comment.isEmpty() && comment.get(0) == null) { comment.remove(0); }
         if (comment.isEmpty()) { return 0; }
         int run = -1;
@@ -397,8 +399,8 @@ public abstract class AbstractConfigEntity {
     /**
      * Every rendering of a token comment the framework may have written above {@code field}'s key: the token's text
      * in each catalogue the module's jar ships (read without any language-file side effect), the text the module
-     * resolves now, and the bare token - each rendered exactly as {@link ConfigDocument#setFrameworkComment}
-     * renders it and {@link ConfigDocument#blockComment(List)} reads it back. An empty text is not a rendering: the
+     * resolves now, and the bare token - each in the byte form {@link ConfigDocument#setFrameworkComment} writes
+     * it, as {@link ConfigDocument#blockCommentAsWritten(List)} reports it. An empty text is not a rendering: the
      * framework writes no comment for it, so it can never identify an operator's bare {@code #} line.
      */
     private List<List<String>> frameworkRenderings(Field field) {
@@ -421,13 +423,13 @@ public abstract class AbstractConfigEntity {
         return new ArrayList<>(known);
     }
 
-    /** The comment lines {@code text} becomes when the framework writes it, as {@code blockComment} reads them. */
+    /** The comment lines {@code text} becomes when the framework writes it, in their written byte form. */
     private static List<String> renderedComment(String text) {
         ConfigDocument presentation = ConfigDocument.empty();
         List<String> key = Collections.singletonList("key");
         presentation.set(key, null);
         presentation.setFrameworkComment(key, Collections.singletonList(text));
-        return presentation.blockComment(key);
+        return presentation.blockCommentAsWritten(key);
     }
 
     private boolean updateTokenComments(ConfigDocument target) {
@@ -812,8 +814,8 @@ public abstract class AbstractConfigEntity {
 
     /**
      * Whether a framework token comment in {@code target} differs from what the current language renders,
-     * without changing {@code target}: the comparison {@link #addEntryComment} makes, on the comment text
-     * {@link ConfigDocument#blockComment(List)} reports (blank lines above a comment are kept by every write).
+     * without changing {@code target}: the framework's own run ({@link #frameworkCommentRun}) compared, in its
+     * written byte form, with the current rendering; a comment that is the operator's never differs.
      *
      * @param target the document as read
      * @return whether a comment-only write would change a comment
@@ -823,7 +825,7 @@ public abstract class AbstractConfigEntity {
             if (!isTokenComment(field) || !target.contains(keys(field))) { continue; }
             int run = frameworkCommentRun(target, field);
             if (run < 0 || resolvedComment(field).isEmpty()) { continue; }
-            List<String> current = target.blockComment(keys(field));
+            List<String> current = target.blockCommentAsWritten(keys(field));
             if (!current.subList(current.size() - run, current.size()).equals(renderedComment(resolvedComment(field)))) {
                 return true;
             }

@@ -350,6 +350,39 @@ public final class ConfigDocument {
     }
 
     /**
+     * Returns the comment lines directly above the key at {@code path} in the byte form they are written in: for a
+     * line at the key's own column, {@code "#"} followed by everything after the {@code #} up to the line break
+     * (a framework line reads {@code "# " + text}, or {@code "#"} for an empty line); {@code null} for a blank line.
+     * A line at any other column is reported as {@code "@<offset>|#..."}, which never equals a line the framework
+     * writes, since the framework writes a key's comment at the key's column. A line added in memory (it has no
+     * position yet) is reported as it will be written. The file header is not part of the first key's comment.
+     * <p>
+     * The framework identifies its own comment lines on this form (17-64 review round 1 R1-02): a line holding the
+     * framework's text in any other byte form was written by an operator.
+     *
+     * @param path the key path
+     * @return the lines, empty when the key has no comment or does not exist
+     */
+    public List<String> blockCommentAsWritten(List<String> path) {
+        requireKeys(path);
+        Node key = findKey(path);
+        List<String> result = new ArrayList<>();
+        if (key == null || key.getBlockComments() == null) {
+            return result;
+        }
+        int keyColumn = key.getStartMark() == null ? -1 : key.getStartMark().getColumn();
+        for (CommentLine line : key.getBlockComments()) {
+            if (line.getCommentType() == CommentType.BLANK_LINE) {
+                result.add(null);
+                continue;
+            }
+            int offset = keyColumn < 0 || line.getStartMark() == null ? 0 : line.getStartMark().getColumn() - keyColumn;
+            result.add((offset == 0 ? "" : "@" + offset + "|") + "#" + line.getValue());
+        }
+        return result;
+    }
+
+    /**
      * Replaces the comment of the key at {@code path} - the only way the framework writes a comment. Blank
      * lines directly above the comment are kept; the comment lines themselves are replaced by {@code lines}.
      * Each line is split at every YAML line break ({@code \r\n}, {@code \r}, {@code \n}, U+0085, U+2028,
