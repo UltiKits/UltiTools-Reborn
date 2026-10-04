@@ -137,6 +137,23 @@ class ConfigSaveKeepsOperatorTextTest {
     }
 
     @Test
+    @DisplayName("a key the operator deleted resets to the declared default on reload, with a warning naming it")
+    void deletedKeyResetsToDeclaredDefaultOnReload() throws Exception {
+        put("item:\n  interval: 450\n  warn-times: [60, 30, 10]\n  message: hello\n");
+        Cfg config = new Cfg(PATH);
+        config.init(plugin);
+        assertThat(config.interval).isEqualTo(450);
+        put("item:\n  warn-times: [60, 30, 10]\n  message: hello\n");
+
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            config.reload();
+            assertThat(warnings.messagesContaining("item.interval")).hasSize(1)
+                    .allSatisfy(message -> assertThat(message).contains(PATH).contains("declared default"));
+        }
+        assertThat(config.interval).isEqualTo(300);
+    }
+
+    @Test
     @DisplayName("a deleted key stays deleted across an unrelated module save")
     void deletedKeyStaysDeletedAcrossUnrelatedSave() throws Exception {
         put("item:\n  interval: 450\n  warn-times: [60, 30, 10]\n  message: hello\n");
