@@ -453,6 +453,64 @@ class ConfigSaveWriteGateTracerTest {
         assertThat(warnings()).isEmpty();
     }
 
+    /**
+     * Route change of 17-65 (round 3 R3-01, prediction to observation): a panel edit of one field of a composite value is
+     * written as that whole value only while the file still holds the whole value the entity last read. The operator
+     * hand-edited another field of it on disk (probe A): the edit is refused naming the setting, the file and memory stay.
+     */
+    @Test
+    @DisplayName("R3-01: a panel edit inside a composite the operator hand-edited since it was read is refused, nothing overwritten")
+    void panelEditInsideACompositeTheOperatorEditedIsRefused() throws Exception {
+        put("composite.yml", COMPOSITE);
+        Composite config = new Composite("composite.yml");
+        config.init(plugin);
+        String edited = COMPOSITE.replaceFirst("x: 1.0", "x: 5.0");
+        put("composite.yml", edited);
+
+        com.google.gson.JsonObject edit = new com.google.gson.JsonObject();
+        edit.addProperty("home.y", 7.5);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> config.updateProperties(edit))
+                .isInstanceOf(com.ultikits.ultitools.config.ConfigWriteRefusedException.class)
+                .hasMessageContaining("'home'").hasMessageContaining("reload");
+
+        assertThat(read("composite.yml")).isEqualTo(edited);
+        assertThat(config.home).isEqualTo(new org.bukkit.util.Vector(1, 2, 3));
+    }
+
+    @Test
+    @DisplayName("R3-01: the same through a typed map entry (probe F5)")
+    void panelEditInsideATypedMapEntryTheOperatorEditedIsRefused() throws Exception {
+        put("composite.yml", COMPOSITE);
+        Composite config = new Composite("composite.yml");
+        config.init(plugin);
+        String edited = COMPOSITE.replace("    x: 1.0\n", "    x: 4.0\n");
+        put("composite.yml", edited);
+
+        com.google.gson.JsonObject edit = new com.google.gson.JsonObject();
+        edit.addProperty("points.a.y", 6.5);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> config.updateProperties(edit))
+                .isInstanceOf(com.ultikits.ultitools.config.ConfigWriteRefusedException.class)
+                .hasMessageContaining("'points.a'");
+
+        assertThat(read("composite.yml")).isEqualTo(edited);
+    }
+
+    @Test
+    @DisplayName("R3-01 pin: a hand edit of a different composite does not block the panel edit; other fields stay as on disk")
+    void panelEditInsideACompositeWithAnUnrelatedHandEditIsWritten() throws Exception {
+        put("composite.yml", COMPOSITE);
+        Composite config = new Composite("composite.yml");
+        config.init(plugin);
+        String edited = COMPOSITE.replace("    x: 1.0\n", "    x: 4.0\n");
+        put("composite.yml", edited);
+
+        com.google.gson.JsonObject edit = new com.google.gson.JsonObject();
+        edit.addProperty("home.y", 7.5);
+        config.updateProperties(edit);
+
+        assertThat(read("composite.yml")).isEqualTo(edited.replace("y: 2.0", "y: 7.5"));
+    }
+
     /** R2-01 sweep, operator-change site: map keys may not reach inside a value that is not a map. */
     @Test
     @DisplayName("R2-01: saveOperatorMapEntry refuses keys inside a serializable entry and writes nothing")
