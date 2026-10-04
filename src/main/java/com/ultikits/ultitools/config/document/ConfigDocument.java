@@ -535,11 +535,13 @@ public final class ConfigDocument {
      * <p>
      * Nothing is injected into the document's text: the lines are located by position. The comment events the
      * emitter received (in order, each carrying its original line's position) are matched one to one with the comment
-     * events of the emitted text read back; when the two sequences differ in length, type or text, the emitted text
-     * is returned unchanged. Each misplaced line - a comment line right after a blank line, with an earlier comment
+     * events of the emitted text read back; when the two sequences differ in length, type or text (a blank line
+     * matches a blank line by type: in memory its text is empty, read back it is the line break), the emitted text is
+     * returned unchanged. Each misplaced line - a comment line right after a blank line, with an earlier comment
      * line in the same run - is written at its own original column, or, for a line added in memory (it has no
-     * position), at the column of the run's first comment line as emitted. Only the spaces before the {@code #} are
-     * changed, and only when nothing but spaces precedes it.
+     * position), at the column of the run's first comment line as emitted. Lines are located with the reader's own
+     * line numbering ({@link #moveComments}), and every move is checked before any is applied, so a misalignment
+     * leaves the output as emitted (review round 3).
      */
     private static String realignCommentsAfterBlankLines(String text, List<Event> events) {
         List<CommentEvent> written = new ArrayList<>();
@@ -565,12 +567,13 @@ public final class ConfigDocument {
             return text;
         }
         for (int i = 0; i < read.size(); i++) {
-            if (read.get(i).getCommentType() != written.get(i).getCommentType()
-                    || !read.get(i).getValue().equals(written.get(i).getValue())) {
+            CommentType type = read.get(i).getCommentType();
+            if (type != written.get(i).getCommentType()
+                    || type != CommentType.BLANK_LINE && !read.get(i).getValue().equals(written.get(i).getValue())) {
                 return text;
             }
         }
-        Map<Integer, int[]> moves = new LinkedHashMap<>();
+        List<CommentMove> moves = new ArrayList<>();
         int index = 0;
         int firstColumn = -1;
         boolean afterBlank = false;
@@ -582,7 +585,8 @@ public final class ConfigDocument {
                 continue;
             }
             CommentEvent comment = (CommentEvent) event;
-            org.yaml.snakeyaml.error.Mark at = read.get(index++).getStartMark();
+            CommentEvent back = read.get(index++);
+            org.yaml.snakeyaml.error.Mark at = back.getStartMark();
             if (comment.getCommentType() == CommentType.BLANK_LINE) {
                 afterBlank = firstColumn >= 0;
                 continue;
@@ -592,37 +596,89 @@ public final class ConfigDocument {
             } else if (afterBlank) {
                 int column = comment.getStartMark() != null ? comment.getStartMark().getColumn() : firstColumn;
                 if (column != at.getColumn()) {
-                    moves.put(at.getLine(), new int[] {at.getColumn(), column});
+                    moves.add(new CommentMove(at.getLine(), at.getColumn(), column, "#" + back.getValue()));
                 }
             }
             afterBlank = false;
         }
-        return moves.isEmpty() ? text : move(text, moves);
+        return moves.isEmpty() ? text : moveComments(text, moves);
     }
 
-    /** Re-indents the given lines (line index to {current column, new column}); others are copied unchanged. */
-    private static String move(String text, Map<Integer, int[]> moves) {
-        StringBuilder result = new StringBuilder(text.length());
-        int line = 0;
-        int start = 0;
-        while (start < text.length()) {
-            int end = text.indexOf('\n', start);
-            end = end < 0 ? text.length() : end + 1;
-            String content = text.substring(start, end);
-            int[] move = moves.get(line);
-            if (move != null && move[0] < content.length() && content.charAt(move[0]) == '#'
-                    && content.substring(0, move[0]).trim().isEmpty()) {
-                StringBuilder indent = new StringBuilder();
-                for (int i = 0; i < move[1]; i++) {
-                    indent.append(' ');
-                }
-                content = indent + content.substring(move[0]);
-            }
-            result.append(content);
-            start = end;
-            line++;
+    /** One comment line to re-indent: where the reader found it, and what must be there for the move to apply. */
+    static final class CommentMove {
+        private final int line;
+        private final int column;
+        private final int target;
+        private final String expected;
+
+        /**
+         * @param line     the line, numbered as SnakeYAML's reader numbers it (0-based)
+         * @param column   the column of its {@code #} in the emitted text
+         * @param target   the column to write it at
+         * @param expected the line's exact text from its {@code #} to the line break: {@code "#"} + the comment
+         */
+        CommentMove(int line, int column, int target, String expected) {
+            this.line = line;
+            this.column = column;
+            this.target = target;
+            this.expected = expected;
         }
+    }
+
+    /**
+     * Re-indents comment lines of {@code text}; every other character is copied unchanged. Lines are counted exactly as
+     * SnakeYAML's reader counts them - {@code \r\n}, {@code \r}, {@code \n}, U+0085, U+2028, U+2029 each end a line
+     * (review round 3 R3-01: the emitter writes U+2028 and U+2029 raw inside a value). Before any line is changed every
+     * move is checked: its line must hold, at the expected column, exactly {@code #} plus its comment, with only spaces
+     * before it; when one move fails the check, {@code text} is returned as it is, so a misalignment can never move a
+     * line it did not mean (review round 3 self-check).
+     *
+     * @param text  the emitted text
+     * @param moves the lines to re-indent
+     * @return the realigned text, or {@code text} unchanged
+     */
+    static String moveComments(String text, List<CommentMove> moves) {
+        List<int[]> lines = readerLines(text);
+        Map<Integer, CommentMove> byLine = new java.util.TreeMap<>();
+        for (CommentMove move : moves) {
+            if (move.line < 0 || move.line >= lines.size() || byLine.put(move.line, move) != null) {
+                return text;
+            }
+            String content = text.substring(lines.get(move.line)[0], lines.get(move.line)[1]);
+            if (move.column >= content.length() || !content.substring(move.column).equals(move.expected)
+                    || !content.substring(0, move.column).replace(" ", "").isEmpty()) {
+                return text;
+            }
+        }
+        StringBuilder result = new StringBuilder(text.length());
+        int copied = 0;
+        for (CommentMove move : byLine.values()) {
+            int start = lines.get(move.line)[0];
+            result.append(text, copied, start);
+            for (int i = 0; i < move.target; i++) {
+                result.append(' ');
+            }
+            copied = start + move.column;
+        }
+        result.append(text, copied, text.length());
         return result.toString();
+    }
+
+    /** Each line's {start, end of content} in {@code text}, with SnakeYAML's reader's line breaks. */
+    private static List<int[]> readerLines(String text) {
+        List<int[]> lines = new ArrayList<>();
+        int start = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            boolean crlf = c == '\r' && i + 1 < text.length() && text.charAt(i + 1) == '\n';
+            if (crlf || c == '\r' || c == '\n' || c == '\u0085' || c == '\u2028' || c == '\u2029') {
+                lines.add(new int[] {start, i});
+                i += crlf ? 1 : 0;
+                start = i + 1;
+            }
+        }
+        lines.add(new int[] {start, text.length()});
+        return lines;
     }
 
     /** Escapes preserve NEL (which the scanner normalizes) and no-EOF multiline string content. */
