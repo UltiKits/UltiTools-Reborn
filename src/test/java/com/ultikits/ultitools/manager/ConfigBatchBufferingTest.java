@@ -114,7 +114,8 @@ class ConfigBatchBufferingTest {
 
     @Test
     void acceptedBatchKeepsEarlierWriteAndProtectsFailedSecondFile() throws Exception {
-        byte[] original = "# old translation\nvalue: existing\n".getBytes(StandardCharsets.UTF_8);
+        // The bare token is the framework's own comment (#604), so the batch flush attempts the comment write.
+        byte[] original = "# {note}\nvalue: existing\n".getBytes(StandardCharsets.UTF_8);
         Files.write(directory.resolve("second.yml"), original);
         Observer.directory = directory;
         try (MockedStatic<ConverterRegistry> registry = selected(First.class, Second.class, Observer.class);

@@ -93,6 +93,8 @@ class ConfigAutomaticWriteGateTest {
         ConfigFileStubs.stubConfigFolder(plugin, tempDir.toFile());
         lenient().when(plugin.i18n(anyString())).thenAnswer(i -> i.getArgument(0));
         lenient().when(plugin.i18n("gate.interval")).thenAnswer(i -> language);
+        // The module's jar ships both catalogues, so a comment in either language is the framework's (#604).
+        lenient().when(plugin.shippedCatalogueTexts("gate.interval")).thenReturn(java.util.Arrays.asList(EN, ZH));
         frameworkLogger.addHandler(capture);
     }
 
