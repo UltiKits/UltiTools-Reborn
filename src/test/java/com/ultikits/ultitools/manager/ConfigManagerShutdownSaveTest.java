@@ -808,4 +808,63 @@ class ConfigManagerShutdownSaveTest {
 
         assertThat(read(entrylessFile)).isEqualTo(operatorEdit);
     }
+
+    // ==================== 17-65: nothing is written at server stop (#599) ====================
+
+    /** Reports of module changes that were never saved and are not written at stop (maintainer decision 2026-10-04). */
+    private List<String> unsavedReports() {
+        List<String> result = new ArrayList<>();
+        for (String message : loggedMessages(Level.WARNING)) {
+            if (message.contains("never saved")) {
+                result.add(message);
+            }
+        }
+        return result;
+    }
+
+    @Test
+    @DisplayName("17-65: at stop an unsaved module change writes nothing; one line names the file and the key, never the value")
+    void stop_unsavedModuleChangeWritesNothingAndIsNamedOnce() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "value: original\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        configManager.register(plugin, config);
+        config.setValue("set-by-code");
+        java.nio.file.attribute.FileTime old = java.nio.file.attribute.FileTime.fromMillis(1_577_836_800_000L);
+        Files.setLastModifiedTime(scalarFile.toPath(), old);
+
+        configManager.saveAll();
+
+        assertThat(read(scalarFile)).isEqualTo("value: original\n");
+        assertThat(Files.getLastModifiedTime(scalarFile.toPath())).isEqualTo(old);
+        assertThat(unsavedReports()).hasSize(1);
+        assertThat(unsavedReports().get(0)).contains(scalarFile.getAbsolutePath(), "'value'").doesNotContain("set-by-code");
+        assertThat(config.getValue()).isEqualTo("set-by-code");
+    }
+
+    @Test
+    @DisplayName("17-65: at stop an operator edit with no module change writes nothing and reports nothing")
+    void stop_operatorEditWithoutModuleChangeWritesAndReportsNothing() throws IOException {
+        File scalarFile = file("config/scalar.yml");
+        write(scalarFile, "value: original\n");
+        ScalarConfig config = new ScalarConfig("config/scalar.yml");
+        configManager.register(plugin, config);
+        write(scalarFile, "value:   operator-edit\n");
+        java.nio.file.attribute.FileTime old = java.nio.file.attribute.FileTime.fromMillis(1_577_836_800_000L);
+        Files.setLastModifiedTime(scalarFile.toPath(), old);
+
+        configManager.saveAll();
+
+        assertThat(read(scalarFile)).isEqualTo("value:   operator-edit\n");
+        assertThat(Files.getLastModifiedTime(scalarFile.toPath())).isEqualTo(old);
+        assertThat(loggedMessages(Level.WARNING)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("17-65: ConfigManager#saveAll() is deprecated since 6.3.0 (it writes nothing)")
+    void saveAll_isDeprecatedSince630() throws Exception {
+        Deprecated deprecated = ConfigManager.class.getMethod("saveAll").getAnnotation(Deprecated.class);
+        assertThat(deprecated).isNotNull();
+        assertThat(deprecated.since()).isEqualTo("6.3.0");
+    }
 }

@@ -225,4 +225,32 @@ class ConfigRegistryReleaseTest {
         @ConfigEntry String value = "default";
         public Values(String path) { super(path); }
     }
+
+    /**
+     * 17-65 (#599; maintainer decision 2026-10-04: no shutdown save of whole entities): a full stop - the module's
+     * unload hook and its {@code @PreDestroy} changing the configuration, then the framework's final step - writes
+     * nothing, and one line names the file and the never-saved key, never its value.
+     */
+    @Test void fullStopWritesNothingAndNamesTheUnsavedKeyOnce() throws Exception {
+        HookOwner hook = callbackOwner(false, true); hook.checkInitialSave = false;
+        java.util.List<String> reports = new java.util.ArrayList<>();
+        java.util.logging.Handler capture = new java.util.logging.Handler() {
+            @Override public void publish(java.util.logging.LogRecord record) {
+                if (record.getMessage() != null && record.getMessage().contains("never saved")) { reports.add(record.getMessage()); }
+            }
+            @Override public void flush() { /* No buffer. */ }
+            @Override public void close() { /* No resource. */ }
+        };
+        java.util.logging.Logger logger = java.util.logging.Logger.getLogger("ShutdownFixture");
+        logger.addHandler(capture);
+        try {
+            plugins.close();
+            configs.saveAll();
+        } finally { logger.removeHandler(capture); }
+        assertThat(hook.ran).isTrue(); assertThat(hook.bean.ran).isTrue();
+        assertThat(disk()).isEqualTo("value: disk\n");
+        assertThat(reports).hasSize(1);
+        assertThat(reports.get(0)).contains("release.yml", "'value'").doesNotContain("destroyed", "pending");
+        assertThat(configs.getAllConfigEntities(hook)).isNull();
+    }
 }

@@ -217,4 +217,26 @@ class ConfigSupersededCopyOrderingTest {
         @ConfigEntry String value = "default";
         public Values(String path) { super(path); }
     }
+
+    /**
+     * 17-65 (#599; maintainer decision 2026-10-04: no replacement save of whole entities): before an identified newer copy
+     * is constructed nothing is saved - the newer copy reads the files as they are - and the old copy's unsaved change no
+     * longer refuses the replacement.
+     */
+    @Test void identifiedReplacementNeverSavesTheOldCopyAndIsNotRefusedByItsUnsavedChange() throws Exception {
+        Values refused = spy(entity);
+        doThrow(new java.io.IOException("a save must not be attempted")).when(refused).save();
+        configs.register(old, refused); refused.value = "pending";
+        try (URLClassLoader loader = incomingJar(true)) {
+            initialize(loader.loadClass(Incoming.class.getName()));
+            assertThat(Probe.constructions).isEqualTo(1);
+            assertThat(Probe.observed).contains("value: disk");
+            verify(refused, never()).save();
+            assertThat(refused.isModifiedSinceSnapshot()).isTrue();
+        }
+        activateConstructedCopy(true);
+        assertThat(warnings).filteredOn(text -> text.contains("dropped")).hasSize(1)
+                .allSatisfy(text -> assertThat(text).contains("SupersededModule", "copy.yml", "value").doesNotContain("pending"));
+        assertThat(new String(Files.readAllBytes(Probe.file), StandardCharsets.UTF_8)).isEqualTo("value: disk\n");
+    }
 }
