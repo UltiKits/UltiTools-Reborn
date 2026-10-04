@@ -398,7 +398,8 @@ public abstract class AbstractConfigEntity {
      * Every rendering of a token comment the framework may have written above {@code field}'s key: the token's text
      * in each catalogue the module's jar ships (read without any language-file side effect), the text the module
      * resolves now, and the bare token - each rendered exactly as {@link ConfigDocument#setFrameworkComment}
-     * renders it and {@link ConfigDocument#blockComment(List)} reads it back.
+     * renders it and {@link ConfigDocument#blockComment(List)} reads it back. An empty text is not a rendering: the
+     * framework writes no comment for it, so it can never identify an operator's bare {@code #} line.
      */
     private List<List<String>> frameworkRenderings(Field field) {
         String token = field.getAnnotation(ConfigEntry.class).comment().trim();
@@ -409,11 +410,14 @@ public abstract class AbstractConfigEntity {
         catch (RuntimeException unavailable) {
             // Without the shipped catalogues only the current text and the bare token are recognised.
         }
-        if (shipped != null) {
-            for (String text : shipped) { known.add(renderedComment(text)); }
+        List<String> texts = new ArrayList<>();
+        if (shipped != null) { texts.addAll(shipped); }
+        texts.add(resolvedComment(field));
+        texts.add(token);
+        for (String text : texts) {
+            // The framework never writes an empty comment (addEntryComment), so an empty text renders nothing of its.
+            if (text != null && !text.isEmpty()) { known.add(renderedComment(text)); }
         }
-        known.add(renderedComment(resolvedComment(field)));
-        known.add(renderedComment(token));
         return new ArrayList<>(known);
     }
 
@@ -422,7 +426,7 @@ public abstract class AbstractConfigEntity {
         ConfigDocument presentation = ConfigDocument.empty();
         List<String> key = Collections.singletonList("key");
         presentation.set(key, null);
-        presentation.setFrameworkComment(key, Collections.singletonList(text == null ? "" : text));
+        presentation.setFrameworkComment(key, Collections.singletonList(text));
         return presentation.blockComment(key);
     }
 
