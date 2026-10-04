@@ -267,9 +267,11 @@ class ConfigPanelMapEntryEditTest {
             assertThat(disk.get(target)).isEqualTo(5); assertThat(disk.get(sibling)).isEqualTo(7);
             // 17-65 save rule (maintainer decision 2026-10-04, superseding #527's overwrite-and-warn): the operator
             // changed the sibling on disk since it was read, so the module's pending sibling is not written and is named.
+            // A serializable map value (holders) is one value, so its entry is named (save rule revision 1, R65-01).
             values.save(); assertThat(values.isModifiedSinceSnapshot()).isTrue();
             assertThat(warnings).containsExactly("Configuration file " + file.toAbsolutePath()
-                    + ": the module's changes to '" + String.join(".", sibling) + "' were not written, because the file"
+                    + ": the module's changes to '" + String.join(".", "holders".equals(shape) ? sibling.subList(0, 2) : sibling)
+                    + "' were not written, because the file"
                     + " does not hold the value they were made from there (edited, deleted or unusable since it was read)."
                     + " The file keeps its text; the module's values stay in memory.");
             disk = ConfigDocument.parse(new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
