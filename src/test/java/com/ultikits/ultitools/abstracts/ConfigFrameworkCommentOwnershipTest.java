@@ -60,6 +60,9 @@ class ConfigFrameworkCommentOwnershipTest {
     private static final String EN_MULTI = "First line\nSecond line";
     private static final String ZH_MULTI = "第一行\n第二行";
     private static final String UNKNOWN_TOKEN = "{config.item.unknown}";
+    private static final String PREVIOUS_LOCKOUT = "封禁类型：IP / UUID / BOTH";
+    private static final String ZH_LOCKOUT = "封禁类型：IP / UUID / BOTH。失败次数按与封禁相同的键计数";
+    private static final String EN_LOCKOUT = "Lockout type: IP / UUID / BOTH. Failures are counted per the same key";
 
     /** The P3 fixture of the overwrite inventory (probe {@code p3_tokenCommentReplacesHandComment}). */
     private static final String P3 = "item:\n  # my own note: keep 300 for event weekends\n  interval: 300\n"
@@ -120,6 +123,21 @@ class ConfigFrameworkCommentOwnershipTest {
         }
     }
 
+    /** UltiLogin's {@code security.lockout-type} shape: an older module version wrote a literal comment. */
+    @SuppressWarnings("unused") // read reflectively by the binder
+    @ConfigEntity(PATH)
+    static class PreviousConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "item.lockout", comment = "{config.item.lockout}", previousComments = {PREVIOUS_LOCKOUT})
+        String lockout = "IP";
+
+        @ConfigEntry(path = "item.kept", comment = "Literal comment", previousComments = {"Old literal comment"})
+        int kept = 1;
+
+        public PreviousConfig(String path) {
+            super(path);
+        }
+    }
+
     @SuppressWarnings("unused") // read reflectively by the binder
     @ConfigEntity(PATH)
     static class LiteralConfig extends AbstractConfigEntity {
@@ -139,9 +157,11 @@ class ConfigFrameworkCommentOwnershipTest {
         Map<String, String> en = new LinkedHashMap<>();
         en.put("config.item.interval", EN_INTERVAL);
         en.put("config.item.multi", EN_MULTI);
+        en.put("config.item.lockout", EN_LOCKOUT);
         Map<String, String> zh = new LinkedHashMap<>();
         zh.put("config.item.interval", ZH_INTERVAL);
         zh.put("config.item.multi", ZH_MULTI);
+        zh.put("config.item.lockout", ZH_LOCKOUT);
         shipped.put("en", en);
         shipped.put("zh", zh);
 
@@ -300,6 +320,43 @@ class ConfigFrameworkCommentOwnershipTest {
         new TokenConfig(PATH).init(plugin);
 
         assertThat(text()).isEqualTo(operatorForm);
+        assertThat(mtime()).isEqualTo(OLD);
+    }
+
+    /**
+     * Maintainer decision 2026-10-04 ("register the old texts as framework-owned"): a comment equal, in the exact
+     * written form, to a text an earlier module version shipped for the setting ({@code @ConfigEntry#previousComments})
+     * is the framework's - replaced by the current catalogue text and following the language from then on.
+     */
+    @Test
+    @DisplayName("a registered previous comment text is the framework's: replaced, then it follows the language")
+    void registeredPreviousCommentIsReplacedAndFollowsTheLanguage() throws Exception {
+        put("item:\n  # operator note\n  # " + PREVIOUS_LOCKOUT + "\n  lockout: UUID\n");
+
+        PreviousConfig config = new PreviousConfig(PATH);
+        config.init(plugin);
+        assertThat(text()).isEqualTo("item:\n  # operator note\n  # " + EN_LOCKOUT + "\n  lockout: UUID\n"
+                + "  # Literal comment\n  kept: 1\n");
+
+        language = "zh";
+        config.reload();
+        assertThat(text()).isEqualTo("item:\n  # operator note\n  # " + ZH_LOCKOUT + "\n  lockout: UUID\n"
+                + "  # Literal comment\n  kept: 1\n");
+
+        Files.setLastModifiedTime(file(), OLD);
+        new PreviousConfig(PATH).init(plugin);
+        assertThat(mtime()).as("the next start writes nothing").isEqualTo(OLD);
+    }
+
+    @Test
+    @DisplayName("a comment one character away from a registered previous text is the operator's and is kept")
+    void commentOneCharacterAwayFromAPreviousTextIsKept() throws Exception {
+        String edited = "item:\n  # " + PREVIOUS_LOCKOUT + "!\n  lockout: UUID\n  # Old literal comment\n  kept: 1\n";
+        put(edited);
+
+        new PreviousConfig(PATH).init(plugin);
+
+        assertThat(text()).as("one character more, and a previous text on a literal entry, are both kept").isEqualTo(edited);
         assertThat(mtime()).isEqualTo(OLD);
     }
 
