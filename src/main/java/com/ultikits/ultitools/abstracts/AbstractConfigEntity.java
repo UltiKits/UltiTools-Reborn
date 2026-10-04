@@ -392,7 +392,10 @@ public abstract class AbstractConfigEntity {
                         : withoutLeaf(raw, change.leaf)));
             }
             if (!bound && document != null) {
-                if (change.present) { document.set(change.path, change.value); } else { document.remove(change.path); }
+                // The entity's own document is addressed where it holds the setting: the file's form may have changed
+                // since it was read, and the written path follows the file (#612, PR #613 local Codex run 1).
+                List<String> mine = new ArrayList<>(keysIn(document, field)); mine.addAll(change.leaf);
+                if (change.present) { document.set(mine, change.value); } else { document.remove(mine); }
             }
         }
         if (bound) {
