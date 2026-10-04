@@ -360,4 +360,85 @@ class ConfigAutomaticWriteGateTest {
         assertThat(warningsNamingTheFile()).hasSize(1);
         assertThat(warningsNamingTheFile().get(0)).contains("enabled").doesNotContain("interval (comment)");
     }
+
+    private Object valueOnDisk(String key) throws Exception {
+        return com.ultikits.ultitools.config.document.ConfigDocument.parse(
+                new String(bytes(), StandardCharsets.UTF_8)).get(Collections.singletonList(key));
+    }
+
+    /**
+     * 17-65 review round 2 R2-02: a 0-byte configuration file (an operator's {@code touch}, or an editor that emptied it)
+     * behaves as before the write gate: start-up inserts the declared keys - there is no other byte to keep - and the
+     * module is not refused by an unchecked exception.
+     */
+    @Test
+    void emptyFileGetsTheDeclaredKeysAtInit() throws Exception {
+        put("");
+        Gate config = new Gate(PATH);
+        config.init(plugin);
+        assertThat(config.interval).isEqualTo(300);
+        assertThat(valueOnDisk("interval")).isEqualTo(300);
+        assertThat(valueOnDisk("enabled")).isEqualTo(true);
+    }
+
+    @Test
+    void fileEmptiedBeforeAReloadKeepsZeroBytesAndBindsTheDefaults() throws Exception {
+        put("# " + EN + "\ninterval: 450\n# Whether the feature is enabled\nenabled: false\n");
+        Gate config = new Gate(PATH);
+        config.init(plugin);
+        put("");
+        config.reload();
+        assertThat(bytes()).isEmpty();
+        assertThat(config.interval).isEqualTo(300);
+        assertThat(config.enabled).isTrue();
+    }
+
+    /** R2-02: a panel edit of a 0-byte file inserts the setting it names (no unchecked exception). */
+    @Test
+    void panelEditOfAnEmptyFileInsertsTheTouchedSetting() throws Exception {
+        put("# " + EN + "\ninterval: 300\n# Whether the feature is enabled\nenabled: true\n");
+        Gate config = new Gate(PATH);
+        config.init(plugin);
+        put("");
+        com.google.gson.JsonObject edit = new com.google.gson.JsonObject();
+        edit.addProperty("enabled", false);
+        config.updateProperties(edit);
+        assertThat(valueOnDisk("enabled")).isEqualTo(false);
+        assertThat(valueOnDisk("interval")).isNull();
+    }
+
+    /**
+     * R2-04: an operator change of a file deleted since it was read does what the javadoc says - the named setting the
+     * file lacks is inserted with its comment - instead of a misleading refusal.
+     */
+    @Test
+    void operatorChangeOfADeletedFileInsertsTheNamedSetting() throws Exception {
+        put("# " + EN + "\ninterval: 300\n# Whether the feature is enabled\nenabled: true\n");
+        Gate config = new Gate(PATH);
+        config.init(plugin);
+        Files.delete(file());
+        config.enabled = false;
+        config.saveOperatorChange("enabled");
+        assertThat(new String(bytes(), StandardCharsets.UTF_8))
+                .isEqualTo("# Whether the feature is enabled\nenabled: false\n");
+    }
+
+    /** R2-02: an unchecked exception from the write gate never escapes start-up; the defaults run in memory. */
+    @Test
+    void uncheckedGateFailureNeverEscapesInit() throws Exception {
+        put("# " + EN + "\ninterval: 450\n");
+        byte[] before = bytes();
+        try (MockedStatic<com.ultikits.ultitools.config.document.OperatorFileWriter> gate = Mockito.mockStatic(
+                com.ultikits.ultitools.config.document.OperatorFileWriter.class, Mockito.CALLS_REAL_METHODS)) {
+            gate.when(() -> com.ultikits.ultitools.config.document.OperatorFileWriter.write(
+                    Mockito.any(Path.class), Mockito.any(), Mockito.any(), Mockito.any()))
+                    .thenThrow(new IllegalStateException("injected gate failure"));
+            Gate config = new Gate(PATH);
+            config.init(plugin);
+            assertThat(config.interval).isEqualTo(450);
+            assertThat(config.enabled).isTrue();
+        }
+        assertThat(bytes()).isEqualTo(before);
+        assertThat(warningsNamingTheFile()).anySatisfy(warning -> assertThat(warning).contains("IllegalStateException"));
+    }
 }
