@@ -14,6 +14,7 @@ import java.net.MalformedURLException;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.nio.charset.StandardCharsets;
 import java.security.CodeSource;
 import java.security.ProtectionDomain;
 import java.util.ArrayList;
@@ -76,6 +77,7 @@ import com.ultikits.ultitools.listeners.UpdateJoinListener;
 import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.utils.Metrics;
 import com.ultikits.ultitools.utils.ModuleFileTransactions;
+import com.ultikits.ultitools.utils.OfficialLanguageFiles;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.utils.SecurityPolicy;
 import com.ultikits.ultitools.websocket.PanelResponderRegistry;
@@ -138,6 +140,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
      * class loader is built, decided after the modules load.
      */
     private ModuleFileTransactions moduleFileTransactions;
+    /**
+     * The official languages the framework ships ({@code lang/<code>.json} in its jar), the codes a custom
+     * language name may be based on (#608). {@link #supported()} returns them.
+     */
+    private static final String[] SHIPPED_LANGUAGES = {"en", "zh"};
     @Getter
     private Language language;
     @Getter
@@ -347,20 +354,67 @@ public final class UltiTools extends JavaPlugin implements Localized {
         }
     }
 
+    /**
+     * Builds the framework's language from the {@code language} setting of {@code config.yml} (#608).
+     * <p>
+     * First writes the official files {@code lang/en.json} and {@code lang/zh.json} to the data folder so an
+     * operator can copy them, restoring any that differ from the bundled version (official language files are
+     * framework-owned, maintainer decision 2026-10-04; see {@link OfficialLanguageFiles#syncFrameworkFiles}). Then
+     * resolves the setting: an official code is used as it is; a custom name such as {@code zh-myserver} reads the
+     * operator's {@code lang/zh-myserver.json} from the data folder when it exists, and takes every message it
+     * lacks from the official language its name starts with ({@code zh}); a name that starts with no official
+     * code uses English for those messages and logs one warning. The official texts always come from the jar,
+     * read as UTF-8. The custom file is only ever read.
+     */
     private void initLanguage() {
-        String lanPath = "lang/" + getConfig().getString("language") + ".json";
+        List<String> shipped = Arrays.asList(SHIPPED_LANGUAGES);
+        List<File[]> restored = OfficialLanguageFiles.syncFrameworkFiles(getDataFolder(), shipped,
+                getClass().getClassLoader(), getLogger());
+        String configured = getConfig().getString("language");
+        String official = Localized.officialLanguageOf(configured, shipped);
+        String baseCode = official != null ? official : "en";
+        Language bundled = readBundledLanguage(baseCode);
+        boolean custom = configured != null && !configured.equals(official);
+        Language customLanguage = custom ? OfficialLanguageFiles.readFrameworkCustomFile(getDataFolder(), configured,
+                baseCode, getClass().getClassLoader(), getLogger()) : null;
+        this.language = customLanguage != null ? customLanguage.withFallback(bundled) : bundled;
+        if (official == null && (configured == null || !Localized.isSafeLanguageCode(configured))) {
+            getLogger().warning("The language setting '" + configured + "' in config.yml is not a valid language "
+                    + "name (an ASCII letter or digit first, then only ASCII letters, digits, '_' and '-'), so no "
+                    + "custom file is read; framework messages use 'en'.");
+        } else if (official == null) {
+            getLogger().warning("The language setting '" + configured + "' in config.yml is neither a shipped "
+                    + "language " + shipped + " nor a custom name that starts with one of them and a hyphen, "
+                    + "such as zh-myserver; messages it does not provide use 'en'.");
+        } else if (custom) {
+            getLogger().info("Custom language '" + configured + "' is based on the official language '" + official
+                    + "': framework messages come from lang/" + configured + ".json in " + getDataFolder()
+                    + (customLanguage != null ? "" : " (not found)") + ", and every message it lacks from the "
+                    + "official '" + official + "' file.");
+        }
+        for (File[] pair : restored) {
+            getLogger().warning(String.format(i18n(OfficialLanguageFiles.RESTORED_LOG_KEY),
+                    pair[0].getPath(), "UltiTools", pair[1].getPath()));
+        }
+    }
+
+    /**
+     * Reads the official catalogue {@code lang/<code>.json} from the framework jar as UTF-8.
+     *
+     * @return the catalogue, or an empty language when it is missing or unreadable (the reason is logged)
+     */
+    private Language readBundledLanguage(String code) {
+        String lanPath = "lang/" + code + ".json";
         InputStream in = getFileResource(lanPath);
         if (in == null) {
             getLogger().log(Level.WARNING, "Language file not found: " + lanPath + ", using default language");
-            this.language = new Language("{}");
-        } else {
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(in))) {
-                String result = reader.lines().collect(Collectors.joining(""));
-                this.language = new Language(result);
-            } catch (IOException e) {
-                getLogger().log(Level.WARNING, "Failed to read language file: " + lanPath, e);
-                this.language = new Language("{}");
-            }
+            return new Language("{}");
+        }
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
+            return new Language(reader.lines().collect(Collectors.joining("")));
+        } catch (IOException e) {
+            getLogger().log(Level.WARNING, "Failed to read language file: " + lanPath, e);
+            return new Language("{}");
         }
     }
 
@@ -839,7 +893,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
      */
     @Override
     public List<String> supported() {
-        return Arrays.asList("en", "zh");
+        return Arrays.asList(SHIPPED_LANGUAGES.clone());
     }
 
     /**

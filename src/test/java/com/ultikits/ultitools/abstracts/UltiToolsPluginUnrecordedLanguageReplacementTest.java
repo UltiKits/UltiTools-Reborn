@@ -62,10 +62,12 @@ class UltiToolsPluginUnrecordedLanguageReplacementTest {
      * The framework catalogue key of the replacement line, spelled out rather than read from the
      * production constant, so the exact operator-visible text is pinned here.
      */
-    private static final String REPLACED_LINE_KEY = "Language file '%s' of module '%s' had no provenance "
-            + "record and differed from the version bundled with this release, so it was replaced by the "
-            + "bundled version: this release cannot tell whether it had been edited. The previous file was "
-            + "kept as '%s'; to restore it, stop the server and rename it back.";
+    private static final String REPLACED_LINE_KEY = "Language file '%s' of module '%s' differed from the version "
+            + "bundled with this release and was restored to it: official language files belong to UltiTools and "
+            + "are restored at every start. The previous file was kept as '%s'. To customise messages, copy the "
+            + "official file under a new name that starts with its language code and a hyphen, keeping the "
+            + "extension (for example zh-myserver), edit the copy, and set language: zh-myserver in "
+            + "plugins/UltiTools/config.yml.";
 
     @TempDir
     File tempDir;
@@ -161,16 +163,21 @@ class UltiToolsPluginUnrecordedLanguageReplacementTest {
     }
 
     @Test
-    @DisplayName("recorded, then edited: kept unchanged (today's rule), no backup")
-    void recordedThenEditedFileIsKept() throws Exception {
+    @DisplayName("#608: recorded, then edited in place: restored to the jar's copy, the edit kept as a backup, one log line")
+    void recordedThenEditedFileIsRestoredWithABackup() throws Exception {
+        // Maintainer decision 2026-10-04 ("official language file edited in place"): restored at every start.
         String edited = "{\"greeting\":\"Hello, edited by the operator\"}";
         fixture.jarEntry(LANG, NEW).onDisk(LANG, OLD).recordCurrent(LANG).onDisk(LANG, edited);
 
         UltiToolsPlugin plugin = start();
 
-        assertThat(BootLanguageFixture.bytesOf(fixture.disk(LANG))).isEqualTo(utf8(edited));
-        assertThat(langListing()).containsExactly("en.json");
-        assertThat(plugin.i18n("greeting")).isEqualTo("Hello, edited by the operator");
+        File backup = new File(langDir(), "en.json.bak");
+        assertThat(BootLanguageFixture.bytesOf(fixture.disk(LANG))).isEqualTo(utf8(NEW));
+        assertThat(BootLanguageFixture.bytesOf(backup)).isEqualTo(utf8(edited));
+        assertThat(langListing()).containsExactly("en.json", "en.json.bak");
+        assertThat(plugin.i18n("greeting")).isEqualTo("Hello from the 6.3 jar");
+        verify(fixture.logger(), times(1)).warning(argThat((String message) ->
+                message.contains(fixture.disk(LANG).getPath()) && message.contains(backup.getPath())));
     }
 
     @Test
@@ -259,9 +266,11 @@ class UltiToolsPluginUnrecordedLanguageReplacementTest {
         Files.write(staleOnDisk.toPath(), utf8("{\"Module '%s' reloaded.\":\"a stale on-disk value\"}"));
         YamlConfiguration config = new YamlConfiguration();
         config.set("language", "en");
+        java.util.logging.Logger frameworkLogger = Mockito.mock(java.util.logging.Logger.class);
         UltiTools ultiTools = TestHelper.mockUltiToolsInstance(mock -> {
             Mockito.lenient().when(mock.getConfig()).thenReturn(config);
             Mockito.lenient().when(mock.getDataFolder()).thenReturn(dataFolder);
+            Mockito.lenient().when(mock.getLogger()).thenReturn(frameworkLogger);
         });
 
         Method initLanguage = UltiTools.class.getDeclaredMethod("initLanguage");
@@ -272,6 +281,9 @@ class UltiToolsPluginUnrecordedLanguageReplacementTest {
         Language language = (Language) languageField.get(ultiTools);
 
         assertThat(language.getLocalizedText("Module '%s' reloaded.")).isEqualTo("Module '%s' reloaded.");
+        // #608: the framework's official files are framework-owned; a differing one is restored, the old copy kept.
+        assertThat(BootLanguageFixture.bytesOf(new File(staleOnDisk.getParentFile(), "en.json.bak")))
+                .isEqualTo(utf8("{\"Module '%s' reloaded.\":\"a stale on-disk value\"}"));
     }
 
     @Test
@@ -306,15 +318,19 @@ class UltiToolsPluginUnrecordedLanguageReplacementTest {
                 .contains(ResourceHashSidecar.sha256(fixture.disk("lang/zh.json")));
         verify(fixture.logger(), times(2)).warning(anyString());
 
-        // The reproduction: after the upgrade the operator edits zh.json, switches to zh and reloads;
-        // the edit is kept as a customisation, not replaced by the jar's copy.
+        // After the upgrade the operator edits zh.json in place, switches to zh and reloads. Since #608
+        // (maintainer decision 2026-10-04, "official language file edited in place") an official file
+        // is framework-owned: the edit is restored, kept as a backup, and the operator is told to copy,
+        // rename and select a custom file instead.
         String edited = "{\"greeting\":\"zh, edited after the upgrade\"}";
         fixture.onDisk("lang/zh.json", edited).language("zh");
         plugin.reloadSelf();
 
-        assertThat(BootLanguageFixture.bytesOf(fixture.disk("lang/zh.json"))).isEqualTo(utf8(edited));
-        assertThat(plugin.i18n("greeting")).isEqualTo("zh, edited after the upgrade");
-        assertThat(langListing()).containsExactly("en.json", "en.json.bak", "zh.json", "zh.json.bak");
+        assertThat(BootLanguageFixture.bytesOf(fixture.disk("lang/zh.json"))).isEqualTo(utf8(newZh));
+        assertThat(BootLanguageFixture.bytesOf(new File(langDir(), "zh.json.1.bak"))).isEqualTo(utf8(edited));
+        assertThat(plugin.i18n("greeting")).isEqualTo("6.3 zh");
+        assertThat(langListing())
+                .containsExactly("en.json", "en.json.bak", "zh.json", "zh.json.1.bak", "zh.json.bak");
     }
 
     @Test

@@ -102,6 +102,50 @@ public interface Localized {
         }
         return safe;
     }
+
+    /**
+     * Resolves the official language a configured {@code language} name is based on (#608).
+     * <p>
+     * Official language files are owned by the framework; an operator customises messages by
+     * copying an official file under a new name and selecting that name in {@code
+     * plugins/UltiTools/config.yml} (maintainer decision 2026-10-04). The new name starts with the
+     * official code it was copied from and a hyphen -- {@code zh-myserver} is based on {@code zh}
+     * -- and keys the custom file lacks come from that official file.
+     * <p>
+     * Returns {@code configured} itself when it is one of {@code officialCodes}; otherwise the
+     * longest official code {@code c} such that {@code configured} starts with {@code c + "-"}, so
+     * {@code zh-CN-myserver} is based on {@code zh-CN} when both {@code zh} and {@code zh-CN} are
+     * official. Returns {@code null} when there is no such code, when {@code configured} is
+     * {@code null}, or when it fails {@link #isSafeLanguageCode(String)} -- a name that could form
+     * a path outside a {@code lang/} folder is never a custom language name. The caller chooses the
+     * fallback for {@code null} and says so in the log.
+     *
+     * @param configured    the configured {@code language} value, possibly {@code null}
+     * @param officialCodes the official language codes the caller ships
+     * @return the official code {@code configured} is based on, or {@code null} if none
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    static String officialLanguageOf(String configured, List<String> officialCodes) {
+        if (configured == null || officialCodes == null) {
+            return null;
+        }
+        if (officialCodes.contains(configured)) {
+            return configured;
+        }
+        if (!isSafeLanguageCode(configured)) {
+            return null;
+        }
+        String best = null;
+        for (String code : officialCodes) {
+            boolean prefixed = code != null && configured.startsWith(code + "-");
+            if (prefixed && (best == null || code.length() > best.length())) {
+                best = code;
+            }
+        }
+        return best;
+    }
+
     /**
      * Get the language code of the plugin module.
      * more <a href="https://en.wikipedia.org/wiki/IETF_language_tag">Language code list</a>

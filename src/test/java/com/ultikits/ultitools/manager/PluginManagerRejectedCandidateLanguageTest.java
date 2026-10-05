@@ -163,14 +163,15 @@ class PluginManagerRejectedCandidateLanguageTest {
         fixture.jarEntry(LANG, "{\"greeting\":\"Hi %s, you have %d items\"}")
                 .onDisk(LANG, "{\"greeting\":\"Hi %s\"}")
                 .recordCurrent(LANG);
-        // Recorded, then edited: the operator-customisation branch, which warns about the key
-        // whose placeholder count moved.
+        // Recorded, then edited in place: since #608 (maintainer decision 2026-10-04) the official
+        // file is restored, the edit backed up, and one line says so.
         fixture.onDisk(LANG, "{\"greeting\":\"Hello %s\"}");
 
         UltiToolsPlugin candidate = fixture.construct("1.0.0");
         verify(fixture.logger(), never()).warning(anyString());
 
         candidate.commitLanguageProvenance();
-        verify(fixture.logger(), times(1)).warning(argThat((String message) -> message.contains("greeting")));
+        verify(fixture.logger(), times(1)).warning(argThat((String message) ->
+                message.contains(fixture.disk(LANG).getPath()) && message.contains(".bak")));
     }
 }

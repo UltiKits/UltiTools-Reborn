@@ -122,7 +122,7 @@ class UltiToolsPluginLanguageFallbackTest {
     @DisplayName("配置的代码在 supported() 中 -- 直接使用，不告警")
     void configuredCodeSupportedIsUsedWithoutWarning() throws Throwable {
         UltiToolsPlugin plugin = mock(FixturePlugin.class);
-        when(plugin.getLanguageCode()).thenReturn("en");
+        when(plugin.getConfiguredLanguage()).thenReturn("en");
         when(plugin.supported()).thenReturn(Arrays.asList("en", "zh"));
         PluginLogger mockLogger = mock(PluginLogger.class);
         when(plugin.getLogger()).thenReturn(mockLogger);
@@ -137,7 +137,7 @@ class UltiToolsPluginLanguageFallbackTest {
     @DisplayName("配置了不支持的代码，但 supported() 里有 en -- 回退到 en 并告警，命名模块/请求代码/可用代码")
     void unsupportedCodeFallsBackToEnglishWithNamingWarning() throws Throwable {
         UltiToolsPlugin plugin = mock(FixturePlugin.class);
-        when(plugin.getLanguageCode()).thenReturn("fr");
+        when(plugin.getConfiguredLanguage()).thenReturn("fr");
         when(plugin.supported()).thenReturn(Arrays.asList("en", "zh"));
         when(plugin.getPluginName()).thenReturn("TestModule");
         PluginLogger mockLogger = mock(PluginLogger.class);
@@ -154,7 +154,7 @@ class UltiToolsPluginLanguageFallbackTest {
     @DisplayName("配置了不支持的代码，且 supported() 不含 en -- 回退到第一个条目并告警")
     void unsupportedCodeWithoutEnglishFallsBackToFirstEntry() throws Throwable {
         UltiToolsPlugin plugin = mock(FixturePlugin.class);
-        when(plugin.getLanguageCode()).thenReturn("fr");
+        when(plugin.getConfiguredLanguage()).thenReturn("fr");
         when(plugin.supported()).thenReturn(Collections.singletonList("zh"));
         when(plugin.getPluginName()).thenReturn("TestModule");
         PluginLogger mockLogger = mock(PluginLogger.class);
@@ -170,7 +170,7 @@ class UltiToolsPluginLanguageFallbackTest {
     @DisplayName("配置代码为 null -- 与不支持的代码走相同的回退和告警路径")
     void nullConfiguredCodeFallsBackSameAsUnsupported() throws Throwable {
         UltiToolsPlugin plugin = mock(FixturePlugin.class);
-        when(plugin.getLanguageCode()).thenReturn(null);
+        when(plugin.getConfiguredLanguage()).thenReturn(null);
         when(plugin.supported()).thenReturn(Arrays.asList("en", "zh"));
         when(plugin.getPluginName()).thenReturn("TestModule");
         PluginLogger mockLogger = mock(PluginLogger.class);
@@ -186,7 +186,7 @@ class UltiToolsPluginLanguageFallbackTest {
     @DisplayName("supported() 为空列表 -- 视为无信息，不告警，不改变原有代码")
     void emptySupportedProducesNoWarningAndNoChange() throws Throwable {
         UltiToolsPlugin plugin = mock(FixturePlugin.class);
-        when(plugin.getLanguageCode()).thenReturn("fr");
+        when(plugin.getConfiguredLanguage()).thenReturn("fr");
         when(plugin.supported()).thenReturn(Collections.emptyList());
         PluginLogger mockLogger = mock(PluginLogger.class);
         when(plugin.getLogger()).thenReturn(mockLogger);
@@ -203,7 +203,7 @@ class UltiToolsPluginLanguageFallbackTest {
         writeLangFile("zh", "{\"greeting\":\"\\u4f60\\u597d\"}");
 
         UltiToolsPlugin plugin = mock(FixturePlugin.class);
-        when(plugin.getLanguageCode()).thenReturn("fr");
+        when(plugin.getConfiguredLanguage()).thenReturn("fr");
         when(plugin.supported()).thenReturn(Collections.singletonList("zh"));
         when(plugin.getPluginName()).thenReturn("TestModule");
         PluginLogger mockLogger = mock(PluginLogger.class);
@@ -233,7 +233,7 @@ class UltiToolsPluginLanguageFallbackTest {
         String hostileCode = "../" + marker;
 
         UltiToolsPlugin plugin = mock(FixturePlugin.class);
-        when(plugin.getLanguageCode()).thenReturn(hostileCode);
+        when(plugin.getConfiguredLanguage()).thenReturn(hostileCode);
         when(plugin.supported()).thenReturn(Collections.emptyList());
         when(plugin.getPluginName()).thenReturn("TestModule");
         PluginLogger mockLogger = mock(PluginLogger.class);
@@ -263,7 +263,7 @@ class UltiToolsPluginLanguageFallbackTest {
         // Simulates a subclass override: supported() is a public, overridable default method, and
         // stubbing it on the mock is virtual-dispatch-equivalent to a real override.
         when(plugin.supported()).thenReturn(Collections.singletonList("ja"));
-        when(plugin.getLanguageCode()).thenReturn("en");
+        when(plugin.getConfiguredLanguage()).thenReturn("en");
         when(plugin.getPluginName()).thenReturn("TestModule");
         PluginLogger mockLogger = mock(PluginLogger.class);
         when(plugin.getLogger()).thenReturn(mockLogger);
@@ -280,7 +280,7 @@ class UltiToolsPluginLanguageFallbackTest {
         writeLangFile("en", "{\"greeting\":\"Hi\"}");
 
         UltiToolsPlugin plugin = mock(FixturePlugin.class);
-        when(plugin.getLanguageCode()).thenReturn("fr");
+        when(plugin.getConfiguredLanguage()).thenReturn("fr");
         when(plugin.supported()).thenReturn(Arrays.asList("en", "zh"));
         when(plugin.getPluginName()).thenReturn("TestModule");
         PluginLogger mockLogger = mock(PluginLogger.class);
@@ -447,6 +447,23 @@ class UltiToolsPluginLanguageFallbackTest {
         return invokeCreateLanguageFromPath((UltiToolsPlugin) fixture.plugin, fixture.resourceFolder.getAbsolutePath());
     }
 
+    /**
+     * #608, maintainer decision 2026-10-04 ("official language file edited in place"): an official
+     * file whose bytes differ from the jar's is now restored at every start, an edited one included,
+     * so the per-key placeholder guard exercised below protects only an edited file the framework
+     * cannot restore. These tests reach that path by making the language folder unwritable: the
+     * backup copy fails, the file is kept as it is, and the guard applies to it.
+     */
+    private Language resolveWithRestoreRefused(ProvenanceFixture fixture) throws Throwable {
+        File langDir = new File(fixture.resourceFolder, "lang");
+        assertThat(langDir.setWritable(false)).isTrue();
+        try {
+            return resolveProvenanceLanguage(fixture);
+        } finally {
+            langDir.setWritable(true);
+        }
+    }
+
     @Test
     @DisplayName("D-05 branch 1: recorded hash == disk hash -> overwritten from the jar, one INFO line")
     void recordedHashEqualsDiskHashOverwritesFromJarWithOneInfoLine() throws Throwable {
@@ -467,8 +484,10 @@ class UltiToolsPluginLanguageFallbackTest {
     }
 
     @Test
-    @DisplayName("D-05 branch 2: recorded hash != disk hash -> disk left alone, no overwrite INFO line")
-    void recordedHashDiffersFromDiskHashLeavesFileAloneWithNoOverwriteLog() throws Throwable {
+    @DisplayName("D-05 branch 2 since #608: recorded hash != disk hash != jar hash -> the edited official file is "
+            + "restored, the edit kept as a backup, one WARN line, no overwrite INFO line")
+    void recordedHashDiffersFromDiskHashRestoresTheOfficialFileWithABackup() throws Throwable {
+        // Maintainer decision 2026-10-04 ("official language file edited in place"): restored at every start.
         ProvenanceFixture fixture = buildProvenanceFixture("en", ".json",
                 "{\"greeting\":\"Hi v2\"}", "{\"greeting\":\"Hi customised\"}");
         File diskFile = new File(fixture.resourceFolder, "lang" + File.separator + "en.json");
@@ -477,8 +496,15 @@ class UltiToolsPluginLanguageFallbackTest {
 
         Language language = resolveProvenanceLanguage(fixture);
 
-        assertThat(language.getLocalizedText("greeting")).isEqualTo("Hi customised");
-        assertThat(Files.readAllBytes(diskFile.toPath())).isEqualTo(beforeBytes);
+        assertThat(language.getLocalizedText("greeting")).isEqualTo("Hi v2");
+        assertThat(Files.readAllBytes(diskFile.toPath()))
+                .isEqualTo("{\"greeting\":\"Hi v2\"}".getBytes(StandardCharsets.UTF_8));
+        File backup = new File(diskFile.getParentFile(), "en.json.bak");
+        assertThat(Files.readAllBytes(backup.toPath())).isEqualTo(beforeBytes);
+        assertThat(ResourceHashSidecar.readRecordedHash(fixture.resourceFolder, "lang/en.json"))
+                .contains(ResourceHashSidecar.sha256(diskFile));
+        verify(fixture.mockLogger, times(1)).warning(argThat((String msg) ->
+                msg.contains(diskFile.getPath()) && msg.contains(backup.getPath())));
         verify(fixture.mockLogger, never()).info(anyString());
     }
 
@@ -491,7 +517,7 @@ class UltiToolsPluginLanguageFallbackTest {
                 "{\"known\":\"Hi %s\",\"other\":\"stable-customised\"}");
         ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
 
-        Language language = resolveProvenanceLanguage(fixture);
+        Language language = resolveWithRestoreRefused(fixture);
 
         assertThat(language.getLocalizedText("known")).isEqualTo("Hi %s, you have %s items");
         assertThat(language.getLocalizedText("other")).isEqualTo("stable-customised");
@@ -506,7 +532,7 @@ class UltiToolsPluginLanguageFallbackTest {
                 "{\"known\":\"Hello %s!\"}", "{\"known\":\"Hi there %s!\"}");
         ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
 
-        Language language = resolveProvenanceLanguage(fixture);
+        Language language = resolveWithRestoreRefused(fixture);
 
         assertThat(language.getLocalizedText("known")).isEqualTo("Hi there %s!");
         verify(fixture.mockLogger, never()).warning(anyString());
@@ -521,7 +547,7 @@ class UltiToolsPluginLanguageFallbackTest {
                 "{\"known\":\"Just %1$s once\"}");
         ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
 
-        Language language = resolveProvenanceLanguage(fixture);
+        Language language = resolveWithRestoreRefused(fixture);
 
         // Both values consume exactly ONE distinct argument position ({1}); a naive occurrence
         // count would see 2 occurrences in the jar value vs 1 in the disk value and incorrectly
@@ -601,12 +627,12 @@ class UltiToolsPluginLanguageFallbackTest {
             + "fallback, never as an error")
     void emptyDiskFileResolvesEveryKeyThroughJarFallbackWithoutError() throws Throwable {
         ProvenanceFixture fixture = buildProvenanceFixture("en", ".json", "{\"greeting\":\"Hi\"}", "");
-        // Recorded as something else, so the empty file is an operator's edit that is kept (branch
-        // 2) and its own parse is what this test exercises; an unrecorded empty file would now be
-        // replaced by the jar's copy (#459).
+        // Recorded as something else, so the empty file is an operator's edit (branch 2). Since #608
+        // such an edit is restored; the folder is made unwritable so it is kept and its own parse is
+        // what this test exercises.
         ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "hash-of-the-extracted-copy");
 
-        Language resolved = resolveProvenanceLanguage(fixture);
+        Language resolved = resolveWithRestoreRefused(fixture);
 
         assertThat(resolved.getLocalizedText("greeting")).isEqualTo("Hi");
         verify(fixture.mockLogger, never()).warning(anyString());
@@ -621,7 +647,7 @@ class UltiToolsPluginLanguageFallbackTest {
                 "{\"common\":\"disk-value\",\"onlyInJar\":\"x\"}");
         ResourceHashSidecar.record(knownCustomisation.resourceFolder, "lang/en.json",
                 "stale-baseline-hash-not-matching");
-        Language viaKnownCustomisation = resolveProvenanceLanguage(knownCustomisation);
+        Language viaKnownCustomisation = resolveWithRestoreRefused(knownCustomisation);
 
         ProvenanceFixture unknownProvenance = buildProvenanceFixture("en", ".json",
                 "{\"common\":\"jar-value\",\"onlyInJar\":\"x\"}",
@@ -843,7 +869,7 @@ class UltiToolsPluginLanguageFallbackTest {
                 "{\"known\":\"Uses %2$s only\"}", "{\"known\":\"Uses %s only\"}");
         ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
 
-        Language language = resolveProvenanceLanguage(fixture);
+        Language language = resolveWithRestoreRefused(fixture);
 
         assertThat(language.getLocalizedText("known")).isEqualTo("Uses %2$s only");
         verify(fixture.mockLogger, times(1)).warning(argThat((String msg) -> msg.contains("known")));
@@ -863,7 +889,7 @@ class UltiToolsPluginLanguageFallbackTest {
                 "{\"known\":\"Uses %999999999999999999$s\",\"other\":\"stable-customised\"}");
         ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
 
-        Language language = resolveProvenanceLanguage(fixture);
+        Language language = resolveWithRestoreRefused(fixture);
 
         // The malformed key falls back to the bundled (jar) value rather than aborting...
         assertThat(language.getLocalizedText("known")).isEqualTo("safe bundled value");
@@ -887,7 +913,7 @@ class UltiToolsPluginLanguageFallbackTest {
                 "{\"known\":\"Progress: 90% done\"}");
         ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
 
-        Language language = resolveProvenanceLanguage(fixture);
+        Language language = resolveWithRestoreRefused(fixture);
 
         assertThat(language.getLocalizedText("known")).isEqualTo("Progress: 90% done");
         verify(fixture.mockLogger, never()).warning(anyString());
@@ -1068,7 +1094,7 @@ class UltiToolsPluginLanguageFallbackTest {
                 "{\"known\":\"Uses %0$s\",\"other\":\"stable-customised\"}");
         ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
 
-        Language language = resolveProvenanceLanguage(fixture);
+        Language language = resolveWithRestoreRefused(fixture);
 
         assertThat(language.getLocalizedText("known")).isEqualTo("safe bundled value");
         assertThat(language.getLocalizedText("other")).isEqualTo("stable-customised");
@@ -1217,7 +1243,7 @@ class UltiToolsPluginLanguageFallbackTest {
                 "{\"known\":\"&aHey {PLAYER}, you've got &b{COUNT} things now!\"}");
         ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
 
-        Language language = resolveProvenanceLanguage(fixture);
+        Language language = resolveWithRestoreRefused(fixture);
 
         assertThat(language.getLocalizedText("known"))
                 .isEqualTo("&aHey {PLAYER}, you've got &b{COUNT} things now!");
@@ -1234,7 +1260,7 @@ class UltiToolsPluginLanguageFallbackTest {
                 "{\"known\":\"Hello {PLAYER} (see {NOTE} below)\"}");
         ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
 
-        Language language = resolveProvenanceLanguage(fixture);
+        Language language = resolveWithRestoreRefused(fixture);
 
         assertThat(language.getLocalizedText("known")).isEqualTo("Hello {PLAYER} (see {NOTE} below)");
         verify(fixture.mockLogger, never()).warning(anyString());
@@ -1252,7 +1278,7 @@ class UltiToolsPluginLanguageFallbackTest {
                 "{\"known\":\"Rules: (please be nice, avoid spam) - thanks!\"}");
         ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
 
-        Language language = resolveProvenanceLanguage(fixture);
+        Language language = resolveWithRestoreRefused(fixture);
 
         // Under a naive `\{[^}]*\}` pattern, "be respectful, no spam" would be read whole as a
         // bundled token; the disk value's rewritten wording does not contain that literal text,
@@ -1272,7 +1298,7 @@ class UltiToolsPluginLanguageFallbackTest {
                 "{\"known\":\"{0} -> {1} [{2}]\",\"other\":\"stable-customised\"}");
         ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
 
-        Language language = resolveProvenanceLanguage(fixture);
+        Language language = resolveWithRestoreRefused(fixture);
 
         assertThat(language.getLocalizedText("known")).isEqualTo("{0} -> {1} [{2}] => {3}");
         assertThat(language.getLocalizedText("other")).isEqualTo("stable-customised");
@@ -1290,7 +1316,7 @@ class UltiToolsPluginLanguageFallbackTest {
                 "{\"known\":\"Teleporting {PLAYER}\",\"other\":\"stable-customised\"}");
         ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
 
-        Language language = resolveProvenanceLanguage(fixture);
+        Language language = resolveWithRestoreRefused(fixture);
 
         assertThat(language.getLocalizedText("known")).isEqualTo("Teleporting {PLAYER} to {WORLD}");
         assertThat(language.getLocalizedText("other")).isEqualTo("stable-customised");
@@ -1308,7 +1334,7 @@ class UltiToolsPluginLanguageFallbackTest {
                 "{\"formatterKey\":\"Hi %s\",\"braceKey\":\"Hi {PLAYER}\"}");
         ResourceHashSidecar.record(fixture.resourceFolder, "lang/en.json", "stale-baseline-hash-not-matching");
 
-        Language language = resolveProvenanceLanguage(fixture);
+        Language language = resolveWithRestoreRefused(fixture);
 
         assertThat(language.getLocalizedText("formatterKey")).isEqualTo("Hi %s, %d items");
         assertThat(language.getLocalizedText("braceKey")).isEqualTo("Hi {PLAYER}, {COUNT} items");
