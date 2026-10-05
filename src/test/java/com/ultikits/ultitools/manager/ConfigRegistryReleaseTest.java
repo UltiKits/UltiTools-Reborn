@@ -152,7 +152,8 @@ class ConfigRegistryReleaseTest {
     @Test void protectedShutdownFileSurvivesBothCallbackSaves() throws Exception {
         HookOwner hook = callbackOwner(false, true); hook.checkInitialSave = false;
         String broken = "value: [broken\n";
-        Files.write(directory.resolve("release.yml"), broken.getBytes(StandardCharsets.UTF_8)); entity.reload();
+        Files.write(directory.resolve("release.yml"), broken.getBytes(StandardCharsets.UTF_8));
+        assertThatThrownBy(entity::reload).isInstanceOf(com.ultikits.ultitools.exceptions.ConfigurationException.class); // #589
         plugins.close();
         assertThat(hook.bean.ran).isTrue(); assertThat(disk()).isEqualTo(broken);
         assertThat(configs.getAllConfigEntities(hook)).isNull();

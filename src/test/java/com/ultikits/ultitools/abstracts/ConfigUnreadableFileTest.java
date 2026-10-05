@@ -85,8 +85,11 @@ class ConfigUnreadableFileTest {
         assertThat(config.isLastLoadUnparseable()).isFalse();
         config.limit = 35;
         put(broken);
-        config.reload();
+        // #589: a reload of the broken file tells its caller; memory and the file stay unchanged.
+        assertThatThrownBy(config::reload)
+                .isInstanceOf(ConfigurationException.class).hasMessageContaining(PATH);
         assertThat(config.limit).isEqualTo(35);
+        assertThat(config.isLastLoadUnparseable()).isTrue();
         config.save();
         assertThatThrownBy(() -> config.updateProperties(panel()))
                 .isInstanceOf(ConfigurationException.class).hasMessageContaining(PATH);

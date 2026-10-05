@@ -47,6 +47,7 @@ import com.ultikits.ultitools.annotations.config.Pattern;
 import com.ultikits.ultitools.annotations.config.Range;
 import com.ultikits.ultitools.annotations.config.Size;
 import com.ultikits.ultitools.exceptions.ConfigurationException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.ConfigChangeListener;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
@@ -371,13 +372,33 @@ public abstract class AbstractConfigEntity {
     }
 
     private boolean protectFailedLoad(ConfigLoadResult loaded) {
-        if (loaded.state() != ConfigLoadResult.State.UNREADABLE
-                && loaded.state() != ConfigLoadResult.State.UNPARSEABLE) { return false; }
+        String cause = failedLoadCause(loaded);
+        if (cause == null) { return false; }
         lastLoadUnparseable = true;
-        String cause = loaded.state() == ConfigLoadResult.State.UNREADABLE
-                ? loaded.cause().getClass().getSimpleName() : safeParserLocation(loaded.parserMessage());
         LOGGER.severe("Cannot load " + configFilePath + ": " + cause + "; file will not be overwritten");
         return true;
+    }
+
+    /**
+     * The safe cause of a load that could not read or parse the file, or {@code null} when it did.
+     * Names only the exception class or the parser's numeric location, never file content.
+     */
+    private static String failedLoadCause(ConfigLoadResult loaded) {
+        if (loaded.state() == ConfigLoadResult.State.UNREADABLE) { return loaded.cause().getClass().getSimpleName(); }
+        if (loaded.state() == ConfigLoadResult.State.UNPARSEABLE) { return safeParserLocation(loaded.parserMessage()); }
+        return null;
+    }
+
+    /**
+     * #589: a reload that cannot read or parse the file refuses with the file and the safe cause.
+     * The caller reports it (the module's reload logs one SEVERE line and {@code /ul reload <name>}
+     * replies failure), so the entity logs nothing itself.
+     */
+    private ConfigurationException reloadRefusal(ConfigLoadResult loaded, String cause) {
+        boolean unreadable = loaded.state() == ConfigLoadResult.State.UNREADABLE;
+        return new ConfigurationException(unreadable ? ErrorCode.CONFIG_LOAD_FAILED : ErrorCode.CONFIG_PARSE_FAILED,
+                "Cannot reload " + configFilePath + ": " + cause + "; the file and the running values are unchanged",
+                unreadable ? loaded.cause() : null);
     }
 
     private static String safeParserLocation(String message) {
@@ -646,6 +667,12 @@ public abstract class AbstractConfigEntity {
     private void load(boolean initialize) throws IOException {
         warnedCommentKeys.clear();
         ConfigLoadResult loaded = ConfigDocument.load(ultiToolsPlugin.getConfigFile(configFilePath).toPath());
+        String failedCause = initialize ? null : failedLoadCause(loaded);
+        if (failedCause != null) {
+            // Protected until a later successful load; reload() restores everything else.
+            lastLoadUnparseable = true;
+            throw reloadRefusal(loaded, failedCause);
+        }
         if (protectFailedLoad(loaded)) {
             if (document == null) { document = ConfigDocument.empty(); }
             validateFields();
@@ -669,10 +696,10 @@ public abstract class AbstractConfigEntity {
                         configFilePath, keys(field), field.getAnnotation(ConfigEntry.class));
                 ReflectionUtil.setFieldValue(this, field, converted.value());
                 for (ConversionFailure failure : converted.failures()) {
-                    warnConversion(field, failure.path(), failure.declaredType(), failure.raw(), raw);
+                    warnConversion(field, failure.cause(), failure.raw(), raw);
                 }
             } catch (ConversionException failure) {
-                warnConversion(field, failure.path(), failure.declaredType(), raw, raw);
+                warnConversion(field, failure, raw, raw);
                 // Restore the initially declared default, not a live unsaved value or the last load.
                 try {
                     Object value = registry().fromPlainResult(declaredDefaults.get(field), declaredType(field),
@@ -783,7 +810,8 @@ public abstract class AbstractConfigEntity {
     }
 
     @SuppressWarnings("PMD.NPathComplexity") // Diagnostic traversal distinguishes list positions, whole keys and inherited secret boundaries.
-    private void warnConversion(Field field, List<String> path, Type type, Object raw, Object fieldRaw) {
+    private void warnConversion(Field field, ConversionException failure, Object raw, Object fieldRaw) {
+        List<String> path = failure.path();
         StringBuilder located = new StringBuilder(fieldPath(field));
         Object cursor = fieldRaw;
         boolean parentSecret = isSecretShapedFieldName(field.getName());
@@ -805,9 +833,23 @@ public abstract class AbstractConfigEntity {
         String found = raw instanceof Map ? "a map" : raw instanceof List ? "a list"
                 : raw instanceof String ? "text" : raw == null ? "null" : raw.getClass().getSimpleName();
         // Container values may hold nested credentials; redact the entire failed specimen.
-        String value = secret || containsSecret(raw) ? "<redacted>" : String.valueOf(raw);
-        LOGGER.warning("File " + configFilePath + ", key '" + key + "', declared as " + typeName(type)
-                + ": found " + found + " " + value + "; skipped or using the declared default");
+        boolean redacted = secret || containsSecret(raw);
+        String value = redacted ? "<redacted>" : String.valueOf(raw);
+        // #590: the converter is the only code that knows what is wrong; its reason may echo the
+        // value, so it is redacted with it, and it is kept on one log line.
+        String reason = conversionReason(failure);
+        String because = reason == null ? "" : " (reason: " + (redacted ? "<redacted>" : reason) + ")";
+        LOGGER.warning("File " + configFilePath + ", key '" + key + "', declared as " + typeName(failure.declaredType())
+                + ": found " + found + " " + value + because + "; skipped or using the declared default");
+    }
+
+    private static String conversionReason(ConversionException failure) {
+        String reason = failure.reason();
+        if ((reason == null || reason.trim().isEmpty()) && failure.getCause() != null) {
+            reason = failure.getCause().getClass().getSimpleName();
+        }
+        if (reason == null || reason.trim().isEmpty()) { return null; }
+        return reason.replaceAll("[\\p{Cntrl}\\u2028\\u2029\\u0085]+", " ").trim();
     }
 
     private boolean containsSecret(Object value) {
@@ -1505,7 +1547,17 @@ public abstract class AbstractConfigEntity {
      * tracking is restored to what it was before the attempt, and the failure is rethrown
      * without notifying listeners. A rejected file value therefore never becomes an unsaved
      * in-memory edit that the next reload's three-way merge would keep over a corrected file.
+     * <p>
+     * Since 6.3.0 (#589) a file that cannot be read or parsed fails the reload the same way: it
+     * throws {@link ConfigurationException} naming the file and the safe cause (the exception class,
+     * or the parser's line and column - never file content), the running values and the file stay
+     * exactly as they were, and the file stays protected from writes until a later successful load.
+     * Nothing is logged by the entity for it: the caller reports the failure, as {@code /ul reload}
+     * does. Initial loading through {@link #init} is different and unchanged: it logs one SEVERE
+     * line, keeps the declared defaults, and never overwrites the file.
      *
+     * @throws ConfigurationException if the file cannot be read or parsed, or a value it holds
+     *                                fails validation or conversion; nothing changed
      * @throws IOException if an I/O error occurs
      */
     public void reload() throws IOException {
@@ -1519,8 +1571,13 @@ public abstract class AbstractConfigEntity {
                 load(false);
                 loaded = true;
             } finally {
-                // Restore on every failure, unchecked errors included, then let it propagate.
-                if (!loaded) { before.restore(); }
+                // Restore on every failure, unchecked errors included, then let it propagate. A file
+                // found unreadable or unparseable stays protected until a later successful load (#589).
+                if (!loaded) {
+                    boolean protectFile = lastLoadUnparseable;
+                    before.restore();
+                    lastLoadUnparseable |= protectFile;
+                }
             }
         }
         notifyChangeListeners();
