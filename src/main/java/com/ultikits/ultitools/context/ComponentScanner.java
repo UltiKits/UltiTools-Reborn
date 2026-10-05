@@ -22,6 +22,7 @@ import com.ultikits.ultitools.annotations.Configuration;
 import com.ultikits.ultitools.annotations.EventListener;
 import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
+import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.exceptions.ContainerException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.utils.ModuleScanDiagnostics;
@@ -79,10 +80,11 @@ public class ComponentScanner {
                     scanJar(resource, basePackage, classLoader);
                 }
             }
-        } catch (ContainerException e) {
+        } catch (ContainerException | ConfigurationException e) {
             // A @Final contract violation is a hard failure and must abort module loading - the
             // catch-all below would otherwise log it and let scanning continue as if nothing
-            // happened. See issue #190.
+            // happened. See issue #190. The same holds for a @ConditionalOnConfig path the file
+            // writes in two forms (#612): the module is refused, naming the file and the path.
             throw e;
         } catch (Exception e) {
             // Skip-and-continue: the scan moves on to the next package, so this is an

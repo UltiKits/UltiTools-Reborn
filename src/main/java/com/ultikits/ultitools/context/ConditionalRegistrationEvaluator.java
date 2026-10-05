@@ -12,8 +12,11 @@ import java.util.logging.Logger;
 
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.ConditionalOnConfig;
+import com.ultikits.ultitools.config.document.ConfigDocument;
+import com.ultikits.ultitools.config.document.ConfigLoadResult;
+import com.ultikits.ultitools.exceptions.ConfigurationException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 
-import org.bukkit.configuration.file.YamlConfiguration;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
@@ -132,8 +135,8 @@ public final class ConditionalRegistrationEvaluator {
     }
 
     /**
-     * The decision logic extracted verbatim from the pre-6.3.0 {@code shouldRegister} body --
-     * no existing decision semantics changed by this extraction. Kept separate from
+     * The decision logic extracted from the pre-6.3.0 {@code shouldRegister} body; since #612 the
+     * value is read with the framework's document reader ({@link #readBoolean}). Kept separate from
      * {@link #shouldRegister(Class, SimpleContainer)} so {@link #reportDrift(UltiToolsPlugin)}
      * can re-run exactly the same logic against the current file contents.
      *
@@ -149,9 +152,36 @@ public final class ConditionalRegistrationEvaluator {
             return condition.negate();
         }
 
-        YamlConfiguration yaml = YamlConfiguration.loadConfiguration(configFile);
-        boolean value = yaml.getBoolean(condition.path(), false);
+        boolean value = readBoolean(configFile, condition);
         return condition.negate() ? !value : value;
+    }
+
+    /**
+     * Reads {@code condition.path()} from {@code configFile} with the framework's own document reader and key semantics,
+     * the same the module's config entity binds the file with (#612): the path is a nested key path, a flat dotted key
+     * such as {@code features.chat: false}, or a mix ({@link ConfigDocument#readings(String)}). Bukkit's
+     * {@code YamlConfiguration}, which this used before, splits every key at its dots and lets a later section replace an
+     * earlier flat key, so it could read a different value from the entity and change its answer after the entity's
+     * missing-key insert. Only a boolean value counts, as with Bukkit's {@code getBoolean}: anything else, an absent path
+     * or a file that cannot be read or parsed reads {@code false}.
+     *
+     * @throws ConfigurationException when the file holds the path in more than one form (refused like the entity's
+     *                                load; the message names the file and the path, never a value)
+     */
+    private static boolean readBoolean(File configFile, ConditionalOnConfig condition) {
+        ConfigLoadResult loaded = ConfigDocument.load(configFile.toPath());
+        if (loaded.state() != ConfigLoadResult.State.LOADED) {
+            return false;
+        }
+        ConfigDocument document = loaded.document();
+        List<List<String>> readings = document.readings(condition.path());
+        if (readings.size() > 1) {
+            throw new ConfigurationException(ErrorCode.CONFIG_VALIDATION_FAILED, "Configuration file '"
+                    + configFile.getPath() + "': setting '" + condition.path() + "' read by @ConditionalOnConfig is"
+                    + " written in two forms (as a flat dotted key and as nested keys, or in two splits of its dots);"
+                    + " delete one of them and restart. The file was not modified.");
+        }
+        return !readings.isEmpty() && Boolean.TRUE.equals(document.get(readings.get(0)));
     }
 
     private static void record(UltiToolsPlugin plugin, Class<?> clazz, boolean decision) {
@@ -169,7 +199,7 @@ public final class ConditionalRegistrationEvaluator {
      * <p>
      * Per D-01, this method only reports -- it never registers, unregisters, or rebuilds
      * anything. Re-evaluation runs outside {@link #RECORD_LOCK} (it does disk I/O via
-     * {@link YamlConfiguration#loadConfiguration(File)}, which must never run while holding a
+     * {@link ConfigDocument#load(java.nio.file.Path)}, which must never run while holding a
      * lock other reload/scan threads might contend on); the plugin's recorded map is snapshotted
      * inside the lock first. Each class is re-evaluated in its own {@code try}/{@code catch} so
      * one unreadable config file cannot abort the reload or the remaining classes.

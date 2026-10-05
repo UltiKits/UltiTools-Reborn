@@ -251,6 +251,62 @@ public final class ConfigDocument {
     }
 
     /**
+     * Returns every place this document holds a declared setting path: each way of splitting {@code dottedPath} at its
+     * dots into keys the document holds, the last one present (an explicit {@code null} included). {@code a.b.c} is read
+     * as {@code a -> b -> c}, {@code a.b -> c}, {@code a -> b.c} or the single key {@code a.b.c}, the way Bukkit's
+     * {@code YamlConfiguration} - which splits every key at its dots - reads the same file, so a setting the operator
+     * wrote as a flat dotted key is that setting (#612). Keys inside the setting's value are not split: this addresses
+     * the setting itself, never an entry of a map it holds.
+     *
+     * @param dottedPath a declared setting path, such as {@code features.chat}
+     * @return the readings found, nested forms first; empty when the document does not hold the setting, two or more
+     *         when it holds it in several forms
+     * @since 6.3.0
+     */
+    public List<List<String>> readings(String dottedPath) {
+        return readings(plain, dottedPath);
+    }
+
+    /**
+     * {@link #readings(String)} over a plain-data tree, such as a copy of a document taken at load.
+     *
+     * @param tree       the top-level mapping
+     * @param dottedPath a declared setting path
+     * @return the readings found, nested forms first
+     * @since 6.3.0
+     */
+    public static List<List<String>> readings(Map<?, ?> tree, String dottedPath) {
+        List<List<String>> found = new ArrayList<>();
+        collectReadings(tree, dottedPath.split("\\.", -1), 0, new ArrayList<String>(), found);
+        return found;
+    }
+
+    private static void collectReadings(Object node, String[] parts, int from, List<String> prefix, List<List<String>> found) {
+        if (!(node instanceof Map)) {
+            return;
+        }
+        Map<?, ?> map = (Map<?, ?>) node;
+        StringBuilder key = new StringBuilder();
+        for (int end = from; end < parts.length; end++) {
+            if (end > from) {
+                key.append('.');
+            }
+            key.append(parts[end]);
+            String name = key.toString();
+            if (!map.containsKey(name)) {
+                continue;
+            }
+            List<String> path = new ArrayList<>(prefix);
+            path.add(name);
+            if (end == parts.length - 1) {
+                found.add(path);
+            } else {
+                collectReadings(map.get(name), parts, end + 1, path, found);
+            }
+        }
+    }
+
+    /**
      * Returns a copy of the whole document as plain data, in file order.
      *
      * @return the top-level mapping
