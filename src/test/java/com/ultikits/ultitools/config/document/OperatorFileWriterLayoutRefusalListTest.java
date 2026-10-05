@@ -47,13 +47,21 @@ class OperatorFileWriterLayoutRefusalListTest {
                 Arguments.of("an explicit key (? key)", "? b\n: 2\na: 1\n", 1),
                 Arguments.of("an explicit tag (!!str)", "b: !!str 2\na: 1\n", 1),
                 Arguments.of("a whitespace-only file", "   \n", 1),
-                Arguments.of("a comment-only file with an indented comment", "# a\n  # indented\n", 2));
+                Arguments.of("a comment-only file with an indented comment", "# a\n  # indented\n", 2),
+                Arguments.of("a last block scalar with | in a file without a final line break", "a: 1\ns: |\n  x\n  y", 2),
+                Arguments.of("a last block scalar with |+ in a file without a final line break", "a: 1\ns: |+\n  x\n  y", 2),
+                Arguments.of("a last block scalar with > in a file without a final line break", "a: 1\ns: >\n  x\n\n  y", 2));
     }
 
     static Stream<Arguments> kept() {
         return Stream.of(
                 Arguments.of("one space before an inline comment", "b: 2 # note\nc: 3\na: 1\n"),
                 Arguments.of("a block scalar not followed by a blank line", "s: |\n  x\nb: 2\na: 1\n"),
+                Arguments.of("a comment after a block scalar at the next key's column (#592)",
+                        "sec:\n  s: |-\n    x\n  # note\n  k: 1\na: 1\n"),
+                Arguments.of("a section-closing comment after a block scalar (#592)", "sec:\n  s: |-\n    x\n  # note\na: 1\n"),
+                Arguments.of("a block scalar in a file without a final line break", "s: |-\n  x\n  y\nb: 2\na: 1"),
+                Arguments.of("a last block scalar with |- in a file without a final line break", "a: 1\ns: |-\n  x\n  y"),
                 Arguments.of("a flow map", "m: {x: 1, y: 2}\na: 1\n"),
                 Arguments.of("a flow list without inner spaces", "w: [x, y]\na: 1\n"),
                 Arguments.of("quoted values", "b: 'x'\nc: \"y\"\na: 1\n"),

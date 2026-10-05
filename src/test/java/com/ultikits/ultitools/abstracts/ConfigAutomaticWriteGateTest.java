@@ -252,20 +252,23 @@ class ConfigAutomaticWriteGateTest {
         assertThat(warningsNamingTheFile().get(0)).contains("anchors");
     }
 
-    /** #600 (inventory A15): a multi-line string in a file without a final line break is never re-quoted. */
+    /**
+     * #600 (inventory A15): a multi-line string in a file without a final line break is never re-quoted. Since the
+     * #592 measurement's adjacent finding, the block scalar is kept as written, so the missing key is inserted and the
+     * file still has no final line break (before, the block was re-rendered quoted and the insert refused).
+     */
     @Test
-    void multiLineStringWithoutFinalNewlineAndMissingKeyIsRefused() throws Exception {
+    void multiLineStringWithoutFinalNewlineAndMissingKeyIsInsertedWithoutRequoting() throws Exception {
         putFixture("multiline-no-final-newline.yml");
-        byte[] before = bytes();
+        String before = new String(bytes(), StandardCharsets.UTF_8);
 
         Gate config = new Gate(PATH);
         config.init(plugin);
 
-        assertThat(bytes()).isEqualTo(before);
-        assertThat(Files.getLastModifiedTime(file())).isEqualTo(OLD);
+        assertThat(new String(bytes(), StandardCharsets.UTF_8))
+                .isEqualTo(before + "\n# Whether the feature is enabled\nenabled: true");
         assertThat(config.enabled).isTrue();
-        assertThat(warningsNamingTheFile()).hasSize(1);
-        assertThat(warningsNamingTheFile().get(0)).contains("layout").contains("enabled");
+        assertThat(warningsNamingTheFile()).isEmpty();
     }
 
     /**

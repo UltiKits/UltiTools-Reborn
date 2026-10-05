@@ -546,10 +546,12 @@ public final class ConfigDocument {
         if (out == null) {
             return modified ? "" : source;
         }
-        StringWriter writer = new StringWriter();
-        normalizeMultilineStrings(out, new IdentityHashMap<Node, Node>(), !style.finalLineBreak());
-        List<Event> events = serialize(out, writer, style);
-        String text = WHITESPACE_ONLY_LINE.matcher(realignCommentsAfterBlankLines(writer.toString(), events)).replaceAll("");
+        normalizeMultilineStrings(out, new IdentityHashMap<Node, Node>(), false);
+        String text = emit(out, style);
+        if (!style.finalLineBreak() && changedByMissingFinalLineBreak(text)) {
+            normalizeMultilineStrings(out, new IdentityHashMap<Node, Node>(), true);
+            text = emit(out, style);
+        }
         if (style.upperCaseHex() || style.latin1AsUnicodeEscape()) {
             text = normalizeEscapes(text, style.upperCaseHex(), style.latin1AsUnicodeEscape());
         }
@@ -560,6 +562,31 @@ public final class ConfigDocument {
             text = text.replace("\n", style.lineBreak());
         }
         return style.byteOrderMark() ? "\uFEFF" + text : text;
+    }
+
+    /** The emitter's text for {@code out}, comments realigned and whitespace-only lines emptied. */
+    private static String emit(Node out, DocumentStyle style) {
+        StringWriter writer = new StringWriter();
+        List<Event> events = serialize(out, writer, style);
+        return WHITESPACE_ONLY_LINE.matcher(realignCommentsAfterBlankLines(writer.toString(), events)).replaceAll("");
+    }
+
+    /**
+     * Whether dropping the emitted text's final line break (a file without one keeps that style) would change a value:
+     * only a block scalar running to the end of the document can be changed, e.g. {@code |} ending a file whose last
+     * value ends with a line break. Then every multi-line string is written double-quoted instead (the #592
+     * measurement's adjacent finding: quoting every block scalar of such a file whenever it is written changed bytes no
+     * write owned, so the write gate refused every write to it).
+     */
+    private static boolean changedByMissingFinalLineBreak(String text) {
+        if (!text.endsWith("\n")) {
+            return false;
+        }
+        try {
+            return !PlainData.plainEquals(parse(text.substring(0, text.length() - 1)).toPlain(), parse(text).toPlain());
+        } catch (ConfigParseException | RuntimeException e) {
+            return true;
+        }
     }
 
     /**
@@ -1327,7 +1354,80 @@ public final class ConfigDocument {
 
         static void adjust(MappingNode root) {
             splitHeader(root);
+            reclaimAfterBlockScalars(root, root, null, Collections.newSetFromMap(new IdentityHashMap<Node, Boolean>()));
             relocate(root, Collections.newSetFromMap(new IdentityHashMap<Node, Boolean>()));
+        }
+
+        /**
+         * #592: SnakeYAML 2.2's scanner reads every comment line with a column above 0 that follows a multi-line block
+         * scalar ({@code |} or {@code >}) as an in-line comment of that scalar, which the emitter then writes at column
+         * 0 - and the key below reads as uncommented. Each such line (any in-line comment starting on a line after the
+         * scalar's own first line; a comment on the indicator line, {@code |- # note}, is the key's and is untouched)
+         * is given back, as a block comment with its original position, to the node that follows it in the file: the
+         * next key or list item at the same level, or for the last value of a section the next one further out, or
+         * for the last value of the document the document's end. That is exactly where SnakeYAML puts a comment after
+         * a plain value, so {@link #relocate} then applies the same deeper-indentation rule to both.
+         *
+         * @param node      the node to walk
+         * @param root      the document's top-level mapping (receives the lines after the document's last value)
+         * @param following the node read right after {@code node}'s subtree, {@code null} at the end of the document
+         * @param seen      nodes already walked (an alias is walked once)
+         */
+        private static void reclaimAfterBlockScalars(Node node, MappingNode root, Node following, Set<Node> seen) {
+            if (!seen.add(node)) {
+                return;
+            }
+            if (node instanceof ScalarNode) {
+                reclaim((ScalarNode) node, root, following);
+            } else if (node instanceof MappingNode) {
+                List<NodeTuple> tuples = ((MappingNode) node).getValue();
+                for (int i = 0; i < tuples.size(); i++) {
+                    reclaimAfterBlockScalars(tuples.get(i).getValueNode(), root,
+                            i + 1 < tuples.size() ? tuples.get(i + 1).getKeyNode() : following, seen);
+                }
+            } else if (node instanceof SequenceNode) {
+                List<Node> elements = ((SequenceNode) node).getValue();
+                for (int i = 0; i < elements.size(); i++) {
+                    reclaimAfterBlockScalars(elements.get(i), root, i + 1 < elements.size() ? elements.get(i + 1) : following, seen);
+                }
+            }
+        }
+
+        private static void reclaim(ScalarNode scalar, MappingNode root, Node following) {
+            if (!isBlockScalar(scalar) || scalar.getInLineComments() == null) {
+                return;
+            }
+            List<CommentLine> keep = new ArrayList<>();
+            List<CommentLine> moved = new ArrayList<>();
+            for (CommentLine line : scalar.getInLineComments()) {
+                if (line.getStartMark() != null && line.getStartMark().getLine() > scalar.getStartMark().getLine()) {
+                    moved.add(new CommentLine(line.getStartMark(), line.getEndMark(), line.getValue(), CommentType.BLOCK));
+                } else {
+                    keep.add(line);
+                }
+            }
+            if (moved.isEmpty()) {
+                return;
+            }
+            scalar.setInLineComments(keep.isEmpty() ? null : keep);
+            if (following == null) {
+                root.setEndComments(prepend(moved, root.getEndComments()));
+            } else {
+                following.setBlockComments(prepend(moved, following.getBlockComments()));
+            }
+        }
+
+        private static boolean isBlockScalar(ScalarNode scalar) {
+            return scalar.getStartMark() != null && (scalar.getScalarStyle() == DumperOptions.ScalarStyle.LITERAL
+                    || scalar.getScalarStyle() == DumperOptions.ScalarStyle.FOLDED);
+        }
+
+        /** {@code first} followed by {@code rest} (which may be {@code null}). */
+        private static List<CommentLine> prepend(List<CommentLine> first, List<CommentLine> rest) {
+            if (rest != null) {
+                first.addAll(rest);
+            }
+            return first;
         }
 
         /** Bukkit's {@code adjustNodeComments}: the first key's comments up to the last blank line are the header. */
