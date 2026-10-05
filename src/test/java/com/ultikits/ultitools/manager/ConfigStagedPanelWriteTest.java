@@ -99,7 +99,8 @@ class ConfigStagedPanelWriteTest {
         Object files = Mockito.mock(operations, invocation -> {
             if ("move".equals(invocation.getMethod().getName())) {
                 Path destination = invocation.getArgument(1);
-                if (!destination.getFileName().toString().endsWith(".bak")) {
+                // The fallback's backup refresh moves onto <file name>.ultitools-backup-<16 hex> (#601).
+                if (!destination.getFileName().toString().contains(".ultitools-backup-")) {
                     throw new java.nio.file.AtomicMoveNotSupportedException("source", destination.toString(), "injected fallback");
                 }
             }
@@ -120,7 +121,9 @@ class ConfigStagedPanelWriteTest {
                     .isInstanceOf(IOException.class).hasMessage("one transient target-open failure")
                     .satisfies(failure -> assertThat(failure.getSuppressed()).isEmpty());
         }
-        assertThat(opens.get()).as("two commits attempted and both attempted files restored").isEqualTo(4);
+        // Two commits attempted; the first file is restored, the second still holds its original bytes after its failed
+        // open, so the gated restore has nothing to put back (17-65 review round 1 R65-I3).
+        assertThat(opens.get()).as("two commits attempted and the replaced file restored").isEqualTo(3);
         for (int i = 0; i < entities.size(); i++) {
             Values value = entities.get(i);
             assertThat(Files.readAllBytes(directory.resolve(value.getConfigFilePath()))).isEqualTo(originals.get(i));
@@ -128,10 +131,12 @@ class ConfigStagedPanelWriteTest {
             assertThat(value.value).isEqualTo(i + 1); assertThat(value.other).isEqualTo("unsaved");
         }
         try (java.util.stream.Stream<Path> paths = Files.list(directory)) {
-            List<Path> backups = paths.filter(path -> path.getFileName().toString().endsWith(".bak")).collect(Collectors.toList());
+            List<Path> backups = paths.filter(path -> path.getFileName().toString().matches(".*\\.ultitools-backup-[0-9a-f]{16}"))
+                    .collect(Collectors.toList());
             assertThat(backups).hasSize(2);
             for (Path backup : backups) {
-                Path target = backup.resolveSibling(backup.getFileName().toString().replace(".bak", ""));
+                String name = backup.getFileName().toString();
+                Path target = backup.resolveSibling(name.substring(0, name.indexOf(".ultitools-backup-")));
                 assertThat(ConfigDocument.load(target).state())
                         .isEqualTo(com.ultikits.ultitools.config.document.ConfigLoadResult.State.LOADED);
                 assertThat(Files.exists(backup)).isFalse();
@@ -320,6 +325,131 @@ class ConfigStagedPanelWriteTest {
         assertNoTemporaries();
     }
 
+    /**
+     * #600: the staged batch keeps its prepare-then-commit shape through the config write gate, and each file's bytes are
+     * checked again immediately before its move: a file the operator saved between staging and commit is kept, the files
+     * already committed are restored, and every entity is left as it was. The batch's commit order is not assumed.
+     */
+    @Test
+    void fileChangedBetweenStagingAndCommitRollsTheWholeBatchBack() throws Exception {
+        List<Path> stagedTargets = new ArrayList<>();
+        List<Path> movedTargets = new ArrayList<>();
+        Path[] edited = new Path[1];
+        try (MockedStatic<AtomicConfigWriter> writer = Mockito.mockStatic(
+                AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
+            writer.when(() -> AtomicConfigWriter.stage(any(Path.class), anyString())).thenAnswer(call -> {
+                Path target = call.getArgument(0);
+                stagedTargets.add(target);
+                AtomicConfigWriter.StagedWrite observed = Mockito.spy((AtomicConfigWriter.StagedWrite) call.callRealMethod());
+                Mockito.doAnswer(commit -> {
+                    Object result = commit.callRealMethod();
+                    movedTargets.add(target);
+                    if (movedTargets.size() == 1) {
+                        // The operator saves another staged file after the first move and before its own commit.
+                        for (Path other : stagedTargets) {
+                            if (!other.equals(target)) { edited[0] = other; break; }
+                        }
+                        Files.write(edited[0], operatorEdit(edited[0]));
+                    }
+                    return result;
+                }).when(observed).commit();
+                return observed;
+            });
+            assertThatThrownBy(() -> manager.loadFromJson(payload()))
+                    .isInstanceOf(com.ultikits.ultitools.config.ConfigWriteRefusedException.class)
+                    .hasMessageContaining(edited[0].getFileName().toString());
+        }
+        assertThat(stagedTargets).as("every file staged before the first move").hasSize(3);
+        assertThat(movedTargets).as("only the first file was moved").hasSize(1);
+        for (int i = 0; i < entities.size(); i++) {
+            Path target = directory.resolve(entities.get(i).getConfigFilePath());
+            if (target.equals(edited[0])) {
+                assertThat(Files.readAllBytes(target)).as("the operator's save is kept").isEqualTo(operatorEdit(target));
+            } else {
+                assertThat(Files.readAllBytes(target)).as("restored or untouched").isEqualTo(originals.get(i));
+            }
+            assertThat(entities.get(i).value).isEqualTo(i + 1);
+            assertThat(state(entities.get(i))).isEqualTo(checkpoints.get(i));
+        }
+        assertNoTemporaries();
+    }
+
+    /**
+     * 17-65 review round 1 R65-I3: the batch rollback restores a file it already replaced only while that file still holds
+     * exactly what this write put there; a file the operator saved after its commit is kept, and one warning names it.
+     */
+    @Test
+    void rollbackKeepsAFileTheOperatorSavedAfterItsCommit() throws Exception {
+        List<Path> moved = new ArrayList<>();
+        List<String> warnings = new ArrayList<>();
+        java.util.logging.Logger logger = java.util.logging.Logger.getLogger("com.ultikits.ultitools");
+        java.util.logging.Handler capture = new java.util.logging.Handler() {
+            @Override public void publish(java.util.logging.LogRecord record) {
+                if (record.getLevel().intValue() >= java.util.logging.Level.WARNING.intValue()) { warnings.add(record.getMessage()); }
+            }
+            @Override public void flush() { /* No buffer. */ }
+            @Override public void close() { /* No resource. */ }
+        };
+        logger.addHandler(capture);
+        try (MockedStatic<AtomicConfigWriter> writer = Mockito.mockStatic(
+                AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
+            writer.when(() -> AtomicConfigWriter.stage(any(Path.class), anyString())).thenAnswer(call -> {
+                Path target = call.getArgument(0);
+                AtomicConfigWriter.StagedWrite observed = Mockito.spy((AtomicConfigWriter.StagedWrite) call.callRealMethod());
+                Mockito.doAnswer(commit -> {
+                    if (moved.size() == 1) { throw new IOException("injected move2"); }
+                    Object result = commit.callRealMethod();
+                    moved.add(target);
+                    // The operator saves this file after the batch replaced it and before the batch fails.
+                    Files.write(target, operatorEdit(target));
+                    return result;
+                }).when(observed).commit();
+                return observed;
+            });
+            assertThatThrownBy(() -> manager.loadFromJson(payload()))
+                    .isInstanceOf(IOException.class).hasMessageContaining("injected move2");
+        } finally { logger.removeHandler(capture); }
+        assertThat(moved).hasSize(1);
+        Path kept = moved.get(0);
+        for (int i = 0; i < entities.size(); i++) {
+            Path target = directory.resolve(entities.get(i).getConfigFilePath());
+            if (target.equals(kept)) {
+                assertThat(Files.readAllBytes(target)).as("the operator's save after the commit is kept").isEqualTo(operatorEdit(target));
+            } else {
+                assertThat(Files.readAllBytes(target)).isEqualTo(originals.get(i));
+            }
+            assertThat(state(entities.get(i))).isEqualTo(checkpoints.get(i));
+        }
+        assertThat(warnings).filteredOn(text -> text.contains(kept.getFileName().toString()) && text.contains("not restored"))
+                .hasSize(1);
+        assertNoTemporaries();
+    }
+
+    private static byte[] operatorEdit(Path target) {
+        return ("# operator header\nvalue: 7\nother: edited after staging " + target.getFileName() + "\nunknown: keep\n")
+                .getBytes(StandardCharsets.UTF_8);
+    }
+
+    /** #600: one file the gate refuses (anchors) refuses the whole batch with the reason, before any file is written. */
+    @Test
+    void anchoredFileRefusesTheWholeBatchBeforeAnyWrite() throws Exception {
+        byte[] anchored = "# operator header\nbase: &v 2\nvalue: *v\nother: disk\nunknown: keep\n"
+                .getBytes(StandardCharsets.UTF_8);
+        Files.write(directory.resolve("file2.yml"), anchored);
+        entities.get(1).reload();
+        Map<String, Object> anchoredState = state(entities.get(1));
+        assertThatThrownBy(() -> manager.loadFromJson(payload()))
+                .isInstanceOf(com.ultikits.ultitools.config.ConfigWriteRefusedException.class)
+                .hasMessageContaining("anchors").hasMessageContaining("file2.yml");
+        assertThat(Files.readAllBytes(directory.resolve("file1.yml"))).isEqualTo(originals.get(0));
+        assertThat(Files.readAllBytes(directory.resolve("file2.yml"))).isEqualTo(anchored);
+        assertThat(Files.readAllBytes(directory.resolve("file3.yml"))).isEqualTo(originals.get(2));
+        assertThat(state(entities.get(0))).isEqualTo(checkpoints.get(0));
+        assertThat(state(entities.get(1))).isEqualTo(anchoredState);
+        assertThat(state(entities.get(2))).isEqualTo(checkpoints.get(2));
+        assertNoTemporaries();
+    }
+
     private String payload() {
         JsonObject files = new JsonObject();
         for (Values entity : entities) {
@@ -351,7 +481,7 @@ class ConfigStagedPanelWriteTest {
     private static Map<String, Object> state(Values value) throws Exception {
         Map<String, Object> result = new LinkedHashMap<>();
         for (String name : Arrays.asList("document", "savedSnapshot", "lastLoadedPresence", "acknowledgedRaw",
-                "savedFileFingerprint", "lastLoadUnparseable", "lastInitIncomplete", "pendingCommentWrite",
+                "savedFileFingerprint", "lastLoadUnparseable", "lastInitIncomplete",
                 "pendingInitialization", "deferInitialization", "warnedCommentKeys")) {
             Field field = AbstractConfigEntity.class.getDeclaredField(name); field.setAccessible(true);
             Object data = field.get(value);

@@ -35,12 +35,16 @@ import org.junit.jupiter.params.provider.ValueSource;
  * Plan 17-56 Task 3: a config file is replaced only by a complete new file (#574). A failure at any step -
  * creating the temporary file, writing it, forcing it to disk, moving it - leaves the target byte-identical and
  * no temporary file behind; eligible atomic-replace failures use a forced backup before an in-place write.
+ * Since #601 (maintainer decision of 2026-10-04: operator-written files are never overwritten automatically) the
+ * backup is named {@code <file name>.ultitools-backup-<16 hex>}, and only a backup the writer recorded during this
+ * run is refreshed or deleted; an operator's {@code <file>.bak} is never touched ({@link AtomicConfigWriterBackupNameTest}).
  */
 @DisplayName("AtomicConfigWriter - replace a file completely or not at all")
 class AtomicConfigWriterTest {
 
     private static final String OLD = "old: content\n";
     private static final String NEW = "new: content\nsecond: line\n";
+    private static final String MID = "mid: content\n";
 
     @TempDir
     Path tempDir;
@@ -149,8 +153,8 @@ class AtomicConfigWriterTest {
         assertThat(content(backup())).isEqualTo(OLD);
         assertThat(files.events).containsSubsequence("backup-write", "backup-force", "target-open", "target-write", "target-force");
         assertThat(warnings()).hasSize(1);
-        assertThat(warnings().get(0).getMessage()).contains(target.toString(), "in-place", ".bak", files.failure.getMessage());
-        assertThat(siblings()).containsExactlyInAnyOrder("config.yml", "config.yml.bak");
+        assertThat(warnings().get(0).getMessage()).contains(target.toString(), "in-place", ".ultitools-backup-", files.failure.getMessage());
+        assertThat(siblings()).containsExactlyInAnyOrder("config.yml", backup().getFileName().toString());
         assertThat(ConfigDocument.load(target).state()).isEqualTo(ConfigLoadResult.State.LOADED);
         assertThat(Files.exists(backup())).isFalse();
         AtomicConfigWriter.write(target, NEW + "third: line\n", new ObservedFallback(trigger));
@@ -186,7 +190,7 @@ class AtomicConfigWriterTest {
         assertThat(content(target)).isEqualTo(NEW + "third: line\n");
         assertThat(content(backup())).isEqualTo(NEW);
         assertThat(second.events).containsSubsequence("copy-write", "copy-force", "backup-move", "target-open");
-        assertThat(siblings()).containsExactlyInAnyOrder("config.yml", "config.yml.bak");
+        assertThat(siblings()).containsExactlyInAnyOrder("config.yml", backup().getFileName().toString());
         assertThat(ConfigDocument.load(target).state()).isEqualTo(ConfigLoadResult.State.LOADED);
         assertThat(Files.exists(backup())).isFalse();
     }
@@ -194,27 +198,29 @@ class AtomicConfigWriterTest {
     @ParameterizedTest
     @ValueSource(strings = {"create", "write", "force", "move"})
     void backupRefreshRefusalKeepsExistingBackupAndTarget(String fault) throws IOException {
-        Files.write(backup(), "earlier backup\n".getBytes(StandardCharsets.UTF_8));
+        // The earlier backup is one this run recorded (#601: an unrecorded file is never refreshed).
+        AtomicConfigWriter.write(target, MID, new ObservedFallback("atomic"));
         RotatingFallback files = new RotatingFallback(fault);
         assertThatThrownBy(() -> AtomicConfigWriter.write(target, NEW, files)).isInstanceOf(IOException.class);
-        assertThat(content(target)).isEqualTo(OLD);
-        assertThat(content(backup())).isEqualTo("earlier backup\n");
+        assertThat(content(target)).isEqualTo(MID);
+        assertThat(content(backup())).isEqualTo(OLD);
         assertThat(files.events).doesNotContain("target-open");
-        assertThat(siblings()).containsExactlyInAnyOrder("config.yml", "config.yml.bak");
+        assertThat(siblings()).containsExactlyInAnyOrder("config.yml", backup().getFileName().toString());
     }
 
     @Test
     void refreshedBackupSurvivesTargetFailureWithTargetPermissions() throws IOException {
         assumeTrue(Files.getFileStore(tempDir).supportsFileAttributeView("posix"));
         Files.setPosixFilePermissions(target, PosixFilePermissions.fromString("rw-------"));
-        Files.write(backup(), "earlier backup\n".getBytes(StandardCharsets.UTF_8));
+        // The earlier backup is one this run recorded (#601: an unrecorded file is never refreshed).
+        AtomicConfigWriter.write(target, MID, new ObservedFallback("atomic"));
         RotatingFallback files = new RotatingFallback("target");
         assertThatThrownBy(() -> AtomicConfigWriter.write(target, NEW, files)).isInstanceOf(IOException.class);
-        assertThat(content(backup())).isEqualTo(OLD);
-        assertThat(content(target)).isEqualTo(OLD);
+        assertThat(content(backup())).isEqualTo(MID);
+        assertThat(content(target)).isEqualTo(MID);
         assertThat(PosixFilePermissions.toString(Files.getPosixFilePermissions(backup()))).isEqualTo("rw-------");
         assertThat(files.events).containsSubsequence("copy-force", "backup-move", "target-open");
-        assertThat(siblings()).containsExactlyInAnyOrder("config.yml", "config.yml.bak");
+        assertThat(siblings()).containsExactlyInAnyOrder("config.yml", backup().getFileName().toString());
     }
 
     private class RotatingFallback implements AtomicConfigWriter.FileOperations {
@@ -224,7 +230,8 @@ class AtomicConfigWriterTest {
         private String priorBackup;
         RotatingFallback(String fault) { this.fault = fault; }
         @Override public FileChannel open(Path temporary, java.nio.file.attribute.FileAttribute<?>... attributes) throws IOException {
-            if (temporary.getFileName().toString().startsWith("config.yml.bak.tmp-")) {
+            String name = temporary.getFileName().toString();
+            if (name.startsWith("config.yml.ultitools-backup-") && name.contains(".tmp-")) {
                 if ("create".equals(fault)) { throw new IOException("injected copy create"); }
                 priorBackup = content(backup());
                 copy = AtomicConfigWriter.FileOperations.super.open(temporary, attributes);
@@ -270,15 +277,12 @@ class AtomicConfigWriterTest {
     @ParameterizedTest
     @ValueSource(strings = {"create", "write", "force"})
     void backupFailureRefusesBeforeTouchingTarget(String step) throws IOException {
-        if ("create".equals(step)) {
-            Files.createDirectory(backup());
-        }
         ObservedFallback files = new ObservedFallback("atomic");
         files.failBackup = step;
         assertThatThrownBy(() -> AtomicConfigWriter.write(target, NEW, files)).isInstanceOf(IOException.class);
         assertThat(content(target)).isEqualTo(OLD);
         assertThat(files.events).doesNotContain("target-write", "target-force");
-        assertThat(Files.exists(backup())).isEqualTo("create".equals(step));
+        assertThat(Files.exists(backup())).as("an incomplete backup is removed").isFalse();
         assertThat(warnings()).hasSize(1);
     }
 
@@ -291,7 +295,7 @@ class AtomicConfigWriterTest {
         assertThat(content(backup())).isEqualTo(OLD);
         assertThat(files.events).containsSubsequence("backup-write", "backup-force", "target-write");
         assertThat(warnings()).hasSize(1);
-        assertThat(warnings().get(0).getMessage()).contains("in-place", ".bak", "failed");
+        assertThat(warnings().get(0).getMessage()).contains("in-place", ".ultitools-backup-", "failed");
     }
 
     @Test
@@ -362,7 +366,8 @@ class AtomicConfigWriterTest {
 
     @Test
     void successfulLoadDeletesBackupOnlyAfterParsingAndCleanupFailureKeepsLoaded() throws IOException {
-        Files.write(backup(), OLD.getBytes(StandardCharsets.UTF_8));
+        AtomicConfigWriter.write(target, NEW, new ObservedFallback("atomic"));
+        assertThat(content(backup())).isEqualTo(OLD);
         List<Path> deletions = new ArrayList<>();
         AtomicConfigWriter.FileOperations denied = new AtomicConfigWriter.FileOperations() {
             @Override public void delete(Path file) throws IOException {
@@ -380,7 +385,8 @@ class AtomicConfigWriterTest {
     @ParameterizedTest
     @ValueSource(strings = {"absent", "unreadable", "syntax", "utf8"})
     void unsuccessfulLoadNeverDeletesBackup(String kind) throws IOException {
-        Files.write(backup(), OLD.getBytes(StandardCharsets.UTF_8));
+        AtomicConfigWriter.write(target, NEW, new ObservedFallback("atomic"));
+        assertThat(content(backup())).isEqualTo(OLD);
         AtomicConfigWriter.FileOperations files = new AtomicConfigWriter.FileOperations() { };
         if ("absent".equals(kind)) {
             Files.delete(target);
@@ -404,17 +410,18 @@ class AtomicConfigWriterTest {
         Files.createSymbolicLink(link, real);
         AtomicConfigWriter.write(link, NEW, new ObservedFallback("atomic"));
         assertThat(Files.isSymbolicLink(link)).isTrue();
-        assertThat(content(real.resolveSibling("real.yml.bak"))).isEqualTo(OLD);
-        assertThat(Files.exists(link.resolveSibling("linked.yml.bak"))).isFalse();
+        assertThat(frameworkBackups(real)).hasSize(1);
+        assertThat(content(frameworkBackups(real).get(0))).isEqualTo(OLD);
+        assertThat(frameworkBackups(link)).isEmpty();
         assertThat(ConfigDocument.load(link).state()).isEqualTo(ConfigLoadResult.State.LOADED);
-        assertThat(Files.exists(real.resolveSibling("real.yml.bak"))).isFalse();
+        assertThat(frameworkBackups(real)).isEmpty();
     }
 
     @ParameterizedTest
     @ValueSource(strings = {"open", "runtime-cleanup"})
     void completeBackupSurvivesTargetOpenFailureAndCleanupRuntimeFailure(String step) throws IOException {
         if ("runtime-cleanup".equals(step)) {
-            Files.write(backup(), OLD.getBytes(StandardCharsets.UTF_8));
+            AtomicConfigWriter.write(target, NEW, new ObservedFallback("atomic"));
             AtomicConfigWriter.FileOperations files = new AtomicConfigWriter.FileOperations() {
                 @Override public void delete(Path file) { throw new SecurityException("cleanup denied"); }
             };
@@ -493,8 +500,20 @@ class AtomicConfigWriterTest {
         }
     }
 
+    /** The framework backup beside the target (#601 name), or a name that does not exist when there is none. */
     private Path backup() {
-        return target.resolveSibling(target.getFileName() + ".bak");
+        List<Path> found = frameworkBackups(target);
+        assertThat(found.size()).as("at most one framework backup").isLessThanOrEqualTo(1);
+        return found.isEmpty() ? target.resolveSibling(target.getFileName() + ".ultitools-backup-none") : found.get(0);
+    }
+
+    private static List<Path> frameworkBackups(Path file) {
+        String name = file.getFileName().toString();
+        try (Stream<Path> files = Files.list(file.toAbsolutePath().getParent())) {
+            return files.filter(p -> AtomicConfigWriter.isBackupOf(name, p.getFileName().toString())).collect(Collectors.toList());
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private List<LogRecord> warnings() {
@@ -534,6 +553,11 @@ class AtomicConfigWriterTest {
             assertThat(events).contains("backup-force");
             events.add("target-open");
             return AtomicConfigWriter.FileOperations.super.openTarget(file);
+        }
+
+        @Override public FileChannel openBackup(Path backup, java.nio.file.attribute.FileAttribute<?>... attributes) throws IOException {
+            if ("create".equals(failBackup)) { throw new IOException("injected backup create"); }
+            return AtomicConfigWriter.FileOperations.super.openBackup(backup, attributes);
         }
 
         @Override public void write(FileChannel channel, ByteBuffer data) throws IOException {

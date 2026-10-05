@@ -199,11 +199,10 @@ class PluginManagerUnregisterDelistTest {
     }
 
     @Test
-    @DisplayName("close() at server shutdown keeps every module's configuration, so the shutdown save still writes its changes")
-    void closeKeepsConfigurationForTheShutdownSave() throws IOException {
-        // Guard, not the removed feature: UltiTools#onDisable() calls pluginManager.close() and
-        // only then configManager.saveAll(), so nothing close() does may keep that save from
-        // writing a module's unsaved change.
+    @DisplayName("close() at server shutdown writes no module configuration, also not in the final step (17-65)")
+    void closeWritesNoConfigurationAtShutdown() throws IOException {
+        // Maintainer decision 2026-10-04: no shutdown save of whole entities. UltiTools#onDisable() calls
+        // pluginManager.close() and only then the configuration report; neither writes a module's unsaved change.
         File moduleDir = new File(tempDir, "module");
         UltiToolsPlugin module = module("Module");
         when(module.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
@@ -221,8 +220,8 @@ class PluginManagerUnregisterDelistTest {
         configManager.saveAll();
 
         assertThat(new String(bytes(configFile), StandardCharsets.UTF_8))
-                .as("the shutdown save after close() writes the module's in-memory change")
-                .contains("changed-in-memory");
+                .as("nothing writes the module's in-memory change at shutdown")
+                .isEqualTo("value: original\n");
         assertThat(pluginManager.getPluginList()).isEmpty();
     }
 }

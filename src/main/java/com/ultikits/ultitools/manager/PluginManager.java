@@ -662,7 +662,8 @@ public class PluginManager {
      * identity, so no caller has to. After the container is closed and before the module is
      * delisted, the configuration layer releases the module's configuration entities through
      * {@link ConfigManager#unregisterAll(UltiToolsPlugin)} (#507); when the unload is part of
-     * {@link #close()}, their shutdown save runs first.
+     * {@link #close()}, their never-saved changes are first named in one warning and dropped - nothing is
+     * written at stop, unload or replacement as of 6.3.0.
      *
      * <p>
      * The three registries a module can file registrations in by name -- tab-completion
@@ -675,7 +676,7 @@ public class PluginManager {
      * @param plugin UltiTools plugin instance
      */
     public void unregister(UltiToolsPlugin plugin) {
-        unregister(plugin, isNameInUseByAnotherLoadedCopy(plugin), false);
+        unregister(plugin, isNameInUseByAnotherLoadedCopy(plugin), true);
     }
 
     /**
@@ -701,10 +702,12 @@ public class PluginManager {
      * @param nameStillInUse whether another copy of the module -- listed, or being activated as
      *                       this copy's replacement -- shares its name, so that name-only
      *                       registrations must not be released by name (#506)
-     * @param shutdown       whether this unload is part of {@link #close()}, so the module's
-     *                       configuration is saved for shutdown before its entities are released
+     * @param reportUnsaved  whether the module's never-saved configuration changes are named, once, before its
+     *                       entities are released - at shutdown and at a normal unload or uninstall; a superseded
+     *                       copy passes {@code false} because the replacement has already named them as dropped.
+     *                       Nothing is written either way (17-65; review round 1 R65-I5)
      */
-    private void unregister(UltiToolsPlugin plugin, boolean nameStillInUse, boolean shutdown) {
+    private void unregister(UltiToolsPlugin plugin, boolean nameStillInUse, boolean reportUnsaved) {
         // Each registry-cleanup step below is isolated from every other step's failure
         // (Codex review on #457, round 4: "Run all registry cleanup after an earlier
         // failure") -- an Error from one owner registry (e.g. TaskManager.cancelAll() not
@@ -774,8 +777,8 @@ public class PluginManager {
             } finally {
                 try {
                     try {
-                        if (shutdown) {
-                            runUnregisterStep(plugin, "save shutdown teardown configuration", () -> {
+                        if (reportUnsaved) {
+                            runUnregisterStep(plugin, "report unsaved configuration", () -> {
                                 ConfigManager configs = UltiTools.getInstance().getConfigManager();
                                 if (configs != null) { configs.saveForShutdown(plugin); }
                             });
@@ -904,9 +907,8 @@ public class PluginManager {
      * Unregister all plugins.
      */
     public void close() {
-        // Save while all module entities are still registered, before any unload can release them.
-        ConfigManager configs = UltiTools.getInstance().getConfigManager();
-        if (configs != null) { configs.saveAll(); }
+        // No configuration is written at server stop (maintainer decision 2026-10-04): each module's never-saved
+        // configuration changes are named once during its unload below, just before its entities are released.
         // Disconnect all external plugins first
         UltiToolsAPI.disconnectAll();
 
@@ -917,7 +919,7 @@ public class PluginManager {
             // not cascade into every subsequent module's own command/listener/EventBus/
             // PanelResponderRegistry unregistration, nor skip pluginList.clear()/
             // taskManager.cancelAllCore() below, nor propagate out of close() into
-            // UltiTools.onDisable() and skip configManager.saveAll() (WR-01,
+            // UltiTools.onDisable() and skip its final configuration report (WR-01,
             // 16-REVIEW-lifecycle.md) -- mirrors the register() convention above.
             try {
                 unregister(plugin, isNameInUseByAnotherLoadedCopy(plugin), true);
@@ -2605,53 +2607,6 @@ public class PluginManager {
         if (configs != null) { configs.unregisterAll(plugin); }
     }
 
-    private void saveIdentifiedSupersededCopies(Class<? extends UltiToolsPlugin> incomingClass) {
-        String[] identity = readConstructionIdentity(incomingClass);
-        if (identity == null) { return; }
-        List<UltiToolsPlugin> superseded = new ArrayList<>();
-        for (UltiToolsPlugin existing : pluginList) {
-            if (identity[0].equals(existing.getMainClass()) && existing.getVersion() != null
-                    && identity[1] != null && com.ultikits.ultitools.utils.VersionComparatorUtil.compare(
-                            identity[1], existing.getVersion()) > 0) {
-                superseded.add(existing);
-            }
-        }
-        superseded.sort(java.util.Comparator.comparing(UltiToolsPlugin::getPluginName)
-                .thenComparing(UltiToolsPlugin::getVersion));
-        ConfigManager configs = UltiTools.getInstance().getConfigManager();
-        if (configs == null) { return; }
-        for (UltiToolsPlugin existing : superseded) {
-            try { configs.saveBeforeReplacement(existing); }
-            catch (IOException failure) {
-                throw new IllegalStateException("Cannot save configuration before constructing replacement for "
-                        + existing.getPluginName(), failure);
-            }
-        }
-    }
-
-    /** Reads the exact own-JAR input and defaults used by UltiToolsPlugin's constructor. */
-    private static String[] readConstructionIdentity(Class<?> incomingClass) {
-        try {
-            java.security.CodeSource source = incomingClass.getProtectionDomain().getCodeSource();
-            if (source == null || source.getLocation() == null) { return null; }
-            String path = source.getLocation().getPath();
-            path = path.startsWith("/") ? path : path.substring(1);
-            java.net.URL entry = new java.net.URI("jar:file:" + path + "!/plugin.yml").toURL();
-            java.net.JarURLConnection connection = (java.net.JarURLConnection) entry.openConnection();
-            try (java.io.InputStream stream = connection.getInputStream();
-                    java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(stream))) {
-                org.bukkit.configuration.file.YamlConfiguration metadata =
-                        new org.bukkit.configuration.file.YamlConfiguration();
-                metadata.load(reader);
-                if (!metadata.contains("name")) { return null; }
-                return new String[]{metadata.getString("main", "unknown"), metadata.getString("version", "unknown")};
-            }
-        } catch (Exception unavailable) {
-            // Unidentifiable targets use the no-save, key-naming fallback only after successful activation.
-            return null;
-        }
-    }
-
     /**
      * Initialize module using its default (zero-argument) constructor. This is the live,
      * undeprecated construction path -- {@link #register(Class)} calls it directly.
@@ -2661,7 +2616,9 @@ public class PluginManager {
      * @return the initialized module, or {@code null} if a compatibility gate rejected it
      */
     private UltiToolsPlugin initializePlugin(ClassLoader classLoader, Class<? extends UltiToolsPlugin> pluginClass) {
-        saveIdentifiedSupersededCopies(pluginClass);
+        // No configuration of an older loaded copy is saved first: a replacement is not an operator's request to write
+        // (maintainer decision 2026-10-04). The newer copy reads the files as they are; once it is active, the older
+        // copy's never-saved keys are named once as dropped (unregisterSupersededVersions).
         ConfigManager configs = UltiTools.getInstance().getConfigManager();
         Set<UltiToolsPlugin> before = configs == null ? Collections.emptySet() : configs.registeredOwners(pluginClass);
         UltiToolsPlugin plugin;

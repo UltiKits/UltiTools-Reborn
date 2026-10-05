@@ -9,6 +9,7 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.TestHelper;
 import java.io.InputStream;
@@ -90,27 +91,28 @@ class ConfigSupersededCopyOrderingTest {
         PluginListSeeding.add(plugins, old); Bukkit.getLogger().addHandler(capture);
     }
     @AfterEach void cleanup() { Bukkit.getLogger().removeHandler(capture); MockBukkitHelper.safeUnmock(); }
-    @Test void ownMetadataSavePrecedesIncomingConstructorAndOldStaysActiveOnRefusal() throws Exception {
+    // 17-65 (maintainer decision 2026-10-04, superseding Follow-up 23's save-before-construct): no save first.
+    @Test void incomingConstructorReadsTheFilesUnsavedAndOldStaysActiveOnRefusal() throws Exception {
         try (URLClassLoader loader = incomingJar(true)) {
             Class<?> type = loader.loadClass(Incoming.class.getName());
             initialize(type);
             assertThat(Probe.constructions).isEqualTo(1);
-            assertThat(Probe.observed).contains("value: pending");
-            assertThat(entity.isModifiedSinceSnapshot()).isFalse();
+            assertThat(Probe.observed).contains("value: disk");
+            assertThat(entity.isModifiedSinceSnapshot()).isTrue();
             verify(old, never()).unregisterSelf();
             assertThat(plugins.getPluginList()).contains(old);
         }
     }
-    @Test void failedOldSaveRefusesConstructionAndKeepsOldDirty() throws Exception {
-        Values refused = spy(entity);
-        doThrow(new java.io.IOException("injected old save refusal")).when(refused).save();
-        // Replace the registered path with the fault-injecting entity, retaining the same live state.
-        configs.register(old, refused); refused.value = "pending";
+    @Test void protectedOldFileNoLongerRefusesConstruction() throws Exception {
+        String broken = "value: [broken\n";
+        Files.write(Probe.file, broken.getBytes(StandardCharsets.UTF_8));
+        // #589 (PR #591): a reload of an unparseable file throws; the file stays protected.
+        assertThatThrownBy(entity::reload).isInstanceOf(ConfigurationException.class);
+        assertThat(entity.isLastLoadUnparseable()).isTrue();
         try (URLClassLoader loader = incomingJar(true)) {
-            assertThatThrownBy(() -> initialize(loader.loadClass(Incoming.class.getName())))
-                    .hasRootCauseMessage("injected old save refusal");
-            assertThat(Probe.constructions).isZero();
-            assertThat(refused.isModifiedSinceSnapshot()).isTrue();
+            initialize(loader.loadClass(Incoming.class.getName()));
+            assertThat(Probe.constructions).isEqualTo(1);
+            assertThat(Probe.observed).isEqualTo(broken);
             verify(old, never()).unregisterSelf();
             assertThat(plugins.getPluginList()).contains(old);
         }
@@ -216,5 +218,27 @@ class ConfigSupersededCopyOrderingTest {
     public static class Values extends AbstractConfigEntity {
         @ConfigEntry String value = "default";
         public Values(String path) { super(path); }
+    }
+
+    /**
+     * 17-65 (#599; maintainer decision 2026-10-04: no replacement save of whole entities): before an identified newer copy
+     * is constructed nothing is saved - the newer copy reads the files as they are - and the old copy's unsaved change no
+     * longer refuses the replacement.
+     */
+    @Test void identifiedReplacementNeverSavesTheOldCopyAndIsNotRefusedByItsUnsavedChange() throws Exception {
+        Values refused = spy(entity);
+        doThrow(new java.io.IOException("a save must not be attempted")).when(refused).save();
+        configs.register(old, refused); refused.value = "pending";
+        try (URLClassLoader loader = incomingJar(true)) {
+            initialize(loader.loadClass(Incoming.class.getName()));
+            assertThat(Probe.constructions).isEqualTo(1);
+            assertThat(Probe.observed).contains("value: disk");
+            verify(refused, never()).save();
+            assertThat(refused.isModifiedSinceSnapshot()).isTrue();
+        }
+        activateConstructedCopy(true);
+        assertThat(warnings).filteredOn(text -> text.contains("dropped")).hasSize(1)
+                .allSatisfy(text -> assertThat(text).contains("SupersededModule", "copy.yml", "value").doesNotContain("pending"));
+        assertThat(new String(Files.readAllBytes(Probe.file), StandardCharsets.UTF_8)).isEqualTo("value: disk\n");
     }
 }

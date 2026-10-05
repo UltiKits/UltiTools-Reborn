@@ -41,6 +41,9 @@ class ConfigDocumentCommentTest {
             + "    # comment after the last key of nested\n"
             + "# end of file comment\n";
 
+    private static final String SEPARATOR_TAIL = "  b:\n    # note\n\n    # framework\n    k: 1\n    # tail\n\n"
+            + "        # operator deep\n    m: 2\n";
+
     @Test
     void removingLastSectionKeyKeepsTrailingComment() throws Exception {
         ConfigDocument document = ConfigDocument.parse("chat:\n  last: true\n  # operator note\neconomy: 1\n");
@@ -189,6 +192,165 @@ class ConfigDocumentCommentTest {
         assertThat(reread.blockComment(path("a")))
                 .containsExactly("one", "two", "three", "four", "five", "six", "seven xyz");
         assertThat(reread.get(path("a"))).isEqualTo(1);
+    }
+
+    /**
+     * #604: the framework rewrites only the trailing run of a key's comment it identified as its own; every line
+     * above that run - an operator's note, blank lines - is kept as it is (maintainer decision 2026-10-04).
+     */
+    @Test
+    @DisplayName("replaceFrameworkComment replaces only the trailing run and keeps every line above it")
+    void replaceFrameworkCommentKeepsTheLinesAboveTheRun() throws Exception {
+        ConfigDocument document = ConfigDocument.parse("a: 1\n\n# operator\n\n# old one\n# old two\nkey: 2\n");
+
+        document.replaceFrameworkComment(path("key"), 2, Collections.singletonList("new\nframework"));
+
+        assertThat(document.render()).isEqualTo("a: 1\n\n# operator\n\n# new\n# framework\nkey: 2\n");
+        assertThat(ConfigDocument.parse(document.render()).blockComment(path("key")))
+                .containsExactly(null, "operator", null, "new", "framework");
+    }
+
+    @Test
+    @DisplayName("replaceFrameworkComment with an empty run appends below a key that has no comment")
+    void replaceFrameworkCommentWithAnEmptyRunAppends() throws Exception {
+        ConfigDocument document = ConfigDocument.parse("a: 1\nkey: 2\n");
+
+        document.replaceFrameworkComment(path("key"), 0, Collections.singletonList("framework"));
+
+        assertThat(document.render()).isEqualTo("a: 1\n# framework\nkey: 2\n");
+    }
+
+    @Test
+    @DisplayName("replaceFrameworkComment refuses a run longer than the comment or one that includes a blank line")
+    void replaceFrameworkCommentRefusesAnImpossibleRun() throws Exception {
+        ConfigDocument document = ConfigDocument.parse("a: 1\n# note\n\n# framework\nkey: 2\n");
+
+        assertThatThrownBy(() -> document.replaceFrameworkComment(path("key"), 5, Collections.singletonList("x")))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> document.replaceFrameworkComment(path("key"), 2, Collections.singletonList("x")))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> document.replaceFrameworkComment(path("absent"), 0, Collections.singletonList("x")))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(document.render()).isEqualTo("a: 1\n# note\n\n# framework\nkey: 2\n");
+    }
+
+    /**
+     * 17-64 review round 1 R1-01: SnakeYAML's emitter writes a comment line that follows a blank line inside the same
+     * comment list at the indentation plus the list's own column again (doubled at depth 1); the renderer writes every
+     * line of a comment list at the list's column, so an unchanged nested comment block renders byte for byte.
+     */
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0}")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+        "demo:\n  # my note\n\n  # framework\n  interval: 300\n",
+        "demo:\n  sub:\n    # my note\n\n    # framework\n    interval: 300\n",
+        "demo:\n  x: 1\n  # one\n\n\n  # two\n  # three\n  interval: 300\n",
+        "demo:\r\n  # my note\r\n\r\n  # framework\r\n  interval: 300\r\n"})
+    @DisplayName("a comment line after a blank line inside a comment list keeps the list's indentation")
+    void commentAfterABlankLineKeepsItsIndentation(String text) throws Exception {
+        assertThat(ConfigDocument.parse(text).render()).isEqualTo(text);
+    }
+
+    /**
+     * 17-64 review round 2 R2-01: the renderer injects nothing into document text, so a value or comment holding any
+     * characters - here {@code #} followed by U+E000..U+E002 - renders byte for byte, unchanged or after an edit.
+     */
+    @Test
+    @DisplayName("a value and a comment holding '#' and private-use characters render byte for byte")
+    void privateUseCharactersAfterAHashSurviveRendering() throws Exception {
+        String text = "item:\n  # note\n\n  # a#\uE000\uE001\uE002b\n  v: a#\uE000\uE001\uE002b\n  w: 1\n";
+        assertThat(ConfigDocument.parse(text).render()).isEqualTo(text);
+        ConfigDocument edited = ConfigDocument.parse(text);
+        edited.set(path("item", "w"), 2);
+        assertThat(edited.render()).isEqualTo(text.replace("w: 1", "w: 2"));
+        ConfigDocument inMemory = ConfigDocument.parse("item:\n  # note\n\n  # x\n  w: 1\n");
+        inMemory.set(path("item", "w"), "#\uE000\uE001\uE002x");
+        assertThat(ConfigDocument.parse(inMemory.render()).get(path("item", "w"))).isEqualTo("#\uE000\uE001\uE002x");
+    }
+
+    /**
+     * 17-64 review round 2 R2-02: a comment line the emitter misplaces after a blank line goes back to its own column,
+     * not to the column of the line before it - an operator's deeper comment stays where the operator put it.
+     */
+    @Test
+    @DisplayName("an operator's deeper comment after a blank line keeps its own column")
+    void deeperCommentAfterABlankLineKeepsItsOwnColumn() throws Exception {
+        String text = "item:\n  # a\n\n    # b deeper\n  n: 1\n";
+        assertThat(ConfigDocument.parse(text).render()).isEqualTo(text);
+        ConfigDocument edited = ConfigDocument.parse(text);
+        edited.set(path("item", "n"), 2);
+        assertThat(edited.render()).isEqualTo(text.replace("n: 1", "n: 2"));
+    }
+
+    /** A file whose first value holds {@code separator}, in the form the renderer itself writes it, then comment runs. */
+    private static String fileWithSeparatorValue(String separator) {
+        ConfigDocument value = ConfigDocument.empty();
+        value.set(path("a", "s"), "x" + separator + "y");
+        return value.render() + SEPARATOR_TAIL;
+    }
+
+    /**
+     * 17-64 review round 3 R3-01: SnakeYAML writes U+2028 and U+2029 raw inside a value and its reader counts them (and
+     * U+0085 and a lone CR) as line breaks; the realignment counts lines with exactly that set, so a comment after such
+     * a value is located on its own line: the framework line stays at the key's column and the operator's deeper line at
+     * its own, unchanged or after an edit.
+     */
+    @org.junit.jupiter.params.ParameterizedTest(name = "U+{0}")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"2028", "2028 x4", "2029", "0085", "000D"})
+    @DisplayName("comments after a value holding a line separator keep their columns")
+    void commentsAfterAValueHoldingALineSeparatorKeepTheirColumns(String code) throws Exception {
+        String one = String.valueOf((char) Integer.parseInt(code.substring(0, 4), 16));
+        String separator = code.endsWith("x4") ? one + one + one + one : one;
+        String text = fileWithSeparatorValue(separator);
+        assertThat(text).endsWith(SEPARATOR_TAIL);
+
+        assertThat(ConfigDocument.parse(text).render()).isEqualTo(text);
+        ConfigDocument edited = ConfigDocument.parse(text);
+        edited.set(path("a", "b", "m"), 3);
+        assertThat(edited.render()).isEqualTo(text.replace("m: 2", "m: 3"));
+    }
+
+    /**
+     * 17-64 review round 3 (self-check): a move is applied only when its line, after the spaces, is exactly {@code #} plus
+     * the comment it was matched to, at the expected column; any mismatch leaves the whole output as emitted, so a future
+     * misalignment can only be a no-op.
+     */
+    @Test
+    @DisplayName("a misaligned move leaves the whole output as emitted")
+    void misalignedMoveLeavesTheOutputAsEmitted() {
+        String emitted = "a:\n  b:\n    # note\n\n        # framework\n    k: 1\n";
+        ConfigDocument.CommentMove right = new ConfigDocument.CommentMove(4, 8, 4, "# framework");
+        assertThat(ConfigDocument.moveComments(emitted, Collections.singletonList(right)))
+                .isEqualTo("a:\n  b:\n    # note\n\n    # framework\n    k: 1\n");
+
+        ConfigDocument.CommentMove otherComment = new ConfigDocument.CommentMove(2, 4, 2, "# framework");
+        ConfigDocument.CommentMove wrongColumn = new ConfigDocument.CommentMove(4, 6, 4, "# framework");
+        ConfigDocument.CommentMove notAComment = new ConfigDocument.CommentMove(5, 4, 2, "# framework");
+        for (ConfigDocument.CommentMove wrong : Arrays.asList(otherComment, wrongColumn, notAComment)) {
+            assertThat(ConfigDocument.moveComments(emitted, Arrays.asList(right, wrong))).isEqualTo(emitted);
+        }
+    }
+
+    /** 17-64 review round 3 R3-02: a blank line added in memory matches the blank line read back (by type). */
+    @Test
+    @DisplayName("a framework comment with a blank line added in memory is not left doubled")
+    void inMemoryBlankLineIsMatchedByType() throws Exception {
+        ConfigDocument document = ConfigDocument.parse("a:\n  b:\n    k: 1\n");
+        document.setFrameworkComment(path("a", "b", "k"), Arrays.asList("L1", null, "L2"));
+        assertThat(document.render()).isEqualTo("a:\n  b:\n    # L1\n\n    # L2\n    k: 1\n");
+
+        ConfigDocument below = ConfigDocument.parse("a:\n  b:\n    # note\n    k: 1\n");
+        below.replaceFrameworkComment(path("a", "b", "k"), 0, Arrays.asList(null, "L2"));
+        assertThat(below.render()).isEqualTo("a:\n  b:\n    # note\n\n    # L2\n    k: 1\n");
+    }
+
+    @Test
+    @DisplayName("a framework comment rewritten below a note and a blank line in a nested block is not shifted")
+    void rewrittenRunBelowABlankLineIsNotShifted() throws Exception {
+        ConfigDocument document = ConfigDocument.parse("demo:\n  # my note\n\n  # old\n  interval: 300\n");
+
+        document.replaceFrameworkComment(path("demo", "interval"), 1, Collections.singletonList("new"));
+
+        assertThat(document.render()).isEqualTo("demo:\n  # my note\n\n  # new\n  interval: 300\n");
     }
 
     @Test
