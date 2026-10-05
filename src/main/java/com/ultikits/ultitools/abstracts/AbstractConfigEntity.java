@@ -93,6 +93,9 @@ public abstract class AbstractConfigEntity {
     private boolean defaultsCaptured;
     @Getter(AccessLevel.NONE)
     private boolean pendingCommentWrite;
+    /** Set only while a reload validates the values it read, for the refusal's wording (#595). */
+    @Getter(AccessLevel.NONE)
+    private boolean validatingReload;
     @Getter(AccessLevel.NONE)
     private boolean deferInitialization;
     @Getter(AccessLevel.NONE)
@@ -431,6 +434,19 @@ public abstract class AbstractConfigEntity {
     }
 
     /**
+     * Runs {@link #validateFields()} on the values a load just bound. A reload's refusal says that
+     * fixing the file and reloading again is enough (#595); a refusal at load keeps its wording.
+     */
+    private void validateLoaded(boolean initialize) {
+        validatingReload = !initialize;
+        try {
+            validateFields();
+        } finally {
+            validatingReload = false;
+        }
+    }
+
+    /**
      * Whether serialized fields differ from their last bound/persisted effective values.
      * Map iteration order is significant here; the storage equality used for no-op saves is not.
      * Protected files and uninitialized entities are never saved by shutdown.
@@ -721,7 +737,7 @@ public abstract class AbstractConfigEntity {
                 } catch (ConversionException failure) { throw new ConfigurationException(failure.getMessage(), failure); }
             }
         }
-        validateFields();
+        validateLoaded(initialize);
         document = next;
         boolean changed = false;
         if (initialize) {
@@ -1326,7 +1342,8 @@ public abstract class AbstractConfigEntity {
      * Validates all fields annotated with validation annotations (@Range, @NotEmpty, @Size, @Pattern).
      * A violation refuses this config's module instead of rewriting the value - the operator's
      * file is never modified (D-01). Every violating field is collected and named in a single
-     * refusal; the module author must fix the value(s) on disk and restart.
+     * refusal. At load the operator fixes the value(s) on disk and restarts; on a reload the running
+     * values are kept and fixing the file and reloading again is enough (#595).
      *
      * @throws ConfigurationException with {@link com.ultikits.ultitools.exceptions.ErrorCode#CONFIG_VALIDATION_FAILED}
      *                                 if any field violates its validation constraint, or if this
@@ -1358,7 +1375,9 @@ public abstract class AbstractConfigEntity {
 
         if (!violations.isEmpty()) {
             String moduleName = ultiToolsPlugin != null ? ultiToolsPlugin.getPluginName() : this.getClass().getSimpleName();
-            throw ConfigurationException.validationFailed(moduleName, configFilePath, violations);
+            throw validatingReload
+                    ? ConfigurationException.reloadValidationFailed(moduleName, configFilePath, violations)
+                    : ConfigurationException.validationFailed(moduleName, configFilePath, violations);
         }
     }
 
