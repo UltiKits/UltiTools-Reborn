@@ -1394,15 +1394,12 @@ public final class ConfigDocument {
         }
 
         private static void reclaim(ScalarNode scalar, MappingNode root, Node following) {
-            List<CommentLine> inline = scalar.getInLineComments();
-            if (inline == null || inline.isEmpty() || scalar.getStartMark() == null
-                    || scalar.getScalarStyle() != DumperOptions.ScalarStyle.LITERAL
-                    && scalar.getScalarStyle() != DumperOptions.ScalarStyle.FOLDED) {
+            if (!isBlockScalar(scalar) || scalar.getInLineComments() == null) {
                 return;
             }
             List<CommentLine> keep = new ArrayList<>();
             List<CommentLine> moved = new ArrayList<>();
-            for (CommentLine line : inline) {
+            for (CommentLine line : scalar.getInLineComments()) {
                 if (line.getStartMark() != null && line.getStartMark().getLine() > scalar.getStartMark().getLine()) {
                     moved.add(new CommentLine(line.getStartMark(), line.getEndMark(), line.getValue(), CommentType.BLOCK));
                 } else {
@@ -1414,16 +1411,23 @@ public final class ConfigDocument {
             }
             scalar.setInLineComments(keep.isEmpty() ? null : keep);
             if (following == null) {
-                if (root.getEndComments() != null) {
-                    moved.addAll(root.getEndComments());
-                }
-                root.setEndComments(moved);
+                root.setEndComments(prepend(moved, root.getEndComments()));
             } else {
-                if (following.getBlockComments() != null) {
-                    moved.addAll(following.getBlockComments());
-                }
-                following.setBlockComments(moved);
+                following.setBlockComments(prepend(moved, following.getBlockComments()));
             }
+        }
+
+        private static boolean isBlockScalar(ScalarNode scalar) {
+            return scalar.getStartMark() != null && (scalar.getScalarStyle() == DumperOptions.ScalarStyle.LITERAL
+                    || scalar.getScalarStyle() == DumperOptions.ScalarStyle.FOLDED);
+        }
+
+        /** {@code first} followed by {@code rest} (which may be {@code null}). */
+        private static List<CommentLine> prepend(List<CommentLine> first, List<CommentLine> rest) {
+            if (rest != null) {
+                first.addAll(rest);
+            }
+            return first;
         }
 
         /** Bukkit's {@code adjustNodeComments}: the first key's comments up to the last blank line are the header. */
