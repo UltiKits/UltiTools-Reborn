@@ -76,8 +76,6 @@ class ConfigDocumentBlockScalarCommentTest {
                 Arguments.of("a mapping inside a list item", "a:\n  - k: |-\n      one\n    # n\n    m: x\n", null, null),
                 Arguments.of("a comment, a blank line, then the key",
                         "a:\n  content: |-\n    one\n  # n\n\n  b: x\n", path("a", "b"), Arrays.asList("# n", null)),
-                Arguments.of("a comment, then a column-0 comment",
-                        "a:\n  content: |-\n    one\n  # n\n# m\n  b: x\n", path("a", "b"), Arrays.asList("# n", "@-2|# m")),
                 Arguments.of("column 0 (never read as the scalar's)", "a:\n  content: |-\n    one\n# n\nc: y\n",
                         path("c"), Collections.singletonList("# n")),
                 Arguments.of("UltiMail's mail.yml shape", MAIL_RECALL, path("recall", "server-name"),
@@ -116,6 +114,8 @@ class ConfigDocumentBlockScalarCommentTest {
                         "content: one\n", "content: |-\n    one\n"),
                 Arguments.of("column 3", "a:\n  content: |-\n    one\n   # n\n  b: x\n", "a:\n  content: one\n   # n\n  b: x\n",
                         "content: one\n", "content: |-\n    one\n"),
+                Arguments.of("a comment, then a column-0 comment", "a:\n  content: |-\n    one\n  # n\n# m\n  b: x\n",
+                        "a:\n  content: one\n  # n\n# m\n  b: x\n", "content: one\n", "content: |-\n    one\n"),
                 Arguments.of("before a list item", "a:\n  - |-\n    one\n  # n\n  - two\n", "a:\n  - one\n  # n\n  - two\n",
                         "- one\n", "- |-\n    one\n"));
     }
@@ -171,7 +171,7 @@ class ConfigDocumentBlockScalarCommentTest {
                 Arguments.of("last value", "interval: 300\nmotd: |-\n  first line\n  second line"),
                 Arguments.of("last value, nested", "a:\n  interval: 300\n  motd: |-\n    first line\n    second line"),
                 Arguments.of("before another key", "motd: |-\n  first line\n  second line\ninterval: 300"),
-                Arguments.of("folded, then a comment", "motd: >-\n  first line\n  second line\n# note\ninterval: 300"),
+                Arguments.of("folded, then a comment", "motd: >-\n  first line\n\n  second line\n# note\ninterval: 300"),
                 Arguments.of("keep |+ in the middle", "motd: |+\n  first line\n\ninterval: 300"),
                 Arguments.of("with a following comment (#592)", "a:\n  motd: |-\n    first\n    second\n  # note\n  interval: 300"));
     }
