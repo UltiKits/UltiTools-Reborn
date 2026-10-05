@@ -238,6 +238,9 @@ public class UltiPanelLogTransmitter {
         if (!logTransmissionEnabled.get() || webSocketClient == null || !webSocketClient.isConnected()) {
             return;
         }
+        if (holdsExternalDrainLock()) {
+            return;
+        }
         
         try {
             JsonObject logData = buildLogData(level, message, source, throwable, System.currentTimeMillis());
@@ -255,8 +258,10 @@ public class UltiPanelLogTransmitter {
             }
 
         } catch (Exception e) {
-            // Avoid a logging loop -- print to the console only (do not use the logger, to avoid the loop)
-            System.err.println(FrameworkText.format("[UltiPanel] 发送日志失败: %s - %s", e.getMessage(), e.getClass().getSimpleName()));
+            // A panel-connection line, never streamed (#584): System.err is not a way around the
+            // logger on Paper -- SysoutCatcher re-logs it through the plugin logger, unmarked.
+            PanelConnectionLog.log(Level.WARNING, FrameworkText.format("[UltiPanel] 发送日志失败: %s - %s",
+                    e.getMessage(), e.getClass().getSimpleName()));
         }
     }
 
@@ -306,6 +311,9 @@ public class UltiPanelLogTransmitter {
      *                  among the live ones that may arrive while the replay is still being sent
      */
     public void replayLog(String level, String message, String source, Throwable throwable, long timestamp) {
+        if (holdsExternalDrainLock()) {
+            return;
+        }
         if (!logTransmissionEnabled.get() || webSocketClient == null || !webSocketClient.isConnected()) {
             return;
         }
@@ -540,7 +548,9 @@ public class UltiPanelLogTransmitter {
         try {
             webSocketClient.sendMessage(frame);
         } catch (RuntimeException e) {
-            System.err.println("[UltiPanel] Log batch not sent, kept for the next attempt: " + e.getMessage());
+            // A panel-connection line, never streamed (#584); see sendLog's catch.
+            PanelConnectionLog.log(Level.WARNING,
+                    "[UltiPanel] Log batch not sent, kept for the next attempt: " + e.getMessage());
             return false;
         }
         return webSocketClient.isConnected();
@@ -750,7 +760,8 @@ public class UltiPanelLogTransmitter {
                 // value (a batch-size count) does not justify carrying a self-recursion hazard.
 
             } catch (Exception e) {
-                System.err.println(FrameworkText.format("[UltiPanel] 发送批量日志失败: %s", e.getMessage()));
+                // A panel-connection line, never streamed (#584); see sendLog's catch.
+                PanelConnectionLog.log(Level.WARNING, FrameworkText.format("[UltiPanel] 发送批量日志失败: %s", e.getMessage()));
             }
         }
     }
@@ -898,6 +909,35 @@ public class UltiPanelLogTransmitter {
      */
     public void setExternalDrainCoordinationLock(Object lock) {
         this.externalDrainCoordinationLock = lock;
+    }
+
+    /**
+     * Whether the current thread holds {@link #externalDrainCoordinationLock}
+     * ({@code ServerMonitorManager}'s {@code logDrainLock}) -- and so must not take
+     * {@link #batchModeLock} (#584).
+     * <p>
+     * <b>The lock order.</b> Every path that holds both locks takes {@link #batchModeLock} first:
+     * {@link #flushLogs()} explicitly, and {@link #sendLog} through {@link #addToBatch}'s
+     * size-threshold callback ({@code ServerMonitorManager#drainLogsNow}). A thread holding the
+     * drain lock that then asked for {@link #batchModeLock} would invert that order and deadlock
+     * against either of them. The drain thread itself never calls into this class's locked methods
+     * -- {@link #drainQueue}, {@link #holdUndelivered} and the getters it uses take no lock -- so the
+     * only way it could reach {@link #batchModeLock} is a line logged on that thread while it holds
+     * the drain lock, re-entering through {@code SystemLogHandler}. On Paper that includes anything
+     * printed to {@code System.out}/{@code System.err}: {@code SysoutCatcher} re-logs it through
+     * the calling plugin's logger.
+     * <p>
+     * <b>Why such a line is dropped from the stream.</b> The framework's own lines on that thread
+     * are about the send in progress and are logged through {@code PanelConnectionLog}, which the
+     * stream never carries anyway; any other line still reaches the console, which is written by a
+     * different handler. Queuing or sending it without the lock instead would bypass the dispatch
+     * decision {@link #batchModeLock} serializes against {@link #setBatchEnabled(boolean)}'s flush.
+     *
+     * @return {@code true} when a drain lock is wired and the current thread holds it
+     */
+    private boolean holdsExternalDrainLock() {
+        Object coordinationLock = externalDrainCoordinationLock;
+        return coordinationLock != null && Thread.holdsLock(coordinationLock);
     }
 
     /**
@@ -1074,7 +1114,8 @@ public class UltiPanelLogTransmitter {
             batchScheduler.shutdownNow();
             Thread.currentThread().interrupt();
         } catch (Exception e) {
-            System.err.println(FrameworkText.format("[UltiPanel] 关闭日志传输器时发生错误: %s", e.getMessage()));
+            // A panel-connection line, never streamed (#584); see sendLog's catch.
+            PanelConnectionLog.log(Level.WARNING, FrameworkText.format("[UltiPanel] 关闭日志传输器时发生错误: %s", e.getMessage()));
         }
     }
 }

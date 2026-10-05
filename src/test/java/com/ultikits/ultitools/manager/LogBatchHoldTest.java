@@ -74,7 +74,7 @@ class LogBatchHoldTest {
             attempted.add(frame);
             if (failuresLeft.getAndUpdate(n -> Math.max(0, n - 1)) > 0) {
                 if (failByClosing.get()) {
-                    // The socket closed first: the real client prints to System.err and returns.
+                    // The socket closed first: the real client logs a panel-connection line and returns.
                     connected.set(false);
                     return null;
                 }
