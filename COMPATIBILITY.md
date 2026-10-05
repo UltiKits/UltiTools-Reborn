@@ -153,8 +153,10 @@ default too. A key missing on reload binds its declared default - with one warni
 still found it, so an operator who deletes a key to reset it is told - unless the module changed that setting since the
 last load or save, which keeps the module's value; the file is not changed either way, and
 no later save re-adds the key ([#596](https://github.com/UltiKits/UltiTools-Reborn/issues/596)).
-Warnings name the file, key and failed position/type; secret-shaped values and nested credentials
-are redacted. Unsupported declared types fail preflight before the file is read or created; register
+Warnings name the file, key and failed position/type and, as of 6.3.0 (#590), the converter's own
+reason (the message it gave `ConversionException`, without the location prefix) as `(reason: ...)`;
+secret-shaped values and nested credentials are redacted, the reason with them, and a multi-line
+reason is kept on one log line. Unsupported declared types fail preflight before the file is read or created; register
 `@ConfigConverterFor` or declare a supported plain-data shape. The built-in Bukkit serialization
 fallback requires a registered alias; registered custom converters keep ownership of their types.
 For every value `x` of the declared type whose collections and arrays contain no null element,
@@ -241,7 +243,15 @@ that is not a declared entry, or a map-entry call on a setting not declared as a
 and writes nothing. Both run under the entity monitor and must be called on the server thread.
 
 Unreadable, unparseable and non-UTF-8 files are protected on every entity write path. Initial load
-keeps declared defaults; failed reload keeps running fields. One SEVERE names the file and safe cause.
+keeps declared defaults and logs one SEVERE naming the file and safe cause. As of 6.3.0 (#589) a
+failed reload keeps running fields and the file unchanged and throws `ConfigurationException`
+(`CONFIG_LOAD_FAILED` for an unreadable file, `CONFIG_PARSE_FAILED` for one that does not parse)
+naming the file and the same safe cause, instead of logging and returning normally; the entity logs
+nothing itself, because its caller reports it: `ConfigManager#reloadConfigs` lets it through, the
+module's reload logs one SEVERE line naming the module and the cause, `/ul reload <module>` replies
+that the module failed to reload, and a full `/ul reload` names the module among its failures. A
+module that calls `reload()` itself and catches only `IOException` now sees this unchecked
+exception propagate; catch `ConfigurationException` to report it in the module's own reply.
 Explicit save does not clear protection; only a later successful load permits writes again.
 Parser diagnostics expose only numeric line/column metadata, never source snippets or scalar values.
 
@@ -364,7 +374,8 @@ or a composite value names the key only. Absent map keys
 and explicit null differ. A whole declared field missing from the file binds its declared default with one warning
 when the module had not changed it, and keeps its live value when the module had (both with the declared-default
 baseline); the file is not written. This planner-selected file-wins policy can be overturned by the maintainer.
-Unreadable/unparseable reloads keep live values and protect the file as before.
+Unreadable/unparseable reloads keep live values and protect the file as before, and throw
+`ConfigurationException` naming the file and the safe cause (#589).
 After a module's language is rebuilt in the reload steps, and before its own reload hook, the framework rewrites
 only its own comment lines of that module's configurations in the new language, through the write gate over a fresh
 read; no value, key or other comment line is written ([#594](https://github.com/UltiKits/UltiTools-Reborn/issues/594)).
@@ -1280,7 +1291,9 @@ This section governs the third kind.
     naming the modules that failed instead of `All plugins reloaded.`; the summary is also sent to
     the command's sender, which previously got no reply on success and the generic command-error
     line on failure;
-  - `/ul reload <name>` replies failure, naming the module and the cause, when the reload threw;
+  - `/ul reload <name>` replies failure, naming the module and the cause, when the reload threw —
+    including, as of #589, when one of the module's configuration files cannot be read or parsed
+    (before #589 that reload logged the protected-load line and still replied success);
   - a module can report a partial reload without throwing: the new public final class
     `ReloadReport`, the new hook `protected void onReload(ReloadReport report)` — whose default body
     calls `onReload()`, so a module overriding only `onReload()` behaves exactly as before — and the

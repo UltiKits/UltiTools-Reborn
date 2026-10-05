@@ -109,7 +109,10 @@ class ConfigThreeWayReloadTest {
         assertThat(entity.isModifiedSinceSnapshot()).isTrue();
     }
     @Test void malformedReloadKeepsRunningChangesAndFileProtected() throws Exception {
-        entity.mine = "pending"; write("mine: [broken\n"); entity.reload();
+        // #589: the reload of the broken file throws; the running change and the protection stay.
+        entity.mine = "pending"; write("mine: [broken\n");
+        org.assertj.core.api.Assertions.assertThatThrownBy(entity::reload)
+                .isInstanceOf(com.ultikits.ultitools.exceptions.ConfigurationException.class).hasMessageContaining("reload.yml");
         assertThat(entity.mine).isEqualTo("pending"); assertThat(entity.isLastLoadUnparseable()).isTrue();
         entity.save(); assertThat(new String(Files.readAllBytes(directory.resolve("reload.yml")), StandardCharsets.UTF_8))
                 .isEqualTo("mine: [broken\n");

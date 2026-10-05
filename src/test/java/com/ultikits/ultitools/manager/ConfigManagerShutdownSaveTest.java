@@ -680,7 +680,8 @@ class ConfigManagerShutdownSaveTest {
 
         String broken = "value: [unclosed\n  bad: : :\n";
         write(scalarFile, broken);
-        config.reload();
+        // #589: the reload throws; the entity keeps its values and the file stays protected.
+        assertThatThrownBy(config::reload).isInstanceOf(com.ultikits.ultitools.exceptions.ConfigurationException.class);
 
         configManager.saveAll();
 
@@ -699,7 +700,8 @@ class ConfigManagerShutdownSaveTest {
         configManager.register(plugin, config);
 
         write(scalarFile, "value: [unclosed\n  bad: : :\n");
-        configManager.reloadConfigs(plugin);
+        // #589: reloadConfigs lets the failure through instead of logging and returning.
+        assertThatThrownBy(() -> configManager.reloadConfigs(plugin)).isInstanceOf(com.ultikits.ultitools.exceptions.ConfigurationException.class);
         // init() rewrites the file with defaults for every key it could not read - the pre-existing
         // defect tracked as #511, unchanged here. What must not happen is a second, later write.
         String afterReload = read(scalarFile);
@@ -719,7 +721,7 @@ class ConfigManagerShutdownSaveTest {
         configManager.register(plugin, config);
 
         write(scalarFile, "value: [unclosed\n  bad: : :\n");
-        config.reload();
+        assertThatThrownBy(config::reload).isInstanceOf(com.ultikits.ultitools.exceptions.ConfigurationException.class); // #589
         write(scalarFile, "value: repaired\n");
         config.reload();
         assertThat(config.getValue()).isEqualTo("repaired");
@@ -741,7 +743,7 @@ class ConfigManagerShutdownSaveTest {
         configManager.register(plugin, config);
 
         write(scalarFile, "value: [unclosed\n  bad: : :\n");
-        config.reload();
+        assertThatThrownBy(config::reload).isInstanceOf(com.ultikits.ultitools.exceptions.ConfigurationException.class); // #589
         config.setValue("set-by-code");
         String broken = read(scalarFile);
         config.save();

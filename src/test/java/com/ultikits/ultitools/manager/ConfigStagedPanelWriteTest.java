@@ -231,7 +231,8 @@ class ConfigStagedPanelWriteTest {
         Path target = directory.resolve(protectedValue.getConfigFilePath());
         byte[] malformed = "value: [unterminated\n".getBytes(StandardCharsets.UTF_8);
         Files.write(target, malformed);
-        protectedValue.reload();
+        // #589: the reload of the malformed file throws and leaves the entity protected.
+        assertThatThrownBy(protectedValue::reload).isInstanceOf(ConfigurationException.class);
         Map<String, Object> protectedState = state(protectedValue);
         JsonObject edit = new JsonObject(); edit.addProperty("value", 10);
         try (MockedStatic<AtomicConfigWriter> writer = Mockito.mockStatic(

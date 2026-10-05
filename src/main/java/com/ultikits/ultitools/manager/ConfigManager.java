@@ -10,6 +10,7 @@ import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.config.convert.ConverterRegistry;
 import com.ultikits.ultitools.utils.DependencyUtils;
 import com.ultikits.ultitools.exceptions.ConfigurationException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
 import java.io.File;
@@ -444,8 +445,17 @@ public class ConfigManager {
 
     /**
      * Reload all configs.
+     * <p>
+     * Since 6.3.0 (#589) a configuration that fails to reload is not logged and skipped: the failure
+     * propagates, so the module's reload reports it ({@code /ul reload <name>} replies that the module
+     * did not reload, naming the file and the cause). A configuration whose file cannot be read or
+     * parsed throws {@link ConfigurationException} from its own {@code reload()}; an
+     * {@link IOException} is rethrown as a {@link ConfigurationException} naming the file. The first
+     * failure stops the remaining configurations of this module, as a validation failure always has;
+     * the failed one keeps its running values.
      *
      * @param plugin UltiTools module
+     * @throws ConfigurationException if a configuration fails to reload
      */
     public void reloadConfigs(UltiToolsPlugin plugin) {
         if (!permitsConfigThread(plugin, "reloadConfigs")) { return; }
@@ -457,7 +467,8 @@ public class ConfigManager {
             try {
                 configEntity.reload();
             } catch (IOException e) {
-                UltiTools.getInstance().getLogger().log(Level.WARNING, "Configuration initialization failed! File path: " + configEntity.getConfigFilePath());
+                throw new ConfigurationException(ErrorCode.CONFIG_LOAD_FAILED,
+                        "Cannot reload " + configEntity.getConfigFilePath() + ": " + e.getClass().getSimpleName(), e);
             }
         }
     }

@@ -42,7 +42,8 @@ import java.lang.annotation.Target;
  *   <li><b>Applied at {@code /ul reload}.</b> The resolved seconds are cached per executor and
  *       refreshed only after a successful configuration reload, so a panel edit takes effect at
  *       the next {@code /ul reload} and a refused reload never takes effect. An invalid value on
- *       reload keeps the running one and logs a WARNING. A cooldown already running keeps the end
+ *       reload keeps the running one, logs a WARNING and reports the reload as partial, naming
+ *       the key, the refused value and the value kept (#595). A cooldown already running keeps the end
  *       time it was stamped with, whatever the new value is: a reload to {@code 0} stamps no new
  *       cooldown, and the running ones expire on their own. Executors sharing one validator chain
  *       keep all their bindings.</li>

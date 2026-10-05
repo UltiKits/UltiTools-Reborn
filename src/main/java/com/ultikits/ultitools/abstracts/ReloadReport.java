@@ -14,6 +14,10 @@ import java.util.List;
  * its summary, instead of reporting an unconditional success. The framework's own reload log line
  * for the module says the same.
  * <p>
+ * The framework records the parts of its own reload steps that did not take effect in the same
+ * report, before the hook runs: a config-bound {@code @Scheduled} or {@code @CmdCD} value it refused
+ * and kept, or a binding step that failed (#595).
+ * <p>
  * Record a part and carry on when the rest of the module still works. Throw instead when the reload
  * cannot continue at all: {@code reloadSelf()} then logs a failure line naming the module,
  * {@code /ul reload <name>} replies failure, and a full {@code /ul reload} carries on with the next

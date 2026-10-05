@@ -2110,7 +2110,9 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * watched key has changed direction since then -- it never registers, unregisters, or
      * rebuilds anything (issue #392, D-01). Right after the configuration reload, and only if it
      * succeeded, the module's config-bound {@code @Scheduled} tasks and {@code @CmdCD} cooldowns
-     * pick up their reloaded values (#531; see {@code PluginManager#applyReloadedConfigBindings}).
+     * pick up their reloaded values (#531; see {@code PluginManager#applyReloadedConfigBindings});
+     * a value that step refuses and keeps, or a part of it that fails, is recorded in the
+     * {@link ReloadReport} as a part that did not reload (#595).
      * {@code final} and always runs its own steps, then calls {@link #onReload()} -- a module can
      * no longer skip any of this by overriding {@code reloadSelf()} itself, because that override
      * point no longer exists (D-01). The hook it calls is {@link #onReload(ReloadReport)}, whose
@@ -2197,7 +2199,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         // reloadConfigs did not throw, so a refused reload leaves the running timings alone.
         PluginManager pluginManager = UltiTools.getInstance().getPluginManager();
         if (pluginManager != null) {
-            pluginManager.applyReloadedConfigBindings(this);
+            // #595: a value the step keeps, or a part of it that fails, is recorded in the report.
+            pluginManager.applyReloadedConfigBindings(this, report);
         }
         // Rebuild the catalogue from this module's language files, re-read from disk and jar, in
         // the language the framework runs with. The `language` setting is one value for the

@@ -15,6 +15,7 @@ public class ConversionException extends Exception {
     private final String file;
     private final List<String> path;
     private final Type declaredType;
+    private final String reason;
 
     /**
      * Creates a conversion failure at the given location.
@@ -40,6 +41,7 @@ public class ConversionException extends Exception {
         this.file = file;
         this.path = Collections.unmodifiableList(new ArrayList<>(path));
         this.declaredType = declaredType;
+        this.reason = message;
     }
 
     /** @return the configuration file */
@@ -48,4 +50,10 @@ public class ConversionException extends Exception {
     public List<String> path() { return path; }
     /** @return the declared Java type */
     public Type declaredType() { return declaredType; }
+    /**
+     * The reason exactly as the converter gave it, without the location prefix of
+     * {@link #getMessage()}. The framework shows it in the operator's skip warning (#590).
+     * @return the reason, or {@code null} when none was given
+     */
+    public String reason() { return reason; }
 }
