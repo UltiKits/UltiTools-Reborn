@@ -143,7 +143,7 @@ class ConfigFileFormTest {
     }
 
     @Test
-    @DisplayName("a comment-only rewrite that failed leaves the entity modified, so the shutdown save writes the file again")
+    @DisplayName("a comment-only rewrite that failed changes no save state, so no shutdown save follows from it (#603)")
     void failedCommentRewriteIsNotACleanSnapshot() throws IOException {
         Files.createDirectories(file().getParent());
         Files.write(file(), "# old\nlimit: 25\n".getBytes(StandardCharsets.UTF_8));
@@ -155,7 +155,8 @@ class ConfigFileFormTest {
             CommentConfig config = new CommentConfig(PATH);
             config.init(plugin);
             assertThat(config.limit).isEqualTo(25);
-            assertThat(config.isModifiedSinceSnapshot()).isTrue();
+            // Maintainer 2026-10-04: a failed comment-only write must not lead to a save over operator edits.
+            assertThat(config.isModifiedSinceSnapshot()).isFalse();
         }
     }
 }

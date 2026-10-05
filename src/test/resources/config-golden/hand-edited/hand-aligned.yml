@@ -1,0 +1,9 @@
+# Interval in seconds
+interval: 300
+motto:    keep going   # aligned
+times:
+  # one minute
+  - 60   # first
+  # thirty seconds
+  - 30
+extra:   operator-own-key

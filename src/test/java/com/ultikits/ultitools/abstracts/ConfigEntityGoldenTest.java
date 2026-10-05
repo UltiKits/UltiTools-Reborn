@@ -226,14 +226,11 @@ class ConfigEntityGoldenTest {
             assertThat(new ArrayList<Object>(((Map<?, ?>) at(disk, Arrays.asList("emojis", "mappings"))).keySet()))
                     .contains("o", "g");
         }
+        // Maintainer decision 2026-10-04 ("what code may write, by file type"): a save writes only what the module
+        // changed, so with nothing changed it writes nothing. The 6.2 split dotted-key cleanup on save is superseded:
+        // the split entries of written-by-6.2/10-dotted-keys-save.yml stay byte for byte.
         config.save();
-        if (semanticNoOp) { unchanged(file, bytes, time); }
-        else {
-            // Explicit save replaces the old split raw data with the already accepted typed binding.
-            assertThat(read(new String(Files.readAllBytes(file), StandardCharsets.UTF_8))).isEqualTo(serialized);
-            assertThat(comments(new String(Files.readAllBytes(file), StandardCharsets.UTF_8)))
-                    .containsExactlyInAnyOrderElementsOf(comments(new String(bytes, StandardCharsets.UTF_8)));
-        }
+        unchanged(file, bytes, time);
         assertThat(config.isModifiedSinceSnapshot()).isFalse();
     }
 
@@ -267,15 +264,12 @@ class ConfigEntityGoldenTest {
         }
         assertThat(config.setting).isEqualTo("inherited");
         String rendered = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
+        // Maintainer 2026-10-04 (inventory A14, #600): a file using anchors or merge keys is never written
+        // automatically; the comment-only write at start-up and reload is refused and the bytes stay. A save writes
+        // only what the module changed and never a comment, and a panel edit writes only what it changes (17-65), so
+        // with nothing changed neither writes anything either - the merge-key file keeps every byte.
+        assertThat(rendered).isEqualTo(original);
         assertThat(PlainData.plainEquals(read(rendered), expected)).isTrue();
-        assertOrderOutsideTarget(read(rendered), expected, new ArrayList<>(), Arrays.asList("group", "setting"));
-        assertThat(comments(rendered)).containsAll(comments(original));
-        com.ultikits.ultitools.config.document.ConfigDocument document =
-                com.ultikits.ultitools.config.document.ConfigDocument.load(file).document();
-        assertThat(document.blockComment(Arrays.asList("group", "setting"))).containsExactly("Owned setting note");
-        assertThat(document.blockComment(Arrays.asList("defaults"))).contains("Anchor owner note");
-        assertThat(document.blockComment(Arrays.asList("defaults", "setting"))).isEmpty();
-        assertThat(document.blockComment(Arrays.asList("defaults", "sibling"))).isEmpty();
         byte[] bytes = Files.readAllBytes(file);
         Files.setLastModifiedTime(file, FileTime.fromMillis(946684800000L));
         FileTime time = Files.getLastModifiedTime(file);
@@ -306,13 +300,22 @@ class ConfigEntityGoldenTest {
         else if (current instanceof Double) { field.set(config, ((Double) current) + 1.0); }
         else if (current instanceof String) { field.set(config, current + " changed"); }
         else if (current instanceof List<?>) { ((List<?>) current).remove(((List<?>) current).size() - 1); }
-        else if (current instanceof Map<?, ?>) {
+        Object removed = null;
+        if (current instanceof Map<?, ?>) {
             List<?> keys = new ArrayList<>(((Map<?, ?>) current).keySet());
-            ((Map<?, ?>) current).remove(keys.get(keys.size() - 1));
-        } else { throw new IllegalStateException("Uncovered fixture field: " + field); }
+            removed = keys.get(keys.size() - 1);
+            ((Map<?, ?>) current).remove(removed);
+        } else if (!(current instanceof Boolean || current instanceof Integer || current instanceof Double
+                || current instanceof String || current instanceof List<?>)) {
+            throw new IllegalStateException("Uncovered fixture field: " + field);
+        }
         assertThat(config.isModifiedSinceSnapshot()).isTrue();
         Map<String, Object> expected = read(original);
-        put(expected, path(field), plain(field.get(config)));
+        Object intended = plain(field.get(config));
+        // A map is written entry by entry (17-65 save rule): only the removed entry goes; a 6.2 split entry the
+        // module never bound stays (maintainer decision 2026-10-04 supersedes the split-key cleanup on save).
+        if (removed != null) { ((Map<?, ?>) at(expected, path(field))).remove(removed); }
+        else { put(expected, path(field), intended); }
         config.save();
         String rendered = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
         Map<String, Object> actual = read(rendered);
@@ -324,7 +327,43 @@ class ConfigEntityGoldenTest {
         assertThat(rendered).doesNotContain("\r"); // Every captured fixture uses LF; layout elsewhere may normalize.
         assertThat(config.isModifiedSinceSnapshot()).isFalse();
         config.reload();
-        assertThat(plain(field.get(config))).isEqualTo(at(expected, path(field)));
+        assertThat(plain(field.get(config))).isEqualTo(intended);
+    }
+
+    public static class DottedWithToggle extends AbstractConfigEntity {
+        @ConfigEntry(path = "emojis.mappings") Map<String, String> mappings = new LinkedHashMap<>();
+        @ConfigEntry(path = "emojis.enabled") boolean enabled = true;
+        public DottedWithToggle(String path) { super(path); }
+    }
+
+    /**
+     * Golden fixture {@code written-by-6.2/10-dotted-keys-save.yml}: an explicit save after the module changed something
+     * keeps every 6.2 split dotted-key entry byte for byte - the module's own change is written alone (maintainer
+     * decision 2026-10-04, "what code may write, by file type", superseding the split-key cleanup on save).
+     */
+    @Test
+    void dottedKeysFixtureKeepsEverySplitEntryAcrossAnExplicitSaveOfAnotherChange() throws Exception {
+        String fixture = "written-by-6.2/10-dotted-keys-save.yml";
+        String original = new String(Files.readAllBytes(corpus().resolve(fixture)), StandardCharsets.UTF_8);
+        Path file = directory.resolve("golden.yml");
+        Files.write(file, original.getBytes(StandardCharsets.UTF_8));
+        AbstractConfigEntity dotted = entity(fixture);
+        dotted.init(plugin);
+        @SuppressWarnings("unchecked")
+        Map<String, String> mappings = (Map<String, String>) entries(dotted).get(0).get(dotted);
+        mappings.put("wave", "o/");
+        dotted.save();
+        assertThat(new String(Files.readAllBytes(file), StandardCharsets.UTF_8)).isEqualTo(original + "    wave: o/\n");
+
+        Files.write(file, original.getBytes(StandardCharsets.UTF_8));
+        DottedWithToggle toggle = new DottedWithToggle("golden.yml");
+        toggle.init(plugin);
+        String afterInit = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
+        assertThat(afterInit).as("init inserts the missing key only").startsWith(original);
+        toggle.enabled = false;
+        toggle.save();
+        assertThat(new String(Files.readAllBytes(file), StandardCharsets.UTF_8))
+                .isEqualTo(afterInit.replace("enabled: true", "enabled: false"));
     }
 
     @SuppressWarnings("unchecked")

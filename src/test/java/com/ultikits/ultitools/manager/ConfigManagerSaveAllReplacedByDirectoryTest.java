@@ -102,8 +102,8 @@ class ConfigManagerSaveAllReplacedByDirectoryTest {
     }
 
     @Test
-    @DisplayName("A changed entity whose file was replaced by a directory is attempted, and the failure is logged")
-    void saveAll_logsFailureForEntityWhoseFileBecameDirectory() throws IOException {
+    @DisplayName("A changed entity whose file was replaced by a directory is named at stop, never written (17-65)")
+    void saveAll_namesChangedEntityWhoseFileBecameDirectory() throws IOException {
         File target = new File(tempDir, RELATIVE_PATH);
         Files.createDirectories(target.getParentFile().toPath());
         Files.write(target.toPath(), "value: original\n".getBytes(StandardCharsets.UTF_8));
@@ -118,6 +118,7 @@ class ConfigManagerSaveAllReplacedByDirectoryTest {
         configManager.saveAll();
 
         assertThat(target).isDirectory();
-        assertThat(warnings()).anyMatch(message -> message.contains("save failed") && message.contains(RELATIVE_PATH));
+        assertThat(warnings()).anyMatch(message -> message.contains("never saved") && message.contains(RELATIVE_PATH));
+        assertThat(warnings()).noneMatch(message -> message.contains("save failed"));
     }
 }

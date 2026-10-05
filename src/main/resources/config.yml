@@ -123,6 +123,26 @@ ultipanel:
       # 值（含 0 和负数）都会被拒绝，此前生效的间隔保持不变——连接建立时读取的这条路径与面板自身的
       # 实时路径共用同一个 1000 毫秒下限（WR-01）。
       interval: 5000
+  commands:
+    # Commands the panel may never execute remotely. Fully operator-editable — add or remove entries freely.
+    # 面板永远不允许远程执行的命令列表。完全由操作员编辑——可自由增删。
+    blocklist:
+      - op
+      - deop
+      - stop
+      - restart
+      - reload
+      - ban-ip
+      - pardon-ip
+      - whitelist
+      - save-off
+      - save-all
+  files:
+    # Directories the panel's file API may read/write/delete within, subject to the capability switches above.
+    # 面板文件 API 可以在其中读取/写入/删除的目录，仍受上方能力开关约束。
+    editable-roots:
+      - plugins
+      - logs
   # 远程能力开关：这些开关限定了面板能做什么；关闭某项能力时，相应请求会被拒绝，
   # 拒绝信息会指向本文件。
   # Capability switches: these bound what the panel may do; a disabled capability

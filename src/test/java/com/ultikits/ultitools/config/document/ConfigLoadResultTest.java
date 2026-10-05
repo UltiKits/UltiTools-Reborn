@@ -226,7 +226,10 @@ class ConfigLoadResultTest {
             org.assertj.core.api.Assertions.assertThatThrownBy(() -> AtomicConfigWriter.write(target, "a: 2\n", files))
                     .isInstanceOf(IOException.class).hasMessageContaining("temporary read failure");
             assertThat(new String(Files.readAllBytes(target), StandardCharsets.UTF_8)).isEqualTo("a: 1\n");
-            assertThat(Files.exists(target.resolveSibling(target.getFileName() + ".bak"))).isFalse();
+            try (java.util.stream.Stream<Path> siblings = Files.list(target.getParent())) {
+                assertThat(siblings.map(path -> path.getFileName().toString())
+                        .filter(name -> AtomicConfigWriter.isBackupOf(target.getFileName().toString(), name))).isEmpty();
+            }
             assertThat(warnings).hasSize(1);
             assertThat(warnings.get(0).getMessage()).contains(target.toString(), "in-place", "failed", "injected refusal");
         } finally {

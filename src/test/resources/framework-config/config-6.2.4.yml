@@ -1,0 +1,75 @@
+# 数据存储方式，内置json, sqlite和mysql，酌情更改，
+# 每个存储方式之间的数据不是互通的，切换存储方式会导致数据丢失
+# json: 可以手动更改内容，但是性能稳定性最低，崩溃下可能会丢失数据
+# sqlite: 本地文件存储，性能稳定性较高，但是无法轻易手动更改数据
+# mysql: 需要配置mysql数据库，性能稳定性最高，但是需要自行创建数据库
+datasource:
+  type: "sqlite"
+  # 仅对json存储有效，数据自动保存时间（秒），高性能机器可酌情调低
+  # 越低数据越不容易丢失，但是性能消耗越大
+  # 越高性能消耗越小，但是数据丢失可能性越大
+  flushRate: 10
+
+# en for English, zh 为中文
+language: "zh"
+
+mysql:
+  enable: false
+  host: localhost
+  port: 3306
+  username: root
+  password: password
+  database: ultitools
+  connectionTimeout: 30000
+  keepaliveTime: 60000
+  maxLifetime: 1800000
+  connectionTestQuery: "select 1"
+  maximumPoolSize: 8
+  cachePrepStmts: true
+  prepStmtCacheSize: 250
+  prepStmtCacheSqlLimit: 2048
+
+# 邮件服务配置 (Email Service Configuration)
+# 此服务为可选功能，仅在enable为true且配置正确时启用
+# 模块需调用 EmailService.isEnabled() 检查服务是否可用
+email:
+  enable: false
+  smtp:
+    # SMTP服务器地址 (如: smtp.gmail.com, smtp.qq.com, smtp.163.com)
+    host: "smtp.example.com"
+    # SMTP端口 (常用: 25, 465(SSL), 587(TLS))
+    port: 587
+    # SMTP认证用户名 (通常是邮箱地址)
+    username: ""
+    # SMTP认证密码 (部分服务商需要使用授权码而非密码)
+    password: ""
+    # 是否使用SSL加密 (端口465时通常为true)
+    ssl: false
+    # 是否使用STARTTLS加密 (端口587时通常为true)
+    starttls: true
+    # 连接超时时间 (毫秒)
+    connectionTimeout: 10000
+    # 读取超时时间 (毫秒)
+    readTimeout: 10000
+  from:
+    # 发件人邮箱地址 (需与username一致或为授权的别名)
+    address: "noreply@example.com"
+    # 发件人显示名称
+    name: "UltiTools Server"
+  # 调试模式 (开启后会在控制台输出详细的SMTP通信日志)
+  debug: false
+
+# UltiPanel 面板集成配置
+ultipanel:
+  logging:
+    error-reporting:
+      # 是否启用错误自动上报到 UltiPanel (Enable auto error reporting to UltiPanel)
+      enabled: true
+      # 去重窗口时间（秒），同一错误在此时间内只上报一次
+      dedup-window-seconds: 300
+      # 每个批次最多上报的错误数量
+      max-errors-per-batch: 10
+      # 同一错误累计超过此次数后开始采样
+      sample-after-count: 10
+      # 采样率（0.1 = 10%）
+      sample-rate: 0.1

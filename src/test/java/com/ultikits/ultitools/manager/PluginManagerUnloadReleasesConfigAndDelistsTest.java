@@ -74,8 +74,10 @@ class PluginManagerUnloadReleasesConfigAndDelistsTest {
 
         assertThatThrownBy(() -> pluginManager.unregister(target)).isSameAs(hookFailure);
 
-        verify(configManager).unregisterAll(target);
-        verify(configManager, never()).saveForShutdown(target);
+        // 17-65 review round 1 R65-I5: a normal unload names the module's never-saved keys (writes nothing) before release.
+        InOrder order = inOrder(configManager);
+        order.verify(configManager).saveForShutdown(target);
+        order.verify(configManager).unregisterAll(target);
         assertThat(pluginManager.getPluginList()).containsExactly(bystander);
     }
 
@@ -91,7 +93,8 @@ class PluginManagerUnloadReleasesConfigAndDelistsTest {
         pluginManager.close();
 
         InOrder order = inOrder(configManager);
-        order.verify(configManager).saveAll();
+        // 17-65: close() writes nothing up front; each module's never-saved changes are named before its release.
+        verify(configManager, never()).saveAll();
         order.verify(configManager).saveForShutdown(first);
         order.verify(configManager).unregisterAll(first);
         order.verify(configManager).saveForShutdown(second);

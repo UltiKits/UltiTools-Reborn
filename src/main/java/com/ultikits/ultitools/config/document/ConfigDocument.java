@@ -6,6 +6,7 @@ import java.io.Reader;
 import java.io.StringReader;
 import java.io.StringWriter;
 import java.io.UncheckedIOException;
+import java.io.Writer;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
@@ -32,6 +33,8 @@ import org.yaml.snakeyaml.comments.CommentLine;
 import org.yaml.snakeyaml.comments.CommentType;
 import org.yaml.snakeyaml.constructor.SafeConstructor;
 import org.yaml.snakeyaml.error.YAMLException;
+import org.yaml.snakeyaml.emitter.Emitter;
+import org.yaml.snakeyaml.events.CommentEvent;
 import org.yaml.snakeyaml.events.Event;
 import org.yaml.snakeyaml.events.ScalarEvent;
 import org.yaml.snakeyaml.nodes.AnchorNode;
@@ -43,6 +46,8 @@ import org.yaml.snakeyaml.nodes.SequenceNode;
 import org.yaml.snakeyaml.nodes.Tag;
 import org.yaml.snakeyaml.reader.UnicodeReader;
 import org.yaml.snakeyaml.representer.Representer;
+import org.yaml.snakeyaml.resolver.Resolver;
+import org.yaml.snakeyaml.serializer.Serializer;
 
 /**
  * One config file as a document: SnakeYAML's own node tree (comments, quoting and layout as they are in
@@ -64,11 +69,15 @@ import org.yaml.snakeyaml.representer.Representer;
  * only what differs: an equal value keeps its node, a changed map is merged key by key, a
  * same-size list element by element, a changed string keeps its quote style, and every replaced node keeps
  * its comments. {@link #render()} serializes the whole node tree through SnakeYAML, preserving content,
- * comments and document style while normalizing operator spacing. Comments on individual list items are
- * kept only while the list keeps its length - the same as Bukkit, which keeps none.
+ * comments and document style; the rendering itself may normalize operator spacing. Comments on individual
+ * list items are kept only while the list keeps its length - the same as Bukkit, which keeps none.
  * A document holding an anchor, an alias
  * or a merge key is re-rendered from its plain data once changed (every value equal, anchors expanded, the
  * comments of keys that still exist carried over), as Bukkit renders every file.
+ * <p>
+ * No caller publishes a rendering as it is: every write to a configuration file goes through
+ * {@link OperatorFileWriter}, which refuses a rendering that would change any byte outside the keys the write
+ * owns (so normalized spacing or an expanded anchor is never written) and never writes an anchored file.
  * <p>
  * <b>Comments.</b> SnakeYAML attaches a comment to the node after it. Two placements are adjusted when the
  * file is read, without changing the rendered text: the file header (the comment lines before the first
@@ -242,6 +251,62 @@ public final class ConfigDocument {
     }
 
     /**
+     * Returns every place this document holds a declared setting path: each way of splitting {@code dottedPath} at its
+     * dots into keys the document holds, the last one present (an explicit {@code null} included). {@code a.b.c} is read
+     * as {@code a -> b -> c}, {@code a.b -> c}, {@code a -> b.c} or the single key {@code a.b.c}, the way Bukkit's
+     * {@code YamlConfiguration} - which splits every key at its dots - reads the same file, so a setting the operator
+     * wrote as a flat dotted key is that setting (#612). Keys inside the setting's value are not split: this addresses
+     * the setting itself, never an entry of a map it holds.
+     *
+     * @param dottedPath a declared setting path, such as {@code features.chat}
+     * @return the readings found, nested forms first; empty when the document does not hold the setting, two or more
+     *         when it holds it in several forms
+     * @since 6.3.0
+     */
+    public List<List<String>> readings(String dottedPath) {
+        return readings(plain, dottedPath);
+    }
+
+    /**
+     * {@link #readings(String)} over a plain-data tree, such as a copy of a document taken at load.
+     *
+     * @param tree       the top-level mapping
+     * @param dottedPath a declared setting path
+     * @return the readings found, nested forms first
+     * @since 6.3.0
+     */
+    public static List<List<String>> readings(Map<?, ?> tree, String dottedPath) {
+        List<List<String>> found = new ArrayList<>();
+        collectReadings(tree, dottedPath.split("\\.", -1), 0, new ArrayList<String>(), found);
+        return found;
+    }
+
+    private static void collectReadings(Object node, String[] parts, int from, List<String> prefix, List<List<String>> found) {
+        if (!(node instanceof Map)) {
+            return;
+        }
+        Map<?, ?> map = (Map<?, ?>) node;
+        StringBuilder key = new StringBuilder();
+        for (int end = from; end < parts.length; end++) {
+            if (end > from) {
+                key.append('.');
+            }
+            key.append(parts[end]);
+            String name = key.toString();
+            if (!map.containsKey(name)) {
+                continue;
+            }
+            List<String> path = new ArrayList<>(prefix);
+            path.add(name);
+            if (end == parts.length - 1) {
+                found.add(path);
+            } else {
+                collectReadings(map.get(name), parts, end + 1, path, found);
+            }
+        }
+    }
+
+    /**
      * Returns a copy of the whole document as plain data, in file order.
      *
      * @return the top-level mapping
@@ -345,6 +410,39 @@ public final class ConfigDocument {
     }
 
     /**
+     * Returns the comment lines directly above the key at {@code path} in the byte form they are written in: for a
+     * line at the key's own column, {@code "#"} followed by everything after the {@code #} up to the line break
+     * (a framework line reads {@code "# " + text}, or {@code "#"} for an empty line); {@code null} for a blank line.
+     * A line at any other column is reported as {@code "@<offset>|#..."}, which never equals a line the framework
+     * writes, since the framework writes a key's comment at the key's column. A line added in memory (it has no
+     * position yet) is reported as it will be written. The file header is not part of the first key's comment.
+     * <p>
+     * The framework identifies its own comment lines on this form (17-64 review round 1 R1-02): a line holding the
+     * framework's text in any other byte form was written by an operator.
+     *
+     * @param path the key path
+     * @return the lines, empty when the key has no comment or does not exist
+     */
+    public List<String> blockCommentAsWritten(List<String> path) {
+        requireKeys(path);
+        Node key = findKey(path);
+        List<String> result = new ArrayList<>();
+        if (key == null || key.getBlockComments() == null) {
+            return result;
+        }
+        int keyColumn = key.getStartMark() == null ? -1 : key.getStartMark().getColumn();
+        for (CommentLine line : key.getBlockComments()) {
+            if (line.getCommentType() == CommentType.BLANK_LINE) {
+                result.add(null);
+                continue;
+            }
+            int offset = keyColumn < 0 || line.getStartMark() == null ? 0 : line.getStartMark().getColumn() - keyColumn;
+            result.add((offset == 0 ? "" : "@" + offset + "|") + "#" + line.getValue());
+        }
+        return result;
+    }
+
+    /**
      * Replaces the comment of the key at {@code path} - the only way the framework writes a comment. Blank
      * lines directly above the comment are kept; the comment lines themselves are replaced by {@code lines}.
      * Each line is split at every YAML line break ({@code \r\n}, {@code \r}, {@code \n}, U+0085, U+2028,
@@ -369,6 +467,61 @@ public final class ConfigDocument {
                 result.add(line);
             }
         }
+        result.addAll(frameworkLines(lines));
+        if (!sameComments(result, key.getBlockComments())) {
+            key.setBlockComments(result.isEmpty() ? null : result);
+            modified = true;
+        }
+    }
+
+    /**
+     * Replaces only the last {@code owned} comment lines of the key at {@code path} - the run the framework
+     * identified as its own comment - with {@code lines}, rendered and sanitized exactly as
+     * {@link #setFrameworkComment(List, List)} renders them. With {@code owned} zero the lines are appended below
+     * the key's existing comment.
+     * <p>
+     * <b>Why it cannot change an operator line.</b> Every comment line above the run - an operator's note, a blank
+     * line, a framework comment the operator edited - is kept as the same comment object, in the same order, so it
+     * renders byte for byte as before; only the run's own lines are dropped. The run may not include a blank line
+     * and may not reach above the key's comment, so it can never take in a line the caller did not identify
+     * (maintainer decision 2026-10-04, "only the framework's own comments are rewritten", #604).
+     *
+     * @param path  the key path of an existing key
+     * @param owned how many of the key's last comment lines are the framework's (0 for none)
+     * @param lines the new framework comment text, one element per line
+     * @throws IllegalArgumentException if no key exists at {@code path}, or the run is negative, longer than the
+     *                                  key's comment, or includes a blank line
+     */
+    public void replaceFrameworkComment(List<String> path, int owned, List<String> lines) {
+        requireKeys(path);
+        Node key = findKey(path);
+        if (key == null) {
+            throw new IllegalArgumentException("No config key at key path " + PlainData.describePath(path));
+        }
+        List<CommentLine> current = key.getBlockComments() == null
+                ? Collections.<CommentLine>emptyList() : key.getBlockComments();
+        int first = current.size() - owned;
+        if (owned < 0 || first < 0) {
+            throw new IllegalArgumentException("The framework comment run of key path " + PlainData.describePath(path)
+                    + " is longer than the key's comment");
+        }
+        for (int i = first; i < current.size(); i++) {
+            if (current.get(i).getCommentType() == CommentType.BLANK_LINE) {
+                throw new IllegalArgumentException("The framework comment run of key path "
+                        + PlainData.describePath(path) + " includes a blank line");
+            }
+        }
+        List<CommentLine> result = new ArrayList<>(current.subList(0, first));
+        result.addAll(frameworkLines(lines));
+        if (!sameComments(result, key.getBlockComments())) {
+            key.setBlockComments(result.isEmpty() ? null : result);
+            modified = true;
+        }
+    }
+
+    /** The comment lines the framework writes for {@code lines}: split at YAML line breaks, made printable. */
+    private static List<CommentLine> frameworkLines(List<String> lines) {
+        List<CommentLine> result = new ArrayList<>();
         for (String line : lines) {
             if (line == null) {
                 result.add(new CommentLine(null, null, "", CommentType.BLANK_LINE));
@@ -379,10 +532,7 @@ public final class ConfigDocument {
                 result.add(new CommentLine(null, null, text.isEmpty() ? "" : " " + text, CommentType.BLOCK));
             }
         }
-        if (!sameComments(result, key.getBlockComments())) {
-            key.setBlockComments(result.isEmpty() ? null : result);
-            modified = true;
-        }
+        return result;
     }
 
     /**
@@ -396,10 +546,12 @@ public final class ConfigDocument {
         if (out == null) {
             return modified ? "" : source;
         }
-        StringWriter writer = new StringWriter();
-        normalizeMultilineStrings(out, new IdentityHashMap<Node, Node>(), !style.finalLineBreak());
-        dumper(style).serialize(out, writer);
-        String text = WHITESPACE_ONLY_LINE.matcher(writer.toString()).replaceAll("");
+        normalizeMultilineStrings(out, new IdentityHashMap<Node, Node>(), false);
+        String text = emit(out, style);
+        if (!style.finalLineBreak() && changedByMissingFinalLineBreak(text)) {
+            normalizeMultilineStrings(out, new IdentityHashMap<Node, Node>(), true);
+            text = emit(out, style);
+        }
         if (style.upperCaseHex() || style.latin1AsUnicodeEscape()) {
             text = normalizeEscapes(text, style.upperCaseHex(), style.latin1AsUnicodeEscape());
         }
@@ -410,6 +562,211 @@ public final class ConfigDocument {
             text = text.replace("\n", style.lineBreak());
         }
         return style.byteOrderMark() ? "\uFEFF" + text : text;
+    }
+
+    /** The emitter's text for {@code out}, comments realigned and whitespace-only lines emptied. */
+    private static String emit(Node out, DocumentStyle style) {
+        StringWriter writer = new StringWriter();
+        List<Event> events = serialize(out, writer, style);
+        return WHITESPACE_ONLY_LINE.matcher(realignCommentsAfterBlankLines(writer.toString(), events)).replaceAll("");
+    }
+
+    /**
+     * Whether dropping the emitted text's final line break (a file without one keeps that style) would change a value:
+     * only a block scalar running to the end of the document can be changed, e.g. {@code |} ending a file whose last
+     * value ends with a line break. Then every multi-line string is written double-quoted instead (the #592
+     * measurement's adjacent finding: quoting every block scalar of such a file whenever it is written changed bytes no
+     * write owned, so the write gate refused every write to it).
+     */
+    private static boolean changedByMissingFinalLineBreak(String text) {
+        if (!text.endsWith("\n")) {
+            return false;
+        }
+        try {
+            return !PlainData.plainEquals(parse(text.substring(0, text.length() - 1)).toPlain(), parse(text).toPlain());
+        } catch (ConfigParseException | RuntimeException e) {
+            return true;
+        }
+    }
+
+    /**
+     * Serializes {@code out} exactly as {@code Yaml#serialize(Node, Writer)} does (the same {@link Serializer},
+     * {@link Emitter}, options and resolver), recording every event the emitter receives, so the comment lines it
+     * writes can be located afterwards by position (17-64 route change (i)).
+     *
+     * @return the events, in the order the emitter wrote them
+     */
+    private static List<Event> serialize(Node out, Writer writer, DocumentStyle style) {
+        DumperOptions options = dumperOptions(style);
+        Emitter emitter = new Emitter(writer, options);
+        List<Event> events = new ArrayList<>();
+        Serializer serializer = new Serializer(event -> {
+            events.add(event);
+            emitter.emit(event);
+        }, new Resolver(), options, null);
+        try {
+            serializer.open();
+            serializer.serialize(out);
+            serializer.close();
+        } catch (IOException e) {
+            throw new YAMLException(e);
+        }
+        return events;
+    }
+
+    /**
+     * Puts back every comment line SnakeYAML's emitter misplaces after a blank line (17-64 review round 1 R1-01,
+     * route change (i)). The emitter ({@code Emitter#writeCommentLines}, SnakeYAML 2.2) writes the first comment
+     * line after a blank line of a comment run at its current indentation plus the run's own column again - doubled
+     * indentation in a nested block - and every other line of the run at the run's column.
+     * <p>
+     * Nothing is injected into the document's text: the lines are located by position. The comment events the
+     * emitter received (in order, each carrying its original line's position) are matched one to one with the comment
+     * events of the emitted text read back; when the two sequences differ in length, type or text (a blank line
+     * matches a blank line by type: in memory its text is empty, read back it is the line break), the emitted text is
+     * returned unchanged. Each misplaced line - a comment line right after a blank line, with an earlier comment
+     * line in the same run - is written at its own original column, or, for a line added in memory (it has no
+     * position), at the column of the run's first comment line as emitted. Lines are located with the reader's own
+     * line numbering ({@link #moveComments}), and every move is checked before any is applied, so a misalignment
+     * leaves the output as emitted (review round 3).
+     */
+    @SuppressWarnings("PMD.NPathComplexity") // Each move is located and checked against the reader's line breaks before any is applied.
+    private static String realignCommentsAfterBlankLines(String text, List<Event> events) {
+        List<CommentEvent> written = new ArrayList<>();
+        for (Event event : events) {
+            if (event instanceof CommentEvent) {
+                written.add((CommentEvent) event);
+            }
+        }
+        if (written.isEmpty()) {
+            return text;
+        }
+        List<CommentEvent> read = new ArrayList<>();
+        try (Reader reader = new StringReader(text)) {
+            for (Event event : new Yaml(loaderOptions()).parse(reader)) {
+                if (event instanceof CommentEvent) {
+                    read.add((CommentEvent) event);
+                }
+            }
+        } catch (IOException | YAMLException e) {
+            return text;
+        }
+        if (read.size() != written.size()) {
+            return text;
+        }
+        for (int i = 0; i < read.size(); i++) {
+            CommentType type = read.get(i).getCommentType();
+            if (type != written.get(i).getCommentType()
+                    || type != CommentType.BLANK_LINE && !read.get(i).getValue().equals(written.get(i).getValue())) {
+                return text;
+            }
+        }
+        List<CommentMove> moves = new ArrayList<>();
+        int index = 0;
+        int firstColumn = -1;
+        boolean afterBlank = false;
+        for (Event event : events) {
+            if (!(event instanceof CommentEvent) || ((CommentEvent) event).getCommentType() == CommentType.IN_LINE) {
+                index += event instanceof CommentEvent ? 1 : 0;
+                firstColumn = -1;
+                afterBlank = false;
+                continue;
+            }
+            CommentEvent comment = (CommentEvent) event;
+            CommentEvent back = read.get(index++);
+            org.yaml.snakeyaml.error.Mark at = back.getStartMark();
+            if (comment.getCommentType() == CommentType.BLANK_LINE) {
+                afterBlank = firstColumn >= 0;
+                continue;
+            }
+            if (firstColumn < 0) {
+                firstColumn = at.getColumn();
+            } else if (afterBlank) {
+                int column = comment.getStartMark() != null ? comment.getStartMark().getColumn() : firstColumn;
+                if (column != at.getColumn()) {
+                    moves.add(new CommentMove(at.getLine(), at.getColumn(), column, "#" + back.getValue()));
+                }
+            }
+            afterBlank = false;
+        }
+        return moves.isEmpty() ? text : moveComments(text, moves);
+    }
+
+    /** One comment line to re-indent: where the reader found it, and what must be there for the move to apply. */
+    static final class CommentMove {
+        private final int line;
+        private final int column;
+        private final int target;
+        private final String expected;
+
+        /**
+         * @param line     the line, numbered as SnakeYAML's reader numbers it (0-based)
+         * @param column   the column of its {@code #} in the emitted text
+         * @param target   the column to write it at
+         * @param expected the line's exact text from its {@code #} to the line break: {@code "#"} + the comment
+         */
+        CommentMove(int line, int column, int target, String expected) {
+            this.line = line;
+            this.column = column;
+            this.target = target;
+            this.expected = expected;
+        }
+    }
+
+    /**
+     * Re-indents comment lines of {@code text}; every other character is copied unchanged. Lines are counted exactly as
+     * SnakeYAML's reader counts them - {@code \r\n}, {@code \r}, {@code \n}, U+0085, U+2028, U+2029 each end a line
+     * (review round 3 R3-01: the emitter writes U+2028 and U+2029 raw inside a value). Before any line is changed every
+     * move is checked: its line must hold, at the expected column, exactly {@code #} plus its comment, with only spaces
+     * before it; when one move fails the check, {@code text} is returned as it is, so a misalignment can never move a
+     * line it did not mean (review round 3 self-check).
+     *
+     * @param text  the emitted text
+     * @param moves the lines to re-indent
+     * @return the realigned text, or {@code text} unchanged
+     */
+    static String moveComments(String text, List<CommentMove> moves) {
+        List<int[]> lines = readerLines(text);
+        Map<Integer, CommentMove> byLine = new java.util.TreeMap<>();
+        for (CommentMove move : moves) {
+            if (move.line < 0 || move.line >= lines.size() || byLine.put(move.line, move) != null) {
+                return text;
+            }
+            String content = text.substring(lines.get(move.line)[0], lines.get(move.line)[1]);
+            if (move.column >= content.length() || !content.substring(move.column).equals(move.expected)
+                    || !content.substring(0, move.column).replace(" ", "").isEmpty()) {
+                return text;
+            }
+        }
+        StringBuilder result = new StringBuilder(text.length());
+        int copied = 0;
+        for (CommentMove move : byLine.values()) {
+            int start = lines.get(move.line)[0];
+            result.append(text, copied, start);
+            for (int i = 0; i < move.target; i++) {
+                result.append(' ');
+            }
+            copied = start + move.column;
+        }
+        result.append(text, copied, text.length());
+        return result.toString();
+    }
+
+    /** Each line's {start, end of content} in {@code text}, with SnakeYAML's reader's line breaks. */
+    private static List<int[]> readerLines(String text) {
+        List<int[]> lines = new ArrayList<>();
+        int start = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            boolean crlf = c == '\r' && i + 1 < text.length() && text.charAt(i + 1) == '\n';
+            if (crlf || c == '\r' || c == '\n' || c == '\u0085' || c == '\u2028' || c == '\u2029') {
+                lines.add(new int[] {start, i});
+                i += crlf ? 1 : 0;
+                start = i + 1;
+            }
+        }
+        lines.add(new int[] {start, text.length()});
+        return lines;
     }
 
     /** Escapes preserve NEL (which the scanner normalizes) and no-EOF multiline string content. */
@@ -868,7 +1225,7 @@ public final class ConfigDocument {
         return result.append(text, copied, text.length()).toString();
     }
 
-    private static String sha256(byte[] bytes) {
+    static String sha256(byte[] bytes) {
         try {
             StringBuilder hex = new StringBuilder(64);
             for (byte b : MessageDigest.getInstance("SHA-256").digest(bytes)) {
@@ -904,11 +1261,11 @@ public final class ConfigDocument {
         return new PlainRepresenter(DocumentStyle.defaults().dumperOptions());
     }
 
-    private static Yaml dumper(DocumentStyle style) {
+    private static DumperOptions dumperOptions(DocumentStyle style) {
         DumperOptions options = style.dumperOptions();
         // Keep the anchor names the file uses; only nodes shared by an alias are anchored on output.
         options.setAnchorGenerator(node -> node.getAnchor() != null ? node.getAnchor() : "id" + System.identityHashCode(node));
-        return new Yaml(new NodeConstructor(), new PlainRepresenter(options), options, loaderOptions());
+        return options;
     }
 
     /** A {@link SafeConstructor} that constructs single nodes and flattens merge keys on request. */
@@ -997,7 +1354,80 @@ public final class ConfigDocument {
 
         static void adjust(MappingNode root) {
             splitHeader(root);
+            reclaimAfterBlockScalars(root, root, null, Collections.newSetFromMap(new IdentityHashMap<Node, Boolean>()));
             relocate(root, Collections.newSetFromMap(new IdentityHashMap<Node, Boolean>()));
+        }
+
+        /**
+         * #592: SnakeYAML 2.2's scanner reads every comment line with a column above 0 that follows a multi-line block
+         * scalar ({@code |} or {@code >}) as an in-line comment of that scalar, which the emitter then writes at column
+         * 0 - and the key below reads as uncommented. Each such line (any in-line comment starting on a line after the
+         * scalar's own first line; a comment on the indicator line, {@code |- # note}, is the key's and is untouched)
+         * is given back, as a block comment with its original position, to the node that follows it in the file: the
+         * next key or list item at the same level, or for the last value of a section the next one further out, or
+         * for the last value of the document the document's end. That is exactly where SnakeYAML puts a comment after
+         * a plain value, so {@link #relocate} then applies the same deeper-indentation rule to both.
+         *
+         * @param node      the node to walk
+         * @param root      the document's top-level mapping (receives the lines after the document's last value)
+         * @param following the node read right after {@code node}'s subtree, {@code null} at the end of the document
+         * @param seen      nodes already walked (an alias is walked once)
+         */
+        private static void reclaimAfterBlockScalars(Node node, MappingNode root, Node following, Set<Node> seen) {
+            if (!seen.add(node)) {
+                return;
+            }
+            if (node instanceof ScalarNode) {
+                reclaim((ScalarNode) node, root, following);
+            } else if (node instanceof MappingNode) {
+                List<NodeTuple> tuples = ((MappingNode) node).getValue();
+                for (int i = 0; i < tuples.size(); i++) {
+                    reclaimAfterBlockScalars(tuples.get(i).getValueNode(), root,
+                            i + 1 < tuples.size() ? tuples.get(i + 1).getKeyNode() : following, seen);
+                }
+            } else if (node instanceof SequenceNode) {
+                List<Node> elements = ((SequenceNode) node).getValue();
+                for (int i = 0; i < elements.size(); i++) {
+                    reclaimAfterBlockScalars(elements.get(i), root, i + 1 < elements.size() ? elements.get(i + 1) : following, seen);
+                }
+            }
+        }
+
+        private static void reclaim(ScalarNode scalar, MappingNode root, Node following) {
+            if (!isBlockScalar(scalar) || scalar.getInLineComments() == null) {
+                return;
+            }
+            List<CommentLine> keep = new ArrayList<>();
+            List<CommentLine> moved = new ArrayList<>();
+            for (CommentLine line : scalar.getInLineComments()) {
+                if (line.getStartMark() != null && line.getStartMark().getLine() > scalar.getStartMark().getLine()) {
+                    moved.add(new CommentLine(line.getStartMark(), line.getEndMark(), line.getValue(), CommentType.BLOCK));
+                } else {
+                    keep.add(line);
+                }
+            }
+            if (moved.isEmpty()) {
+                return;
+            }
+            scalar.setInLineComments(keep.isEmpty() ? null : keep);
+            if (following == null) {
+                root.setEndComments(prepend(moved, root.getEndComments()));
+            } else {
+                following.setBlockComments(prepend(moved, following.getBlockComments()));
+            }
+        }
+
+        private static boolean isBlockScalar(ScalarNode scalar) {
+            return scalar.getStartMark() != null && (scalar.getScalarStyle() == DumperOptions.ScalarStyle.LITERAL
+                    || scalar.getScalarStyle() == DumperOptions.ScalarStyle.FOLDED);
+        }
+
+        /** {@code first} followed by {@code rest} (which may be {@code null}). */
+        private static List<CommentLine> prepend(List<CommentLine> first, List<CommentLine> rest) {
+            if (rest != null) {
+                first.addAll(rest);
+            }
+            return first;
         }
 
         /** Bukkit's {@code adjustNodeComments}: the first key's comments up to the last blank line are the header. */

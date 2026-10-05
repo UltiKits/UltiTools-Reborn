@@ -2,6 +2,7 @@ package com.ultikits.ultitools.abstracts;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
@@ -74,7 +75,7 @@ class UltiToolsPluginReloadBindingStepTest {
 
         InOrder order = inOrder(configManager, pluginManager, plugin);
         order.verify(configManager).reloadConfigs(plugin);
-        order.verify(pluginManager).applyReloadedConfigBindings(plugin);
+        order.verify(pluginManager).applyReloadedConfigBindings(eq(plugin), any(ReloadReport.class));
         order.verify(plugin).onReload();
     }
 
@@ -86,6 +87,6 @@ class UltiToolsPluginReloadBindingStepTest {
 
         assertThrows(ConfigurationException.class, plugin::reloadSelf);
 
-        verify(pluginManager, never()).applyReloadedConfigBindings(any());
+        verify(pluginManager, never()).applyReloadedConfigBindings(any(), any());
     }
 }

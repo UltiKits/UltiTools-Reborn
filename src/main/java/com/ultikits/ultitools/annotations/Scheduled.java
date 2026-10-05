@@ -62,8 +62,10 @@ import java.lang.annotation.Target;
  *       is the last run plus the new period (before the first run: the arm time plus the new
  *       delay), or the next tick if that moment has already passed. A reload never runs the task
  *       early and never postpones it by restarting its clock; a task whose value did not change is
- *       not touched. An invalid value on reload is not applied -- the running value is kept and a
- *       WARNING names the key. A panel edit takes effect at the next {@code /ul reload}. The
+ *       not touched. An invalid value on reload is not applied -- the running value is kept, a
+ *       WARNING names the key, and the reload is reported as partial, naming the key, the refused
+ *       value and the value kept, so {@code /ul reload} does not reply plain success (#595). A
+ *       panel edit takes effect at the next {@code /ul reload}. The
  *       reload step runs on the main thread only.</li>
  *   <li><b>Panel edits are range-checked.</b> A panel write that sets a bound key outside this
  *       range (for example {@code 0}) is refused like a {@code @Range} violation, and nothing is

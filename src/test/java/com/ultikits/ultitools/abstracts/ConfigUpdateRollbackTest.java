@@ -63,7 +63,8 @@ class ConfigUpdateRollbackTest {
         Map<String, String> entriesBefore = new LinkedHashMap<>(entity.entries);
         byte[] disk = Files.readAllBytes(file());
         try (MockedStatic<AtomicConfigWriter> writer = Mockito.mockStatic(AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
-            writer.when(() -> AtomicConfigWriter.write(Mockito.any(Path.class), Mockito.anyString()))
+            // A panel edit publishes through the config write gate, which stages before it replaces (17-65).
+            writer.when(() -> AtomicConfigWriter.stage(Mockito.any(Path.class), Mockito.anyString()))
                     .thenThrow(new IOException("injected write failure"));
             assertThatThrownBy(() -> entity.updateProperties(panel(600, "panel")))
                     .isInstanceOf(IOException.class).hasMessageContaining("injected write failure");
@@ -79,7 +80,8 @@ class ConfigUpdateRollbackTest {
 
     @Test void retryAfterFailedWritePersistsAndAcknowledges() throws Exception {
         try (MockedStatic<AtomicConfigWriter> writer = Mockito.mockStatic(AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
-            writer.when(() -> AtomicConfigWriter.write(Mockito.any(Path.class), Mockito.anyString()))
+            // A panel edit publishes through the config write gate, which stages before it replaces (17-65).
+            writer.when(() -> AtomicConfigWriter.stage(Mockito.any(Path.class), Mockito.anyString()))
                     .thenThrow(new IOException("injected write failure"));
             assertThatThrownBy(() -> entity.updateProperties(panel(600, "panel"))).isInstanceOf(IOException.class);
         }

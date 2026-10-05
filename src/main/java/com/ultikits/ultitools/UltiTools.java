@@ -5,6 +5,7 @@ import static com.ultikits.ultitools.utils.PluginInitiationUtils.stopWebsocket;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -19,7 +20,9 @@ import java.security.ProtectionDomain;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -38,6 +41,11 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.commands.CloudLoginCommand;
 import com.ultikits.ultitools.commands.PluginInstallCommands;
 import com.ultikits.ultitools.commands.UltiToolsCommands;
+import com.ultikits.ultitools.config.document.ConfigDocument;
+import com.ultikits.ultitools.config.document.ConfigLoadResult;
+import com.ultikits.ultitools.config.document.ConfigParseException;
+import com.ultikits.ultitools.config.document.OperatorFileWriter;
+import com.ultikits.ultitools.config.document.OwnedPaths;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.exceptions.ConfigurationException;
@@ -302,7 +310,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         initPluginModules();
         migrateCapabilitiesConfig();
         initWebSocketManagers();
-        new Metrics(this, 8652);
+        startMetrics(this, 8652, getLogger());
 
         boolean loginSuccess = attemptCloudLogin();
         if (loginSuccess) {
@@ -485,10 +493,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
     }
 
     /**
-     * Migrates the framework's own {@code config.yml} in place, invoked from {@link #onEnable()}
+     * Adds the panel keys the framework's own {@code config.yml} is missing, invoked from {@link #onEnable()}
      * after {@link #saveDefaultConfig()} (called in {@link #onLoad()}) and before
-     * {@link #initWebSocketManagers()}. Reloads {@link #getConfig()} when the file changed, so
-     * every manager constructed afterward sees the merged file.
+     * {@link #initWebSocketManagers()}. Reloads {@link #getConfig()} only when the file was written, so every
+     * manager constructed afterward sees the merged file; when the write is refused nothing is reloaded and the
+     * jar's {@code config.yml}, which {@link #getConfig()} uses as its defaults, answers for the missing keys.
      */
     private void migrateCapabilitiesConfig() {
         boolean changed = migrateCapabilitiesConfig(new File(getDataFolder(), "config.yml"), getLogger());
@@ -498,78 +507,217 @@ public final class UltiTools extends JavaPlugin implements Localized {
     }
 
     /**
-     * The actual migration logic, taking explicit inputs rather than reading {@code this} — the
-     * same test-seam shape {@link #parsePluginVersion(String)} already uses, so this is callable
-     * from a plain JUnit test with no live Bukkit server. Never reaches for
-     * {@code AbstractConfigEntity}/{@code @ConfigEntity} — that mechanism is scoped to
-     * module-authored config POJOs and never adds a key to the framework's own existing
-     * {@code config.yml}. What transfers is the underlying Paper technique
-     * {@code AbstractConfigEntity.init()} uses: a {@link YamlConfiguration} with
-     * {@code options().parseComments(true)} set <b>before</b> {@code load()} — {@code load()}
-     * reads the option itself — plus {@code config.setComments(path, ...)} on the missing-key
-     * branch. Never modifies a value the operator already set and never removes or reorders
-     * existing content (04-CONTEXT D-01).
+     * The migration itself, taking explicit inputs rather than reading {@code this} - the same test-seam shape
+     * {@link #parsePluginVersion(String)} already uses, so it is callable from a plain JUnit test with no live server.
+     * <p>
+     * <b>Why it cannot overwrite operator content</b> (maintainer decisions of 2026-10-04: "operator-written
+     * configuration is never overwritten" and "what code may write, by file type" - a shipped file gets missing keys
+     * and the framework's own comments, insert only; UltiKits/UltiTools-Reborn#605). The file is read through
+     * {@link ConfigDocument#load(java.nio.file.Path)}; only keys absent from it are inserted, each with its comment, and
+     * the write goes through the config write gate ({@link OperatorFileWriter}) owning exactly those keys: every other
+     * byte of the file - values, hex numbers, dotted keys, quoting, layout, comments - must come out byte-identical, and
+     * the file must still hold the bytes read. Otherwise nothing is written and the gate logs one WARNING naming the
+     * keys and the reason. A key the operator set, even to an explicit null, is never touched. A file that cannot be read
+     * or parsed is never written (logged at SEVERE, as before).
+     * <p>
+     * The server reads this file through Bukkit's {@link YamlConfiguration}, which splits a flat dotted key
+     * ({@code ultipanel.capabilities.logs: false}) into a path, while the document layer keeps it one whole key. So a key
+     * counts as present when either reading holds it, and the edit is first rendered and read the way Bukkit reads it:
+     * if any value Bukkit reads for an existing key would change - a nested section added after a flat dotted key
+     * replaces it - nothing is written, and one WARNING names the file and that key, never a value (PR #611 local Codex
+     * run 2).
      *
      * @param configFile the {@code config.yml} file to migrate
-     * @param logger     where to log a load failure
-     * @return {@code true} if the file was modified
+     * @param logger     where to log a load or write failure
+     * @return {@code true} if the file was written
      */
     private static boolean migrateCapabilitiesConfig(File configFile, Logger logger) {
-        YamlConfiguration config = new YamlConfiguration();
-        // D-08 (04-CONTEXT precedent, AbstractConfigEntity.init()'s technique): parseComments(true)
-        // must be set on THIS instance before load() runs — load() reads the option itself.
-        config.options().parseComments(true);
-        try {
-            config.load(configFile);
-        } catch (Exception e) {
-            logger.log(Level.SEVERE,
-                    "Cannot load config.yml for capability migration: " + e.getMessage(), e);
+        ConfigLoadResult loaded = ConfigDocument.load(configFile.toPath());
+        if (loaded.state() != ConfigLoadResult.State.LOADED) {
+            Exception cause = loaded.cause() != null ? loaded.cause()
+                    : loaded.state() == ConfigLoadResult.State.ABSENT ? new FileNotFoundException(configFile.getPath())
+                    : new ConfigParseException(String.valueOf(loaded.parserMessage()), null);
+            logger.log(Level.SEVERE, "Cannot load config.yml for capability migration; the file is not written: "
+                    + cause.getMessage(), cause);
             return false;
         }
 
-        boolean changed = false;
+        ConfigDocument document = loaded.document();
+        YamlConfiguration server = bukkitReading(configFile, loaded.fingerprint());
+        if (server == null) {
+            return false;
+        }
+        Map<List<String>, Object> missing = new LinkedHashMap<>();
+        Map<List<String>, List<String>> comments = new LinkedHashMap<>();
         for (Capability capability : Capability.values()) {
             if (capability.getConfigKey() == null) {
                 continue; // NONE — never written to config.yml
             }
-            changed |= migrateKeyIfAbsent(config, capability.getConfigPath(),
-                    capability.getDefaultEnabled(), capability.getCommentLines());
+            addIfAbsent(document, server, missing, comments, capability.getConfigPath(), capability.getDefaultEnabled(),
+                    capability.getCommentLines());
         }
-        changed |= migrateKeyIfAbsent(config, "ultipanel.commands.blocklist",
+        addIfAbsent(document, server, missing, comments, "ultipanel.commands.blocklist",
                 DEFAULT_COMMAND_BLOCKLIST, COMMAND_BLOCKLIST_COMMENT);
-        changed |= migrateKeyIfAbsent(config, "ultipanel.files.editable-roots",
+        addIfAbsent(document, server, missing, comments, "ultipanel.files.editable-roots",
                 DEFAULT_EDITABLE_ROOTS, EDITABLE_ROOTS_COMMENT);
-        changed |= migrateKeyIfAbsent(config, "ultipanel.logging.action-log.max-size-bytes",
+        addIfAbsent(document, server, missing, comments, "ultipanel.logging.action-log.max-size-bytes",
                 1_048_576, ACTION_LOG_SIZE_COMMENT);
-        changed |= migrateKeyIfAbsent(config, "ultipanel.logging.action-log.max-files",
+        addIfAbsent(document, server, missing, comments, "ultipanel.logging.action-log.max-files",
                 5, ACTION_LOG_FILES_COMMENT);
+        if (missing.isEmpty()) {
+            return false;
+        }
 
-        if (changed) {
-            try {
-                config.save(configFile);
-            } catch (IOException e) {
-                logger.log(Level.SEVERE,
-                        "Failed to persist capability migration: " + e.getMessage(), e);
+        OwnedPaths.Builder owned = OwnedPaths.builder();
+        for (List<String> path : missing.keySet()) {
+            owned.value(path);
+        }
+        java.util.function.Consumer<ConfigDocument> insert = candidate -> {
+            for (Map.Entry<List<String>, Object> entry : missing.entrySet()) {
+                candidate.set(entry.getKey(), entry.getValue());
+                candidate.setFrameworkComment(entry.getKey(), comments.get(entry.getKey()));
+            }
+        };
+        try {
+            String changed = keyBukkitWouldReadDifferently(configFile, loaded.fingerprint(), server, insert);
+            if (changed != null) {
+                logger.warning("Configuration file " + configFile.getAbsolutePath() + " was not written: inserting the"
+                        + " missing panel keys would change how the server reads '" + changed + "' (a flat dotted key"
+                        + " and a nested section name the same setting). The built-in defaults answer for the missing"
+                        + " keys; the file is unchanged.");
                 return false;
             }
+            OperatorFileWriter.Result result = OperatorFileWriter.write(configFile.toPath(), owned.build(),
+                    loaded.fingerprint(), insert);
+            return result.outcome() == OperatorFileWriter.Outcome.WRITTEN;
+        } catch (IOException | RuntimeException e) {
+            logger.log(Level.SEVERE, "Failed to persist capability migration: " + e.getMessage(), e);
+            return false;
         }
-        return changed;
     }
 
     /**
-     * Sets {@code path} to {@code value} with {@code commentLines} only when it is absent from
-     * {@code config} — never overwrites a value the operator already set (04-CONTEXT D-01).
-     *
-     * @return {@code true} if the key was absent and was written
+     * Records {@code dottedPath} (framework keys, no key contains a dot) as missing when neither the document nor the
+     * server's Bukkit reading of the same bytes holds it (a flat dotted key is present only in the latter).
      */
-    private static boolean migrateKeyIfAbsent(YamlConfiguration config, String path, Object value,
-                                                List<String> commentLines) {
-        if (config.get(path) != null) {
-            return false;
+    private static void addIfAbsent(ConfigDocument document, YamlConfiguration server, Map<List<String>, Object> missing,
+                                    Map<List<String>, List<String>> comments, String dottedPath, Object value,
+                                    List<String> commentLines) {
+        List<String> path = Arrays.asList(dottedPath.split("\\."));
+        if (!document.contains(path) && !server.contains(dottedPath)) {
+            missing.put(path, value);
+            comments.put(path, commentLines);
         }
-        config.set(path, value);
-        config.setComments(path, commentLines);
-        return true;
+    }
+
+    /**
+     * The file as the server reads it - Bukkit's {@link YamlConfiguration} over the same bytes the document was loaded
+     * from - or {@code null} when those bytes cannot be read again unchanged or Bukkit cannot parse them (nothing is
+     * written then; the next start tries again).
+     */
+    private static YamlConfiguration bukkitReading(File configFile, String fingerprint) {
+        String text = textIfUnchanged(configFile, fingerprint);
+        if (text == null) {
+            return null;
+        }
+        YamlConfiguration reading = new YamlConfiguration();
+        try {
+            reading.loadFromString(text);
+        } catch (InvalidConfigurationException | RuntimeException unparseable) {
+            return null;
+        }
+        return reading;
+    }
+
+    /** The file's text when its bytes still have {@code fingerprint}, else {@code null}. */
+    private static String textIfUnchanged(File configFile, String fingerprint) {
+        ConfigLoadResult again = ConfigDocument.load(configFile.toPath());
+        if (again.state() != ConfigLoadResult.State.LOADED || !again.fingerprint().equals(fingerprint)) {
+            return null;
+        }
+        try {
+            return new String(java.nio.file.Files.readAllBytes(configFile.toPath()), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (IOException unreadable) {
+            return null;
+        }
+    }
+
+    /**
+     * Renders {@code insert} on a fresh copy of the file and reads the result the way the server does: the first key
+     * whose value Bukkit would read differently than {@code before} does, or {@code null} when every existing key reads
+     * the same. A file that changed meanwhile, or a rendering Bukkit cannot read, names the whole file.
+     */
+    private static String keyBukkitWouldReadDifferently(File configFile, String fingerprint, YamlConfiguration before,
+                                                        java.util.function.Consumer<ConfigDocument> insert) {
+        ConfigLoadResult fresh = ConfigDocument.load(configFile.toPath());
+        if (fresh.state() != ConfigLoadResult.State.LOADED || !fresh.fingerprint().equals(fingerprint)) {
+            return "the whole file";
+        }
+        ConfigDocument candidate = fresh.document();
+        insert.accept(candidate);
+        YamlConfiguration after = new YamlConfiguration();
+        try {
+            after.loadFromString(candidate.render());
+        } catch (InvalidConfigurationException | RuntimeException unreadable) {
+            return "the whole file";
+        }
+        for (String key : before.getKeys(true)) {
+            Object was = before.get(key);
+            if (!(was instanceof org.bukkit.configuration.ConfigurationSection)
+                    && !java.util.Objects.equals(was, after.get(key))) {
+                return key;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Starts bStats metrics only when its shared file allows it without being written over.
+     * <p>
+     * <b>Why it cannot overwrite operator content</b> (maintainer foundational rule of 2026-10-04: a file an operator
+     * may edit is never overwritten automatically; inventory B3, UltiKits/UltiTools-Reborn#606). The vendored
+     * {@link Metrics} - not edited - saves its defaults over {@code plugins/bStats/config.yml}, a file shared by every
+     * bStats plugin on the server, whenever it cannot read {@code serverUuid}; on a server an unparseable file loads as
+     * empty, so its content would be replaced. This guard reads the file without writing it and constructs
+     * {@code Metrics} only when the file is absent (bStats then creates it) or already holds {@code serverUuid} (bStats
+     * then writes nothing). A file that cannot be read or parsed, or one without {@code serverUuid}, is left
+     * byte-identical: one line names the file and the reason, never a value, and UltiTools' metrics stay off for this
+     * run.
+     *
+     * @param plugin    the plugin bStats reports for; its data folder's parent holds {@code bStats/config.yml}
+     * @param serviceId the bStats service id
+     * @param logger    where the refusal line goes
+     * @return the started metrics, or {@code null} when the shared file was left alone
+     */
+    static Metrics startMetrics(JavaPlugin plugin, int serviceId, Logger logger) {
+        File shared = new File(new File(plugin.getDataFolder().getParentFile(), "bStats"), "config.yml");
+        String refusal = bStatsFileRefusal(shared);
+        if (refusal != null) {
+            logger.warning("bStats metrics are off for this run: " + shared.getPath() + " " + refusal
+                    + "; UltiTools leaves the file as it is.");
+            return null;
+        }
+        return new Metrics(plugin, serviceId);
+    }
+
+    /** Why {@code shared} must not be handed to bStats, or {@code null}; reads only. */
+    private static String bStatsFileRefusal(File shared) {
+        if (!shared.exists()) {
+            return null;
+        }
+        String text;
+        try {
+            text = new String(java.nio.file.Files.readAllBytes(shared.toPath()), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (IOException | RuntimeException unreadable) {
+            return "cannot be read (" + unreadable.getClass().getSimpleName() + ")";
+        }
+        YamlConfiguration config = new YamlConfiguration();
+        try {
+            config.loadFromString(text);
+        } catch (InvalidConfigurationException | RuntimeException unparseable) {
+            return "cannot be parsed";
+        }
+        return config.isSet("serverUuid") ? null : "has no serverUuid";
     }
 
     private void initWebSocketManagers() {
@@ -698,7 +846,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
         getCommandManager().close();
         DataStoreManager.close();
         if (configManager != null) {
-            configManager.saveAll();
+            // Writes nothing: names, once, configuration changes still registered that were never saved (17-65).
+            configManager.reportUnsavedAtStop();
         }
         Bukkit.getServicesManager().unregisterAll(this);
         if (ultiToolsClassLoader != null) {

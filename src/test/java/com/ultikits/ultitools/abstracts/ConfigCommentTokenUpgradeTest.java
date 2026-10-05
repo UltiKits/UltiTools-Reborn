@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,9 +26,13 @@ import com.ultikits.ultitools.annotations.ConfigEntry;
  * UltiKits/UltiTools-Reborn#542, maintainer answer of 2026-09-29 ("rewrite in the current language
  * on every save"): on every framework write, a one-token comment is written in the server's current
  * language - keys already in the file included - and an upgraded server's existing file follows the
- * server's language after one start even when no value changed. Under Follow-up 21, edited writes
- * preserve untargeted content, order, comments and supported style, while layout may normalize.
+ * server's language after one start even when no value changed. Since the maintainer decision of
+ * 2026-10-04 ("what code may write, by file type"), the comment-only write at start-up goes through the
+ * config write gate: every byte outside the rewritten comment lines stays, or nothing is written.
  * A start with nothing semantically changed writes nothing (bytes and modification time unchanged).
+ * Since the maintainer decision of 2026-10-04 ("only the framework's own comments are rewritten", #604) a
+ * comment line is rewritten only when it equals the framework's rendering of the token - in a catalogue the
+ * module's jar ships, in the current language, or the bare token; an operator's comment on a token entry is kept.
  */
 @DisplayName("AbstractConfigEntity - one-token comments follow the server language on an existing file (#542)")
 class ConfigCommentTokenUpgradeTest {
@@ -36,14 +41,20 @@ class ConfigCommentTokenUpgradeTest {
 
     /** "Maximum number of items" in Chinese, as the module's zh catalogue holds it. */
     private static final String ZH_LIMIT = "最大物品数";
-    /** The old hard-coded Chinese comment an older build of the module wrote. */
-    private static final String OLD_ZH_COMMENT = "最大物品数量";
+    /**
+     * The old hard-coded Chinese comment an older build of the module wrote. Moving it into the catalogue kept the
+     * text verbatim in {@code zh} (adoption rule of the module batch), which is what lets the framework recognise it
+     * as its own (#604); a different old text would be kept as the operator's
+     * ({@code ConfigFrameworkCommentOwnershipTest#frameworkCommentEditedByOneWordIsKept}).
+     */
+    private static final String OLD_ZH_COMMENT = ZH_LIMIT;
     private static final String EN_LIMIT = "Maximum number of items";
 
     /**
      * What an older build wrote, then an operator edited: header, values, own comments, a blank line.
-     * Edited writes may normalize this layout, but must preserve values, key order and untargeted
-     * comment text. No-op writes still preserve every byte.
+     * The blank line is a true blank line: a line of spaces would be normalized by the renderer, so under
+     * the 2026-10-04 decision the gate refuses the comment write on such a file
+     * ({@link #whitespaceOnlyBlankLineBlocksTheCommentRewrite}).
      */
     private static final String UPGRADED_FILE = "# Operator header line\n"
             + "\n"
@@ -52,7 +63,7 @@ class ConfigCommentTokenUpgradeTest {
             + "  limit: 25\n"
             + "  # My own note on the name\n"
             + "  name: Custom\n"
-            + "  \n"
+            + "\n"
             + "  # operator note on other\n"
             + "  other: 3\n";
 
@@ -84,6 +95,8 @@ class ConfigCommentTokenUpgradeTest {
         lenient().when(plugin.getConfigFolder()).thenReturn(tempDir.toString());
         lenient().when(plugin.getConfigFile(anyString())).thenAnswer(
                 invocation -> new File(tempDir.toFile(), invocation.<String>getArgument(0)));
+        // The module's jar ships both catalogues (#604: a shipped text is the framework's in every language).
+        lenient().when(plugin.shippedCatalogueTexts("config.demo.limit")).thenReturn(Arrays.asList(EN_LIMIT, ZH_LIMIT));
         languageEnglish();
     }
 
@@ -123,7 +136,7 @@ class ConfigCommentTokenUpgradeTest {
         return configuration;
     }
 
-    // Follow-up 21 permits layout normalization on an edited write, not data/comment loss.
+    // The token comment line is the only line the comment-only write owns.
     private void assertPreserved(String limitComment) throws Exception {
         YamlConfiguration parsed = parse();
         assertThat(parsed.getInt("demo.limit")).isEqualTo(25);
@@ -150,6 +163,22 @@ class ConfigCommentTokenUpgradeTest {
         assertThat(config.name).isEqualTo("Custom");
         assertThat(config.other).isEqualTo(3);
         assertThat(config.isModifiedSinceSnapshot()).as("the shutdown save sees no change").isFalse();
+    }
+
+    @Test
+    @DisplayName("a line of spaces outside the comment: the comment write is refused and the file keeps every byte")
+    void whitespaceOnlyBlankLineBlocksTheCommentRewrite() throws Exception {
+        String spaced = UPGRADED_FILE.replace("Custom\n\n", "Custom\n  \n");
+        writeFile(spaced);
+        long mtime = pinModificationTime();
+
+        UpgradeConfig config = new UpgradeConfig(PATH);
+        config.init(plugin);
+
+        assertThat(readFile()).isEqualTo(spaced);
+        assertThat(file().toFile().lastModified()).isEqualTo(mtime);
+        assertThat(config.limit).isEqualTo(25);
+        assertThat(config.isModifiedSinceSnapshot()).isFalse();
     }
 
     @Test
@@ -186,42 +215,49 @@ class ConfigCommentTokenUpgradeTest {
     }
 
     @Test
-    @DisplayName("an operator's hand-written comment on a token-keyed entry is replaced; one on a literal entry is kept")
-    void handWrittenCommentOnTokenEntryIsReplaced() throws Exception {
-        writeFile("demo:\n  # my own explanation\n  limit: 25\n  # my note\n  name: Custom\n  other: 3\n");
+    @DisplayName("an operator's hand-written comment is kept on a token-keyed entry and on a literal entry (#604)")
+    void handWrittenCommentOnTokenEntryIsKept() throws Exception {
+        String handWritten = "demo:\n  # my own explanation\n  limit: 25\n  # my note\n  name: Custom\n  other: 3\n";
+        writeFile(handWritten);
 
         new UpgradeConfig(PATH).init(plugin);
 
+        assertThat(readFile()).isEqualTo(handWritten);
         YamlConfiguration parsed = parse();
-        assertThat(parsed.getComments("demo.limit")).containsExactly(EN_LIMIT);
+        assertThat(parsed.getComments("demo.limit")).containsExactly("my own explanation");
         assertThat(parsed.getComments("demo.name")).containsExactly("my note");
         assertThat(parsed.getInt("demo.limit")).isEqualTo(25);
     }
 
     @Test
-    @DisplayName("every write carries the resolved comment: an explicit save() and a panel write")
+    @DisplayName("an explicit save() rewrites no comment, and a panel write keeps one the operator edited (#604)")
     void explicitSaveAndPanelWriteCarryTheComment() throws Exception {
         writeFile(UPGRADED_FILE);
         UpgradeConfig config = new UpgradeConfig(PATH);
         config.init(plugin);
 
-        writeFile(readFile().replace("# " + EN_LIMIT, "# tampered in memory"));
+        writeFile(readFile().replace("# " + EN_LIMIT, "# " + ZH_LIMIT));
+        byte[] beforeSave = Files.readAllBytes(file());
         config.save();
-        assertThat(parse().getComments("demo.limit")).containsExactly(EN_LIMIT);
+        // 17-65 save rule (maintainer decision 2026-10-04): a save writes only what the module changed and never a
+        // comment; the framework's line follows the language at the next start or /ul reload.
+        assertThat(Files.readAllBytes(file())).isEqualTo(beforeSave);
+        assertThat(parse().getComments("demo.limit")).containsExactly(ZH_LIMIT);
 
-        writeFile(readFile().replace("# " + EN_LIMIT, "# tampered again"));
+        writeFile(readFile().replace("# " + ZH_LIMIT, "# edited by the operator"));
         JsonObject payload = new JsonObject();
         payload.addProperty("demo.other", 4);
         config.updateProperties(payload);
         YamlConfiguration afterPanel = parse();
-        assertThat(afterPanel.getComments("demo.limit")).containsExactly(EN_LIMIT);
+        assertThat(afterPanel.getComments("demo.limit")).as("the operator's edit is kept")
+                .containsExactly("edited by the operator");
         assertThat(afterPanel.getInt("demo.other")).isEqualTo(4);
         assertThat(afterPanel.getComments("demo.name")).containsExactly("My own note on the name");
     }
     @Test
     void bundledLayoutPreservesContentCommentsAndStyleWhenTokenChanges() throws Exception {
         String text = "\uFEFF# Operator header\r\n\r\ndemo:\r\n"
-                + "    # old token text\r\n    limit: 25 # inline limit\r\n"
+                + "    # {config.demo.limit}\r\n    limit: 25 # inline limit\r\n"
                 + "    # Literal operator note\r\n    name: 'Custom'\r\n    other: 3\r\n"
                 + "extra:\r\n    items:\r\n        - 'quoted item' # inline list\r\n        - second";
         writeFile(text);

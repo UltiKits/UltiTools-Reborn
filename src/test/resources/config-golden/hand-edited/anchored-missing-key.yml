@@ -1,0 +1,4 @@
+# Interval in seconds
+interval: 300
+base: &b {x: 1}
+copy: *b

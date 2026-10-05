@@ -88,6 +88,19 @@ class ConfigThreeWayReloadTest {
         assertThat(entity.entries).doesNotContainKey("remove");
         assertThat(warnings).anySatisfy(text -> assertThat(text).contains("entries.remove", "memory"));
     }
+    /** #596 item 2: a whole field the operator deleted, and the module did not change, binds its declared default. */
+    @Test void missingWholeFieldTheModuleDidNotChangeBindsTheDeclaredDefaultWithoutWriting() throws Exception {
+        write("mine: edited\ntheirs: base\nrate: 1.5\nsecret: original\nentries:\n  keep: base\n  remove: base\n");
+        entity.reload();
+        assertThat(entity.mine).isEqualTo("edited");
+        String deleted = "theirs: base\nrate: 1.5\nsecret: original\nentries:\n  keep: base\n  remove: base\n";
+        write(deleted);
+        entity.reload();
+        assertThat(entity.mine).as("the declared default").isEqualTo("default");
+        assertThat(entity.isModifiedSinceSnapshot()).isFalse();
+        assertThat(warnings).anySatisfy(text -> assertThat(text).contains("'mine'", "declared default"));
+        assertThat(new String(Files.readAllBytes(directory.resolve("reload.yml")), StandardCharsets.UTF_8)).isEqualTo(deleted);
+    }
     @Test void missingWholeFieldRetainsLiveWithDeclaredDefaultBaseline() throws Exception {
         entity.mine = "pending";
         write("theirs: base\nrate: 1.5\nsecret: original\nentries:\n  keep: base\n  remove: base\n");
@@ -96,7 +109,10 @@ class ConfigThreeWayReloadTest {
         assertThat(entity.isModifiedSinceSnapshot()).isTrue();
     }
     @Test void malformedReloadKeepsRunningChangesAndFileProtected() throws Exception {
-        entity.mine = "pending"; write("mine: [broken\n"); entity.reload();
+        // #589: the reload of the broken file throws; the running change and the protection stay.
+        entity.mine = "pending"; write("mine: [broken\n");
+        org.assertj.core.api.Assertions.assertThatThrownBy(entity::reload)
+                .isInstanceOf(com.ultikits.ultitools.exceptions.ConfigurationException.class).hasMessageContaining("reload.yml");
         assertThat(entity.mine).isEqualTo("pending"); assertThat(entity.isLastLoadUnparseable()).isTrue();
         entity.save(); assertThat(new String(Files.readAllBytes(directory.resolve("reload.yml")), StandardCharsets.UTF_8))
                 .isEqualTo("mine: [broken\n");

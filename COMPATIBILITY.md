@@ -12,25 +12,145 @@ point is `com.ultikits.ultitools.config.convert.ConfigConverter<T>`, discovered 
 Third-party modules must rebuild if they used the removed accessor, and register converters for
 unsupported declared field types before configuration initialization.
 
+### The write contract (read this first)
+
+**Configuration an operator wrote is never overwritten automatically** (the maintainer's foundational rule of
+2026-10-04). No framework or module code path may change content an operator wrote in a configuration file unless the
+operator explicitly asked for that change. A value the framework cannot use is surfaced before code relies on it - the
+value is refused with a warning and its declared default runs, or the module or the start is refused - and is never
+"fixed" by rewriting the file. Everything else in this chapter is a consequence of this rule.
+
+What code may write, by file type (the maintainer's table of 2026-10-04):
+
+| File | Code may write | Code never writes |
+|---|---|---|
+| A **shipped** configuration file (a module's `config.yml`, an interest-settings file, `spawn.yml`, the framework's own `config.yml`) | (1) the file itself, the first time, when it does not exist; (2) a declared key the file lacks, and the framework's own comment lines - inserted only, no existing content changed; (3) exactly the item the operator explicitly asked to change - a command (`/setspawn` writes only the location, `/autoreply` only that rule), a panel edit (only the named key), or a change the operator made through the module and the module saves; (4) a value that still equals the shipped factory text byte for byte, re-rendered after a language switch, and a line that is byte for byte unedited legacy shipped text the module removes | a save at server stop, module unload or replacement; a whole-object "incidental" save; a repair of an invalid value; any layout or formatting normalization; the 6.2 split-dotted-key cleanup; a comment the operator wrote |
+| An **operator-created** file (a kit, a menu) | the file, only on the operator's explicit create action (`/kit create`); on an explicit edit, only the edited part (the kit editor writes that kit's items; comments and other keys stay) | anything else |
+
+**One gate, one outcome.** Every write to an operator-editable configuration file goes through one framework write gate
+(`OperatorFileWriter`, internal): the write declares the keys (or the framework's own comment lines) it owns; after
+rendering, every byte outside them must equal the file as read, and the file must still hold the bytes it was read from.
+Otherwise nothing is written: one WARNING names the file, the keys and the reason - for a layout the renderer cannot keep,
+the line number to fix (see "Layouts the write gate cannot keep") - and never a value, and the program keeps its
+in-memory value. A module API call the operator asked for (`saveOperatorChange`, `saveOperatorMapEntry`) throws
+`ConfigWriteRefusedException` instead, so the command can reply that nothing was saved and why; a panel edit gets an
+error reply naming the reason. Configuration data is not moved out of configuration files.
+
+What an operator does about a refusal: read the WARNING, fix the line it names (or, for "the file changed since it was
+read", run `/ul reload` first), and repeat the change; nothing they wrote has been lost.
+
+The public surface of the contract: `AbstractConfigEntity#save()` (only what the module changed, where the file still
+holds what was read), `#saveOperatorChange(String...)` and `#saveOperatorMapEntry(String, String...)` (exactly what an
+operator's command names), `com.ultikits.ultitools.config.OperatorFiles` (module-managed operator files such as kits), and
+`com.ultikits.ultitools.config.ConfigWriteRefusedException`. Outside YAML, a panel edit of `server.properties` replaces the
+value text of the one line it names, and the framework leaves the shared `plugins/bStats/config.yml` byte for byte unless
+it is absent (see "Behavioral changes that need no migration period").
+
+**Official language files are framework-owned** - the one exception to the rule (maintainer decision of 2026-10-04). The
+`lang/` files the framework and modules extract may be replaced on upgrade, with a backup and a log line; editing one in
+place is not a supported way to customise text. Customise by copying an official file under a new name, editing the copy
+and selecting it in the main configuration; the copy is operator-owned and never written. The custom-file selection and
+its fallback for missing keys are completed in this release
+([#608](https://github.com/UltiKits/UltiTools-Reborn/issues/608)). Framework-owned files besides these (the
+`.ultitools-backup-<hex>` backups, `.ultitools-resource-hashes.json`, the credential store, module JARs and transaction
+records) are not operator configuration.
+
+中文补充（写入约定）：**服主写的配置绝不被自动覆盖**（维护者 2026-10-04 的底层规则）。框架或模块的任何代码都不能改动服主在配置文件里写的内容，除非服主明确要求这一改动；框架用不了的值在代码使用前就挑明（警告并拒绝该值、使用声明默认值，或拒绝模块、拒绝启动），绝不靠改写文件“修好”。按文件类型（维护者 2026-10-04 批准的表）：**出厂配置文件**（主配置、利息设置、`spawn.yml`、框架自己的 `config.yml` 等）代码只能（1）首次创建不存在的文件；（2）补入文件缺少的声明键和框架自己的注释——只插入，不改已有内容；（3）只写服主明确要求改的那一项（命令、面板、GUI，或服主通过模块做出、由模块保存的改动）；（4）语言切换后重新渲染仍与出厂文字逐字节相同的值，以及删除逐字节未改过的旧版出厂文字行。除此之外一律不写：不在关服、卸载或替换时保存，不做整对象的顺带保存，不修复无效值，不规整排版，不清理 6.2 拆开的含点键，不改服主写的注释。**服主自己创建的文件**（礼包、菜单）只在服主明确创建时创建、明确编辑时只写编辑的部分。所有写入经同一个写入闸门：每次写入声明自己拥有的键（或框架自己的注释行），渲染后其余每个字节必须与读取时相同，且文件仍是读取时的内容；否则不写，一条 WARNING 列出文件、键和原因（排版无法保留时给出要改的行号），从不列值，内存中的值照常使用。服主命令调用的 `saveOperatorChange`/`saveOperatorMapEntry` 被拒绝时抛 `ConfigWriteRefusedException`，命令据此回复“未保存”及原因；面板编辑收到注明原因的错误。服主看到拒绝时：按警告改掉它指出的那一行（“文件在读取后已被改动”则先 `/ul reload`），再做一次改动即可，所写内容没有丢失。**官方语言文件归框架所有**，是唯一例外（维护者 2026-10-04 决定）：升级时可能被替换（保留备份并记日志），直接改官方文件不是受支持的定制方式；要定制，请复制官方文件、改名、编辑副本并在主配置中选择它，该副本归服主所有、永不被写入（自定义文件的选择与缺失键的回退在本版本内完成，#608）。
+
 ### Rendering and save fallback
 
 The internal config storage layer renders the whole YAML document through SnakeYAML, preserving content, comment text and key
-order. Its existing line-terminator, BOM, final-newline and supported indentation-style rules remain in effect. Operator layout
-may be normalized: aligned inline comments, flow spacing, extra spaces after a colon, document markers, mixed indentation and
-trailing spaces are not byte-preservation guarantees. Changed anchored documents expand aliases and merge keys from their plain
-values while retaining comments on surviving keys. Comments on individual list items are kept only while the list keeps its length — the same as Bukkit, which keeps none. The storage API signatures are unchanged.
+order. Its existing line-terminator, BOM, final-newline and supported indentation-style rules remain in effect.
+
+As of 6.3.0 every automatic write to a module configuration file - creating a file that does not exist, inserting a declared
+key the file lacks, rewriting the framework's own token comments at start-up or reload, and the registration batch flush - goes
+through one write gate. Each write declares the keys it owns; after rendering, every line outside them must be byte-identical
+to the file as read (line terminators, BOM and final line break included), and the file must still hold the bytes it was read
+from. Otherwise nothing is written, one warning names the file, the keys and the reason (never a value), and the declared
+defaults run in memory. These writes never normalize layout: on a hand-aligned file a missing key stays missing, with a warning
+at each start, until the operator adds it. A file using anchors, aliases or merge keys is never written automatically and is
+named once per server run. A file the framework creates is created exclusively and never replaces a file that appeared
+meanwhile. The residual window between the gate's last read and the replacement cannot be closed between an editor and the JVM.
+
+A module's explicit save, an operator change written through `saveOperatorChange`/`saveOperatorMapEntry`, and a panel edit
+go through the same gate, each owning only the settings or map entries it writes (see "Declared types, whole map keys and
+persistence", [#599](https://github.com/UltiKits/UltiTools-Reborn/issues/599),
+[#600](https://github.com/UltiKits/UltiTools-Reborn/issues/600)). No write normalizes layout or expands anchors any more: a
+panel edit on a file the gate refuses replies with an error naming the reason, and the file keeps its bytes. Comments on
+individual list items are kept only while the list keeps its length — the same as Bukkit, which keeps none. The storage API
+signatures are unchanged.
+
+#### Layouts the write gate cannot keep
+
+The renderer writes a document back in one canonical layout. Wherever a file's layout differs from it, the gate cannot
+keep those bytes, so **every** gated write to that file is refused - a first-start insert, a comment rewrite, a save, an
+operator change or a panel edit - whichever setting it changes. Refusing is deliberate: the rule forbids normalizing an
+operator's layout to make a write pass (orchestrator decision of 2026-10-05 under the maintainer's delegation). The file
+keeps its bytes, the declared or in-memory values run, and the warning names the keys and the reason with the line to fix:
+`the file's layout outside the keys this write owns would change (line N)`, or, for a key sharing its line with another,
+`a key this write owns shares line N with a key it does not own`. Measured layouts that refuse (each pinned by a test,
+`OperatorFileWriterLayoutRefusalListTest`):
+
+- a line holding only spaces, and a file holding only spaces;
+- a trailing space after a value or after a section key (`interval: 300 `);
+- an inline comment aligned with several spaces (`enabled: true    # note`; one space before `#` is kept);
+- more than one space after a colon (`key:  value`), and spaces inside flow brackets (`worlds: [ world ]`);
+- a document start marker `---` or end marker `...`;
+- a block scalar value (`|` or `>`) followed by a blank line;
+- in a file without a final line break, a last value written as a block scalar with `|`, `|+` or `>`: at the end of
+  such a file its value has no final line break, so it is written back as `|-` or `>-` (a block scalar anywhere else
+  in such a file, or a last one written `|-` or `>-`, is kept - except that a write which sets the file's last value
+  to text ending in a line break is refused, naming that line; no value is ever changed);
+- a comment that closes a section after a blank line, indented deeper than the key that follows it, and any comment
+  indented deeper than the key below it (including in a comment-only file);
+- two indentation widths in one file (two spaces in one section, four in another);
+- mixed line endings (CRLF on some lines, LF on others);
+- a plain value continued onto the next line, a tab inside a value, an explicit `? key`, an explicit tag (`!!str`);
+- a file holding only a byte-order mark (an emptied file saved as UTF-8 with BOM; the reason names the mark).
+
+Kept byte for byte (a write elsewhere goes through): one space before an inline comment, a block scalar without a blank
+line after it (including a comment line right after it, which is read as the comment of the key or list item below it,
+exactly as after a plain value - [#592](https://github.com/UltiKits/UltiTools-Reborn/issues/592); before the fix SnakeYAML's
+reading made every later write to such a file refuse, which an operator reached by deleting one of eleven UltiMail
+settings to reset it), flow maps and flow lists without inner spaces, quoted values, consistent four-space indentation, list
+items at the key's column, CRLF or LF throughout, a missing final line break (also in a file holding block scalars, apart from the last-value case
+above), a byte-order mark, `#comment` without a
+space, several blank lines, hexadecimal numbers, `~` and empty values. A file using anchors, aliases or merge keys is
+refused as a whole (above), not by line.
+
+Measured frequency (the real gate, inserting a key): none of the 32 YAML files shipped by the framework and the
+fifteen modules refuses (a whitespace-only line in two official language files, which are framework-owned and not written
+through the gate, is the only hit), and none of 3,710 configuration YAML files under `plugins/UltiTools/` on the
+maintainer's test servers refuses. The one shipped file known to refuse is the framework `config.yml` of 6.0.0 and 6.0.6
+(see the framework `config.yml` entry under "Behavioral changes that need no migration period"). Fixing the named line -
+removing the trailing space, the extra blank line or the alignment - lets the next write through.
+
+A 0-byte file, a file of blank lines only, and a file holding only comments at the start of their lines (optionally after
+blank lines) is an empty document to the gate: start-up inserts the declared keys after the existing bytes (there is no
+other byte to keep), and an operator change or a panel edit inserts the setting it names; a save never inserts. A file of
+spaces, a comment-only file with an indented comment and a BOM-only file are refused as layouts (above), with defaults in
+memory and the module loaded; a file holding only a tab, `---` or `...` cannot be parsed and is protected as an
+unparseable file (never written). So is a file in which a block scalar is followed by a comment line indented above
+column 0, a blank line and a second comment line: SnakeYAML 2.2 throws inside its composer on that layout
+([#617](https://github.com/UltiKits/UltiTools-Reborn/issues/617), open). An operator change or a panel edit of a file deleted since it was read creates the file,
+exclusively, holding only the named settings with their comments. An unchecked failure inside the gate at start-up never
+refuses the module: one warning names the file and the failure's class, and the declared defaults run in memory.
 
 Saving first attempts a forced same-directory temporary file and atomic replacement. Only an unsupported atomic move, EBUSY,
-EXDEV, or a permission/read-only refusal to create the temporary file allows the narrow fallback: exclusively create `<file>.bak`,
-copy and force the existing target's bytes, then overwrite and force the existing target in place. If a backup already exists,
-it is refreshed from the current target through a forced same-directory temporary and atomic replacement before the target is
-opened. A backup creation/write/force or refresh rename failure refuses the save before the target is touched and preserves the
-previous backup. No old-backup restoration or validation of the current target is implied by this refresh. Other staging or move
-failures refuse the save. A fallback attempt logs one warning identifying the target, backup, cause and outcome. Symbolic links
-remain links, with the backup beside the resolved target.
+EXDEV, or a permission/read-only refusal to create the temporary file allows the narrow fallback: exclusively create a backup
+named `<file name>.ultitools-backup-<16 lower-case hex>`, copy and force the existing target's bytes, then overwrite and force the
+existing target in place. If this server run already wrote such a backup for the same file and it still holds exactly the bytes
+written, it is refreshed from the current target through a forced same-directory temporary and atomic replacement before the
+target is opened. A backup creation/write/force or refresh rename failure refuses the save before the target is touched and
+preserves the previous backup. No old-backup restoration or validation of the current target is implied by this refresh. Other
+staging or move failures refuse the save. A fallback attempt logs one warning identifying the target, backup, cause and outcome.
+Symbolic links remain links, with the backup beside the resolved target. The writer reads, writes or deletes no other name: an
+operator's own `<file>.bak` (the name the fallback used before 6.3.0's #601) is never touched.
 
 After an in-place write begins, a failure may leave a partial target, but its complete forced backup remains. That backup is
-removed only after the next successful strict UTF-8 storage load; unreadable or unparseable files keep it. Backup cleanup is best
+removed only after the next successful strict UTF-8 storage load, and only while its bytes still match what the writer recorded;
+unreadable or unparseable files keep it. A file of the backup pattern that this server run did not write, or whose bytes changed
+after it was written, is kept and named once at INFO; delete it yourself once it is no longer needed. Backup cleanup is best
 effort and cannot turn a successful load into a failure. No automatic restoration policy is introduced.
 
 ### Declared types, whole map keys and persistence
@@ -39,9 +159,14 @@ effort and cannot turn a successful load into a failure. No automatic restoratio
 explicit saves and panel updates. Typed collections resolve their full inherited generic types:
 convertible values bind, invalid collection/map elements are skipped with a located warning, and an
 invalid field value falls back to its initially declared default. Invalid reload values use that
-default too; a missing reload key instead retains its live field and is not added to the file.
-Warnings name the file, key and failed position/type; secret-shaped values and nested credentials
-are redacted. Unsupported declared types fail preflight before the file is read or created; register
+default too. A key missing on reload binds its declared default - with one warning naming the key when the previous load
+still found it, so an operator who deletes a key to reset it is told - unless the module changed that setting since the
+last load or save, which keeps the module's value; the file is not changed either way, and
+no later save re-adds the key ([#596](https://github.com/UltiKits/UltiTools-Reborn/issues/596)).
+Warnings name the file, key and failed position/type and, as of 6.3.0 (#590), the converter's own
+reason (the message it gave `ConversionException`, without the location prefix) as `(reason: ...)`;
+secret-shaped values and nested credentials are redacted, the reason with them, and a multi-line
+reason is kept on one log line. Unsupported declared types fail preflight before the file is read or created; register
 `@ConfigConverterFor` or declare a supported plain-data shape. The built-in Bukkit serialization
 fallback requires a registered alias; registered custom converters keep ownership of their types.
 For every value `x` of the declared type whose collections and arrays contain no null element,
@@ -55,15 +180,34 @@ normalization is stable: `fromPlain(toPlain(fromPlain(q)))` equals `fromPlain(q)
 (number to String, numeric text to int/float, `"false"` to boolean and duplicate elements to a Set)
 remain unchanged. 6.2's default parser stored every list element as text, so a 6.2-saved
 `List<Integer>` reads `- '60'`; 6.3.0 binds it as the number 60 and writes `- 60` the next time
-that file is saved by its module or a panel edit. Loading, reloading and the shutdown check never
-rewrite such a file on their own. Equality is semantic value comparison, not object identity; numeric plain values
+its module changes that setting and saves it, or a panel edit sets it. Loading, reloading, a save that
+did not change that setting and server stop never rewrite such a file on their own. Equality is semantic value comparison, not object identity; numeric plain values
 compare by value. Reload merges and panel leaf edits rely on forward equality. A converter that adds
 a value during reading without undoing that change during writing violates this contract.
 
 Whole map keys, including `g.m`, `o.O` and `wave.`, are supported as of 6.3.0.
 `@ConfigEntry.path` still splits at every dot: `chat.aliases` selects nested settings, whereas a
 key `o.O` inside the bound map is one whole key. These are different path conventions. Legacy 6.2 files in which Bukkit
-split a dotted key into nested mappings are read as they are, never automatically merged or renamed.
+split a dotted key into nested mappings are read as they are, never automatically merged or renamed, and a save never removes
+such an entry: it stays until the operator removes it (maintainer decision of 2026-10-04).
+
+A declared setting written as a flat dotted key is that setting, as of 6.3.0 (#612). When a module declares
+`@ConfigEntry(path = "features.chat")` and the file holds `features.chat: false` instead of `features:` / `chat: false`,
+the module binds `false`, as 6.2 did through Bukkit; the same holds for any split of the path's dots (`a.b:` / `c: 1`
+for `a.b.c`). The framework never adds a nested copy of such a setting: a missing-key insert, a module save, an
+operator command (`saveOperatorChange`, `saveOperatorMapEntry`) and a panel edit write the setting on the line that
+holds it, through the write gate, and the panel shows it once under its setting path. `@ConditionalOnConfig` now reads
+its key with the same document reader and the same rule instead of Bukkit's `YamlConfiguration`, so it reads the value
+the module binds, before and after a start-up insert; only a boolean value counts, as before. `isPresentInFile` reads a
+path the same way (a flat dotted key counts as present). A setting written in two forms in one file, such as
+`features.chat: false` and `features:` / `chat: true`, is refused before module code runs: the module does not load
+(a reload is refused and keeps the running values), and the message says the setting is written in two forms and names
+the file and the setting path, never a value. The same holds for a path `@ConditionalOnConfig` reads that no config entity
+declares: the module's component scan is refused.
+Two forms holding the same value are refused too; measured on 3,710 live configuration files, none holds a setting
+twice, and accepting equal copies would let a later write change one copy and refuse the module at the next start.
+Delete one of the two lines and restart. This applies to declared setting paths only: keys inside a map value keep
+their whole-key meaning (`o.O` above).
 For a `Map<String, String>` the wrongly shaped nested value is skipped with a warning.
 Explicit `null` is stored and binds to reference fields (primitive null is a mismatch). UUIDs, enums,
 sets and registered Bukkit values use converter plain output, not Java class tags. A Bukkit value
@@ -78,29 +222,92 @@ runs before any missing-key or panel persistence. Snapshots track successful eff
 separately from the raw document and byte fingerprint. Reordering a map is dirty, but an order-only
 save acknowledges its new effective order without changing operator file order, comments or bytes.
 
-An explicit save compares its candidates with the current disk document, not only the saved
-baseline, so it may replace an operator's changed value even when the entity was clean. Semantic
-no-op saves invoke no writer and preserve bytes and modification time. Edited saves use the full
-emitter described above, retaining untargeted data, key order and comment text subject to the list-item
-length limit above, while allowing layout normalization. A failed write never acknowledges the pending effective values as saved.
+As of 6.3.0 a module's `save()` writes only what the module changed in memory since the last load or save, and only
+where the file still holds what it was read with ([#599](https://github.com/UltiKits/UltiTools-Reborn/issues/599);
+maintainer decision of 2026-10-04, "what code may write, by file type"). A setting is written when all three hold: the
+module changed it; the file still holds at that key exactly the value the framework last read or wrote there; and that
+value is the one the module started from - it converts, without a conversion warning, to the setting's value as last loaded
+or saved. A setting declared as a `Map` is written entry by entry, following the declared map types into nested maps: only
+the entries the module added, changed or removed are set or removed (a map that is empty, or that the module empties, is
+written as a whole, because its key line changes with its first or last entry). Any other value - a list, a
+`ConfigurationSerializable` such as a Bukkit `Location` or `Vector`, the value of a typed map entry that is not itself a map -
+is one value, written whole or not at all, so the file never holds a value mixed from the module's and the operator's. A
+setting declared as `Map<String, Object>` or as a raw `Map` is split one level only: a plain nested map below it is one value.
+The same rule decides what is one value for the reload merge (a conflict over a composite value or a list takes the file's
+whole value and names the key only), for a panel edit inside a composite value (the whole value is the unit written - the value the
+framework last read with that field changed - and only while the file still holds exactly that whole value at write time;
+otherwise the edit is refused naming the setting, "the file changed since it was read; reload first", and nothing is
+written), and for `saveOperatorMapEntry` (map keys that reach inside an entry that is not a map throw `IllegalArgumentException`
+and nothing is written). A save never inserts a key the file lacks, never rewrites a comment and never removes a
+map entry the module did not remove. So a value the operator edited on disk since it was read, a key the operator deleted, a
+value or list element the framework could not use (`interval: 3O0`, `[60, 30, 10, abc]`) and a 6.2 split map entry are
+never written over by a save, whether or not the module changed that setting
+([#596](https://github.com/UltiKits/UltiTools-Reborn/issues/596)). A change that is not written stays in memory, and one
+warning per save names the file and those keys, never values; a key the write gate refuses is named in the gate's warning
+instead, with its reason. The write goes through the write gate above, so every other line of the file stays byte for byte,
+or nothing is written. "The file still holds what was read" compares the text the framework last read or wrote: an
+operator edit saved to disk without `/ul reload` - even one that keeps the value, such as `y: 64` changed to `y: 64.0` -
+makes a later module change of that setting not written (named in the warning) until a reload reads the file again;
+nothing is lost, and the module's value stays in memory. With nothing to write the file is not touched (bytes and modification time stay). A failed write
+never acknowledges the pending effective values as saved. Use `save()` for a change the operator asked for through the
+module, or for shipped text the module re-renders after a language switch. Before this change an explicit save compared
+its values with the file and replaced an operator's changed value with a warning (#527); that is removed in 6.3.0 without
+a migration period, by the maintainer's rule that operator-written configuration is never overwritten automatically.
+
+For a command the operator runs to change exactly one thing, two methods are new in 6.3.0 (additive):
+`AbstractConfigEntity#saveOperatorChange(String...)` writes exactly the named settings (`/setspawn` names the six
+`spawn.location.*` entries), and `#saveOperatorMapEntry(String, String...)` exactly one entry of a setting declared as a
+map (`/autoreply` names one rule; the entry is inserted when the file lacks it and removed when the module's map no longer
+holds it; each map key is one whole key, so `play.example` is a single key). The operator's request is their consent: the
+module's value replaces what the file holds at the named keys, including a value the operator edited there by hand; a
+named setting the file lacks is inserted with its comment. Nothing else is written - not even another setting the module
+changed - and the write goes through the write gate owning only those keys. Naming a setting declared as a map with
+`saveOperatorChange` writes the whole map and drops entries the operator added by hand; use `saveOperatorMapEntry` for a
+command that changes one entry. A refusal (a file that cannot be read or
+parsed, uses anchors, has a layout the write cannot keep byte for byte, or changed while the write was being prepared)
+throws the new `com.ultikits.ultitools.config.ConfigWriteRefusedException`, an `IOException` whose message and
+`getReason()` name the reason without any value; the file keeps its bytes and the in-memory value stays, unsaved. A path
+that is not a declared entry, or a map-entry call on a setting not declared as a map, throws `IllegalArgumentException`
+and writes nothing. Both run under the entity monitor and must be called on the server thread.
 
 Unreadable, unparseable and non-UTF-8 files are protected on every entity write path. Initial load
-keeps declared defaults; failed reload keeps running fields. One SEVERE names the file and safe cause.
+keeps declared defaults and logs one SEVERE naming the file and safe cause. As of 6.3.0 (#589) a
+failed reload keeps running fields and the file unchanged and throws `ConfigurationException`
+(`CONFIG_LOAD_FAILED` for an unreadable file, `CONFIG_PARSE_FAILED` for one that does not parse)
+naming the file and the same safe cause, instead of logging and returning normally; the entity logs
+nothing itself, because its caller reports it: `ConfigManager#reloadConfigs` lets it through, the
+module's reload logs one SEVERE line naming the module and the cause, `/ul reload <module>` replies
+that the module failed to reload, and a full `/ul reload` names the module among its failures. A
+module that calls `reload()` itself and catches only `IOException` now sees this unchecked
+exception propagate; catch `ConfigurationException` to report it in the module's own reply.
 Explicit save does not clear protection; only a later successful load permits writes again.
 Parser diagnostics expose only numeric line/column metadata, never source snippets or scalar values.
 
-Exactly one `{key}` annotation comment (surrounding whitespace ignored) is framework-owned. Every
-load and write refreshes existing token comments from the module catalogue in the current language;
-operator block comments on token entries are replaced, while literal-entry comments are kept.
+An annotation comment that is exactly one `{key}` token (surrounding whitespace ignored) is resolved
+from the module catalogue. Start-up and reload rewrite, in the current language, only the comment
+lines above a token entry that the framework can identify as its own (a save, an operator change and a panel edit rewrite no
+comment; a key one of them inserts gets its comment): the entry's comment, as a whole
+or as its trailing run of lines, equal byte for byte to what the framework writes (the entry's
+column, `#`, a space and the text) for the token's text in a catalogue the module's jar ships, for the text the
+module resolves now, or for the bare token. Equality is the only test; the same text without the space
+after `#` or at another column is the operator's. Every other comment line - a note an operator wrote above a token entry, a framework comment the
+operator edited, a literal-entry comment - is kept byte for byte, permanently (maintainer decision of
+2026-10-04, [#604](https://github.com/UltiKits/UltiTools-Reborn/issues/604); supersedes the earlier
+6.3.0 rule that an operator's comment on a token entry is replaced). A framework comment whose text no
+shipped catalogue holds any more - an older module version's wording - is recognised only when the module
+lists that text in the new `@ConfigEntry(previousComments = {...})` attribute (additive, default empty):
+a comment equal to a listed text, in the same exact written form, is replaced by the current catalogue
+text and follows the language from then on (maintainer decision of 2026-10-04); otherwise it is kept as
+it is. A token entry without any comment gets the framework's.
 Catalogue lookup failure keeps the literal token and warns once per entry per load. Comment text
 uses the document's YAML line-break/control-character sanitation, including the panel payload.
-A failed comment-only rewrite does not fail load or discard bound values: the entity stays dirty
-until persistence succeeds. No-op comparison includes these authoritative comments.
+A failed comment-only rewrite does not fail load or discard bound values, logs one warning and marks
+nothing for a later save. No-op comparison includes these comments.
 
-A successful entity write that replaces an operator-edited value warns once, naming the file and
-only the keys actually replaced, never values. Explicit saves, partial panel writes and shutdown
-share this reporting. Comment/layout-only edits, equal candidate values and failed writes do not
-claim an overwrite. The check and write run under the same entity monitor.
+A panel edit replaces an operator-edited value at exactly the keys it names - the operator's consent - and warns about
+nothing; before 6.3.0's [#600](https://github.com/UltiKits/UltiTools-Reborn/issues/600) it warned once naming the replaced
+keys (#527). A save never replaces an operator-edited value (above). Comment/layout-only edits, equal candidate values and
+failed writes report nothing. The check and write run under the same entity monitor.
 
 ### Removed mutable configuration accessor
 
@@ -123,19 +330,21 @@ As of 6.3.0, package/directory configuration registration buffers initialization
 entity binds and validates. A refused batch creates no file and changes no existing file, including
 missing-key and language-token comment rewrites. Once accepted, files persist independently; an I/O
 failure preserves earlier successful files and protects the failed entity until a successful reload.
+The flush writes through the write gate (see "Rendering and save fallback") and only while the file still
+holds the bytes read at registration; an edit made in between is kept, with one warning.
 Standalone registration still writes immediately. Framework-internal initialization bridges are not
 a module transaction API.
 
 ### Superseded-copy configuration ordering
 
-As of 6.3.0, before framework construction of an identifiable newer module copy, the framework
-reads its own JAR plugin.yml using the constructor's main/version defaults and existing version
-comparator, and saves the loaded old copy's dirty configurations in sorted file-path order.
-A failed or protected old save refuses incoming construction and retains the old active copy.
-The old copy is not unloaded before incoming activation succeeds. If identity is unavailable
-before construction, or an already-constructed instance is supplied, there is no late old save:
-successful supersede warns once with the dropped file/entry keys (never values), then releases
-old configuration entities. Failed incoming construction, compatibility, assembly or activation
+As of 6.3.0 no configuration of a loaded older module copy is saved before, during or after a newer copy replaces it
+(maintainer decision of 2026-10-04, "what code may write, by file type": no replacement save of whole entities, because a
+module update is not an operator's request to write). The newer copy is constructed and reads the files as they are; the old
+copy's unsaved changes or a protected (unreadable or unparseable) old file no longer refuse the replacement. The old copy is
+not unloaded before incoming activation succeeds; once it does, one warning names the dropped file/entry keys (never values)
+and the old configuration entities are released. This replaces the earlier 6.3.0 behaviour of saving an identifiable old
+copy's changed configurations before construction (and refusing construction when that save failed); its "no save, warn
+naming the keys" fallback is now the only path. Failed incoming construction, compatibility, assembly or activation
 releases only refused incoming configuration owners; existing owners remain registered.
 No constructor deferral, early unload or public storage/transaction API is introduced.
 
@@ -155,16 +364,25 @@ persistence uses its existing monitor. No separate manager lock or blocking sche
 Async registry callers must schedule on the server thread. Existing public method signatures and
 panel response fields/types are unchanged.
 
-### Configuration release and shutdown save
+### Configuration release; nothing written at stop
 
 As of 6.3.0, module unload releases that module instance's configuration registry entry even
-when its unload hook or context close throws. Later shutdown saves neither retain nor write
-unloaded entities. PluginManager.close saves all registered dirty configurations before unloading
-any module. After each module's unload hook and container `@PreDestroy` callbacks, shutdown saves
-that same owner's dirty configurations again before releasing the owner, even when cleanup throws.
-The final save retains protected-file refusal and per-entity failure isolation. Normal runtime unload itself does
-not save; superseded-copy preparation follows the separate preconstruction rule. Public existing
-signatures are unchanged; no module migration is required.
+when its unload hook or context close throws. **Nothing writes configuration at server stop, at
+module unload or uninstall, or at module replacement** (maintainer decision of 2026-10-04: no
+shutdown or replacement save of whole entities; a lifecycle event is not an operator's request to
+write). At stop, and at a normal unload or uninstall, after each module's unload hook and container
+`@PreDestroy` callbacks and just before its release, every configuration of that module holding module
+changes that were never saved is named in one WARNING - the file and the changed keys, never values -
+and the changes are dropped; the framework's final step at stop names, the same way, anything still
+registered. A superseded copy is named once by the replacement's own drop warning instead. A configuration whose file
+could not be read or parsed at its last load is named once instead, as before. An operator's edit made
+while the server runs is never touched at stop. A module persists a change when it makes it, with
+`save()` (only what the module changed, where the file still holds what was read) or
+`saveOperatorChange`/`saveOperatorMapEntry` (exactly what an operator's command names).
+`ConfigManager#saveAll()` keeps its signature, writes nothing, reports as above and is
+`@Deprecated(since = "6.3.0")`. Public existing signatures are unchanged. This removes the earlier
+6.3.0 shutdown saves (before unload and again per module after its callbacks) without a migration
+period; see "Behavioral changes that need no migration period".
 
 ### Configuration init and reload thread contract
 
@@ -179,10 +397,16 @@ are unchanged; async third-party callers must schedule their reload on the serve
 As of 6.3.0, reload compares the last effective disk baseline, current serialized fields, and
 incoming disk values. Memory-only changes survive and stay dirty; disk-only changes are adopted.
 Maps merge recursively by whole keys; lists and scalars are atomic. Conflicts take the file's value
-and warn with the located key and discarded value, redacting secret-shaped values. Absent map keys
-and explicit null differ. Missing whole declared fields retain their live values with the inherited
-declared-default baseline. This planner-selected file-wins policy can be overturned by the maintainer.
-Unreadable/unparseable reloads keep live values and protect the file as before.
+and warn with the located key and, for a scalar, the discarded value, redacting secret-shaped values; a conflict over a list
+or a composite value names the key only. Absent map keys
+and explicit null differ. A whole declared field missing from the file binds its declared default with one warning
+when the module had not changed it, and keeps its live value when the module had (both with the declared-default
+baseline); the file is not written. This planner-selected file-wins policy can be overturned by the maintainer.
+Unreadable/unparseable reloads keep live values and protect the file as before, and throw
+`ConfigurationException` naming the file and the safe cause (#589).
+After a module's language is rebuilt in the reload steps, and before its own reload hook, the framework rewrites
+only its own comment lines of that module's configurations in the new language, through the write gate over a fresh
+read; no value, key or other comment line is written ([#594](https://github.com/UltiKits/UltiTools-Reborn/issues/594)).
 
 ### Panel edits inside map entries
 
@@ -195,13 +419,29 @@ silently ignored. Leaf edits preserve unrelated pending in-memory siblings and t
 and preserve independently edited disk siblings without acknowledging them. Full declared-field
 conversion and validation still run: the live field is serialized, only targeted plain leaves are
 patched, and the registry binds that candidate once. The round-trip contract preserves untouched
-bound siblings without any type-specific map/object merging. Only targeted leaves are persisted.
+bound siblings without any type-specific map/object merging. Only targeted leaves are persisted, through the write gate
+owning exactly those leaves (a map that is empty, or that the edit empties, is owned whole).
 The existing `config_update_response` shape is unchanged.
+
+A panel edit of one field inside a composite value (a Bukkit `Vector` or `Location`, also as a map entry) writes that whole
+value exactly as the file held it with only the edited field changed, so the other fields keep the bytes the operator wrote
+(`y: 64` and `pitch: 0` stay, never `64.0`). A whole number - sent by the panel, or already in another field of the value in
+the file - is widened to a floating-point number for the conversion where the module's own value holds one (Bukkit's `Vector`
+does not widen by itself), and the edited field is written in that type (`7` is written as `7.0`), so the file the edit leaves
+behind loads ([#609](https://github.com/UltiKits/UltiTools-Reborn/issues/609)). A whole number in the file in a `Vector` or
+`BlockVector` coordinate (`y: 64`) now loads as that number: Bukkit's `Vector` reads its coordinates as `Double` only, so before
+6.3.0 such a value failed with a SEVERE stack trace and the module used the declared default; the framework now widens `x`, `y`
+and `z` of a `Vector` in memory only - the file keeps `y: 64`, an unchanged save writes nothing, and no other type is widened.
+An edit below a map group the module removed in memory and has not
+saved is refused, naming the key with "not found in memory".
 
 ### Multi-file panel persistence
 
 As of 6.3.0, `ConfigManager#loadFromJson(String)` validates every touched configuration, stages
-all changed files, and only then replaces them. Entity baselines and raw acknowledgments advance
+all changed files through the write gate, and only then replaces them. Each file is replaced only while it still holds
+exactly the bytes it was staged against, checked again immediately before its move: a file an operator saved in between
+refuses the whole batch with `ConfigWriteRefusedException` naming that file, the operator's save is kept, and the files
+already replaced are restored to exactly the bytes they were verified against. Entity baselines and raw acknowledgments advance
 after every commit succeeds. An in-process staging/replacement refusal restores attempted targets
 and the complete prior entity state, removes staged temporaries, and rethrows the original error.
 Recovery errors are attached as suppressed exceptions; persistently unavailable storage can prevent
@@ -209,6 +449,19 @@ restoration and is not falsely reported as a successful rollback. Semantic no-op
 This is not a crash-safe multi-file transaction: a JVM crash between moves remains deferred to #545.
 The panel message shape and public `loadFromJson` signatures are unchanged. Internal staged-entity
 coordination bridges are not a module transaction API.
+
+### Writing operator files a module manages
+
+As of 6.3.0, `com.ultikits.ultitools.config.OperatorFiles` (additive) is the way a module writes a YAML file it
+manages on an operator's behalf - a kit file, a menu file - on an explicit operator edit (maintainer decision of
+2026-10-04: such a file gets only the edited part; comments and other keys are kept). `OperatorFiles.read(File)`
+returns the file's text (strict UTF-8) and the SHA-256 of its bytes; `OperatorFiles.write(Snapshot, Map<List<String>,
+Object>)` writes only the named whole keys (a key containing `.` is one key), through the configuration write gate,
+only while the file still holds the snapshot's bytes, and returns `WRITTEN`, `UNCHANGED`, `FILE_CHANGED` or `REFUSED`
+(a layout the gate cannot keep byte for byte, or anchors, with one WARNING naming the file, the keys and the reason).
+Values must be plain data - serialize an `ItemStack` first; anything else throws `IllegalArgumentException` before
+the file is touched. It never creates, deletes or renames a file, is not a general file API (UltiKits/UltiTools-Reborn#545
+stays a later feature), and is not for `@ConfigEntity` files, which keep their own save rules.
 
 ### Migrating legacy parsers to converters
 
@@ -325,9 +578,8 @@ decimal as a plain `Double`. This is not a promise of exact binary representatio
 
 ### Shutdown and known limits
 
-Shutdown saves dirty registered entities before module release. An operator-only disk edit does
-not make a clean live entity dirty and survives shutdown untouched; a pending code change is saved
-and may replace operator values with the warning above. A partial panel save cannot acknowledge an
+Nothing is written at shutdown: an operator-only disk edit survives untouched, and a pending code change is named in
+one warning and dropped (see "Configuration release; nothing written at stop"). A partial panel save cannot acknowledge an
 unrelated pending field. Async module field mutation itself is not protected by registry confinement:
 module authors must arrange server-thread mutations. Initialization batches and panel transactions
 are different: accepted initialization files persist independently, while the panel stages all
@@ -345,15 +597,23 @@ separate crash-safe multi-file transaction limit.
 ### 中文补充：6.3.0 配置层迁移
 
 - 新扩展点是 `ConfigConverter<T>` 和 `@ConfigConverterFor`，转换器必须是扫描包内带 public 无参构造器的 public 顶层类；扫描器不发现嵌套转换器。它不是 IoC bean。未知声明类型在读取或创建文件前拒绝模块加载；官方 UltiRecipe 的配方对象需要模块自己的转换器。
-- 注解 `path` 中的点仍表示嵌套路径；映射里的 `g.m`、`o.O`、`wave.` 从 6.3.0 起按完整键保存。6.2 已经拆开的文件原样读取，不会自动合并。完整泛型参与绑定；无效集合元素跳过，无效字段用声明默认值，缺失的重载字段保留运行值。允许 null 的引用类型可往返；`Object` 中的 Bukkit 序列化对象读取后仍是普通映射。
-- 保存内容、注释文字、键顺序和支持的文件风格；有修改时整份经过 SnakeYAML 输出，运维排版可以规整。语义无变化不写文件，字节和修改时间不变。浮点数按最短可回读十进制判断，不要求二进制精确。
-- 先临时文件、force、原子替换；仅已允许的原子替换/临时创建拒绝才走备份后原地写。已有 `.bak` 先从当前文件刷新并原子替换，之后才打开目标。失败保留备份，只有成功严格加载当前文件才清理；不自动还原，不保证多文件崩溃事务。
-- 不能读取、不能解析、非 UTF-8 文件不会被任何实体写入路径覆盖；初次失败用默认值，重载失败保留运行值。成功加载才解除保护。单独 `{key}` 注释归框架所有，按模块当前语言目录更新；字面注释保持。成功覆盖运维值时一条警告只列文件和键，不列值。
+- 注解 `path` 中的点仍表示嵌套路径；映射里的 `g.m`、`o.O`、`wave.` 从 6.3.0 起按完整键保存。6.2 已经拆开的文件原样读取，不会自动合并，保存也不会删除这些条目，留给服主自己删（维护者 2026-10-04 决定）。完整泛型参与绑定；无效集合元素跳过，无效字段用声明默认值；重载时文件里缺少的键改用声明默认值（上次加载时还在、即服主刚删掉的键警告一次）（模块自上次加载或保存后改过该设置时保留模块的值），两种情况都不改文件，之后的保存也不会补回该键（#596）。允许 null 的引用类型可往返；`Object` 中的 Bukkit 序列化对象读取后仍是普通映射。
+- 6.3.0 起，声明的设置写成带点的扁平键时就是该设置（#612）：模块声明 `@ConfigEntry(path = "features.chat")`，文件写的是 `features.chat: false` 而不是 `features:` / `chat: false` 时，模块读到 `false`，与 6.2 经 Bukkit 读取时相同；路径的点以任何方式拆分都算（`a.b.c` 写成 `a.b:` / `c: 1` 也可以）。框架不会再为这种设置补一份嵌套写法：启动补键、模块保存、服主命令（`saveOperatorChange`、`saveOperatorMapEntry`）和面板编辑都经写入闸门写在该设置所在的那一行，面板也只按设置路径显示一次。`@ConditionalOnConfig` 改用同一个文档读取器和同一规则读取，不再用 Bukkit 的 `YamlConfiguration`，所以启动补键前后读到的都是模块绑定的值；仍只认布尔值。`isPresentInFile` 同样按此规则判断（扁平点键也算存在）。同一文件里一个设置写了两种形式（例如 `features.chat: false` 和 `features:` / `chat: true`）时，在模块代码运行前拒绝加载该模块（重载则拒绝重载、保留运行中的值），提示说明该设置写了两种形式，只写文件和设置路径，不写值；`@ConditionalOnConfig` 读取的路径即使没有配置实体声明，写了两种形式时同样拒绝该模块的组件扫描。两种形式的值相同也拒绝：在 3,710 个实际配置文件上实测，没有一个文件把同一设置写了两次；若接受相同的两份，之后某次写入只改其中一份，下次启动就会拒绝模块。删掉其中一行再重启即可。此规则只针对声明的设置路径，映射值里的键仍按完整键处理（如上面的 `o.O`）。
+- 保存内容、注释文字、键顺序和支持的文件风格。6.3.0 起，所有自动写入（创建不存在的文件、补写缺失的声明键、启动或重载时改写框架自己的令牌注释、注册批次落盘）都经过同一个写入闸门：每次写入声明自己拥有的键，渲染后其余每一行必须与读取时逐字节相同（含换行符、BOM 和末尾换行），且文件仍是读取时的内容；否则不写，警告一次（只列文件、键和原因，不列值），内存中使用声明默认值。这些写入不会规整排版：手工对齐的文件缺少的键会一直缺少，每次启动警告一次，直到服主自己补上。使用锚点、别名或合并键的文件不会被自动写入，每次运行只提示一次。框架新建文件时独占创建，绝不替换期间出现的文件。模块的显式保存同样经过写入闸门，只拥有它要写的设置（#599，见下）；服主操作写入和面板编辑同样经过写入闸门，只写它们改的设置或映射条目，不再规整排版或展开锚点；闸门拒绝时面板收到注明原因的错误，文件不变（#600）。渲染器只能按一种规范排版写回；文件排版与之不同的地方，闸门无法保留，因此对该文件的**每一次**经闸门写入（启动补键、改写注释、保存、服主操作写入、面板编辑）都会拒绝，无论改的是哪个设置。这是有意的：规则不允许为了让写入通过而规整服主的排版（维护者授权下编排者 2026-10-05 的决定）。文件保持原样，内存中使用相应值，警告列出键和原因，并给出要改的行号（“…would change (line N)”或“…shares line N…”）。实测会拒绝的排版（每种都有测试 `OperatorFileWriterLayoutRefusalListTest` 固定）：只含空格的行或文件；值或节键后面的行尾空格；用多个空格对齐的行内注释（`#` 前只有一个空格的会保留）；冒号后多于一个空格、流式方括号内侧的空格（`[ world ]`）；文档开始标记 `---` 或结束标记 `...`；块标量（`|` 或 `>`）后面跟空行；没有末尾换行的文件里，最后一个值是用 `|`、`|+` 或 `>` 写的块标量（在这种文件末尾它的值没有末尾换行，所以会按 `|-` 或 `>-` 写回；这种文件里其它位置的块标量、以及用 `|-` 或 `>-` 写的最后一个值都会保留——但把文件最后一个值写成以换行结尾的文本的写入会被拒绝，并指出那一行；值永远不会被改动）；一节末尾、空行之后、缩进比下一个键更深的注释，以及任何缩进比下面的键更深的注释；同一文件里两种缩进宽度；混用换行符；续到下一行的普通值、值里的制表符、显式 `? key`、显式标签（`!!str`）；只含 BOM 的文件（原因里注明 BOM）。会保留的排版（其它键的写入照常通过）：`#` 前一个空格的行内注释、后面没有空行的块标量（包括紧跟在它后面的注释行：它被读成下面那个键或列表项的注释，与普通值之后的注释相同，[#592](https://github.com/UltiKits/UltiTools-Reborn/issues/592)；修复前 SnakeYAML 的读法会让该文件之后的每次写入都被拒绝，服主删除 UltiMail 的十一个设置之一来重置它时就会遇到）、内侧无空格的流式映射和列表、带引号的值、全文一致的四空格缩进、与键同列的列表项、全文统一的 CRLF 或 LF、没有末尾换行（含有块标量的文件也一样，上面所说的最后一个值除外）、BOM、`#` 后无空格的注释、多个空行、十六进制数、`~` 和空值。使用锚点的文件整体拒绝，不按行。实测：框架和十五个模块自带的 32 个 YAML 文件、维护者测试服务器 `plugins/UltiTools/` 下 3,710 个配置 YAML 文件，经真实闸门插入一个键全部通过；已知唯一会拒绝的出厂文件是 6.0.0 和 6.0.6 的框架 `config.yml`（见下）。改掉警告指出的那一行，下一次写入即可通过。0 字节文件、只有空行的文件、以及只含行首注释（前面可有空行）的文件在闸门看来是空文档：启动时在已有字节之后补入声明的键（没有其它字节需要保留），服主操作写入或面板编辑插入它指定的设置；保存从不插入。只含空格的文件、含缩进注释的纯注释文件和只含 BOM 的文件按排版拒绝（见上），内存使用默认值、模块照常加载；只含制表符、`---` 或 `...` 的文件无法解析，按无法解析的文件保护（永不写入）；块标量后面依次是缩进大于 0 列的注释行、空行、第二个注释行的文件也一样：SnakeYAML 2.2 在这种排版上会在组装节点时抛出异常（[#617](https://github.com/UltiKits/UltiTools-Reborn/issues/617)，未修复）。读取后被删除的文件，服主操作写入或面板编辑会独占地重新创建它，只含指定的设置及其注释。启动时闸门内部的非受检异常不会拒绝模块：一条警告列出文件和异常类名，内存中使用声明默认值。语义无变化不写文件，字节和修改时间不变。浮点数按最短可回读十进制判断，不要求二进制精确。
+- 先临时文件、force、原子替换；仅已允许的原子替换/临时创建拒绝才走备份后原地写。备份文件名为 `<文件名>.ultitools-backup-<16 位小写十六进制>`，独占创建；本次运行已为同一文件写过、且内容未变的备份先从当前文件刷新并原子替换，之后才打开目标。写入器不读取、不写入、不删除任何其它文件，服主自己的 `<文件>.bak` 不受影响。失败保留备份，只有成功严格加载当前文件、且备份内容仍与记录一致时才清理；本次运行未写过或已被改动的同类备份保留，并以 INFO 提示一次。不自动还原，不保证多文件崩溃事务。
+- 不能读取、不能解析、非 UTF-8 文件不会被任何实体写入路径覆盖；初次失败用默认值，重载失败保留运行值。成功加载才解除保护。单独 `{key}` 注释按模块当前语言目录更新，但只改框架能认出是自己写的注释行：该项注释整体或末尾连续几行，与框架对模块 jar 自带任一语言目录中的文字、模块当前解析出的文字或原样 `{key}` 写出的形式逐字节相同（该项的缩进、`#`、一个空格加文字；只按相等判断，`#` 后缺空格或缩进不同即视为服主所写）；服主在令牌项上方手写的注释、改过的框架注释和字面注释逐字节永久保留（#604，维护者 2026-10-04 决定，取代此前“令牌项上的服主注释会被替换”）。已不在任何自带目录中的旧版措辞，只有模块在新增的 `@ConfigEntry(previousComments = {...})`（增量属性，默认为空）中登记了该文字时才算框架所写：逐字节相同即替换为当前目录文字并从此随语言切换（维护者 2026-10-04 决定）；未登记的原样保留。面板编辑以服主同意为准，只替换它指定的键，不再发警告（此前会警告一次列出被覆盖的键，#527）。
+- 6.3.0 起模块 `save()` 只写模块自上次加载或保存以来改过的设置，并且只在文件该处仍是框架上次读到或写入的值、且该值正是模块的起始值（能无转换警告地转换为上次加载或保存时的设置值）时才写（#599，维护者 2026-10-04 决定）。声明为 `Map` 的设置按条目写（按声明的映射类型逐层进入嵌套映射），只设置或删除模块增、改、删的条目（空映射或被模块删空的映射整体写，因为它的键行随首条或末条一起变）；其他值——列表、Bukkit `Location`/`Vector` 等 `ConfigurationSerializable`、类型化映射中本身不是映射的条目值——都算一个值，要么整体写入要么不写，文件里不会出现模块与服主各占一部分的值。声明为 `Map<String, Object>` 或原始 `Map` 的设置只拆一层，其下的普通嵌套映射算一个值。重载合并（复合值或列表冲突时整体采用文件的值，只列键名）、面板编辑复合值内的字段（以框架上次读到的整个值加上该字段的改动为写入单位，且仅当写入时文件仍保存着该整个值；否则拒绝并注明设置名“文件在读取后已被改动，请先重载”，不写入）以及 `saveOperatorMapEntry`（键深入到非映射条目内部时抛 `IllegalArgumentException`，不写入）都按同一规则判断什么算一个值。保存从不补写文件缺少的键、从不改写注释、从不删除模块没删的映射条目。因此服主在磁盘上改过的值、删掉的键、框架无法使用的值或列表元素（`interval: 3O0`、`[60, 30, 10, abc]`）以及 6.2 拆开的映射条目，无论模块是否改了该设置，保存都不会覆盖（#596）。没写成的改动留在内存，每次保存一条警告列出文件和这些键，不列值；被写入闸门拒绝的键由闸门的警告连同原因列出。其余每一行逐字节不变，否则不写；没有可写内容时不碰文件。“文件仍是读取时的内容”比较的是框架上次读到或写入的文本：服主不经 `/ul reload` 直接在磁盘上改过的设置——哪怕值不变，比如把 `y: 64` 改成 `y: 64.0`——之后模块对该设置的改动不会写入（警告中列出），直到重载重新读取文件；没有任何内容丢失，模块的值留在内存中。`save()` 用于服主通过模块要求的改动，或语言切换后重新渲染出厂文字。此前显式保存会把服主改过的值连同警告一起覆盖（#527），该行为在 6.3.0 依维护者“服主写的配置绝不被自动覆盖”的规则直接取消，没有过渡期。
+- 6.3.0 新增两个服主操作写入方法（增量 API）：`saveOperatorChange(String...)` 只写指定的设置（如 `/setspawn` 指定六个 `spawn.location.*`），`saveOperatorMapEntry(String, String...)` 只写映射设置中的一个条目（如 `/autoreply` 的一条规则；文件缺少时插入，模块映射里已删除时从文件删除；每个映射键是完整键，`play.example` 是一个键）。服主的命令即同意：指定键处以模块的值为准，服主手改过的也替换；文件缺少的指定设置连同注释插入。其余一律不写（模块改过但未指定的设置也不写；用 `saveOperatorChange` 指定整个映射设置会整体写入并丢掉服主手加的条目，只改一个条目的命令应使用 `saveOperatorMapEntry`），写入经写入闸门且只拥有这些键。被拒绝时（文件不可读或无法解析、使用锚点、排版无法逐字节保留、准备写入期间文件被改）抛出新的 `com.ultikits.ultitools.config.ConfigWriteRefusedException`（`IOException` 子类），消息和 `getReason()` 说明原因、不含任何值；文件保持原样，内存中的值不变且仍未保存。路径不是已声明的配置项，或对非映射设置调用条目方法，抛 `IllegalArgumentException` 且不写。两者都在实体锁下执行，须在服务器主线程调用。
 - `getConfig()` 在 6.2.5 确实可用，不能冒称符合两个同版删除例外；维护者通过 6.3.0 一次性 carve-out 删除它。改用 `isPresentInFile` 查询上次成功加载时的存在性，修改声明字段后 `save()`。两个已知官方调用在 UltiEssentials 与 UltiRemoteBag；第三方用量未知。
 - 六个旧解析器相关声明在 6.3.0 首次带 `forRemoval`，公告 6.4.0 删除。显式非默认 parser 暂时保留冻结的旧行为；默认 parser 改走注册表。迁移示例见上方，转换器必须满足两条互逆等式，不能单向加值或悄悄丢字段。
-- 注册批次验证完成才开始独立写文件；面板批次先验证并暂存全部文件，在进程内失败时回滚，持久存储故障可能阻止恢复。面板唯一映射路径走整字段类型转换，歧义和未知变更拒绝整个请求；无关内存/磁盘兄弟项保留。
-- 重载三方合并，内存独有改动保留且仍脏，磁盘独有采用，冲突磁盘胜。仅磁盘该映射未变时保证内存顺序保留，不写文件。初始化、重载和注册表在服务器主线程执行；异步面板回调整体排队，不能阻塞等待。
-- 可以提前识别的新副本先保存旧副本配置再构造；失败保留旧副本。不能识别时成功替换后只警告丢弃的键，不事后保存。卸载释放实体，关闭先保存后释放。已知限制 #578、#580 和多文件崩溃限制 #545 仍存在。
+- 注册批次验证完成才开始独立写文件；面板批次先验证并经写入闸门暂存全部文件，在进程内失败时回滚，持久存储故障可能阻止恢复；每个文件替换前再核对一次字节，期间被服主保存的文件整批拒绝（`ConfigWriteRefusedException` 注明文件）、服主的保存保留，已替换的文件恢复为核对时的原字节。面板唯一映射路径走整字段类型转换，歧义和未知变更拒绝整个请求；无关内存/磁盘兄弟项保留。
+- 重载三方合并，内存独有改动保留且仍脏，磁盘独有采用，冲突磁盘胜。重载重建模块语言之后、模块自己的重载钩子之前，框架经写入闸门、按重新读取的文件，只把它能认出的自己的注释行改成新语言，不写任何值、键或其它注释行（#594）。仅磁盘该映射未变时保证内存顺序保留，不写文件。初始化、重载和注册表在服务器主线程执行；异步面板回调整体排队，不能阻塞等待。
+- 框架自己的 `plugins/UltiTools/config.yml` 启动时补入缺少的面板键（能力开关、`ultipanel.commands.blocklist`、`ultipanel.files.editable-roots`、操作日志轮转键）同样经过写入闸门，只插入（#605）。此前启动迁移会整份重写文件：十六进制数变成十进制、锚点被展开、`o.O` 这样的含点键被拆成嵌套映射、显式 `null` 被替换。现在其余每个字节保持不变（已在每个已发布的 6.2.x `config.yml` 上实测）；闸门无法逐字节写回的文件（手工对齐、锚点）保持原样，警告一次列出这些键，由 jar 自带 `config.yml` 中的默认值（现在也列出命令黑名单和可编辑根目录）生效。若文件以扁平含点键（如 `ultipanel.capabilities.logs: false`）或含点的节键保存其中某个设置，而插入的嵌套节会在服务器读取时取代它，同样不写入：警告一次，指出文件和该设置（不含任何值），缺少的键使用 jar 默认值。较早版本实测：6.0.9 和 6.1.x 的 `config.yml` 同样只插入；6.0.0 和 6.0.6 的 `config.yml` 含 `trustIp: [ ]`（方括号内侧有空格），每次启动都被拒绝并警告一次、指出第 14 行，缺少的键使用 jar 默认值，不写入任何内容——只有从 6.0.0 或 6.0.6 直接升级才会遇到；改成 `trustIp: []` 或手工补上这些键即可消除警告。
+- UltiTools 只在 `plugins/bStats/config.yml` 不存在、或已含 `serverUuid` 时启动 bStats（#606）。该文件由所有使用 bStats 的插件共用；此前无法解析的文件被当作空文件，bStats 的默认值会写在它上面。现在无法读取、无法解析或缺少 `serverUuid` 的文件逐字节保持不变，记一行日志说明，本次运行 UltiTools 不发送统计。在 Paper 上，服务器自带的统计代码会在任何插件加载之前读取该文件，并用新的默认值重写无法解析或缺少 `serverUuid` 的文件（在 Paper 1.21.11 上实测），因此这类文件是被服务器本身替换的，而不是被 UltiTools 替换的，UltiTools 只会看到有效的文件。
+- 面板编辑 `server.properties` 时只替换它指定的那个键所在行的值文字（#607）：键、分隔符、注释、顺序和其它每个字节保持不变（含 UTF-8 的 `motd`），按服务器读取该文件的方式解码和编码（严格 UTF-8，不是 UTF-8 时用 ISO-8859-1），校验后原子写入。同一个键定义在多行、或定义续到下一行时拒绝，原因注明行号（不含值）；`set_all` 回复把它列在 `failed` 中，并在新增的 `failureReasons` 字段中给出原因，服务器日志对每个被拒的键只记一次。服务器自己下次启动时仍会整份重写该文件，所有 Paper 版本都如此。
+- 6.3.0 新增 `com.ultikits.ultitools.config.OperatorFiles`（增量 API），供模块在服主明确编辑时写入它代为管理的 YAML 文件（礼包、菜单文件）：只写编辑的部分，注释和其它键保留（维护者 2026-10-04 决定）。`read(File)` 返回文件文本（严格 UTF-8）和字节的 SHA-256；`write(Snapshot, Map<List<String>, Object>)` 只写指定的完整键（含点的键是一个键），经写入闸门，且仅当文件仍是快照时的字节，返回 `WRITTEN`、`UNCHANGED`、`FILE_CHANGED` 或 `REFUSED`（排版无法逐字节保留或使用锚点，警告一次列出文件、键和原因）。值必须是普通数据（`ItemStack` 先序列化），否则在碰文件之前抛 `IllegalArgumentException`。它从不创建、删除或重命名文件，不是通用文件 API（#545 仍是以后的功能），也不用于 `@ConfigEntity` 文件。
+- 面板编辑复合值（Bukkit `Vector`、`Location`，或映射条目中的此类值）内的一个字段时，写入的是文件中原样的整个值、只改该字段，其余字段保持服主写下的字节（`y: 64`、`pitch: 0` 不会变成 `64.0`）。面板发送的整数、或文件中该值其它字段里的整数，在模块自身的值为浮点数的位置按浮点数转换（Bukkit 的 `Vector` 自己不放宽），被编辑的字段按该类型写入（`7` 写成 `7.0`），因此编辑后的文件能被重新加载（#609）。文件中 `Vector` 或 `BlockVector` 坐标里的整数（`y: 64`）现在按该数字加载：Bukkit 的 `Vector` 只接受 `Double` 坐标，此前这样的值会以 SEVERE 堆栈失败并使用声明默认值；框架现在只在内存中把 `Vector` 的 `x`、`y`、`z` 放宽为浮点数——文件保持 `y: 64`，未改动的保存不写入，其它类型不放宽。模块在内存中删除且未保存的映射分组，编辑其下的键会被拒绝，注明“not found in memory”。
+- 服务器关闭、模块卸载或卸载删除、模块被新版本替换时，一律不写任何配置（维护者 2026-10-04 决定：生命周期事件不是服主的写入请求，不做整对象的关闭保存或替换保存）。关闭时以及正常卸载或卸载删除时，每个模块在卸载钩子和 `@PreDestroy` 之后、释放之前，凡有从未保存的模块改动的配置各警告一次（列文件和键，不列值），改动随之丢弃；框架最后一步对仍注册的配置同样处理。上次加载无法读取或解析的文件照旧只提示一次。新版本副本直接读取现有文件，旧副本的未保存改动或受保护文件不再阻止替换；新副本激活后警告一次丢弃的键。`ConfigManager#saveAll()` 签名不变、不再写入、改为报告并标记 `@Deprecated(since = "6.3.0")`。模块应在改动发生时用 `save()` 或 `saveOperatorChange`/`saveOperatorMapEntry` 保存。卸载照旧释放实体。已知限制 #578、#580 和多文件崩溃限制 #545 仍存在。
 
 ## What the version number means
 
@@ -864,13 +1124,15 @@ This section governs the third kind.
   `UltiToolsPlugin#commitLanguageProvenance()` (#460), `PluginManager#getConnectedExternalScanPackages()`
   (#462) and `PluginManager#getModuleBeingRegistered()` (#483). Additions only; no existing
   signature changed. A module never needs to call them.
-- Saving at shutdown only the configuration that module code changed (#510). Operator-only disk
-  edits survive a clean stop; pending code changes are saved before module release, with one
-  warning naming replaced operator keys. The [config-layer contract](#config-layer-630) covers
+- Writing no configuration at shutdown (#510, completed by #599). Operator-only disk edits survive a
+  clean stop. An earlier 6.3.0 step saved pending code changes before module release with a warning
+  naming replaced operator keys; as of the write gate nothing is written at stop, unload or
+  replacement at all - a pending module change is named in one warning and dropped (see the entry
+  on configuration writes below). The [config-layer contract](#config-layer-630) covers
   protected files, partial panel acknowledgments, semantic no-ops and server-thread confinement.
   Panel callbacks queue their complete operation on the server thread; they do not perform registry
-  writes concurrently on the WebSocket thread. Explicit entity saves still compare against current
-  disk content and can replace an operator edit even when the entity was clean.
+  writes concurrently on the WebSocket thread. An explicit entity save writes only what the module
+  changed, where the file still holds what was read, and never replaces an operator edit.
 
 - `PluginInstallUtils.uninstallPlugin(String)` unloading through the framework's one full unload
   path, and reporting the outcome it documents (#503, #501). It used to call
@@ -1075,8 +1337,8 @@ This section governs the third kind.
   against the fifteen modules' `master` and UltiTools-External-Example, is every caller (two modules
   iterate it; none mutates it). `unregister` itself now removes the module from the loaded modules,
   by identity and whether or not the module's unload hook threw. It does not change the module's
-  configuration entities: releasing them, so the shutdown save stops writing the files of a module
-  unloaded while the server ran, is part of the configuration-layer rework in this release.
+  configuration entities: releasing them is part of the configuration-layer rework in this release,
+  in which nothing writes configuration at stop or unload.
 - Registrations released per module instance, and a superseded copy of a module unloaded through the
   full unload path (#506, #528). This path is reached only when code registers a newer instance of a
   loaded module through `PluginManager#register(...)`; two jars of one module in the modules folder
@@ -1119,7 +1381,9 @@ This section governs the third kind.
     naming the modules that failed instead of `All plugins reloaded.`; the summary is also sent to
     the command's sender, which previously got no reply on success and the generic command-error
     line on failure;
-  - `/ul reload <name>` replies failure, naming the module and the cause, when the reload threw;
+  - `/ul reload <name>` replies failure, naming the module and the cause, when the reload threw —
+    including, as of #589, when one of the module's configuration files cannot be read or parsed
+    (before #589 that reload logged the protected-load line and still replied success);
   - a module can report a partial reload without throwing: the new public final class
     `ReloadReport`, the new hook `protected void onReload(ReloadReport report)` — whose default body
     calls `onReload()`, so a module overriding only `onReload()` behaves exactly as before — and the
@@ -1150,6 +1414,40 @@ This section governs the third kind.
   unparseable one, never overwritten). A module that already handles the declared `IOException`
   needs no change. Separately, each credential write now forces the file and its directory to disk
   around the atomic rename, a performance change of a few milliseconds per write.
+- Configuration writes follow the maintainer's rule that operator-written configuration is never
+  overwritten automatically (2026-10-04, "what code may write, by file type";
+  [#599](https://github.com/UltiKits/UltiTools-Reborn/issues/599)). Changed without a migration period,
+  because a migration period would mean continuing to overwrite operators' files: a module's `save()`
+  writes only what the module changed, where the file still holds what was read, and never writes over an
+  operator's disk edit, deleted key or unusable value (it names the change as not written instead of
+  overwriting with a warning); a panel edit writes only what it touches; and nothing writes configuration at
+  server stop, module unload or module replacement - a never-saved module change is named at stop and
+  dropped, and `ConfigManager#saveAll()` is deprecated and writes nothing. A module that relied on the stop
+  to persist an in-memory change must call `save()` (or `saveOperatorChange`) when it makes the change; the
+  stop warning names any configuration that still holds one.
+- The framework's own `plugins/UltiTools/config.yml` gets its missing panel keys (the capability switches,
+  `ultipanel.commands.blocklist`, `ultipanel.files.editable-roots` and the action-log rotation keys) through the
+  same write gate, insert only ([#605](https://github.com/UltiKits/UltiTools-Reborn/issues/605)). Before 6.3.0
+  the start-up migration re-emitted the whole file: hex numbers became decimal, anchors were expanded, a dotted
+  key such as `o.O` was split into a nested map, and an explicit `null` was replaced. Now every other byte
+  stays, measured on every released 6.2.x `config.yml`; a file the gate cannot write byte-identically (hand
+  alignment, anchors) is left as it is with one WARNING naming the keys, and the defaults shipped in the jar's
+  `config.yml` (which now also lists the blocklist and the editable roots) answer for them. A file that holds one of
+  these settings as a flat dotted key (`ultipanel.capabilities.logs: false`) or a dotted section key, where the
+  inserted nested section would replace it as the server reads the file, is not written either: one WARNING names the
+  file and that setting (never a value), and the jar defaults answer for the missing keys. Measured on older
+  releases: a 6.0.9 or 6.1.x `config.yml` is written insert-only too; the `config.yml` of 6.0.0 and 6.0.6 holds
+  `trustIp: [ ]` (spaces inside flow brackets), so it is refused at every start with that one WARNING naming line 14,
+  the missing keys run on the jar's defaults, and nothing is written - only a direct upgrade from 6.0.0 or 6.0.6 sees
+  this. Writing `trustIp: []`, or adding the keys by hand, ends the warning.
+- UltiTools starts bStats only when `plugins/bStats/config.yml` is absent or already holds `serverUuid`
+  ([#606](https://github.com/UltiKits/UltiTools-Reborn/issues/606)). That file is shared by every bStats plugin;
+  before 6.3.0 an unparseable copy was read as empty and bStats' defaults were saved over it. A file that cannot
+  be read or parsed, or one without `serverUuid`, is now left byte-identical, one line names it, and UltiTools'
+  metrics stay off for that run (other plugins' own bStats copies are outside the framework). On Paper, the server's own
+  metrics code reads that file at start, before any plugin loads, and rewrites an unparseable copy or one without
+  `serverUuid` with fresh defaults (measured on Paper 1.21.11), so on Paper such a file is replaced by the server, never by
+  UltiTools, and UltiTools only ever sees a valid file.
 
 ### Behavioral changes that do need one
 
@@ -1314,6 +1612,15 @@ Each corrects a declared behaviour the stream did not deliver. The panel protoco
   this server's server.properties` instead of `This server version has no such key` (#473): nothing
   tells a key the running version lacks from one the file omits. A panel or tool that matched on the
   old text must match the new one; the UltiPanel worker and frontend do not match on it.
+- **A panel edit of `server.properties` changes only the line of the key it names** (#607). Before
+  6.3.0 the file was read as ISO-8859-1 and re-emitted whole: every comment dropped, keys reordered,
+  and UTF-8 values of other keys (a `motd` with `§` or Chinese text) turned into mojibake. The value
+  text of that one line is now replaced - key, separator, comments, order and every other byte kept -
+  decoded and encoded as the server reads the file (strict UTF-8, ISO-8859-1 when it is not UTF-8),
+  checked, and written atomically. A key defined on more than one line, or continued onto the next
+  line, is refused with a reason naming the lines (no value); `set_all` lists it under `failed` and, as an added
+  field, gives its reason under `failureReasons` (key to reason); the server log names each refused key once.
+  The server itself still re-writes the whole file when it next starts, as every Paper version does.
 
 ### Framework text follows `language`; the class-load audit is quiet on a clean start (6.3.0) that need no migration period
 

@@ -62,41 +62,42 @@ class ConfigRegistryReleaseTest {
         assertThat(configs.getAllConfigEntities(owner)).isNull();
         configs.saveAll(); assertThat(disk()).contains("value: disk");
     }
-    @Test void closeSavesBeforeUnloadAndLaterSaveCannotUndoIt() throws Exception {
+    // 17-65 (maintainer decision 2026-10-04, superseding Follow-up 26.2's final shutdown save): nothing below writes.
+    @Test void closeWritesNothingBeforeOrAfterUnloadAndLaterReportCannotWriteEither() throws Exception {
         doAnswer(call -> {
-            assertThat(disk()).contains("value: pending");
+            assertThat(disk()).contains("value: disk");
             assertThat(configs.getAllConfigEntities(owner)).containsValue(entity);
             return null;
         }).when(owner).unregisterSelf();
         plugins.close();
         verify(owner).unregisterSelf();
         assertThat(configs.getAllConfigEntities(owner)).isNull();
-        entity.value = "after-release"; configs.saveAll(); assertThat(disk()).contains("value: pending");
+        entity.value = "after-release"; configs.saveAll(); assertThat(disk()).isEqualTo("value: disk\n");
     }
-    @Test void shutdownPersistsActualUnloadHookMutationAfterInitialSave() throws Exception {
-        HookOwner hook = callbackOwner(false, false);
+    @Test void shutdownWritesNoUnloadHookMutation() throws Exception {
+        HookOwner hook = callbackOwner(false, false); hook.checkInitialSave = false;
         plugins.close();
         assertThat(hook.ran).isTrue();
-        assertThat(disk()).contains("value: hook");
+        assertThat(disk()).isEqualTo("value: disk\n");
         assertThat(configs.getAllConfigEntities(hook)).isNull();
     }
 
-    @Test void shutdownPersistsActualPreDestroyAfterActualUnloadHook() throws Exception {
-        HookOwner hook = callbackOwner(false, true);
+    @Test void shutdownWritesNoPreDestroyMutationAfterTheUnloadHook() throws Exception {
+        HookOwner hook = callbackOwner(false, true); hook.checkInitialSave = false;
         plugins.close();
         assertThat(hook.ran).isTrue();
         assertThat(hook.bean.ran).isTrue();
-        assertThat(disk()).contains("value: destroyed");
+        assertThat(disk()).isEqualTo("value: disk\n");
         assertThat(configs.getAllConfigEntities(hook)).isNull();
         entity.value = "released"; configs.saveAll();
-        assertThat(disk()).contains("value: destroyed");
+        assertThat(disk()).isEqualTo("value: disk\n");
     }
 
-    @Test void throwingActualHookStillRunsPreDestroySavesAndReleases() throws Exception {
-        HookOwner hook = callbackOwner(true, true);
+    @Test void throwingActualHookStillRunsPreDestroyAndReleasesWithoutWriting() throws Exception {
+        HookOwner hook = callbackOwner(true, true); hook.checkInitialSave = false;
         plugins.close();
         assertThat(hook.ran).isTrue(); assertThat(hook.bean.ran).isTrue();
-        assertThat(disk()).contains("value: destroyed");
+        assertThat(disk()).isEqualTo("value: disk\n");
         assertThat(configs.getAllConfigEntities(hook)).isNull();
     }
 
@@ -152,27 +153,87 @@ class ConfigRegistryReleaseTest {
     @Test void protectedShutdownFileSurvivesBothCallbackSaves() throws Exception {
         HookOwner hook = callbackOwner(false, true); hook.checkInitialSave = false;
         String broken = "value: [broken\n";
-        Files.write(directory.resolve("release.yml"), broken.getBytes(StandardCharsets.UTF_8)); entity.reload();
+        Files.write(directory.resolve("release.yml"), broken.getBytes(StandardCharsets.UTF_8));
+        assertThatThrownBy(entity::reload).isInstanceOf(com.ultikits.ultitools.exceptions.ConfigurationException.class); // #589
         plugins.close();
         assertThat(hook.bean.ran).isTrue(); assertThat(disk()).isEqualTo(broken);
         assertThat(configs.getAllConfigEntities(hook)).isNull();
     }
 
-    @Test void finalSaveFailureIsIsolatedAndReleaseStillRuns() throws Exception {
-        HookOwner hook = callbackOwner(false, true);
+    @Test void shutdownNeverSavesAnyEntityAndReleaseStillRuns() throws Exception {
+        HookOwner hook = callbackOwner(false, true); hook.checkInitialSave = false;
         Values failing = spy(entity); configs.register(hook, failing); failing.value = "pending";
         hook.value = failing; hook.bean.value = failing;
-        doAnswer(call -> {
-            if ("destroyed".equals(failing.value)) { throw new java.io.IOException("final save failure"); }
-            return call.callRealMethod();
-        }).when(failing).save();
+        doThrow(new java.io.IOException("a save must not be attempted")).when(failing).save();
         Values healthy = new Values("healthy.yml"); configs.register(hook, healthy);
+        String healthyAtInit = new String(Files.readAllBytes(directory.resolve("healthy.yml")), StandardCharsets.UTF_8);
         hook.bean.healthy = healthy;
         plugins.close();
-        assertThat(disk()).contains("value: pending");
+        verify(failing, never()).save();
+        assertThat(disk()).isEqualTo("value: disk\n");
         assertThat(new String(Files.readAllBytes(directory.resolve("healthy.yml")), StandardCharsets.UTF_8))
-                .contains("value: healthy-destroyed");
+                .isEqualTo(healthyAtInit);
         assertThat(configs.getAllConfigEntities(hook)).isNull();
+    }
+
+    @FunctionalInterface
+    private interface Action { void run() throws Exception; }
+
+    /** The "never saved" report lines logged while {@code action} runs. */
+    private java.util.List<String> reportsDuring(Action action) throws Exception {
+        java.util.List<String> reports = new java.util.ArrayList<>();
+        java.util.logging.Handler capture = new java.util.logging.Handler() {
+            @Override public void publish(java.util.logging.LogRecord record) {
+                if (record.getMessage() != null && record.getMessage().contains("never saved")) { reports.add(record.getMessage()); }
+            }
+            @Override public void flush() { /* No buffer. */ }
+            @Override public void close() { /* No resource. */ }
+        };
+        java.util.logging.Logger logger = java.util.logging.Logger.getLogger("ShutdownFixture");
+        logger.addHandler(capture);
+        try { action.run(); } finally { logger.removeHandler(capture); }
+        return reports;
+    }
+
+    /**
+     * 17-65 review round 1 R65-I5: a normal unload drops never-saved changes like the stop does - nothing is written -
+     * and names them once, the same way (file and keys, never values).
+     */
+    @Test void runtimeUnloadNamesNeverSavedKeysOnceAndWritesNothing() throws Exception {
+        java.util.List<String> reports = reportsDuring(() -> plugins.unregister(owner));
+        assertThat(disk()).isEqualTo("value: disk\n");
+        assertThat(reports).hasSize(1);
+        assertThat(reports.get(0)).contains("release.yml", "'value'").doesNotContain("pending");
+        assertThat(reportsDuring(() -> configs.saveAll())).as("released entities are not named again").isEmpty();
+    }
+
+    @Test void runtimeUninstallNamesNeverSavedKeysOnceAndWritesNothing() throws Exception {
+        HookOwner hook = callbackOwner(false, true); hook.checkInitialSave = false;
+        Path moduleDirectory = directory.resolve("plugins"); Files.createDirectories(moduleDirectory);
+        try (java.util.jar.JarOutputStream jar = new java.util.jar.JarOutputStream(
+                Files.newOutputStream(moduleDirectory.resolve("fixture.jar")))) {
+            jar.putNextEntry(new java.util.jar.JarEntry("plugin.yml"));
+            jar.write("name: ReleasedModule\n".getBytes(StandardCharsets.UTF_8)); jar.closeEntry();
+        }
+        java.util.List<String> reports = reportsDuring(
+                () -> com.ultikits.ultitools.utils.PluginInstallUtils.uninstallPluginReporting("ReleasedModule"));
+        assertThat(disk()).isEqualTo("value: disk\n");
+        assertThat(reports).hasSize(1).allSatisfy(report -> assertThat(report).contains("release.yml", "'value'")
+                .doesNotContain("destroyed"));
+    }
+
+    /** Pin: a superseded owner is named only by the replacement's own drop warning, not a second time on its release. */
+    @Test
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Exercise the existing private supersede boundary without constructing a second module.
+    void supersededOwnerIsNotNamedTwiceOnItsRelease() throws Exception {
+        HookOwner hook = callbackOwner(false, false); hook.checkInitialSave = false;
+        when(hook.getMainClass()).thenReturn("example.Module");
+        UltiToolsPlugin incoming = mock(UltiToolsPlugin.class);
+        when(incoming.getMainClass()).thenReturn("example.Module"); when(incoming.isNewerVersionThan(hook)).thenReturn(true);
+        java.lang.reflect.Method supersede = PluginManager.class.getDeclaredMethod("unregisterSupersededVersions", UltiToolsPlugin.class);
+        supersede.setAccessible(true);
+        assertThat(reportsDuring(() -> supersede.invoke(plugins, incoming))).isEmpty();
+        assertThat(disk()).isEqualTo("value: disk\n");
     }
 
     private HookOwner callbackOwner(boolean throwing, boolean destroy) throws Exception {
@@ -224,5 +285,33 @@ class ConfigRegistryReleaseTest {
     public static class Values extends AbstractConfigEntity {
         @ConfigEntry String value = "default";
         public Values(String path) { super(path); }
+    }
+
+    /**
+     * 17-65 (#599; maintainer decision 2026-10-04: no shutdown save of whole entities): a full stop - the module's
+     * unload hook and its {@code @PreDestroy} changing the configuration, then the framework's final step - writes
+     * nothing, and one line names the file and the never-saved key, never its value.
+     */
+    @Test void fullStopWritesNothingAndNamesTheUnsavedKeyOnce() throws Exception {
+        HookOwner hook = callbackOwner(false, true); hook.checkInitialSave = false;
+        java.util.List<String> reports = new java.util.ArrayList<>();
+        java.util.logging.Handler capture = new java.util.logging.Handler() {
+            @Override public void publish(java.util.logging.LogRecord record) {
+                if (record.getMessage() != null && record.getMessage().contains("never saved")) { reports.add(record.getMessage()); }
+            }
+            @Override public void flush() { /* No buffer. */ }
+            @Override public void close() { /* No resource. */ }
+        };
+        java.util.logging.Logger logger = java.util.logging.Logger.getLogger("ShutdownFixture");
+        logger.addHandler(capture);
+        try {
+            plugins.close();
+            configs.saveAll();
+        } finally { logger.removeHandler(capture); }
+        assertThat(hook.ran).isTrue(); assertThat(hook.bean.ran).isTrue();
+        assertThat(disk()).isEqualTo("value: disk\n");
+        assertThat(reports).hasSize(1);
+        assertThat(reports.get(0)).contains("release.yml", "'value'").doesNotContain("destroyed", "pending");
+        assertThat(configs.getAllConfigEntities(hook)).isNull();
     }
 }

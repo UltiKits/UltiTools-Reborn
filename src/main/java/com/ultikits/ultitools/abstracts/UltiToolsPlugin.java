@@ -218,6 +218,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     private static final Type ARITY_MAP_TYPE = new TypeToken<Map<String, String>>() { }.getType();
 
     private Language language;
+    /** The language catalogues the module's jar ships, read once on first use (see {@link #shippedCatalogueTexts}). */
+    private volatile List<Language> shippedCatalogues;
     @Getter
     private final String version;
     @Getter
@@ -612,6 +614,61 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             }
         }
         return null;
+    }
+
+    /**
+     * The texts the language catalogues this module's jar ships hold for {@code key}: one entry per shipped
+     * catalogue - every language code under the jar's {@code lang/}, every extension the loader reads - that holds
+     * the key, in code order. The config layer uses them to recognise a comment line the framework wrote in any
+     * language (maintainer decision 2026-10-04, "only the framework's own comments are rewritten", #604).
+     * <p>
+     * Read-only by construction: it reads the module's own code source through {@link #loadLanguageFromJar} and
+     * nothing else - never the extracted language files under the module's folder, the resource hash record or a
+     * language backup - so it performs none of the language-provenance writes a language load makes, and logging a
+     * catalogue it cannot read is its only effect. The catalogues are read once per module instance: the jar does
+     * not change while the module is loaded.
+     *
+     * @param key the catalogue key
+     * @return the shipped texts for {@code key}, possibly empty, never {@code null}
+     */
+    @ApiStatus.Internal
+    List<String> shippedCatalogueTexts(String key) {
+        List<String> texts = new ArrayList<>();
+        for (Language catalogue : shippedCatalogues()) {
+            String text = catalogue.getLocalizedText(key);
+            if (text != null && !text.equals(key)) {
+                texts.add(text);
+            }
+        }
+        return texts;
+    }
+
+    private List<Language> shippedCatalogues() {
+        List<Language> catalogues = shippedCatalogues;
+        if (catalogues != null) {
+            return catalogues;
+        }
+        List<Language> read = new ArrayList<>();
+        CodeSource codeSource = this.getClass().getProtectionDomain().getCodeSource();
+        if (codeSource != null && codeSource.getLocation() != null) {
+            for (String code : Localized.scanLangResources(codeSource.getLocation())) {
+                for (String extension : LANGUAGE_EXTENSIONS) {
+                    try {
+                        Language inJar = loadLanguageFromJar(code, extension);
+                        if (inJar != null) {
+                            read.add(inJar);
+                        }
+                    } catch (RuntimeException unreadable) {
+                        // One malformed catalogue must not hide the others; its texts are simply not recognised.
+                        getLogger().warn("Could not read the shipped language catalogue 'lang/" + code + extension
+                                + "' of module '" + getPluginName() + "': " + unreadable.getClass().getSimpleName());
+                    }
+                }
+            }
+        }
+        catalogues = Collections.unmodifiableList(read);
+        shippedCatalogues = catalogues;
+        return catalogues;
     }
 
     /**
@@ -1889,6 +1946,19 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         return getConfigManager().getConfigEntities(this, configType);
     }
 
+    /**
+     * Saves this module's configuration registered at {@code path} through {@link AbstractConfigEntity#save()}: only the
+     * settings the module changed since the last load or save are written, and only where the file still holds the
+     * value the module started from; every other byte of the file stays as the operator left it, and a change that
+     * cannot be written stays in memory and is named in one warning. It cannot overwrite operator content: a value the
+     * operator edited, deleted or wrote unusably is never written over (maintainer decision 2026-10-04). Use it for a
+     * change the operator asked for through the module, or for shipped text re-rendered after a language switch.
+     *
+     * @param path       the registered configuration file path, for example {@code config/config.yml}
+     * @param configType the configuration entity class
+     * @param <T>        the configuration entity type
+     * @throws IOException if publishing the verified file fails
+     */
     public <T extends AbstractConfigEntity> void saveConfig(String path, Class<T> configType) throws IOException {
         getConfigManager().getConfigEntity(this, path, configType).save();
     }
@@ -2208,7 +2278,9 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * watched key has changed direction since then -- it never registers, unregisters, or
      * rebuilds anything (issue #392, D-01). Right after the configuration reload, and only if it
      * succeeded, the module's config-bound {@code @Scheduled} tasks and {@code @CmdCD} cooldowns
-     * pick up their reloaded values (#531; see {@code PluginManager#applyReloadedConfigBindings}).
+     * pick up their reloaded values (#531; see {@code PluginManager#applyReloadedConfigBindings});
+     * a value that step refuses and keeps, or a part of it that fails, is recorded in the
+     * {@link ReloadReport} as a part that did not reload (#595).
      * {@code final} and always runs its own steps, then calls {@link #onReload()} -- a module can
      * no longer skip any of this by overriding {@code reloadSelf()} itself, because that override
      * point no longer exists (D-01). The hook it calls is {@link #onReload(ReloadReport)}, whose
@@ -2295,7 +2367,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         // reloadConfigs did not throw, so a refused reload leaves the running timings alone.
         PluginManager pluginManager = UltiTools.getInstance().getPluginManager();
         if (pluginManager != null) {
-            pluginManager.applyReloadedConfigBindings(this);
+            // #595: a value the step keeps, or a part of it that fails, is recorded in the report.
+            pluginManager.applyReloadedConfigBindings(this, report);
         }
         // Rebuild the catalogue from this module's language files, re-read from disk and jar, in
         // the language the framework runs with. The `language` setting is one value for the
@@ -2304,6 +2377,9 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         // module. It records the change instead, so the operator is told a full /ul reload
         // applies it (#502).
         language = createLanguageFromPath(resourceFolderPath);
+        // #594: the configs were read above with the old catalogue; now that the language is rebuilt, the framework's
+        // own comment lines follow it - comment lines only, through the config write gate, before the module's hook.
+        getConfigManager().refreshFrameworkComments(this);
         String pendingLanguage = pendingLanguageSetting();
         if (pendingLanguage != null) {
             report.partial(String.format(UltiTools.getInstance().i18n(LANGUAGE_CHANGE_PENDING_KEY),

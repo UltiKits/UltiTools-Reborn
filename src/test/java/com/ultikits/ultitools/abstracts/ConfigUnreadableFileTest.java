@@ -85,8 +85,11 @@ class ConfigUnreadableFileTest {
         assertThat(config.isLastLoadUnparseable()).isFalse();
         config.limit = 35;
         put(broken);
-        config.reload();
+        // #589: a reload of the broken file tells its caller; memory and the file stay unchanged.
+        assertThatThrownBy(config::reload)
+                .isInstanceOf(ConfigurationException.class).hasMessageContaining(PATH);
         assertThat(config.limit).isEqualTo(35);
+        assertThat(config.isLastLoadUnparseable()).isTrue();
         config.save();
         assertThatThrownBy(() -> config.updateProperties(panel()))
                 .isInstanceOf(ConfigurationException.class).hasMessageContaining(PATH);
@@ -172,7 +175,8 @@ class ConfigUnreadableFileTest {
         byte[] before = Files.readAllBytes(file());
         config.limit = 35;
         try (MockedStatic<AtomicConfigWriter> writer = Mockito.mockStatic(AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
-            writer.when(() -> AtomicConfigWriter.write(Mockito.eq(file()), Mockito.anyString()))
+            // A save publishes through the config write gate, which stages before it replaces (17-65).
+            writer.when(() -> AtomicConfigWriter.stage(Mockito.eq(file()), Mockito.anyString()))
                     .thenThrow(new IOException("injected write failure"));
             assertThatThrownBy(config::save).isInstanceOf(IOException.class);
             assertThat(Files.readAllBytes(file())).isEqualTo(before);
@@ -191,7 +195,8 @@ class ConfigUnreadableFileTest {
         int limitBefore = config.limit;
         byte[] before = Files.readAllBytes(file());
         try (MockedStatic<AtomicConfigWriter> writer = Mockito.mockStatic(AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
-            writer.when(() -> AtomicConfigWriter.write(Mockito.eq(file()), Mockito.anyString()))
+            // A panel edit publishes through the config write gate, which stages before it replaces (17-65).
+            writer.when(() -> AtomicConfigWriter.stage(Mockito.eq(file()), Mockito.anyString()))
                     .thenThrow(new IOException("injected write failure"));
             assertThatThrownBy(() -> config.updateProperties(panel())).isInstanceOf(IOException.class);
         }

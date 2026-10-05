@@ -82,7 +82,8 @@ class ConfigCommentTokenSafetyTest {
     void everyLineBreakAndControlCharacterIsSafe() throws Exception {
         lenient().when(plugin.i18n("config.demo.limit"))
                 .thenReturn("Max items (keep it low)\u0085third fourth\u0007");
-        writeFile("demo:\n  # old\n  limit: 25\n  # Display name\n  name: Custom\n");
+        // The bare token is the framework's own comment (#604), so the load rewrites it.
+        writeFile("demo:\n  # {config.demo.limit}\n  limit: 25\n  # Display name\n  name: Custom\n");
 
         new SafetyConfig(PATH).init(plugin);
 
@@ -121,11 +122,13 @@ class ConfigCommentTokenSafetyTest {
     @Test
     @DisplayName("a comment-only rewrite that cannot be written does not fail the load: values bind, a warning names the file")
     void unwritableCommentOnlyRewriteDoesNotFailTheLoad() throws Exception {
-        writeFile("demo:\n  # old\n  limit: 25\n  # Display name\n  name: Custom\n");
+        // The bare token is the framework's own comment (#604), so the load attempts the comment-only write.
+        writeFile("demo:\n  # {config.demo.limit}\n  limit: 25\n  # Display name\n  name: Custom\n");
         byte[] before = Files.readAllBytes(file());
         try (org.mockito.MockedStatic<com.ultikits.ultitools.config.document.AtomicConfigWriter> writer =
                 Mockito.mockStatic(com.ultikits.ultitools.config.document.AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
-            writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.write(
+            // Automatic writes publish through the write gate, which stages before its last-moment re-read (17-63 IN-01).
+            writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.stage(
                     Mockito.eq(file()), Mockito.anyString())).thenThrow(new IOException("injected write failure"));
             SafetyConfig config = new SafetyConfig(PATH);
             try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
