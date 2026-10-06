@@ -431,6 +431,45 @@ class InPlaceFallbackRestoreTest {
         assertThat(second.isFileModifiedSinceSnapshot()).isFalse();
     }
 
+    @Test
+    @DisplayName("not put back during a module save: save fails and the entity treats the file as changed")
+    void notPutBackAtModuleSave() throws Exception {
+        Gate gate = loaded("gate.yml");
+        injectFaults();
+        faults.failForceAtOpen = 1;
+        faults.failOpenAt = 2;
+
+        gate.motd = NEW_VALUE;
+        assertThat(catchThrowable(gate::save)).isInstanceOf(IOException.class);
+
+        assertThat(severe()).hasSize(1);
+        assertThat(gate.isFileModifiedSinceSnapshot()).isTrue();
+    }
+
+    @Test
+    @DisplayName("not put back while a panel batch commits a file: that entity treats its file as changed")
+    void notPutBackAtBatchCommit() throws Exception {
+        write("a.yml", TEXT);
+        ConfigManager manager = new ConfigManager();
+        Gate only = new Gate("a.yml");
+        manager.register(plugin, only);
+        JsonObject edit = new JsonObject();
+        edit.addProperty("motd", NEW_VALUE);
+        JsonObject files = new JsonObject();
+        files.add("a.yml", edit);
+        JsonObject root = new JsonObject();
+        root.add("RestoreModule", files);
+        injectFaults();
+        faults.failForceAtOpen = 1;
+        faults.failOpenAt = 2;
+
+        assertThat(catchThrowable(() -> manager.loadFromJson(root.toString()))).isInstanceOf(IOException.class);
+
+        assertThat(severe()).hasSize(1);
+        assertThat(only.motd).isEqualTo(ORIGINAL_VALUE);
+        assertThat(only.isFileModifiedSinceSnapshot()).isTrue();
+    }
+
     // -------------------------------------------------------------------------------------------------- helpers
 
     private Gate loaded(String name) throws IOException {
