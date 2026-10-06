@@ -1448,6 +1448,19 @@ This section governs the third kind.
   metrics code reads that file at start, before any plugin loads, and rewrites an unparseable copy or one without
   `serverUuid` with fresh defaults (measured on Paper 1.21.11), so on Paper such a file is replaced by the server, never by
   UltiTools, and UltiTools only ever sees a valid file.
+- **`@NotEmpty` on a list, set or map now acts** ([#630](https://github.com/UltiKits/UltiTools-Reborn/issues/630), as of
+  v6.3.0, maintainer decision of 2026-10-06). Before 6.3.0 the check read only the value's text, so an empty list (`[]`)
+  or map (`{}`) passed and the module ran on an empty value its declaration forbids (UltiKits/UltiCleaner#34: an empty
+  `warn-times` silently turned the countdown off). Now a value that a load or reload binds empty - empty or `null` in
+  the file, or a list whose every entry failed to bind - is replaced **in memory** by the field's declared default, and
+  one WARNING names the file, the key, the value kind, the value as written and the default (both redacted for a
+  secret-shaped key). The module loads and the file is not written, at load and at reload; a later `save()` does not
+  write the default either. The declared default must itself be non-empty: a `@NotEmpty` list, set or map whose
+  declared default is empty refuses the module at load as a declaration error naming the field. `@NotEmpty` on text is
+  unchanged (the module refuses to load naming the field). One case moves the other way: a `@NotEmpty` list written
+  as an explicit `null` (`key: ~`) used to refuse the module and now runs the declared default with the warning.
+
+  中文补充：**`@NotEmpty` 用在列表、集合或映射上现在会生效**（自 6.3.0 起，#630，维护者 2026-10-06 决定）。6.3.0 之前只检查值的文本，空列表 `[]` 或空映射 `{}` 都能通过，模块带着声明为“不得为空”的空值运行（UltiKits/UltiCleaner#34：空的 `warn-times` 让倒计时提示悄悄失效）。现在加载或重载时绑定为空的值——文件中为空或为 `null`，或列表中每一项都无法绑定——会在**内存中**改用字段声明的默认值，并输出一条 WARNING，写明文件、键、值的种类、文件中写的值和默认值（键名像机密时两者都隐去）。模块照常加载，加载和重载时都不写文件，之后的 `save()` 也不会把默认值写进去。声明的默认值本身必须非空：声明默认值为空的 `@NotEmpty` 列表、集合或映射属于声明错误，加载时拒绝该模块并指明字段。文本上的 `@NotEmpty` 不变（拒绝加载并指明字段）。有一种情况方向相反：写成显式 `null`（`key: ~`）的 `@NotEmpty` 列表以前会拒绝模块，现在改用声明的默认值并给出同一条警告。
 
 ### Behavioral changes that do need one
 

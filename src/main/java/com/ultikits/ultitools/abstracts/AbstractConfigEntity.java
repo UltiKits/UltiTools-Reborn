@@ -1238,6 +1238,7 @@ public abstract class AbstractConfigEntity {
             this.ultiToolsPlugin = ultiToolsPlugin;
             registry().checkEntityFields(getClass(), ultiToolsPlugin.getPluginName(), configFilePath);
             captureDefaults();
+            checkConstraintDeclarations();
             try { load(true); }
             finally { deferInitialization = false; }
             lastInitIncomplete = false;
@@ -1314,6 +1315,7 @@ public abstract class AbstractConfigEntity {
                     throw new ConfigurationException(invalidDefault.getMessage(), invalidDefault);
                 }
             }
+            useDeclaredDefaultIfEmpty(field, raw);
             Object theirs = plainValue(field);
             baseline.put(field, theirs);
             if (!initialize && savedSnapshot != null && savedSnapshot.containsKey(field)) {
@@ -2440,6 +2442,88 @@ public abstract class AbstractConfigEntity {
         if (value instanceof java.util.Collection) return ((java.util.Collection<?>) value).size();
         if (value instanceof String) return ((String) value).length();
         return -1;
+    }
+
+    // ==================== @NotEmpty on lists, sets and maps (#630) ====================
+
+    /**
+     * The value kind {@code @NotEmpty} treats as a container on {@code field}: {@code "list"}, {@code "set"},
+     * {@code "map"} or {@code "collection"} by the field's declared type, or {@code null} for any other type (text keeps
+     * its refusal).
+     */
+    private String containerKind(Field field) {
+        Class<?> raw = TypeToken.of(getClass()).resolveType(field.getGenericType()).getRawType();
+        if (Map.class.isAssignableFrom(raw)) { return "map"; }
+        if (Set.class.isAssignableFrom(raw)) { return "set"; }
+        if (List.class.isAssignableFrom(raw)) { return "list"; }
+        return java.util.Collection.class.isAssignableFrom(raw) ? "collection" : null;
+    }
+
+    /** Whether a container value holds nothing: {@code null}, an empty collection or an empty map. */
+    private static boolean isEmptyContainer(Object value) {
+        return value == null || value instanceof java.util.Collection && ((java.util.Collection<?>) value).isEmpty()
+                || value instanceof Map && ((Map<?, ?>) value).isEmpty();
+    }
+
+    /**
+     * A {@code @NotEmpty} list, set or map that a load or reload bound empty - the file holds it empty or {@code null},
+     * or every entry failed to bind - runs on the field's declared default in memory (#630, maintainer decision of
+     * 2026-10-06). One WARNING names the file, the key, the value kind, the value as written and the default, redacted
+     * for a secret-shaped key or value as a conversion warning is. It is not a violation, so the module loads.
+     * <p>
+     * Why it cannot overwrite operator content: nothing here writes. The setting's baseline becomes the default the
+     * field now holds (the load records the bound value after this call) and the file's value stays the one last read,
+     * so {@link #save()} finds no module change to write and never puts the default over the operator's empty value.
+     *
+     * @param field the setting just bound, already made accessible
+     * @param raw   the value as the file holds it
+     */
+    private void useDeclaredDefaultIfEmpty(Field field, Object raw) {
+        if (field.getAnnotation(NotEmpty.class) == null) { return; }
+        String kind = containerKind(field);
+        if (kind == null || !isEmptyContainer(ReflectionUtil.getFieldValue(this, field))) { return; }
+        Object declared = declaredDefaults.get(field);
+        try {
+            Object value = registry().fromPlainResult(declared, declaredType(field), configFilePath, keys(field),
+                    field.getAnnotation(ConfigEntry.class)).value();
+            ReflectionUtil.setFieldValue(this, field, value);
+        } catch (ConversionException invalidDefault) {
+            throw new ConfigurationException(invalidDefault.getMessage(), invalidDefault);
+        }
+        boolean secret = isSecretShapedFieldName(field.getName()) || containsSecret(raw) || containsSecret(declared);
+        for (String key : keys(field)) { secret |= isSecretShapedFieldName(key); }
+        LOGGER.warning("File " + configFilePath + ", key '" + fieldPath(field) + "': the " + kind + " is empty (found "
+                + oneLine(secret, raw) + ") but the setting is declared @NotEmpty; using the declared default "
+                + oneLine(secret, declared) + " in memory (the file is not changed)");
+    }
+
+    /** A value for a warning on one log line, or {@code <redacted>}. */
+    private static String oneLine(boolean redacted, Object value) {
+        return redacted ? "<redacted>" : String.valueOf(value).replaceAll("[\\p{Cntrl}\\u2028\\u2029\\u0085]+", " ");
+    }
+
+    /**
+     * Refuses, at load and before the file is read, a constraint declaration the framework cannot hold (#630,
+     * maintainer decision of 2026-10-06): a {@code @NotEmpty} list, set or map whose declared default is empty, which
+     * leaves nothing to run in place of an empty value. One refusal names every such field; no file is read or written.
+     */
+    private void checkConstraintDeclarations() {
+        List<String> errors = new ArrayList<>();
+        for (Field field : configEntryFields()) {
+            String kind = containerKind(field);
+            if (field.getAnnotation(NotEmpty.class) != null && kind != null && isEmptyContainer(declaredDefaults.get(field))) {
+                errors.add("field '" + field.getName() + "' (key '" + fieldPath(field) + "'): @NotEmpty " + kind
+                        + " whose declared default is empty, so there is no value to use when the file holds an empty one");
+            }
+        }
+        if (!errors.isEmpty()) {
+            String module = ultiToolsPlugin != null ? ultiToolsPlugin.getPluginName() : getClass().getSimpleName();
+            throw new ConfigurationException(ErrorCode.CONFIG_VALIDATION_FAILED, "Module '" + module
+                    + "' refused to load: configuration class " + getClass().getName() + " (file '" + configFilePath
+                    + "') declares " + (errors.size() == 1 ? "a constraint" : errors.size() + " constraints")
+                    + " the framework cannot hold: " + String.join("; ", errors)
+                    + ". The file was not read or modified - this is a defect in the module's declaration, not in the file.");
+        }
     }
 
     // ==================== Configuration Change Listener Support ====================
