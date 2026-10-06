@@ -32,6 +32,8 @@ import com.ultikits.ultitools.utils.MockBukkitHelper;
 @DisplayName("@Range: NaN and unbounded infinities are out of range, by the existing outcome (#625)")
 class RangeNotANumberTest {
 
+    private static final String VALID = "tax: 0.5\nftax: 0.5\nboxed: 0.5\nunbounded: 1.0\n";
+
     @TempDir
     Path directory;
 
@@ -59,8 +61,6 @@ class RangeNotANumberTest {
             super(path);
         }
     }
-
-    private static final String VALID = "tax: 0.5\nftax: 0.5\nboxed: 0.5\nunbounded: 1.0\n";
 
     @BeforeEach
     void setUp() throws ReflectiveOperationException {

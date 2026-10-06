@@ -84,6 +84,13 @@ public abstract class AbstractConfigEntity {
 
     @Getter(AccessLevel.NONE)
     private final Map<Field, Object> declaredDefaults = new LinkedHashMap<>();
+    /**
+     * The declared default's own size per field, measured on the Java value when the defaults are captured (0 for an
+     * empty or null container, -1 for a value {@code @Size} does not count): a converter or a legacy parser may give the
+     * default another plain shape, such as a set written as one {@code joined:} entry (PR #632 local Codex run 1).
+     */
+    @Getter(AccessLevel.NONE)
+    private final Map<Field, Integer> declaredDefaultLengths = new LinkedHashMap<>();
     @Getter(AccessLevel.NONE)
     private Map<Field, Object> savedSnapshot;
     @Getter(AccessLevel.NONE)
@@ -800,6 +807,10 @@ public abstract class AbstractConfigEntity {
     private void captureDefaults() {
         if (!defaultsCaptured) {
             declaredDefaults.putAll(currentPlain(configEntryFields()));
+            for (Field field : configEntryFields()) {
+                Object javaDefault = ReflectionUtil.getFieldValue(this, field);
+                declaredDefaultLengths.put(field, isEmptyContainer(javaDefault) ? 0 : getValueLength(javaDefault));
+            }
             defaultsCaptured = true;
         }
     }
@@ -2578,13 +2589,14 @@ public abstract class AbstractConfigEntity {
      * {@code @Range} and {@code @Pattern} on it).
      */
     private String defaultCannotStandIn(Field field, String kind) {
-        Object declared = declaredDefaults.get(field);
-        if (isEmptyContainer(declared)) {
+        // Measured on the Java default, not its plain form, which a converter or parser may shape differently.
+        Integer measured = declaredDefaultLengths.get(field);
+        int length = measured == null ? 0 : measured;
+        if (length == 0) {
             return "@NotEmpty " + kind + " whose declared default is empty, so there is no value to use when the file"
                     + " holds an empty one";
         }
         Size size = field.getAnnotation(Size.class);
-        int length = getValueLength(declared);
         if (size != null && length >= 0 && (length < size.min() || length > size.max())) {
             return "the declared default of this @NotEmpty " + kind + " holds " + length + " entries, outside its own @Size ["
                     + size.min() + ", " + size.max() + "], so it cannot stand in for an empty value";
@@ -2632,8 +2644,9 @@ public abstract class AbstractConfigEntity {
 
     /**
      * Adds an error for every constraint annotation on a field of a value type reached through a setting's declared
-     * {@code type} - the setting's own class, its type arguments and array components, and the declared types of those
-     * classes' non-static, non-transient fields, transitively. The framework validates the setting, never the fields of
+     * {@code type} - the setting's own class, its type arguments (including those a class inherits from a generic
+     * superclass or interface, as in {@code ItemList extends ArrayList<Item>}) and array components, and the declared types
+     * of those classes' non-static, non-transient fields, transitively. The framework validates the setting, never the fields of
      * its value: a converter builds that value, so such a constraint would never be checked (maintainer decision
      * 2026-10-06, row 04:18). Not walked: platform classes ({@code java.*}, Bukkit, Paper, Adventure and the like), which
      * cannot carry these annotations; a config class ({@code AbstractConfigEntity} subclass), whose own entity validates
@@ -2642,17 +2655,17 @@ public abstract class AbstractConfigEntity {
      * declared as an interface or abstract type reaches only that type's own fields, never an implementation's.
      */
     @SuppressWarnings("PMD.NPathComplexity") // One walk over every shape a java.lang.reflect.Type can take.
-    private static void walkValueTypes(String setting, java.lang.reflect.Type type, List<String> errors,
+    private static void walkValueTypes(String setting, Type type, List<String> errors,
             Set<Class<?>> visited) {
         if (type instanceof ParameterizedType) {
-            for (java.lang.reflect.Type argument : ((ParameterizedType) type).getActualTypeArguments()) {
+            for (Type argument : ((ParameterizedType) type).getActualTypeArguments()) {
                 walkValueTypes(setting, argument, errors, visited);
             }
             walkValueTypes(setting, ((ParameterizedType) type).getRawType(), errors, visited);
         } else if (type instanceof java.lang.reflect.GenericArrayType) {
             walkValueTypes(setting, ((java.lang.reflect.GenericArrayType) type).getGenericComponentType(), errors, visited);
         } else if (type instanceof java.lang.reflect.WildcardType) {
-            for (java.lang.reflect.Type bound : ((java.lang.reflect.WildcardType) type).getUpperBounds()) {
+            for (Type bound : ((java.lang.reflect.WildcardType) type).getUpperBounds()) {
                 walkValueTypes(setting, bound, errors, visited);
             }
         } else if (type instanceof Class<?>) {
@@ -2682,6 +2695,29 @@ public abstract class AbstractConfigEntity {
                         // Not resolvable here: no constraint can be read from it either.
                     }
                 }
+                // Type arguments a level inherits, such as Item in ItemList extends ArrayList<Item> (PR #632 Codex run 1).
+                try {
+                    walkTypeArguments(setting, level.getGenericSuperclass(), errors, visited);
+                    for (Type face : level.getGenericInterfaces()) {
+                        walkTypeArguments(setting, face, errors, visited);
+                    }
+                } catch (TypeNotPresentException | java.lang.reflect.MalformedParameterizedTypeException
+                        | LinkageError unresolvable) {
+                    // Not resolvable here: no constraint can be read from it either.
+                }
+            }
+        }
+    }
+
+    /**
+     * Walks the type arguments of a supertype a value type inherits, not the supertype itself: its own fields are walked
+     * level by level by {@link #walkValueTypes}.
+     */
+    private static void walkTypeArguments(String setting, Type supertype, List<String> errors,
+            Set<Class<?>> visited) {
+        if (supertype instanceof ParameterizedType) {
+            for (Type argument : ((ParameterizedType) supertype).getActualTypeArguments()) {
+                walkValueTypes(setting, argument, errors, visited);
             }
         }
     }

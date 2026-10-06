@@ -2,6 +2,7 @@ package com.ultikits.ultitools.abstracts;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.Mockito.lenient;
 
 import java.nio.charset.StandardCharsets;
@@ -95,6 +96,13 @@ class ConstraintDeclarationTest {
                 new ConstraintFixtures.Recipe(new ConstraintFixtures.Item("STONE", 1))));
 
         NestedElementFields(String path) { super(path); }
+    }
+
+    static class InheritedElements extends AbstractConfigEntity {
+        @ConfigEntry(path = "items")
+        ConstraintFixtures.ItemList items = new ConstraintFixtures.ItemList();
+
+        InheritedElements(String path) { super(path); }
     }
 
     static class BackReference extends AbstractConfigEntity {
@@ -201,7 +209,7 @@ class ConstraintDeclarationTest {
         Path file = write("names: [ABC]\n");
         byte[] before = Files.readAllBytes(file);
 
-        Throwable refusal = org.assertj.core.api.Assertions.catchThrowable(() -> new PatternOnList("decl.yml").init(plugin));
+        Throwable refusal = catchThrowable(() -> new PatternOnList("decl.yml").init(plugin));
         assertDeclarationRefusal(refusal, "field 'names'", "@Pattern", "text");
         assertThat(Files.readAllBytes(file)).isEqualTo(before);
     }
@@ -219,7 +227,7 @@ class ConstraintDeclarationTest {
     @DisplayName("@Range on text is refused at load")
     void rangeOnTextIsRefused() throws Exception {
         write("limit: '99'\n");
-        assertDeclarationRefusal(org.assertj.core.api.Assertions.catchThrowable(() -> new RangeOnText("decl.yml").init(plugin)),
+        assertDeclarationRefusal(catchThrowable(() -> new RangeOnText("decl.yml").init(plugin)),
                 "field 'limit'", "@Range", "numbers");
     }
 
@@ -227,7 +235,7 @@ class ConstraintDeclarationTest {
     @DisplayName("@Range on a list of numbers is refused at load")
     void rangeOnListIsRefused() throws Exception {
         write("limits: [99]\n");
-        assertDeclarationRefusal(org.assertj.core.api.Assertions.catchThrowable(() -> new RangeOnList("decl.yml").init(plugin)),
+        assertDeclarationRefusal(catchThrowable(() -> new RangeOnList("decl.yml").init(plugin)),
                 "field 'limits'", "@Range", "numbers");
     }
 
@@ -235,7 +243,7 @@ class ConstraintDeclarationTest {
     @DisplayName("@Size on an Integer is refused at load")
     void sizeOnIntegerIsRefused() throws Exception {
         write("count: 12345\n");
-        assertDeclarationRefusal(org.assertj.core.api.Assertions.catchThrowable(() -> new SizeOnInteger("decl.yml").init(plugin)),
+        assertDeclarationRefusal(catchThrowable(() -> new SizeOnInteger("decl.yml").init(plugin)),
                 "field 'count'", "@Size");
     }
 
@@ -243,7 +251,7 @@ class ConstraintDeclarationTest {
     @DisplayName("constraints on a field of a map's element type (UltiRecipe's OutputItem shape) are refused in one message")
     void elementTypeFieldsAreRefused() throws Exception {
         write("outputs:\n  stone: {material: STONE, amount: 1}\n");
-        Throwable refusal = org.assertj.core.api.Assertions.catchThrowable(() -> new ElementFields("decl.yml").init(plugin));
+        Throwable refusal = catchThrowable(() -> new ElementFields("decl.yml").init(plugin));
         assertDeclarationRefusal(refusal, "field 'outputs'", "ConstraintFixtures.Item.material", "@NotEmpty",
                 "ConstraintFixtures.Item.amount", "@Range");
         assertThat(refusal.getMessage().split("ConstraintFixtures.Item.material", -1)).as("named once").hasSize(2);
@@ -254,8 +262,16 @@ class ConstraintDeclarationTest {
     void nestedElementTypeFieldsAreRefused() throws Exception {
         write("recipes:\n  r: {output: {material: STONE, amount: 1}}\n");
         assertDeclarationRefusal(
-                org.assertj.core.api.Assertions.catchThrowable(() -> new NestedElementFields("decl.yml").init(plugin)),
+                catchThrowable(() -> new NestedElementFields("decl.yml").init(plugin)),
                 "field 'recipes'", "ConstraintFixtures.Item.material", "ConstraintFixtures.Item.amount");
+    }
+
+    @Test
+    @DisplayName("an element type inherited from a container superclass (ItemList extends ArrayList<Item>) is walked (PR #632 Codex run 1)")
+    void inheritedElementTypeIsWalked() throws Exception {
+        write("items: [{material: STONE, amount: 99}]\n");
+        assertDeclarationRefusal(catchThrowable(() -> new InheritedElements("decl.yml").init(plugin)),
+                "field 'items'", "ConstraintFixtures.Item.material", "ConstraintFixtures.Item.amount");
     }
 
     @Test
@@ -280,7 +296,7 @@ class ConstraintDeclarationTest {
     @DisplayName("a constraint on a field that is not a @ConfigEntry setting is refused: nothing would check it")
     void constraintOffASettingIsRefused() throws Exception {
         write("limit: 5\n");
-        assertDeclarationRefusal(org.assertj.core.api.Assertions.catchThrowable(() -> new NotAnEntry("decl.yml").init(plugin)),
+        assertDeclarationRefusal(catchThrowable(() -> new NotAnEntry("decl.yml").init(plugin)),
                 "field 'unbound'", "@Range", "@ConfigEntry");
     }
 
@@ -338,7 +354,7 @@ class ConstraintDeclarationTest {
     @DisplayName("every declaration error of a class is named in one refusal")
     void allErrorsInOneRefusal() throws Exception {
         write("limit: '5'\ncount: 1\n");
-        assertDeclarationRefusal(org.assertj.core.api.Assertions.catchThrowable(() -> new TwoErrors("decl.yml").init(plugin)),
+        assertDeclarationRefusal(catchThrowable(() -> new TwoErrors("decl.yml").init(plugin)),
                 "2 constraints", "field 'limit'", "@Range", "field 'count'", "@Size");
     }
 }

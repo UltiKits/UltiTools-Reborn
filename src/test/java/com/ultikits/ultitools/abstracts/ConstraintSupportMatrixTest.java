@@ -67,11 +67,30 @@ class ConstraintSupportMatrixTest {
 
     private static final AtomicInteger SEQUENCE = new AtomicInteger();
     private static final Map<String, String> TABLE = Collections.synchronizedMap(new java.util.TreeMap<>());
+    /** The text a refusal on a violating value carries, per annotation. */
+    private static final Map<Class<? extends Annotation>, String> VIOLATION = new LinkedHashMap<>();
+    /** The reason a declaration error gives for the annotation's own value type, per annotation. */
+    private static final Map<Class<? extends Annotation>, String> UNCHECKABLE = new LinkedHashMap<>();
+    private static final String INSIDE = "a field inside the setting's value type";
+    private static final List<String> NUMBERS = Arrays.asList("int", "long", "double", "float", "BigDecimal");
+    private static final List<String> TEXT = Arrays.asList("text", "char");
+    private static final List<String> CONTAINERS = Arrays.asList("list", "set", "map", "array");
 
     @TempDir
     Path directory;
 
     private UltiToolsPlugin plugin;
+
+    static {
+        VIOLATION.put(Range.class, "is out of range");
+        VIOLATION.put(Pattern.class, "does not match pattern");
+        VIOLATION.put(Size.class, "field 'value' size ");
+        VIOLATION.put(NotEmpty.class, "field 'value' must not be empty");
+        UNCHECKABLE.put(Range.class, "@Range checks numbers only");
+        UNCHECKABLE.put(Pattern.class, "@Pattern checks text only");
+        UNCHECKABLE.put(Size.class, "@Size counts text, lists, sets, maps and arrays only");
+        UNCHECKABLE.put(NotEmpty.class, "@NotEmpty applies to text, lists, sets, maps and arrays only");
+    }
 
     /** The outcome of loading a violating value. */
     enum Outcome { REFUSED, DEFAULT_WITH_WARNING, DECLARATION_REFUSED, INERT }
@@ -155,14 +174,10 @@ class ConstraintSupportMatrixTest {
      * The "element field" kind carries no constraint on the setting itself: its constraints sit on {@code Item}'s fields.
      */
     static Outcome decided(Class<? extends Annotation> annotation, String kind) {
-        boolean number = Arrays.asList("int", "long", "double", "float", "BigDecimal").contains(kind);
-        boolean text = "text".equals(kind) || "char".equals(kind);
-        boolean container = Arrays.asList("list", "set", "map", "array").contains(kind);
-        if (annotation == Range.class) { return number ? Outcome.REFUSED : Outcome.DECLARATION_REFUSED; }
-        if (annotation == Pattern.class) { return text ? Outcome.REFUSED : Outcome.DECLARATION_REFUSED; }
-        if (annotation == Size.class) { return text || container ? Outcome.REFUSED : Outcome.DECLARATION_REFUSED; }
-        if (text) { return Outcome.REFUSED; }
-        return container ? Outcome.DEFAULT_WITH_WARNING : Outcome.DECLARATION_REFUSED;
+        if (annotation == Range.class) { return NUMBERS.contains(kind) ? Outcome.REFUSED : Outcome.DECLARATION_REFUSED; }
+        if (TEXT.contains(kind)) { return Outcome.REFUSED; }
+        if (!CONTAINERS.contains(kind) || annotation == Pattern.class) { return Outcome.DECLARATION_REFUSED; }
+        return annotation == Size.class ? Outcome.REFUSED : Outcome.DEFAULT_WITH_WARNING;
     }
 
     @BeforeEach
@@ -187,20 +202,11 @@ class ConstraintSupportMatrixTest {
      * its own type and its fields; one without any is refused for its own type only.
      */
     static List<String> reason(Class<? extends Annotation> annotation, String kind, Outcome outcome) {
-        if (outcome == Outcome.REFUSED) {
-            if (annotation == Range.class) { return Collections.singletonList("is out of range"); }
-            if (annotation == Pattern.class) { return Collections.singletonList("does not match pattern"); }
-            if (annotation == Size.class) { return Collections.singletonList("field 'value' size "); }
-            return Collections.singletonList("field 'value' must not be empty");
-        }
+        if (outcome == Outcome.REFUSED) { return Collections.singletonList(VIOLATION.get(annotation)); }
         if (outcome == Outcome.DEFAULT_WITH_WARNING) { return Arrays.asList("key 'value'", "@NotEmpty"); }
-        String inside = "a field inside the setting's value type";
-        if ("element field".equals(kind)) { return Collections.singletonList(inside); }
-        String own = annotation == Range.class ? "@Range checks numbers only"
-                : annotation == Pattern.class ? "@Pattern checks text only"
-                : annotation == Size.class ? "@Size counts text, lists, sets, maps and arrays only"
-                : "@NotEmpty applies to text, lists, sets, maps and arrays only";
-        return "module type".equals(kind) ? Arrays.asList(own, inside) : Collections.singletonList(own);
+        if ("element field".equals(kind)) { return Collections.singletonList(INSIDE); }
+        String own = UNCHECKABLE.get(annotation);
+        return "module type".equals(kind) ? Arrays.asList(own, INSIDE) : Collections.singletonList(own);
     }
 
     @AfterAll
@@ -215,7 +221,7 @@ class ConstraintSupportMatrixTest {
     /** Clears a mocked {@code UltiTools} instance an earlier test class in the same fork left behind (17-74 gate-1 F1). */
     @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // the framework singleton is a private static field
     private static void clearLeakedUltiToolsInstance() throws ReflectiveOperationException {
-        java.lang.reflect.Field instance = com.ultikits.ultitools.UltiTools.class.getDeclaredField("ultiTools");
+        Field instance = com.ultikits.ultitools.UltiTools.class.getDeclaredField("ultiTools");
         instance.setAccessible(true);
         instance.set(null, null);
     }
@@ -290,7 +296,7 @@ class ConstraintSupportMatrixTest {
             assertThat(measured.text).as("the reason of @%s on %s", annotationName, kindName)
                     .contains(reason(annotation, kindName, measured.outcome));
             if ("plain module type".equals(kindName)) {
-                assertThat(measured.text).doesNotContain("a field inside the setting's value type");
+                assertThat(measured.text).doesNotContain(INSIDE);
             }
         }
     }

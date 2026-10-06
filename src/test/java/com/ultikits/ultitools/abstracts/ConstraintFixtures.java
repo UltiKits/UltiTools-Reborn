@@ -55,6 +55,11 @@ final class ConstraintFixtures {
         }
     }
 
+    /** A list type declared as a subclass of {@code ArrayList<Item>}: its element type comes from the superclass (PR #632). */
+    public static class ItemList extends java.util.ArrayList<Item> {
+        private static final long serialVersionUID = 1L;
+    }
+
     /** A value type with no constrained field at all (gate-1 F6): a constraint on it is refused for its own type. */
     public static final class Plain {
         String label;

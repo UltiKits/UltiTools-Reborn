@@ -11,8 +11,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -68,6 +70,26 @@ class NotEmptyDefaultConstraintsTest {
         List<String> lines = new ArrayList<>(Collections.nCopies(16, "line"));
 
         TooLongDefault(String path) { super(path); }
+    }
+
+    /** A @NotEmpty @Size set whose legacy parser writes it as one map entry ({@code joined: 'a,b'}) - PR #632 Codex run 1. */
+    static class ParserShapedDefault extends AbstractConfigEntity {
+        @NotEmpty
+        @Size(min = 2, max = 3)
+        @ConfigEntry(path = "tags", parser = ConfigBindingEdgeCaseTest.JoinedSetParser.class)
+        Set<String> tags = new LinkedHashSet<>(Arrays.asList("a", "b"));
+
+        ParserShapedDefault(String path) { super(path); }
+    }
+
+    /** The same shape with a one-element default, outside its own @Size(min = 2). */
+    static class ParserShapedShortDefault extends AbstractConfigEntity {
+        @NotEmpty
+        @Size(min = 2, max = 3)
+        @ConfigEntry(path = "tags", parser = ConfigBindingEdgeCaseTest.JoinedSetParser.class)
+        Set<String> tags = new LinkedHashSet<>(Collections.singletonList("a"));
+
+        ParserShapedShortDefault(String path) { super(path); }
     }
 
     @BeforeEach
@@ -163,6 +185,19 @@ class NotEmptyDefaultConstraintsTest {
 
         assertThatThrownBy(() -> new TooLongDefault("sidebar.yml").init(plugin)).isInstanceOf(ConfigurationException.class)
                 .hasMessageContaining("declared default").hasMessageContaining("@Size");
+    }
+
+    @Test
+    @DisplayName("the default's size is the Java value's, not its serialized shape: a parser writing it as one map entry loads")
+    void defaultIsMeasuredOnTheJavaValue() throws Exception {
+        write("tags:\n  joined: x,y\n");
+        ParserShapedDefault config = new ParserShapedDefault("sidebar.yml");
+        config.init(plugin);
+        assertThat(config.tags).containsExactly("x", "y");
+
+        assertThatThrownBy(() -> new ParserShapedShortDefault("sidebar.yml").init(plugin))
+                .isInstanceOf(ConfigurationException.class).hasMessageContaining("holds 1 entries")
+                .hasMessageContaining("@Size [2, 3]");
     }
 
     @Test

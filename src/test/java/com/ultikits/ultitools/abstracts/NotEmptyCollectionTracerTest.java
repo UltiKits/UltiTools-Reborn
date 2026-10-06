@@ -2,6 +2,7 @@ package com.ultikits.ultitools.abstracts;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.entry;
 import static org.mockito.Mockito.lenient;
 
 import java.nio.charset.StandardCharsets;
@@ -39,6 +40,7 @@ import com.ultikits.ultitools.utils.MockBukkitHelper;
 class NotEmptyCollectionTracerTest {
 
     private static final FileTime OLD = FileTime.fromMillis(1_500_000_000_000L);
+    private static final String FULL = "warn-times: [10]\nnames: {creeper: Creeper}\napi-tokens: [abc123]\ntitle: Cleaner\n";
 
     @TempDir
     Path directory;
@@ -78,8 +80,6 @@ class NotEmptyCollectionTracerTest {
             super(path);
         }
     }
-
-    private static final String FULL = "warn-times: [10]\nnames: {creeper: Creeper}\napi-tokens: [abc123]\ntitle: Cleaner\n";
 
     @BeforeEach
     void setUp() throws ReflectiveOperationException {
@@ -191,7 +191,7 @@ class NotEmptyCollectionTracerTest {
         try (ConfigWarningCapture capture = ConfigWarningCapture.install()) {
             cleaner.init(plugin);
 
-            assertThat(cleaner.names).containsExactly(org.assertj.core.api.Assertions.entry("zombie", "Zombie"));
+            assertThat(cleaner.names).containsExactly(entry("zombie", "Zombie"));
             assertThat(capture.messages()).hasSize(1);
             assertThat(capture.messages().get(0)).contains("'names'").contains("map").contains("{}")
                     .contains("zombie").contains("@NotEmpty");
@@ -210,7 +210,7 @@ class NotEmptyCollectionTracerTest {
             cleaner.init(plugin);
 
             assertThat(cleaner.warnTimes).containsExactly(10);
-            assertThat(cleaner.names).containsExactly(org.assertj.core.api.Assertions.entry("creeper", "Creeper"));
+            assertThat(cleaner.names).containsExactly(entry("creeper", "Creeper"));
             assertThat(capture.messages()).isEmpty();
         }
         assertUntouched(file, before);
