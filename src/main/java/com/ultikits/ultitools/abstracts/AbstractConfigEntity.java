@@ -2424,8 +2424,10 @@ public abstract class AbstractConfigEntity {
     }
 
     private boolean isNotEmptyViolation(Field field, Object value) {
+        // An empty list, set, map or array is a violation wherever nothing replaces it - a panel write (#630). A load or
+        // reload has already replaced the file's empty value with the declared default (useDeclaredDefaultIfEmpty).
         return field.getAnnotation(NotEmpty.class) != null
-                && (value == null || value.toString().trim().isEmpty());
+                && (value == null || isEmptyContainer(value) || value.toString().trim().isEmpty());
     }
 
     private boolean isSizeViolation(Field field, Object value) {
@@ -2552,9 +2554,9 @@ public abstract class AbstractConfigEntity {
             }
             walkValueTypes(setting, declaredType(field), errors, new java.util.HashSet<>());
             String kind = containerKind(field);
-            if (field.getAnnotation(NotEmpty.class) != null && kind != null && isEmptyContainer(declaredDefaults.get(field))) {
-                errors.add(setting + ": @NotEmpty " + kind
-                        + " whose declared default is empty, so there is no value to use when the file holds an empty one");
+            if (field.getAnnotation(NotEmpty.class) != null && kind != null) {
+                String defaultError = defaultCannotStandIn(field, kind);
+                if (defaultError != null) { errors.add(setting + ": " + defaultError); }
             }
         }
         if (!errors.isEmpty()) {
@@ -2565,6 +2567,27 @@ public abstract class AbstractConfigEntity {
                     + " the framework cannot hold: " + String.join("; ", errors)
                     + ". The file was not read or modified - this is a defect in the module's declaration, not in the file.");
         }
+    }
+
+    /**
+     * Why the declared default of a {@code @NotEmpty} list, set, map or array cannot stand in for an empty value, or
+     * {@code null} when it can (#630, maintainer decision of 2026-10-06): it is empty itself, or it violates the field's
+     * other constraint - {@code @Size}, the only other one such a field can carry (the declaration check refuses
+     * {@code @Range} and {@code @Pattern} on it).
+     */
+    private String defaultCannotStandIn(Field field, String kind) {
+        Object declared = declaredDefaults.get(field);
+        if (isEmptyContainer(declared)) {
+            return "@NotEmpty " + kind + " whose declared default is empty, so there is no value to use when the file"
+                    + " holds an empty one";
+        }
+        Size size = field.getAnnotation(Size.class);
+        int length = getValueLength(declared);
+        if (size != null && length >= 0 && (length < size.min() || length > size.max())) {
+            return "the declared default of this @NotEmpty " + kind + " holds " + length + " entries, outside its own @Size ["
+                    + size.min() + ", " + size.max() + "], so it cannot stand in for an empty value";
+        }
+        return null;
     }
 
     /** The four constraint annotations {@code element} carries, in a fixed order. */

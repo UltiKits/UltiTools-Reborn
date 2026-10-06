@@ -1455,12 +1455,14 @@ This section governs the third kind.
   the file, or a list whose every entry failed to bind - is replaced **in memory** by the field's declared default, and
   one WARNING names the file, the key, the value kind, the value as written and the default (both redacted for a
   secret-shaped key). The module loads and the file is not written, at load and at reload; a later `save()` does not
-  write the default either. The declared default must itself be non-empty: a `@NotEmpty` list, set or map whose
-  declared default is empty refuses the module at load as a declaration error naming the field. `@NotEmpty` on text is
+  write the default either. A panel write that would empty the value is refused like any other violation, and nothing is
+  written. The declared default must itself satisfy the field's constraints - be non-empty, and inside the field's
+  `@Size` if it has one (UltiSideBar's `lines` is `@NotEmpty @Size(min = 1, max = 15)`): a default that does not refuses
+  the module at load as a declaration error naming the field and the constraint, whatever the file holds. `@NotEmpty` on text is
   unchanged (the module refuses to load naming the field). One case moves the other way: a `@NotEmpty` list written
   as an explicit `null` (`key: ~`) used to refuse the module and now runs the declared default with the warning.
 
-  中文补充：**`@NotEmpty` 用在列表、集合或映射上现在会生效**（自 6.3.0 起，#630，维护者 2026-10-06 决定）。6.3.0 之前只检查值的文本，空列表 `[]` 或空映射 `{}` 都能通过，模块带着声明为“不得为空”的空值运行（UltiKits/UltiCleaner#34：空的 `warn-times` 让倒计时提示悄悄失效）。现在加载或重载时绑定为空的值——文件中为空或为 `null`，或列表中每一项都无法绑定——会在**内存中**改用字段声明的默认值，并输出一条 WARNING，写明文件、键、值的种类、文件中写的值和默认值（键名像机密时两者都隐去）。模块照常加载，加载和重载时都不写文件，之后的 `save()` 也不会把默认值写进去。声明的默认值本身必须非空：声明默认值为空的 `@NotEmpty` 列表、集合或映射属于声明错误，加载时拒绝该模块并指明字段。文本上的 `@NotEmpty` 不变（拒绝加载并指明字段）。有一种情况方向相反：写成显式 `null`（`key: ~`）的 `@NotEmpty` 列表以前会拒绝模块，现在改用声明的默认值并给出同一条警告。
+  中文补充：**`@NotEmpty` 用在列表、集合或映射上现在会生效**（自 6.3.0 起，#630，维护者 2026-10-06 决定）。6.3.0 之前只检查值的文本，空列表 `[]` 或空映射 `{}` 都能通过，模块带着声明为“不得为空”的空值运行（UltiKits/UltiCleaner#34：空的 `warn-times` 让倒计时提示悄悄失效）。现在加载或重载时绑定为空的值——文件中为空或为 `null`，或列表中每一项都无法绑定——会在**内存中**改用字段声明的默认值，并输出一条 WARNING，写明文件、键、值的种类、文件中写的值和默认值（键名像机密时两者都隐去）。模块照常加载，加载和重载时都不写文件，之后的 `save()` 也不会把默认值写进去。面板写入会让该值变空时，与其他违规一样被拒绝，什么都不写。声明的默认值本身必须满足该字段的约束——非空，并且若字段带 `@Size` 则在其范围内（UltiSideBar 的 `lines` 是 `@NotEmpty @Size(min = 1, max = 15)`）：不满足时属于声明错误，无论文件里写的是什么，加载时都会拒绝该模块并写明字段和约束。文本上的 `@NotEmpty` 不变（拒绝加载并指明字段）。有一种情况方向相反：写成显式 `null`（`key: ~`）的 `@NotEmpty` 列表以前会拒绝模块，现在改用声明的默认值并给出同一条警告。
 - **`@Range` refuses NaN** ([#625](https://github.com/UltiKits/UltiTools-Reborn/issues/625), as of v6.3.0). The check
   compared with `<` and `>`, both false for NaN, so `rate: .nan` passed a `@Range(min = 0.0, max = 1.0)` and reached
   the module (UltiKits/UltiTrade#64). Now a value must satisfy `min <= value <= max`: NaN is out of every range and
