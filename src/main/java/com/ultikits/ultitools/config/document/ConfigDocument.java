@@ -386,7 +386,7 @@ public final class ConfigDocument {
             int at = indexOf(mapping, path.get(i));
             Node before = at < 0 ? null : mapping.getValue().get(at).getValueNode();
             mapping = childMapping(mapping, path.get(i), plainMapping.get(path.get(i)));
-            if (isNullScalar(before)) {
+            if (isLeftWithNoValue(before)) {
                 recordExpansion(parents, path.subList(0, i + 1), mapping);
             }
             plainMapping = childPlainMapping(plainMapping, path.get(i));
@@ -400,7 +400,7 @@ public final class ConfigDocument {
             NodeTuple old = mapping.getValue().get(index);
             Node updated = update(old.getValueNode(), plainMapping.get(last), copy);
             mapping.getValue().set(index, new NodeTuple(old.getKeyNode(), updated));
-            if (isNullScalar(old.getValueNode()) && isBlockCollection(updated)) {
+            if (isLeftWithNoValue(old.getValueNode()) && isBlockCollection(updated)) {
                 // A key left with no value written whole as a section or a list (#620 sweep): its comment stays the key's.
                 moveInLineCommentsToKey(updated, old.getKeyNode());
                 if (updated instanceof MappingNode) {
@@ -935,7 +935,7 @@ public final class ConfigDocument {
             } else if (!oldPlain.containsKey(key) || !PlainData.plainEquals(oldPlain.get(key), entry.getValue())) {
                 NodeTuple tuple = tuples.get(index);
                 Node updated = update(tuple.getValueNode(), oldPlain.get(key), entry.getValue());
-                if (isNullScalar(tuple.getValueNode()) && isBlockCollection(updated)) {
+                if (isLeftWithNoValue(tuple.getValueNode()) && isBlockCollection(updated)) {
                     // As in set: a key left with no value keeps the comment after its colon (#620 sweep).
                     moveInLineCommentsToKey(updated, tuple.getKeyNode());
                 }
@@ -958,7 +958,7 @@ public final class ConfigDocument {
             MappingNode created = child instanceof Map ? (MappingNode) newNode(child)
                     : new MappingNode(Tag.MAP, new ArrayList<NodeTuple>(), DumperOptions.FlowStyle.BLOCK);
             carryComments(tuple.getValueNode(), created);
-            if (isNullScalar(tuple.getValueNode())) {
+            if (isLeftWithNoValue(tuple.getValueNode())) {
                 // A section line left with no value that becomes a section again (#620): the comment after its colon is
                 // the key's, where a block section keeps it - on the mapping the emitter could not write it.
                 moveInLineCommentsToKey(created, tuple.getKeyNode());
@@ -974,8 +974,14 @@ public final class ConfigDocument {
         return created;
     }
 
-    private static boolean isNullScalar(Node node) {
-        return node instanceof ScalarNode && Tag.NULL.equals(node.getTag());
+    /**
+     * A key's value left empty - nothing after the colon: an empty plain {@code null} (#620). A value written as
+     * {@code ~}, {@code null} or {@code Null} is the operator's own, never "left with no value" (maintainer decision
+     * 2026-10-06), and keeps SnakeYAML's placement of the comment after it.
+     */
+    private static boolean isLeftWithNoValue(Node node) {
+        return node instanceof ScalarNode && Tag.NULL.equals(node.getTag()) && ((ScalarNode) node).getValue().isEmpty()
+                && ((ScalarNode) node).getScalarStyle() == DumperOptions.ScalarStyle.PLAIN;
     }
 
     private static void moveInLineCommentsToKey(Node from, Node key) {
