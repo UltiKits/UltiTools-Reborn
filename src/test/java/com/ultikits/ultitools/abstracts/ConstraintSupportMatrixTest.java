@@ -63,7 +63,7 @@ import net.bytebuddy.dynamic.scaffold.subclass.ConstructorStrategy;
 class ConstraintSupportMatrixTest {
 
     /** Report mode when false: print the table, assert nothing. */
-    private static final boolean ASSERT = false;
+    private static final boolean ASSERT = true;
 
     private static final AtomicInteger SEQUENCE = new AtomicInteger();
     private static final Map<String, String> TABLE = Collections.synchronizedMap(new java.util.TreeMap<>());
@@ -196,9 +196,10 @@ class ConstraintSupportMatrixTest {
         instance.set(null, null);
     }
 
-    private static AnnotationDescription describe(Class<? extends Annotation> annotation) {
+    private static AnnotationDescription describe(Class<? extends Annotation> annotation, Kind kind) {
         AnnotationDescription.Builder builder = AnnotationDescription.Builder.ofType(annotation);
-        if (annotation == Size.class) { builder = builder.define("max", 2); }
+        // A char is one character long, so only a lower bound above 1 can be violated by it.
+        if (annotation == Size.class) { builder = "char".equals(kind.name) ? builder.define("min", 2) : builder.define("max", 2); }
         if (annotation == Pattern.class) { builder = builder.define("regex", "[a-z]+"); }
         if (annotation == Range.class) { builder = builder.define("min", 0.0).define("max", 10.0); }
         return builder.build();
@@ -215,7 +216,7 @@ class ConstraintSupportMatrixTest {
                 .subclass(AbstractConfigEntity.class, ConstructorStrategy.Default.IMITATE_SUPER_CLASS_PUBLIC)
                 .name("com.ultikits.ultitools.abstracts.generated.Matrix" + SEQUENCE.incrementAndGet())
                 .defineField("value", declared, Visibility.PUBLIC)
-                .annotateField(element ? Collections.singletonList(entry) : Arrays.asList(entry, describe(annotation)))
+                .annotateField(element ? Collections.singletonList(entry) : Arrays.asList(entry, describe(annotation, kind)))
                 .make()
                 .load(getClass().getClassLoader(), ClassLoadingStrategy.Default.WRAPPER)
                 .getLoaded();
