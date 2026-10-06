@@ -664,6 +664,7 @@ public final class OperatorFileWriter {
         private final List<List<String>> expanded = new ArrayList<>();
         private String refusal;
 
+        @SuppressWarnings("PMD.NPathComplexity") // Each inserted path is classified on its own; every exit is one shape's verdict.
         static EmptySections of(String text, ConfigDocument original, ConfigDocument candidate, Changes changes) {
             EmptySections result = new EmptySections();
             Node tree = null;
@@ -1010,6 +1011,7 @@ public final class OperatorFileWriter {
      * section ({@link EmptySections}) held {@code null} and must now hold nothing but the inserted keys: once they are
      * stripped it is an empty mapping, which is read back as the {@code null} it was.
      */
+    @SuppressWarnings("PMD.NPathComplexity") // Parse-back, value equality and the owned-path strip are independent checks.
     private static String verifyValues(ConfigDocument original, ConfigDocument candidate, String rendered,
             List<List<String>> changedValues, List<List<String>> expanded, boolean wholeFile) {
         ConfigDocument reparsed = parseOrNull(rendered);

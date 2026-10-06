@@ -34,6 +34,7 @@ class OperatorFileWriterGoldenProfileTest {
 
     private static final String ADDED = "ultitools-golden-profile-added";
     private static final String COMMENT = "Golden profile framework comment";
+    private static final String NO_SECTION = "n/a (no block section)";
     private static final List<String> TABLE = Collections.synchronizedList(new ArrayList<String>());
 
     @TempDir
@@ -92,8 +93,6 @@ class OperatorFileWriterGoldenProfileTest {
 
     private enum Check { INSERT, SET, COMMENT }
 
-    private static final String NO_SECTION = "n/a (no block section)";
-
     /**
      * Write type (d), #620: the operator deletes every child of the first block section (its lines from the one after
      * the section line to the end of its value, found with SnakeYAML's composer, not with the gate's span logic), so the
@@ -101,6 +100,7 @@ class OperatorFileWriterGoldenProfileTest {
      * start-up insert does. Checked independently: the only line of the deleted file that may change is the section
      * line itself, and every added line is one contiguous block directly below it, indented deeper than the section key.
      */
+    @SuppressWarnings("PMD.NPathComplexity") // An independent oracle: shape, write, values and each line property checked separately.
     private String emptySectionInsert(GoldenCorpus.Fixture fixture) throws IOException, ConfigParseException {
         String original = fixture.text();
         String body = original.startsWith("\uFEFF") ? original.substring(1) : original;
@@ -192,20 +192,23 @@ class OperatorFileWriterGoldenProfileTest {
 
     private static Section firstBlockSection(String text, org.yaml.snakeyaml.nodes.MappingNode mapping, List<String> prefix) {
         ConfigDocument.NodeConstructor keys = new ConfigDocument.NodeConstructor();
+        org.yaml.snakeyaml.nodes.NodeTuple found = null;
         for (org.yaml.snakeyaml.nodes.NodeTuple tuple : mapping.getValue()) {
             org.yaml.snakeyaml.nodes.Node value = tuple.getValueNode();
-            if (!(value instanceof org.yaml.snakeyaml.nodes.MappingNode)
-                    || ((org.yaml.snakeyaml.nodes.MappingNode) value).getFlowStyle() == org.yaml.snakeyaml.DumperOptions.FlowStyle.FLOW
-                    || ((org.yaml.snakeyaml.nodes.MappingNode) value).getValue().isEmpty()
-                    || value.getAnchor() != null) {
-                continue;
+            if (found == null && value instanceof org.yaml.snakeyaml.nodes.MappingNode
+                    && ((org.yaml.snakeyaml.nodes.MappingNode) value).getFlowStyle() != org.yaml.snakeyaml.DumperOptions.FlowStyle.FLOW
+                    && !((org.yaml.snakeyaml.nodes.MappingNode) value).getValue().isEmpty()
+                    && value.getAnchor() == null) {
+                found = tuple;
             }
-            List<String> path = new ArrayList<>(prefix);
-            path.add(String.valueOf(keys.construct(tuple.getKeyNode())));
-            int[] region = valueRegion(text, path);
-            return new Section(path, region[0], tuple.getKeyNode().getStartMark().getColumn(), region[1]);
         }
-        return null;
+        if (found == null) {
+            return null;
+        }
+        List<String> path = new ArrayList<>(prefix);
+        path.add(String.valueOf(keys.construct(found.getKeyNode())));
+        int[] region = valueRegion(text, path);
+        return new Section(path, region[0], found.getKeyNode().getStartMark().getColumn(), region[1]);
     }
 
     private String attempt(GoldenCorpus.Fixture fixture, OwnedPaths owned, Consumer<ConfigDocument> edit, Check check)

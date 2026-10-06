@@ -597,11 +597,13 @@ public final class ConfigDocument {
      * @return the file text
      */
     public String render() {
-        MappingNode out = anchored && modified ? reRenderFromPlain() : root;
+        boolean fromPlain = anchored && modified;
+        MappingNode out = fromPlain ? reRenderFromPlain() : root;
         if (out == null) {
             return modified ? "" : source;
         }
-        List<Runnable> undo = out == root ? placeExpansionComments() : Collections.<Runnable>emptyList();
+        // The expansion comments are placed only on the document's own tree, never on a re-render from plain data.
+        List<Runnable> undo = fromPlain ? Collections.<Runnable>emptyList() : placeExpansionComments();
         try {
             return renderFrom(out);
         } finally {
@@ -1023,6 +1025,7 @@ public final class ConfigDocument {
      * at that key's column; they are the leading block comment lines of that key that start below the section line and
      * at a column deeper than the section key.
      */
+    @SuppressWarnings("PMD.NPathComplexity") // Finding the next key in file order and the run under the line are separate walks.
     private void recordExpansion(List<MappingNode> parents, List<String> keys, MappingNode section) {
         MappingNode parent = parents.get(keys.size() - 1);
         int at = indexOf(parent, keys.get(keys.size() - 1));
@@ -1103,6 +1106,7 @@ public final class ConfigDocument {
         }
     }
 
+    @SuppressWarnings("PMD.CompareObjectsWithEquals") // Node identity is the point: the very node, not an equal one.
     private static boolean holdsAsValue(MappingNode parent, Node value) {
         for (NodeTuple tuple : parent.getValue()) {
             if (tuple.getValueNode() == value) {
@@ -1112,6 +1116,7 @@ public final class ConfigDocument {
         return false;
     }
 
+    @SuppressWarnings("PMD.CompareObjectsWithEquals") // The same comment objects the reader attached, not equal text.
     private static boolean startsWithSame(List<CommentLine> lines, List<CommentLine> prefix) {
         if (lines == null || lines.size() < prefix.size()) {
             return false;
@@ -1124,6 +1129,7 @@ public final class ConfigDocument {
         return true;
     }
 
+    @SuppressWarnings("PMD.CompareObjectsWithEquals") // The same comment objects the reader attached, not equal text.
     private static boolean containsSame(List<CommentLine> lines, CommentLine line) {
         for (CommentLine each : lines) {
             if (each == line) {

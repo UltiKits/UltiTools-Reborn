@@ -11,7 +11,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
@@ -114,6 +116,16 @@ class InsertUnderDottedSectionTest {
         int d = 2;
 
         public Three(String path) {
+            super(path);
+        }
+    }
+
+    @ConfigEntity(PATH)
+    public static class Rules extends AbstractConfigEntity {
+        @ConfigEntry(path = "a.b.rules", comment = "Rules")
+        Map<String, String> rules = new LinkedHashMap<>();
+
+        public Rules(String path) {
             super(path);
         }
     }
@@ -321,5 +333,24 @@ class InsertUnderDottedSectionTest {
         config.saveOperatorChange("a.b.d");
 
         assertThat(text()).isEqualTo("a:\n  b.c: 3\n  # D\n  b.d: 9\n");
+    }
+
+    /**
+     * Gate 2, local Codex run 1 (plan 17-75, P2): an undecidable insert location refuses only a change that writes a value.
+     * Removing an entry of a map setting the operator has deleted by hand - with its section held in two forms and no
+     * declared sibling to choose by - writes nothing and completes, as it did before #614.
+     */
+    @Test
+    void removingAnEntryOfASettingDeletedByHandIsNotRefusedForAnUndecidableLocation() throws Exception {
+        write("a.b:\n  rules:\n    greeting: hi\n");
+        Rules config = new Rules(PATH);
+        config.init(plugin);
+        byte[] split = "a.b:\n  x: 1\na:\n  b:\n    y: 2\n".getBytes(StandardCharsets.UTF_8);
+        Files.write(file(), split);
+
+        config.rules.remove("greeting");
+        config.saveOperatorMapEntry("a.b.rules", "greeting");
+
+        assertThat(Files.readAllBytes(file())).as("nothing to remove, nothing written").isEqualTo(split);
     }
 }

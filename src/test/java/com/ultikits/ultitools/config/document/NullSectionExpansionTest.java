@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.config.document;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 
@@ -9,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -23,8 +25,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockito.Mockito;
+import org.yaml.snakeyaml.error.YAMLException;
 
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
@@ -267,16 +272,16 @@ class NullSectionExpansionTest {
     @Nested
     class TheOperatorsOwnNullValues {
 
-        @org.junit.jupiter.params.ParameterizedTest(name = "foo: {0}  # placeholder")
-        @org.junit.jupiter.params.provider.ValueSource(strings = {"~", "null", "Null"})
+        @ParameterizedTest(name = "foo: {0}  # placeholder")
+        @ValueSource(strings = {"~", "null", "Null"})
         void anExplicitNullWithACommentIsNotTreatedAsLeftEmpty(String value) throws Exception {
             ConfigDocument document = ConfigDocument.parse("rules:\n  foo: " + value + "  # placeholder\n");
             Map<String, Object> entry = new LinkedHashMap<>();
             entry.put("keyword", "hi");
-            document.set(java.util.Arrays.asList("rules", "foo"), entry);
+            document.set(Arrays.asList("rules", "foo"), entry);
 
-            org.assertj.core.api.Assertions.assertThatThrownBy(document::render)
-                    .isInstanceOf(org.yaml.snakeyaml.error.YAMLException.class);
+            assertThatThrownBy(document::render)
+                    .isInstanceOf(YAMLException.class);
         }
 
         @Test
@@ -284,7 +289,7 @@ class NullSectionExpansionTest {
             ConfigDocument document = ConfigDocument.parse("rules:\n  foo:  # placeholder\n");
             Map<String, Object> entry = new LinkedHashMap<>();
             entry.put("keyword", "hi");
-            document.set(java.util.Arrays.asList("rules", "foo"), entry);
+            document.set(Arrays.asList("rules", "foo"), entry);
 
             assertThat(document.render()).isEqualTo("rules:\n  foo: # placeholder\n    keyword: hi\n");
         }
@@ -311,8 +316,8 @@ class NullSectionExpansionTest {
             return spelling.isEmpty() ? key + ":" : key + ": " + spelling;
         }
 
-        @org.junit.jupiter.params.ParameterizedTest(name = "gate: messages: [{0}]")
-        @org.junit.jupiter.params.provider.ValueSource(strings = {NONE, "~", "null", "Null", "NULL", "!!null",
+        @ParameterizedTest(name = "gate: messages: [{0}]")
+        @ValueSource(strings = {NONE, "~", "null", "Null", "NULL", "!!null",
                 "!<tag:yaml.org,2002:null>", "!!null ''"})
         void theWriteGate(String spelling) throws Exception {
             String text = "other: 1\n" + line("messages", spelling) + "  # c\n";
@@ -330,26 +335,26 @@ class NullSectionExpansionTest {
             }
         }
 
-        @org.junit.jupiter.params.ParameterizedTest(name = "childMapping: messages: [{0}]")
-        @org.junit.jupiter.params.provider.ValueSource(strings = {NONE, "~", "null", "Null", "NULL", "!!null",
+        @ParameterizedTest(name = "childMapping: messages: [{0}]")
+        @ValueSource(strings = {NONE, "~", "null", "Null", "NULL", "!!null",
                 "!<tag:yaml.org,2002:null>", "!!null ''"})
         void theExpansionOfATraversedKey(String spelling) throws Exception {
             ConfigDocument document = ConfigDocument.parse(line("messages", spelling) + "  # c\nother: 1\n");
-            document.set(java.util.Arrays.asList("messages", "x"), "v");
+            document.set(Arrays.asList("messages", "x"), "v");
             if (noValue(spelling)) {
                 assertThat(document.render()).isEqualTo("messages: # c\n  x: v\nother: 1\n");
             } else {
-                org.assertj.core.api.Assertions.assertThatThrownBy(document::render)
-                        .isInstanceOf(org.yaml.snakeyaml.error.YAMLException.class);
+                assertThatThrownBy(document::render)
+                        .isInstanceOf(YAMLException.class);
             }
         }
 
-        @org.junit.jupiter.params.ParameterizedTest(name = "comment placement: messages: [{0}]")
-        @org.junit.jupiter.params.provider.ValueSource(strings = {NONE, "~", "null", "Null", "NULL", "!!null",
+        @ParameterizedTest(name = "comment placement: messages: [{0}]")
+        @ValueSource(strings = {NONE, "~", "null", "Null", "NULL", "!!null",
                 "!<tag:yaml.org,2002:null>", "!!null ''"})
         void theCommentsIndentedUnderTheKey(String spelling) throws Exception {
             ConfigDocument document = ConfigDocument.parse(line("messages", spelling) + "\n  # child\nnext: 1\n");
-            document.set(java.util.Arrays.asList("messages", "x"), "v");
+            document.set(Arrays.asList("messages", "x"), "v");
             String rendered = document.render();
             if (noValue(spelling)) {
                 assertThat(rendered).isEqualTo("messages:\n  x: v\n  # child\nnext: 1\n");
@@ -358,32 +363,32 @@ class NullSectionExpansionTest {
             }
         }
 
-        @org.junit.jupiter.params.ParameterizedTest(name = "set: foo: [{0}]")
-        @org.junit.jupiter.params.provider.ValueSource(strings = {NONE, "~", "null", "Null", "NULL", "!!null",
+        @ParameterizedTest(name = "set: foo: [{0}]")
+        @ValueSource(strings = {NONE, "~", "null", "Null", "NULL", "!!null",
                 "!<tag:yaml.org,2002:null>", "!!null ''"})
         void aWholeKeyWrite(String spelling) throws Exception {
             ConfigDocument document = ConfigDocument.parse(line("foo", spelling) + "  # c\n");
-            document.set(java.util.Collections.singletonList("foo"), java.util.Collections.singletonMap("k", "v"));
+            document.set(Collections.singletonList("foo"), Collections.singletonMap("k", "v"));
             if (noValue(spelling)) {
                 assertThat(document.render()).isEqualTo("foo: # c\n  k: v\n");
             } else {
-                org.assertj.core.api.Assertions.assertThatThrownBy(document::render)
-                        .isInstanceOf(org.yaml.snakeyaml.error.YAMLException.class);
+                assertThatThrownBy(document::render)
+                        .isInstanceOf(YAMLException.class);
             }
         }
 
-        @org.junit.jupiter.params.ParameterizedTest(name = "merge: r.foo: [{0}]")
-        @org.junit.jupiter.params.provider.ValueSource(strings = {NONE, "~", "null", "Null", "NULL", "!!null",
+        @ParameterizedTest(name = "merge: r.foo: [{0}]")
+        @ValueSource(strings = {NONE, "~", "null", "Null", "NULL", "!!null",
                 "!<tag:yaml.org,2002:null>", "!!null ''"})
         void anEntryOfAMergedMap(String spelling) throws Exception {
             ConfigDocument document = ConfigDocument.parse("r:\n  " + line("foo", spelling) + "  # c\n");
-            document.set(java.util.Collections.singletonList("r"),
-                    java.util.Collections.singletonMap("foo", java.util.Collections.singletonMap("k", "v")));
+            document.set(Collections.singletonList("r"),
+                    Collections.singletonMap("foo", Collections.singletonMap("k", "v")));
             if (noValue(spelling)) {
                 assertThat(document.render()).isEqualTo("r:\n  foo: # c\n    k: v\n");
             } else {
-                org.assertj.core.api.Assertions.assertThatThrownBy(document::render)
-                        .isInstanceOf(org.yaml.snakeyaml.error.YAMLException.class);
+                assertThatThrownBy(document::render)
+                        .isInstanceOf(YAMLException.class);
             }
         }
     }

@@ -654,8 +654,9 @@ public abstract class AbstractConfigEntity {
             // Written on the line the file holds the setting on - a flat dotted key stays flat - and refused when the file
             // now holds it twice, since writing one form would leave the other (#612).
             if (heldTwice(read, change.field)) { throw refused(heldTwiceReason(change.field) + "; delete one of them, then reload"); }
-            if (read.readings(fieldPath(change.field)).isEmpty() && insertKeysIn(read, change.field) == null) {
-                // Inserted below the section the file holds, never into a second form of it (#614).
+            if (change.present && read.readings(fieldPath(change.field)).isEmpty() && insertKeysIn(read, change.field) == null) {
+                // Inserted below the section the file holds, never into a second form of it (#614). Only a change that
+                // writes a value inserts; removing from a setting the file no longer holds writes nothing (Codex run 1).
                 throw refused("setting '" + fieldPath(change.field) + "' cannot be inserted: " + unplacedReason(read, change.field)
                         + "; delete one of the forms, then reload");
             }
