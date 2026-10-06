@@ -1461,6 +1461,15 @@ This section governs the third kind.
   as an explicit `null` (`key: ~`) used to refuse the module and now runs the declared default with the warning.
 
   中文补充：**`@NotEmpty` 用在列表、集合或映射上现在会生效**（自 6.3.0 起，#630，维护者 2026-10-06 决定）。6.3.0 之前只检查值的文本，空列表 `[]` 或空映射 `{}` 都能通过，模块带着声明为“不得为空”的空值运行（UltiKits/UltiCleaner#34：空的 `warn-times` 让倒计时提示悄悄失效）。现在加载或重载时绑定为空的值——文件中为空或为 `null`，或列表中每一项都无法绑定——会在**内存中**改用字段声明的默认值，并输出一条 WARNING，写明文件、键、值的种类、文件中写的值和默认值（键名像机密时两者都隐去）。模块照常加载，加载和重载时都不写文件，之后的 `save()` 也不会把默认值写进去。声明的默认值本身必须非空：声明默认值为空的 `@NotEmpty` 列表、集合或映射属于声明错误，加载时拒绝该模块并指明字段。文本上的 `@NotEmpty` 不变（拒绝加载并指明字段）。有一种情况方向相反：写成显式 `null`（`key: ~`）的 `@NotEmpty` 列表以前会拒绝模块，现在改用声明的默认值并给出同一条警告。
+- **`@Range` refuses NaN** ([#625](https://github.com/UltiKits/UltiTools-Reborn/issues/625), as of v6.3.0). The check
+  compared with `<` and `>`, both false for NaN, so `rate: .nan` passed a `@Range(min = 0.0, max = 1.0)` and reached
+  the module (UltiKits/UltiTrade#64). Now a value must satisfy `min <= value <= max`: NaN is out of every range and
+  gets the ordinary out-of-range outcome - the module refuses to load at start, and at `/ul reload` the reload is refused
+  and the running values are kept, naming the field, the value and the bounds. `.inf` and `-.inf` were already out of
+  range for every finite bound and still are; a bound declared as `Double.POSITIVE_INFINITY` (or negative) accepts that
+  infinity.
+
+  中文补充：**`@Range` 拒绝 NaN**（自 6.3.0 起，#625）。原来的检查用 `<` 和 `>` 比较，对 NaN 都为假，因此 `rate: .nan` 能通过 `@Range(min = 0.0, max = 1.0)` 并进入模块（UltiKits/UltiTrade#64）。现在值必须满足 `min <= 值 <= max`：NaN 超出任何范围，按普通越界处理——启动时拒绝加载模块，`/ul reload` 时拒绝这次重载并保留运行中的值，都会写明字段、值和范围。`.inf`、`-.inf` 本来就超出任何有限范围，现在仍然如此；边界声明为 `Double.POSITIVE_INFINITY`（或负无穷）时接受对应的无穷大。
 
 ### Behavioral changes that do need one
 

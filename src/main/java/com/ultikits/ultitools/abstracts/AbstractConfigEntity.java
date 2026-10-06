@@ -2418,7 +2418,9 @@ public abstract class AbstractConfigEntity {
         Range range = field.getAnnotation(Range.class);
         if (range == null || !(value instanceof Number)) return false;
         double num = ((Number) value).doubleValue();
-        return num < range.min() || num > range.max();
+        // Written as "not inside" so NaN, for which every comparison is false, is out of every range (#625); an
+        // infinity is inside only a range whose bound is that infinity.
+        return !(num >= range.min() && num <= range.max());
     }
 
     private boolean isNotEmptyViolation(Field field, Object value) {

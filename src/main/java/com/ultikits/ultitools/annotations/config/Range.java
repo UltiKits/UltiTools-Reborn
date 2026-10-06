@@ -8,7 +8,13 @@ import java.lang.annotation.Target;
 /**
  * Validates that a numeric config value falls within the specified range.
  * If the value is out of range, the module refuses to load naming the field, the actual value,
- * and the violated bounds - the config file is never rewritten (D-01).
+ * and the violated bounds - the config file is never rewritten (D-01). On a reload the reload is
+ * refused instead and the running values are kept.
+ * <p>
+ * Since 6.3.0 (#625) the value must satisfy {@code min <= value && value <= max}, compared as a
+ * {@code double}: NaN ({@code .nan} in YAML) is out of every range, and positive or negative infinity
+ * ({@code .inf}, {@code -.inf}) is out of range unless the bound on that side is itself that infinity,
+ * for example {@code max = Double.POSITIVE_INFINITY}.
  *
  * @see com.ultikits.ultitools.annotations.ConfigEntry
  */
