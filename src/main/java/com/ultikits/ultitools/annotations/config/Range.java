@@ -24,7 +24,9 @@ import java.lang.annotation.Target;
  * that is not a {@code @ConfigEntry} setting.
  * <p>
  * It takes effect only on a field that is itself a {@code @ConfigEntry} setting of a config class, judged by that field's
- * declared type. On a field of a value type, a nested class or anything a converter produces it is never checked and not
+ * declared type. A declared type that can hold a value the annotation checks - {@code Object}, {@code Serializable},
+ * {@code Comparable}, {@code CharSequence}, {@code Number} or another supertype of a checked kind - is accepted, and the
+ * value bound at load is checked; only a type that can never hold a checkable value is a declaration error. On a field of a value type, a nested class or anything a converter produces it is never checked and not
  * reported (maintainer decision of 2026-10-06): validate such fields in the module's converter.
  *
  * @see com.ultikits.ultitools.annotations.ConfigEntry

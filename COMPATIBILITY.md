@@ -1479,7 +1479,10 @@ This section governs the third kind.
   ([#631](https://github.com/UltiKits/UltiTools-Reborn/issues/631), as of v6.3.0, maintainer decision of 2026-10-06).
   Before 6.3.0 such a declaration did nothing, with no message: `@Range` on anything but a number, `@Pattern` on anything
   but text, `@Size` on a map or an array, `@Size` and `@NotEmpty` on numbers, booleans, enums or value types. Now, for a
-  field that is itself a `@ConfigEntry` setting, judged by its declared type:
+  field that is itself a `@ConfigEntry` setting, judged by its declared type. A declared type that can hold a value the
+  annotation checks - `Object`, `Serializable`, `Comparable`, `CharSequence`, `Number` or another supertype of a checked
+  kind - is not an error: the value bound at load is checked, as before 6.3.0. Only a type that can never hold a
+  checkable value is:
   - `@Size` counts a map's entries and an array's length (a violation refuses the module like any `@Size` violation).
     Text is a `String` or a `char` for `@NotEmpty`, `@Size` and `@Pattern`.
   - Every other such declaration refuses the module at load, before its file is read, with one message naming each
@@ -1496,7 +1499,7 @@ This section governs the third kind.
     `recipes` setting. They are not checked (it checks them itself), and the module loads; its 6.3.0 build removes the two
     annotations as cleanup. No first-party module is refused by these declaration checks.
 
-  中文补充：**框架无法检查的约束注解会让模块在加载时被拒绝**（自 6.3.0 起，#631，维护者 2026-10-06 决定）。6.3.0 之前这类声明什么也不做、也没有任何提示：用在非数字上的 `@Range`、非文本上的 `@Pattern`、映射或数组上的 `@Size`、数字/布尔/枚举/值类型上的 `@Size` 与 `@NotEmpty`。现在，对本身就是 `@ConfigEntry` 设置的字段，按其声明类型判断：`@Size` 统计映射的条目数和数组长度（违规时与其他 `@Size` 违规一样拒绝模块）；对 `@NotEmpty`、`@Size`、`@Pattern` 而言，文本指 `String` 或 `char`。其他这类声明都会在加载时、读取配置文件之前拒绝模块，一条消息写明每个字段、注解和原因：`@Range` 只检查数字；`@Pattern` 只检查文本；`@Size` 与 `@NotEmpty` 只适用于文本、列表、集合、映射和数组（`List<Integer>` 上的 `@Range` 就属于这种错误：它不适用于列表本身）。配置类中不是 `@ConfigEntry` 设置的字段上的约束同样会被拒绝。**约束注解只对本身就是配置类 `@ConfigEntry` 设置的字段生效。** 值类型的字段、嵌套类的字段，以及转换器产生的任何对象上的注解（例如 `Map<String, Item>` 设置中 `Item` 类字段上的 `@NotEmpty`）既不检查也不报告；框架不会深入值类型（#633，按维护者 2026-10-06 的决定关闭）。请在模块的转换器中校验这些字段（在那里跳过或拒绝该条目）。第一方模块：UltiRecipe 在 `RecipeConfig.OutputItem`（其 `recipes` 设置中的值）上声明了 `@NotEmpty` 和 `@Range`，它们不会被检查（模块自行检查），模块照常加载；它面向 6.3.0 的构建会顺带删除这两个注解。没有第一方模块会被这些声明检查拒绝。
+  中文补充：**框架无法检查的约束注解会让模块在加载时被拒绝**（自 6.3.0 起，#631，维护者 2026-10-06 决定）。6.3.0 之前这类声明什么也不做、也没有任何提示：用在非数字上的 `@Range`、非文本上的 `@Pattern`、映射或数组上的 `@Size`、数字/布尔/枚举/值类型上的 `@Size` 与 `@NotEmpty`。现在，对本身就是 `@ConfigEntry` 设置的字段，按其声明类型判断；声明类型若能容纳注解可检查的值（`Object`、`Serializable`、`Comparable`、`CharSequence`、`Number` 或其他被检查种类的父类型），则不算错误，加载时绑定的值照常检查，与 6.3.0 之前相同；只有永远不可能容纳可检查值的类型才算声明错误：`@Size` 统计映射的条目数和数组长度（违规时与其他 `@Size` 违规一样拒绝模块）；对 `@NotEmpty`、`@Size`、`@Pattern` 而言，文本指 `String` 或 `char`。其他这类声明都会在加载时、读取配置文件之前拒绝模块，一条消息写明每个字段、注解和原因：`@Range` 只检查数字；`@Pattern` 只检查文本；`@Size` 与 `@NotEmpty` 只适用于文本、列表、集合、映射和数组（`List<Integer>` 上的 `@Range` 就属于这种错误：它不适用于列表本身）。配置类中不是 `@ConfigEntry` 设置的字段上的约束同样会被拒绝。**约束注解只对本身就是配置类 `@ConfigEntry` 设置的字段生效。** 值类型的字段、嵌套类的字段，以及转换器产生的任何对象上的注解（例如 `Map<String, Item>` 设置中 `Item` 类字段上的 `@NotEmpty`）既不检查也不报告；框架不会深入值类型（#633，按维护者 2026-10-06 的决定关闭）。请在模块的转换器中校验这些字段（在那里跳过或拒绝该条目）。第一方模块：UltiRecipe 在 `RecipeConfig.OutputItem`（其 `recipes` 设置中的值）上声明了 `@NotEmpty` 和 `@Range`，它们不会被检查（模块自行检查），模块照常加载；它面向 6.3.0 的构建会顺带删除这两个注解。没有第一方模块会被这些声明检查拒绝。
 
 ### Behavioral changes that do need one
 

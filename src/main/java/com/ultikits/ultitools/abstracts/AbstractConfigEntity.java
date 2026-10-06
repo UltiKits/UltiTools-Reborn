@@ -72,6 +72,12 @@ import lombok.Getter;
 public abstract class AbstractConfigEntity {
     private static final Object ABSENT_RELOAD_VALUE = new Object();
     private static final Logger LOGGER = Logger.getLogger(AbstractConfigEntity.class.getName());
+    /** Representative classes of each kind a constraint checks, for "can a value of the declared type be one of them". */
+    private static final List<Class<?>> NUMBER_KINDS = Arrays.asList(Integer.class, Long.class, Double.class, Float.class,
+            Short.class, Byte.class, java.math.BigInteger.class, java.math.BigDecimal.class);
+    private static final List<Class<?>> TEXT_KINDS = Arrays.asList(String.class, Character.class);
+    private static final List<Class<?>> CONTAINER_KINDS = Arrays.asList(ArrayList.class, java.util.LinkedHashSet.class,
+            LinkedHashMap.class, Object[].class);
 
     private final String configFilePath;
     private final List<ConfigChangeListener> changeListeners = new CopyOnWriteArrayList<>();
@@ -769,15 +775,7 @@ public abstract class AbstractConfigEntity {
     }
 
     private Type declaredType(Field field) {
-        return resolveIn(getClass(), field.getGenericType());
-    }
-
-    /**
-     * {@code declared} - a field's generic type - as seen from {@code owner}, its type variables substituted: the
-     * resolution used for every setting the load binds and the declaration check reads ({@link #declaredType}).
-     */
-    private static Type resolveIn(Type owner, Type declared) {
-        return TypeToken.of(owner).resolveType(declared).getType();
+        return TypeToken.of(getClass()).resolveType(field.getGenericType()).getType();
     }
 
     private Object plainValue(Field field) { return plainValue(field, false); }
@@ -2637,17 +2635,32 @@ public abstract class AbstractConfigEntity {
                 : "@NotEmpty applies to text, lists, sets, maps and arrays only";
     }
 
+    /**
+     * Whether a field declared as {@code raw} can hold a value of one of {@code kinds}: {@code raw} is one of them, a
+     * subtype, or a supertype such as {@code Object}, {@code Serializable}, {@code Comparable}, {@code CharSequence} or
+     * {@code Number} (final review F1 of plan 17-76). The runtime validator checks the value bound at load, so only a
+     * declared type that can never hold a checkable value is a declaration error.
+     */
+    private static boolean canHold(Class<?> raw, List<Class<?>> kinds) {
+        Class<?> declared = ConversionTypes.boxed(raw);
+        for (Class<?> kind : kinds) {
+            if (declared.isAssignableFrom(kind) || kind.isAssignableFrom(declared)) { return true; }
+        }
+        return false;
+    }
+
     private static boolean isNumberType(Class<?> raw) {
-        return Number.class.isAssignableFrom(raw)
-                || raw.isPrimitive() && raw != boolean.class && raw != char.class && raw != void.class;
+        return raw != boolean.class && raw != char.class && raw != void.class
+                && (Number.class.isAssignableFrom(ConversionTypes.boxed(raw)) || canHold(raw, NUMBER_KINDS));
     }
 
     private static boolean isTextType(Class<?> raw) {
-        return raw == String.class || raw == char.class || raw == Character.class;
+        return canHold(raw, TEXT_KINDS);
     }
 
     private static boolean isContainerType(Class<?> raw) {
-        return java.util.Collection.class.isAssignableFrom(raw) || Map.class.isAssignableFrom(raw) || raw.isArray();
+        return java.util.Collection.class.isAssignableFrom(raw) || Map.class.isAssignableFrom(raw) || raw.isArray()
+                || canHold(raw, CONTAINER_KINDS);
     }
 
     // ==================== Configuration Change Listener Support ====================
