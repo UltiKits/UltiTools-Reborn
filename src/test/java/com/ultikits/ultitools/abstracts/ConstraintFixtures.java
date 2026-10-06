@@ -22,17 +22,18 @@ import com.ultikits.ultitools.config.convert.ConverterRegistry;
 import com.ultikits.ultitools.utils.PackageScanUtils;
 
 /**
- * Test-only module value types for the constraint tests of plan 17-76: an element type whose fields carry constraint
- * annotations, bound by a module converter - the shape of UltiRecipe's {@code RecipeConfig.OutputItem}, which the
- * framework never validates.
+ * Test-only module value types for the constraint tests of plan 17-76: value types whose fields carry constraint
+ * annotations, bound by module converters - the shape of UltiRecipe's {@code RecipeConfig.OutputItem}. The framework
+ * checks constraints only on {@code @ConfigEntry} fields, so the annotations on these types' fields are never checked
+ * (maintainer decision of 2026-10-06; {@code ConstraintDeclarationTest#nestedConstraintsAreNotChecked} pins it).
  */
-@SuppressWarnings("unused") // the value types' fields are read reflectively by the declaration check
+@SuppressWarnings("unused") // the value types' fields exist to show that they are never read
 final class ConstraintFixtures {
 
     private ConstraintFixtures() {
     }
 
-    /** A module value type with constrained fields, reached through a declared setting. */
+    /** A module value type with constrained fields, held by a declared setting; its constraints are never checked. */
     public static final class Item {
         @NotEmpty
         String material;
@@ -223,7 +224,7 @@ final class ConstraintFixtures {
         }
     }
 
-    /** A self-referencing value type: the same type again, nothing new to walk (control for the walk limit). */
+    /** A self-referencing value type (a former walk shape, now pinned as loading). */
     public static final class Chain {
         Chain next;
         String name;
@@ -384,6 +385,39 @@ final class ConstraintFixtures {
         @Override String name(PlainRack value) { return value.name; }
     }
 
+    /** Binds a {@code Number} setting from the plain number, as a module converter would (final review F1). */
+    @ConfigConverterFor(value = Number.class, exact = true)
+    public static class NumberConverter implements ConfigConverter<Number> {
+        @Override public Object toPlain(Number value, ConversionContext ctx) { return value; }
+        @Override public Number fromPlain(Object plain, ConversionContext ctx) throws ConversionException {
+            if (!(plain instanceof Number)) { throw new ConversionException("Expected a number", ctx.file(), ctx.path(), ctx.declaredType()); }
+            return (Number) plain;
+        }
+    }
+
+    /** Binds a {@code CharSequence} setting from the plain text (final review F1). */
+    @ConfigConverterFor(value = CharSequence.class, exact = true)
+    public static class CharSequenceConverter implements ConfigConverter<CharSequence> {
+        @Override public Object toPlain(CharSequence value, ConversionContext ctx) { return value.toString(); }
+        @Override public CharSequence fromPlain(Object plain, ConversionContext ctx) { return String.valueOf(plain); }
+    }
+
+    /** Binds a {@code Serializable} setting to the plain value itself (final review F1). */
+    @ConfigConverterFor(value = java.io.Serializable.class, exact = true)
+    public static class SerializableConverter implements ConfigConverter<java.io.Serializable> {
+        @Override public Object toPlain(java.io.Serializable value, ConversionContext ctx) { return value; }
+        @Override public java.io.Serializable fromPlain(Object plain, ConversionContext ctx) {
+            return plain instanceof java.util.List ? new java.util.ArrayList<>((java.util.List<?>) plain) : (java.io.Serializable) plain;
+        }
+    }
+
+    /** Binds a {@code Comparable} setting to the plain number or text (final review F1). */
+    @ConfigConverterFor(value = Comparable.class, exact = true)
+    public static class ComparableConverter implements ConfigConverter<Comparable<?>> {
+        @Override public Object toPlain(Comparable<?> value, ConversionContext ctx) { return value; }
+        @Override public Comparable<?> fromPlain(Object plain, ConversionContext ctx) { return (Comparable<?>) plain; }
+    }
+
     /** Binds {@link ManyHolders}. */
     @ConfigConverterFor(ManyHolders.class)
     public static class ManyHoldersConverter extends NamedConverter<ManyHolders> {
@@ -480,7 +514,9 @@ final class ConstraintFixtures {
                                         AtomicReferenceConverter.class, MultimapConverter.class,
                                         ManyHoldersConverter.class, TreeConverter.class, ChainConverter.class,
                                         DrawingConverter.class, TaggedConverter.class, PrizeConverter.class,
-                                        AuraConverter.class, ItemRackConverter.class, PlainRackConverter.class))
+                                        AuraConverter.class, ItemRackConverter.class, PlainRackConverter.class,
+                                        NumberConverter.class, CharSequenceConverter.class, SerializableConverter.class,
+                                        ComparableConverter.class))
                                 : Collections.emptySet();
                     });
             ConverterRegistry.prepareModule(plugin, new String[]{"fixture.constraints"},

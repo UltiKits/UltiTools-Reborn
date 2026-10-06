@@ -34,10 +34,11 @@ import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 
 /**
- * #631 (maintainer decision of 2026-10-06, option A): a constraint annotation on a value type it can never check - or
- * on a field of an element type reached through a declared setting, which the framework never validates - refuses the
- * module at load with one message naming the field, the annotation and why; nothing is silently ignored. {@code @Size}
- * is extended to count a map's entries. On the base every declaration below loads silently.
+ * #631 (maintainer decisions of 2026-10-06): a constraint annotation on a {@code @ConfigEntry} field whose declared type
+ * can never hold a value it checks, or on a field of the config class that is not a {@code @ConfigEntry}, refuses the
+ * module at load with one message naming the field, the annotation and why. {@code @Size} is extended to count a map's
+ * entries. A constraint on a field inside a setting's value type is not checked at all - the documented limit pinned by
+ * {@link #nestedConstraintsAreNotChecked}.
  */
 @DisplayName("A constraint on a @ConfigEntry field the framework cannot check refuses the module at load; @Size counts map entries (#631)")
 class ConstraintDeclarationTest {
