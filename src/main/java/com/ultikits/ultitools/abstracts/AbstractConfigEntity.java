@@ -766,19 +766,85 @@ public abstract class AbstractConfigEntity {
      * 0, plan 17-75); when none or more than one does, the framework cannot tell, and this returns {@code null}: the
      * insert is refused, naming the file and the setting ({@link #unplacedReason}). The nested keys of the whole path when
      * the file holds no prefix as a section.
+     * <p>
+     * <b>A sibling written as one dotted key below the section</b> (insert-location rule revision 1, gate-1 F4 of plan
+     * 17-75, maintainer decision 2026-10-06). When a declared setting of the same section is held with the rest of its path
+     * as one dotted key ({@code a:} / {@code b.c: 3}), it shares a longer prefix with the missing setting ({@code a.b.d})
+     * than any section the file holds; the missing setting is then written in that sibling's form, beside it
+     * ({@code b.d: 2}), never as a nested {@code b:} / {@code d:} - a second form of {@code a.b}, which Bukkit reads as
+     * shadowing the first. When siblings sharing that prefix are written in different splits, it cannot be decided.
      *
      * @return the key path to insert at, or {@code null} when it cannot be decided
      */
     private List<String> insertKeysIn(ConfigDocument doc, Field field) {
-        String dotted = fieldPath(field);
-        List<List<String>> sections = doc.heldSections(dotted);
-        if (sections.isEmpty()) { return keys(field); }
-        List<String> section = sections.size() == 1 ? sections.get(0) : sectionHoldingASibling(doc, field, sections);
-        if (section == null) { return null; }
+        return placement(doc, field).path;
+    }
+
+    /** Where {@link #insertKeysIn} puts a setting, and the dotted section it belongs to (named in a refusal). */
+    private static final class Placement {
+        private final List<String> path;
+        private final String section;
+
+        private Placement(List<String> path, String section) {
+            this.path = path;
+            this.section = section;
+        }
+    }
+
+    @SuppressWarnings("PMD.NPathComplexity") // The mirrored form is decided first; the held section's rule follows unchanged.
+    private Placement placement(ConfigDocument doc, Field field) {
         List<String> parts = keys(field);
+        List<List<String>> sections = doc.heldSections(fieldPath(field));
+        int held = sections.isEmpty() ? 0 : String.join(".", sections.get(0)).split("\\.", -1).length;
+        // A sibling written as one dotted key below the held section shares a longer prefix than that section (F4).
+        int longest = held;
+        List<List<String>> mirrored = new ArrayList<>();
+        for (Field other : configEntryFields()) {
+            List<List<String>> readings = other.equals(field) ? Collections.<List<String>>emptyList()
+                    : doc.readings(fieldPath(other));
+            if (readings.size() != 1) { continue; }
+            List<String> otherParts = keys(other);
+            int common = 0;
+            while (common < parts.size() - 1 && common < otherParts.size() && parts.get(common).equals(otherParts.get(common))) {
+                common++;
+            }
+            List<String> location = common > longest || common == longest && common > held
+                    ? mirroredPath(readings.get(0), common, parts) : null;
+            if (location == null) { continue; }
+            if (common > longest) { longest = common; mirrored.clear(); }
+            if (!mirrored.contains(location)) { mirrored.add(location); }
+        }
+        if (longest > held) {
+            return new Placement(mirrored.size() == 1 ? mirrored.get(0) : null, String.join(".", parts.subList(0, longest)));
+        }
+        if (sections.isEmpty()) { return new Placement(keys(field), String.join(".", parts)); }
+        List<String> section = sections.size() == 1 ? sections.get(0) : sectionHoldingASibling(doc, field, sections);
+        String name = String.join(".", sections.get(0));
+        if (section == null) { return new Placement(null, name); }
         List<String> path = new ArrayList<>(section);
-        path.addAll(parts.subList(String.join(".", section).split("\\.", -1).length, parts.size()));
-        return path;
+        path.addAll(parts.subList(held, parts.size()));
+        return new Placement(path, name);
+    }
+
+    /**
+     * The missing setting's path in a sibling's form: the sibling's reading cut at the {@code common} dotted segments both
+     * paths share, when that cut falls inside one of its keys ({@code [a, b.c]} cut after {@code a.b} gives
+     * {@code [a, b.d]} for {@code a.b.d}); {@code null} when the cut falls between keys (that prefix is a held section).
+     */
+    private static List<String> mirroredPath(List<String> reading, int common, List<String> parts) {
+        int before = 0;
+        for (int i = 0; i < reading.size(); i++) {
+            String[] segments = reading.get(i).split("\\.", -1);
+            if (common == before + segments.length) { return null; }
+            if (common < before + segments.length) {
+                List<String> path = new ArrayList<>(reading.subList(0, i));
+                path.add(String.join(".", Arrays.asList(segments).subList(0, common - before)) + "."
+                        + String.join(".", parts.subList(common, parts.size())));
+                return path;
+            }
+            before += segments.length;
+        }
+        return null;
     }
 
     /** Of several forms of one section, the one form holding another declared setting of it; {@code null} for none or several. */
@@ -801,7 +867,7 @@ public abstract class AbstractConfigEntity {
 
     /** Why {@code field}'s setting cannot be inserted ({@link #insertKeysIn} returned {@code null}): names, never values. */
     private String unplacedReason(ConfigDocument doc, Field field) {
-        return "the section '" + String.join(".", doc.heldSections(fieldPath(field)).get(0)) + "' is written in several"
+        return "the section '" + placement(doc, field).section + "' is written in several"
                 + " forms (as a flat dotted key and as nested keys, or in several splits of its dots), and not exactly one"
                 + " of them holds another setting of the section, so the framework cannot tell where to add it";
     }
