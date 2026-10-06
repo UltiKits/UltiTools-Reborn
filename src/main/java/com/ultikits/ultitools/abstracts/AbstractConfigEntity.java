@@ -33,7 +33,9 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonPrimitive;
 import com.google.common.reflect.TypeToken;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.config.ConfigEntryPresenceException;
 import com.ultikits.ultitools.config.ConfigWriteRefusedException;
+import com.ultikits.ultitools.config.EntryPresence;
 import com.ultikits.ultitools.config.document.ConfigDocument;
 import com.ultikits.ultitools.config.document.ConfigLoadResult;
 import com.ultikits.ultitools.config.document.AtomicConfigWriter;
@@ -230,6 +232,11 @@ public abstract class AbstractConfigEntity {
          * hold at write time (17-65 route change, R3-01); {@code null} when the file's value is not a precondition.
          */
         private RawEntry required;
+        /**
+         * For an operator's map-entry write made under a condition: whether the entry must already be in the file, or must
+         * not be, on the read the gate verifies against (#623); {@code null} when presence is not a precondition.
+         */
+        private EntryPresence presence;
 
         private ModuleChange(Field field, List<String> leaf, List<String> path, Object mine, RawEntry read) {
             this.field = field; this.leaf = leaf; this.path = path;
@@ -582,6 +589,55 @@ public abstract class AbstractConfigEntity {
      * @since 6.3.0
      */
     public final void saveOperatorMapEntry(String entryPath, String... mapKeys) throws IOException {
+        writeOperatorMapEntry(null, entryPath, mapKeys);
+    }
+
+    /**
+     * Writes exactly one entry of a map setting, as {@link #saveOperatorMapEntry(String, String...)} does, but only when
+     * the entry's presence in the file is what the operator's command assumes: {@link EntryPresence#MUST_BE_ABSENT} for a
+     * command that creates the entry ({@code /autoreply add <name>}), {@link EntryPresence#MUST_BE_PRESENT} for one that
+     * changes an existing entry ({@code /autoreply setkeyword <name>}). When the condition does not hold, nothing is
+     * written and {@link ConfigEntryPresenceException} tells the caller which condition failed. A module then needs no
+     * second read of the file to decide whether the command may write.
+     * <p>
+     * <b>What "present" means.</b> The entry is present when its whole key path exists in the file. The path is where the
+     * framework reads the setting (its nested keys, or the flat dotted key the operator wrote), followed by
+     * {@code mapKeys}, each one whole key. An entry holding {@code null} is present. An entry is absent when its key, or a
+     * key above it, is missing, {@code null}, an empty map or not a map. A file that is missing, empty or holds only
+     * comments holds no entry (see {@link EntryPresence}).
+     * <p>
+     * <b>Why it cannot overwrite other operator content.</b> As {@link #saveOperatorMapEntry(String, String...)}: the write
+     * owns only that entry's key at the configuration write gate, which refuses any change to another byte of the file.
+     * The condition adds no second read. It is decided on the same read of the file that the gate verifies the edit
+     * against and that the gate checks again immediately before it replaces the file. An entry the operator added or
+     * deleted by hand before that read is seen. An edit saved after it makes the gate refuse the write, because the file
+     * changed. So {@code add} never replaces an entry the operator wrote, and {@code setkeyword} never writes back an
+     * entry the operator deleted.
+     * <p>
+     * A failed condition logs at FINE only, because the caller reports it to the operator. Every other refusal is as for
+     * the two-argument overload: one WARNING names the file and the keys, never a value.
+     *
+     * @param required  whether the entry must already be in the file, or must not be
+     * @param entryPath the {@link ConfigEntry#path()} of a setting declared as a {@link Map}
+     * @param mapKeys   the keys from that map down to the entry, one whole key each; usually just the entry's key
+     * @throws IllegalArgumentException     if {@code required} is {@code null}, or for any reason the two-argument
+     *                                      overload names; nothing is written
+     * @throws IllegalStateException        if called before {@code init}, or off the server thread while a server runs
+     * @throws ConfigEntryPresenceException if the entry's presence in the file is not {@code required}; nothing is written
+     * @throws ConfigWriteRefusedException  if the configuration write gate refused the write; nothing is written
+     * @throws IOException                  if publishing the verified file fails
+     * @since 6.3.0
+     */
+    public final void saveOperatorMapEntry(EntryPresence required, String entryPath, String... mapKeys) throws IOException {
+        if (required == null) {
+            throw new IllegalArgumentException("Name the presence the map entry of '" + entryPath + "' in " + configFilePath
+                    + " must have (EntryPresence.MUST_BE_PRESENT or MUST_BE_ABSENT)");
+        }
+        writeOperatorMapEntry(required, entryPath, mapKeys);
+    }
+
+    /** Both {@code saveOperatorMapEntry} overloads: {@code required} is {@code null} for the unconditional one. */
+    private void writeOperatorMapEntry(EntryPresence required, String entryPath, String... mapKeys) throws IOException {
         requireOperatorWriteThread("saveOperatorMapEntry");
         synchronized (this) {
             Field field = declaredEntry(entryPath);
@@ -603,8 +659,9 @@ public abstract class AbstractConfigEntity {
                         + " reach inside an entry that is not a map; name the entry itself");
             }
             List<String> path = new ArrayList<>(keys(field)); path.addAll(leaf);
-            writeOperatorChanges(Collections.singletonList(
-                    new ModuleChange(field, leaf, path, plainValue(field, true), acknowledgedRaw.get(field))));
+            ModuleChange change = new ModuleChange(field, leaf, path, plainValue(field, true), acknowledgedRaw.get(field));
+            change.presence = required;
+            writeOperatorChanges(Collections.singletonList(change));
         }
     }
 
@@ -665,6 +722,14 @@ public abstract class AbstractConfigEntity {
                 throw refused(describeKey(change.field, change.leaf) + ": the file changed since it was read; reload first");
             }
         }
+        for (ModuleChange change : changes) {
+            // An operator's map-entry write under a presence condition (#623), decided on this read: the gate below
+            // verifies the edit against exactly these bytes, and checks them again immediately before it replaces the file.
+            if (change.presence != null
+                    && read.contains(change.path) != (change.presence == EntryPresence.MUST_BE_PRESENT)) {
+                throw presenceRefused(change);
+            }
+        }
         List<Field> inserted = new ArrayList<>();
         for (ModuleChange change : changes) {
             if (change.leaf.isEmpty() && !read.contains(change.path)) { inserted.add(change.field); }
@@ -680,6 +745,15 @@ public abstract class AbstractConfigEntity {
 
     private ConfigWriteRefusedException refused(String reason) {
         return new ConfigWriteRefusedException(ultiToolsPlugin.getConfigFile(configFilePath).getAbsolutePath(), reason);
+    }
+
+    /** The refusal of a map-entry write whose presence condition did not hold: logged at FINE only, the caller reports it (#623). */
+    private ConfigEntryPresenceException presenceRefused(ModuleChange change) {
+        String reason = describeKey(change.field, change.leaf) + (change.presence == EntryPresence.MUST_BE_ABSENT
+                ? " is already in the file, so it was not created" : " is not in the file, so it was not written");
+        String file = ultiToolsPlugin.getConfigFile(configFilePath).getAbsolutePath();
+        LOGGER.fine("Configuration file " + file + " was not written: " + reason);
+        return new ConfigEntryPresenceException(file, reason, change.presence);
     }
 
     /**

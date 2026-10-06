@@ -41,8 +41,10 @@ read", run `/ul reload` first), and repeat the change; nothing they wrote has be
 
 The public surface of the contract: `AbstractConfigEntity#save()` (only what the module changed, where the file still
 holds what was read), `#saveOperatorChange(String...)` and `#saveOperatorMapEntry(String, String...)` (exactly what an
-operator's command names), `com.ultikits.ultitools.config.OperatorFiles` (module-managed operator files such as kits), and
-`com.ultikits.ultitools.config.ConfigWriteRefusedException`. Outside YAML, a panel edit of `server.properties` replaces the
+operator's command names), `#saveOperatorMapEntry(EntryPresence, String, String...)` (the same, only while the entry is, or
+is not, in the file: [#623](https://github.com/UltiKits/UltiTools-Reborn/issues/623)),
+`com.ultikits.ultitools.config.OperatorFiles` (module-managed operator files such as kits), and
+`com.ultikits.ultitools.config.ConfigWriteRefusedException` with its subtype `ConfigEntryPresenceException`. Outside YAML, a panel edit of `server.properties` replaces the
 value text of the one line it names, and the framework leaves the shared `plugins/bStats/config.yml` byte for byte unless
 it is absent (see "Behavioral changes that need no migration period").
 
@@ -269,6 +271,22 @@ throws the new `com.ultikits.ultitools.config.ConfigWriteRefusedException`, an `
 `getReason()` name the reason without any value; the file keeps its bytes and the in-memory value stays, unsaved. A path
 that is not a declared entry, or a map-entry call on a setting not declared as a map, throws `IllegalArgumentException`
 and writes nothing. Both run under the entity monitor and must be called on the server thread.
+
+A map-entry write can also be made conditional on whether the entry is in the file (additive, 6.3.0,
+[#623](https://github.com/UltiKits/UltiTools-Reborn/issues/623)): `#saveOperatorMapEntry(EntryPresence, String, String...)`
+with the new enum `com.ultikits.ultitools.config.EntryPresence`. Use `MUST_BE_ABSENT` for a command that creates an entry
+(`/autoreply add`) and `MUST_BE_PRESENT` for one that changes an existing entry (`/autoreply setkeyword`). A module therefore
+needs no second read of the file with its own parser. The condition is decided on the read whose bytes the write gate
+verifies the edit against, and the gate checks those bytes again immediately before it replaces the file. So an entry the
+operator added or deleted by hand since the load is seen, and an edit saved after that read makes the gate refuse the write
+as "the file changed". "Present" means the entry's whole key path exists where the framework reads the setting: its nested
+keys, or the flat dotted form ([#612](https://github.com/UltiKits/UltiTools-Reborn/issues/612)), followed by the map keys,
+each one whole key. An entry holding `null` is present. An entry under a missing, `null`, empty (`{}`) or non-map key is
+absent, and so is every entry of a missing, empty or comment-only file. When the condition does not hold, nothing is
+written (bytes and modification time stay) and the framework logs nothing above FINE. The call then throws the new
+`com.ultikits.ultitools.config.ConfigEntryPresenceException`, a `ConfigWriteRefusedException`: `getRequired()` names the
+condition that failed, and `getReason()` names the entry's key path, never a value. A `null` condition throws
+`IllegalArgumentException`. The two-argument overload is unchanged.
 
 Unreadable, unparseable and non-UTF-8 files are protected on every entity write path. Initial load
 keeps declared defaults and logs one SEVERE naming the file and safe cause. As of 6.3.0 (#589) a
@@ -604,6 +622,7 @@ separate crash-safe multi-file transaction limit.
 - 不能读取、不能解析、非 UTF-8 文件不会被任何实体写入路径覆盖；初次失败用默认值，重载失败保留运行值。成功加载才解除保护。单独 `{key}` 注释按模块当前语言目录更新，但只改框架能认出是自己写的注释行：该项注释整体或末尾连续几行，与框架对模块 jar 自带任一语言目录中的文字、模块当前解析出的文字或原样 `{key}` 写出的形式逐字节相同（该项的缩进、`#`、一个空格加文字；只按相等判断，`#` 后缺空格或缩进不同即视为服主所写）；服主在令牌项上方手写的注释、改过的框架注释和字面注释逐字节永久保留（#604，维护者 2026-10-04 决定，取代此前“令牌项上的服主注释会被替换”）。已不在任何自带目录中的旧版措辞，只有模块在新增的 `@ConfigEntry(previousComments = {...})`（增量属性，默认为空）中登记了该文字时才算框架所写：逐字节相同即替换为当前目录文字并从此随语言切换（维护者 2026-10-04 决定）；未登记的原样保留。面板编辑以服主同意为准，只替换它指定的键，不再发警告（此前会警告一次列出被覆盖的键，#527）。
 - 6.3.0 起模块 `save()` 只写模块自上次加载或保存以来改过的设置，并且只在文件该处仍是框架上次读到或写入的值、且该值正是模块的起始值（能无转换警告地转换为上次加载或保存时的设置值）时才写（#599，维护者 2026-10-04 决定）。声明为 `Map` 的设置按条目写（按声明的映射类型逐层进入嵌套映射），只设置或删除模块增、改、删的条目（空映射或被模块删空的映射整体写，因为它的键行随首条或末条一起变）；其他值——列表、Bukkit `Location`/`Vector` 等 `ConfigurationSerializable`、类型化映射中本身不是映射的条目值——都算一个值，要么整体写入要么不写，文件里不会出现模块与服主各占一部分的值。声明为 `Map<String, Object>` 或原始 `Map` 的设置只拆一层，其下的普通嵌套映射算一个值。重载合并（复合值或列表冲突时整体采用文件的值，只列键名）、面板编辑复合值内的字段（以框架上次读到的整个值加上该字段的改动为写入单位，且仅当写入时文件仍保存着该整个值；否则拒绝并注明设置名“文件在读取后已被改动，请先重载”，不写入）以及 `saveOperatorMapEntry`（键深入到非映射条目内部时抛 `IllegalArgumentException`，不写入）都按同一规则判断什么算一个值。保存从不补写文件缺少的键、从不改写注释、从不删除模块没删的映射条目。因此服主在磁盘上改过的值、删掉的键、框架无法使用的值或列表元素（`interval: 3O0`、`[60, 30, 10, abc]`）以及 6.2 拆开的映射条目，无论模块是否改了该设置，保存都不会覆盖（#596）。没写成的改动留在内存，每次保存一条警告列出文件和这些键，不列值；被写入闸门拒绝的键由闸门的警告连同原因列出。其余每一行逐字节不变，否则不写；没有可写内容时不碰文件。“文件仍是读取时的内容”比较的是框架上次读到或写入的文本：服主不经 `/ul reload` 直接在磁盘上改过的设置——哪怕值不变，比如把 `y: 64` 改成 `y: 64.0`——之后模块对该设置的改动不会写入（警告中列出），直到重载重新读取文件；没有任何内容丢失，模块的值留在内存中。`save()` 用于服主通过模块要求的改动，或语言切换后重新渲染出厂文字。此前显式保存会把服主改过的值连同警告一起覆盖（#527），该行为在 6.3.0 依维护者“服主写的配置绝不被自动覆盖”的规则直接取消，没有过渡期。
 - 6.3.0 新增两个服主操作写入方法（增量 API）：`saveOperatorChange(String...)` 只写指定的设置（如 `/setspawn` 指定六个 `spawn.location.*`），`saveOperatorMapEntry(String, String...)` 只写映射设置中的一个条目（如 `/autoreply` 的一条规则；文件缺少时插入，模块映射里已删除时从文件删除；每个映射键是完整键，`play.example` 是一个键）。服主的命令即同意：指定键处以模块的值为准，服主手改过的也替换；文件缺少的指定设置连同注释插入。其余一律不写（模块改过但未指定的设置也不写；用 `saveOperatorChange` 指定整个映射设置会整体写入并丢掉服主手加的条目，只改一个条目的命令应使用 `saveOperatorMapEntry`），写入经写入闸门且只拥有这些键。被拒绝时（文件不可读或无法解析、使用锚点、排版无法逐字节保留、准备写入期间文件被改）抛出新的 `com.ultikits.ultitools.config.ConfigWriteRefusedException`（`IOException` 子类），消息和 `getReason()` 说明原因、不含任何值；文件保持原样，内存中的值不变且仍未保存。路径不是已声明的配置项，或对非映射设置调用条目方法，抛 `IllegalArgumentException` 且不写。两者都在实体锁下执行，须在服务器主线程调用。
+- 6.3.0 新增 `saveOperatorMapEntry(EntryPresence, String, String...)`（增量 API，#623）：映射条目的写入可附带存在性条件，`MUST_BE_ABSENT` 用于新建条目的命令（如 `/autoreply add`），`MUST_BE_PRESENT` 用于修改已有条目的命令（如 `/autoreply setkeyword`），模块不必再用自己的解析器另读一次文件。条件在写入闸门据以校验的同一次读取上判断，闸门在替换文件前还会再核对一次这些字节：服主自加载以来手动添加或删除的条目都能看到，此后保存的改动则让闸门以“文件已被改动”拒绝写入。“存在”指该条目的完整键路径在文件中存在（框架读取该设置的位置：嵌套键或扁平的带点键，#612，再接映射键，每个都是完整键）；值为 `null` 的条目算存在；上级键缺失、为 `null`、为空映射 `{}` 或不是映射时算不存在，缺失、空白或只有注释的文件不含任何条目。条件不成立时不写入（字节和修改时间不变），框架只记 FINE 级日志，并抛出新的 `com.ultikits.ultitools.config.ConfigEntryPresenceException`（`ConfigWriteRefusedException` 的子类）：`getRequired()` 给出不成立的条件，`getReason()` 给出条目的键路径，从不含值。条件为 `null` 时抛 `IllegalArgumentException`。原来的两参数重载不变。
 - `getConfig()` 在 6.2.5 确实可用，不能冒称符合两个同版删除例外；维护者通过 6.3.0 一次性 carve-out 删除它。改用 `isPresentInFile` 查询上次成功加载时的存在性，修改声明字段后 `save()`。两个已知官方调用在 UltiEssentials 与 UltiRemoteBag；第三方用量未知。
 - 六个旧解析器相关声明在 6.3.0 首次带 `forRemoval`，公告 6.4.0 删除。显式非默认 parser 暂时保留冻结的旧行为；默认 parser 改走注册表。迁移示例见上方，转换器必须满足两条互逆等式，不能单向加值或悄悄丢字段。
 - 注册批次验证完成才开始独立写文件；面板批次先验证并经写入闸门暂存全部文件，在进程内失败时回滚，持久存储故障可能阻止恢复；每个文件替换前再核对一次字节，期间被服主保存的文件整批拒绝（`ConfigWriteRefusedException` 注明文件）、服主的保存保留，已替换的文件恢复为核对时的原字节。面板唯一映射路径走整字段类型转换，歧义和未知变更拒绝整个请求；无关内存/磁盘兄弟项保留。
