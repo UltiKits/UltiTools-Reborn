@@ -91,7 +91,8 @@ class OperatorMapEntryPreconditionTracerTest {
     }
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws ReflectiveOperationException {
+        clearLeakedUltiToolsInstance();
         MockBukkitHelper.ensureCleanState();
         MockBukkit.mock();
         plugin = Mockito.mock(UltiToolsPlugin.class);
@@ -101,6 +102,17 @@ class OperatorMapEntryPreconditionTracerTest {
         lenient().when(plugin.getConfigFile(anyString())).thenAnswer(
                 invocation -> new File(tempDir.toFile(), invocation.<String>getArgument(0)));
         Logger.getLogger("com.ultikits").addHandler(capture);
+    }
+
+    /**
+     * Clears a mocked {@code UltiTools} instance an earlier test class in the same fork left behind (gate-1 F1): with one,
+     * the framework logs through the mock's {@code getLogger()}, which is {@code null}, instead of its own logger.
+     */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // the framework singleton is a private static field
+    private static void clearLeakedUltiToolsInstance() throws ReflectiveOperationException {
+        java.lang.reflect.Field instance = com.ultikits.ultitools.UltiTools.class.getDeclaredField("ultiTools");
+        instance.setAccessible(true);
+        instance.set(null, null);
     }
 
     @AfterEach

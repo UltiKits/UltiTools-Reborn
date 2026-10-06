@@ -91,6 +91,10 @@ public final class OperatorFileWriter {
     private static final List<String> SECRET_WORDS = Arrays.asList("password", "secret", "token", "credential",
             "apikey", "api_key", "key", "auth", "private", "cert");
     private static final String ANCHORED = "the file uses YAML anchors, aliases or merge keys";
+    private static final String READING = "reading the file";
+    private static final String EDITING = "editing the document";
+    private static final String RENDERING = "rendering the document";
+    private static final String CHECKING = "checking the rendered document";
     private static final String COMMENT_NOT_LOCATED = "the comment of a key this write owns cannot be located in the file";
     /** Files already named in an anchored-file warning this server run (canonical paths). */
     private static final Set<Path> WARNED_ANCHORED = ConcurrentHashMap.newKeySet();
@@ -262,6 +266,8 @@ public final class OperatorFileWriter {
         ConfigDocument candidate;
         List<String> keys;
         String rendered;
+        // What the gate is doing, so a runtime failure's refusal names the step that failed (gate-1 F7, 17-74).
+        String step = READING;
         try {
             snapshot = Snapshot.read(file, owned, expectedFingerprint);
             if (snapshot.failure != null) {
@@ -272,6 +278,7 @@ public final class OperatorFileWriter {
                         snapshot.reason));
             }
             candidate = snapshot.candidate;
+            step = EDITING;
             fault(Step.EDIT);
             edit.accept(candidate);
             Changes changes = Changes.of(snapshot.original, candidate, owned);
@@ -281,11 +288,13 @@ public final class OperatorFileWriter {
                         ? new Result(Outcome.UNCHANGED, "", candidate, snapshot.fingerprint, snapshot.fingerprint)
                         : refuse(absolute, owned, keys, "the write would change keys it does not own"));
             }
+            step = RENDERING;
             fault(Step.RENDER);
             rendered = candidate.render();
             if (rendered.equals(snapshot.text)) {
                 return Staged.settled(new Result(Outcome.UNCHANGED, "", candidate, snapshot.fingerprint, snapshot.fingerprint));
             }
+            step = CHECKING;
             String failure = owned.isWholeFile()
                     ? verifyValues(snapshot.original, candidate, rendered, Collections.<List<String>>emptyList(), true)
                     : verify(snapshot.text, rendered, snapshot.original, candidate, changes, owned);
@@ -293,11 +302,13 @@ public final class OperatorFileWriter {
                 return Staged.settled(refuse(absolute, owned, keys, failure));
             }
         } catch (RuntimeException failure) {
-            // A runtime failure of the YAML library while the edit is applied, rendered or checked - an EmitterException
-            // for a layout it cannot emit, a YAMLException, a ClassCastException from its composer - is the gate's
-            // refusal like every other layout it cannot keep (#624): nothing is written and the reason names the keys
-            // and the failure's class, never its message, which may quote the file.
-            return Staged.settled(refuse(absolute, owned, Collections.<String>emptyList(), libraryFailure(owned, failure)));
+            // A runtime failure while the file is read, the edit applied, the document rendered or the rendering checked -
+            // an EmitterException for a layout the YAML library cannot emit, a YAMLException, a ClassCastException from
+            // its composer, or any other unchecked failure there - is the gate's refusal like every other layout it
+            // cannot keep (#624): nothing is written and the reason names the keys, the step and the failure's class,
+            // never its message, which may quote the file.
+            return Staged.settled(refuse(absolute, owned, Collections.<String>emptyList(),
+                    runtimeFailure(owned, step, failure)));
         }
         if (ABSENT.equals(snapshot.fingerprint)) {
             Path parent = absolute.getParent();
@@ -331,11 +342,13 @@ public final class OperatorFileWriter {
         }
     }
 
-    /** The refusal reason for a runtime failure of the YAML library inside a gated write (#624): keys, never a value. */
-    private static String libraryFailure(OwnedPaths owned, RuntimeException failure) {
+    /**
+     * The refusal reason for a runtime failure inside a gated write (#624): the keys, the step that failed and the
+     * failure's class, never a value.
+     */
+    private static String runtimeFailure(OwnedPaths owned, String step, RuntimeException failure) {
         String keys = owned.isWholeFile() ? "the whole file" : String.join(", ", describe(owned.values(), owned.comments()));
-        return "the file cannot be written at " + keys + ": the YAML library failed on its layout there ("
-                + failure.getClass().getSimpleName() + ")";
+        return "the file cannot be written at " + keys + ": " + step + " failed (" + failure.getClass().getSimpleName() + ")";
     }
 
     /**

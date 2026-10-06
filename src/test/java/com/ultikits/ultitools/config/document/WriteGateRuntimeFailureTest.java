@@ -115,13 +115,25 @@ class WriteGateRuntimeFailureTest {
     }
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws ReflectiveOperationException {
+        clearLeakedUltiToolsInstance();
         plugin = Mockito.mock(UltiToolsPlugin.class);
         lenient().when(plugin.getPluginName()).thenReturn("GateModule");
         lenient().when(plugin.getResourceFolderPath()).thenReturn(tempDir.toString());
         lenient().when(plugin.i18n("fx.interval")).thenReturn("New interval text");
         ConfigFileStubs.stubConfigFolder(plugin, tempDir.toFile());
         Logger.getLogger("com.ultikits").addHandler(capture);
+    }
+
+    /**
+     * Clears a mocked {@code UltiTools} instance an earlier test class in the same fork left behind (gate-1 F1): with one,
+     * the framework logs through the mock's {@code getLogger()}, which is {@code null}, instead of its own logger.
+     */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // the framework singleton is a private static field
+    private static void clearLeakedUltiToolsInstance() throws ReflectiveOperationException {
+        java.lang.reflect.Field instance = com.ultikits.ultitools.UltiTools.class.getDeclaredField("ultiTools");
+        instance.setAccessible(true);
+        instance.set(null, null);
     }
 
     @AfterEach
@@ -149,7 +161,9 @@ class WriteGateRuntimeFailureTest {
         for (Throwable thrown : new Throwable[] {twoArgument, conditional}) {
             assertThat(thrown).as("a refusal, not the library's EmitterException")
                     .isInstanceOf(ConfigWriteRefusedException.class).isNotInstanceOf(ConfigEntryPresenceException.class);
-            assertThat(((ConfigWriteRefusedException) thrown).getReason()).contains("autoreply.rules.foo")
+            assertThat(((ConfigWriteRefusedException) thrown).getReason())
+                    .isEqualTo("the file cannot be written at autoreply.rules.foo: rendering the document failed"
+                            + " (EmitterException)")
                     .doesNotContain("reply-value-91c2");
         }
         assertThat(read(RULES)).isEqualTo(text);
@@ -166,6 +180,18 @@ class WriteGateRuntimeFailureTest {
             cases.add(Arguments.of(step, "ClassCastException", (Supplier<RuntimeException>) () -> new ClassCastException(LEAK)));
         }
         return cases.stream();
+    }
+
+    /** The step the refusal reason names for a failure injected at {@code step} (gate-1 F7). */
+    private static String named(OperatorFileWriter.Step step) {
+        switch (step) {
+            case EDIT:
+                return "editing the document failed";
+            case RENDER:
+                return "rendering the document failed";
+            default:
+                return "checking the rendered document failed";
+        }
     }
 
     private void arm(OperatorFileWriter.Step at, Supplier<RuntimeException> failure) {
@@ -186,6 +212,9 @@ class WriteGateRuntimeFailureTest {
         config.enabled = false;
         arm(step, failure);
         assertRefused(() -> config.saveOperatorChange("autoreply.enabled"), "autoreply.enabled");
+        Throwable named = catchThrowable(() -> config.saveOperatorChange("autoreply.enabled"));
+        assertThat(((ConfigWriteRefusedException) named).getReason()).as("the reason names the step that failed")
+                .endsWith(named(step) + " (" + type + ")");
         config.rules.put("b", rule("ip", "here"));
         assertRefused(() -> config.saveOperatorMapEntry("autoreply.rules", "b"), "autoreply.rules.b");
         assertRefused(() -> config.saveOperatorMapEntry(EntryPresence.MUST_BE_ABSENT, "autoreply.rules", "b"),
