@@ -283,6 +283,45 @@ public final class ConfigDocument {
         return found;
     }
 
+    /**
+     * Where a declared setting this document does not hold belongs (#614): the readings ({@link #readings(String)}) of the
+     * longest proper prefix of {@code dottedPath} that this document holds as a section - a mapping, or a key with no
+     * value. An insert goes below one of them, the rest of the path as nested keys, so a section the operator wrote in
+     * flat dotted form ({@code a.b:}) gets the setting in place and never a second, nested copy ({@code a: b:}), which
+     * Bukkit's {@code YamlConfiguration} would read as replacing the first. Each returned path joins with {@code .} to the
+     * same prefix.
+     *
+     * @param dottedPath a declared setting path
+     * @return the section readings of the longest held prefix, nested forms first; empty when no prefix is held as a
+     *         section; two or more when the document holds that section in several forms
+     * @since 6.3.0
+     */
+    public List<List<String>> heldSections(String dottedPath) {
+        String[] parts = dottedPath.split("\\.", -1);
+        StringBuilder prefix = new StringBuilder();
+        List<String> prefixes = new ArrayList<>();
+        for (int k = 0; k < parts.length - 1; k++) {
+            if (k > 0) {
+                prefix.append('.');
+            }
+            prefix.append(parts[k]);
+            prefixes.add(prefix.toString());
+        }
+        for (int k = prefixes.size() - 1; k >= 0; k--) {
+            List<List<String>> sections = new ArrayList<>();
+            for (List<String> reading : readings(plain, prefixes.get(k))) {
+                Object value = get(reading);
+                if (value == null || value instanceof Map) {
+                    sections.add(reading);
+                }
+            }
+            if (!sections.isEmpty()) {
+                return sections;
+            }
+        }
+        return Collections.emptyList();
+    }
+
     private static void collectReadings(Object node, String[] parts, int from, List<String> prefix, List<List<String>> found) {
         if (!(node instanceof Map)) {
             return;
