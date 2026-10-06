@@ -1478,38 +1478,25 @@ This section governs the third kind.
 - **A constraint annotation the framework cannot check refuses the module at load**
   ([#631](https://github.com/UltiKits/UltiTools-Reborn/issues/631), as of v6.3.0, maintainer decision of 2026-10-06).
   Before 6.3.0 such a declaration did nothing, with no message: `@Range` on anything but a number, `@Pattern` on anything
-  but text, `@Size` on a map or an array, `@Size` and `@NotEmpty` on numbers, booleans, enums or value types, and any
-  constraint on a field the framework never validates. Now:
+  but text, `@Size` on a map or an array, `@Size` and `@NotEmpty` on numbers, booleans, enums or value types. Now, for a
+  field that is itself a `@ConfigEntry` setting, judged by its declared type:
   - `@Size` counts a map's entries and an array's length (a violation refuses the module like any `@Size` violation).
     Text is a `String` or a `char` for `@NotEmpty`, `@Size` and `@Pattern`.
   - Every other such declaration refuses the module at load, before its file is read, with one message naming each
     field, the annotation and why: `@Range` checks numbers only; `@Pattern` checks text only; `@Size` and `@NotEmpty`
-    apply to text, lists, sets, maps and arrays only.
-  - So does a constraint on a field that is not a `@ConfigEntry` setting, and a constraint on a field **inside a
-    setting's value type** - for example `@NotEmpty` on a field of the class a `Map<String, Item>` setting holds. A
-    converter builds that value and the framework validates only the setting itself, so the annotation was never
-    checked. Validate such fields in the module's converter (skip or refuse the entry there) and remove the annotation.
-    The check reaches at least every type the config binder can bind - including what a module converter binds for a
-    wrapper or a container - and refuses any type it cannot walk with certainty
-    ([#633](https://github.com/UltiKits/UltiTools-Reborn/issues/633)). It follows the setting's own class, every type
-    argument and array component (wildcards and type variables resolved as the binder resolves them, so
-    `List<? super Item>` and `List<T extends Item>` reach `Item`), and, for each class reached, its non-static,
-    non-transient fields, its superclass and its interfaces, transitively: `Optional<Item>`, `Multimap<String, Item>`
-    and a list subclass's own fields are all checked. It does not walk platform classes (`java.*`, Bukkit, Paper,
-    Adventure, Guava and the like) beyond their type arguments, another config class (an `AbstractConfigEntity`
-    subclass, whose own entity validates it), or a type already on the current path. Refused, not skipped: a type that
-    cannot be resolved or loaded (a soft dependency absent at runtime), and a class that nests itself more than eight
-    times on one path, each time with different type arguments (a recursive generic that grows without end). The count
-    is per path, so one class used with many different type arguments side by side is always walked in full. A type
-    reached that is an interface or abstract class is also checked against its implementations in the module's own jar
-    (maintainer decision of 2026-10-06): when any of them carries such a constraint, directly or through its own fields,
-    the module is refused naming the field and the implementing classes; when none does, it loads. The one remaining
-    limit: an implementation provided by another plugin is not in the module's jar and cannot be seen.
-  - First-party modules: UltiRecipe declares `@NotEmpty` and `@Range` on `RecipeConfig.OutputItem` (a value inside its
-    `recipes` setting) and checks them itself; its build for 6.3.0 removes the two annotations, and an older UltiRecipe
-    build is refused by this framework. No other first-party module declares a constraint the framework cannot check.
+    apply to text, lists, sets, maps and arrays only (`@Range` on a `List<Integer>` is such an error: it does not apply
+    to the list itself). A constraint on a field of a config class that is not a `@ConfigEntry` setting is refused too.
+  - **The constraint annotations take effect only on fields that are themselves `@ConfigEntry` settings of a config
+    class.** An annotation on a field of a value type, a nested class, or anything a converter produces - for example
+    `@NotEmpty` on a field of the class a `Map<String, Item>` setting holds - is never checked and not reported; the
+    framework does not walk into value types ([#633](https://github.com/UltiKits/UltiTools-Reborn/issues/633), closed by
+    the maintainer's decision of 2026-10-06). Validate such fields in the module's converter (skip or refuse the entry
+    there).
+  - First-party modules: UltiRecipe declares `@NotEmpty` and `@Range` on `RecipeConfig.OutputItem`, a value inside its
+    `recipes` setting. They are not checked (it checks them itself), and the module loads; its 6.3.0 build removes the two
+    annotations as cleanup. No first-party module is refused by these declaration checks.
 
-  中文补充：**框架无法检查的约束注解会让模块在加载时被拒绝**（自 6.3.0 起，#631，维护者 2026-10-06 决定）。6.3.0 之前这类声明什么也不做、也没有任何提示：用在非数字上的 `@Range`、非文本上的 `@Pattern`、映射或数组上的 `@Size`、数字/布尔/枚举/值类型上的 `@Size` 与 `@NotEmpty`，以及框架从不校验的字段上的任何约束。现在：`@Size` 统计映射的条目数和数组长度（违规时与其他 `@Size` 违规一样拒绝模块）；对 `@NotEmpty`、`@Size`、`@Pattern` 而言，文本指 `String` 或 `char`。其他这类声明都会在加载时、读取配置文件之前拒绝模块，一条消息写明每个字段、注解和原因：`@Range` 只检查数字；`@Pattern` 只检查文本；`@Size` 与 `@NotEmpty` 只适用于文本、列表、集合、映射和数组。不是 `@ConfigEntry` 设置的字段上的约束，以及**设置值类型内部字段**上的约束（例如 `Map<String, Item>` 设置中 `Item` 类字段上的 `@NotEmpty`）同样如此：这些值由转换器构造，框架只校验设置本身，这类注解从未被检查过。请在模块的转换器中校验这些字段（在那里跳过或拒绝该条目），并删除注解。该检查至少会到达配置绑定器可能绑定的每一种类型（包括模块转换器为包装类型或容器绑定的内容），无法确定地遍历的类型一律拒绝（#633）。它沿设置自身的类、每个类型参数和数组元素类型（通配符和类型变量按绑定器的方式解析，因此 `List<? super Item>`、`List<T extends Item>` 都会到达 `Item`），再对到达的每个类沿其非静态、非 transient 字段、父类和接口逐层深入：`Optional<Item>`、`Multimap<String, Item>` 以及列表子类自身的字段都会被检查。它不深入平台类（`java.*`、Bukkit、Paper、Adventure、Guava 等）的内部（只看其类型参数），不进入另一个配置类（`AbstractConfigEntity` 子类，由它自己的实体校验），也不再次进入当前路径上已有的同一类型。以下情况拒绝而不是跳过：无法解析或加载的类型（运行时缺少的软依赖），以及同一个类在一条路径上嵌套自身超过八次、且每次类型参数都不同（无限增长的递归泛型）。计数按路径进行，因此同一个类并列使用多种不同的类型参数时总会被完整遍历。到达的类型若是接口或抽象类，还会对照模块自身 jar 中的实现类检查（维护者 2026-10-06 决定）：只要有实现类直接或经其字段带有这类约束，就拒绝模块并写明字段和实现类；都没有则照常加载。仍有一个局限：由其他插件提供的实现类不在模块的 jar 中，无法看到。第一方模块：UltiRecipe 在 `RecipeConfig.OutputItem`（其 `recipes` 设置中的值）上声明了 `@NotEmpty` 和 `@Range`，并自行检查；它面向 6.3.0 的构建会删除这两个注解，旧版 UltiRecipe 构建会被本框架拒绝。其他第一方模块没有声明框架无法检查的约束。
+  中文补充：**框架无法检查的约束注解会让模块在加载时被拒绝**（自 6.3.0 起，#631，维护者 2026-10-06 决定）。6.3.0 之前这类声明什么也不做、也没有任何提示：用在非数字上的 `@Range`、非文本上的 `@Pattern`、映射或数组上的 `@Size`、数字/布尔/枚举/值类型上的 `@Size` 与 `@NotEmpty`。现在，对本身就是 `@ConfigEntry` 设置的字段，按其声明类型判断：`@Size` 统计映射的条目数和数组长度（违规时与其他 `@Size` 违规一样拒绝模块）；对 `@NotEmpty`、`@Size`、`@Pattern` 而言，文本指 `String` 或 `char`。其他这类声明都会在加载时、读取配置文件之前拒绝模块，一条消息写明每个字段、注解和原因：`@Range` 只检查数字；`@Pattern` 只检查文本；`@Size` 与 `@NotEmpty` 只适用于文本、列表、集合、映射和数组（`List<Integer>` 上的 `@Range` 就属于这种错误：它不适用于列表本身）。配置类中不是 `@ConfigEntry` 设置的字段上的约束同样会被拒绝。**约束注解只对本身就是配置类 `@ConfigEntry` 设置的字段生效。** 值类型的字段、嵌套类的字段，以及转换器产生的任何对象上的注解（例如 `Map<String, Item>` 设置中 `Item` 类字段上的 `@NotEmpty`）既不检查也不报告；框架不会深入值类型（#633，按维护者 2026-10-06 的决定关闭）。请在模块的转换器中校验这些字段（在那里跳过或拒绝该条目）。第一方模块：UltiRecipe 在 `RecipeConfig.OutputItem`（其 `recipes` 设置中的值）上声明了 `@NotEmpty` 和 `@Range`，它们不会被检查（模块自行检查），模块照常加载；它面向 6.3.0 的构建会顺带删除这两个注解。没有第一方模块会被这些声明检查拒绝。
 
 ### Behavioral changes that do need one
 

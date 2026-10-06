@@ -72,8 +72,6 @@ import lombok.Getter;
 public abstract class AbstractConfigEntity {
     private static final Object ABSENT_RELOAD_VALUE = new Object();
     private static final Logger LOGGER = Logger.getLogger(AbstractConfigEntity.class.getName());
-    /** How many times one class may nest itself on one path of the declaration check's walk before it refuses. */
-    private static final int MAX_NESTING = 8;
 
     private final String configFilePath;
     private final List<ConfigChangeListener> changeListeners = new CopyOnWriteArrayList<>();
@@ -775,22 +773,11 @@ public abstract class AbstractConfigEntity {
     }
 
     /**
-     * {@code declared} - a field's or a supertype's generic type - as seen from {@code owner}, its type variables
-     * substituted: the one resolution used for a setting the load binds ({@link #declaredType}) and for every field and
-     * supertype the declaration check walks ({@link #walkClass}).
+     * {@code declared} - a field's generic type - as seen from {@code owner}, its type variables substituted: the
+     * resolution used for every setting the load binds and the declaration check reads ({@link #declaredType}).
      */
     private static Type resolveIn(Type owner, Type declared) {
         return TypeToken.of(owner).resolveType(declared).getType();
-    }
-
-    /**
-     * {@code implementation} as the subtype of {@code declared} it is, its type variables substituted from
-     * {@code declared} ({@code ContentSlot<T>} under {@code Slot<Item>} is {@code ContentSlot<Item>}); the raw class when
-     * the two cannot be related that way. The same {@code TypeToken} resolution as {@link #resolveIn}.
-     */
-    private static Type subtypeIn(Type declared, Class<?> implementation) {
-        try { return TypeToken.of(declared).getSubtype(implementation).getType(); }
-        catch (IllegalArgumentException unrelated) { return implementation; }
     }
 
     private Object plainValue(Field field) { return plainValue(field, false); }
@@ -2558,18 +2545,14 @@ public abstract class AbstractConfigEntity {
      *   <li>a constraint on a value type it can never check: {@code @Range} off numbers, {@code @Pattern} off text,
      *       {@code @Size} and {@code @NotEmpty} off text, collections, maps and arrays (text is a {@code String} or a
      *       {@code char});</li>
-     *   <li>a constraint on a field the framework never validates: a field of this class that is not a
-     *       {@code @ConfigEntry} setting, or a field of a value type reached through a setting (the setting's own class,
-     *       every type argument and array component, and the non-static, non-transient fields and supertypes of each class
-     *       reached, transitively; a config class reached that way is not walked, its own entity validates it) - a module
-     *       converter builds those values, so the module validates them there;</li>
-     *   <li>a type reached that way which cannot be walked with certainty: one that cannot be resolved or loaded, or a
-     *       class nesting itself more than {@value #MAX_NESTING} times on one path ({@link #walkValueTypes});</li>
-     *   <li>an interface or abstract type reached that way with an implementation in the module's own jar that carries
-     *       such a constraint ({@link #walkImplementations});</li>
-     *   <li>a {@code @NotEmpty} list, set, map or array whose declared default is empty, which leaves nothing to run in
-     *       place of an empty value.</li>
+     *   <li>a constraint on a field of this class that is not a {@code @ConfigEntry} setting;</li>
+     *   <li>a {@code @NotEmpty} list, set, map or array whose declared default is empty, or outside the field's own
+     *       {@code @Size}, which leaves nothing valid to run in place of an empty value.</li>
      * </ul>
+     * Only this class's own fields are read, each by its declared type through {@link ConversionTypes#raw}: the check never
+     * walks into a setting's value type (maintainer decision of 2026-10-06, the simplest route). A constraint annotation
+     * on a field of a value type, a nested class or anything a converter produces is never checked and not reported - the
+     * documented limit (COMPATIBILITY.md); a module validates such fields in its converter.
      */
     private void checkConstraintDeclarations() {
         List<String> errors = new ArrayList<>();
@@ -2591,7 +2574,6 @@ public abstract class AbstractConfigEntity {
                             + " - " + unsupported + ", so the framework cannot check it there");
                 }
             }
-            walkValueTypes(setting, declaredType(field), errors, getClass());
             String kind = containerKind(field);
             if (field.getAnnotation(NotEmpty.class) != null && kind != null) {
                 String defaultError = defaultCannotStandIn(field, kind);
@@ -2666,262 +2648,6 @@ public abstract class AbstractConfigEntity {
 
     private static boolean isContainerType(Class<?> raw) {
         return java.util.Collection.class.isAssignableFrom(raw) || Map.class.isAssignableFrom(raw) || raw.isArray();
-    }
-
-    /**
-     * The state of one walk over a setting's value types: the errors it adds (each once), every class it reaches, and the
-     * types on the current path from the setting down.
-     */
-    private static final class TypeWalk {
-        private final String setting;
-        /** Where the walk's errors go; swapped while an implementation of an interface or abstract type is walked. */
-        private List<String> errors;
-        private final Set<Class<?>> reached = new java.util.LinkedHashSet<>();
-        private final java.util.Deque<Type> path = new java.util.ArrayDeque<>();
-        /** What declared the type being walked: the setting itself, or {@code Class.field}. */
-        private final java.util.Deque<String> declaredBy = new java.util.ArrayDeque<>();
-        /** A class of the module, whose jar or directory holds the classes an interface or abstract type is checked against. */
-        private final Class<?> module;
-        private List<Class<?>> moduleClasses;
-
-        private TypeWalk(String setting, List<String> errors, Class<?> module) {
-            this.setting = setting;
-            this.errors = errors;
-            this.module = module;
-            declaredBy.push("the setting itself");
-        }
-
-        /** The module's own classes, listed once per walk ({@link #moduleClassesOf}). */
-        private List<Class<?>> moduleClasses() throws IOException, java.net.URISyntaxException {
-            if (moduleClasses == null) { moduleClasses = moduleClassesOf(module); }
-            return moduleClasses;
-        }
-
-        private void error(String error) {
-            if (!errors.contains(error)) { errors.add(error); }
-        }
-
-        private int onPath(Class<?> raw) {
-            int count = 0;
-            for (Type type : path) { if (ConversionTypes.raw(type) == raw) { count++; } }
-            return count;
-        }
-    }
-
-    /**
-     * Adds an error for every constraint annotation the framework cannot check on a type reachable from a setting's
-     * declared {@code type}, and refuses every type it cannot walk with certainty (maintainer decision 2026-10-06, the
-     * conservative route after the #633 top-up review). It reaches at least every type the binder can bind - including
-     * what a module converter may bind for a wrapper or container - by over-approximating: every type argument, array
-     * component, the setting's own class, and, transitively, the non-static, non-transient fields, the superclass and the
-     * interfaces of each class reached. Every type is resolved by one shared helper: {@link ConversionTypes#bound} (a
-     * wildcard's lower bound, else its first upper bound; a type variable's first bound), {@link ConversionTypes#raw},
-     * {@link ConversionTypes#component}, and {@link #resolveIn} for a field or supertype seen from the type holding it.
-     * <p>
-     * Not walked: platform classes ({@code java.*}, Bukkit, Paper, Adventure, Guava and the like) beyond their type
-     * arguments, which cannot carry these annotations; a config class ({@code AbstractConfigEntity} subclass), whose own
-     * entity validates its constraints; the type of a static or transient field, which is not part of the bound value
-     * (gate-1 F1); and a type already on the current path (a self-reference adds nothing new). Refused, never skipped: a
-     * type that cannot be resolved or loaded, and a class that nests itself more than {@value #MAX_NESTING} times on one
-     * path with a different type each time (a recursive generic that grows without end); the limit counts per path, so
-     * one class used with many type arguments side by side is always walked in full.
-     * <p>
-     * A type reached that is an interface or abstract class is also checked against its implementations in the module's
-     * own jar ({@link #walkImplementations}, maintainer decision 2026-10-06): when any of them carries a constraint the
-     * framework cannot check, directly or through its own walk, the module is refused naming the declaring field and the
-     * implementing classes. The remaining limit: an implementation provided by another plugin cannot be seen.
-     *
-     * @param module a class of the module that declares the setting
-     */
-    private static void walkValueTypes(String setting, Type type, List<String> errors, Class<?> module) {
-        walk(new TypeWalk(setting, errors, module), type);
-    }
-
-    /**
-     * Walks {@code declared} as {@link #walkValueTypes} does and returns every class it reached; the refusals it found are
-     * added to {@code refusals}. Package-private for {@code DeclarationBinderAgreementTest}, which requires every class the
-     * binder binds to be among them.
-     *
-     * @param declared a declared setting type
-     * @param module   a class of the module that declares it (its jar holds the implementations checked)
-     * @param refusals receives the refusal reasons, empty when the type is walked with certainty
-     * @return the classes reached, in discovery order (primitive classes as declared)
-     */
-    static Set<Class<?>> reachedClasses(Type declared, Class<?> module, List<String> refusals) {
-        TypeWalk walk = new TypeWalk("type " + declared.getTypeName(), refusals, module);
-        walk(walk, declared);
-        return walk.reached;
-    }
-
-    private static void walk(TypeWalk walk, Type declared) {
-        Type type;
-        Class<?> raw;
-        try {
-            type = ConversionTypes.bound(declared);
-            raw = ConversionTypes.raw(type);
-        } catch (RuntimeException | LinkageError unresolvable) {
-            walk.error(unresolvableType(walk, declared, unresolvable));
-            return;
-        }
-        walk.reached.add(raw);
-        if (walk.path.contains(type)) { return; }
-        if (walk.onPath(raw) >= MAX_NESTING) {
-            walk.error(walk.setting + ": the value type " + nestedName(raw) + " nests itself more than " + MAX_NESTING
-                    + " levels deep with a different type each time, so the framework cannot check it to the end for"
-                    + " constraint annotations");
-            return;
-        }
-        walk.path.push(type);
-        try {
-            if (type instanceof ParameterizedType) {
-                for (Type argument : ((ParameterizedType) type).getActualTypeArguments()) { walk(walk, argument); }
-            }
-            if (raw.isArray()) { walk(walk, ConversionTypes.component(type)); }
-            else {
-                walkClass(walk, raw, type);
-                walkImplementations(walk, raw, type);
-            }
-        } catch (RuntimeException | LinkageError unresolvable) {
-            walk.error(unresolvableType(walk, declared, unresolvable));
-        } finally {
-            walk.path.pop();
-        }
-    }
-
-    /** Reports the constraints on {@code raw}'s own fields and walks its fields' types and its supertypes, seen from {@code owner}. */
-    private static void walkClass(TypeWalk walk, Class<?> raw, Type owner) {
-        // A config class reached from a value type (a back-reference) is validated by its own entity (gate-1 F1).
-        if (raw.isPrimitive() || isPlatformClass(raw) || AbstractConfigEntity.class.isAssignableFrom(raw)) { return; }
-        for (Field inner : raw.getDeclaredFields()) {
-            if (inner.isSynthetic()) { continue; }
-            for (java.lang.annotation.Annotation constraint : constraintsOn(inner)) {
-                walk.error(walk.setting + ": @" + constraint.annotationType().getSimpleName() + " on " + nestedName(raw)
-                        + "." + inner.getName() + ", a field inside the setting's value type - the framework validates the"
-                        + " setting, never the fields of its value, so it cannot check it there (validate it in the"
-                        + " module's converter)");
-            }
-            // Static and transient fields are not part of the bound value: their types are not walked (gate-1 F1).
-            if (java.lang.reflect.Modifier.isStatic(inner.getModifiers())
-                    || java.lang.reflect.Modifier.isTransient(inner.getModifiers())) { continue; }
-            walk.declaredBy.push(nestedName(raw) + "." + inner.getName());
-            try { walk(walk, resolveIn(owner, inner.getGenericType())); }
-            finally { walk.declaredBy.pop(); }
-        }
-        if (raw.getGenericSuperclass() != null) { walk(walk, resolveIn(owner, raw.getGenericSuperclass())); }
-        for (Type face : raw.getGenericInterfaces()) { walk(walk, resolveIn(owner, face)); }
-    }
-
-    /**
-     * Checks an interface or abstract module type against its implementations in the module's own jar (maintainer
-     * decision 2026-10-06): each module class assignable to {@code raw} is walked as the subtype of {@code type} it is
-     * ({@link #subtypeIn}, so {@code ContentSlot<T>} under {@code Slot<Item>} is walked as {@code ContentSlot<Item>}). When
-     * any of them carries a constraint the framework cannot check, directly or through its own walk, one error names the
-     * field or setting that declared the type, the implementing classes and what they carry. A module class that cannot be
-     * loaded is not an implementation: the module could not create an instance of it either. Implementations another plugin
-     * provides are not in the module's jar and cannot be seen - the walk's one remaining limit.
-     */
-    private static void walkImplementations(TypeWalk walk, Class<?> raw, Type type) {
-        if (raw.isPrimitive() || isPlatformClass(raw) || AbstractConfigEntity.class.isAssignableFrom(raw)
-                || !raw.isInterface() && !java.lang.reflect.Modifier.isAbstract(raw.getModifiers())) {
-            return;
-        }
-        String declaredBy = walk.declaredBy.peek();
-        List<Class<?>> candidates;
-        try { candidates = walk.moduleClasses(); }
-        catch (IOException | java.net.URISyntaxException | RuntimeException unlisted) {
-            walk.error(walk.setting + ": " + declaredBy + " is declared as " + nestedName(raw) + ", an interface or abstract"
-                    + " type, and the module's classes cannot be listed (" + unlisted.getClass().getSimpleName() + "), so the"
-                    + " framework cannot check its implementations for constraint annotations");
-            return;
-        }
-        Map<String, List<String>> constrained = new LinkedHashMap<>();
-        String prefix = walk.setting + ": ";
-        for (Class<?> implementation : candidates) {
-            boolean assignable;
-            try { assignable = implementation != raw && raw.isAssignableFrom(implementation); }
-            catch (LinkageError notLoadable) { assignable = false; }
-            if (!assignable) { continue; }
-            List<String> found = new ArrayList<>();
-            List<String> outer = walk.errors;
-            walk.errors = found;
-            try { walk(walk, subtypeIn(type, implementation)); }
-            finally { walk.errors = outer; }
-            if (found.isEmpty()) { continue; }
-            List<String> details = new ArrayList<>();
-            for (String error : found) { details.add(error.startsWith(prefix) ? error.substring(prefix.length()) : error); }
-            constrained.put(nestedName(implementation), details);
-        }
-        if (constrained.isEmpty()) { return; }
-        List<String> details = new ArrayList<>();
-        for (List<String> each : constrained.values()) { details.addAll(each); }
-        walk.error(prefix + declaredBy + " is declared as " + nestedName(raw) + ", an interface or abstract type, and the"
-                + " module's implementing class" + (constrained.size() == 1 ? " " : "es ") + String.join(", ", constrained.keySet())
-                + " carr" + (constrained.size() == 1 ? "ies" : "y") + " constraints the framework cannot check ("
-                + String.join("; ", details) + ")");
-    }
-
-    /**
-     * Every class in the jar or directory {@code module} was loaded from, loaded through its class loader without
-     * initialization; a class that cannot be loaded is left out (no instance of it can exist in this server).
-     */
-    private static List<Class<?>> moduleClassesOf(Class<?> module) throws IOException, java.net.URISyntaxException {
-        java.security.CodeSource source = module.getProtectionDomain().getCodeSource();
-        if (source == null || source.getLocation() == null) {
-            throw new IllegalStateException("no code source for " + module.getName());
-        }
-        File location = new File(source.getLocation().toURI());
-        List<String> names = new ArrayList<>();
-        if (location.isDirectory()) {
-            java.nio.file.Path root = location.toPath();
-            try (java.util.stream.Stream<java.nio.file.Path> files = Files.walk(root)) {
-                files.filter(file -> file.toString().endsWith(".class"))
-                        .forEach(file -> names.add(className(root.relativize(file).toString().replace(File.separatorChar, '/'))));
-            }
-        } else {
-            try (java.util.jar.JarFile jar = new java.util.jar.JarFile(location)) {
-                java.util.Enumeration<java.util.jar.JarEntry> entries = jar.entries();
-                while (entries.hasMoreElements()) {
-                    String entry = entries.nextElement().getName();
-                    if (entry.endsWith(".class") && !entry.startsWith("META-INF/")) { names.add(className(entry)); }
-                }
-            }
-        }
-        List<Class<?>> classes = new ArrayList<>();
-        for (String name : names) {
-            if (name.endsWith("module-info") || name.endsWith("package-info")) { continue; }
-            try { classes.add(Class.forName(name, false, module.getClassLoader())); }
-            catch (ClassNotFoundException | LinkageError notLoadable) {
-                // Not loadable here: the module cannot create an instance of it in this server either.
-            }
-        }
-        return classes;
-    }
-
-    private static String className(String entry) {
-        return entry.substring(0, entry.length() - ".class".length()).replace('/', '.');
-    }
-
-    /** The refusal for a type the walk cannot resolve or load: the setting, the type and the failure's class, never a value. */
-    private static String unresolvableType(TypeWalk walk, Type declared, Throwable failure) {
-        return walk.setting + ": the value type " + declared.getTypeName() + " cannot be resolved or loaded ("
-                + failure.getClass().getSimpleName() + "), so the framework cannot check it for constraint annotations";
-    }
-
-    /** A class name without its package, nested classes joined by dots ({@code RecipeConfig.OutputItem}). */
-    private static String nestedName(Class<?> type) {
-        String name = type.getName();
-        return name.substring(name.lastIndexOf('.') + 1).replace('$', '.');
-    }
-
-    /** Classes of the platform and its libraries, which cannot carry the framework's constraint annotations. */
-    private static boolean isPlatformClass(Class<?> type) {
-        String name = type.getName();
-        for (String prefix : Arrays.asList("java.", "javax.", "jdk.", "sun.", "com.sun.", "org.bukkit.", "io.papermc.",
-                "com.destroystokyo.", "org.spigotmc.", "net.md_5.", "net.kyori.", "com.google.", "org.yaml.",
-                "org.jetbrains.")) {
-            if (name.startsWith(prefix)) { return true; }
-        }
-        return false;
     }
 
     // ==================== Configuration Change Listener Support ====================

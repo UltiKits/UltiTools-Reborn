@@ -13,14 +13,12 @@ import java.lang.annotation.Target;
  * kept) - the config file is never rewritten (D-01).
  * <p>
  * On a value type it cannot check, the module is refused at load, before the file is read, naming the field and the
- * annotation (since 6.3.0, #631; maintainer decision of 2026-10-06). So is this annotation on a field that is not a
- * {@code @ConfigEntry} setting, or on a field of a value type reached through a setting - the setting's own class, every
- * type argument and array component (wildcards and type variables resolved as the binder resolves them) and, for each
- * class reached, its non-static, non-transient fields and supertypes, transitively, not into another config class (a
- * converter builds that value and the framework never validates its fields - validate them in the converter). The check
- * reaches at least every type the binder can bind and refuses a type it cannot walk with certainty (since 6.3.0, #633) An interface or abstract type reached is checked against
- * its implementations in the module's own jar; one carrying such a constraint refuses the module. Implementations another
- * plugin provides cannot be seen.
+ * annotation (since 6.3.0, #631; maintainer decision of 2026-10-06). So is this annotation on a field of a config class
+ * that is not a {@code @ConfigEntry} setting.
+ * <p>
+ * It takes effect only on a field that is itself a {@code @ConfigEntry} setting of a config class, judged by that field's
+ * declared type. On a field of a value type, a nested class or anything a converter produces it is never checked and not
+ * reported (maintainer decision of 2026-10-06): validate such fields in the module's converter.
  *
  * @see com.ultikits.ultitools.annotations.ConfigEntry
  */
