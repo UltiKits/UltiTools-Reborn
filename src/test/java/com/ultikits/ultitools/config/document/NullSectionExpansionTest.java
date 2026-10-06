@@ -289,4 +289,102 @@ class NullSectionExpansionTest {
             assertThat(document.render()).isEqualTo("rules:\n  foo: # placeholder\n    keyword: hi\n");
         }
     }
+
+    /**
+     * Gate-1 F1 (plan 17-75): one answer to "did the operator write no value, or an explicit null?" at every site that
+     * asks it. Only nothing after the colon is "no value"; {@code ~}, {@code null} in any case and every tagged form
+     * ({@code !!null}, {@code !<tag:yaml.org,2002:null>}, {@code !!null ''}) are the operator's explicit null. The sites:
+     * the write gate (an insert below the key), and the document's four - the expansion of a traversed key
+     * ({@code childMapping}), the placement of comments indented under it, a whole-key write over it ({@code set}) and an
+     * entry of a merged map ({@code merge}).
+     */
+    @Nested
+    class EveryNullSpellingAtEverySite {
+
+        private static final String NONE = "";
+
+        private boolean noValue(String spelling) {
+            return NONE.equals(spelling);
+        }
+
+        private String line(String key, String spelling) {
+            return spelling.isEmpty() ? key + ":" : key + ": " + spelling;
+        }
+
+        @org.junit.jupiter.params.ParameterizedTest(name = "gate: messages: [{0}]")
+        @org.junit.jupiter.params.provider.ValueSource(strings = {NONE, "~", "null", "Null", "NULL", "!!null",
+                "!<tag:yaml.org,2002:null>", "!!null ''"})
+        void theWriteGate(String spelling) throws Exception {
+            String text = "other: 1\n" + line("messages", spelling) + "  # c\n";
+            write("mail.yml", text);
+
+            new Mail("mail.yml").init(plugin);
+
+            if (noValue(spelling)) {
+                assertThat(read("mail.yml")).contains("  mail-received: ");
+                assertThat(refusals()).isEmpty();
+            } else {
+                assertThat(read("mail.yml")).isEqualTo(text);
+                assertThat(refusals()).hasSize(1);
+                assertThat(refusals().get(0)).contains("is written as an explicit empty value");
+            }
+        }
+
+        @org.junit.jupiter.params.ParameterizedTest(name = "childMapping: messages: [{0}]")
+        @org.junit.jupiter.params.provider.ValueSource(strings = {NONE, "~", "null", "Null", "NULL", "!!null",
+                "!<tag:yaml.org,2002:null>", "!!null ''"})
+        void theExpansionOfATraversedKey(String spelling) throws Exception {
+            ConfigDocument document = ConfigDocument.parse(line("messages", spelling) + "  # c\nother: 1\n");
+            document.set(java.util.Arrays.asList("messages", "x"), "v");
+            if (noValue(spelling)) {
+                assertThat(document.render()).isEqualTo("messages: # c\n  x: v\nother: 1\n");
+            } else {
+                org.assertj.core.api.Assertions.assertThatThrownBy(document::render)
+                        .isInstanceOf(org.yaml.snakeyaml.error.YAMLException.class);
+            }
+        }
+
+        @org.junit.jupiter.params.ParameterizedTest(name = "comment placement: messages: [{0}]")
+        @org.junit.jupiter.params.provider.ValueSource(strings = {NONE, "~", "null", "Null", "NULL", "!!null",
+                "!<tag:yaml.org,2002:null>", "!!null ''"})
+        void theCommentsIndentedUnderTheKey(String spelling) throws Exception {
+            ConfigDocument document = ConfigDocument.parse(line("messages", spelling) + "\n  # child\nnext: 1\n");
+            document.set(java.util.Arrays.asList("messages", "x"), "v");
+            String rendered = document.render();
+            if (noValue(spelling)) {
+                assertThat(rendered).isEqualTo("messages:\n  x: v\n  # child\nnext: 1\n");
+            } else {
+                assertThat(rendered).as("an explicit null is not treated as emptied").doesNotContain("  # child\n");
+            }
+        }
+
+        @org.junit.jupiter.params.ParameterizedTest(name = "set: foo: [{0}]")
+        @org.junit.jupiter.params.provider.ValueSource(strings = {NONE, "~", "null", "Null", "NULL", "!!null",
+                "!<tag:yaml.org,2002:null>", "!!null ''"})
+        void aWholeKeyWrite(String spelling) throws Exception {
+            ConfigDocument document = ConfigDocument.parse(line("foo", spelling) + "  # c\n");
+            document.set(java.util.Collections.singletonList("foo"), java.util.Collections.singletonMap("k", "v"));
+            if (noValue(spelling)) {
+                assertThat(document.render()).isEqualTo("foo: # c\n  k: v\n");
+            } else {
+                org.assertj.core.api.Assertions.assertThatThrownBy(document::render)
+                        .isInstanceOf(org.yaml.snakeyaml.error.YAMLException.class);
+            }
+        }
+
+        @org.junit.jupiter.params.ParameterizedTest(name = "merge: r.foo: [{0}]")
+        @org.junit.jupiter.params.provider.ValueSource(strings = {NONE, "~", "null", "Null", "NULL", "!!null",
+                "!<tag:yaml.org,2002:null>", "!!null ''"})
+        void anEntryOfAMergedMap(String spelling) throws Exception {
+            ConfigDocument document = ConfigDocument.parse("r:\n  " + line("foo", spelling) + "  # c\n");
+            document.set(java.util.Collections.singletonList("r"),
+                    java.util.Collections.singletonMap("foo", java.util.Collections.singletonMap("k", "v")));
+            if (noValue(spelling)) {
+                assertThat(document.render()).isEqualTo("r:\n  foo: # c\n    k: v\n");
+            } else {
+                org.assertj.core.api.Assertions.assertThatThrownBy(document::render)
+                        .isInstanceOf(org.yaml.snakeyaml.error.YAMLException.class);
+            }
+        }
+    }
 }
