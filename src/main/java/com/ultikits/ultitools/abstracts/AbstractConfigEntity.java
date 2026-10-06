@@ -1217,20 +1217,6 @@ public abstract class AbstractConfigEntity {
     }
 
     /**
-     * Whether the file on disk differs from the file as it was at the last snapshot point (#510) -
-     * in practice, whether someone edited, replaced or removed it while the server was running. The
-     * snapshot is the bytes this entity last bound or wrote itself, never a fresh read, so an
-     * operator's edit stays visible here until the next load.
-     * <p>
-     * Framework-internal: this method is called only by {@code ConfigManager#saveAll()} and is
-     * {@code public} solely because {@code ConfigManager} lives in another package. Module code
-     * should not call it.
-     *
-     * @return {@code true} if the file's fingerprint changed since the last snapshot; {@code false}
-     *         if it did not, or if no snapshot has been taken yet
-     * @since 6.3.0
-     */
-    /**
      * Whether the last attempt to read this configuration's file failed to parse (#510) - in
      * practice, whether the file on disk holds invalid YAML. Nothing writes configuration at server
      * stop as of 6.3.0; the stop report names such a configuration once as left alone, instead of
@@ -1295,6 +1281,24 @@ public abstract class AbstractConfigEntity {
         bindingRanges.computeIfAbsent(key, k -> new ConcurrentHashMap<>()).put(rule, isValid);
     }
 
+    /**
+     * Whether the file on disk differs from the file as it was at the last snapshot point (#510) -
+     * in practice, whether someone edited, replaced or removed it while the server was running. The
+     * snapshot is the bytes this entity last bound or wrote itself, never a fresh read, so an
+     * operator's edit stays visible here until the next load. It is also {@code true} while a write
+     * to the file failed part-way and could not be put back from its framework backup (#622): the
+     * file may then hold part of that write, so it is treated as changed since it was read until a
+     * load reads it again.
+     * <p>
+     * Framework-internal: no production code calls it as of 6.3.0. Its former caller,
+     * {@code ConfigManager#saveAll()}, no longer writes or compares anything (#510, #599); the
+     * method is kept for the framework's own regression tests of the snapshot. It is {@code public}
+     * only because that former caller lives in another package. Module code should not call it.
+     *
+     * @return {@code true} if the file's fingerprint changed since the last snapshot, or a write to
+     *         it could not be put back; {@code false} if neither, or if no snapshot has been taken yet
+     * @since 6.3.0
+     */
     @ApiStatus.Internal
     public final boolean isFileModifiedSinceSnapshot() {
         synchronized (this) {
