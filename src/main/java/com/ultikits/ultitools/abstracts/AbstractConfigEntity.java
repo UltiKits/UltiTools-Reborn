@@ -2483,8 +2483,9 @@ public abstract class AbstractConfigEntity {
     /**
      * A {@code @NotEmpty} list, set or map that a load or reload bound empty - the file holds it empty or {@code null},
      * or every entry failed to bind - runs on the field's declared default in memory (#630, maintainer decision of
-     * 2026-10-06). One WARNING names the file, the key, the value kind, the value as written and the default, redacted
-     * for a secret-shaped key or value as a conversion warning is. It is not a violation, so the module loads.
+     * 2026-10-06). One WARNING names the file, the key, the value kind, the value as written and the default; both are
+     * redacted when the field name, a key segment, or a map key inside the value or the default is secret-shaped, as a
+     * conversion warning is. It is not a violation, so the module loads.
      * <p>
      * Why it cannot overwrite operator content: nothing here writes. The setting's baseline becomes the default the
      * field now holds (the load records the bound value after this call) and the file's value stays the one last read,
@@ -2526,8 +2527,9 @@ public abstract class AbstractConfigEntity {
      *       {@code char});</li>
      *   <li>a constraint on a field the framework never validates: a field of this class that is not a
      *       {@code @ConfigEntry} setting, or a field of a value type reached through a setting (the setting's own class,
-     *       its type arguments and array components, and the fields of those types, transitively) - a module converter
-     *       builds those values, so the module validates them there;</li>
+     *       its type arguments and array components, and the non-static, non-transient fields of those types,
+     *       transitively; a config class reached that way is not walked, its own entity validates it) - a module
+     *       converter builds those values, so the module validates them there;</li>
      *   <li>a {@code @NotEmpty} list, set, map or array whose declared default is empty, which leaves nothing to run in
      *       place of an empty value.</li>
      * </ul>
