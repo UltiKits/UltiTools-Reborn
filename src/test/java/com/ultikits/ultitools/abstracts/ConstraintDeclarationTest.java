@@ -136,6 +136,71 @@ class ConstraintDeclarationTest {
         NestedWildcards(String path) { super(path); }
     }
 
+    static class OptionalItem extends AbstractConfigEntity {
+        @ConfigEntry(path = "opt")
+        java.util.Optional<ConstraintFixtures.Item> opt = java.util.Optional.empty();
+
+        OptionalItem(String path) { super(path); }
+    }
+
+    static class AtomicItem extends AbstractConfigEntity {
+        @ConfigEntry(path = "ref")
+        java.util.concurrent.atomic.AtomicReference<ConstraintFixtures.Item> ref =
+                new java.util.concurrent.atomic.AtomicReference<>();
+
+        AtomicItem(String path) { super(path); }
+    }
+
+    static class MultimapItem extends AbstractConfigEntity {
+        @ConfigEntry(path = "multi")
+        com.google.common.collect.Multimap<String, ConstraintFixtures.Item> multi =
+                com.google.common.collect.ArrayListMultimap.create();
+
+        MultimapItem(String path) { super(path); }
+    }
+
+    static class CappedListSetting extends AbstractConfigEntity {
+        @ConfigEntry(path = "capped")
+        ConstraintFixtures.CappedList capped = new ConstraintFixtures.CappedList();
+
+        CappedListSetting(String path) { super(path); }
+    }
+
+    static class CappedListElements extends AbstractConfigEntity {
+        @ConfigEntry(path = "capped")
+        List<ConstraintFixtures.CappedList> capped = new ArrayList<>();
+
+        CappedListElements(String path) { super(path); }
+    }
+
+    static class CappedMapSetting extends AbstractConfigEntity {
+        @ConfigEntry(path = "capped")
+        ConstraintFixtures.CappedMap capped = new ConstraintFixtures.CappedMap();
+
+        CappedMapSetting(String path) { super(path); }
+    }
+
+    static class ManyHoldersSetting extends AbstractConfigEntity {
+        @ConfigEntry(path = "many")
+        ConstraintFixtures.ManyHolders many = new ConstraintFixtures.ManyHolders("m");
+
+        ManyHoldersSetting(String path) { super(path); }
+    }
+
+    static class TreeSetting extends AbstractConfigEntity {
+        @ConfigEntry(path = "tree")
+        ConstraintFixtures.Tree<ConstraintFixtures.Plain> tree = new ConstraintFixtures.Tree<>("t");
+
+        TreeSetting(String path) { super(path); }
+    }
+
+    static class ChainSetting extends AbstractConfigEntity {
+        @ConfigEntry(path = "chain")
+        ConstraintFixtures.Chain chain = new ConstraintFixtures.Chain("c");
+
+        ChainSetting(String path) { super(path); }
+    }
+
     static class BackReference extends AbstractConfigEntity {
         @ConfigEntry(path = "links")
         Map<String, ConstraintFixtures.OwnerLink> links =
@@ -335,6 +400,73 @@ class ConstraintDeclarationTest {
         write("groups: {}\nothers: {}\n");
         Throwable refusal = catchThrowable(() -> new NestedWildcards("decl.yml").init(plugin));
         assertDeclarationRefusal(refusal, "field 'groups'", "field 'others'", "ConstraintFixtures.Item.material");
+    }
+
+    @Test
+    @DisplayName("Optional<Item> bound by a module converter: Item's constraints are refused (top-up T1)")
+    void optionalContentIsReached() throws Exception {
+        write("opt: {material: '', amount: 999}\n");
+        assertDeclarationRefusal(catchThrowable(() -> new OptionalItem("decl.yml").init(plugin)),
+                "field 'opt'", "ConstraintFixtures.Item.material", "ConstraintFixtures.Item.amount");
+    }
+
+    @Test
+    @DisplayName("AtomicReference<Item> bound by a module converter: Item's constraints are refused (top-up T1)")
+    void atomicReferenceContentIsReached() throws Exception {
+        write("ref: {material: '', amount: 999}\n");
+        assertDeclarationRefusal(catchThrowable(() -> new AtomicItem("decl.yml").init(plugin)),
+                "field 'ref'", "ConstraintFixtures.Item.material", "ConstraintFixtures.Item.amount");
+    }
+
+    @Test
+    @DisplayName("Guava Multimap<String, Item> bound by a module converter: Item's constraints are refused (top-up T1)")
+    void multimapValuesAreReached() throws Exception {
+        write("multi: {}\n");
+        assertDeclarationRefusal(catchThrowable(() -> new MultimapItem("decl.yml").init(plugin)),
+                "field 'multi'", "ConstraintFixtures.Item.material", "ConstraintFixtures.Item.amount");
+    }
+
+    @Test
+    @DisplayName("a list subclass's own constrained field is refused, as the setting itself and as an element (top-up T1)")
+    void containerSubclassOwnFieldsAreReached() throws Exception {
+        write("capped: []\n");
+        assertDeclarationRefusal(catchThrowable(() -> new CappedListSetting("decl.yml").init(plugin)),
+                "field 'capped'", "ConstraintFixtures.CappedList.cap", "@Range");
+        assertDeclarationRefusal(catchThrowable(() -> new CappedListElements("decl.yml").init(plugin)),
+                "field 'capped'", "ConstraintFixtures.CappedList.cap", "@Range");
+    }
+
+    @Test
+    @DisplayName("a map subclass's own constrained field is refused (top-up T1)")
+    void mapSubclassOwnFieldsAreReached() throws Exception {
+        write("capped: {}\n");
+        assertDeclarationRefusal(catchThrowable(() -> new CappedMapSetting("decl.yml").init(plugin)),
+                "field 'capped'", "ConstraintFixtures.CappedMap.label", "@NotEmpty");
+    }
+
+    @Test
+    @DisplayName("one generic holder used with nine type arguments: the ninth's constraints are still refused (top-up T2)")
+    void manyParameterizationsAreAllWalked() throws Exception {
+        write("many: m\n");
+        assertDeclarationRefusal(catchThrowable(() -> new ManyHoldersSetting("decl.yml").init(plugin)),
+                "field 'many'", "ConstraintFixtures.Item.material", "ConstraintFixtures.Item.amount");
+    }
+
+    @Test
+    @DisplayName("a recursive generic whose type grows at every level is refused, never skipped (top-up T2)")
+    void unboundedRecursiveGenericIsRefused() throws Exception {
+        write("tree: t\n");
+        assertDeclarationRefusal(catchThrowable(() -> new TreeSetting("decl.yml").init(plugin)),
+                "field 'tree'", "ConstraintFixtures.Tree", "nests");
+    }
+
+    @Test
+    @DisplayName("control: a value type referring to itself again (the same type) loads")
+    void selfReferenceLoads() throws Exception {
+        write("chain: c\n");
+        ChainSetting config = new ChainSetting("decl.yml");
+        config.init(plugin);
+        assertThat(config.chain.name).isEqualTo("c");
     }
 
     @Test

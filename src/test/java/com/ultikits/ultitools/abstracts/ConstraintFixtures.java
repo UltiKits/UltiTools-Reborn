@@ -122,6 +122,143 @@ final class ConstraintFixtures {
         }
     }
 
+    /** The type argument a wrapper converter binds its content as (the declared one, or Object for a raw declaration). */
+    static java.lang.reflect.Type contentType(ConversionContext ctx, int index) {
+        java.lang.reflect.Type declared = ctx.declaredType();
+        return declared instanceof java.lang.reflect.ParameterizedType
+                ? ((java.lang.reflect.ParameterizedType) declared).getActualTypeArguments()[index] : Object.class;
+    }
+
+    /** A module's converter for {@code Optional}, binding its content as the declared type argument (top-up T1). */
+    @ConfigConverterFor(java.util.Optional.class)
+    public static class OptionalConverter implements ConfigConverter<java.util.Optional<?>> {
+        @Override
+        public Object toPlain(java.util.Optional<?> value, ConversionContext ctx) throws ConversionException {
+            return value.isPresent() ? ctx.toPlain(value.get()) : null;
+        }
+
+        @Override
+        public java.util.Optional<?> fromPlain(Object plain, ConversionContext ctx) throws ConversionException {
+            return java.util.Optional.ofNullable(ctx.fromPlain(plain, contentType(ctx, 0)));
+        }
+    }
+
+    /** A module's converter for {@code AtomicReference}, binding its content as the declared type argument (top-up T1). */
+    @ConfigConverterFor(java.util.concurrent.atomic.AtomicReference.class)
+    public static class AtomicReferenceConverter implements ConfigConverter<java.util.concurrent.atomic.AtomicReference<?>> {
+        @Override
+        public Object toPlain(java.util.concurrent.atomic.AtomicReference<?> value, ConversionContext ctx)
+                throws ConversionException {
+            return ctx.toPlain(value.get());
+        }
+
+        @Override
+        public java.util.concurrent.atomic.AtomicReference<?> fromPlain(Object plain, ConversionContext ctx)
+                throws ConversionException {
+            return new java.util.concurrent.atomic.AtomicReference<>(ctx.fromPlain(plain, contentType(ctx, 0)));
+        }
+    }
+
+    /** A module's converter for Guava's {@code Multimap}, binding its values as the declared value type (top-up T1). */
+    @ConfigConverterFor(com.google.common.collect.Multimap.class)
+    public static class MultimapConverter implements ConfigConverter<com.google.common.collect.Multimap<?, ?>> {
+        @Override
+        public Object toPlain(com.google.common.collect.Multimap<?, ?> value, ConversionContext ctx) {
+            return Collections.emptyMap();
+        }
+
+        @Override
+        public com.google.common.collect.Multimap<?, ?> fromPlain(Object plain, ConversionContext ctx)
+                throws ConversionException {
+            com.google.common.collect.Multimap<Object, Object> values = com.google.common.collect.ArrayListMultimap.create();
+            if (plain instanceof Map) {
+                for (Map.Entry<?, ?> entry : ((Map<?, ?>) plain).entrySet()) {
+                    values.put(entry.getKey(), ctx.fromPlain(entry.getValue(), contentType(ctx, 1)));
+                }
+            }
+            return values;
+        }
+    }
+
+    /** A list subclass with a constrained field of its own, which the generic binder never binds (top-up T1). */
+    public static class CappedList extends java.util.ArrayList<Plain> {
+        private static final long serialVersionUID = 1L;
+        @Range(min = 1, max = 5)
+        int cap = 1;
+    }
+
+    /** A map subclass with a constrained field of its own (top-up T1). */
+    public static class CappedMap extends LinkedHashMap<String, String> {
+        private static final long serialVersionUID = 1L;
+        @NotEmpty
+        String label = "x";
+    }
+
+    /** A generic holder (top-up T2). */
+    public static final class Holder<T> {
+        T held;
+    }
+
+    /** A value class using one generic holder with nine different type arguments, the ninth constrained (top-up T2). */
+    public static final class ManyHolders {
+        Holder<String> a;
+        Holder<Integer> b;
+        Holder<Long> c;
+        Holder<Double> d;
+        Holder<Boolean> e;
+        Holder<Plain> f;
+        Holder<java.util.UUID> g;
+        Holder<Character> h;
+        Holder<Item> i;
+        String name;
+
+        ManyHolders(String name) {
+            this.name = name;
+        }
+    }
+
+    /** A recursive generic whose type grows at every level: Tree<T> holds Tree<List<T>> (top-up T2). */
+    public static final class Tree<T> {
+        T value;
+        java.util.List<Tree<java.util.List<T>>> kids;
+        String name;
+
+        Tree(String name) {
+            this.name = name;
+        }
+    }
+
+    /** A self-referencing value type: the same type again, nothing new to walk (control for the walk limit). */
+    public static final class Chain {
+        Chain next;
+        String name;
+
+        Chain(String name) {
+            this.name = name;
+        }
+    }
+
+    /** Binds {@link ManyHolders}. */
+    @ConfigConverterFor(ManyHolders.class)
+    public static class ManyHoldersConverter extends NamedConverter<ManyHolders> {
+        @Override ManyHolders named(String name) { return new ManyHolders(name); }
+        @Override String name(ManyHolders value) { return value.name; }
+    }
+
+    /** Binds {@link Tree}. */
+    @ConfigConverterFor(Tree.class)
+    public static class TreeConverter extends NamedConverter<Tree<?>> {
+        @Override Tree<?> named(String name) { return new Tree<>(name); }
+        @Override String name(Tree<?> value) { return value.name; }
+    }
+
+    /** Binds {@link Chain}. */
+    @ConfigConverterFor(Chain.class)
+    public static class ChainConverter extends NamedConverter<Chain> {
+        @Override Chain named(String name) { return new Chain(name); }
+        @Override String name(Chain value) { return value.name; }
+    }
+
     /** Binds {@link Plain}. */
     @ConfigConverterFor(Plain.class)
     public static class PlainConverter extends NamedConverter<Plain> {
@@ -193,7 +330,9 @@ final class ConstraintFixtures {
                         return annotation == ConfigConverterFor.class
                                 ? new java.util.LinkedHashSet<Class<?>>(java.util.Arrays.asList(ItemConverter.class,
                                         RecipeConverter.class, PlainConverter.class, OwnerLinkConverter.class,
-                                        TransientLinkConverter.class))
+                                        TransientLinkConverter.class, OptionalConverter.class,
+                                        AtomicReferenceConverter.class, MultimapConverter.class,
+                                        ManyHoldersConverter.class, TreeConverter.class, ChainConverter.class))
                                 : Collections.emptySet();
                     });
             ConverterRegistry.prepareModule(plugin, new String[]{"fixture.constraints"},

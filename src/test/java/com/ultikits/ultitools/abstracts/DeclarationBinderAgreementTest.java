@@ -35,15 +35,17 @@ import com.ultikits.ultitools.config.convert.builtin.ConversionTypes;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 
 /**
- * #633 (maintainer decision of 2026-10-06): the declaration check reaches exactly the element types the config binder
- * binds, for every value kind of the support matrix and every generic shape found by review (wildcards either way, a
- * bounded type variable, nested wildcards, an inherited container element, a legacy parser). For each declared type the
- * test binds a sample value through the module's real converter registry - the call the load makes - collects the runtime
- * classes of the bound leaves (everything that is not a list, set, map or array), and requires that set to equal the
- * element types {@link AbstractConfigEntity#boundElementClasses(Type)} reports for the declaration. A future change to one
- * side's type resolution that the other side does not share fails here.
+ * #633 and the top-up review's T1/T3 (maintainer decision of 2026-10-06, the conservative route): the declaration check
+ * reaches at least every type the config binder can bind, and refuses any it cannot walk with certainty. For every value
+ * kind of the support matrix, every generic shape found by review (wildcards either way, a bounded type variable, nested
+ * wildcards, an inherited container element, a legacy parser) and module converters on wrappers ({@code Optional},
+ * {@code AtomicReference}), the test binds a sample value through the module's real converter registry - the call the
+ * load makes - collects the runtime classes of the bound leaves (everything that is not a list, set, map, array or one of
+ * those wrappers), and requires each of them among the classes {@link AbstractConfigEntity#reachedClasses} reports, with
+ * no refusal. A wrapper or container whose content or own fields carry constraints must be refused instead
+ * ({@link #checkRefusesWhatItCannotHold}). A change to the binder that the check does not follow fails here.
  */
-@DisplayName("The declaration check and the binder agree on every declared element type (#633)")
+@DisplayName("The declaration check reaches at least every type the binder binds, or refuses (#633)")
 class DeclarationBinderAgreementTest {
 
     @TempDir
@@ -79,6 +81,14 @@ class DeclarationBinderAgreementTest {
         Map<String, List<? super ConstraintFixtures.Plain>> nestedSuper;
         Map<? extends String, ? extends List<? extends ConstraintFixtures.Plain>> nestedExtends;
         ConstraintFixtures.PlainList inherited;
+        java.util.Optional<ConstraintFixtures.Plain> optionalPlain;
+        java.util.concurrent.atomic.AtomicReference<ConstraintFixtures.Plain> atomicPlain;
+        java.util.Optional<ConstraintFixtures.Item> optionalItem;
+        java.util.concurrent.atomic.AtomicReference<ConstraintFixtures.Item> atomicItem;
+        ConstraintFixtures.CappedList cappedList;
+        List<ConstraintFixtures.CappedList> cappedElements;
+        ConstraintFixtures.CappedMap cappedMap;
+        ConstraintFixtures.ManyHolders manyHolders;
         @ConfigEntry(path = "tags", parser = ConfigBindingEdgeCaseTest.JoinedSetParser.class)
         Set<String> legacyParser;
     }
@@ -115,6 +125,8 @@ class DeclarationBinderAgreementTest {
                 Arguments.of("nestedSuper", Collections.singletonMap("a", Collections.singletonList("ab"))),
                 Arguments.of("nestedExtends", Collections.singletonMap("a", Collections.singletonList("ab"))),
                 Arguments.of("inherited", Collections.singletonList("ab")),
+                Arguments.of("optionalPlain", "ab"),
+                Arguments.of("atomicPlain", "ab"),
                 Arguments.of("legacyParser", Collections.singletonMap("joined", "x,y")));
     }
 
@@ -151,6 +163,10 @@ class DeclarationBinderAgreementTest {
                 leaves(entry.getKey(), out);
                 leaves(entry.getValue(), out);
             }
+        } else if (value instanceof java.util.Optional) {
+            leaves(((java.util.Optional<?>) value).orElse(null), out);
+        } else if (value instanceof java.util.concurrent.atomic.AtomicReference) {
+            leaves(((java.util.concurrent.atomic.AtomicReference<?>) value).get(), out);
         } else if (value != null && value.getClass().isArray()) {
             for (int index = 0; index < Array.getLength(value); index++) { leaves(Array.get(value, index), out); }
         } else if (value != null) {
@@ -166,7 +182,7 @@ class DeclarationBinderAgreementTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("shapes")
-    void checkAndBinderReachTheSameElementTypes(String name, Object plain) throws Exception {
+    void checkReachesEveryTypeTheBinderBinds(String name, Object plain) throws Exception {
         Field field = Shapes.class.getDeclaredField(name);
         Type declared = TypeToken.of(Shapes.class).resolveType(field.getGenericType()).getType();
         ConversionResult<Object> bound = ConverterRegistry.forModule(plugin).fromPlainResult(plain, declared,
@@ -176,8 +192,26 @@ class DeclarationBinderAgreementTest {
         Set<Class<?>> binder = new LinkedHashSet<>();
         leaves(bound.value(), binder);
         assertThat(binder).as("the sample produced at least one leaf").isNotEmpty();
-        assertThat(boxed(AbstractConfigEntity.boundElementClasses(declared)))
-                .as("element types the declaration check reaches for %s (%s)", name, declared.getTypeName())
-                .containsExactlyInAnyOrderElementsOf(boxed(binder));
+        List<String> refusals = new java.util.ArrayList<>();
+        Set<Class<?>> reached = AbstractConfigEntity.reachedClasses(declared, refusals);
+        assertThat(refusals).as("the check walks %s with certainty", declared.getTypeName()).isEmpty();
+        assertThat(boxed(reached)).as("types the declaration check reaches for %s (%s)", name, declared.getTypeName())
+                .containsAll(boxed(binder));
+    }
+
+    /** Wrappers and containers whose bound content or own fields carry constraints: the check refuses, it never agrees. */
+    @ParameterizedTest(name = "{0}")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"optionalItem", "atomicItem", "cappedList", "cappedElements",
+            "cappedMap", "manyHolders", "elementField"})
+    void checkRefusesWhatItCannotHold(String name) throws Exception {
+        Field field = Shapes.class.getDeclaredField(name);
+        Type declared = TypeToken.of(Shapes.class).resolveType(field.getGenericType()).getType();
+        List<String> refusals = new java.util.ArrayList<>();
+        AbstractConfigEntity.reachedClasses(declared, refusals);
+        if ("elementField".equals(name)) {
+            assertThat(refusals).as("Plain carries no constraint").isEmpty();
+        } else {
+            assertThat(refusals).as("the check refuses %s", declared.getTypeName()).isNotEmpty();
+        }
     }
 }
