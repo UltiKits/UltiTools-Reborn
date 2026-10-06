@@ -83,6 +83,17 @@ class ConstraintSupertypeTest {
                 Arguments.of(Number.class, NotEmpty.class));
     }
 
+    /** declared supertype, annotation, a bound value of a kind the annotation cannot read, and that kind's name. */
+    static List<Arguments> wrongKind() {
+        return Arrays.asList(
+                Arguments.of(Object.class, Range.class, "abc", "String"),
+                Arguments.of(Object.class, Pattern.class, "5", "Integer"),
+                Arguments.of(Object.class, Size.class, "5", "Integer"),
+                Arguments.of(Object.class, NotEmpty.class, "5", "Integer"),
+                Arguments.of(java.io.Serializable.class, Range.class, "abc", "String"),
+                Arguments.of(Comparable.class, Pattern.class, "5", "Integer"));
+    }
+
     @BeforeEach
     void setUp() throws ReflectiveOperationException {
         clearLeakedUltiToolsInstance();
@@ -149,6 +160,31 @@ class ConstraintSupertypeTest {
         assertThatThrownBy(() -> entity(declared, annotation).init(plugin)).isInstanceOf(ConfigurationException.class)
                 .hasMessageContaining("refused to load").hasMessageContaining("field 'value'")
                 .hasMessageNotContaining("cannot check");
+    }
+
+    @ParameterizedTest(name = "@{1} on {0} holding a {3}: a value of a kind it cannot read is a violation, refused at load")
+    @MethodSource("wrongKind")
+    void valueOfAnUnreadableKindIsAViolation(Class<?> declared, Class<? extends Annotation> annotation, String value,
+            String kind) throws Exception {
+        write(value);
+        assertThatThrownBy(() -> entity(declared, annotation).init(plugin)).isInstanceOf(ConfigurationException.class)
+                .hasMessageContaining("refused to load").hasMessageContaining("field 'value' holds a " + kind)
+                .hasMessageContaining("@" + annotation.getSimpleName()).hasMessageNotContaining(value + "'");
+    }
+
+    @org.junit.jupiter.api.Test
+    @DisplayName("at reload a value of a kind @Range cannot read is refused like any violation: the running value is kept")
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // reads the generated field
+    void unreadableKindAtReloadKeepsTheRunningValue() throws Exception {
+        write("5");
+        AbstractConfigEntity running = entity(Object.class, Range.class);
+        running.init(plugin);
+        write("abc");
+        assertThatThrownBy(running::reload).isInstanceOf(ConfigurationException.class)
+                .hasMessageContaining("did not reload").hasMessageContaining("field 'value' holds a String");
+        Field value = running.getClass().getDeclaredField("value");
+        value.setAccessible(true);
+        assertThat(value.get(running)).isEqualTo(5);
     }
 
     @ParameterizedTest(name = "@{1} on {0}: no value of the type is checkable, refused at load")
