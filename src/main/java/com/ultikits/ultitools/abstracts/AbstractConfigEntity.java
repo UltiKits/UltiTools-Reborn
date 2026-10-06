@@ -72,8 +72,8 @@ import lombok.Getter;
 public abstract class AbstractConfigEntity {
     private static final Object ABSENT_RELOAD_VALUE = new Object();
     private static final Logger LOGGER = Logger.getLogger(AbstractConfigEntity.class.getName());
-    /** At most this many distinct parameterizations of one generic value type are walked by the declaration check. */
-    private static final int MAX_PARAMETERIZATIONS = 8;
+    /** How many times one class may nest itself on one path of the declaration check's walk before it refuses. */
+    private static final int MAX_NESTING = 8;
 
     private final String configFilePath;
     private final List<ConfigChangeListener> changeListeners = new CopyOnWriteArrayList<>();
@@ -771,15 +771,16 @@ public abstract class AbstractConfigEntity {
     }
 
     private Type declaredType(Field field) {
-        return fieldType(getClass(), field);
+        return resolveIn(getClass(), field.getGenericType());
     }
 
     /**
-     * {@code field}'s declared type as seen from {@code owner}, its type variables substituted: the one resolution used for
-     * a setting the load binds ({@link #declaredType}) and for a field the declaration check walks ({@link #walkFields}).
+     * {@code declared} - a field's or a supertype's generic type - as seen from {@code owner}, its type variables
+     * substituted: the one resolution used for a setting the load binds ({@link #declaredType}) and for every field and
+     * supertype the declaration check walks ({@link #walkClass}).
      */
-    private static Type fieldType(Type owner, Field field) {
-        return TypeToken.of(owner).resolveType(field.getGenericType()).getType();
+    private static Type resolveIn(Type owner, Type declared) {
+        return TypeToken.of(owner).resolveType(declared).getType();
     }
 
     private Object plainValue(Field field) { return plainValue(field, false); }
@@ -2548,10 +2549,12 @@ public abstract class AbstractConfigEntity {
      *       {@code @Size} and {@code @NotEmpty} off text, collections, maps and arrays (text is a {@code String} or a
      *       {@code char});</li>
      *   <li>a constraint on a field the framework never validates: a field of this class that is not a
-     *       {@code @ConfigEntry} setting, or a field of a value type reached through a setting (the element types the
-     *       binder itself binds, {@link #boundElementClasses}, and the non-static, non-transient fields of those types,
-     *       transitively; a config class reached that way is not walked, its own entity validates it) - a module
+     *       {@code @ConfigEntry} setting, or a field of a value type reached through a setting (the setting's own class,
+     *       every type argument and array component, and the non-static, non-transient fields and supertypes of each class
+     *       reached, transitively; a config class reached that way is not walked, its own entity validates it) - a module
      *       converter builds those values, so the module validates them there;</li>
+     *   <li>a type reached that way which cannot be walked with certainty: one that cannot be resolved or loaded, or a
+     *       class nesting itself more than {@value #MAX_NESTING} times on one path ({@link #walkValueTypes});</li>
      *   <li>a {@code @NotEmpty} list, set, map or array whose declared default is empty, which leaves nothing to run in
      *       place of an empty value.</li>
      * </ul>
@@ -2576,7 +2579,7 @@ public abstract class AbstractConfigEntity {
                             + " - " + unsupported + ", so the framework cannot check it there");
                 }
             }
-            walkValueTypes(setting, declaredType(field), errors, new LinkedHashMap<>());
+            walkValueTypes(setting, declaredType(field), errors);
             String kind = containerKind(field);
             if (field.getAnnotation(NotEmpty.class) != null && kind != null) {
                 String defaultError = defaultCannotStandIn(field, kind);
@@ -2654,100 +2657,127 @@ public abstract class AbstractConfigEntity {
     }
 
     /**
-     * Adds an error for every constraint annotation on a field of a value type reached through a setting's declared
-     * {@code type}. The value types are the leaves {@link #boundElementClasses} reports - the classes the binder itself
-     * binds, resolved by the binder's own steps - and, transitively, the declared types of those classes' non-static,
-     * non-transient fields, each resolved against the type that holds it ({@link #fieldType}, the resolution the load uses
-     * for every setting). The framework validates the setting, never the fields of its value: a converter builds that value,
-     * so such a constraint would never be checked (maintainer decision 2026-10-06, row 04:18). Not walked: platform classes
-     * ({@code java.*}, Bukkit, Paper, Adventure and the like), which cannot carry these annotations; a config class
-     * ({@code AbstractConfigEntity} subclass), whose own entity validates its constraints; and the type of a transient
-     * field, which is not part of the bound value (gate-1 F1). Limits of this static walk: a type that cannot be resolved
-     * or loaded (a soft dependency absent at runtime) is skipped; a field declared as an interface or abstract type reaches
-     * only that type's own fields, never an implementation's; and a generic value type is walked with at most
-     * {@value #MAX_PARAMETERIZATIONS} distinct parameterizations, so a recursive generic declaration terminates.
+     * The state of one walk over a setting's value types: the errors it adds (each once), every class it reaches, and the
+     * types on the current path from the setting down.
      */
-    private static void walkValueTypes(String setting, Type type, List<String> errors, Map<Class<?>, Set<Type>> walked) {
-        Map<Class<?>, Set<Type>> leaves = new LinkedHashMap<>();
-        try { collectBoundLeaves(type, leaves); }
-        catch (RuntimeException | LinkageError unresolvable) {
-            // Not resolvable here, by the binder either: the converter check reports such a declaration.
+    private static final class TypeWalk {
+        private final String setting;
+        private final List<String> errors;
+        private final Set<Class<?>> reached = new java.util.LinkedHashSet<>();
+        private final java.util.Deque<Type> path = new java.util.ArrayDeque<>();
+
+        private TypeWalk(String setting, List<String> errors) {
+            this.setting = setting;
+            this.errors = errors;
+        }
+
+        private void error(String error) {
+            if (!errors.contains(error)) { errors.add(error); }
+        }
+
+        private int onPath(Class<?> raw) {
+            int count = 0;
+            for (Type type : path) { if (ConversionTypes.raw(type) == raw) { count++; } }
+            return count;
+        }
+    }
+
+    /**
+     * Adds an error for every constraint annotation the framework cannot check on a type reachable from a setting's
+     * declared {@code type}, and refuses every type it cannot walk with certainty (maintainer decision 2026-10-06, the
+     * conservative route after the #633 top-up review). It reaches at least every type the binder can bind - including
+     * what a module converter may bind for a wrapper or container - by over-approximating: every type argument, array
+     * component, the setting's own class, and, transitively, the non-static, non-transient fields, the superclass and the
+     * interfaces of each class reached. Every type is resolved by one shared helper: {@link ConversionTypes#bound} (a
+     * wildcard's lower bound, else its first upper bound; a type variable's first bound), {@link ConversionTypes#raw},
+     * {@link ConversionTypes#component}, and {@link #resolveIn} for a field or supertype seen from the type holding it.
+     * <p>
+     * Not walked: platform classes ({@code java.*}, Bukkit, Paper, Adventure, Guava and the like) beyond their type
+     * arguments, which cannot carry these annotations; a config class ({@code AbstractConfigEntity} subclass), whose own
+     * entity validates its constraints; the type of a static or transient field, which is not part of the bound value
+     * (gate-1 F1); and a type already on the current path (a self-reference adds nothing new). Refused, never skipped: a
+     * type that cannot be resolved or loaded, and a class that nests itself more than {@value #MAX_NESTING} times on one
+     * path with a different type each time (a recursive generic that grows without end); the limit counts per path, so
+     * one class used with many type arguments side by side is always walked in full. One limit remains: a field declared
+     * as an interface or abstract type reaches only that type's own declared fields and supertypes, never an
+     * implementation's.
+     */
+    private static void walkValueTypes(String setting, Type type, List<String> errors) {
+        walk(new TypeWalk(setting, errors), type);
+    }
+
+    /**
+     * Walks {@code declared} as {@link #walkValueTypes} does and returns every class it reached; the refusals it found are
+     * added to {@code refusals}. Package-private for {@code DeclarationBinderAgreementTest}, which requires every class the
+     * binder binds to be among them.
+     *
+     * @param declared a declared setting type
+     * @param refusals receives the refusal reasons, empty when the type is walked with certainty
+     * @return the classes reached, in discovery order (primitive classes as declared)
+     */
+    static Set<Class<?>> reachedClasses(Type declared, List<String> refusals) {
+        TypeWalk walk = new TypeWalk("type " + declared.getTypeName(), refusals);
+        walk(walk, declared);
+        return walk.reached;
+    }
+
+    private static void walk(TypeWalk walk, Type declared) {
+        Type type;
+        Class<?> raw;
+        try {
+            type = ConversionTypes.bound(declared);
+            raw = ConversionTypes.raw(type);
+        } catch (RuntimeException | LinkageError unresolvable) {
+            walk.error(unresolvableType(walk, declared, unresolvable));
             return;
         }
-        for (Map.Entry<Class<?>, Set<Type>> leaf : leaves.entrySet()) {
-            for (Type declared : leaf.getValue()) { walkFields(setting, leaf.getKey(), declared, errors, walked); }
+        walk.reached.add(raw);
+        if (walk.path.contains(type)) { return; }
+        if (walk.onPath(raw) >= MAX_NESTING) {
+            walk.error(walk.setting + ": the value type " + nestedName(raw) + " nests itself more than " + MAX_NESTING
+                    + " levels deep with a different type each time, so the framework cannot check it to the end for"
+                    + " constraint annotations");
+            return;
         }
-    }
-
-    /**
-     * Reports the constraint annotations on {@code value}'s fields and walks their types; {@code declared} is the type
-     * through which {@code value} was reached, against which its fields' type variables are resolved.
-     */
-    private static void walkFields(String setting, Class<?> value, Type declared, List<String> errors,
-            Map<Class<?>, Set<Type>> walked) {
-        // A config class reached from a value type (a back-reference) is validated by its own entity (gate-1 F1).
-        if (value.isPrimitive() || isPlatformClass(value) || AbstractConfigEntity.class.isAssignableFrom(value)) { return; }
-        Set<Type> seen = walked.computeIfAbsent(value, ignored -> new java.util.HashSet<>());
-        if (seen.size() >= MAX_PARAMETERIZATIONS || !seen.add(declared)) { return; }
-        for (Class<?> level = value; level != null && !isPlatformClass(level); level = level.getSuperclass()) {
-            Field[] fields;
-            try { fields = level.getDeclaredFields(); }
-            catch (LinkageError unresolvable) { return; }
-            for (Field inner : fields) {
-                if (inner.isSynthetic()) { continue; }
-                for (java.lang.annotation.Annotation constraint : constraintsOn(inner)) {
-                    String error = setting + ": @" + constraint.annotationType().getSimpleName() + " on "
-                            + nestedName(level) + "." + inner.getName() + ", a field inside the setting's value type - "
-                            + "the framework validates the setting, never the fields of its value, so it cannot check"
-                            + " it there (validate it in the module's converter)";
-                    if (!errors.contains(error)) { errors.add(error); }
-                }
-                // Static and transient fields are not part of the bound value: their types are not walked (gate-1 F1).
-                if (java.lang.reflect.Modifier.isStatic(inner.getModifiers())
-                        || java.lang.reflect.Modifier.isTransient(inner.getModifiers())) { continue; }
-                Type fieldType;
-                try { fieldType = fieldType(declared, inner); }
-                catch (RuntimeException | LinkageError unresolvable) {
-                    // Not resolvable here: no constraint can be read from it either.
-                    continue;
-                }
-                walkValueTypes(setting, fieldType, errors, walked);
+        walk.path.push(type);
+        try {
+            if (type instanceof ParameterizedType) {
+                for (Type argument : ((ParameterizedType) type).getActualTypeArguments()) { walk(walk, argument); }
             }
+            if (raw.isArray()) { walk(walk, ConversionTypes.component(type)); }
+            else { walkClass(walk, raw, type); }
+        } catch (RuntimeException | LinkageError unresolvable) {
+            walk.error(unresolvableType(walk, declared, unresolvable));
+        } finally {
+            walk.path.pop();
         }
     }
 
-    /**
-     * The classes the binder binds as the leaves of a value declared as {@code type}: everything that is not a list, set,
-     * map or array, found by the binder's own resolution steps in the binder's own order ({@code GenericConverters
-     * #fromPlain}): {@link ConversionTypes#raw} decides the shape, {@link ConversionTypes#component} gives an array's
-     * component, and {@link ConversionTypes#argument} gives a collection's element and a map's key and value types,
-     * including those a subclass such as {@code ItemList extends ArrayList<Item>} inherits; wildcards and type variables
-     * are resolved by {@link ConversionTypes#bound} inside those steps ({@code List<? super Item>} binds {@code Item}).
-     * The declaration check has no type resolution of its own (#633); {@code DeclarationBinderAgreementTest} holds the two
-     * in agreement for every value kind.
-     *
-     * @param type a declared setting type, or a type reached inside one
-     * @return the leaf classes, in discovery order (primitive classes as declared)
-     */
-    static Set<Class<?>> boundElementClasses(Type type) {
-        Map<Class<?>, Set<Type>> leaves = new LinkedHashMap<>();
-        collectBoundLeaves(type, leaves);
-        return leaves.keySet();
+    /** Reports the constraints on {@code raw}'s own fields and walks its fields' types and its supertypes, seen from {@code owner}. */
+    private static void walkClass(TypeWalk walk, Class<?> raw, Type owner) {
+        // A config class reached from a value type (a back-reference) is validated by its own entity (gate-1 F1).
+        if (raw.isPrimitive() || isPlatformClass(raw) || AbstractConfigEntity.class.isAssignableFrom(raw)) { return; }
+        for (Field inner : raw.getDeclaredFields()) {
+            if (inner.isSynthetic()) { continue; }
+            for (java.lang.annotation.Annotation constraint : constraintsOn(inner)) {
+                walk.error(walk.setting + ": @" + constraint.annotationType().getSimpleName() + " on " + nestedName(raw)
+                        + "." + inner.getName() + ", a field inside the setting's value type - the framework validates the"
+                        + " setting, never the fields of its value, so it cannot check it there (validate it in the"
+                        + " module's converter)");
+            }
+            // Static and transient fields are not part of the bound value: their types are not walked (gate-1 F1).
+            if (java.lang.reflect.Modifier.isStatic(inner.getModifiers())
+                    || java.lang.reflect.Modifier.isTransient(inner.getModifiers())) { continue; }
+            walk(walk, resolveIn(owner, inner.getGenericType()));
+        }
+        if (raw.getGenericSuperclass() != null) { walk(walk, resolveIn(owner, raw.getGenericSuperclass())); }
+        for (Type face : raw.getGenericInterfaces()) { walk(walk, resolveIn(owner, face)); }
     }
 
-    /** {@link #boundElementClasses}, keeping for each leaf class the declared types it was reached through. */
-    private static void collectBoundLeaves(Type type, Map<Class<?>, Set<Type>> leaves) {
-        Class<?> raw = ConversionTypes.raw(type);
-        if (raw.isArray()) {
-            collectBoundLeaves(ConversionTypes.component(type), leaves);
-        } else if (java.util.Collection.class.isAssignableFrom(raw)) {
-            collectBoundLeaves(ConversionTypes.argument(type, java.util.Collection.class, 0), leaves);
-        } else if (Map.class.isAssignableFrom(raw)) {
-            collectBoundLeaves(ConversionTypes.argument(type, Map.class, 0), leaves);
-            collectBoundLeaves(ConversionTypes.argument(type, Map.class, 1), leaves);
-        } else {
-            leaves.computeIfAbsent(raw, ignored -> new java.util.LinkedHashSet<>()).add(ConversionTypes.bound(type));
-        }
+    /** The refusal for a type the walk cannot resolve or load: the setting, the type and the failure's class, never a value. */
+    private static String unresolvableType(TypeWalk walk, Type declared, Throwable failure) {
+        return walk.setting + ": the value type " + declared.getTypeName() + " cannot be resolved or loaded ("
+                + failure.getClass().getSimpleName() + "), so the framework cannot check it for constraint annotations";
     }
 
     /** A class name without its package, nested classes joined by dots ({@code RecipeConfig.OutputItem}). */

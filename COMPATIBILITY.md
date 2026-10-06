@@ -1489,20 +1489,25 @@ This section governs the third kind.
     setting's value type** - for example `@NotEmpty` on a field of the class a `Map<String, Item>` setting holds. A
     converter builds that value and the framework validates only the setting itself, so the annotation was never
     checked. Validate such fields in the module's converter (skip or refuse the entry there) and remove the annotation.
-    The check reaches exactly the element types the config binder binds, through the binder's own type resolution
-    ([#633](https://github.com/UltiKits/UltiTools-Reborn/issues/633)): collection elements, map keys and values and
-    array components, with wildcards and type variables resolved as the binder resolves them (`List<? super Item>` and
-    `List<T extends Item>` reach `Item`, as does `ItemList extends ArrayList<Item>`), then the non-static, non-transient
-    fields of those types, transitively. It does not walk platform classes (`java.*`, Bukkit, Paper, Adventure and the
-    like) or another config class (an `AbstractConfigEntity` subclass, whose own entity validates it). Limits of this
-    static check: a type that cannot be resolved or loaded (a soft dependency absent at runtime) is skipped; a field
-    declared as an interface or abstract type reaches only that type's own fields, never an implementation's; and a
-    generic value type is walked with at most eight distinct parameterizations, so a recursive generic terminates.
+    The check reaches at least every type the config binder can bind - including what a module converter binds for a
+    wrapper or a container - and refuses any type it cannot walk with certainty
+    ([#633](https://github.com/UltiKits/UltiTools-Reborn/issues/633)). It follows the setting's own class, every type
+    argument and array component (wildcards and type variables resolved as the binder resolves them, so
+    `List<? super Item>` and `List<T extends Item>` reach `Item`), and, for each class reached, its non-static,
+    non-transient fields, its superclass and its interfaces, transitively: `Optional<Item>`, `Multimap<String, Item>`
+    and a list subclass's own fields are all checked. It does not walk platform classes (`java.*`, Bukkit, Paper,
+    Adventure, Guava and the like) beyond their type arguments, another config class (an `AbstractConfigEntity`
+    subclass, whose own entity validates it), or a type already on the current path. Refused, not skipped: a type that
+    cannot be resolved or loaded (a soft dependency absent at runtime), and a class that nests itself more than eight
+    times on one path, each time with different type arguments (a recursive generic that grows without end). The count
+    is per path, so one class used with many different type arguments side by side is always walked in full. One limit
+    remains: a field declared as an interface or abstract type reaches only that type's own fields and supertypes, never
+    an implementation's.
   - First-party modules: UltiRecipe declares `@NotEmpty` and `@Range` on `RecipeConfig.OutputItem` (a value inside its
     `recipes` setting) and checks them itself; its build for 6.3.0 removes the two annotations, and an older UltiRecipe
     build is refused by this framework. No other first-party module declares a constraint the framework cannot check.
 
-  中文补充：**框架无法检查的约束注解会让模块在加载时被拒绝**（自 6.3.0 起，#631，维护者 2026-10-06 决定）。6.3.0 之前这类声明什么也不做、也没有任何提示：用在非数字上的 `@Range`、非文本上的 `@Pattern`、映射或数组上的 `@Size`、数字/布尔/枚举/值类型上的 `@Size` 与 `@NotEmpty`，以及框架从不校验的字段上的任何约束。现在：`@Size` 统计映射的条目数和数组长度（违规时与其他 `@Size` 违规一样拒绝模块）；对 `@NotEmpty`、`@Size`、`@Pattern` 而言，文本指 `String` 或 `char`。其他这类声明都会在加载时、读取配置文件之前拒绝模块，一条消息写明每个字段、注解和原因：`@Range` 只检查数字；`@Pattern` 只检查文本；`@Size` 与 `@NotEmpty` 只适用于文本、列表、集合、映射和数组。不是 `@ConfigEntry` 设置的字段上的约束，以及**设置值类型内部字段**上的约束（例如 `Map<String, Item>` 设置中 `Item` 类字段上的 `@NotEmpty`）同样如此：这些值由转换器构造，框架只校验设置本身，这类注解从未被检查过。请在模块的转换器中校验这些字段（在那里跳过或拒绝该条目），并删除注解。该检查通过配置绑定器自身的类型解析，到达的正是绑定器实际绑定的元素类型（#633）：集合元素、映射的键和值、数组元素，通配符和类型变量按绑定器的方式解析（`List<? super Item>`、`List<T extends Item>` 以及 `ItemList extends ArrayList<Item>` 都会到达 `Item`），再逐层深入这些类型中非静态、非 transient 的字段；不进入平台类（`java.*`、Bukkit、Paper、Adventure 等），也不进入另一个配置类（`AbstractConfigEntity` 子类，由它自己的实体校验）。这种静态检查有三个局限：无法解析或加载的类型（运行时缺少的软依赖）会被跳过；声明为接口或抽象类型的字段只能看到该类型自身的字段，看不到具体实现的字段；同一个泛型值类型最多按八种不同的参数化形式遍历，以保证递归泛型能结束。第一方模块：UltiRecipe 在 `RecipeConfig.OutputItem`（其 `recipes` 设置中的值）上声明了 `@NotEmpty` 和 `@Range`，并自行检查；它面向 6.3.0 的构建会删除这两个注解，旧版 UltiRecipe 构建会被本框架拒绝。其他第一方模块没有声明框架无法检查的约束。
+  中文补充：**框架无法检查的约束注解会让模块在加载时被拒绝**（自 6.3.0 起，#631，维护者 2026-10-06 决定）。6.3.0 之前这类声明什么也不做、也没有任何提示：用在非数字上的 `@Range`、非文本上的 `@Pattern`、映射或数组上的 `@Size`、数字/布尔/枚举/值类型上的 `@Size` 与 `@NotEmpty`，以及框架从不校验的字段上的任何约束。现在：`@Size` 统计映射的条目数和数组长度（违规时与其他 `@Size` 违规一样拒绝模块）；对 `@NotEmpty`、`@Size`、`@Pattern` 而言，文本指 `String` 或 `char`。其他这类声明都会在加载时、读取配置文件之前拒绝模块，一条消息写明每个字段、注解和原因：`@Range` 只检查数字；`@Pattern` 只检查文本；`@Size` 与 `@NotEmpty` 只适用于文本、列表、集合、映射和数组。不是 `@ConfigEntry` 设置的字段上的约束，以及**设置值类型内部字段**上的约束（例如 `Map<String, Item>` 设置中 `Item` 类字段上的 `@NotEmpty`）同样如此：这些值由转换器构造，框架只校验设置本身，这类注解从未被检查过。请在模块的转换器中校验这些字段（在那里跳过或拒绝该条目），并删除注解。该检查至少会到达配置绑定器可能绑定的每一种类型（包括模块转换器为包装类型或容器绑定的内容），无法确定地遍历的类型一律拒绝（#633）。它沿设置自身的类、每个类型参数和数组元素类型（通配符和类型变量按绑定器的方式解析，因此 `List<? super Item>`、`List<T extends Item>` 都会到达 `Item`），再对到达的每个类沿其非静态、非 transient 字段、父类和接口逐层深入：`Optional<Item>`、`Multimap<String, Item>` 以及列表子类自身的字段都会被检查。它不深入平台类（`java.*`、Bukkit、Paper、Adventure、Guava 等）的内部（只看其类型参数），不进入另一个配置类（`AbstractConfigEntity` 子类，由它自己的实体校验），也不再次进入当前路径上已有的同一类型。以下情况拒绝而不是跳过：无法解析或加载的类型（运行时缺少的软依赖），以及同一个类在一条路径上嵌套自身超过八次、且每次类型参数都不同（无限增长的递归泛型）。计数按路径进行，因此同一个类并列使用多种不同的类型参数时总会被完整遍历。仍有一个局限：声明为接口或抽象类型的字段只能看到该类型自身的字段和父类型，看不到具体实现的字段。第一方模块：UltiRecipe 在 `RecipeConfig.OutputItem`（其 `recipes` 设置中的值）上声明了 `@NotEmpty` 和 `@Range`，并自行检查；它面向 6.3.0 的构建会删除这两个注解，旧版 UltiRecipe 构建会被本框架拒绝。其他第一方模块没有声明框架无法检查的约束。
 
 ### Behavioral changes that do need one
 
