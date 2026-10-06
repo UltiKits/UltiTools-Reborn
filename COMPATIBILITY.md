@@ -49,7 +49,10 @@ write touch, and only in this shape: the line keeps its key text, its comment (o
 change) and its line ending; the section's value goes from nothing to exactly the inserted keys; every other line stays
 byte for byte, and a child commented out under the section stays where it is, below the restored keys. The same holds for
 an operator command, an operator change and a panel edit that add a key below such a line - for example the first rule
-added to an emptied `rules:`.
+added to an emptied `rules:`. A section written with an explicit empty value - `messages: {}`, `messages: ~` or
+`messages: null` - is the operator's own value and is never changed: an insert below it is refused, and the warning says
+what to do ([#610](https://github.com/UltiKits/UltiTools-Reborn/issues/610) item 2; see "Layouts the write gate cannot
+keep").
 
 The public surface of the contract: `AbstractConfigEntity#save()` (only what the module changed, where the file still
 holds what was read), `#saveOperatorChange(String...)` and `#saveOperatorMapEntry(String, String...)` (exactly what an
@@ -69,7 +72,7 @@ records) are not operator configuration.
 
 中文补充（写入约定）：**服主写的配置绝不被自动覆盖**（维护者 2026-10-04 的底层规则）。框架或模块的任何代码都不能改动服主在配置文件里写的内容，除非服主明确要求这一改动；框架用不了的值在代码使用前就挑明（警告并拒绝该值、使用声明默认值，或拒绝模块、拒绝启动），绝不靠改写文件“修好”。按文件类型（维护者 2026-10-04 批准的表）：**出厂配置文件**（主配置、利息设置、`spawn.yml`、框架自己的 `config.yml` 等）代码只能（1）首次创建不存在的文件；（2）补入文件缺少的声明键和框架自己的注释——只插入，不改已有内容；（3）只写服主明确要求改的那一项（命令、面板、GUI，或服主通过模块做出、由模块保存的改动）；（4）语言切换后重新渲染仍与出厂文字逐字节相同的值，以及删除逐字节未改过的旧版出厂文字行。除此之外一律不写：不在关服、卸载或替换时保存，不做整对象的顺带保存，不修复无效值，不规整排版，不清理 6.2 拆开的含点键，不改服主写的注释。**服主自己创建的文件**（礼包、菜单）只在服主明确创建时创建、明确编辑时只写编辑的部分。所有写入经同一个写入闸门：每次写入声明自己拥有的键（或框架自己的注释行），渲染后其余每个字节必须与读取时相同，且文件仍是读取时的内容；否则不写，一条 WARNING 列出文件、键和原因（排版无法保留时给出要改的行号），从不列值，内存中的值照常使用。服主命令调用的 `saveOperatorChange`/`saveOperatorMapEntry` 被拒绝时抛 `ConfigWriteRefusedException`，命令据此回复“未保存”及原因；面板编辑收到注明原因的错误。服主看到拒绝时：按警告改掉它指出的那一行（“文件在读取后已被改动”则先 `/ul reload`），再做一次改动即可，所写内容没有丢失。**官方语言文件归框架所有**，是唯一例外（维护者 2026-10-04 决定）：升级时可能被替换（保留备份并记日志），直接改官方文件不是受支持的定制方式；要定制，请复制官方文件、改名、编辑副本并在主配置中选择它，该副本归服主所有、永不被写入（自定义文件的选择与缺失键的回退在本版本内完成，#608）。
 
-中文补充（被清空的节）：删除一个键就是把该设置重置为默认值，下次启动时框架会连同注释把它补回。如果删掉的是某个节里最后一个键，节的键名会单独留在一行、冒号后什么都没有（`messages:`），读作“没有值”。按维护者 2026-10-06 的决定，这多半是误删，框架会把该节的键补回到这一行下面，而不是每次启动都拒绝写入（自 6.3.0 起，#620）。这是闸门允许一次写入触碰的、写入自身键之外的唯一一行，而且只限这种形状：该行的键名、注释（只有注释前的空格可能变化）和换行符保持不变；节的值只会从“没有值”变成恰好是补入的那些键；其余每一行逐字节不变，节下被注释掉的子键行也留在原处、位于补回的键下面。服主命令、服主改动和面板编辑在这样一行下面添加键时同样如此，例如在被清空的 `rules:` 下添加第一条规则。
+中文补充（被清空的节）：删除一个键就是把该设置重置为默认值，下次启动时框架会连同注释把它补回。如果删掉的是某个节里最后一个键，节的键名会单独留在一行、冒号后什么都没有（`messages:`），读作“没有值”。按维护者 2026-10-06 的决定，这多半是误删，框架会把该节的键补回到这一行下面，而不是每次启动都拒绝写入（自 6.3.0 起，#620）。这是闸门允许一次写入触碰的、写入自身键之外的唯一一行，而且只限这种形状：该行的键名、注释（只有注释前的空格可能变化）和换行符保持不变；节的值只会从“没有值”变成恰好是补入的那些键；其余每一行逐字节不变，节下被注释掉的子键行也留在原处、位于补回的键下面。服主命令、服主改动和面板编辑在这样一行下面添加键时同样如此，例如在被清空的 `rules:` 下添加第一条规则。写成显式空值的节（`messages: {}`、`messages: ~` 或 `messages: null`）是服主自己写的值，绝不会被改动：在它下面插入会被拒绝，警告会写明该节及其行号，并说明可以怎么做——删掉这个值、让该行在冒号处结束（下次启动即补回键），或手动添加这些键（#610 第 2 项）。
 
 ### Rendering and save fallback
 
@@ -102,8 +105,13 @@ operator change or a panel edit - whichever setting it changes. Refusing is deli
 operator's layout to make a write pass (orchestrator decision of 2026-10-05 under the maintainer's delegation). The file
 keeps its bytes, the declared or in-memory values run, and the warning names the keys and the reason with the line to fix:
 `the file's layout outside the keys this write owns would change (line N)`, or, for a key sharing its line with another,
-`a key this write owns shares line N with a key it does not own`. Measured layouts that refuse (each pinned by a test,
-`OperatorFileWriterLayoutRefusalListTest`):
+`a key this write owns shares line N with a key it does not own`. An insert below a section written as an explicit empty
+value (`{}`, `~`, `null`, `!!null`) is refused as `the section <key> (line N) is written as an explicit empty value, which the
+framework does not change; to have keys added below it, delete that value so the line ends after the colon, or add the keys
+by hand` (as of v6.3.0, [#610](https://github.com/UltiKits/UltiTools-Reborn/issues/610) item 2; before, the reason was one of
+the two above and did not say what to change). A section left with no value at all (`messages:`) is not refused: the keys
+are put back below it ([#620](https://github.com/UltiKits/UltiTools-Reborn/issues/620), "The write contract"). Measured
+layouts that refuse (each pinned by a test, `OperatorFileWriterLayoutRefusalListTest`):
 
 - a line holding only spaces, and a file holding only spaces;
 - a trailing space after a value or after a section key (`interval: 300 `);

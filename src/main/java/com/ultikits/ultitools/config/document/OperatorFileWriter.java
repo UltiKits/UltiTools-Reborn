@@ -635,7 +635,7 @@ public final class OperatorFileWriter {
     }
 
     /**
-     * The sections an insert finds empty (#620). For every value path the edit inserts, the nearest key
+     * The sections an insert finds empty (#620, #610 item 2). For every value path the edit inserts, the nearest key
      * above it that the file already holds is its section. When the write does not own that section and the file holds
      * it with no value:
      * <ul>
@@ -644,10 +644,14 @@ public final class OperatorFileWriter {
      *       is <em>expanded</em>: the write owns that one line, its value may become a mapping holding only the inserted
      *       keys, and {@link #markExpandedSection} keeps the operator's key text, comment and line terminator on it
      *       (owned-span rule revision 3, maintainer decision 2026-10-06: deleting every child is most likely accidental,
-     *       so the framework keeps the section complete).</li>
+     *       so the framework keeps the section complete);</li>
+     *   <li><b>written as an explicit empty value</b> - {@code ~}, {@code null}, {@code !!null} or {@code {}} on a block
+     *       key - the operator's own value, never reinterpreted as "left empty": the write is refused before rendering
+     *       (it was refused before as well, by the checks below, with reasons that did not say what to change) with a
+     *       reason that names the section and its line, never its value, and says what the operator can change.</li>
      * </ul>
-     * Any other section - written as {@code ~}, {@code null} or {@code {}}, a flow collection holding the key, an
-     * explicit {@code ?} key, a scalar - is not owned and is left to the existing checks, which refuse a change to it.
+     * Any other section - a flow collection holding the key, an explicit {@code ?} key, a scalar - is not owned and is
+     * left to the existing checks, which refuse a change to it.
      */
     private static final class EmptySections {
 
@@ -685,6 +689,15 @@ public final class OperatorFileWriter {
                 }
                 if (value == null && leftWithNoValue(tuple, lines, hasByteOrderMark(text))) {
                     result.expanded.add(section);
+                } else if (value == null && tuple.getValueNode() instanceof ScalarNode
+                        || emptyMapping && isFlow(tuple.getValueNode())) {
+                    // #610 item 2: the operator's own empty value; say what to change, never the value (wording rule,
+                    // revision 0, plan 17-75).
+                    result.refusal = "the section " + redacted(section) + " (line "
+                            + (tuple.getKeyNode().getStartMark().getLine() + 1) + ") is written as an explicit empty value,"
+                            + " which the framework does not change; to have keys added below it, delete that value so the"
+                            + " line ends after the colon, or add the keys by hand";
+                    return result;
                 }
             }
             return result;
