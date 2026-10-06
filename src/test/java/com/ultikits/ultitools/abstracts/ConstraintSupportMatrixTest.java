@@ -129,6 +129,8 @@ class ConstraintSupportMatrixTest {
                 new Kind("module type", ConstraintFixtures.Item.class, new ConstraintFixtures.Item("STONE", 1),
                         "{material: '', amount: 1}", "{material: '', amount: 1}", "{material: '', amount: 1}",
                         "{material: X, amount: 99}"),
+                new Kind("plain module type", ConstraintFixtures.Plain.class, new ConstraintFixtures.Plain("ab"),
+                        "x", "x", "x", "x"),
                 new Kind("element field", mapOfItem,
                         new LinkedHashMap<>(Collections.singletonMap("a", new ConstraintFixtures.Item("STONE", 1))),
                         "{a: {material: '', amount: 1}}", "{a: {material: '', amount: 1}}",
@@ -179,6 +181,28 @@ class ConstraintSupportMatrixTest {
         MockBukkitHelper.ensureCleanState();
     }
 
+    /**
+     * The text the refusal must carry for {@code annotation} on {@code kind} (gate-1 F6): the violated constraint for a
+     * refusal on a value, the reason for a declaration error. A module type with constrained fields is refused for both
+     * its own type and its fields; one without any is refused for its own type only.
+     */
+    static List<String> reason(Class<? extends Annotation> annotation, String kind, Outcome outcome) {
+        if (outcome == Outcome.REFUSED) {
+            if (annotation == Range.class) { return Collections.singletonList("is out of range"); }
+            if (annotation == Pattern.class) { return Collections.singletonList("does not match pattern"); }
+            if (annotation == Size.class) { return Collections.singletonList("field 'value' size "); }
+            return Collections.singletonList("field 'value' must not be empty");
+        }
+        if (outcome == Outcome.DEFAULT_WITH_WARNING) { return Arrays.asList("key 'value'", "@NotEmpty"); }
+        String inside = "a field inside the setting's value type";
+        if ("element field".equals(kind)) { return Collections.singletonList(inside); }
+        String own = annotation == Range.class ? "@Range checks numbers only"
+                : annotation == Pattern.class ? "@Pattern checks text only"
+                : annotation == Size.class ? "@Size counts text, lists, sets, maps and arrays only"
+                : "@NotEmpty applies to text, lists, sets, maps and arrays only";
+        return "module type".equals(kind) ? Arrays.asList(own, inside) : Collections.singletonList(own);
+    }
+
     @AfterAll
     static void printTable() {
         System.out.println("MATRIX | annotation | value kind | outcome |");
@@ -227,8 +251,16 @@ class ConstraintSupportMatrixTest {
         return instance;
     }
 
+    /** A measured outcome and the text that came with it (the refusal message or the warnings). */
+    static final class Measured {
+        final Outcome outcome;
+        final String text;
+
+        Measured(Outcome outcome, String text) { this.outcome = outcome; this.text = text; }
+    }
+
     @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // reads the generated field
-    private Outcome measure(Class<? extends Annotation> annotation, Kind kind) throws Exception {
+    private Measured measure(Class<? extends Annotation> annotation, Kind kind) throws Exception {
         Files.write(directory.resolve("matrix.yml"),
                 ("value: " + kind.violating.get(annotation) + "\n").getBytes(StandardCharsets.UTF_8));
         AbstractConfigEntity entity = entity(annotation, kind);
@@ -237,11 +269,11 @@ class ConstraintSupportMatrixTest {
                 entity.init(plugin);
             } catch (ConfigurationException refused) {
                 String message = String.valueOf(refused.getMessage());
-                return message.contains("cannot check") || message.contains("cannot hold")
-                        ? Outcome.DECLARATION_REFUSED : Outcome.REFUSED;
+                return new Measured(message.contains("cannot check") || message.contains("cannot hold")
+                        ? Outcome.DECLARATION_REFUSED : Outcome.REFUSED, message);
             }
-            boolean warned = !capture.messagesContaining("@NotEmpty").isEmpty();
-            return warned ? Outcome.DEFAULT_WITH_WARNING : Outcome.INERT;
+            List<String> warnings = capture.messagesContaining("@NotEmpty");
+            return new Measured(warnings.isEmpty() ? Outcome.INERT : Outcome.DEFAULT_WITH_WARNING, String.join("\n", warnings));
         }
     }
 
@@ -249,12 +281,17 @@ class ConstraintSupportMatrixTest {
     @MethodSource("pairs")
     @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // report mode asserts nothing by design; assertion mode does
     void pair(String annotationName, String kindName, Class<? extends Annotation> annotation, Kind kind) throws Exception {
-        Outcome measured = measure(annotation, kind);
-        String key = String.format("%-9s %-14s", annotationName, kindName);
-        TABLE.put(key, "| @" + annotationName + " | " + kindName + " | " + measured + " |");
+        Measured measured = measure(annotation, kind);
+        String key = String.format("%-9s %-17s", annotationName, kindName);
+        TABLE.put(key, "| @" + annotationName + " | " + kindName + " | " + measured.outcome + " |");
         if (ASSERT) {
-            assertThat(measured).as("@%s on %s", annotationName, kindName).isNotEqualTo(Outcome.INERT)
+            assertThat(measured.outcome).as("@%s on %s", annotationName, kindName).isNotEqualTo(Outcome.INERT)
                     .isEqualTo(decided(annotation, kindName));
+            assertThat(measured.text).as("the reason of @%s on %s", annotationName, kindName)
+                    .contains(reason(annotation, kindName, measured.outcome));
+            if ("plain module type".equals(kindName)) {
+                assertThat(measured.text).doesNotContain("a field inside the setting's value type");
+            }
         }
     }
 }
