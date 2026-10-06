@@ -2385,6 +2385,10 @@ public abstract class AbstractConfigEntity {
     private String validateSingleField(Field field) throws IllegalAccessException {
         Object value = field.get(this);
 
+        String unreadable = unreadableKind(field, value);
+        if (unreadable != null) {
+            return unreadable;
+        }
         if (isRangeViolation(field, value)) {
             Range range = field.getAnnotation(Range.class);
             return String.format("field '%s' value %s is out of range [%s, %s]",
@@ -2430,6 +2434,35 @@ public abstract class AbstractConfigEntity {
                 || lower.contains("apikey") || lower.contains("api_key")
                 || lower.contains("key") || lower.contains("auth")
                 || lower.contains("private") || lower.contains("cert");
+    }
+
+    /**
+     * A violation for a bound value of a kind the field's annotation cannot read - possible only when the setting is
+     * declared as a supertype such as {@code Object} (final review of plan 17-76: a declared constraint works or is
+     * refused, never passes silently). {@code @Range} reads numbers, {@code @Pattern} text, {@code @Size} text,
+     * collections, maps and arrays, {@code @NotEmpty} the same kinds; {@code null} is left to {@code @NotEmpty} as before.
+     * It is a violation like any other, with that annotation's outcome (refused at load; at reload the reload is refused
+     * and the running values are kept). The message names the field and the value's kind, never the value.
+     *
+     * @return the violation, or {@code null} when every annotation on the field can read the value
+     */
+    private String unreadableKind(Field field, Object value) {
+        if (value == null) { return null; }
+        boolean text = value instanceof String || value instanceof Character;
+        boolean sized = text || getValueLength(value) >= 0;
+        String reason = null;
+        String annotation = null;
+        if (field.getAnnotation(Range.class) != null && !(value instanceof Number)) {
+            annotation = "@Range"; reason = "it checks numbers only";
+        } else if (field.getAnnotation(Pattern.class) != null && !text) {
+            annotation = "@Pattern"; reason = "it checks text only";
+        } else if (field.getAnnotation(Size.class) != null && !sized) {
+            annotation = "@Size"; reason = "it counts text, lists, sets, maps and arrays only";
+        } else if (field.getAnnotation(NotEmpty.class) != null && !sized) {
+            annotation = "@NotEmpty"; reason = "it applies to text, lists, sets, maps and arrays only";
+        }
+        return annotation == null ? null : String.format("field '%s' holds a %s, which %s cannot read (%s)",
+                field.getName(), value.getClass().getSimpleName(), annotation, reason);
     }
 
     private boolean isRangeViolation(Field field, Object value) {

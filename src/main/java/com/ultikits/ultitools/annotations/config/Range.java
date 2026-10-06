@@ -26,7 +26,9 @@ import java.lang.annotation.Target;
  * It takes effect only on a field that is itself a {@code @ConfigEntry} setting of a config class, judged by that field's
  * declared type. A declared type that can hold a value the annotation checks - {@code Object}, {@code Serializable},
  * {@code Comparable}, {@code CharSequence}, {@code Number} or another supertype of a checked kind - is accepted, and the
- * value bound at load is checked; only a type that can never hold a checkable value is a declaration error. On a field of a value type, a nested class or anything a converter produces it is never checked and not
+ * value bound at load is checked; only a type that can never hold a checkable value is a declaration error. A bound
+ * value of a kind the annotation cannot read (text under {@code @Range}, a number under {@code @Pattern}) is a violation
+ * like any other: the module is refused at load, and a reload is refused with the running values kept. On a field of a value type, a nested class or anything a converter produces it is never checked and not
  * reported (maintainer decision of 2026-10-06): validate such fields in the module's converter.
  *
  * @see com.ultikits.ultitools.annotations.ConfigEntry
