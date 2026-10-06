@@ -141,7 +141,7 @@ class WriteGateRuntimeFailureTest {
         config.init(plugin);
         logged.clear();
 
-        config.rules.put("foo", rule("hi", "there"));
+        config.rules.put("foo", rule("hi", "reply-value-91c2"));
         Throwable twoArgument = catchThrowable(() -> config.saveOperatorMapEntry("autoreply.rules", "foo"));
         Throwable conditional = catchThrowable(
                 () -> config.saveOperatorMapEntry(EntryPresence.MUST_BE_PRESENT, "autoreply.rules", "foo"));
@@ -150,7 +150,7 @@ class WriteGateRuntimeFailureTest {
             assertThat(thrown).as("a refusal, not the library's EmitterException")
                     .isInstanceOf(ConfigWriteRefusedException.class).isNotInstanceOf(ConfigEntryPresenceException.class);
             assertThat(((ConfigWriteRefusedException) thrown).getReason()).contains("autoreply.rules.foo")
-                    .doesNotContain("there");
+                    .doesNotContain("reply-value-91c2");
         }
         assertThat(read(RULES)).isEqualTo(text);
         assertThat(Files.getLastModifiedTime(tempDir.resolve(RULES))).isEqualTo(OLD);
