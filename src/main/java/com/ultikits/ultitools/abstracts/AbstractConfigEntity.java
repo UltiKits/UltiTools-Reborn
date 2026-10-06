@@ -2631,10 +2631,13 @@ public abstract class AbstractConfigEntity {
     /**
      * Adds an error for every constraint annotation on a field of a value type reached through a setting's declared
      * {@code type} - the setting's own class, its type arguments and array components, and the declared types of those
-     * classes' instance fields, transitively. The framework validates the setting, never the fields of its value: a
-     * converter builds that value, so such a constraint would never be checked (maintainer decision 2026-10-06, row
-     * 04:18). Platform classes ({@code java.*}, Bukkit, Paper, Adventure and the like) cannot carry these annotations and
-     * are not walked; a type that cannot be resolved is skipped (the converter check reports a missing converter).
+     * classes' non-static, non-transient fields, transitively. The framework validates the setting, never the fields of
+     * its value: a converter builds that value, so such a constraint would never be checked (maintainer decision
+     * 2026-10-06, row 04:18). Not walked: platform classes ({@code java.*}, Bukkit, Paper, Adventure and the like), which
+     * cannot carry these annotations; a config class ({@code AbstractConfigEntity} subclass), whose own entity validates
+     * its constraints; and the type of a transient field, which is not part of the bound value (gate-1 F1). Two limits of
+     * this static walk: a class whose fields cannot be loaded (a soft dependency absent at runtime) is skipped, and a field
+     * declared as an interface or abstract type reaches only that type's own fields, never an implementation's.
      */
     @SuppressWarnings("PMD.NPathComplexity") // One walk over every shape a java.lang.reflect.Type can take.
     private static void walkValueTypes(String setting, java.lang.reflect.Type type, List<String> errors,
@@ -2653,7 +2656,9 @@ public abstract class AbstractConfigEntity {
         } else if (type instanceof Class<?>) {
             Class<?> value = (Class<?>) type;
             if (value.isArray()) { walkValueTypes(setting, value.getComponentType(), errors, visited); return; }
-            if (value.isPrimitive() || isPlatformClass(value) || !visited.add(value)) { return; }
+            // A config class reached from a value type (a back-reference) is validated by its own entity (gate-1 F1).
+            if (value.isPrimitive() || isPlatformClass(value) || AbstractConfigEntity.class.isAssignableFrom(value)
+                    || !visited.add(value)) { return; }
             for (Class<?> level = value; level != null && !isPlatformClass(level); level = level.getSuperclass()) {
                 Field[] fields;
                 try { fields = level.getDeclaredFields(); }
@@ -2666,7 +2671,9 @@ public abstract class AbstractConfigEntity {
                                 + "the framework validates the setting, never the fields of its value, so it cannot check"
                                 + " it there (validate it in the module's converter)");
                     }
-                    if (java.lang.reflect.Modifier.isStatic(inner.getModifiers())) { continue; }
+                    // Static and transient fields are not part of the bound value: their types are not walked (gate-1 F1).
+                    if (java.lang.reflect.Modifier.isStatic(inner.getModifiers())
+                            || java.lang.reflect.Modifier.isTransient(inner.getModifiers())) { continue; }
                     try { walkValueTypes(setting, inner.getGenericType(), errors, visited); }
                     catch (TypeNotPresentException | java.lang.reflect.MalformedParameterizedTypeException
                             | LinkageError unresolvable) {
