@@ -97,6 +97,22 @@ class ConstraintDeclarationTest {
         NestedElementFields(String path) { super(path); }
     }
 
+    static class BackReference extends AbstractConfigEntity {
+        @ConfigEntry(path = "links")
+        Map<String, ConstraintFixtures.OwnerLink> links =
+                new LinkedHashMap<>(Collections.singletonMap("a", new ConstraintFixtures.OwnerLink("a")));
+
+        BackReference(String path) { super(path); }
+    }
+
+    static class TransientCache extends AbstractConfigEntity {
+        @ConfigEntry(path = "links")
+        Map<String, ConstraintFixtures.TransientLink> links =
+                new LinkedHashMap<>(Collections.singletonMap("a", new ConstraintFixtures.TransientLink("a")));
+
+        TransientCache(String path) { super(path); }
+    }
+
     static class NotAnEntry extends AbstractConfigEntity {
         @ConfigEntry(path = "limit")
         int limit = 5;
@@ -240,6 +256,24 @@ class ConstraintDeclarationTest {
         assertDeclarationRefusal(
                 org.assertj.core.api.Assertions.catchThrowable(() -> new NestedElementFields("decl.yml").init(plugin)),
                 "field 'recipes'", "ConstraintFixtures.Item.material", "ConstraintFixtures.Item.amount");
+    }
+
+    @Test
+    @DisplayName("a value type's back-reference to a config class is not walked: that class's own entity checks it (gate-1 F1)")
+    void backReferenceToAConfigClassLoads() throws Exception {
+        write("links: {a: first}\n");
+        BackReference config = new BackReference("decl.yml");
+        config.init(plugin);
+        assertThat(config.links).containsOnlyKeys("a");
+    }
+
+    @Test
+    @DisplayName("a value type's transient field is not part of the bound value and is not walked (gate-1 F1)")
+    void transientFieldIsNotWalked() throws Exception {
+        write("links: {a: first}\n");
+        TransientCache config = new TransientCache("decl.yml");
+        config.init(plugin);
+        assertThat(config.links).containsOnlyKeys("a");
     }
 
     @Test

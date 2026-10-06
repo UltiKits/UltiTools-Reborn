@@ -11,6 +11,7 @@ import java.util.Map;
 
 import org.mockito.MockedStatic;
 
+import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.annotations.config.NotEmpty;
 import com.ultikits.ultitools.annotations.config.Range;
 import com.ultikits.ultitools.config.convert.ConfigConverter;
@@ -25,6 +26,7 @@ import com.ultikits.ultitools.utils.PackageScanUtils;
  * annotations, bound by a module converter - the shape of UltiRecipe's {@code RecipeConfig.OutputItem}, which the
  * framework never validates.
  */
+@SuppressWarnings("unused") // the value types' fields are read reflectively by the declaration check
 final class ConstraintFixtures {
 
     private ConstraintFixtures() {
@@ -51,6 +53,84 @@ final class ConstraintFixtures {
         Recipe(Item output) {
             this.output = output;
         }
+    }
+
+    /** A value type with no constrained field at all (gate-1 F6): a constraint on it is refused for its own type. */
+    public static final class Plain {
+        String label;
+
+        Plain(String label) {
+            this.label = label;
+        }
+    }
+
+    /** A config class a value type points back to (gate-1 F1): its own entity checks its constraint. */
+    public static class OwnerConfig extends AbstractConfigEntity {
+        @Range(min = 1, max = 10)
+        @ConfigEntry(path = "interval")
+        int interval = 5;
+
+        public OwnerConfig(String path) {
+            super(path);
+        }
+    }
+
+    /** A value type holding a back-reference to a config class (gate-1 F1). */
+    public static final class OwnerLink {
+        String name;
+        OwnerConfig owner;
+
+        OwnerLink(String name) {
+            this.name = name;
+        }
+    }
+
+    /** A value type with a transient cache of a constrained type, not part of the bound value (gate-1 F1). */
+    public static final class TransientLink {
+        String name;
+        transient Item cached;
+
+        TransientLink(String name) {
+            this.name = name;
+        }
+    }
+
+    /** Binds a value type from its {@code name} text, for the shapes above. */
+    abstract static class NamedConverter<T> implements ConfigConverter<T> {
+        abstract T named(String name);
+
+        abstract String name(T value);
+
+        @Override
+        public Object toPlain(T value, ConversionContext ctx) {
+            return name(value);
+        }
+
+        @Override
+        public T fromPlain(Object plain, ConversionContext ctx) {
+            return named(String.valueOf(plain));
+        }
+    }
+
+    /** Binds {@link Plain}. */
+    @ConfigConverterFor(Plain.class)
+    public static class PlainConverter extends NamedConverter<Plain> {
+        @Override Plain named(String name) { return new Plain(name); }
+        @Override String name(Plain value) { return value.label; }
+    }
+
+    /** Binds {@link OwnerLink}. */
+    @ConfigConverterFor(OwnerLink.class)
+    public static class OwnerLinkConverter extends NamedConverter<OwnerLink> {
+        @Override OwnerLink named(String name) { return new OwnerLink(name); }
+        @Override String name(OwnerLink value) { return value.name; }
+    }
+
+    /** Binds {@link TransientLink}. */
+    @ConfigConverterFor(TransientLink.class)
+    public static class TransientLinkConverter extends NamedConverter<TransientLink> {
+        @Override TransientLink named(String name) { return new TransientLink(name); }
+        @Override String name(TransientLink value) { return value.name; }
     }
 
     /** Binds {@link Item} from {@code {material, amount}}, accepting any value as UltiRecipe's own converter does. */
@@ -102,7 +182,8 @@ final class ConstraintFixtures {
                         Class<? extends Annotation> annotation = call.getArgument(0);
                         return annotation == ConfigConverterFor.class
                                 ? new java.util.LinkedHashSet<Class<?>>(java.util.Arrays.asList(ItemConverter.class,
-                                        RecipeConverter.class))
+                                        RecipeConverter.class, PlainConverter.class, OwnerLinkConverter.class,
+                                        TransientLinkConverter.class))
                                 : Collections.emptySet();
                     });
             ConverterRegistry.prepareModule(plugin, new String[]{"fixture.constraints"},
