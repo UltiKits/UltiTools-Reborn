@@ -15,6 +15,14 @@ import java.lang.annotation.Target;
  * {@code double}: NaN ({@code .nan} in YAML) is out of every range, and positive or negative infinity
  * ({@code .inf}, {@code -.inf}) is out of range unless the bound on that side is itself that infinity,
  * for example {@code max = Double.POSITIVE_INFINITY}.
+ * <p>
+ * {@code @Range} checks numbers only: a primitive number or a {@code Number} such as {@code Integer} or
+ * {@code BigDecimal}.
+ * <p>
+ * On a value type it cannot check, the module is refused at load, before the file is read, naming the field and the
+ * annotation (since 6.3.0, #631; maintainer decision of 2026-10-06). So is this annotation on a field that is not a
+ * {@code @ConfigEntry} setting, or on a field of a value type reached through a setting (a converter builds that value
+ * and the framework never validates its fields - validate them in the converter).
  *
  * @see com.ultikits.ultitools.annotations.ConfigEntry
  */

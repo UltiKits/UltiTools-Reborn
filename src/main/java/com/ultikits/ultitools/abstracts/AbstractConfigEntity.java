@@ -2437,34 +2437,45 @@ public abstract class AbstractConfigEntity {
 
     private boolean isPatternViolation(Field field, Object value) {
         Pattern pattern = field.getAnnotation(Pattern.class);
-        return pattern != null && value instanceof String && !((String) value).matches(pattern.regex());
+        // A char is text too (#631): its one character is matched as a string.
+        return pattern != null && (value instanceof String || value instanceof Character)
+                && !String.valueOf(value).matches(pattern.regex());
     }
 
+    /**
+     * What {@code @Size} counts: a text's length (a {@code char} is one character), a collection's size, a map's
+     * entries and an array's length (maps and arrays since 6.3.0, #631); {@code -1} for anything else.
+     */
     private int getValueLength(Object value) {
         if (value instanceof java.util.Collection) return ((java.util.Collection<?>) value).size();
+        if (value instanceof Map) return ((Map<?, ?>) value).size();
         if (value instanceof String) return ((String) value).length();
+        if (value instanceof Character) return 1;
+        if (value != null && value.getClass().isArray()) return java.lang.reflect.Array.getLength(value);
         return -1;
     }
 
     // ==================== @NotEmpty on lists, sets and maps (#630) ====================
 
     /**
-     * The value kind {@code @NotEmpty} treats as a container on {@code field}: {@code "list"}, {@code "set"},
-     * {@code "map"} or {@code "collection"} by the field's declared type, or {@code null} for any other type (text keeps
-     * its refusal).
+     * The value kind {@code @NotEmpty} treats as a container on {@code field}: {@code "list"} (a list or an array),
+     * {@code "set"}, {@code "map"} or {@code "collection"} by the field's declared type, or {@code null} for any other
+     * type (text keeps its refusal).
      */
     private String containerKind(Field field) {
         Class<?> raw = TypeToken.of(getClass()).resolveType(field.getGenericType()).getRawType();
         if (Map.class.isAssignableFrom(raw)) { return "map"; }
         if (Set.class.isAssignableFrom(raw)) { return "set"; }
-        if (List.class.isAssignableFrom(raw)) { return "list"; }
+        // An array is written as a list in the file (#631).
+        if (List.class.isAssignableFrom(raw) || raw.isArray()) { return "list"; }
         return java.util.Collection.class.isAssignableFrom(raw) ? "collection" : null;
     }
 
-    /** Whether a container value holds nothing: {@code null}, an empty collection or an empty map. */
+    /** Whether a container value holds nothing: {@code null}, an empty collection, map or array. */
     private static boolean isEmptyContainer(Object value) {
         return value == null || value instanceof java.util.Collection && ((java.util.Collection<?>) value).isEmpty()
-                || value instanceof Map && ((Map<?, ?>) value).isEmpty();
+                || value instanceof Map && ((Map<?, ?>) value).isEmpty()
+                || value.getClass().isArray() && java.lang.reflect.Array.getLength(value) == 0;
     }
 
     /**
@@ -2505,16 +2516,44 @@ public abstract class AbstractConfigEntity {
     }
 
     /**
-     * Refuses, at load and before the file is read, a constraint declaration the framework cannot hold (#630,
-     * maintainer decision of 2026-10-06): a {@code @NotEmpty} list, set or map whose declared default is empty, which
-     * leaves nothing to run in place of an empty value. One refusal names every such field; no file is read or written.
+     * Refuses, at load and before the file is read, a constraint declaration the framework cannot hold (maintainer
+     * decision of 2026-10-06, option A; #630, #631). One refusal names every such field; no file is read or written:
+     * <ul>
+     *   <li>a constraint on a value type it can never check: {@code @Range} off numbers, {@code @Pattern} off text,
+     *       {@code @Size} and {@code @NotEmpty} off text, collections, maps and arrays (text is a {@code String} or a
+     *       {@code char});</li>
+     *   <li>a constraint on a field the framework never validates: a field of this class that is not a
+     *       {@code @ConfigEntry} setting, or a field of a value type reached through a setting (the setting's own class,
+     *       its type arguments and array components, and the fields of those types, transitively) - a module converter
+     *       builds those values, so the module validates them there;</li>
+     *   <li>a {@code @NotEmpty} list, set, map or array whose declared default is empty, which leaves nothing to run in
+     *       place of an empty value.</li>
+     * </ul>
      */
     private void checkConstraintDeclarations() {
         List<String> errors = new ArrayList<>();
-        for (Field field : configEntryFields()) {
+        List<Field> entries = configEntryFields();
+        for (Field field : ReflectionUtil.getFields(getClass())) {
+            if (!entries.contains(field)) {
+                for (java.lang.annotation.Annotation constraint : constraintsOn(field)) {
+                    errors.add("field '" + field.getName() + "' carries @" + constraint.annotationType().getSimpleName()
+                            + " but is not a @ConfigEntry setting, so the framework cannot check it");
+                }
+                continue;
+            }
+            Class<?> raw = TypeToken.of(getClass()).resolveType(field.getGenericType()).getRawType();
+            String setting = "field '" + field.getName() + "' (key '" + fieldPath(field) + "')";
+            for (java.lang.annotation.Annotation constraint : constraintsOn(field)) {
+                String unsupported = unsupportedBy(constraint, raw);
+                if (unsupported != null) {
+                    errors.add(setting + ": @" + constraint.annotationType().getSimpleName() + " on " + raw.getSimpleName()
+                            + " - " + unsupported + ", so the framework cannot check it there");
+                }
+            }
+            walkValueTypes(setting, declaredType(field), errors, new java.util.HashSet<>());
             String kind = containerKind(field);
             if (field.getAnnotation(NotEmpty.class) != null && kind != null && isEmptyContainer(declaredDefaults.get(field))) {
-                errors.add("field '" + field.getName() + "' (key '" + fieldPath(field) + "'): @NotEmpty " + kind
+                errors.add(setting + ": @NotEmpty " + kind
                         + " whose declared default is empty, so there is no value to use when the file holds an empty one");
             }
         }
@@ -2526,6 +2565,110 @@ public abstract class AbstractConfigEntity {
                     + " the framework cannot hold: " + String.join("; ", errors)
                     + ". The file was not read or modified - this is a defect in the module's declaration, not in the file.");
         }
+    }
+
+    /** The four constraint annotations {@code element} carries, in a fixed order. */
+    private static List<java.lang.annotation.Annotation> constraintsOn(java.lang.reflect.AnnotatedElement element) {
+        List<java.lang.annotation.Annotation> constraints = new ArrayList<>();
+        for (Class<? extends java.lang.annotation.Annotation> type : Arrays.asList(NotEmpty.class, Size.class,
+                Pattern.class, Range.class)) {
+            java.lang.annotation.Annotation constraint = element.getAnnotation(type);
+            if (constraint != null) { constraints.add(constraint); }
+        }
+        return constraints;
+    }
+
+    /**
+     * Why {@code constraint} cannot be checked on a setting declared as {@code raw}, or {@code null} when it can: the
+     * value kinds the validation step reads ({@link #isRangeViolation}, {@link #isPatternViolation},
+     * {@link #getValueLength}, {@link #isNotEmptyViolation}).
+     */
+    private static String unsupportedBy(java.lang.annotation.Annotation constraint, Class<?> raw) {
+        Class<? extends java.lang.annotation.Annotation> type = constraint.annotationType();
+        if (type == Range.class) { return isNumberType(raw) ? null : "@Range checks numbers only"; }
+        if (type == Pattern.class) { return isTextType(raw) ? null : "@Pattern checks text only"; }
+        if (isTextType(raw) || isContainerType(raw)) { return null; }
+        return type == Size.class ? "@Size counts text, lists, sets, maps and arrays only"
+                : "@NotEmpty applies to text, lists, sets, maps and arrays only";
+    }
+
+    private static boolean isNumberType(Class<?> raw) {
+        return Number.class.isAssignableFrom(raw)
+                || raw.isPrimitive() && raw != boolean.class && raw != char.class && raw != void.class;
+    }
+
+    private static boolean isTextType(Class<?> raw) {
+        return raw == String.class || raw == char.class || raw == Character.class;
+    }
+
+    private static boolean isContainerType(Class<?> raw) {
+        return java.util.Collection.class.isAssignableFrom(raw) || Map.class.isAssignableFrom(raw) || raw.isArray();
+    }
+
+    /**
+     * Adds an error for every constraint annotation on a field of a value type reached through a setting's declared
+     * {@code type} - the setting's own class, its type arguments and array components, and the declared types of those
+     * classes' instance fields, transitively. The framework validates the setting, never the fields of its value: a
+     * converter builds that value, so such a constraint would never be checked (maintainer decision 2026-10-06, row
+     * 04:18). Platform classes ({@code java.*}, Bukkit, Paper, Adventure and the like) cannot carry these annotations and
+     * are not walked; a type that cannot be resolved is skipped (the converter check reports a missing converter).
+     */
+    @SuppressWarnings("PMD.NPathComplexity") // One walk over every shape a java.lang.reflect.Type can take.
+    private static void walkValueTypes(String setting, java.lang.reflect.Type type, List<String> errors,
+            Set<Class<?>> visited) {
+        if (type instanceof ParameterizedType) {
+            for (java.lang.reflect.Type argument : ((ParameterizedType) type).getActualTypeArguments()) {
+                walkValueTypes(setting, argument, errors, visited);
+            }
+            walkValueTypes(setting, ((ParameterizedType) type).getRawType(), errors, visited);
+        } else if (type instanceof java.lang.reflect.GenericArrayType) {
+            walkValueTypes(setting, ((java.lang.reflect.GenericArrayType) type).getGenericComponentType(), errors, visited);
+        } else if (type instanceof java.lang.reflect.WildcardType) {
+            for (java.lang.reflect.Type bound : ((java.lang.reflect.WildcardType) type).getUpperBounds()) {
+                walkValueTypes(setting, bound, errors, visited);
+            }
+        } else if (type instanceof Class<?>) {
+            Class<?> value = (Class<?>) type;
+            if (value.isArray()) { walkValueTypes(setting, value.getComponentType(), errors, visited); return; }
+            if (value.isPrimitive() || isPlatformClass(value) || !visited.add(value)) { return; }
+            for (Class<?> level = value; level != null && !isPlatformClass(level); level = level.getSuperclass()) {
+                Field[] fields;
+                try { fields = level.getDeclaredFields(); }
+                catch (LinkageError unresolvable) { return; }
+                for (Field inner : fields) {
+                    if (inner.isSynthetic()) { continue; }
+                    for (java.lang.annotation.Annotation constraint : constraintsOn(inner)) {
+                        errors.add(setting + ": @" + constraint.annotationType().getSimpleName() + " on "
+                                + nestedName(level) + "." + inner.getName() + ", a field inside the setting's value type - "
+                                + "the framework validates the setting, never the fields of its value, so it cannot check"
+                                + " it there (validate it in the module's converter)");
+                    }
+                    if (java.lang.reflect.Modifier.isStatic(inner.getModifiers())) { continue; }
+                    try { walkValueTypes(setting, inner.getGenericType(), errors, visited); }
+                    catch (TypeNotPresentException | java.lang.reflect.MalformedParameterizedTypeException
+                            | LinkageError unresolvable) {
+                        // Not resolvable here: no constraint can be read from it either.
+                    }
+                }
+            }
+        }
+    }
+
+    /** A class name without its package, nested classes joined by dots ({@code RecipeConfig.OutputItem}). */
+    private static String nestedName(Class<?> type) {
+        String name = type.getName();
+        return name.substring(name.lastIndexOf('.') + 1).replace('$', '.');
+    }
+
+    /** Classes of the platform and its libraries, which cannot carry the framework's constraint annotations. */
+    private static boolean isPlatformClass(Class<?> type) {
+        String name = type.getName();
+        for (String prefix : Arrays.asList("java.", "javax.", "jdk.", "sun.", "com.sun.", "org.bukkit.", "io.papermc.",
+                "com.destroystokyo.", "org.spigotmc.", "net.md_5.", "net.kyori.", "com.google.", "org.yaml.",
+                "org.jetbrains.")) {
+            if (name.startsWith(prefix)) { return true; }
+        }
+        return false;
     }
 
     // ==================== Configuration Change Listener Support ====================
