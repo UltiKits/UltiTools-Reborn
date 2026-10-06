@@ -201,6 +201,48 @@ class ConstraintDeclarationTest {
         ChainSetting(String path) { super(path); }
     }
 
+    static class DrawingSetting extends AbstractConfigEntity {
+        @ConfigEntry(path = "drawing")
+        ConstraintFixtures.Drawing value = new ConstraintFixtures.Drawing("v");
+
+        DrawingSetting(String path) { super(path); }
+    }
+
+    static class TaggedSetting extends AbstractConfigEntity {
+        @ConfigEntry(path = "tagged")
+        ConstraintFixtures.Tagged value = new ConstraintFixtures.Tagged("v");
+
+        TaggedSetting(String path) { super(path); }
+    }
+
+    static class PrizeSetting extends AbstractConfigEntity {
+        @ConfigEntry(path = "prize")
+        ConstraintFixtures.Prize value = new ConstraintFixtures.Prize("v");
+
+        PrizeSetting(String path) { super(path); }
+    }
+
+    static class AuraSetting extends AbstractConfigEntity {
+        @ConfigEntry(path = "aura")
+        ConstraintFixtures.Aura value = new ConstraintFixtures.Aura("v");
+
+        AuraSetting(String path) { super(path); }
+    }
+
+    static class ItemRackSetting extends AbstractConfigEntity {
+        @ConfigEntry(path = "rack")
+        ConstraintFixtures.ItemRack value = new ConstraintFixtures.ItemRack("v");
+
+        ItemRackSetting(String path) { super(path); }
+    }
+
+    static class PlainRackSetting extends AbstractConfigEntity {
+        @ConfigEntry(path = "rack")
+        ConstraintFixtures.PlainRack value = new ConstraintFixtures.PlainRack("v");
+
+        PlainRackSetting(String path) { super(path); }
+    }
+
     static class BackReference extends AbstractConfigEntity {
         @ConfigEntry(path = "links")
         Map<String, ConstraintFixtures.OwnerLink> links =
@@ -467,6 +509,59 @@ class ConstraintDeclarationTest {
         ChainSetting config = new ChainSetting("decl.yml");
         config.init(plugin);
         assertThat(config.chain.name).isEqualTo("c");
+    }
+
+    @Test
+    @DisplayName("an interface-typed field whose module implementation is constrained refuses, naming field and class")
+    void interfaceWithConstrainedImplementationIsRefused() throws Exception {
+        write("drawing: v\n");
+        assertDeclarationRefusal(catchThrowable(() -> new DrawingSetting("decl.yml").init(plugin)),
+                "ConstraintFixtures.Drawing.shape", "ConstraintFixtures.Shape", "ConstraintFixtures.Circle",
+                "ConstraintFixtures.Circle.radius");
+    }
+
+    @Test
+    @DisplayName("an interface-typed field whose module implementations carry no constraint loads")
+    void interfaceWithUnconstrainedImplementationsLoads() throws Exception {
+        write("tagged: v\n");
+        TaggedSetting config = new TaggedSetting("decl.yml");
+        config.init(plugin);
+        assertThat(config.value.name).isEqualTo("v");
+    }
+
+    @Test
+    @DisplayName("an abstract-typed field whose module subclass is constrained refuses, naming field and class")
+    void abstractBaseWithConstrainedSubclassIsRefused() throws Exception {
+        write("prize: v\n");
+        assertDeclarationRefusal(catchThrowable(() -> new PrizeSetting("decl.yml").init(plugin)),
+                "ConstraintFixtures.Prize.reward", "ConstraintFixtures.Reward", "ConstraintFixtures.CoinReward",
+                "ConstraintFixtures.CoinReward.currency");
+    }
+
+    @Test
+    @DisplayName("an abstract-typed field whose module subclasses carry no constraint loads")
+    void abstractBaseWithUnconstrainedSubclassesLoads() throws Exception {
+        write("aura: v\n");
+        AuraSetting config = new AuraSetting("decl.yml");
+        config.init(plugin);
+        assertThat(config.value.name).isEqualTo("v");
+    }
+
+    @Test
+    @DisplayName("a generic interface field Slot<Item>: the implementation ContentSlot<T> holds an Item, refused")
+    void genericInterfaceImplementationIsResolvedAndRefused() throws Exception {
+        write("rack: v\n");
+        assertDeclarationRefusal(catchThrowable(() -> new ItemRackSetting("decl.yml").init(plugin)),
+                "ConstraintFixtures.ItemRack.slot", "ConstraintFixtures.ContentSlot", "ConstraintFixtures.Item.material");
+    }
+
+    @Test
+    @DisplayName("control: the same generic interface field as Slot<Plain> loads")
+    void genericInterfaceWithUnconstrainedArgumentLoads() throws Exception {
+        write("rack: v\n");
+        PlainRackSetting config = new PlainRackSetting("decl.yml");
+        config.init(plugin);
+        assertThat(config.value.name).isEqualTo("v");
     }
 
     @Test

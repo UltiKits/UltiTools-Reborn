@@ -193,7 +193,7 @@ class DeclarationBinderAgreementTest {
         leaves(bound.value(), binder);
         assertThat(binder).as("the sample produced at least one leaf").isNotEmpty();
         List<String> refusals = new java.util.ArrayList<>();
-        Set<Class<?>> reached = AbstractConfigEntity.reachedClasses(declared, refusals);
+        Set<Class<?>> reached = AbstractConfigEntity.reachedClasses(declared, Shapes.class, refusals);
         assertThat(refusals).as("the check walks %s with certainty", declared.getTypeName()).isEmpty();
         assertThat(boxed(reached)).as("types the declaration check reaches for %s (%s)", name, declared.getTypeName())
                 .containsAll(boxed(binder));
@@ -207,7 +207,7 @@ class DeclarationBinderAgreementTest {
         Field field = Shapes.class.getDeclaredField(name);
         Type declared = TypeToken.of(Shapes.class).resolveType(field.getGenericType()).getType();
         List<String> refusals = new java.util.ArrayList<>();
-        AbstractConfigEntity.reachedClasses(declared, refusals);
+        AbstractConfigEntity.reachedClasses(declared, Shapes.class, refusals);
         if ("elementField".equals(name)) {
             assertThat(refusals).as("Plain carries no constraint").isEmpty();
         } else {

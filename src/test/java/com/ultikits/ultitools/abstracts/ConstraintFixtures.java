@@ -238,6 +238,157 @@ final class ConstraintFixtures {
         }
     }
 
+    /** An interface a value type's field is declared as; its module implementation carries a constraint (maintainer 2026-10-06). */
+    public interface Shape {
+    }
+
+    /** A module implementation of {@link Shape} with a constrained field of its own. */
+    public static final class Circle implements Shape {
+        @Range(min = 1, max = 10)
+        int radius = 1;
+    }
+
+    /** A value type holding a {@link Shape}. */
+    public static final class Drawing {
+        Shape shape;
+        String name;
+
+        Drawing(String name) {
+            this.name = name;
+        }
+    }
+
+    /** An interface whose module implementations carry no constraint (control). */
+    public interface Marker {
+    }
+
+    /** An unconstrained implementation of {@link Marker}. */
+    public static final class Flag implements Marker {
+        String label;
+    }
+
+    /** A value type holding a {@link Marker}. */
+    public static final class Tagged {
+        Marker marker;
+        String name;
+
+        Tagged(String name) {
+            this.name = name;
+        }
+    }
+
+    /** An abstract base a value type's field is declared as; its module subclass carries a constraint. */
+    public abstract static class Reward {
+        String id;
+    }
+
+    /** A module subclass of {@link Reward} with a constrained field of its own. */
+    public static final class CoinReward extends Reward {
+        @NotEmpty
+        String currency;
+    }
+
+    /** A value type holding a {@link Reward}. */
+    public static final class Prize {
+        Reward reward;
+        String name;
+
+        Prize(String name) {
+            this.name = name;
+        }
+    }
+
+    /** An abstract base whose module subclasses carry no constraint (control). */
+    public abstract static class Effect {
+        String id;
+    }
+
+    /** An unconstrained subclass of {@link Effect}. */
+    public static final class GlowEffect extends Effect {
+        int ticks;
+    }
+
+    /** A value type holding an {@link Effect}. */
+    public static final class Aura {
+        Effect effect;
+        String name;
+
+        Aura(String name) {
+            this.name = name;
+        }
+    }
+
+    /** A generic interface; its module implementation holds its type argument. */
+    public interface Slot<T> {
+    }
+
+    /** A generic module implementation of {@link Slot}: its content is the slot's type argument. */
+    public static final class ContentSlot<T> implements Slot<T> {
+        T content;
+    }
+
+    /** A value type holding a {@code Slot<Item>}: the implementation's content is an Item, whose fields are constrained. */
+    public static final class ItemRack {
+        Slot<Item> slot;
+        String name;
+
+        ItemRack(String name) {
+            this.name = name;
+        }
+    }
+
+    /** A value type holding a {@code Slot<Plain>}: nothing constrained (control). */
+    public static final class PlainRack {
+        Slot<Plain> slot;
+        String name;
+
+        PlainRack(String name) {
+            this.name = name;
+        }
+    }
+
+    /** Binds {@link Drawing}. */
+    @ConfigConverterFor(Drawing.class)
+    public static class DrawingConverter extends NamedConverter<Drawing> {
+        @Override Drawing named(String name) { return new Drawing(name); }
+        @Override String name(Drawing value) { return value.name; }
+    }
+
+    /** Binds {@link Tagged}. */
+    @ConfigConverterFor(Tagged.class)
+    public static class TaggedConverter extends NamedConverter<Tagged> {
+        @Override Tagged named(String name) { return new Tagged(name); }
+        @Override String name(Tagged value) { return value.name; }
+    }
+
+    /** Binds {@link Prize}. */
+    @ConfigConverterFor(Prize.class)
+    public static class PrizeConverter extends NamedConverter<Prize> {
+        @Override Prize named(String name) { return new Prize(name); }
+        @Override String name(Prize value) { return value.name; }
+    }
+
+    /** Binds {@link Aura}. */
+    @ConfigConverterFor(Aura.class)
+    public static class AuraConverter extends NamedConverter<Aura> {
+        @Override Aura named(String name) { return new Aura(name); }
+        @Override String name(Aura value) { return value.name; }
+    }
+
+    /** Binds {@link ItemRack}. */
+    @ConfigConverterFor(ItemRack.class)
+    public static class ItemRackConverter extends NamedConverter<ItemRack> {
+        @Override ItemRack named(String name) { return new ItemRack(name); }
+        @Override String name(ItemRack value) { return value.name; }
+    }
+
+    /** Binds {@link PlainRack}. */
+    @ConfigConverterFor(PlainRack.class)
+    public static class PlainRackConverter extends NamedConverter<PlainRack> {
+        @Override PlainRack named(String name) { return new PlainRack(name); }
+        @Override String name(PlainRack value) { return value.name; }
+    }
+
     /** Binds {@link ManyHolders}. */
     @ConfigConverterFor(ManyHolders.class)
     public static class ManyHoldersConverter extends NamedConverter<ManyHolders> {
@@ -332,7 +483,9 @@ final class ConstraintFixtures {
                                         RecipeConverter.class, PlainConverter.class, OwnerLinkConverter.class,
                                         TransientLinkConverter.class, OptionalConverter.class,
                                         AtomicReferenceConverter.class, MultimapConverter.class,
-                                        ManyHoldersConverter.class, TreeConverter.class, ChainConverter.class))
+                                        ManyHoldersConverter.class, TreeConverter.class, ChainConverter.class,
+                                        DrawingConverter.class, TaggedConverter.class, PrizeConverter.class,
+                                        AuraConverter.class, ItemRackConverter.class, PlainRackConverter.class))
                                 : Collections.emptySet();
                     });
             ConverterRegistry.prepareModule(plugin, new String[]{"fixture.constraints"},
