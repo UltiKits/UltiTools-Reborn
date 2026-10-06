@@ -687,8 +687,12 @@ public final class OperatorFileWriter {
                 if (tuple == null || !onBlockKeyLine(tuple, lines, hasByteOrderMark(text))) {
                     continue;
                 }
-                if (value == null && leftWithNoValue(tuple, lines, hasByteOrderMark(text))) {
-                    result.expanded.add(section);
+                if (value == null && ConfigDocument.writtenWithNoValue(tuple.getValueNode())) {
+                    // No value written (the one shared predicate, gate-1 F1): expanded when its line holds nothing after
+                    // the colon but a comment; any other layout is left to the checks below.
+                    if (endsAfterColon(tuple, lines, hasByteOrderMark(text))) {
+                        result.expanded.add(section);
+                    }
                 } else if (value == null && tuple.getValueNode() instanceof ScalarNode
                         || emptyMapping && isFlow(tuple.getValueNode())) {
                     // #610 item 2: the operator's own empty value; say what to change, never the value (wording rule,
@@ -734,15 +738,9 @@ public final class OperatorFileWriter {
             return before.replace("﻿", "").trim().isEmpty();
         }
 
-        private static boolean leftWithNoValue(NodeTuple tuple, List<String> lines, boolean byteOrderMark) {
+        /** Whether the section key's line holds nothing after the colon but spaces and, optionally, a comment. */
+        private static boolean endsAfterColon(NodeTuple tuple, List<String> lines, boolean byteOrderMark) {
             Node key = tuple.getKeyNode();
-            Node value = tuple.getValueNode();
-            // The empty value's own mark lies on the next token's line (after blank and comment lines), so "no value
-            // token" is read from the section line's text: an empty plain scalar, and nothing after the colon but a comment.
-            if (!(value instanceof ScalarNode) || !((ScalarNode) value).getValue().isEmpty()
-                    || ((ScalarNode) value).getScalarStyle() != DumperOptions.ScalarStyle.PLAIN) {
-                return false;
-            }
             int line = key.getStartMark().getLine();
             String[] parts = sectionLineParts(lines.get(line), key, line == 0 && byteOrderMark);
             String text = lines.get(line);

@@ -386,7 +386,7 @@ public final class ConfigDocument {
             int at = indexOf(mapping, path.get(i));
             Node before = at < 0 ? null : mapping.getValue().get(at).getValueNode();
             mapping = childMapping(mapping, path.get(i), plainMapping.get(path.get(i)));
-            if (isLeftWithNoValue(before)) {
+            if (writtenWithNoValue(before)) {
                 recordExpansion(parents, path.subList(0, i + 1), mapping);
             }
             plainMapping = childPlainMapping(plainMapping, path.get(i));
@@ -400,7 +400,7 @@ public final class ConfigDocument {
             NodeTuple old = mapping.getValue().get(index);
             Node updated = update(old.getValueNode(), plainMapping.get(last), copy);
             mapping.getValue().set(index, new NodeTuple(old.getKeyNode(), updated));
-            if (isLeftWithNoValue(old.getValueNode()) && isBlockCollection(updated)) {
+            if (writtenWithNoValue(old.getValueNode()) && isBlockCollection(updated)) {
                 // A key left with no value written whole as a section or a list (#620 sweep): its comment stays the key's.
                 moveInLineCommentsToKey(updated, old.getKeyNode());
                 if (updated instanceof MappingNode) {
@@ -935,7 +935,7 @@ public final class ConfigDocument {
             } else if (!oldPlain.containsKey(key) || !PlainData.plainEquals(oldPlain.get(key), entry.getValue())) {
                 NodeTuple tuple = tuples.get(index);
                 Node updated = update(tuple.getValueNode(), oldPlain.get(key), entry.getValue());
-                if (isLeftWithNoValue(tuple.getValueNode()) && isBlockCollection(updated)) {
+                if (writtenWithNoValue(tuple.getValueNode()) && isBlockCollection(updated)) {
                     // As in set: a key left with no value keeps the comment after its colon (#620 sweep).
                     moveInLineCommentsToKey(updated, tuple.getKeyNode());
                 }
@@ -958,7 +958,7 @@ public final class ConfigDocument {
             MappingNode created = child instanceof Map ? (MappingNode) newNode(child)
                     : new MappingNode(Tag.MAP, new ArrayList<NodeTuple>(), DumperOptions.FlowStyle.BLOCK);
             carryComments(tuple.getValueNode(), created);
-            if (isLeftWithNoValue(tuple.getValueNode())) {
+            if (writtenWithNoValue(tuple.getValueNode())) {
                 // A section line left with no value that becomes a section again (#620): the comment after its colon is
                 // the key's, where a block section keeps it - on the mapping the emitter could not write it.
                 moveInLineCommentsToKey(created, tuple.getKeyNode());
@@ -975,13 +975,27 @@ public final class ConfigDocument {
     }
 
     /**
-     * A key's value left empty - nothing after the colon: an empty plain {@code null} (#620). A value written as
-     * {@code ~}, {@code null} or {@code Null} is the operator's own, never "left with no value" (maintainer decision
-     * 2026-10-06), and keeps SnakeYAML's placement of the comment after it.
+     * Whether the operator wrote no value at all for the key holding {@code value}: nothing after the colon but, at most,
+     * a comment. That is an empty plain {@code null} scalar without a token of its own, so its start and end marks
+     * coincide. A null written as {@code ~} or {@code null} in any case, or with a tag ({@code !!null},
+     * {@code !<tag:yaml.org,2002:null>}, {@code !!null ''}), is the operator's explicit value (maintainer decision
+     * 2026-10-06). A node built in memory has no marks and was not written by anyone, so it is not "no value" either.
+     * <p>
+     * The one answer to this question for the write gate ({@link OperatorFileWriter}, which expands only a key with no
+     * value, #620) and for this document's own comment handling ({@link #set}, {@code merge}, {@code childMapping}):
+     * gate-1 F1 of plan 17-75 found the two had separate predicates that disagreed on {@code !!null}.
+     *
+     * @param value a value node of a parsed document
+     * @return whether the operator wrote no value for it
      */
-    private static boolean isLeftWithNoValue(Node node) {
-        return node instanceof ScalarNode && Tag.NULL.equals(node.getTag()) && ((ScalarNode) node).getValue().isEmpty()
-                && ((ScalarNode) node).getScalarStyle() == DumperOptions.ScalarStyle.PLAIN;
+    static boolean writtenWithNoValue(Node value) {
+        if (!(value instanceof ScalarNode) || !Tag.NULL.equals(value.getTag())) {
+            return false;
+        }
+        ScalarNode scalar = (ScalarNode) value;
+        return scalar.getValue().isEmpty() && scalar.getScalarStyle() == DumperOptions.ScalarStyle.PLAIN
+                && scalar.getStartMark() != null && scalar.getEndMark() != null
+                && scalar.getStartMark().getIndex() == scalar.getEndMark().getIndex();
     }
 
     private static void moveInLineCommentsToKey(Node from, Node key) {
