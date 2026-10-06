@@ -1520,7 +1520,10 @@ public abstract class AbstractConfigEntity {
      * the batch flush. This cannot overwrite operator content: the write owns only the inserted keys and the
      * token comment lines the framework identified as its own (#604) (or the whole file when it was absent,
      * created exclusively so a file that appeared
-     * meanwhile is never replaced), the gate verifies that every other byte of the file is unchanged after
+     * meanwhile is never replaced) - and, for a key whose section the operator left with no value ({@code messages:}
+     * after deleting every key of the section), that section's one line, which carried no value and keeps its key text
+     * and comment (#620, maintainer decision 2026-10-06: the key is put back so the section is complete) - the gate
+     * verifies that every other byte of the file is unchanged after
      * rendering (layout included), and it writes nothing when the file no longer holds the bytes read at
      * {@code expected}. When it does not write, the gate has logged one warning naming the file and the keys,
      * the fields keep their declared defaults in memory, and the file keeps its bytes.

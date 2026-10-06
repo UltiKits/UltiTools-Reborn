@@ -886,6 +886,11 @@ public final class ConfigDocument {
             MappingNode created = child instanceof Map ? (MappingNode) newNode(child)
                     : new MappingNode(Tag.MAP, new ArrayList<NodeTuple>(), DumperOptions.FlowStyle.BLOCK);
             carryComments(tuple.getValueNode(), created);
+            if (isNullScalar(tuple.getValueNode())) {
+                // A section line left with no value that becomes a section again (#620): the comment after its colon is
+                // the key's, where a block section keeps it - on the mapping the emitter could not write it.
+                moveInLineCommentsToKey(created, tuple.getKeyNode());
+            }
             retainDescendantEnds(tuple.getValueNode(), created);
             mapping.getValue().set(index, new NodeTuple(tuple.getKeyNode(), created));
             modified = true;
@@ -895,6 +900,22 @@ public final class ConfigDocument {
         mapping.getValue().add(new NodeTuple(representer().represent(key), created));
         modified = true;
         return created;
+    }
+
+    private static boolean isNullScalar(Node node) {
+        return node instanceof ScalarNode && Tag.NULL.equals(node.getTag());
+    }
+
+    private static void moveInLineCommentsToKey(Node from, Node key) {
+        List<CommentLine> moved = from.getInLineComments();
+        if (moved == null || moved.isEmpty()) {
+            return;
+        }
+        List<CommentLine> onKey = key.getInLineComments() == null
+                ? new ArrayList<CommentLine>() : new ArrayList<>(key.getInLineComments());
+        onKey.addAll(moved);
+        key.setInLineComments(onKey);
+        from.setInLineComments(null);
     }
 
     @SuppressWarnings("unchecked")

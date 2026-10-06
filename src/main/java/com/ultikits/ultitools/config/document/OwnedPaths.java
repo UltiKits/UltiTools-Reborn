@@ -19,6 +19,14 @@ import org.jetbrains.annotations.ApiStatus;
  * comment is owned - the comment lines directly above it. An owned comment is either the key's whole comment or,
  * for a framework comment ({@link Builder#frameworkComment(List, int)}), only its last lines: the run the
  * framework identified as its own, so every comment line above that run stays the operator's (#604).
+ * <p>
+ * <b>An inserted key under a section left with no value</b> (#620, owned-span rule revision 3, maintainer decision
+ * 2026-10-06). When the operator deletes every key of a section, the section key is left on its own line with nothing
+ * after the colon ({@code messages:}), which reads as no value at all. A value path inserted below such a line also owns
+ * that one line: the section becomes a mapping that holds exactly the inserted keys. This cannot overwrite operator
+ * content - the line carried no value, its key text, comment and line terminator are kept, and every other line of the
+ * file must still come out byte for byte. {@link OperatorFileWriter} decides this from the file at write time; a section
+ * written as an empty value ({@code ~}, {@code null}, {@code {}}) is the operator's value and is never owned this way.
  * Instances are immutable.
  *
  * @since 6.3.0
