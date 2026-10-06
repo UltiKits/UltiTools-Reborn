@@ -240,7 +240,11 @@ proves the framework's own stop sequence, which names never-saved module changes
 Use the local `ConfigFixture` module from the Phase 17 UAT handoff, installed in the framework's
 module directory (not Bukkit's top-level plugin directory). `F` below means
 `plugins/UltiTools/pluginConfig/ConfigFixture/config/fixture.yml`. Record complete before/after
-files and restore the per-row backup. Start from the positive fixture baseline for each row;
+files and restore the per-row backup. Before the first row, start the server once with the fixture build under test
+and stop it, so F holds every setting that build declares (a rebuilt fixture's first start appends any setting it
+added, for example `# Map-valued entries` / `rules: {}` since plan 17-74); capture the baseline F only after that start.
+A baseline captured before it makes every row that compares F across a start show those lines and give a wrong
+verdict. Start from the positive fixture baseline for each row;
 never carry a damaged file or ambiguous-map specimen into the next row. These server rows do not
 count Maven tests as real-server evidence. No write normalizes layout: in every row, each byte of F outside what
 the row's step writes stays as it was (compare with `diff` or `cmp`), and a file the write gate cannot write that way
