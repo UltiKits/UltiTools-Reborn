@@ -85,6 +85,17 @@ class InPlaceFallbackRestoreTest {
         }
     };
 
+    @ConfigEntity("commented.yml")
+    public static class Commented extends AbstractConfigEntity {
+        @ConfigEntry(path = "interval", comment = "{fx.interval}", previousComments = {"Old interval text"})
+        int interval = 300;
+        @ConfigEntry(path = "name") String name = "lobby";
+
+        public Commented(String path) {
+            super(path);
+        }
+    }
+
     @ConfigEntity("gate.yml")
     public static class Gate extends AbstractConfigEntity {
         @ConfigEntry(path = "motd") String motd = "default-motd";
@@ -105,6 +116,8 @@ class InPlaceFallbackRestoreTest {
         int failForceAtOpen;
         int failOpenAt;
         int failWriteAtOpen;
+        final java.util.Set<Integer> forceFailures = new java.util.HashSet<>();
+        final java.util.Set<Integer> openFailures = new java.util.HashSet<>();
 
         @Override
         public void move(Path source, Path destination, CopyOption... options) throws IOException {
@@ -117,7 +130,7 @@ class InPlaceFallbackRestoreTest {
         @Override
         public FileChannel openTarget(Path file) throws IOException {
             targetOpens++;
-            if (targetOpens == failOpenAt) {
+            if (targetOpens == failOpenAt || openFailures.contains(targetOpens)) {
                 throw new IOException("injected open failure");
             }
             target = FileChannel.open(file, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING);
@@ -138,7 +151,7 @@ class InPlaceFallbackRestoreTest {
 
         @Override
         public void force(FileChannel channel) throws IOException {
-            if (channel == target && targetOpens == failForceAtOpen) {
+            if (channel == target && (targetOpens == failForceAtOpen || forceFailures.contains(targetOpens))) {
                 throw new IOException("injected force failure");
             }
             channel.force(true);
@@ -301,6 +314,121 @@ class InPlaceFallbackRestoreTest {
         gate.reload();
         assertThat(gate.isFileModifiedSinceSnapshot()).as("a reload reads the file again").isFalse();
         assertThat(backups).allMatch(Files::exists);
+    }
+
+    // ------------------------------------------- every consumer of "the file could not be put back" (#622 signal)
+
+    @Test
+    @DisplayName("not put back: a panel edit is refused and the comment refresh writes nothing until a reload")
+    void notPutBackRefusesPanelEditsAndCommentRefresh() throws Exception {
+        lenient().when(plugin.i18n("fx.interval")).thenReturn("New interval text");
+        write("commented.yml", "# Old interval text\ninterval: 300\nname: lobby\n");
+        Commented config = new Commented("commented.yml");
+        config.init(plugin);
+        assertThat(read("commented.yml")).as("precondition: the comment follows the language")
+                .isEqualTo("# New interval text\ninterval: 300\nname: lobby\n");
+        injectFaults();
+        faults.failForceAtOpen = 1;
+        faults.failOpenAt = 2;
+
+        config.name = "renamed-value";
+        assertThat(catchThrowable(() -> config.saveOperatorChange("name"))).isInstanceOf(IOException.class);
+        config.name = "lobby";
+        stopFaults();
+        String onDisk = read("commented.yml");
+
+        JsonObject edit = new JsonObject();
+        edit.addProperty("interval", 60);
+        Throwable panel = catchThrowable(() -> config.updateProperties(edit));
+        assertThat(panel).isInstanceOf(ConfigWriteRefusedException.class);
+        assertThat(((ConfigWriteRefusedException) panel).getReason()).contains("changed since it was read");
+        assertThat(config.interval).as("the panel value is rolled back").isEqualTo(300);
+        lenient().when(plugin.i18n("fx.interval")).thenReturn("Newer interval text");
+        config.refreshFrameworkComments();
+        assertThat(read("commented.yml")).as("neither a panel edit nor the comment refresh writes").isEqualTo(onDisk);
+    }
+
+    @Test
+    @DisplayName("not put back during the start-up insert: init fails and the entity treats the file as changed")
+    void notPutBackAtStartUpInsert() throws Exception {
+        write("gate.yml", "# Gate settings\nmotd: " + ORIGINAL_VALUE + "\n");
+        Gate gate = new Gate("gate.yml");
+        injectFaults();
+        faults.failForceAtOpen = 1;
+        faults.failOpenAt = 2;
+
+        assertThat(catchThrowable(() -> gate.init(plugin))).isInstanceOf(IOException.class);
+
+        assertThat(severe()).hasSize(1);
+        assertThat(gate.isFileModifiedSinceSnapshot()).isTrue();
+    }
+
+    @Test
+    @DisplayName("not put back during the comment-only write at load: no exception, and every later write is refused")
+    void notPutBackAtCommentWriteOnLoad() throws Exception {
+        lenient().when(plugin.i18n("fx.interval")).thenReturn("New interval text");
+        write("commented.yml", "# Old interval text\ninterval: 300\nname: lobby\n");
+        Commented config = new Commented("commented.yml");
+        injectFaults();
+        faults.failForceAtOpen = 1;
+        faults.failOpenAt = 2;
+
+        config.init(plugin);
+        stopFaults();
+
+        assertThat(severe()).hasSize(1);
+        assertThat(config.isFileModifiedSinceSnapshot()).isTrue();
+        config.name = "renamed-value";
+        assertThat(catchThrowable(() -> config.saveOperatorChange("name"))).isInstanceOf(ConfigWriteRefusedException.class);
+    }
+
+    @Test
+    @DisplayName("not put back during the registration batch flush: the flush fails and the file is treated as changed")
+    void notPutBackAtBatchFlush() throws Exception {
+        write("gate.yml", "# Gate settings\nmotd: " + ORIGINAL_VALUE + "\n");
+        Gate gate = new Gate("gate.yml");
+        gate.initForBatch(plugin);
+        injectFaults();
+        faults.failForceAtOpen = 1;
+        faults.failOpenAt = 2;
+
+        assertThat(catchThrowable(gate::flushInitializationWrite)).isInstanceOf(IOException.class);
+
+        assertThat(severe()).hasSize(1);
+        assertThat(gate.isFileModifiedSinceSnapshot()).isTrue();
+    }
+
+    @Test
+    @DisplayName("not put back while a panel batch rolls back a file it replaced: that entity treats its file as changed")
+    void notPutBackDuringBatchRollback() throws Exception {
+        write("a.yml", TEXT);
+        write("b.yml", TEXT);
+        ConfigManager manager = new ConfigManager();
+        Gate first = new Gate("a.yml");
+        Gate second = new Gate("b.yml");
+        manager.register(plugin, first);
+        manager.register(plugin, second);
+        JsonObject edit = new JsonObject();
+        edit.addProperty("motd", NEW_VALUE);
+        JsonObject files = new JsonObject();
+        files.add("a.yml", edit);
+        files.add("b.yml", edit);
+        JsonObject root = new JsonObject();
+        root.add("RestoreModule", files);
+        injectFaults();
+        // Open 1: the first file is replaced. Open 2: the second fails and open 3 puts it back. Open 4: the rollback of
+        // the first file fails, and open 5, putting that back, fails too.
+        faults.forceFailures.add(2);
+        faults.forceFailures.add(4);
+        faults.openFailures.add(5);
+
+        Throwable thrown = catchThrowable(() -> manager.loadFromJson(root.toString()));
+
+        assertThat(thrown).isInstanceOf(IOException.class);
+        assertThat(read("b.yml")).isEqualTo(TEXT);
+        assertThat(severe()).hasSize(1);
+        assertThat(first.isFileModifiedSinceSnapshot()).isTrue();
+        assertThat(second.isFileModifiedSinceSnapshot()).isFalse();
     }
 
     // -------------------------------------------------------------------------------------------------- helpers
