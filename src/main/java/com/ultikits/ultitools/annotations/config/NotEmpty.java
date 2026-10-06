@@ -21,9 +21,11 @@ import java.lang.annotation.Target;
  * <p>
  * On a value type it cannot check, the module is refused at load, before the file is read, naming the field and the
  * annotation (since 6.3.0, #631; maintainer decision of 2026-10-06). So is this annotation on a field that is not a
- * {@code @ConfigEntry} setting, or on a field of a value type reached through a setting - its type arguments, array
- * components and non-static, non-transient fields, transitively, not into another config class (a converter builds that
- * value and the framework never validates its fields - validate them in the converter).
+ * {@code @ConfigEntry} setting, or on a field of a value type reached through a setting - the element types the binder
+ * itself binds (collection elements, map keys and values, array components, wildcards and type variables resolved as the
+ * binder resolves them, since 6.3.0 #633) and their non-static, non-transient fields, transitively, not into another
+ * config class (a converter builds that value and the framework never validates its fields - validate them in the
+ * converter).
  *
  * @see com.ultikits.ultitools.annotations.ConfigEntry
  */
