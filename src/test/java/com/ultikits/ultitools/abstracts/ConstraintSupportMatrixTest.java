@@ -71,7 +71,6 @@ class ConstraintSupportMatrixTest {
     private static final Map<Class<? extends Annotation>, String> VIOLATION = new LinkedHashMap<>();
     /** The reason a declaration error gives for the annotation's own value type, per annotation. */
     private static final Map<Class<? extends Annotation>, String> UNCHECKABLE = new LinkedHashMap<>();
-    private static final String INSIDE = "a field inside the setting's value type";
     private static final List<String> NUMBERS = Arrays.asList("int", "long", "double", "float", "BigDecimal");
     private static final List<String> TEXT = Arrays.asList("text", "char");
     private static final List<String> CONTAINERS = Arrays.asList("list", "set", "map", "array");
@@ -120,8 +119,6 @@ class ConstraintSupportMatrixTest {
         TypeDescription.Generic setOfString = TypeDescription.Generic.Builder.parameterizedType(Set.class, String.class).build();
         TypeDescription.Generic mapOfString = TypeDescription.Generic.Builder
                 .parameterizedType(Map.class, String.class, String.class).build();
-        TypeDescription.Generic mapOfItem = TypeDescription.Generic.Builder
-                .parameterizedType(Map.class, String.class, ConstraintFixtures.Item.class).build();
         Map<String, Object> mapDefault = new LinkedHashMap<>(Collections.singletonMap("a", "ab"));
         return Arrays.asList(
                 new Kind("text", String.class, "ab", "''", "abcdef", "ABC", "'5'"),
@@ -149,11 +146,7 @@ class ConstraintSupportMatrixTest {
                         "{material: '', amount: 1}", "{material: '', amount: 1}", "{material: '', amount: 1}",
                         "{material: X, amount: 99}"),
                 new Kind("plain module type", ConstraintFixtures.Plain.class, new ConstraintFixtures.Plain("ab"),
-                        "x", "x", "x", "x"),
-                new Kind("element field", mapOfItem,
-                        new LinkedHashMap<>(Collections.singletonMap("a", new ConstraintFixtures.Item("STONE", 1))),
-                        "{a: {material: '', amount: 1}}", "{a: {material: '', amount: 1}}",
-                        "{a: {material: '', amount: 1}}", "{a: {material: X, amount: 99}}"));
+                        "x", "x", "x", "x"));
     }
 
     static List<Arguments> pairs() {
@@ -171,7 +164,8 @@ class ConstraintSupportMatrixTest {
      * on text (a {@code String} or a {@code char}), {@code @Size} on text, collections, maps and arrays, {@code @NotEmpty}
      * refuses empty text and runs the
      * declared default for an empty collection, map or array; anything else is a declaration the framework cannot check.
-     * The "element field" kind carries no constraint on the setting itself: its constraints sit on {@code Item}'s fields.
+     * Only the {@code @ConfigEntry} field's own annotation counts: constraints on a module type's fields are never checked
+     * (maintainer decision 2026-10-06, the simplest route; see ConstraintDeclarationTest#nestedConstraintsAreNotChecked).
      */
     static Outcome decided(Class<? extends Annotation> annotation, String kind) {
         if (annotation == Range.class) { return NUMBERS.contains(kind) ? Outcome.REFUSED : Outcome.DECLARATION_REFUSED; }
@@ -198,15 +192,12 @@ class ConstraintSupportMatrixTest {
 
     /**
      * The text the refusal must carry for {@code annotation} on {@code kind} (gate-1 F6): the violated constraint for a
-     * refusal on a value, the reason for a declaration error. A module type with constrained fields is refused for both
-     * its own type and its fields; one without any is refused for its own type only.
+     * refusal on a value, the reason for a declaration error on the field's own type.
      */
     static List<String> reason(Class<? extends Annotation> annotation, String kind, Outcome outcome) {
         if (outcome == Outcome.REFUSED) { return Collections.singletonList(VIOLATION.get(annotation)); }
         if (outcome == Outcome.DEFAULT_WITH_WARNING) { return Arrays.asList("key 'value'", "@NotEmpty"); }
-        if ("element field".equals(kind)) { return Collections.singletonList(INSIDE); }
-        String own = UNCHECKABLE.get(annotation);
-        return "module type".equals(kind) ? Arrays.asList(own, INSIDE) : Collections.singletonList(own);
+        return Collections.singletonList(UNCHECKABLE.get(annotation));
     }
 
     @AfterAll
@@ -235,18 +226,17 @@ class ConstraintSupportMatrixTest {
         return builder.build();
     }
 
-    /** One generated config class per pair; the "element field" kind puts no constraint on the setting itself. */
+    /** One generated config class per pair: one {@code @ConfigEntry} field named {@code value} carrying the annotation. */
     @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // the generated field's declared default is set reflectively
     private AbstractConfigEntity entity(Class<? extends Annotation> annotation, Kind kind) throws ReflectiveOperationException {
         AnnotationDescription entry = AnnotationDescription.Builder.ofType(ConfigEntry.class).define("path", "value").build();
-        boolean element = "element field".equals(kind.name);
         TypeDescription.Generic declared = kind.type instanceof TypeDescription.Generic ? (TypeDescription.Generic) kind.type
                 : net.bytebuddy.description.type.TypeDefinition.Sort.describe((Type) kind.type);
         Class<? extends AbstractConfigEntity> generated = new ByteBuddy()
                 .subclass(AbstractConfigEntity.class, ConstructorStrategy.Default.IMITATE_SUPER_CLASS_PUBLIC)
                 .name("com.ultikits.ultitools.abstracts.generated.Matrix" + SEQUENCE.incrementAndGet())
                 .defineField("value", declared, Visibility.PUBLIC)
-                .annotateField(element ? Collections.singletonList(entry) : Arrays.asList(entry, describe(annotation, kind)))
+                .annotateField(Arrays.asList(entry, describe(annotation, kind)))
                 .make()
                 .load(getClass().getClassLoader(), ClassLoadingStrategy.Default.WRAPPER)
                 .getLoaded();
@@ -295,9 +285,6 @@ class ConstraintSupportMatrixTest {
                     .isEqualTo(decided(annotation, kindName));
             assertThat(measured.text).as("the reason of @%s on %s", annotationName, kindName)
                     .contains(reason(annotation, kindName, measured.outcome));
-            if ("plain module type".equals(kindName)) {
-                assertThat(measured.text).doesNotContain(INSIDE);
-            }
         }
     }
 }

@@ -13,12 +13,16 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.Mockito;
 
 import com.ultikits.ultitools.annotations.ConfigEntry;
@@ -35,7 +39,7 @@ import com.ultikits.ultitools.utils.MockBukkitHelper;
  * module at load with one message naming the field, the annotation and why; nothing is silently ignored. {@code @Size}
  * is extended to count a map's entries. On the base every declaration below loads silently.
  */
-@DisplayName("A constraint the framework cannot check refuses the module at load; @Size counts map entries (#631)")
+@DisplayName("A constraint on a @ConfigEntry field the framework cannot check refuses the module at load; @Size counts map entries (#631)")
 class ConstraintDeclarationTest {
 
     @TempDir
@@ -385,201 +389,52 @@ class ConstraintDeclarationTest {
                 "field 'count'", "@Size");
     }
 
-    @Test
-    @DisplayName("constraints on a field of a map's element type (UltiRecipe's OutputItem shape) are refused in one message")
-    void elementTypeFieldsAreRefused() throws Exception {
-        write("outputs:\n  stone: {material: STONE, amount: 1}\n");
-        Throwable refusal = catchThrowable(() -> new ElementFields("decl.yml").init(plugin));
-        assertDeclarationRefusal(refusal, "field 'outputs'", "ConstraintFixtures.Item.material", "@NotEmpty",
-                "ConstraintFixtures.Item.amount", "@Range");
-        assertThat(refusal.getMessage().split("ConstraintFixtures.Item.material", -1)).as("named once").hasSize(2);
+    /**
+     * Every shape whose constraints sit on fields of a value type, a nested class, or anything a converter produces - not
+     * on the {@code @ConfigEntry} field itself. Maintainer decision of 2026-10-06 (the simplest route, superseding the
+     * value-type walk): the framework checks constraints only on fields that are themselves {@code @ConfigEntry}
+     * settings, so these load, their constraints are not checked, and nothing is logged about them - a pinned,
+     * documented limit.
+     */
+    static List<Arguments> nestedShapes() {
+        return java.util.Arrays.asList(
+                Arguments.of("element type field (UltiRecipe's OutputItem shape)", (Function<String, AbstractConfigEntity>) ElementFields::new, "outputs:\n  stone: {material: '', amount: 99}\n"),
+                Arguments.of("element type two levels below", (Function<String, AbstractConfigEntity>) NestedElementFields::new, "recipes:\n  r: {output: {material: '', amount: 99}}\n"),
+                Arguments.of("inherited container element (ItemList extends ArrayList<Item>)", (Function<String, AbstractConfigEntity>) InheritedElements::new, "items: [{material: '', amount: 99}]\n"),
+                Arguments.of("List<? super Item>", (Function<String, AbstractConfigEntity>) SuperWildcard::new, "items: []\n"),
+                Arguments.of("List<? extends Item>", (Function<String, AbstractConfigEntity>) ExtendsWildcard::new, "items: []\n"),
+                Arguments.of("List<T> with T extends Item", (Function<String, AbstractConfigEntity>) BoundedTypeVariable::new, "items: []\n"),
+                Arguments.of("nested wildcards in map values", (Function<String, AbstractConfigEntity>) NestedWildcards::new, "groups: {}\nothers: {}\n"),
+                Arguments.of("Optional<Item> by a module converter", (Function<String, AbstractConfigEntity>) OptionalItem::new, "opt: {material: '', amount: 999}\n"),
+                Arguments.of("AtomicReference<Item> by a module converter", (Function<String, AbstractConfigEntity>) AtomicItem::new, "ref: {material: '', amount: 999}\n"),
+                Arguments.of("Guava Multimap<String, Item> by a module converter", (Function<String, AbstractConfigEntity>) MultimapItem::new, "multi: {}\n"),
+                Arguments.of("list subclass with its own constrained field", (Function<String, AbstractConfigEntity>) CappedListSetting::new, "capped: []\n"),
+                Arguments.of("list of such list subclasses", (Function<String, AbstractConfigEntity>) CappedListElements::new, "capped: []\n"),
+                Arguments.of("map subclass with its own constrained field", (Function<String, AbstractConfigEntity>) CappedMapSetting::new, "capped: {}\n"),
+                Arguments.of("one holder with nine type arguments", (Function<String, AbstractConfigEntity>) ManyHoldersSetting::new, "many: m\n"),
+                Arguments.of("recursive generic growing at every level", (Function<String, AbstractConfigEntity>) TreeSetting::new, "tree: t\n"),
+                Arguments.of("self-referencing value type", (Function<String, AbstractConfigEntity>) ChainSetting::new, "chain: c\n"),
+                Arguments.of("interface field with a constrained implementation", (Function<String, AbstractConfigEntity>) DrawingSetting::new, "drawing: v\n"),
+                Arguments.of("interface field with unconstrained implementations", (Function<String, AbstractConfigEntity>) TaggedSetting::new, "tagged: v\n"),
+                Arguments.of("abstract field with a constrained subclass", (Function<String, AbstractConfigEntity>) PrizeSetting::new, "prize: v\n"),
+                Arguments.of("abstract field with unconstrained subclasses", (Function<String, AbstractConfigEntity>) AuraSetting::new, "aura: v\n"),
+                Arguments.of("generic interface Slot<Item>", (Function<String, AbstractConfigEntity>) ItemRackSetting::new, "rack: v\n"),
+                Arguments.of("generic interface Slot<Plain>", (Function<String, AbstractConfigEntity>) PlainRackSetting::new, "rack: v\n"),
+                Arguments.of("value type back-referencing a config class", (Function<String, AbstractConfigEntity>) BackReference::new, "links: {a: first}\n"),
+                Arguments.of("value type with a transient constrained field", (Function<String, AbstractConfigEntity>) TransientCache::new, "links: {a: first}\n"));
     }
 
-    @Test
-    @DisplayName("an element type two levels below the setting is walked too")
-    void nestedElementTypeFieldsAreRefused() throws Exception {
-        write("recipes:\n  r: {output: {material: STONE, amount: 1}}\n");
-        assertDeclarationRefusal(
-                catchThrowable(() -> new NestedElementFields("decl.yml").init(plugin)),
-                "field 'recipes'", "ConstraintFixtures.Item.material", "ConstraintFixtures.Item.amount");
-    }
-
-    @Test
-    @DisplayName("an element type inherited from a container superclass (ItemList extends ArrayList<Item>) is walked (PR #632 Codex run 1)")
-    void inheritedElementTypeIsWalked() throws Exception {
-        write("items: [{material: STONE, amount: 99}]\n");
-        assertDeclarationRefusal(catchThrowable(() -> new InheritedElements("decl.yml").init(plugin)),
-                "field 'items'", "ConstraintFixtures.Item.material", "ConstraintFixtures.Item.amount");
-    }
-
-    @Test
-    @DisplayName("List<? super Item> reaches Item, the type the binder binds (#633)")
-    void superWildcardReachesItsLowerBound() throws Exception {
-        write("items: []\n");
-        assertDeclarationRefusal(catchThrowable(() -> new SuperWildcard("decl.yml").init(plugin)),
-                "field 'items'", "ConstraintFixtures.Item.material", "ConstraintFixtures.Item.amount");
-    }
-
-    @Test
-    @DisplayName("List<? extends Item> reaches Item (#633)")
-    void extendsWildcardReachesItsUpperBound() throws Exception {
-        write("items: []\n");
-        assertDeclarationRefusal(catchThrowable(() -> new ExtendsWildcard("decl.yml").init(plugin)),
-                "field 'items'", "ConstraintFixtures.Item.material", "ConstraintFixtures.Item.amount");
-    }
-
-    @Test
-    @DisplayName("List<T> with T extends Item reaches Item, the type variable's bound (#633)")
-    void boundedTypeVariableReachesItsBound() throws Exception {
-        write("items: []\n");
-        assertDeclarationRefusal(catchThrowable(() -> new BoundedTypeVariable<>("decl.yml").init(plugin)),
-                "field 'items'", "ConstraintFixtures.Item.material", "ConstraintFixtures.Item.amount");
-    }
-
-    @Test
-    @DisplayName("nested wildcards in map values reach Item through every level (#633)")
-    void nestedWildcardsReachTheElement() throws Exception {
-        write("groups: {}\nothers: {}\n");
-        Throwable refusal = catchThrowable(() -> new NestedWildcards("decl.yml").init(plugin));
-        assertDeclarationRefusal(refusal, "field 'groups'", "field 'others'", "ConstraintFixtures.Item.material");
-    }
-
-    @Test
-    @DisplayName("Optional<Item> bound by a module converter: Item's constraints are refused (top-up T1)")
-    void optionalContentIsReached() throws Exception {
-        write("opt: {material: '', amount: 999}\n");
-        assertDeclarationRefusal(catchThrowable(() -> new OptionalItem("decl.yml").init(plugin)),
-                "field 'opt'", "ConstraintFixtures.Item.material", "ConstraintFixtures.Item.amount");
-    }
-
-    @Test
-    @DisplayName("AtomicReference<Item> bound by a module converter: Item's constraints are refused (top-up T1)")
-    void atomicReferenceContentIsReached() throws Exception {
-        write("ref: {material: '', amount: 999}\n");
-        assertDeclarationRefusal(catchThrowable(() -> new AtomicItem("decl.yml").init(plugin)),
-                "field 'ref'", "ConstraintFixtures.Item.material", "ConstraintFixtures.Item.amount");
-    }
-
-    @Test
-    @DisplayName("Guava Multimap<String, Item> bound by a module converter: Item's constraints are refused (top-up T1)")
-    void multimapValuesAreReached() throws Exception {
-        write("multi: {}\n");
-        assertDeclarationRefusal(catchThrowable(() -> new MultimapItem("decl.yml").init(plugin)),
-                "field 'multi'", "ConstraintFixtures.Item.material", "ConstraintFixtures.Item.amount");
-    }
-
-    @Test
-    @DisplayName("a list subclass's own constrained field is refused, as the setting itself and as an element (top-up T1)")
-    void containerSubclassOwnFieldsAreReached() throws Exception {
-        write("capped: []\n");
-        assertDeclarationRefusal(catchThrowable(() -> new CappedListSetting("decl.yml").init(plugin)),
-                "field 'capped'", "ConstraintFixtures.CappedList.cap", "@Range");
-        assertDeclarationRefusal(catchThrowable(() -> new CappedListElements("decl.yml").init(plugin)),
-                "field 'capped'", "ConstraintFixtures.CappedList.cap", "@Range");
-    }
-
-    @Test
-    @DisplayName("a map subclass's own constrained field is refused (top-up T1)")
-    void mapSubclassOwnFieldsAreReached() throws Exception {
-        write("capped: {}\n");
-        assertDeclarationRefusal(catchThrowable(() -> new CappedMapSetting("decl.yml").init(plugin)),
-                "field 'capped'", "ConstraintFixtures.CappedMap.label", "@NotEmpty");
-    }
-
-    @Test
-    @DisplayName("one generic holder used with nine type arguments: the ninth's constraints are still refused (top-up T2)")
-    void manyParameterizationsAreAllWalked() throws Exception {
-        write("many: m\n");
-        assertDeclarationRefusal(catchThrowable(() -> new ManyHoldersSetting("decl.yml").init(plugin)),
-                "field 'many'", "ConstraintFixtures.Item.material", "ConstraintFixtures.Item.amount");
-    }
-
-    @Test
-    @DisplayName("a recursive generic whose type grows at every level is refused, never skipped (top-up T2)")
-    void unboundedRecursiveGenericIsRefused() throws Exception {
-        write("tree: t\n");
-        assertDeclarationRefusal(catchThrowable(() -> new TreeSetting("decl.yml").init(plugin)),
-                "field 'tree'", "ConstraintFixtures.Tree", "nests");
-    }
-
-    @Test
-    @DisplayName("control: a value type referring to itself again (the same type) loads")
-    void selfReferenceLoads() throws Exception {
-        write("chain: c\n");
-        ChainSetting config = new ChainSetting("decl.yml");
-        config.init(plugin);
-        assertThat(config.chain.name).isEqualTo("c");
-    }
-
-    @Test
-    @DisplayName("an interface-typed field whose module implementation is constrained refuses, naming field and class")
-    void interfaceWithConstrainedImplementationIsRefused() throws Exception {
-        write("drawing: v\n");
-        assertDeclarationRefusal(catchThrowable(() -> new DrawingSetting("decl.yml").init(plugin)),
-                "ConstraintFixtures.Drawing.shape", "ConstraintFixtures.Shape", "ConstraintFixtures.Circle",
-                "ConstraintFixtures.Circle.radius");
-    }
-
-    @Test
-    @DisplayName("an interface-typed field whose module implementations carry no constraint loads")
-    void interfaceWithUnconstrainedImplementationsLoads() throws Exception {
-        write("tagged: v\n");
-        TaggedSetting config = new TaggedSetting("decl.yml");
-        config.init(plugin);
-        assertThat(config.value.name).isEqualTo("v");
-    }
-
-    @Test
-    @DisplayName("an abstract-typed field whose module subclass is constrained refuses, naming field and class")
-    void abstractBaseWithConstrainedSubclassIsRefused() throws Exception {
-        write("prize: v\n");
-        assertDeclarationRefusal(catchThrowable(() -> new PrizeSetting("decl.yml").init(plugin)),
-                "ConstraintFixtures.Prize.reward", "ConstraintFixtures.Reward", "ConstraintFixtures.CoinReward",
-                "ConstraintFixtures.CoinReward.currency");
-    }
-
-    @Test
-    @DisplayName("an abstract-typed field whose module subclasses carry no constraint loads")
-    void abstractBaseWithUnconstrainedSubclassesLoads() throws Exception {
-        write("aura: v\n");
-        AuraSetting config = new AuraSetting("decl.yml");
-        config.init(plugin);
-        assertThat(config.value.name).isEqualTo("v");
-    }
-
-    @Test
-    @DisplayName("a generic interface field Slot<Item>: the implementation ContentSlot<T> holds an Item, refused")
-    void genericInterfaceImplementationIsResolvedAndRefused() throws Exception {
-        write("rack: v\n");
-        assertDeclarationRefusal(catchThrowable(() -> new ItemRackSetting("decl.yml").init(plugin)),
-                "ConstraintFixtures.ItemRack.slot", "ConstraintFixtures.ContentSlot", "ConstraintFixtures.Item.material");
-    }
-
-    @Test
-    @DisplayName("control: the same generic interface field as Slot<Plain> loads")
-    void genericInterfaceWithUnconstrainedArgumentLoads() throws Exception {
-        write("rack: v\n");
-        PlainRackSetting config = new PlainRackSetting("decl.yml");
-        config.init(plugin);
-        assertThat(config.value.name).isEqualTo("v");
-    }
-
-    @Test
-    @DisplayName("a value type's back-reference to a config class is not walked: that class's own entity checks it (gate-1 F1)")
-    void backReferenceToAConfigClassLoads() throws Exception {
-        write("links: {a: first}\n");
-        BackReference config = new BackReference("decl.yml");
-        config.init(plugin);
-        assertThat(config.links).containsOnlyKeys("a");
-    }
-
-    @Test
-    @DisplayName("a value type's transient field is not part of the bound value and is not walked (gate-1 F1)")
-    void transientFieldIsNotWalked() throws Exception {
-        write("links: {a: first}\n");
-        TransientCache config = new TransientCache("decl.yml");
-        config.init(plugin);
-        assertThat(config.links).containsOnlyKeys("a");
+    @ParameterizedTest(name = "{0} loads unchecked")
+    @MethodSource("nestedShapes")
+    @DisplayName("a constraint on a field inside a value type is not checked: the module loads, nothing is logged (documented limit)")
+    void nestedConstraintsAreNotChecked(String shape, Function<String, AbstractConfigEntity> config, String yaml)
+            throws Exception {
+        write(yaml);
+        AbstractConfigEntity entity = config.apply("decl.yml");
+        try (ConfigWarningCapture capture = ConfigWarningCapture.install()) {
+            entity.init(plugin);
+            assertThat(capture.messages()).as("nothing is logged for %s", shape).isEmpty();
+        }
     }
 
     @Test
