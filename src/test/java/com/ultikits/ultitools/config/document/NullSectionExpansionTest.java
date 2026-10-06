@@ -39,7 +39,9 @@ import com.ultikits.ultitools.utils.TestHelper;
  * #620 beyond the start-up insert (plan 17-75 Task 2): the expansion of a section line the operator left with no value
  * applies to every gated insert - an operator's map-entry command ({@code /uchat autoreply add} into an emptied
  * {@code rules:}, UltiChat#51), an operator change of a named setting, and a panel edit - and keeps every other line
- * byte-identical.
+ * byte-identical. Also the shapes of the same deletion the start-up tracer does not cover: a child commented out rather
+ * than deleted (its comment line stays where it is, under the section), and a section line with a trailing comment
+ * written whole.
  */
 class NullSectionExpansionTest {
 
@@ -202,6 +204,55 @@ class NullSectionExpansionTest {
                     "  mail-received: from the panel\n");
             assertThat(lines.get(1)).startsWith("messages:").endsWith("# emptied by hand\n");
             assertThat(config.mailReceived).isEqualTo("from the panel");
+            assertThat(refusals()).isEmpty();
+        }
+    }
+
+    @Nested
+    class SameDeletionOtherShapes {
+
+        @Test
+        void aCommentedOutChildStaysUnderItsSectionBelowTheRestoredKey() throws Exception {
+            String commentedOut = "other: 1\nmessages:\n  # mail-received: my old text\nlast: 2\n";
+            write("mail.yml", commentedOut);
+
+            new Mail("mail.yml").init(plugin);
+
+            String restored = read("mail.yml");
+            onlyInserted(commentedOut, restored, 1, "  # " + NOTICE + "\n", "  mail-received: You received a new mail\n");
+            assertThat(refusals()).isEmpty();
+            new Mail("mail.yml").init(plugin);
+            assertThat(read("mail.yml")).as("a second start changes nothing").isEqualTo(restored);
+            assertThat(refusals()).isEmpty();
+        }
+
+        @Test
+        void aCommentedOutChildAtTheEndOfTheFileStaysUnderItsSection() throws Exception {
+            String commentedOut = "other: 1\nmessages:\n  # mail-received: my old text\n";
+            write("mail.yml", commentedOut);
+
+            new Mail("mail.yml").init(plugin);
+
+            onlyInserted(commentedOut, read("mail.yml"), 1, "  # " + NOTICE + "\n", "  mail-received: You received a new mail\n");
+            assertThat(refusals()).isEmpty();
+        }
+
+        @Test
+        void aWholeMapWrittenOverASectionLineWithATrailingCommentKeepsTheComment() throws Exception {
+            String emptied = "autoreply:\n  enabled: true\n  rules:   # none yet\n";
+            write("autoreply.yml", emptied);
+            Rules config = new Rules("autoreply.yml");
+            config.init(plugin);
+
+            config.rules = new LinkedHashMap<>();
+            config.rules.put("greeting", rule("hi", "hello"));
+            config.saveOperatorChange("autoreply.rules");
+
+            List<String> lines = OperatorFileWriter.lines(read("autoreply.yml"));
+            assertThat(lines).hasSize(6);
+            assertThat(lines.subList(0, 2)).containsExactly("autoreply:\n", "  enabled: true\n");
+            assertThat(lines.get(2)).startsWith("  rules:").endsWith("# none yet\n");
+            assertThat(lines.subList(3, 6)).containsExactly("    greeting:\n", "      keyword: hi\n", "      response: hello\n");
             assertThat(refusals()).isEmpty();
         }
     }
