@@ -60,6 +60,11 @@ final class ConstraintFixtures {
         private static final long serialVersionUID = 1L;
     }
 
+    /** A list type whose unconstrained element type comes from its superclass, for the binder agreement test (#633). */
+    public static class PlainList extends java.util.ArrayList<Plain> {
+        private static final long serialVersionUID = 1L;
+    }
+
     /** A value type with no constrained field at all (gate-1 F6): a constraint on it is refused for its own type. */
     public static final class Plain {
         String label;

@@ -105,6 +105,37 @@ class ConstraintDeclarationTest {
         InheritedElements(String path) { super(path); }
     }
 
+    static class SuperWildcard extends AbstractConfigEntity {
+        @ConfigEntry(path = "items")
+        List<? super ConstraintFixtures.Item> items = new ArrayList<>();
+
+        SuperWildcard(String path) { super(path); }
+    }
+
+    static class ExtendsWildcard extends AbstractConfigEntity {
+        @ConfigEntry(path = "items")
+        List<? extends ConstraintFixtures.Item> items = new ArrayList<>();
+
+        ExtendsWildcard(String path) { super(path); }
+    }
+
+    static class BoundedTypeVariable<T extends ConstraintFixtures.Item> extends AbstractConfigEntity {
+        @ConfigEntry(path = "items")
+        List<T> items = new ArrayList<>();
+
+        BoundedTypeVariable(String path) { super(path); }
+    }
+
+    static class NestedWildcards extends AbstractConfigEntity {
+        @ConfigEntry(path = "groups")
+        Map<String, List<? super ConstraintFixtures.Item>> groups = new LinkedHashMap<>();
+
+        @ConfigEntry(path = "others")
+        Map<? extends String, ? extends List<? extends ConstraintFixtures.Item>> others = new LinkedHashMap<>();
+
+        NestedWildcards(String path) { super(path); }
+    }
+
     static class BackReference extends AbstractConfigEntity {
         @ConfigEntry(path = "links")
         Map<String, ConstraintFixtures.OwnerLink> links =
@@ -272,6 +303,38 @@ class ConstraintDeclarationTest {
         write("items: [{material: STONE, amount: 99}]\n");
         assertDeclarationRefusal(catchThrowable(() -> new InheritedElements("decl.yml").init(plugin)),
                 "field 'items'", "ConstraintFixtures.Item.material", "ConstraintFixtures.Item.amount");
+    }
+
+    @Test
+    @DisplayName("List<? super Item> reaches Item, the type the binder binds (#633)")
+    void superWildcardReachesItsLowerBound() throws Exception {
+        write("items: []\n");
+        assertDeclarationRefusal(catchThrowable(() -> new SuperWildcard("decl.yml").init(plugin)),
+                "field 'items'", "ConstraintFixtures.Item.material", "ConstraintFixtures.Item.amount");
+    }
+
+    @Test
+    @DisplayName("List<? extends Item> reaches Item (#633)")
+    void extendsWildcardReachesItsUpperBound() throws Exception {
+        write("items: []\n");
+        assertDeclarationRefusal(catchThrowable(() -> new ExtendsWildcard("decl.yml").init(plugin)),
+                "field 'items'", "ConstraintFixtures.Item.material", "ConstraintFixtures.Item.amount");
+    }
+
+    @Test
+    @DisplayName("List<T> with T extends Item reaches Item, the type variable's bound (#633)")
+    void boundedTypeVariableReachesItsBound() throws Exception {
+        write("items: []\n");
+        assertDeclarationRefusal(catchThrowable(() -> new BoundedTypeVariable<>("decl.yml").init(plugin)),
+                "field 'items'", "ConstraintFixtures.Item.material", "ConstraintFixtures.Item.amount");
+    }
+
+    @Test
+    @DisplayName("nested wildcards in map values reach Item through every level (#633)")
+    void nestedWildcardsReachTheElement() throws Exception {
+        write("groups: {}\nothers: {}\n");
+        Throwable refusal = catchThrowable(() -> new NestedWildcards("decl.yml").init(plugin));
+        assertDeclarationRefusal(refusal, "field 'groups'", "field 'others'", "ConstraintFixtures.Item.material");
     }
 
     @Test
