@@ -21,6 +21,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 
@@ -91,6 +92,21 @@ public final class OperatorFileWriter {
     private static final String COMMENT_NOT_LOCATED = "the comment of a key this write owns cannot be located in the file";
     /** Files already named in an anchored-file warning this server run (canonical paths). */
     private static final Set<Path> WARNED_ANCHORED = ConcurrentHashMap.newKeySet();
+    /**
+     * Test seam: called with each {@link Step} of every gated write, so a test can throw a runtime failure there as the
+     * YAML library would; empty in production.
+     */
+    static final AtomicReference<Consumer<Step>> FAULT = new AtomicReference<>();
+
+    /** The steps of a gated write that call into the YAML library, as the fault seam names them. */
+    enum Step {
+        /** Applying the caller's edit to the freshly read document. */
+        EDIT,
+        /** Rendering the edited document. */
+        RENDER,
+        /** Parsing the rendered text back for the self-check. */
+        SELF_CHECK
+    }
 
     private OperatorFileWriter() {
     }
@@ -257,6 +273,7 @@ public final class OperatorFileWriter {
             return Staged.settled(fail(snapshot.failure, absolute, owned, wouldChange, snapshot.reason));
         }
         ConfigDocument candidate = snapshot.candidate;
+        fault(Step.EDIT);
         edit.accept(candidate);
         Changes changes = Changes.of(snapshot.original, candidate, owned);
         List<String> keys = describe(changes.values, changes.comments);
@@ -265,6 +282,7 @@ public final class OperatorFileWriter {
                     ? new Result(Outcome.UNCHANGED, "", candidate, snapshot.fingerprint, snapshot.fingerprint)
                     : refuse(absolute, owned, keys, "the write would change keys it does not own"));
         }
+        fault(Step.RENDER);
         String rendered = candidate.render();
         if (rendered.equals(snapshot.text)) {
             return Staged.settled(new Result(Outcome.UNCHANGED, "", candidate, snapshot.fingerprint, snapshot.fingerprint));
@@ -472,6 +490,13 @@ public final class OperatorFileWriter {
             }
             finished = true;
             return temporary.discard();
+        }
+    }
+
+    private static void fault(Step step) {
+        Consumer<Step> fault = FAULT.get();
+        if (fault != null) {
+            fault.accept(step);
         }
     }
 
@@ -813,6 +838,7 @@ public final class OperatorFileWriter {
     /** Check 1: the rendered text holds exactly the edited values, and the edit stayed inside its paths. */
     private static String verifyValues(ConfigDocument original, ConfigDocument candidate, String rendered,
             List<List<String>> changedValues, boolean wholeFile) {
+        fault(Step.SELF_CHECK);
         ConfigDocument reparsed = parseOrNull(rendered);
         if (reparsed == null) {
             return "the rendered text would not parse back";
