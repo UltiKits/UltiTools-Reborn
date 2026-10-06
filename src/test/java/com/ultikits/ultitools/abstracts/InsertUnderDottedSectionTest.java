@@ -92,6 +92,32 @@ class InsertUnderDottedSectionTest {
         }
     }
 
+    @ConfigEntity(PATH)
+    public static class MixedDeep extends AbstractConfigEntity {
+        @ConfigEntry(path = "a.b.c.x", comment = "X")
+        int x = 1;
+        @ConfigEntry(path = "a.b.c.y", comment = "Y")
+        int y = 5;
+
+        public MixedDeep(String path) {
+            super(path);
+        }
+    }
+
+    @ConfigEntity(PATH)
+    public static class Three extends AbstractConfigEntity {
+        @ConfigEntry(path = "a.b.c", comment = "C")
+        int c = 1;
+        @ConfigEntry(path = "a.b.e", comment = "E")
+        int e = 3;
+        @ConfigEntry(path = "a.b.d", comment = "D")
+        int d = 2;
+
+        public Three(String path) {
+            super(path);
+        }
+    }
+
     @BeforeEach
     void setUp() {
         MockBukkitHelper.ensureCleanState();
@@ -226,5 +252,74 @@ class InsertUnderDottedSectionTest {
         assertThatThrownBy(() -> config.saveOperatorChange("a.b.d")).isInstanceOf(ConfigWriteRefusedException.class)
                 .hasMessageContaining("'a.b.d'").hasMessageContaining("section 'a.b' is written in several forms");
         assertThat(Files.readAllBytes(file())).isEqualTo(neither);
+    }
+
+    // ---------------------------------------------------------------------- gate-1 F4: the mixed form (maintainer decision)
+
+    /**
+     * Gate-1 F4 of plan 17-75, decided by the maintainer: when a sibling setting is written with the rest of its path as one
+     * dotted key below the held section ({@code a:} / {@code b.c: 3}), the missing setting is inserted the same way beside it
+     * ({@code b.d: 2}), never as a nested {@code b:} / {@code d:} second form of {@code a.b}, which Bukkit reads as shadowing
+     * {@code a.b.c}. Same rule as #614: never write a second form of a section.
+     */
+    @Test
+    void aMissingSettingMirrorsASiblingWrittenAsADottedKeyBelowTheSection() throws Exception {
+        write("# hand-written\na:\n  b.c: 3\n");
+
+        Dotted config = new Dotted(PATH);
+        config.init(plugin);
+
+        String inserted = text();
+        assertThat(inserted).isEqualTo("# hand-written\na:\n  b.c: 3\n  # D\n  b.d: 2\n");
+        YamlConfiguration bukkit = YamlConfiguration.loadConfiguration(file().toFile());
+        assertThat(bukkit.getInt("a.b.c")).as("Bukkit still reads the operator's value").isEqualTo(3);
+        assertThat(bukkit.getInt("a.b.d")).isEqualTo(2);
+        assertThat(config.c).isEqualTo(3);
+        assertThat(warningsNamingTheFile()).isEmpty();
+
+        new Dotted(PATH).init(plugin);
+        assertThat(text()).as("a second start changes nothing").isEqualTo(inserted);
+        assertThat(warningsNamingTheFile()).isEmpty();
+    }
+
+    @Test
+    void theMirrorKeepsTheSiblingsSplitAtAnyDepth() throws Exception {
+        write("a:\n  b.c.x: 1\n");
+
+        new MixedDeep(PATH).init(plugin);
+
+        assertThat(text()).isEqualTo("a:\n  b.c.x: 1\n  # Y\n  b.c.y: 5\n");
+        YamlConfiguration bukkit = YamlConfiguration.loadConfiguration(file().toFile());
+        assertThat(bukkit.getInt("a.b.c.x")).isEqualTo(1);
+        assertThat(bukkit.getInt("a.b.c.y")).isEqualTo(5);
+        assertThat(warningsNamingTheFile()).isEmpty();
+    }
+
+    @Test
+    void siblingsWrittenInDifferentSplitsAreRefusedNamingTheFileAndTheSetting() throws Exception {
+        byte[] before = "a:\n  b.c: 1\na.b.e: 2\n".getBytes(StandardCharsets.UTF_8);
+        Files.write(file(), before);
+
+        Three config = new Three(PATH);
+        config.init(plugin);
+
+        assertThat(Files.readAllBytes(file())).as("nothing is written").isEqualTo(before);
+        assertThat(config.d).isEqualTo(2);
+        List<String> named = warningsNamingTheFile();
+        assertThat(named).hasSize(1);
+        assertThat(named.get(0)).contains("'a.b.d'").contains("section 'a.b' is written in several forms");
+    }
+
+    @Test
+    void anOperatorChangeOfASettingDeletedBesideAMixedSiblingIsWrittenThere() throws Exception {
+        write("a:\n  b.c: 3\n  b.d: 5\n");
+        Dotted config = new Dotted(PATH);
+        config.init(plugin);
+        write("a:\n  b.c: 3\n");
+
+        config.d = 9;
+        config.saveOperatorChange("a.b.d");
+
+        assertThat(text()).isEqualTo("a:\n  b.c: 3\n  # D\n  b.d: 9\n");
     }
 }
