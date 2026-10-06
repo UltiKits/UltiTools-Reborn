@@ -18,7 +18,9 @@ import java.lang.annotation.Target;
  * type argument and array component (wildcards and type variables resolved as the binder resolves them) and, for each
  * class reached, its non-static, non-transient fields and supertypes, transitively, not into another config class (a
  * converter builds that value and the framework never validates its fields - validate them in the converter). The check
- * reaches at least every type the binder can bind and refuses a type it cannot walk with certainty (since 6.3.0, #633).
+ * reaches at least every type the binder can bind and refuses a type it cannot walk with certainty (since 6.3.0, #633) An interface or abstract type reached is checked against
+ * its implementations in the module's own jar; one carrying such a constraint refuses the module. Implementations another
+ * plugin provides cannot be seen.
  *
  * @see com.ultikits.ultitools.annotations.ConfigEntry
  */
