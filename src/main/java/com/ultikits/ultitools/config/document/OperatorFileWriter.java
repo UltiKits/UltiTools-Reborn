@@ -57,8 +57,10 @@ import org.yaml.snakeyaml.representer.Representer;
  *       lines, so the comment lines above the run are unowned and must come out unchanged (#604); an inserted key
  *       whose nearest key in the file is a section the operator left with no value ({@code messages:}, nothing after
  *       the colon but a comment) also owns that section's one line, and the section's value may change only from
- *       nothing to a mapping holding exactly the inserted keys - the line keeps its key text, its comment and its line
- *       terminator (#620; owned-span rule revision 3, maintainer decision 2026-10-06). A section written as an empty
+ *       nothing to a mapping holding exactly the inserted keys - the line keeps the key as written, the comment text and
+ *       its line terminator, and only its whitespace may be normalized: a space before the colon, the spaces before the
+ *       comment, and trailing spaces after the comment or at the end of a line without one (#620; owned-span rule
+ *       revision 3, maintainer decision 2026-10-06). A section written as an empty
  *       value ({@code ~}, {@code null}, {@code {}}) is the operator's value and is never owned this way;</li>
  *   <li>the lines outside the owned spans - each compared as text including its line terminator - are the
  *       same sequence on both sides (the line diff restricted to unowned lines; stricter than a plain
@@ -782,8 +784,10 @@ public final class OperatorFileWriter {
      * The owned span of an expanded section ({@link EmptySections}, #620): its key line on both sides and nothing else -
      * the inserted keys below it are marked as inserted values by {@link #markSpans}. On both sides that line may hold no
      * node of another path, and the rendered line must keep the operator's bytes of it: the text up to the end of the
-     * key, the comment after the colon, and the line terminator (only the spacing between colon and comment may change,
-     * as every render of such a line changes it; a last line without a line break gains one, as check 3 allows).
+     * key, the comment after the colon (without trailing spaces), and the line terminator. Only whitespace on the line may
+     * change: a space before the colon, the spaces before the comment, and trailing spaces after the comment or at the end
+     * of a line without one - every render of such a line writes {@code key: # comment} (gate-1 F2 of plan 17-75 stated
+     * this exactly); a last line without a line break gains one, as check 3 allows.
      */
     private static String markExpandedSection(Side left, Side right, List<String> section, boolean leftBom, boolean rightBom) {
         NodeTuple before = find(left.tree, section);

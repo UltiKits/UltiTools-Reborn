@@ -45,19 +45,28 @@ next start puts the key back with its declared default and comment. When the del
 the section key is left alone on its line with nothing after the colon (`messages:`), which reads as no value at all. The
 maintainer's decision of 2026-10-06 treats that as most likely accidental, so the framework puts the section's keys back
 below that line instead of refusing at every start. It is the one line outside a write's own keys that the gate lets the
-write touch, and only in this shape: the line keeps its key text, its comment (only the spacing before the comment may
-change) and its line ending; the section's value goes from nothing to exactly the inserted keys; every other line stays
-byte for byte, and a child commented out under the section stays where it is, below the restored keys. The same holds for
+write touch, and only in this shape: the line keeps the key as written (its indentation and quotes included), the comment
+text and the line ending; only whitespace on it may be normalized - a space before the colon, the spaces before the
+comment, and trailing spaces after the comment or at the end of a line without one (`messages :   # reset  ` comes back
+as `messages: # reset`). The section's value goes from nothing to exactly the inserted keys, and every other line stays
+byte for byte. A child the operator commented out under the line stays where it is, below the restored keys, when its
+comment lines follow the section line directly, as one run without a blank line, at the file's indentation for that level
+(two spaces in a two-space file). Three shapes are refused instead, at every start, with one WARNING naming the line and
+the file unchanged: a blank line between the section line and the commented child; two commented runs separated by a
+blank line; a child commented out deeper than the file's indentation (four spaces in a two-space file). Removing the
+blank line, or moving the comment to the file's indentation, lets the next start put the keys back. The same holds for
 an operator command, an operator change and a panel edit that add a key below such a line - for example the first rule
 added to an emptied `rules:`. A section written with an explicit empty value - `messages: {}`, `messages: ~` or
 `messages: null` - is the operator's own value and is never changed: an insert below it is refused, and the warning says
 what to do ([#610](https://github.com/UltiKits/UltiTools-Reborn/issues/610) item 2; see "Layouts the write gate cannot
 keep").
 
-**For operators: to leave a setting blank, write an empty string; do not delete the key** (as of v6.3.0, maintainer
-decision of 2026-10-06). Write `key: ''`: an empty string is read as blank and is never rewritten - not by a start, a
-reload, or a save of another setting. A deleted key is put back with its declared default on the next start, which is
-how to reset a setting, not how to blank it.
+**For operators: to leave a text setting blank, write an empty string; do not delete the key** (as of v6.3.0,
+maintainer decision of 2026-10-06). Write `key: ''`: for a text setting, an empty string is read as blank and is never
+rewritten - not by a start, a reload, or a save of another setting. A deleted key is put back with its declared default on
+the next start, which is how to reset a setting, not how to blank it. A number, true/false or other non-text setting has
+no blank value: `count: ''` is reported in one WARNING naming the key (`declared as int: found text …`), its declared
+default is used in memory, and the file keeps `''` as written.
 
 The public surface of the contract: `AbstractConfigEntity#save()` (only what the module changed, where the file still
 holds what was read), `#saveOperatorChange(String...)` and `#saveOperatorMapEntry(String, String...)` (exactly what an
@@ -77,9 +86,9 @@ records) are not operator configuration.
 
 中文补充（写入约定）：**服主写的配置绝不被自动覆盖**（维护者 2026-10-04 的底层规则）。框架或模块的任何代码都不能改动服主在配置文件里写的内容，除非服主明确要求这一改动；框架用不了的值在代码使用前就挑明（警告并拒绝该值、使用声明默认值，或拒绝模块、拒绝启动），绝不靠改写文件“修好”。按文件类型（维护者 2026-10-04 批准的表）：**出厂配置文件**（主配置、利息设置、`spawn.yml`、框架自己的 `config.yml` 等）代码只能（1）首次创建不存在的文件；（2）补入文件缺少的声明键和框架自己的注释——只插入，不改已有内容；（3）只写服主明确要求改的那一项（命令、面板、GUI，或服主通过模块做出、由模块保存的改动）；（4）语言切换后重新渲染仍与出厂文字逐字节相同的值，以及删除逐字节未改过的旧版出厂文字行。除此之外一律不写：不在关服、卸载或替换时保存，不做整对象的顺带保存，不修复无效值，不规整排版，不清理 6.2 拆开的含点键，不改服主写的注释。**服主自己创建的文件**（礼包、菜单）只在服主明确创建时创建、明确编辑时只写编辑的部分。所有写入经同一个写入闸门：每次写入声明自己拥有的键（或框架自己的注释行），渲染后其余每个字节必须与读取时相同，且文件仍是读取时的内容；否则不写，一条 WARNING 列出文件、键和原因（排版无法保留时给出要改的行号），从不列值，内存中的值照常使用。服主命令调用的 `saveOperatorChange`/`saveOperatorMapEntry` 被拒绝时抛 `ConfigWriteRefusedException`，命令据此回复“未保存”及原因；面板编辑收到注明原因的错误。服主看到拒绝时：按警告改掉它指出的那一行（“文件在读取后已被改动”则先 `/ul reload`），再做一次改动即可，所写内容没有丢失。**官方语言文件归框架所有**，是唯一例外（维护者 2026-10-04 决定）：升级时可能被替换（保留备份并记日志），直接改官方文件不是受支持的定制方式；要定制，请复制官方文件、改名、编辑副本并在主配置中选择它，该副本归服主所有、永不被写入（自定义文件的选择与缺失键的回退在本版本内完成，#608）。
 
-中文补充（被清空的节）：删除一个键就是把该设置重置为默认值，下次启动时框架会连同注释把它补回。如果删掉的是某个节里最后一个键，节的键名会单独留在一行、冒号后什么都没有（`messages:`），读作“没有值”。按维护者 2026-10-06 的决定，这多半是误删，框架会把该节的键补回到这一行下面，而不是每次启动都拒绝写入（自 6.3.0 起，#620）。这是闸门允许一次写入触碰的、写入自身键之外的唯一一行，而且只限这种形状：该行的键名、注释（只有注释前的空格可能变化）和换行符保持不变；节的值只会从“没有值”变成恰好是补入的那些键；其余每一行逐字节不变，节下被注释掉的子键行也留在原处、位于补回的键下面。服主命令、服主改动和面板编辑在这样一行下面添加键时同样如此，例如在被清空的 `rules:` 下添加第一条规则。写成显式空值的节（`messages: {}`、`messages: ~` 或 `messages: null`）是服主自己写的值，绝不会被改动：在它下面插入会被拒绝，警告会写明该节及其行号，并说明可以怎么做——删掉这个值、让该行在冒号处结束（下次启动即补回键），或手动添加这些键（#610 第 2 项）。
+中文补充（被清空的节）：删除一个键就是把该设置重置为默认值，下次启动时框架会连同注释把它补回。如果删掉的是某个节里最后一个键，节的键名会单独留在一行、冒号后什么都没有（`messages:`），读作“没有值”。按维护者 2026-10-06 的决定，这多半是误删，框架会把该节的键补回到这一行下面，而不是每次启动都拒绝写入（自 6.3.0 起，#620）。这是闸门允许一次写入触碰的、写入自身键之外的唯一一行，而且只限这种形状：该行按原样保留键（包括缩进和引号）、注释文字和换行符，只有空白可能被规整——冒号前的空格、注释前的空格，以及注释后或无注释行末尾的空格（`messages :   # reset  ` 补键后成为 `messages: # reset`）；节的值只会从“没有值”变成恰好是补入的那些键；其余每一行逐字节不变。服主在这一行下面注释掉的子键行留在原处、位于补回的键下面，前提是这些注释行紧跟在节所在行之后、连成一段中间没有空行，并且位于文件在该层级的缩进处（两空格缩进的文件里就是两个空格）。以下三种形状则会在每次启动时被拒绝，一条 WARNING 写明行号，文件不变：节所在行与注释掉的子键之间有空行；两段注释之间隔着空行；子键被注释在比文件缩进更深的位置（两空格文件里的四个空格）。删掉空行或把注释移到文件的缩进处，下次启动就会补回键。服主命令、服主改动和面板编辑在这样一行下面添加键时同样如此，例如在被清空的 `rules:` 下添加第一条规则。写成显式空值的节（`messages: {}`、`messages: ~` 或 `messages: null`）是服主自己写的值，绝不会被改动：在它下面插入会被拒绝，警告会写明该节及其行号，并说明可以怎么做——删掉这个值、让该行在冒号处结束（下次启动即补回键），或手动添加这些键（#610 第 2 项）。
 
-中文补充（给服主）：**要让某个设置留空，请写空字符串，不要删除这个键**（自 6.3.0 起，维护者 2026-10-06 决定）。写成 `key: ''`：空字符串读作“留空”，启动、重载或保存其他设置时都不会改写它。删除的键会在下次启动时以声明的默认值补回——这是重置设置的方法，不是留空的方法。
+中文补充（给服主）：**要让某个文本设置留空，请写空字符串，不要删除这个键**（自 6.3.0 起，维护者 2026-10-06 决定）。写成 `key: ''`：对文本设置，空字符串读作“留空”，启动、重载或保存其他设置时都不会改写它。删除的键会在下次启动时以声明的默认值补回——这是重置设置的方法，不是留空的方法。数字、true/false 等非文本设置没有“留空”的值：`count: ''` 会以一条点名该键的 WARNING 报告（`declared as int: found text …`），内存中使用声明默认值，文件里的 `''` 原样保留。
 
 ### Rendering and save fallback
 

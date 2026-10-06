@@ -24,7 +24,8 @@ import org.jetbrains.annotations.ApiStatus;
  * 2026-10-06). When the operator deletes every key of a section, the section key is left on its own line with nothing
  * after the colon ({@code messages:}), which reads as no value at all. A value path inserted below such a line also owns
  * that one line: the section becomes a mapping that holds exactly the inserted keys. This cannot overwrite operator
- * content - the line carried no value, its key text, comment and line terminator are kept, and every other line of the
+ * content - the line carried no value, its key as written, its comment text and its line terminator are kept (only
+ * whitespace on it may be normalized: before the colon, before the comment, and trailing), and every other line of the
  * file must still come out byte for byte. {@link OperatorFileWriter} decides this from the file at write time; a section
  * written as an empty value ({@code ~}, {@code null}, {@code {}}) is the operator's value and is never owned this way.
  * Instances are immutable.
