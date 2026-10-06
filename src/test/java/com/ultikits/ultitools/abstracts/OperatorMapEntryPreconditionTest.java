@@ -45,6 +45,8 @@ class OperatorMapEntryPreconditionTest {
 
     private static final FileTime OLD = FileTime.fromMillis(1_577_836_800_000L);
     private static final String RULES = "autoreply.yml";
+    private static final String BASE = "autoreply:\n  enabled: true\n  rules:\n    a:\n      keyword: hi\n      response: hello\n"
+            + "  lists:\n    l: [x]\n";
 
     @TempDir
     Path tempDir;
@@ -112,9 +114,6 @@ class OperatorMapEntryPreconditionTest {
         rule.put("response", response);
         return rule;
     }
-
-    private static final String BASE = "autoreply:\n  enabled: true\n  rules:\n    a:\n      keyword: hi\n      response: hello\n"
-            + "  lists:\n    l: [x]\n";
 
     @Test
     @DisplayName("a null condition is an IllegalArgumentException; nothing is written")

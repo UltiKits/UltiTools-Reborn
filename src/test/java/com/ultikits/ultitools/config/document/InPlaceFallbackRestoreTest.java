@@ -139,7 +139,7 @@ class InPlaceFallbackRestoreTest {
 
         @Override
         public void write(FileChannel channel, java.nio.ByteBuffer data) throws IOException {
-            if (channel == target && targetOpens == failWriteAtOpen) {
+            if (channel.equals(target) && targetOpens == failWriteAtOpen) {
                 java.nio.ByteBuffer half = data.duplicate();
                 half.limit(half.position() + Math.max(1, half.remaining() / 2));
                 channel.write(half);
@@ -151,7 +151,7 @@ class InPlaceFallbackRestoreTest {
 
         @Override
         public void force(FileChannel channel) throws IOException {
-            if (channel == target && (targetOpens == failForceAtOpen || forceFailures.contains(targetOpens))) {
+            if (channel.equals(target) && (targetOpens == failForceAtOpen || forceFailures.contains(targetOpens))) {
                 throw new IOException("injected force failure");
             }
             channel.force(true);
@@ -501,7 +501,7 @@ class InPlaceFallbackRestoreTest {
 
     private List<LogRecord> severe() {
         synchronized (logged) {
-            return logged.stream().filter(record -> record.getLevel() == Level.SEVERE).collect(Collectors.toList());
+            return logged.stream().filter(record -> Level.SEVERE.equals(record.getLevel())).collect(Collectors.toList());
         }
     }
 
