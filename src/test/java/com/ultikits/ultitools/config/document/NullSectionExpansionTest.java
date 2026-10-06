@@ -256,4 +256,37 @@ class NullSectionExpansionTest {
             assertThat(refusals()).isEmpty();
         }
     }
+
+    /**
+     * The boundary of the shapes above: only a key left with no value at all is treated as emptied. A key written as
+     * {@code ~} or {@code null} holds the operator's own value (maintainer decision 2026-10-06), and the document keeps
+     * SnakeYAML's own placement of the comment after it - so writing a section over it still fails to render, which the
+     * write gate reports as a refusal (#624, framework follow-up 3 batch 1, whose specimen is exactly
+     * {@code foo: ~  # placeholder}).
+     */
+    @Nested
+    class TheOperatorsOwnNullValues {
+
+        @org.junit.jupiter.params.ParameterizedTest(name = "foo: {0}  # placeholder")
+        @org.junit.jupiter.params.provider.ValueSource(strings = {"~", "null", "Null"})
+        void anExplicitNullWithACommentIsNotTreatedAsLeftEmpty(String value) throws Exception {
+            ConfigDocument document = ConfigDocument.parse("rules:\n  foo: " + value + "  # placeholder\n");
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("keyword", "hi");
+            document.set(java.util.Arrays.asList("rules", "foo"), entry);
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(document::render)
+                    .isInstanceOf(org.yaml.snakeyaml.error.YAMLException.class);
+        }
+
+        @Test
+        void controlAKeyLeftWithNoValueKeepsItsCommentOnTheKeyLine() throws Exception {
+            ConfigDocument document = ConfigDocument.parse("rules:\n  foo:  # placeholder\n");
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("keyword", "hi");
+            document.set(java.util.Arrays.asList("rules", "foo"), entry);
+
+            assertThat(document.render()).isEqualTo("rules:\n  foo: # placeholder\n    keyword: hi\n");
+        }
+    }
 }
