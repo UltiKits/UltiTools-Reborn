@@ -783,16 +783,25 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
 
     // ===== Transaction support (snapshot-based) =====
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Any {@link Throwable} the action throws -- an {@link Error} included (#634) -- restores the
+     * snapshot taken before the action and is rethrown as the same instance.
+     */
+    // PMD.AvoidCatchingThrowable: an Error must restore the snapshot too (#634); it is rethrown
+    // unchanged, never swallowed.
+    @SuppressWarnings("PMD.AvoidCatchingThrowable")
     @Override
     public synchronized <R> R transaction(Callable<R> action) throws Exception {
         // Deep copy: serialize/deserialize to break references
         Map<Object, T> snapshot = snapshotCache();
         try {
             return action.call();
-        } catch (Exception e) {
+        } catch (Throwable failure) {
             // Rollback: restore cache from deep copy
             restoreCache(snapshot);
-            throw e;
+            throw failure;
         }
     }
 

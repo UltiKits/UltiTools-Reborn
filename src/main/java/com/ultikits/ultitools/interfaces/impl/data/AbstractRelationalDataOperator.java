@@ -44,6 +44,7 @@ import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.TransactionManager;
+import com.ultikits.ultitools.manager.DataSourceTransactionManager;
 import com.ultikits.ultitools.utils.BasicTypeUtil;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
@@ -246,6 +247,9 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      * @return the number of rows given an id
      * @since 6.3.0
      */
+    // PMD.AvoidCatchingThrowable: any failure, an Error included, must roll the assignment back
+    // before the connection is released (#634); it is rethrown unchanged.
+    @SuppressWarnings({"PMD.AvoidCatchingThrowable", "PMD.CloseResource"})
     protected final int backfillNullIds(String rowIdColumn) {
         String select = "SELECT " + rowIdColumn + " AS " + BACKFILL_ROWID + ", `" + tableName + "`.* FROM `"
                 + tableName + "` WHERE `id` IS NULL";
@@ -256,9 +260,16 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         int shared = 0;
         int alreadyHeld = 0;
         int unusable = 0;
-        try (Connection conn = dataSource.getConnection()) {
+        Connection conn = null;
+        boolean discarded = false;
+        try {
+            conn = dataSource.getConnection();
             boolean autoCommit = conn.getAutoCommit();
             conn.setAutoCommit(false);
+            // #634: auto-commit is restored only after a commit or a rollback that succeeded --
+            // switching it on over an open transaction commits it -- otherwise the connection is
+            // discarded, so a partial assignment is never stored.
+            boolean ended = false;
             try {
                 List<Object> rowIds = new ArrayList<>();
                 List<String> candidates = new ArrayList<>();
@@ -288,17 +299,38 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                     }
                 }
                 conn.commit();
-            } catch (SQLException e) {
-                conn.rollback();
-                throw e;
+                ended = true;
+            } catch (Throwable failure) {
+                try {
+                    conn.rollback();
+                    ended = true;
+                } catch (Throwable rollbackFailure) {
+                    failure.addSuppressed(rollbackFailure);
+                }
+                throw failure;
             } finally {
-                conn.setAutoCommit(autoCommit);
+                if (ended) {
+                    conn.setAutoCommit(autoCommit);
+                } else {
+                    discarded = true;
+                    DataSourceTransactionManager.discardConnection(dataSource, conn);
+                }
             }
         } catch (SQLException e) {
             LOGGER.log(Level.SEVERE, "Could not assign ids to the rows of table '" + tableName
                     + "' that have none; nothing was changed. Rows without an id cannot be updated or deleted "
                     + "until this succeeds on a later start.", e);
             return 0;
+        } finally {
+            // A discarded connection is not touched again: a pool that evicted it would fail on close.
+            if (conn != null && !discarded) {
+                try {
+                    conn.close();
+                } catch (SQLException e) {
+                    LOGGER.log(Level.WARNING, "Failed to close the id backfill connection of table '"
+                            + tableName + "'", e);
+                }
+            }
         }
         int repaired = reported + generated;
         if (repaired > 0) {
@@ -982,6 +1014,19 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
 
     // ===== Transaction support =====
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Any {@link Throwable} the action throws -- an {@link Error} included (#634) -- rolls the
+     * transaction back and is rethrown as the same instance, so the thread's transaction context is
+     * gone afterwards and the next {@code transaction(...)} on that thread starts its own. When the
+     * rollback itself throws, the action's throwable still reaches the caller and the rollback
+     * failure is attached to it as suppressed. A commit or rollback that fails never ends in an
+     * implicit commit: see {@code DataSourceTransactionManager}.
+     */
+    // PMD.AvoidCatchingThrowable: an Error must roll the transaction back too (#634); it is
+    // rethrown unchanged, never swallowed.
+    @SuppressWarnings({"PMD.AvoidCatchingThrowable", "PMD.AvoidCatchingGenericException"})
     @Override
     public <R> R transaction(Callable<R> action) throws Exception {
         if (transactionManager == null) {
@@ -992,9 +1037,13 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
             R result = action.call();
             transactionManager.commit();
             return result;
-        } catch (Exception e) {
-            transactionManager.rollback();
-            throw e;
+        } catch (Throwable failure) {
+            try {
+                transactionManager.rollback();
+            } catch (Throwable rollbackFailure) {
+                failure.addSuppressed(rollbackFailure);
+            }
+            throw failure;
         }
     }
 

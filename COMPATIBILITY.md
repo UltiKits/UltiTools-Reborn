@@ -1343,6 +1343,33 @@ This section governs the third kind.
   still links; a third-party implementation that does not override it is counted by whether the row
   exists before its `update` (the one remaining miscount: a delete by another writer during that
   call). See `ultitools.storage.missing-row-update` in `FEATURES.md`.
+- A transaction whose own failure path fails no longer ends in an implicit commit (#634). JDBC
+  commits an open transaction when auto-commit is switched on, and the framework's transaction
+  manager switched it on after every transaction — also after a rollback that had failed, after a
+  commit that had failed, and after the failed rollback an outer commit performs for a transaction
+  a nested scope marked rollback-only — so rows the caller was told were not written could be
+  stored. As of 6.3.0 auto-commit is restored only after a commit or rollback that succeeded;
+  otherwise the connection is discarded (a HikariCP pool evicts it, so it is never handed out
+  again with the transaction still open; any other connection is closed), nothing of the
+  transaction is stored, and the caller still gets the original exception. The startup id backfill
+  of SQLite tables follows the same rule. `DataOperator#transaction(...)` also rolls back on an
+  `Error` (it caught `Exception` only, so an `Error` skipped both the commit and the rollback and
+  left the thread's transaction open, and the next transaction on that thread nested into it): the
+  relational operators roll back and rethrow the same `Error`, the JSON operator restores its
+  snapshot and rethrows it, and a rollback that itself throws is attached to the original as
+  suppressed instead of replacing it. `@Transactional` already rolled back on an `Error` and is
+  unchanged, as are nesting, rollback-only marking, propagation, isolation and timeout. No
+  signature changes. See `ultitools.storage.transaction-failure-paths` in `FEATURES.md`.
+
+  中文补充：事务自身的失败路径再失败时，不再隐式提交（#634）。JDBC 在打开自动提交时会提交尚未结束的事务，而框架的事务管理器
+  在每个事务结束后都会打开自动提交——包括回滚失败、提交失败，以及外层提交为被嵌套作用域标记为仅回滚的事务执行真正回滚却失败之后——
+  因此调用方被告知“未写入”的行可能已被保存。自 6.3.0 起，只有提交或回滚成功后才恢复自动提交；否则丢弃该连接（HikariCP 连接池
+  会将其剔除，不会把仍处于事务中的连接再交给别人；其他连接直接关闭），事务中的内容一律不保存，调用方仍收到原来的异常。SQLite
+  表启动时的 id 补全遵循同一规则。`DataOperator#transaction(...)` 遇到 `Error` 时也会回滚（此前只捕获 `Exception`，`Error`
+  会跳过提交和回滚，使线程上的事务保持打开，该线程的下一个事务会嵌套进去）：关系型实现回滚后原样抛出同一个 `Error`，JSON 实现
+  恢复快照后原样抛出；回滚本身抛出的异常作为 suppressed 附在原异常上，而不是替换它。`@Transactional` 本就会在 `Error` 时回滚，
+  保持不变；嵌套、仅回滚标记、传播、隔离级别和超时均不变。没有签名变化。见 `FEATURES.md` 中的
+  `ultitools.storage.transaction-failure-paths`。
 
 - `PluginManager#getPluginList()` returning an unmodifiable snapshot, and
   `PluginManager#unregister(UltiToolsPlugin)` delisting the module (#507). `getPluginList()` used to return the manager's live internal `ArrayList`, which callers had

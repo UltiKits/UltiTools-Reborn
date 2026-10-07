@@ -5,6 +5,7 @@ import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.exceptions.UnexpectedRollbackException;
 import com.ultikits.ultitools.interfaces.JdbcTransactionManager;
 import com.ultikits.ultitools.interfaces.TransactionManager;
+import com.zaxxer.hikari.HikariDataSource;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -22,6 +23,16 @@ import org.jetbrains.annotations.ApiStatus;
  * <p>
  * Uses ThreadLocal to associate transactions with threads, ensuring thread safety.
  * Each thread can have at most one active transaction at a time.
+ * <p>
+ * <b>A transaction is never committed after its commit or rollback failed</b> (as of 6.3.0,
+ * UltiTools-Reborn#634). JDBC commits an open transaction when auto-commit is switched on
+ * ({@link Connection#setAutoCommit(boolean)}), so auto-commit is restored only after a commit or
+ * rollback that succeeded. A connection whose commit or rollback failed is discarded instead: a
+ * HikariCP pool is told to evict it ({@link HikariDataSource#evictConnection(Connection)}, which
+ * closes the physical connection, and the database rolls the open transaction back), and any other
+ * connection is closed. Measured on HikariCP 5.1.0: a pooled connection merely closed after a
+ * rollback that keeps failing goes back to the pool with auto-commit off and the transaction still
+ * open, and the next borrower's work joins it; an evicted one is never handed out again.
  *
  * @author wisdomme
  * @since 6.2.0
@@ -128,24 +139,31 @@ public class DataSourceTransactionManager implements JdbcTransactionManager {
         // asked to happen after all. cleanup(ctx) runs before the throw so a caller catching this
         // exception never observes a still-live context (T-02-TAM-2).
         if (ctx.rollbackOnly) {
+            boolean rolledBack = false;
             try {
                 ctx.connection.rollback();
+                rolledBack = true;
                 LOGGER.fine("Transaction rolled back (was marked rollback-only by a nested scope)");
             } catch (SQLException e) {
-                LOGGER.log(Level.SEVERE, "Failed to rollback rollback-only transaction", e);
+                LOGGER.log(Level.SEVERE, "Failed to rollback rollback-only transaction; its connection is "
+                        + "discarded, nothing is committed", e);
             } finally {
-                cleanup(ctx);
+                cleanup(ctx, rolledBack);
             }
             throw UnexpectedRollbackException.markedBy("a nested transaction scope");
         }
 
+        boolean committed = false;
         try {
             ctx.connection.commit();
+            committed = true;
             LOGGER.fine("Transaction committed");
         } catch (SQLException e) {
             throw new DataAccessException(ErrorCode.TRANSACTION_FAILED, "Failed to commit transaction", e);
         } finally {
-            cleanup(ctx);
+            // #634: a failed commit discards the connection -- the cleanup's auto-commit switch would
+            // otherwise commit the transaction the caller is told did not commit.
+            cleanup(ctx, committed);
         }
     }
 
@@ -169,13 +187,18 @@ public class DataSourceTransactionManager implements JdbcTransactionManager {
             return;
         }
 
+        boolean rolledBack = false;
         try {
             ctx.connection.rollback();
+            rolledBack = true;
             LOGGER.fine("Transaction rolled back");
         } catch (SQLException e) {
-            LOGGER.log(Level.SEVERE, "Failed to rollback transaction", e);
+            LOGGER.log(Level.SEVERE, "Failed to rollback transaction; its connection is discarded, nothing "
+                    + "is committed", e);
         } finally {
-            cleanup(ctx);
+            // #634: after a failed rollback the connection is discarded, never switched to
+            // auto-commit (which would commit what the caller asked to roll back).
+            cleanup(ctx, rolledBack);
         }
     }
 
@@ -319,17 +342,29 @@ public class DataSourceTransactionManager implements JdbcTransactionManager {
     }
 
     /**
-     * Cleans up the transaction context.
+     * Ends the transaction context: removes it from this thread and never throws.
+     * <p>
+     * {@code completed} -- the commit or rollback succeeded: auto-commit is restored and the
+     * connection closed (back to the pool). Otherwise the connection is discarded through
+     * {@link #discardConnection(DataSource, Connection)} and auto-commit is never switched on
+     * (#634).
+     *
+     * @param ctx       the context to end
+     * @param completed whether its commit or rollback succeeded
      */
-    private void cleanup(TransactionContext ctx) {
+    private void cleanup(TransactionContext ctx, boolean completed) {
         if (ctx == null) {
             return;
         }
 
         try {
             if (ctx.connection != null && !ctx.connection.isClosed()) {
-                ctx.connection.setAutoCommit(true);
-                ctx.connection.close();
+                if (completed) {
+                    ctx.connection.setAutoCommit(true);
+                    ctx.connection.close();
+                } else {
+                    discardConnection(dataSource, ctx.connection);
+                }
             }
         } catch (SQLException e) {
             LOGGER.log(Level.WARNING, "Failed to cleanup connection", e);
@@ -337,6 +372,59 @@ public class DataSourceTransactionManager implements JdbcTransactionManager {
             ctx.active = false;
             ctx.depth = 0;
             contextHolder.remove();
+        }
+    }
+
+    /**
+     * Discards a connection whose commit or rollback failed, without ever switching auto-commit on
+     * (UltiTools-Reborn#634): JDBC commits an open transaction when auto-commit is switched on. When
+     * {@code dataSource} is, or wraps, a {@link HikariDataSource} and {@code connection} is one of its
+     * connections, the pool evicts it -- the physical connection is closed, the database rolls the
+     * open transaction back, and the connection is never handed out again; the caller must not use
+     * it afterwards. Any other connection is closed. Never throws; a failure is logged.
+     *
+     * @param dataSource the data source {@code connection} came from, possibly {@code null}
+     * @param connection the connection to discard, possibly {@code null}
+     * @since 6.3.0
+     */
+    // PMD.AvoidCatchingGenericException: a pool or driver may throw anything while it discards a
+    // broken connection, and this runs on a failure path whose own exception must reach the caller.
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    @ApiStatus.Internal
+    public static void discardConnection(DataSource dataSource, Connection connection) {
+        if (connection == null) {
+            return;
+        }
+        HikariDataSource pool = hikariPool(dataSource);
+        if (pool != null && connection.getClass().getName().startsWith("com.zaxxer.hikari.")) {
+            try {
+                pool.evictConnection(connection);
+                return;
+            } catch (RuntimeException e) {
+                LOGGER.log(Level.WARNING, "Failed to evict a connection whose transaction failed; closing it", e);
+            }
+        }
+        try {
+            connection.close();
+        } catch (SQLException | RuntimeException e) {
+            LOGGER.log(Level.WARNING, "Failed to close a connection whose transaction failed", e);
+        }
+    }
+
+    // PMD.AvoidCatchingGenericException: unwrap of a foreign DataSource may throw anything; then
+    // there is no pool to evict from and the connection is simply closed.
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private static HikariDataSource hikariPool(DataSource dataSource) {
+        if (dataSource == null) {
+            return null;
+        }
+        if (dataSource instanceof HikariDataSource) {
+            return (HikariDataSource) dataSource;
+        }
+        try {
+            return dataSource.isWrapperFor(HikariDataSource.class) ? dataSource.unwrap(HikariDataSource.class) : null;
+        } catch (SQLException | RuntimeException e) {
+            return null;
         }
     }
 
