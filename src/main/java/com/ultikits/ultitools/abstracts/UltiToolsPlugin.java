@@ -298,7 +298,11 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         // #540: extract the bundled resources first, then resolve the language. Resolving first
         // picked whatever catalogue was on disk before extraction -- a stale lang/<code>.yml when
         // lang/<code>.json had been deleted -- and the next reload switched to the fresh one.
-        saveResources();
+        // #567 item 1: only config/ and res/ here (initConfig() reads them next); lang/ is extracted
+        // at the commit step, and the construction-time resolution reads a lang/ file the disk lacks
+        // from the jar as if it were extracted, so a candidate the load gates reject writes no
+        // language file.
+        saveResources(false);
         // #460: resolve without writing; the provenance writes are committed only after the load
         // gates accept this candidate (PluginManager calls commitLanguageProvenance()).
         language = initializeLanguage();
@@ -335,6 +339,12 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * the decision, so a candidate the gates reject never writes to the language files it shares
      * with the accepted version.
      * <p>
+     * <p>
+     * It is also the only point that extracts the module's {@code lang/} resources the disk lacks, with their
+     * hashes recorded as at any extraction (#567 item 1): construction extracts only {@code config/} and {@code
+     * res/}, and resolves a missing {@code lang/} file from the jar's copy without writing it. A copy the load gates
+     * reject never reaches this method, so it cannot write a language file.
+     * <p>
      * Not part of the module-facing API. Public only because {@code PluginManager} lives in another
      * package, like {@link #setContext}. Calling it again re-runs the same resolution a reload's
      * language step runs, so it is harmless but pointless.
@@ -343,6 +353,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      */
     @ApiStatus.Internal
     public final void commitLanguageProvenance() {
+        saveResources(true);
         migrateBundledLanguageFiles();
         language = createLanguageFromPath(resourceFolderPath);
     }
@@ -474,7 +485,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * 2026-10-04), so this method never calls {@link #loadLanguageFromDisk} -- whose provenance step
      * can refresh, restore or back up a file -- and never writes, renames, backs up or records
      * anything. The module jar never ships a file under a custom name either, so {@link
-     * #saveResources()} and {@link #migrateBundledLanguageFiles()} never reach one. The canonical
+     * #saveResources(boolean)} and {@link #migrateBundledLanguageFiles()} never reach one. The canonical
      * {@code lang/} containment guard applies as for every other language read.
      * <p>
      * A key whose custom value lost a placeholder relative to the official base's bundled value uses the
@@ -795,7 +806,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * com.ultikits.ultitools.interfaces.Localized#supported()} is empty. This is therefore the
      * last line of defence: before this file is read (or, deeper in {@link
      * #resolveLanguageWithProvenance}, overwritten), its canonical path must stay inside {@code
-     * <folderPath>/lang}'s own canonical path -- mirroring the guard {@link #saveResources()}
+     * <folderPath>/lang}'s own canonical path -- mirroring the guard {@link #saveResources(boolean)}
      * already applies to extracted jar entries. A violation degrades to the same {@code null}
      * (“not loadable”) outcome as a missing file, never a thrown exception.
      */
@@ -808,16 +819,41 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                     + file + "'.");
             return null;
         }
-        if (!file.exists()) {
-            return null;
-        }
         String resourcePath = "lang/" + code + extension;
+        if (!file.exists()) {
+            // #567 item 1: during construction a lang/ file the disk lacks has not been extracted yet
+            // (the commit step extracts it); resolve as if it were, from the jar's copy, so the
+            // construction-time language is the one the commit produces and #540's order holds.
+            return languageDryRun ? jarCopyAsIfExtracted(resourcePath, extension) : null;
+        }
         return resolveLanguageWithProvenance(folderPath, file, resourcePath, extension);
     }
 
     /**
+     * The language a {@code lang/} file would hold once extracted: the jar's copy of {@code resourcePath}, parsed as
+     * {@link #readLanguageFile} parses the extracted file; {@code null} when the jar does not ship it (#567 item 1).
+     * Reads the jar only; writes nothing.
+     */
+    private Language jarCopyAsIfExtracted(String resourcePath, String extension) {
+        byte[] jarBytes = readEmbeddedResourceBytes(resourcePath);
+        if (jarBytes == null) {
+            return null;
+        }
+        String text = new String(jarBytes, StandardCharsets.UTF_8);
+        if (".json".equals(extension)) {
+            return new Language(text);
+        }
+        try (Reader reader = new java.io.StringReader(text)) {
+            return Language.fromYaml(reader);
+        } catch (IOException e) {
+            languageLog().error("Failed to read language resource " + resourcePath, e);
+            return new Language("{}");
+        }
+    }
+
+    /**
      * Verifies that {@code candidate}'s canonical path is contained within {@code baseDir}'s own
-     * canonical path -- the same Zip Slip guard {@link #saveResources()} already applies to
+     * canonical path -- the same Zip Slip guard {@link #saveResources(boolean)} already applies to
      * extracted jar entries, generalized here for every other place an untrusted language code is
      * turned into a {@link File} (16-05 / CodeQL {@code java/zipslip} alert #11, CWE-22). Neither
      * {@code baseDir} nor {@code candidate} needs to exist: {@link File#getCanonicalPath()} is
@@ -1890,8 +1926,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         this.identifyString = null; // Connector plugins don't have identify-string
         this.resourceFolderPath = resourceFolderPath;
         prepareConfigConverters();
-        // #540: extract first, then resolve -- see the module constructor.
-        saveResources();
+        // #540: extract first, then resolve -- see the module constructor (lang/ waits for the commit, #567).
+        saveResources(false);
         // #460: resolve without writing -- see the module constructor.
         language = initializeLanguage();
         try {
@@ -2145,8 +2181,16 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * (#441, D-05/D-06). A file this method skips (already present on disk) gets no record here:
      * the skip already means the file predates this mechanism, or was already decided on by
      * {@link #loadLanguageFromDisk} on a previous boot.
+     * <p>
+     * Two halves (#567 item 1). The constructors pass {@code false}: {@code config/} and {@code res/} only, because
+     * {@code initConfig()} reads them right after. {@link #commitLanguageProvenance()} passes {@code true}: {@code
+     * lang/} only, once the load gates accepted this copy. A copy the gates reject is never committed, so it writes no
+     * language file; its construction-time language reads the jar's copy instead (see {@link #loadLanguageFromDisk}).
+     *
+     * @param languageFiles {@code true} for the {@code lang/} resources, {@code false} for {@code config/} and
+     *                      {@code res/}
      */
-    private void saveResources() {
+    private void saveResources(boolean languageFiles) {
         CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
         URL jar = src.getLocation();
         // Codex round 4, P2: accumulated across the whole pass and persisted ONCE via
@@ -2171,7 +2215,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                 JarEntry jarEntry = entries.nextElement();
                 String fileName = jarEntry.getName();
                 if ((!fileName.startsWith("res") && !fileName.startsWith("lang")
-                        && !fileName.startsWith("config")) || !fileName.contains(".")) {
+                        && !fileName.startsWith("config")) || !fileName.contains(".")
+                        || fileName.startsWith("lang") != languageFiles) {
                     continue;
                 }
                 try (InputStream inputStream = jarFile.getInputStream(jarEntry)) {

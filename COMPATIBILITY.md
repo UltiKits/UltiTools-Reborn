@@ -1104,7 +1104,10 @@ This section governs the third kind.
   fresh copy, beside an older `lang/<code>.yml`, got the stale `.yml` at start-up and the fresh
   `.json` only at the next `/ul reload` — two catalogues from the same files, with nothing logged.
   As of 6.3.0 extraction runs first in both constructors, so the start-up catalogue is the one the
-  next reload resolves (`ultitools.language.boot-resolve-after-extract`).
+  next reload resolves (`ultitools.language.boot-resolve-after-extract`). Since #567 the constructors
+  extract `config/` and `res/` only; a `lang/` file the disk lacks is read from the jar's copy as if it
+  were extracted, and is extracted at the commit step described in the next entry, so the start-up
+  catalogue is the same.
 - Writing a module's language provenance only after the load gates accept it (#460). The
   refresh of an untouched `lang/` file, its provenance record and the #459 replacement used to run
   inside the module's constructor, before `PluginManager` decided whether to keep the candidate — so
@@ -1114,9 +1117,18 @@ This section governs the third kind.
   new `UltiToolsPlugin#commitLanguageProvenance()` right after the gates pass, on both `register`
   entry points. That method is `@ApiStatus.Internal` and public only because `PluginManager` is in
   another package, like `setContext`; a module never needs to call it. A module that registers
-  through `PluginManager#register(UltiToolsPlugin)` gets this automatically. One thing is
-  unchanged: a language file the candidate's jar ships and the disk lacks is still extracted, with
-  its hash, while the candidate is constructed (`ultitools.language.rejected-candidate-untouched`).
+  through `PluginManager#register(UltiToolsPlugin)` gets this automatically. As of 6.3.0 (#567) a
+  language file the candidate's jar ships and the disk lacks is not extracted during construction
+  either: the constructor resolves it from the jar's copy without writing it, and
+  `commitLanguageProvenance()` extracts it, with its hash, once the gates accepted the module — so a
+  rejected candidate writes no language file at all (`ultitools.language.rejected-candidate-untouched`,
+  `ultitools.language.rejected-copy-no-files`). `config/` and `res/` files are still extracted while
+  the candidate is constructed, because its configuration is read right after; a rejected candidate
+  can still leave one the disk lacked. For module authors: an instance constructed but never
+  registered through `PluginManager` (a test, for example) extracts no `lang/` file; call
+  `commitLanguageProvenance()` as `PluginManager` does if it needs them on disk.
+
+  中文补充：6.3.0 起（#567）模块在构造时只解压 `config/` 和 `res/`；磁盘上缺少的 `lang/` 文件在构造时直接按 jar 内的副本解析、不写盘，等加载闸门接受该模块后由 `commitLanguageProvenance()` 解压并记录哈希。因此被闸门拒绝的模块副本（已加载更新版本的旧副本、要求更新框架的模块）不会写入任何语言文件；`config/`、`res/` 仍在构造时解压，被拒绝的副本仍可能留下磁盘原本缺少的这类文件。模块作者注意：构造后从未经 `PluginManager` 注册的实例（例如测试）不会解压 `lang/` 文件，需要时请像 `PluginManager` 一样调用 `commitLanguageProvenance()`。
 - Unwinding a refused External Plugin API registration (#537). When
   `PluginManager#registerExternal` refused a plugin after recording its data-folder scope — the
   command-executor contract check, the config-binding refusal of #531, or a failed container
