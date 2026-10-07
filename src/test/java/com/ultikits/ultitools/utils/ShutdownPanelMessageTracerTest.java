@@ -58,7 +58,6 @@ import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
  * #621 的示踪测试：UltiTools 正在禁用时到达的面板消息不得让 WebSocket 线程为已禁用的插件调度任务。
  */
 @DisplayName("#621 panel messages while UltiTools is disabling")
-@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // reaches the instance field and the accepting-flag seam, as PanelMessageEventDispatchTest does
 class ShutdownPanelMessageTracerTest {
 
     private static final String MODULE_TYPE = "fixture_module_query";
@@ -145,6 +144,7 @@ class ShutdownPanelMessageTracerTest {
     }
 
     @AfterEach
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // clears UltiTools' instance field, as PanelMessageEventDispatchTest does
     void tearDown() throws Exception {
         bukkit.close();
         try {

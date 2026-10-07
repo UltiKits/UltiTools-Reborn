@@ -46,7 +46,6 @@ import com.ultikits.ultitools.utils.TestHelper;
  */
 @DisplayName("#583 F1 -- the console mirror fails closed without Paper's forwarder")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
-@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // resets the once-per-run warning flag between tests
 class ConsoleMirrorForwarderMissingTest {
 
     /** A forwarder doing what Paper's does, under a binary name the mirror does not recognise. */
@@ -116,6 +115,7 @@ class ConsoleMirrorForwarderMissingTest {
     }
 
     /** The once-per-run flag is reached reflectively: on the base it does not exist yet. */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // resets the once-per-run warning flag between tests
     private static void resetWarnedFlag() throws Exception {
         try {
             Field field = ConsoleMirror.class.getDeclaredField("forwarderMissingWarned");

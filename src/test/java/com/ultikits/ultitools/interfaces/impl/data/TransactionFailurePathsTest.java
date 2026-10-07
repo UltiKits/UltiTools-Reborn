@@ -71,7 +71,6 @@ import com.zaxxer.hikari.HikariDataSource;
  * {@code transaction(Callable)} 遇到 {@link Error} 时回滚并原样抛出。
  */
 @DisplayName("#634 transaction failure paths never end in an implicit commit")
-@SuppressWarnings({"PMD.AvoidThrowingRawExceptionTypes", "PMD.AvoidCatchingThrowable"}) // the injected failures are the specimens
 class TransactionFailurePathsTest {
 
     @TempDir
