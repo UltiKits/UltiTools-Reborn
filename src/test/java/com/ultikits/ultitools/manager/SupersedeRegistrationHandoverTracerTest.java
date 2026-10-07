@@ -1,6 +1,8 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -251,6 +253,63 @@ class SupersedeRegistrationHandoverTracerTest {
         boolean loaded = pluginManager.register(newer);
 
         assertOlderCopyWhole(loaded, older, olderCalls, newerCalls);
+    }
+
+    @Test
+    @DisplayName("a newer copy whose container cannot be built gives every registration back to the older copy")
+    void newerCopyFailingInAssemblyGivesTheRegistrationsBack() throws Exception {
+        // Gate-1 probe of 17-79 (G1-03): the assembly catch of register(UltiToolsPlugin).
+        AtomicInteger olderCalls = new AtomicInteger();
+        UltiToolsPlugin older = loadOlderCopy(olderCalls);
+        UltiToolsPlugin newer = module("2.0.0");
+        when(newer.isNewerVersionThan(older)).thenReturn(true);
+        doThrow(new IllegalStateException("container assembly failed")).when(newer).setContext(any());
+
+        boolean loaded = pluginManager.register(newer);
+
+        assertThat(loaded).isFalse();
+        assertThat(pluginManager.getPluginList()).containsExactly(older);
+        assertThat(answer()).isEqualTo("v1");
+        assertThat(completion()).isEqualTo("v1");
+        eventBus.publish(new HandoverEvent());
+        assertThat(olderCalls.get()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("restored EventBus handlers keep their dispatch order among other modules' handlers, without duplicates")
+    void restoredHandlersKeepTheirOrder() throws Exception {
+        // Gate-1 probe of 17-79 (G1-03): the older copy's handlers A1 and A2 interleaved with another
+        // module's B and C (C at a higher priority).
+        List<String> order = Collections.synchronizedList(new ArrayList<>());
+        UltiToolsPlugin older = module("1.0.0");
+        when(older.registerSelf()).thenAnswer(invocation -> {
+            eventBus.subscribe(HandoverEvent.class, EventPriority.NORMAL, false, "M",
+                    (HandoverEvent event) -> order.add("A1"));
+            return true;
+        });
+        assertThat(pluginManager.register(older)).isTrue();
+        eventBus.subscribe(HandoverEvent.class, EventPriority.NORMAL, false, "Other",
+                (HandoverEvent event) -> order.add("B"));
+        eventBus.subscribe(HandoverEvent.class, EventPriority.NORMAL, false, "M", older,
+                (HandoverEvent event) -> order.add("A2"));
+        eventBus.subscribe(HandoverEvent.class, EventPriority.HIGH, false, "Other",
+                (HandoverEvent event) -> order.add("C"));
+        eventBus.publish(new HandoverEvent());
+        List<String> before = new ArrayList<>(order);
+        order.clear();
+        UltiToolsPlugin newer = module("2.0.0");
+        when(newer.isNewerVersionThan(older)).thenReturn(true);
+        when(newer.registerSelf()).thenAnswer(invocation -> {
+            eventBus.subscribe(HandoverEvent.class, EventPriority.NORMAL, false, "M",
+                    (HandoverEvent event) -> order.add("N"));
+            return false;
+        });
+
+        assertThat(pluginManager.register(newer)).isFalse();
+        eventBus.publish(new HandoverEvent());
+
+        assertThat(before).containsExactly("A1", "B", "A2", "C");
+        assertThat(order).as("same handlers, same order, nothing of the failed copy").isEqualTo(before);
     }
 
     private void assertOlderCopyWhole(boolean loaded, UltiToolsPlugin older, AtomicInteger olderCalls,
