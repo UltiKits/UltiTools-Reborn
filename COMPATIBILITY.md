@@ -1398,13 +1398,18 @@ This section governs the third kind.
   `PanelResponderRegistry#releaseForSupersede(UltiToolsPlugin)`, each returning the action that
   restores what it released. Known limitations, documented rather than defended because only code
   reaches this path: a responder or subscription registered by name before the registering copy's
-  load scope opens (in a module's constructor) belongs to the copy listed under that name at the
-  time -- no copy at the module's first load, so it is not handed over and a newer copy registering
-  the same type is still refused; or, while a newer copy is constructed, the older copy, so it is
+  load scope opens -- in a module's constructor, or in `@PostConstruct` code that runs when the
+  framework registers the module instance as a bean (the main class's own, and that of any bean it
+  injects), before the container refresh the scope covers -- belongs to the copy listed under that name at the time: no copy at
+  the module's first load, so it is not handed over and a newer copy registering the same type is
+  still refused; or, while a newer copy is constructed and assembled, the older copy, so it is
   released with the older copy if the newer one loads and restored to the older copy, still running
-  the newer copy's code, if the newer one fails -- register in `registerSelf()` or pass the
-  instance; and a subscription the older copy removes with `Subscription#unsubscribe()` from another
-  thread while its handlers are released comes back if the newer copy then fails.
+  the newer copy's code, if the newer one fails. Register in `registerSelf()`, which always runs
+  inside the scope, or pass the instance. A subscription the older
+  copy removes with `Subscription#unsubscribe()` from another thread while its handlers are released
+  comes back if the newer copy then fails. When one newer copy supersedes two loaded copies at once
+  (two copies of one version can both be listed) and then fails, both copies get their handlers
+  back, but handlers of the same priority may come back in a different order.
 
   中文补充：模块的新副本接管旧副本的登记；新副本加载失败时把登记还给旧副本（#562 第 2 项）。此前新副本的
   `registerSelf()` 在旧副本仍占有全部登记时运行，所以新副本若登记旧副本已占有的面板响应器类型，会被拒绝
@@ -1414,9 +1419,11 @@ This section governs the third kind.
   再把旧副本的登记原样放回（EventBus 处理器回到原来的位置），旧副本照常运行。任何加载失败现在都会释放失败副本在这三个登记表中的登记。
   释放期间被其它登记占用的类型或键归该登记所有，并记一条 WARNING。只有以新实例调用 `PluginManager#register(...)`
   的代码会走到这条路径，服主命令走不到。已知限制（只记录、不做防御，因为只有代码会走到这条路径）：在登记方副本的加载范围打开之前
-  （即在模块构造器中）按名称登记的内容，属于当时以该名称列出的副本：模块首次加载时没有这样的副本，于是不会被移交，新副本登记同一类型仍会被拒绝；
-  新副本构造期间则属于旧副本，新副本加载成功时随旧副本释放，加载失败时还给旧副本（其中仍是新副本的代码）。请在 `registerSelf()` 中登记或传入实例；
-  旧副本在登记被释放期间从其它线程调用 `Subscription#unsubscribe()` 取消的订阅，若新副本随后加载失败，会被恢复。
+  （在模块构造器中，或在框架把模块实例注册为 Bean 时运行的 `@PostConstruct` 代码中，包括主类自身及其注入的 Bean 的，早于加载范围所覆盖的容器刷新）按名称登记的内容，
+  属于当时以该名称列出的副本：模块首次加载时没有这样的副本，于是不会被移交，新副本登记同一类型仍会被拒绝；新副本构造和装配期间则属于旧副本，
+  新副本加载成功时随旧副本释放，加载失败时还给旧副本（其中仍是新副本的代码）。请在 `registerSelf()` 中登记
+  （它总在加载范围内运行），或传入实例。旧副本在登记被释放期间从其它线程调用 `Subscription#unsubscribe()` 取消的订阅，若新副本随后加载失败，会被恢复。
+  一个新副本同时替换两个已加载副本（同一版本的两个副本可同时被列出）后加载失败时，两者的处理器都会还回，但同优先级处理器的先后顺序可能改变。
 - A registration made after load through the name-only APIs belongs to a module instance (#562
   item 1). `PanelResponderRegistry#registerResponder(type, responder, ownerModule)` and the
   `EventBus` methods that take an `ownerModule` (`subscribe(..., ownerModule, consumer)` and the
