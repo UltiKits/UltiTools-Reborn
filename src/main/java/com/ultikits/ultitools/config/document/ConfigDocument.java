@@ -106,6 +106,8 @@ public final class ConfigDocument {
     private final NodeConstructor keyConstructor = new NodeConstructor();
     private MappingNode root;
     private boolean modified;
+    /** Sections left with no value that this document made sections again, with the comment lines indented under them. */
+    private final List<Expansion> expansions = new ArrayList<>();
 
     private ConfigDocument(String source, MappingNode root, Map<String, Object> plain, DocumentStyle style, boolean anchored) {
         this.source = source;
@@ -281,6 +283,45 @@ public final class ConfigDocument {
         return found;
     }
 
+    /**
+     * Where a declared setting this document does not hold belongs (#614): the readings ({@link #readings(String)}) of the
+     * longest proper prefix of {@code dottedPath} that this document holds as a section - a mapping, or a key with no
+     * value. An insert goes below one of them, the rest of the path as nested keys, so a section the operator wrote in
+     * flat dotted form ({@code a.b:}) gets the setting in place and never a second, nested copy ({@code a: b:}), which
+     * Bukkit's {@code YamlConfiguration} would read as replacing the first. Each returned path joins with {@code .} to the
+     * same prefix.
+     *
+     * @param dottedPath a declared setting path
+     * @return the section readings of the longest held prefix, nested forms first; empty when no prefix is held as a
+     *         section; two or more when the document holds that section in several forms
+     * @since 6.3.0
+     */
+    public List<List<String>> heldSections(String dottedPath) {
+        String[] parts = dottedPath.split("\\.", -1);
+        StringBuilder prefix = new StringBuilder();
+        List<String> prefixes = new ArrayList<>();
+        for (int k = 0; k < parts.length - 1; k++) {
+            if (k > 0) {
+                prefix.append('.');
+            }
+            prefix.append(parts[k]);
+            prefixes.add(prefix.toString());
+        }
+        for (int k = prefixes.size() - 1; k >= 0; k--) {
+            List<List<String>> sections = new ArrayList<>();
+            for (List<String> reading : readings(plain, prefixes.get(k))) {
+                Object value = get(reading);
+                if (value == null || value instanceof Map) {
+                    sections.add(reading);
+                }
+            }
+            if (!sections.isEmpty()) {
+                return sections;
+            }
+        }
+        return Collections.emptyList();
+    }
+
     private static void collectReadings(Object node, String[] parts, int from, List<String> prefix, List<List<String>> found) {
         if (!(node instanceof Map)) {
             return;
@@ -339,8 +380,15 @@ public final class ConfigDocument {
         }
         MappingNode mapping = root;
         Map<String, Object> plainMapping = plain;
+        List<MappingNode> parents = new ArrayList<>();
         for (int i = 0; i < path.size() - 1; i++) {
+            parents.add(mapping);
+            int at = indexOf(mapping, path.get(i));
+            Node before = at < 0 ? null : mapping.getValue().get(at).getValueNode();
             mapping = childMapping(mapping, path.get(i), plainMapping.get(path.get(i)));
+            if (writtenWithNoValue(before)) {
+                recordExpansion(parents, path.subList(0, i + 1), mapping);
+            }
             plainMapping = childPlainMapping(plainMapping, path.get(i));
         }
         String last = path.get(path.size() - 1);
@@ -352,6 +400,14 @@ public final class ConfigDocument {
             NodeTuple old = mapping.getValue().get(index);
             Node updated = update(old.getValueNode(), plainMapping.get(last), copy);
             mapping.getValue().set(index, new NodeTuple(old.getKeyNode(), updated));
+            if (writtenWithNoValue(old.getValueNode()) && isBlockCollection(updated)) {
+                // A key left with no value written whole as a section or a list (#620 sweep): its comment stays the key's.
+                moveInLineCommentsToKey(updated, old.getKeyNode());
+                if (updated instanceof MappingNode) {
+                    parents.add(mapping);
+                    recordExpansion(parents, path, (MappingNode) updated);
+                }
+            }
             modified = true;
         }
         plainMapping.put(last, copy);
@@ -540,12 +596,25 @@ public final class ConfigDocument {
      *
      * @return the file text
      */
-    @SuppressWarnings("PMD.NPathComplexity") // Presentation options are independent and retain the existing emitter configuration order.
     public String render() {
-        MappingNode out = anchored && modified ? reRenderFromPlain() : root;
+        boolean fromPlain = anchored && modified;
+        MappingNode out = fromPlain ? reRenderFromPlain() : root;
         if (out == null) {
             return modified ? "" : source;
         }
+        // The expansion comments are placed only on the document's own tree, never on a re-render from plain data.
+        List<Runnable> undo = fromPlain ? Collections.<Runnable>emptyList() : placeExpansionComments();
+        try {
+            return renderFrom(out);
+        } finally {
+            for (int i = undo.size() - 1; i >= 0; i--) {
+                undo.get(i).run();
+            }
+        }
+    }
+
+    @SuppressWarnings("PMD.NPathComplexity") // Presentation options are independent and retain the existing emitter configuration order.
+    private String renderFrom(MappingNode out) {
         normalizeMultilineStrings(out, new IdentityHashMap<Node, Node>(), false);
         String text = emit(out, style);
         if (!style.finalLineBreak() && changedByMissingFinalLineBreak(text)) {
@@ -867,7 +936,12 @@ public final class ConfigDocument {
                 tuples.add(new NodeTuple(representer().represent(key), newNode(entry.getValue())));
             } else if (!oldPlain.containsKey(key) || !PlainData.plainEquals(oldPlain.get(key), entry.getValue())) {
                 NodeTuple tuple = tuples.get(index);
-                tuples.set(index, new NodeTuple(tuple.getKeyNode(), update(tuple.getValueNode(), oldPlain.get(key), entry.getValue())));
+                Node updated = update(tuple.getValueNode(), oldPlain.get(key), entry.getValue());
+                if (writtenWithNoValue(tuple.getValueNode()) && isBlockCollection(updated)) {
+                    // As in set: a key left with no value keeps the comment after its colon (#620 sweep).
+                    moveInLineCommentsToKey(updated, tuple.getKeyNode());
+                }
+                tuples.set(index, new NodeTuple(tuple.getKeyNode(), updated));
             }
         }
     }
@@ -886,6 +960,11 @@ public final class ConfigDocument {
             MappingNode created = child instanceof Map ? (MappingNode) newNode(child)
                     : new MappingNode(Tag.MAP, new ArrayList<NodeTuple>(), DumperOptions.FlowStyle.BLOCK);
             carryComments(tuple.getValueNode(), created);
+            if (writtenWithNoValue(tuple.getValueNode())) {
+                // A section line left with no value that becomes a section again (#620): the comment after its colon is
+                // the key's, where a block section keeps it - on the mapping the emitter could not write it.
+                moveInLineCommentsToKey(created, tuple.getKeyNode());
+            }
             retainDescendantEnds(tuple.getValueNode(), created);
             mapping.getValue().set(index, new NodeTuple(tuple.getKeyNode(), created));
             modified = true;
@@ -895,6 +974,185 @@ public final class ConfigDocument {
         mapping.getValue().add(new NodeTuple(representer().represent(key), created));
         modified = true;
         return created;
+    }
+
+    /**
+     * Whether the operator wrote no value at all for the key holding {@code value}: nothing after the colon but, at most,
+     * a comment. That is an empty plain {@code null} scalar without a token of its own, so its start and end marks
+     * coincide. A null written as {@code ~} or {@code null} in any case, or with a tag ({@code !!null},
+     * {@code !<tag:yaml.org,2002:null>}, {@code !!null ''}), is the operator's explicit value (maintainer decision
+     * 2026-10-06). A node built in memory has no marks and was not written by anyone, so it is not "no value" either.
+     * <p>
+     * The one answer to this question for the write gate ({@link OperatorFileWriter}, which expands only a key with no
+     * value, #620) and for this document's own comment handling ({@link #set}, {@code merge}, {@code childMapping}):
+     * gate-1 F1 of plan 17-75 found the two had separate predicates that disagreed on {@code !!null}.
+     *
+     * @param value a value node of a parsed document
+     * @return whether the operator wrote no value for it
+     */
+    static boolean writtenWithNoValue(Node value) {
+        if (!(value instanceof ScalarNode) || !Tag.NULL.equals(value.getTag())) {
+            return false;
+        }
+        ScalarNode scalar = (ScalarNode) value;
+        return scalar.getValue().isEmpty() && scalar.getScalarStyle() == DumperOptions.ScalarStyle.PLAIN
+                && scalar.getStartMark() != null && scalar.getEndMark() != null
+                && scalar.getStartMark().getIndex() == scalar.getEndMark().getIndex();
+    }
+
+    private static void moveInLineCommentsToKey(Node from, Node key) {
+        List<CommentLine> moved = from.getInLineComments();
+        if (moved == null || moved.isEmpty()) {
+            return;
+        }
+        List<CommentLine> onKey = key.getInLineComments() == null
+                ? new ArrayList<CommentLine>() : new ArrayList<>(key.getInLineComments());
+        onKey.addAll(moved);
+        key.setInLineComments(onKey);
+        from.setInLineComments(null);
+    }
+
+    private static boolean isBlockCollection(Node node) {
+        return node instanceof MappingNode && ((MappingNode) node).getFlowStyle() != DumperOptions.FlowStyle.FLOW
+                || node instanceof SequenceNode && ((SequenceNode) node).getFlowStyle() != DumperOptions.FlowStyle.FLOW;
+    }
+
+    /**
+     * Records a section left with no value that this document made a section again ({@code keys} is its key path,
+     * {@code parents} the mappings holding each of those keys, from the top level), together with the comment lines
+     * indented under its line in the file - the lines a commented-out child leaves (#620). The reader attached them, as
+     * SnakeYAML does, to the next key in the file (or to the end of the document), where an unchanged render writes them
+     * at that key's column; they are the leading block comment lines of that key that start below the section line and
+     * at a column deeper than the section key.
+     */
+    @SuppressWarnings("PMD.NPathComplexity") // Finding the next key in file order and the run under the line are separate walks.
+    private void recordExpansion(List<MappingNode> parents, List<String> keys, MappingNode section) {
+        MappingNode parent = parents.get(keys.size() - 1);
+        int at = indexOf(parent, keys.get(keys.size() - 1));
+        Node key = at < 0 ? null : parent.getValue().get(at).getKeyNode();
+        if (key == null || key.getStartMark() == null) {
+            return;
+        }
+        Node holder = null;
+        for (int level = keys.size() - 1; level >= 0 && holder == null; level--) {
+            List<NodeTuple> tuples = parents.get(level).getValue();
+            int index = indexOf(parents.get(level), keys.get(level));
+            if (index >= 0 && index + 1 < tuples.size()) {
+                holder = tuples.get(index + 1).getKeyNode();
+            }
+        }
+        List<CommentLine> held = holder == null ? root.getEndComments() : holder.getBlockComments();
+        List<CommentLine> under = new ArrayList<>();
+        for (CommentLine line : held == null ? Collections.<CommentLine>emptyList() : held) {
+            if (line.getCommentType() != CommentType.BLOCK || line.getStartMark() == null
+                    || line.getStartMark().getLine() <= key.getStartMark().getLine()
+                    || line.getStartMark().getColumn() <= key.getStartMark().getColumn()) {
+                break;
+            }
+            under.add(line);
+        }
+        if (!under.isEmpty()) {
+            expansions.add(new Expansion(parent, section, holder, under));
+        }
+    }
+
+    /**
+     * For a render only: moves each recorded run of comment lines indented under an expanded section to the end of the
+     * section's last value - where the reader puts such lines once the section holds keys, and where the emitter writes
+     * them at the section's own indentation, byte for byte as the operator wrote them when their column is that one - and
+     * returns how to undo it, so the document's comments stay as read (the write gate's comment ownership is computed on
+     * them). A run is moved only while the section is still in the tree, holds keys, and the next key still starts with
+     * exactly those lines.
+     */
+    private List<Runnable> placeExpansionComments() {
+        List<Runnable> undo = new ArrayList<>();
+        for (Expansion expansion : expansions) {
+            List<NodeTuple> children = expansion.section.getValue();
+            List<CommentLine> held = expansion.holder == null ? root.getEndComments() : expansion.holder.getBlockComments();
+            if (children.isEmpty() || !holdsAsValue(expansion.parent, expansion.section)
+                    || !startsWithSame(held, expansion.lines)) {
+                continue;
+            }
+            List<CommentLine> rest = new ArrayList<>(held.subList(expansion.lines.size(), held.size()));
+            setHeldComments(expansion.holder, rest.isEmpty() ? null : rest);
+            Node target = children.get(children.size() - 1).getValueNode();
+            List<CommentLine> ends = target.getEndComments() == null
+                    ? new ArrayList<CommentLine>() : new ArrayList<>(target.getEndComments());
+            ends.addAll(expansion.lines);
+            target.setEndComments(ends);
+            undo.add(() -> {
+                setHeldComments(expansion.holder, held);
+                // Rendering may have replaced the value node (a multi-line string re-quoted), carrying its comments.
+                List<NodeTuple> now = expansion.section.getValue();
+                Node last = now.get(now.size() - 1).getValueNode();
+                List<CommentLine> kept = new ArrayList<>();
+                for (CommentLine line : last.getEndComments() == null
+                        ? Collections.<CommentLine>emptyList() : last.getEndComments()) {
+                    if (!containsSame(expansion.lines, line)) {
+                        kept.add(line);
+                    }
+                }
+                last.setEndComments(kept.isEmpty() ? null : kept);
+            });
+        }
+        return undo;
+    }
+
+    private void setHeldComments(Node holder, List<CommentLine> lines) {
+        if (holder == null) {
+            root.setEndComments(lines);
+        } else {
+            holder.setBlockComments(lines);
+        }
+    }
+
+    @SuppressWarnings("PMD.CompareObjectsWithEquals") // Node identity is the point: the very node, not an equal one.
+    private static boolean holdsAsValue(MappingNode parent, Node value) {
+        for (NodeTuple tuple : parent.getValue()) {
+            if (tuple.getValueNode() == value) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @SuppressWarnings("PMD.CompareObjectsWithEquals") // The same comment objects the reader attached, not equal text.
+    private static boolean startsWithSame(List<CommentLine> lines, List<CommentLine> prefix) {
+        if (lines == null || lines.size() < prefix.size()) {
+            return false;
+        }
+        for (int i = 0; i < prefix.size(); i++) {
+            if (lines.get(i) != prefix.get(i)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    @SuppressWarnings("PMD.CompareObjectsWithEquals") // The same comment objects the reader attached, not equal text.
+    private static boolean containsSame(List<CommentLine> lines, CommentLine line) {
+        for (CommentLine each : lines) {
+            if (each == line) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** A section left with no value that a {@link #set} made a section again, and the comment lines indented under it. */
+    private static final class Expansion {
+        private final MappingNode parent;
+        private final MappingNode section;
+        /** The key whose block comments hold the lines, or {@code null} for the end of the document. */
+        private final Node holder;
+        private final List<CommentLine> lines;
+
+        Expansion(MappingNode parent, MappingNode section, Node holder, List<CommentLine> lines) {
+            this.parent = parent;
+            this.section = section;
+            this.holder = holder;
+            this.lines = lines;
+        }
     }
 
     @SuppressWarnings("unchecked")

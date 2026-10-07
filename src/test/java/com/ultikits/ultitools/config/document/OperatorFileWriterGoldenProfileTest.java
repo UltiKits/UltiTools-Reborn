@@ -22,9 +22,11 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 /**
  * The golden refusal profile of the config write gate (plan 17-63): for every fixture of the golden corpus,
- * the three routine automatic writes - (a) insert a new top-level key, (b) set the first scalar leaf to a
- * different value of the same type, (c) rewrite the first key's framework comment - and what the gate did.
- * Every {@code bundled/} and {@code written-by-6.2/} fixture must accept all three with its unowned lines
+ * the routine automatic writes - (a) insert a new top-level key, (b) set the first scalar leaf to a
+ * different value of the same type, (c) rewrite the first key's framework comment, and (plan 17-75, #620)
+ * (d) delete every child of the first block section, leaving the bare section line ({@code section:}), then insert
+ * its first child back with a framework comment - and what the gate did.
+ * Every {@code bundled/} and {@code written-by-6.2/} fixture must accept all four with its unowned lines
  * byte-identical (the files the project ships and the files 6.2 wrote); {@code hand-edited/} fixtures are
  * measured and printed, not asserted, because refusing operator layout is the gate's purpose.
  */
@@ -32,6 +34,7 @@ class OperatorFileWriterGoldenProfileTest {
 
     private static final String ADDED = "ultitools-golden-profile-added";
     private static final String COMMENT = "Golden profile framework comment";
+    private static final String NO_SECTION = "n/a (no block section)";
     private static final List<String> TABLE = Collections.synchronizedList(new ArrayList<String>());
 
     @TempDir
@@ -50,7 +53,7 @@ class OperatorFileWriterGoldenProfileTest {
     static void printTable() {
         List<String> rows = new ArrayList<>(TABLE);
         Collections.sort(rows);
-        StringBuilder table = new StringBuilder("GOLDEN-PROFILE | Fixture | Class | insert | set | comment |\n");
+        StringBuilder table = new StringBuilder("GOLDEN-PROFILE | Fixture | Class | insert | set | comment | empty-section insert |\n");
         for (String row : rows) {
             table.append("GOLDEN-PROFILE ").append(row).append('\n');
         }
@@ -76,15 +79,137 @@ class OperatorFileWriterGoldenProfileTest {
         String comment = first == null ? "n/a (no key)" : attempt(fixture, OwnedPaths.builder().comment(first).build(),
                 d -> d.setFrameworkComment(first, Collections.singletonList(COMMENT)), Check.COMMENT);
 
-        TABLE.add("| " + fixture.name + " | " + fixtureClass + " | " + insert + " | " + set + " | " + comment + " |");
+        String emptySection = emptySectionInsert(fixture);
+
+        TABLE.add("| " + fixture.name + " | " + fixtureClass + " | " + insert + " | " + set + " | " + comment + " | "
+                + emptySection + " |");
         if (!"hand-edited".equals(fixtureClass)) {
             assertThat(insert).as("insert on " + fixture.name).isEqualTo("WRITTEN");
             assertThat(set).as("set on " + fixture.name).isIn("WRITTEN", "n/a (no scalar leaf)");
             assertThat(comment).as("comment on " + fixture.name).isEqualTo("WRITTEN");
+            assertThat(emptySection).as("empty-section insert on " + fixture.name).isIn("WRITTEN", NO_SECTION);
         }
     }
 
     private enum Check { INSERT, SET, COMMENT }
+
+    /**
+     * Write type (d), #620: the operator deletes every child of the first block section (its lines from the one after
+     * the section line to the end of its value, found with SnakeYAML's composer, not with the gate's span logic), so the
+     * section line is left with no value; the gate then inserts the first child back with a framework comment, as a
+     * start-up insert does. Checked independently: the only line of the deleted file that may change is the section
+     * line itself, and every added line is one contiguous block directly below it, indented deeper than the section key.
+     */
+    @SuppressWarnings("PMD.NPathComplexity") // An independent oracle: shape, write, values and each line property checked separately.
+    private String emptySectionInsert(GoldenCorpus.Fixture fixture) throws IOException, ConfigParseException {
+        String original = fixture.text();
+        String body = original.startsWith("\uFEFF") ? original.substring(1) : original;
+        Section section = firstBlockSection(body);
+        if (section == null) {
+            return NO_SECTION;
+        }
+        List<String> lines = LineDiff.lines(body);
+        StringBuilder deleted = new StringBuilder(original.startsWith("\uFEFF") ? "\uFEFF" : "");
+        for (int i = 0; i < lines.size(); i++) {
+            if (i <= section.keyLine || i > section.lastLine) {
+                deleted.append(lines.get(i));
+            }
+        }
+        String deletedText = deleted.toString();
+        ConfigDocument shape = ConfigDocument.parse(deletedText);
+        if (!shape.contains(section.path) || shape.get(section.path) != null) {
+            return "n/a (deleting the children does not leave a bare section line)";
+        }
+        Map<String, Object> plain = ConfigDocument.parse(original).toPlain();
+        Object sectionValue = plain;
+        for (String key : section.path) {
+            sectionValue = ((Map<?, ?>) sectionValue).get(key);
+        }
+        Map.Entry<?, ?> child = ((Map<?, ?>) sectionValue).entrySet().iterator().next();
+        List<String> childPath = new ArrayList<>(section.path);
+        childPath.add(String.valueOf(child.getKey()));
+        Object childValue = child.getValue();
+
+        Path file = Files.createTempDirectory(tempDir, "profile").resolve("profile.yml");
+        byte[] before = deletedText.getBytes(StandardCharsets.UTF_8);
+        Files.write(file, before);
+        Consumer<ConfigDocument> edit = d -> {
+            d.set(childPath, childValue);
+            d.setFrameworkComment(childPath, Collections.singletonList(COMMENT));
+        };
+        OperatorFileWriter.Result result = OperatorFileWriter.write(file, OwnedPaths.builder().value(childPath).build(), null, edit);
+        byte[] after = Files.readAllBytes(file);
+        if (result.outcome() != OperatorFileWriter.Outcome.WRITTEN) {
+            assertThat(after).as("a write that was not published leaves the bytes").isEqualTo(before);
+            return result.outcome() + " (" + result.reason() + ")";
+        }
+        String afterText = new String(after, StandardCharsets.UTF_8);
+        ConfigDocument expected = ConfigDocument.parse(deletedText);
+        edit.accept(expected);
+        assertThat(PlainData.plainEquals(ConfigDocument.parse(afterText).toPlain(), expected.toPlain()))
+                .as("the file holds the deleted file's values with only the child put back").isTrue();
+        LineDiff diff = LineDiff.of(deletedText, afterText);
+        for (int line : diff.removedAt) {
+            assertThat(line).as("only the section line may change").isEqualTo(section.keyLine);
+        }
+        assertThat(diff.addedIsContiguous()).as("one added block").isTrue();
+        int firstAdded = diff.addedAt.get(0);
+        assertThat(firstAdded).as("directly below (or replacing) the section line")
+                .isEqualTo(diff.removedAt.isEmpty() ? section.keyLine + 1 : section.keyLine);
+        for (int i = diff.removedAt.isEmpty() ? 0 : 1; i < diff.added.size(); i++) {
+            String line = diff.added.get(i);
+            int indent = line.length() - line.replaceAll("^[ \t]+", "").length();
+            assertThat(indent).as("added line indented below the section key: " + line).isGreaterThan(section.keyColumn);
+        }
+        assertThat(diff.added).anySatisfy(line -> assertThat(line).contains(COMMENT));
+        return "WRITTEN";
+    }
+
+    /** A key whose value is a non-empty block mapping: its path, key line and column, and its value's last line. */
+    private static final class Section {
+        private final List<String> path;
+        private final int keyLine;
+        private final int keyColumn;
+        private final int lastLine;
+
+        Section(List<String> path, int keyLine, int keyColumn, int lastLine) {
+            this.path = path;
+            this.keyLine = keyLine;
+            this.keyColumn = keyColumn;
+            this.lastLine = lastLine;
+        }
+    }
+
+    /** The first top-level key whose value is a non-empty block mapping, measured with SnakeYAML's composer and {@link #valueRegion}. */
+    private static Section firstBlockSection(String text) {
+        org.yaml.snakeyaml.nodes.Node root = new org.yaml.snakeyaml.Yaml(ConfigDocument.loaderOptions())
+                .compose(new java.io.StringReader(text));
+        if (!(root instanceof org.yaml.snakeyaml.nodes.MappingNode)) {
+            return null;
+        }
+        return firstBlockSection(text, (org.yaml.snakeyaml.nodes.MappingNode) root, new ArrayList<String>());
+    }
+
+    private static Section firstBlockSection(String text, org.yaml.snakeyaml.nodes.MappingNode mapping, List<String> prefix) {
+        ConfigDocument.NodeConstructor keys = new ConfigDocument.NodeConstructor();
+        org.yaml.snakeyaml.nodes.NodeTuple found = null;
+        for (org.yaml.snakeyaml.nodes.NodeTuple tuple : mapping.getValue()) {
+            org.yaml.snakeyaml.nodes.Node value = tuple.getValueNode();
+            if (found == null && value instanceof org.yaml.snakeyaml.nodes.MappingNode
+                    && ((org.yaml.snakeyaml.nodes.MappingNode) value).getFlowStyle() != org.yaml.snakeyaml.DumperOptions.FlowStyle.FLOW
+                    && !((org.yaml.snakeyaml.nodes.MappingNode) value).getValue().isEmpty()
+                    && value.getAnchor() == null) {
+                found = tuple;
+            }
+        }
+        if (found == null) {
+            return null;
+        }
+        List<String> path = new ArrayList<>(prefix);
+        path.add(String.valueOf(keys.construct(found.getKeyNode())));
+        int[] region = valueRegion(text, path);
+        return new Section(path, region[0], found.getKeyNode().getStartMark().getColumn(), region[1]);
+    }
 
     private String attempt(GoldenCorpus.Fixture fixture, OwnedPaths owned, Consumer<ConfigDocument> edit, Check check)
             throws IOException, ConfigParseException {
