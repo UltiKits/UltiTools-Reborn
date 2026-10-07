@@ -145,9 +145,10 @@ public final class OperatorFiles {
      * @return what happened; {@link WriteResult#UNCHANGED} when {@code values} is empty
      * @throws IllegalArgumentException if a key path is empty or holds {@code null}, or a value is not plain data -
      *                                  checked before the file is read again, so nothing is written
-     * @throws IOException              if publishing fails (an atomic replacement, so the file then holds its old
-     *                                  bytes or, after a failed in-place fallback, a complete framework backup
-     *                                  remains beside it)
+     * @throws IOException              if publishing fails; the file then holds its old bytes (a failed in-place
+     *                                  fallback is put back from its framework backup first) - only when even that
+     *                                  fails does it hold part of the new content, with one SEVERE naming the file and
+     *                                  the framework backup kept beside it
      */
     @SuppressWarnings("PMD.NPathComplexity") // Every argument is validated before any I/O, each with its own message.
     public static WriteResult write(Snapshot readAt, Map<List<String>, Object> values) throws IOException {

@@ -52,9 +52,14 @@ import org.jetbrains.annotations.ApiStatus;
  * given and names of its own two patterns, {@code <file name>.tmp-<16 lower-case hex>} and the backup pattern
  * above; an operator's {@code <file>.bak}, or any other name, is never touched (UltiKits/UltiTools-Reborn#601).
  * <p>
- * Before the in-place target is opened, failures leave its bytes unchanged. Once that open is attempted,
- * an I/O failure may leave a partial target, but its complete forced backup is retained. No automatic
- * restoration is attempted. A symbolic link stays a link: writes and backup cleanup use its resolved target.
+ * Before the in-place target is opened, failures leave its bytes unchanged. Once it is open, a failure (a write
+ * that stops part-way, a failed force or close) puts the target back before the failure is reported: the bytes the
+ * target held immediately before - exactly what the forced backup holds - are written back in place, the same way,
+ * because the atomic move this fallback stands in for was refused; the backup is then removed, so the target holds
+ * its previous bytes when the {@code IOException} reaches the caller (UltiKits/UltiTools-Reborn#622). If putting it
+ * back fails too, one SEVERE names the target and the backup (never content), the backup is kept and no later load
+ * deletes it, and the failure is a {@link RestoreFailedException}: the target may hold part of the new content. A
+ * symbolic link stays a link: writes and backup cleanup use its resolved target.
  * Stale temporary files are cleaned on load; live staged writes are protected. The atomic path copies only
  * POSIX permission bits, not ownership, ACLs or extended attributes. Directory syncing is best effort.
  * This is a framework-internal writer for config files; crash-safe writes of a module's own files are a
@@ -90,7 +95,8 @@ public final class AtomicConfigWriter {
      *
      * @param target the file to replace; its parent directory must exist
      * @param text   the complete new content
-     * @throws IOException if a step fails; before in-place open the target is unchanged, otherwise a complete backup remains
+     * @throws IOException if a step fails; the target then holds its previous bytes, except after a
+     *                     {@link RestoreFailedException}, when its complete backup remains beside it
      */
     public static void write(Path target, String text) throws IOException {
         write(target, text, FILES);
@@ -393,7 +399,8 @@ public final class AtomicConfigWriter {
         /**
          * Atomically replaces the target, or uses the backed in-place path on an eligible refusal.
          *
-         * @throws IOException if replacement fails; a failed in-place attempt retains a complete forced backup
+         * @throws IOException if replacement fails; a failed in-place attempt puts the target back from its backup first
+         *                     (a {@link RestoreFailedException} when that fails too, the backup then kept)
          */
         public void commit() throws IOException {
             synchronized (WRITE_LOAD_LOCK) {
@@ -446,6 +453,7 @@ public final class AtomicConfigWriter {
             }
         }
 
+        @SuppressWarnings("PMD.NPathComplexity") // Backup, in-place write and the restore of a failed write, in order.
         private void replaceInPlace(byte[] replacement, IOException cause) throws IOException {
             RecordedBackup recorded = BACKUPS.get(target);
             boolean refresh = recorded != null && recorded.matches(files);
@@ -454,9 +462,12 @@ public final class AtomicConfigWriter {
             boolean created = false;
             boolean forced = false;
             boolean success = false;
+            boolean opened = false;
+            boolean restored = false;
+            byte[] original = null;
             try {
                 byte[] content = replacement == null ? files.read(temporary) : replacement;
-                byte[] original = files.read(target);
+                original = files.read(target);
                 FileAttribute<?>[] attributes = files.temporaryAttributes(target);
                 if (refresh) {
                     refreshBackup(backup, original, attributes);
@@ -473,17 +484,50 @@ public final class AtomicConfigWriter {
                 BACKUPS.put(target, new RecordedBackup(backup, ConfigDocument.sha256(original)));
                 syncDirectory(target.getParent());
                 try (FileChannel channel = files.openTarget(target)) {
+                    opened = true;
                     writeAll(files, channel, content);
                     files.force(channel);
                 }
                 success = true;
+            } catch (IOException | RuntimeException failure) {
+                if (opened) {
+                    // #622: the target may hold part of the new content; put back what it held before reporting.
+                    putBack(original, backup, failure);
+                    restored = true;
+                }
+                throw failure;
             } finally {
                 if (created && !forced) {
                     deleteQuietly(backup);
                 }
                 LOGGER.warning("Config " + target + " in-place replacement with backup " + backup
-                        + (success ? " succeeded" : " failed") + "; cause: " + cause.getMessage());
+                        + (success ? " succeeded" : restored ? " failed; the file was put back from the backup" : " failed")
+                        + "; cause: " + cause.getMessage());
             }
+        }
+
+        /**
+         * Puts the target back after its in-place write failed once it was open (#622): writes {@code original} - the
+         * bytes it held immediately before, which the forced {@code backup} holds - back in place, then removes the
+         * backup as no longer needed. When that fails, the backup is kept (no load deletes it any more), one SEVERE
+         * names the target and the backup and no content, and a {@link RestoreFailedException} replaces the failure.
+         */
+        private void putBack(byte[] original, Path backup, Exception failure) throws RestoreFailedException {
+            try {
+                try (FileChannel channel = files.openTarget(target)) {
+                    writeAll(files, channel, original);
+                    files.force(channel);
+                }
+            } catch (IOException | RuntimeException restoreFailure) {
+                BACKUPS.remove(target);
+                LOGGER.severe("Config " + target + " could not be put back after its in-place write failed, so it may hold"
+                        + " part of the new content; its previous content is kept in " + backup + ". Compare the two,"
+                        + " copy the backup over the file if needed, then reload; nothing writes the file until then.");
+                RestoreFailedException signal = new RestoreFailedException(target, backup, failure);
+                signal.addSuppressed(restoreFailure);
+                throw signal;
+            }
+            deleteRecorded(target, backup, files);
         }
 
         /** Refreshes a retained backup without exposing a partial replacement. */
@@ -542,6 +586,44 @@ public final class AtomicConfigWriter {
             deleteQuietly(temporary);
             release(identity);
             return !Files.exists(temporary);
+        }
+    }
+
+    /**
+     * Thrown when an in-place write failed after the target was opened and putting the target back from its framework
+     * backup failed too (#622): the target may hold part of the new content, and the backup holding its previous content
+     * is kept. The message names the target and the backup, never content; the in-place write's own failure is the cause.
+     */
+    public static final class RestoreFailedException extends IOException {
+
+        private static final long serialVersionUID = 1L;
+
+        private final transient Path target;
+        private final transient Path backup;
+
+        RestoreFailedException(Path target, Path backup, Throwable cause) {
+            super("Config " + target + " could not be put back after a failed in-place write; its previous content is"
+                    + " kept in " + backup, cause);
+            this.target = target;
+            this.backup = backup;
+        }
+
+        /**
+         * The file that may hold part of the new content.
+         *
+         * @return the target (a symbolic link resolved)
+         */
+        public Path target() {
+            return target;
+        }
+
+        /**
+         * The framework backup holding the target's previous content, kept beside it.
+         *
+         * @return the backup
+         */
+        public Path backup() {
+            return backup;
         }
     }
 

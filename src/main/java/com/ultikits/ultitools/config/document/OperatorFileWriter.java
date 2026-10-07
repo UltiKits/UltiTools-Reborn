@@ -21,6 +21,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 
@@ -62,7 +63,9 @@ import org.yaml.snakeyaml.representer.Representer;
  *       owned and an unowned key on one line is refused, not partially rewritten).</li>
  * </ol>
  * A file using YAML anchors, aliases or merge keys is refused before the edit is applied: the renderer
- * cannot write one back without expanding or moving shared content. If any check fails nothing is written,
+ * cannot write one back without expanding or moving shared content. A runtime failure of the YAML library while the
+ * edit is applied, while the document is rendered or while the rendering is parsed back (an {@code EmitterException}
+ * for a layout it cannot emit, for example) is refused the same way (#624). If any check fails nothing is written,
  * one WARNING names the absolute file, the keys the write would have changed (a key below a secret-shaped key
  * is redacted) and the reason - never a value - and the caller keeps its in-memory value. Layout is never
  * normalized and no operator value, key or comment is repaired to make a write pass.
@@ -88,9 +91,28 @@ public final class OperatorFileWriter {
     private static final List<String> SECRET_WORDS = Arrays.asList("password", "secret", "token", "credential",
             "apikey", "api_key", "key", "auth", "private", "cert");
     private static final String ANCHORED = "the file uses YAML anchors, aliases or merge keys";
+    private static final String READING = "reading the file";
+    private static final String EDITING = "editing the document";
+    private static final String RENDERING = "rendering the document";
+    private static final String CHECKING = "checking the rendered document";
     private static final String COMMENT_NOT_LOCATED = "the comment of a key this write owns cannot be located in the file";
     /** Files already named in an anchored-file warning this server run (canonical paths). */
     private static final Set<Path> WARNED_ANCHORED = ConcurrentHashMap.newKeySet();
+    /**
+     * Test seam: called with each {@link Step} of every gated write, so a test can throw a runtime failure there as the
+     * YAML library would; empty in production.
+     */
+    static final AtomicReference<Consumer<Step>> FAULT = new AtomicReference<>();
+
+    /** The steps of a gated write that call into the YAML library, as the fault seam names them. */
+    enum Step {
+        /** Applying the caller's edit to the freshly read document. */
+        EDIT,
+        /** Rendering the edited document. */
+        RENDER,
+        /** Parsing the rendered text back for the self-check. */
+        SELF_CHECK
+    }
 
     private OperatorFileWriter() {
     }
@@ -240,40 +262,53 @@ public final class OperatorFileWriter {
     static Staged stage(Path file, OwnedPaths owned, String expectedFingerprint, Consumer<ConfigDocument> edit,
             AtomicConfigWriter.FileOperations files) throws IOException {
         Path absolute = file.toAbsolutePath();
-        Snapshot snapshot = Snapshot.read(file, owned, expectedFingerprint);
-        if (snapshot.failure != null) {
-            if (ANCHORED.equals(snapshot.reason)) {
-                return Staged.settled(refuseAnchored(absolute, owned));
+        Snapshot snapshot;
+        ConfigDocument candidate;
+        List<String> keys;
+        String rendered;
+        // What the gate is doing, so a runtime failure's refusal names the step that failed (gate-1 F7, 17-74).
+        String step = READING;
+        try {
+            snapshot = Snapshot.read(file, owned, expectedFingerprint);
+            if (snapshot.failure != null) {
+                if (ANCHORED.equals(snapshot.reason)) {
+                    return Staged.settled(refuseAnchored(absolute, owned));
+                }
+                return Staged.settled(fail(snapshot.failure, absolute, owned, wouldChange(snapshot, owned, edit),
+                        snapshot.reason));
             }
-            List<String> wouldChange = Collections.emptyList();
-            if (snapshot.parsed && snapshot.failure == Outcome.FILE_CHANGED && !owned.isWholeFile()
-                    && !usesAnchors(compose(snapshot.text))) {
-                // Name only what the write would have changed in the file as it is now; nothing is written. A newer
-                // file using anchors is never edited, not even in memory (review round 2 IN-R2-01).
-                edit.accept(snapshot.candidate);
-                Changes changes = Changes.of(snapshot.original, snapshot.candidate, owned);
-                wouldChange = describe(changes.values, changes.comments);
+            candidate = snapshot.candidate;
+            step = EDITING;
+            fault(Step.EDIT);
+            edit.accept(candidate);
+            Changes changes = Changes.of(snapshot.original, candidate, owned);
+            keys = describe(changes.values, changes.comments);
+            if (!owned.isWholeFile() && changes.isEmpty()) {
+                return Staged.settled(PlainData.plainEquals(snapshot.original.toPlain(), candidate.toPlain())
+                        ? new Result(Outcome.UNCHANGED, "", candidate, snapshot.fingerprint, snapshot.fingerprint)
+                        : refuse(absolute, owned, keys, "the write would change keys it does not own"));
             }
-            return Staged.settled(fail(snapshot.failure, absolute, owned, wouldChange, snapshot.reason));
-        }
-        ConfigDocument candidate = snapshot.candidate;
-        edit.accept(candidate);
-        Changes changes = Changes.of(snapshot.original, candidate, owned);
-        List<String> keys = describe(changes.values, changes.comments);
-        if (!owned.isWholeFile() && changes.isEmpty()) {
-            return Staged.settled(PlainData.plainEquals(snapshot.original.toPlain(), candidate.toPlain())
-                    ? new Result(Outcome.UNCHANGED, "", candidate, snapshot.fingerprint, snapshot.fingerprint)
-                    : refuse(absolute, owned, keys, "the write would change keys it does not own"));
-        }
-        String rendered = candidate.render();
-        if (rendered.equals(snapshot.text)) {
-            return Staged.settled(new Result(Outcome.UNCHANGED, "", candidate, snapshot.fingerprint, snapshot.fingerprint));
-        }
-        String failure = owned.isWholeFile()
-                ? verifyValues(snapshot.original, candidate, rendered, Collections.<List<String>>emptyList(), true)
-                : verify(snapshot.text, rendered, snapshot.original, candidate, changes, owned);
-        if (failure != null) {
-            return Staged.settled(refuse(absolute, owned, keys, failure));
+            step = RENDERING;
+            fault(Step.RENDER);
+            rendered = candidate.render();
+            if (rendered.equals(snapshot.text)) {
+                return Staged.settled(new Result(Outcome.UNCHANGED, "", candidate, snapshot.fingerprint, snapshot.fingerprint));
+            }
+            step = CHECKING;
+            String failure = owned.isWholeFile()
+                    ? verifyValues(snapshot.original, candidate, rendered, Collections.<List<String>>emptyList(), true)
+                    : verify(snapshot.text, rendered, snapshot.original, candidate, changes, owned);
+            if (failure != null) {
+                return Staged.settled(refuse(absolute, owned, keys, failure));
+            }
+        } catch (RuntimeException failure) {
+            // A runtime failure while the file is read, the edit applied, the document rendered or the rendering checked -
+            // an EmitterException for a layout the YAML library cannot emit, a YAMLException, a ClassCastException from
+            // its composer, or any other unchecked failure there - is the gate's refusal like every other layout it
+            // cannot keep (#624): nothing is written and the reason names the keys, the step and the failure's class,
+            // never its message, which may quote the file.
+            return Staged.settled(refuse(absolute, owned, Collections.<String>emptyList(),
+                    runtimeFailure(owned, step, failure)));
         }
         if (ABSENT.equals(snapshot.fingerprint)) {
             Path parent = absolute.getParent();
@@ -285,6 +320,35 @@ public final class OperatorFileWriter {
                 : AtomicConfigWriter.stage(file, rendered, files);
         return new Staged(file, absolute, owned, keys, rendered, candidate, snapshot.fingerprint,
                 ABSENT.equals(snapshot.fingerprint) ? null : snapshot.text, temporary);
+    }
+
+    /**
+     * For a write that cannot start because the file changed: what it would have changed in the file as it is now, to
+     * name in the warning; empty when that cannot be told. Nothing is written. A newer file using anchors is never
+     * edited, not even in memory (review round 2 IN-R2-01), and an edit the YAML library cannot apply names the owned keys
+     * instead (#624).
+     */
+    private static List<String> wouldChange(Snapshot snapshot, OwnedPaths owned, Consumer<ConfigDocument> edit) {
+        if (!snapshot.parsed || snapshot.failure != Outcome.FILE_CHANGED || owned.isWholeFile()
+                || usesAnchors(compose(snapshot.text))) {
+            return Collections.emptyList();
+        }
+        try {
+            edit.accept(snapshot.candidate);
+            Changes changes = Changes.of(snapshot.original, snapshot.candidate, owned);
+            return describe(changes.values, changes.comments);
+        } catch (RuntimeException failure) {
+            return Collections.emptyList();
+        }
+    }
+
+    /**
+     * The refusal reason for a runtime failure inside a gated write (#624): the keys, the step that failed and the
+     * failure's class, never a value.
+     */
+    private static String runtimeFailure(OwnedPaths owned, String step, RuntimeException failure) {
+        String keys = owned.isWholeFile() ? "the whole file" : String.join(", ", describe(owned.values(), owned.comments()));
+        return "the file cannot be written at " + keys + ": " + step + " failed (" + failure.getClass().getSimpleName() + ")";
     }
 
     /**
@@ -472,6 +536,13 @@ public final class OperatorFileWriter {
             }
             finished = true;
             return temporary.discard();
+        }
+    }
+
+    private static void fault(Step step) {
+        Consumer<Step> fault = FAULT.get();
+        if (fault != null) {
+            fault.accept(step);
         }
     }
 
@@ -813,6 +884,7 @@ public final class OperatorFileWriter {
     /** Check 1: the rendered text holds exactly the edited values, and the edit stayed inside its paths. */
     private static String verifyValues(ConfigDocument original, ConfigDocument candidate, String rendered,
             List<List<String>> changedValues, boolean wholeFile) {
+        fault(Step.SELF_CHECK);
         ConfigDocument reparsed = parseOrNull(rendered);
         if (reparsed == null) {
             return "the rendered text would not parse back";
