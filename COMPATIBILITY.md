@@ -1080,7 +1080,13 @@ This section governs the third kind.
     or `/ul reload`) and remove the file afterwards, or delete those comment lines and the framework
     writes them again in the current language. A framework comment line you delete is written again
     in the language selected at that moment, unless a comment line of your own remains directly
-    above the setting (see the configuration comments entry of the config layer section);
+    above the setting (see the configuration comments entry of the config layer section). Known
+    limitations, documented rather than changed (gate 2 of #636): an unparseable custom `.yml`/`.yaml`
+    file left in `lang/` is reported by Bukkit's YAML reader once per start even when it is not the
+    selected language - fix or remove it; a custom file replaced by one of exactly the same size with
+    its old modification time kept (a copy tool that preserves times) is noticed only at the next
+    start; and a module that overrides `supported()` must list every language its jar ships, or a
+    shipped file is read as a custom one for this recognition;
   - **your custom file is never written**, replaced, backed up or recorded by any start, reload,
     upgrade or module update;
   - **for module authors**: `UltiToolsPlugin#getLanguageCode()` now returns the official language
@@ -1102,7 +1108,7 @@ This section governs the third kind.
   修改这个副本，然后在 `plugins/UltiTools/config.yml` 中设置 `language: zh-myserver` 并重启或执行 `/ul reload`。这一个设置同时作用于框架和所有模块，没有按模块的设置。
   副本里缺少的文本使用名称开头对应的官方文件（`zh-myserver` 对应 `zh`）补充，所以只需保留要改的条目；没有 `zh-myserver` 文件的模块直接使用官方 `zh`。
   名称不以已有语言代码开头（如 `myserver`）时，缺少的文本使用英文，并记录一行警告。副本中 `%s`/`%d` 个数与官方文本不同、在官方文本也用到的位置上占位符类型不同（如官方为 `%s` 而副本为 `%d`，或反之；位置按 `String.format` 的规则计算，`%%` 不算占位符；6.3.0 起检查，#615，此前这样的条目会在显示消息时格式化失败）、或缺少官方文本中某个 `{TOKEN}` 的条目（自己添加的占位符会保留）（通常是升级后该消息变了），在内存中改用官方文本并记录一行警告（写明文件和键），文件本身不会被修改。
-  配置文件注释会跟随语言切换（6.3.0 起，#615）：选择自定义语言期间，框架在配置项上方写入的注释取自自定义文件中该项的文本；只要注释与自定义文件当前的该项文本完全一致，就被识别为框架写入的注释，切换到其他语言后会改写为该语言，切换回来会再次写成你的文本。框架为此读取模块 `lang/` 目录下的所有自定义文件，只读不写。之后若你在自定义文件里改了这段文本，按旧文本写入的注释视为你自己的内容：永远不会被改写，保持写入时的语言，框架也不保存旧文本的记录（维护者 2026-10-06 决定）。你自己写的、恰好与自定义文件中同一配置项文本一致的注释会被视为框架写入的注释。从被删除或改名的自定义文件写入的注释同理：它不再等于任何当前文本，会保持自定义措辞。要停用自定义语言，请先切换 `language`（启动或 `/ul reload`）再删除文件，或者删掉这些注释行，框架会用当前语言重新写入。被删除的框架注释行会按当时所选的语言写回，除非该设置正上方还留着你自己的注释行（见配置层一节的说明）。
+  配置文件注释会跟随语言切换（6.3.0 起，#615）：选择自定义语言期间，框架在配置项上方写入的注释取自自定义文件中该项的文本；只要注释与自定义文件当前的该项文本完全一致，就被识别为框架写入的注释，切换到其他语言后会改写为该语言，切换回来会再次写成你的文本。框架为此读取模块 `lang/` 目录下的所有自定义文件，只读不写。之后若你在自定义文件里改了这段文本，按旧文本写入的注释视为你自己的内容：永远不会被改写，保持写入时的语言，框架也不保存旧文本的记录（维护者 2026-10-06 决定）。你自己写的、恰好与自定义文件中同一配置项文本一致的注释会被视为框架写入的注释。从被删除或改名的自定义文件写入的注释同理：它不再等于任何当前文本，会保持自定义措辞。要停用自定义语言，请先切换 `language`（启动或 `/ul reload`）再删除文件，或者删掉这些注释行，框架会用当前语言重新写入。被删除的框架注释行会按当时所选的语言写回，除非该设置正上方还留着你自己的注释行（见配置层一节的说明）。已知限制（#636 门禁 2，只写文档）：`lang/` 中无法解析的自定义 `.yml`/`.yaml` 文件即使未被选用，每次启动也会由 Bukkit 的 YAML 读取器报一次错，请修正或删除；被大小完全相同、且保留旧修改时间的文件替换的自定义文件（保留时间的复制工具），要到下次启动才会被注意到；覆写 `supported()` 的模块必须列出 jar 自带的全部语言，否则自带文件会被当作自定义文件参与识别。
   请使用模块不会自带的名称（如 `zh-myserver`）：不自带所配置官方语言的模块会把它当作自定义名称，日后版本若开始自带你用过的名称，该文件会变成官方文件并被恢复。自定义文件在任何启动、重载、升级或模块更新中都不会被写入、替换、备份或登记。
   模块作者注意：`getLanguageCode()` 现在返回自定义名称所基于的官方语言代码（`zh-myserver` 返回 `zh`），新增的 `getConfiguredLanguage()` 返回配置的名称。
 - Resolving a module's language only after its resources are extracted (#540). Before 6.3.0 the

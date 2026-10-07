@@ -695,16 +695,20 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * The texts the operator's custom language files in this module's {@code lang/} folder hold for {@code key}
      * (#615 item 1; contract-batching decision of 2026-10-06): one entry per custom file that holds the key, in file
      * name order. A custom file is a language file -- {@code .json}, {@code .yml} or {@code .yaml} -- whose name is a
-     * safe language-code token ({@link Localized#isSafeLanguageCode}) that the module's jar does not ship, such as
+     * safe language-code token ({@link Localized#isSafeLanguageCode}) that the module does not ship ({@link
+     * Localized#supported()}, which a module that overrides it must keep equal to its jar's {@code lang/} codes), such as
      * {@code zh-myserver.yml}: the files an operator selects as a custom language (#608). The config layer adds them
      * to the texts it recognises as framework-written comments, so a comment the framework wrote while the operator's
      * custom language was selected keeps following later language switches.
      * <p>
      * Read-only by construction, like {@link #readCustomLanguageFile}: it lists the folder and parses the files, and
-     * never writes, renames, backs up, refreshes or records anything -- no provenance step, no placeholder guard and
-     * nothing logged. A file that cannot be parsed contributes no text (when it is the selected custom language, the
-     * language build has already reported it). A file is parsed again only after its modification time or size
-     * changed, so the texts follow the operator's edits.
+     * never writes, renames, backs up, refreshes or records anything -- no provenance step and no placeholder guard,
+     * and it logs nothing of its own. A file that cannot be parsed contributes no text; for a {@code .yml}/{@code
+     * .yaml} file Bukkit's YAML reader itself logs the parse failure, even when the file is not the selected language
+     * (a documented limitation, gate 2 of PR #636: an unusable file left in {@code lang/} is the operator's to fix or
+     * remove). A file is parsed again only after its modification time or size changed, so the texts follow the
+     * operator's edits; a file replaced by one of the same size with its old modification time kept is noticed at
+     * the next start (documented limitation, same review).
      * <p>
      * Only the operator's CURRENT custom texts are known: no record of earlier renderings is kept (maintainer
      * decision of 2026-10-06, option A). A comment written from a text the operator has since edited in the custom
