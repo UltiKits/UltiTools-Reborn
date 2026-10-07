@@ -1159,6 +1159,16 @@ This section governs the third kind.
   still unattributable is reported as `an unknown caller`, as before, but once per calling package
   rather than once for all of them, so a second one is no longer silenced
   (`ultitools.economy.attribute-caller`). Log wording and frequency only.
+  **Known limitation (#567, maintainer decision of 2026-10-07: documented, not changed).** The main
+  class's own package counts as a root together with its sub-packages, like a declared root. A
+  module whose main class sits in a broad package shared with other code - for example
+  `com.example`, while other plugins or libraries also live under `com.example` - may therefore be
+  named as the caller for code in that package that is not its own, and that use spends the
+  module's one warning for the session. None of the fifteen first-party modules is affected (each
+  declares a scan root equal to its main class's package, measured). **Module authors: put the main
+  class in a package of its own,** such as `com.example.myplugin`, as every first-party module does.
+
+  中文补充：已知限制（#567，维护者 2026-10-07 决定：写入文档，不改代码）。模块主类所在的包连同其子包都算作该模块的归属根，与声明的扫描根相同。主类放在与其他代码共用的宽泛包里（例如 `com.example`，而其他插件或库也在 `com.example` 下）时，该包内并非该模块的代码可能被记到这个模块名下，并用掉该模块本次运行唯一的一次警告。十五个官方模块都不受影响（实测：每个模块声明的扫描根都等于其主类所在的包）。模块作者请把主类放在自己专用的包里（如 `com.example.myplugin`），官方模块都是这样做的。
 - Three internal methods added to published classes for the fixes above, each
   `@ApiStatus.Internal` and public only because the caller is in another package:
   `UltiToolsPlugin#commitLanguageProvenance()` (#460), `PluginManager#getConnectedExternalScanPackages()`
