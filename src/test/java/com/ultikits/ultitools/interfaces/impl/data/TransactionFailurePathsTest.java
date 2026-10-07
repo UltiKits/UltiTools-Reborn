@@ -259,6 +259,17 @@ class TransactionFailurePathsTest {
 
         Backend(String label, String url, boolean pooled,
                 Function<DataSource, AbstractRelationalDataOperator<Row>> factory) {
+            this(label, url, pooled ? 2 : 0, false, factory);
+        }
+
+        /**
+         * @param poolSize       0 for no pool, otherwise the HikariCP pool size
+         * @param managerWrapped whether the transaction manager sees the pool only through a
+         *                       delegating wrapper (the operators' own {@code TransactionAwareDataSource})
+         */
+        Backend(String label, String url, int poolSize, boolean managerWrapped,
+                Function<DataSource, AbstractRelationalDataOperator<Row>> factory) {
+            boolean pooled = poolSize > 0;
             this.label = label;
             raw = new JdbcDataSource();
             raw.setURL(url);
@@ -267,7 +278,7 @@ class TransactionFailurePathsTest {
             if (pooled) {
                 HikariConfig config = new HikariConfig();
                 config.setDataSource(faulty);
-                config.setMaximumPoolSize(2);
+                config.setMaximumPoolSize(poolSize);
                 config.setPoolName("tfp-" + label);
                 pool = new HikariDataSource(config);
                 closeables.add(pool);
@@ -276,7 +287,8 @@ class TransactionFailurePathsTest {
                 pool = null;
                 operatorSource = faulty;
             }
-            manager = new DataSourceTransactionManager(operatorSource);
+            manager = new DataSourceTransactionManager(managerWrapped
+                    ? new TransactionAwareDataSource(operatorSource, () -> null) : operatorSource);
             operator = factory.apply(operatorSource);
             operator.setTransactionManager(manager);
             faulty.faults.events.clear();
@@ -389,6 +401,69 @@ class TransactionFailurePathsTest {
                 assertThat(backend.rows()).as("%s: rows after the next transaction", backend.label).isEqualTo(1);
                 assertThat(backend.operator.getById("r1")).as(backend.label).isNull();
             }
+        }
+    }
+
+    /**
+     * Gate-1 WR-02: with a rollback that keeps failing, HikariCP's own {@code close()} cannot roll
+     * the connection back and returns it to the pool with auto-commit off and the transaction still
+     * open (measured, and read in HikariCP 5.1.0's {@code ProxyConnection#close}). Only eviction keeps
+     * the next borrower out of it. A pool of one makes the next borrower get that same slot.
+     */
+    @Nested
+    @DisplayName("a rollback that keeps failing, under a HikariCP pool of one")
+    class PersistentRollbackFailureUnderAPool {
+
+        private void assertNextBorrowerIsClean(Backend backend) throws Exception {
+            backend.faulty.faults.rollbackFailures.set(0);
+            try (Connection next = backend.pool.getConnection(); Statement statement = next.createStatement()) {
+                assertThat(next.getAutoCommit()).as("%s: next borrower's auto-commit", backend.label).isTrue();
+                statement.executeUpdate("INSERT INTO tfp_row (`id`, `name`) VALUES ('next', 'next')");
+            }
+            assertThat(backend.rows()).as("%s: the next borrower's own insert is stored, and nothing else", backend.label)
+                    .isEqualTo(1);
+            assertThat(backend.operator.getById("r1")).as(backend.label).isNull();
+        }
+
+        @Test
+        @DisplayName("the connection is evicted: nothing stored, and the next borrower does not join the open transaction")
+        void persistentRollbackFailureEvictsTheConnection() throws Exception {
+            List<Backend> backends = new ArrayList<>();
+            backends.add(new Backend("sqlite+pool1", "jdbc:h2:file:" + tempDir.resolve("persist-" + UUID.randomUUID())
+                    .toAbsolutePath() + ";MODE=MySQL", 1, false, source -> new SQLiteDataOperator<>(source, Row.class)));
+            backends.add(new Backend("mysql+pool1", "jdbc:h2:mem:tfp-persist-" + UUID.randomUUID()
+                    + ";DB_CLOSE_DELAY=-1;MODE=MySQL", 1, false, source -> new MysqlDataOperator<>(source, Row.class)));
+            for (Backend backend : backends) {
+                backend.faulty.faults.rollbackFailures.set(Integer.MAX_VALUE);
+
+                Throwable thrown = catchThrowable(() -> backend.operator.transaction((Callable<Object>) () -> {
+                    backend.operator.insert(new Row("r1", "written"));
+                    throw new IllegalStateException("action failed");
+                }));
+
+                assertThat(thrown).as(backend.label).isInstanceOf(IllegalStateException.class);
+                assertThat(backend.rows()).as("%s: rows stored", backend.label).isZero();
+                assertThat(backend.pool.getHikariPoolMXBean().getActiveConnections())
+                        .as("%s: active connections", backend.label).isZero();
+                assertNextBorrowerIsClean(backend);
+            }
+        }
+
+        @Test
+        @DisplayName("the manager sees the pool through a delegating wrapper: the pool is still found and evicts it")
+        void evictionThroughADelegatingWrapper() throws Exception {
+            Backend backend = new Backend("mysql+pool1+wrapped", "jdbc:h2:mem:tfp-wrapped-" + UUID.randomUUID()
+                    + ";DB_CLOSE_DELAY=-1;MODE=MySQL", 1, true, source -> new MysqlDataOperator<>(source, Row.class));
+            backend.faulty.faults.rollbackFailures.set(Integer.MAX_VALUE);
+
+            Throwable thrown = catchThrowable(() -> backend.operator.transaction((Callable<Object>) () -> {
+                backend.operator.insert(new Row("r1", "written"));
+                throw new IllegalStateException("action failed");
+            }));
+
+            assertThat(thrown).isInstanceOf(IllegalStateException.class);
+            assertThat(backend.rows()).as("rows stored").isZero();
+            assertNextBorrowerIsClean(backend);
         }
     }
 

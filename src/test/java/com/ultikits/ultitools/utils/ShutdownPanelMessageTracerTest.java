@@ -304,4 +304,51 @@ class ShutdownPanelMessageTracerTest {
             assertThat(messages(Level.SEVERE)).isEmpty();
         }
     }
+
+    /**
+     * Gate-1 WR-03: the entry drops above stop everything before an inner guard is reached, so these
+     * reach the inner guards directly -- the scheduler refusing in the moment between the check and
+     * the call, and one inner site (the remote command hand-off) while disabling.
+     */
+    @Nested
+    @DisplayName("inner guards: the race branch and one hand-off site")
+    class InnerGuards {
+
+        @Test
+        @DisplayName("the scheduler refuses after the check passed: dropped, null, one FINE line, no WARNING")
+        void refusalBetweenCheckAndSchedulerIsDropped() {
+            Object scheduled = PluginInitiationUtils.scheduleUnlessDisabling("race probe", () -> {
+                throw new IllegalPluginAccessException("Plugin attempted to register task while disabled");
+            });
+
+            assertThat(scheduled).isNull();
+            assertDroppedQuietly("race probe");
+        }
+
+        @Test
+        @DisplayName("control: while accepting, the scheduler call runs and its result is returned")
+        void acceptedSchedulingReturnsTheResult() {
+            Object scheduled = PluginInitiationUtils.scheduleUnlessDisabling("accepted probe", () -> "task");
+
+            assertThat(scheduled).isEqualTo("task");
+            assertThat(at(Level.FINE)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("the remote command hand-off while disabling schedules nothing and logs no WARNING")
+        void remoteCommandHandOffWhileDisablingIsDropped() {
+            CommandExecutionManager manager = new CommandExecutionManager();
+            disabling();
+            JsonObject data = new JsonObject();
+            data.addProperty("command", "say hi");
+            data.addProperty("commandId", "c1");
+
+            manager.executeCommand(data);
+
+            assertThat(disabledScheduling).as("scheduler calls for the disabled plugin").isEmpty();
+            assertThat(messages(Level.WARNING)).isEmpty();
+            assertThat(messages(Level.SEVERE)).isEmpty();
+            assertThat(messages(Level.FINE)).anyMatch(line -> line.contains("remote command"));
+        }
+    }
 }
