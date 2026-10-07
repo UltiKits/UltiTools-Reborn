@@ -293,6 +293,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     @Override
     public void onEnable() {
+        // #621: inbound panel work is accepted again (cleared first in onDisable).
+        PluginInitiationUtils.startAcceptingPanelMessages();
         // #505: recorded module updates are put in place before the class loader opens any module
         // JAR, and decided after the modules load (initPluginModules). Their log lines wait for
         // the language to be loaded.
@@ -800,6 +802,10 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     @Override
     public void onDisable() {
+        // #621: the very first step -- from here an inbound panel message, a completing handshake
+        // and every scheduler hand-off from the WebSocket thread is dropped with one FINE line,
+        // instead of scheduling a task the scheduler refuses for a disabled plugin.
+        PluginInitiationUtils.stopAcceptingPanelMessages();
         // Plugin shutdown logic
         EarlyLogCapture.release();
         ConsoleMirror.uninstall();

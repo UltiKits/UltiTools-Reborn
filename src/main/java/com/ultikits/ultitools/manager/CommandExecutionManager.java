@@ -19,6 +19,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.AccessDecision;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.utils.FrameworkText;
+import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -233,10 +234,12 @@ public class CommandExecutionManager {
             }
 
             // Bukkit.dispatchCommand() MUST run on the main server thread.
-            // Paper's AsyncCatcher will reject async dispatch.
-            Bukkit.getScheduler().runTask(UltiTools.getInstance(), () -> {
-                executeCommandInternal(command, executor, commandId, startTime);
-            });
+            // Paper's AsyncCatcher will reject async dispatch. While UltiTools is disabling the
+            // hand-off is dropped with one FINE line instead (#621).
+            PluginInitiationUtils.scheduleUnlessDisabling("remote command",
+                () -> Bukkit.getScheduler().runTask(UltiTools.getInstance(), () -> {
+                    executeCommandInternal(command, executor, commandId, startTime);
+                }));
 
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkText.format("执行命令时发生错误: %s", e.getMessage()));

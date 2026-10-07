@@ -6,9 +6,12 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 
 import org.bukkit.Bukkit;
+import org.bukkit.plugin.IllegalPluginAccessException;
+import org.jetbrains.annotations.ApiStatus;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
@@ -69,6 +72,15 @@ public class PluginInitiationUtils {
      */
     private static final long SLOW_PANEL_EVENT_HANDLER_THRESHOLD_MILLIS = 20L;
 
+    /**
+     * Whether the framework accepts inbound panel work (UltiTools-Reborn#621). Set by
+     * {@code UltiTools#onEnable} and cleared as the very first step of {@code UltiTools#onDisable},
+     * before any manager shuts down and before the WebSocket is closed. Starts {@code true} so a
+     * framework that was never disabled (and every unit test that does not touch it) behaves as
+     * before. See {@link #isAcceptingPanelMessages()} for the full condition.
+     */
+    private static volatile boolean acceptingPanelMessages = true;
+
     // Round-8 external review finding (16-10, PR #464): the prior comment here claimed "all field
     // declarations precede all methods", but that was false at the time it was written --
     // currentWebSocketClient() and setWebSocketClientForTesting() below were already two methods
@@ -79,6 +91,83 @@ public class PluginInitiationUtils {
     // remain static-method-call / literal expressions with no dependency on declaration order
     // relative to other members (buildInboundHandlers() does not reference any other field in this
     // class; see the Phase 06 Codacy remediation commit for the original verification).
+
+    /**
+     * Starts accepting inbound panel work again; called by {@code UltiTools#onEnable}.
+     *
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public static void startAcceptingPanelMessages() {
+        acceptingPanelMessages = true;
+    }
+
+    /**
+     * Stops accepting inbound panel work (UltiTools-Reborn#621); called as the very first step of
+     * {@code UltiTools#onDisable}. From this moment an inbound panel message, a completing handshake
+     * and every scheduler hand-off reachable from the WebSocket thread is dropped with one FINE line
+     * instead of scheduling a task for a plugin that is being disabled.
+     *
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public static void stopAcceptingPanelMessages() {
+        acceptingPanelMessages = false;
+    }
+
+    /**
+     * Whether inbound panel work may run now: the accepting flag is set, and UltiTools is not being
+     * disabled. Bukkit turns {@code isEnabled()} to {@code false} before it calls
+     * {@code onDisable()}, so the second half covers the moment between the two; Paper refuses every
+     * task of a disabled plugin with {@link IllegalPluginAccessException}. No instance (a unit test
+     * without one) is not "disabling": the hand-off sites below need an instance anyway.
+     *
+     * @return {@code true} when inbound panel work may be dispatched and scheduled
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public static boolean isAcceptingPanelMessages() {
+        if (!acceptingPanelMessages) {
+            return false;
+        }
+        UltiTools instance = UltiTools.getInstance();
+        return instance == null || instance.isEnabled();
+    }
+
+    /**
+     * The one check every scheduler hand-off reachable from the WebSocket thread goes through
+     * (UltiTools-Reborn#621, swept by class: the inbound event publish, the queued config callbacks,
+     * the remote command dispatch, and the monitoring tasks a completing handshake starts). Runs
+     * {@code scheduling} -- exactly one call into the Bukkit scheduler -- only while
+     * {@link #isAcceptingPanelMessages()} holds; otherwise, and when the plugin is disabled between
+     * that check and the scheduler's own check (the scheduler then throws
+     * {@link IllegalPluginAccessException}, the only exception caught here), the work is dropped
+     * with one FINE line naming it. Nothing is lost that a stopping server could still use: the
+     * scheduler would refuse the task anyway.
+     *
+     * @param what       what is being scheduled, for the FINE line
+     * @param scheduling the scheduler call
+     * @param <T>        what the scheduler call returns
+     * @return what {@code scheduling} returned, or {@code null} when the work was dropped
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public static <T> T scheduleUnlessDisabling(String what, Supplier<T> scheduling) {
+        if (!isAcceptingPanelMessages()) {
+            logDroppedWhileDisabling(what);
+            return null;
+        }
+        try {
+            return scheduling.get();
+        } catch (IllegalPluginAccessException disabledMeanwhile) {
+            logDroppedWhileDisabling(what);
+            return null;
+        }
+    }
+
+    private static void logDroppedWhileDisabling(String what) {
+        PanelConnectionLog.log(Level.FINE, "Panel work '" + what + "' dropped: UltiTools is disabling");
+    }
 
     /**
      * The WebSocket client belonging to {@link CloudSession#current()}, or {@code null} if none is
@@ -332,6 +421,13 @@ public class PluginInitiationUtils {
      *                client parameter itself must not be re-read from the session either)
      */
     static void onWebSocketOpened(CloudSession session, UltiPanelWebSocketClient client) {
+        if (!isAcceptingPanelMessages()) {
+            // A handshake completing while UltiTools is disabling (#621) wires nothing: the
+            // subscription, manager wiring and uploads below would only schedule tasks the
+            // scheduler refuses.
+            logDroppedWhileDisabling("websocket handshake");
+            return;
+        }
         PanelConnectionLog.log(Level.FINE, UltiTools.getInstance().i18n("Websocket已连接!"));
 
         // The handshake has genuinely succeeded — this is the only place where the phrase
@@ -783,6 +879,12 @@ public class PluginInitiationUtils {
                 // filter on. This also means the trailing publish call below is never reached.
                 return;
             }
+            if (!isAcceptingPanelMessages()) {
+                // UltiTools is disabling (#621): nothing is dispatched, nothing is scheduled, and
+                // the trailing publish below is not reached. One FINE line names the type.
+                logDroppedWhileDisabling(type);
+                return;
+            }
 
             data = message.has("data") && message.get("data").isJsonObject()
                 ? message.getAsJsonObject("data") : null;
@@ -945,7 +1047,7 @@ public class PluginInitiationUtils {
             if (eventBus == null) {
                 return;
             }
-            Bukkit.getScheduler().runTask(instance, () -> {
+            scheduleUnlessDisabling("PanelMessageEvent " + type, () -> Bukkit.getScheduler().runTask(instance, () -> {
                 // Two long reads and a comparison on the fast path — no allocation, no logging,
                 // until the slow branch below is actually taken.
                 long startNanos = System.nanoTime();
@@ -964,7 +1066,7 @@ public class PluginInitiationUtils {
                             + "drag server tick rate",
                             type, elapsedMillis, SLOW_PANEL_EVENT_HANDLER_THRESHOLD_MILLIS));
                 }
-            });
+            }));
         } catch (Exception e) {
             UltiTools.getInstance().getLogger().log(Level.WARNING,
                 "[PanelMessageEvent] Failed to publish event for type " + type, e);
@@ -1492,7 +1594,9 @@ public class PluginInitiationUtils {
     /** Queues a whole panel config callback; never waits while a caller may hold an entity monitor. */
     private static boolean queueConfigCallback(Runnable callback) {
         if (Bukkit.getServer() == null || Bukkit.isPrimaryThread()) { return false; }
-        Bukkit.getScheduler().runTask(UltiTools.getInstance(), callback);
+        // Dropped while disabling (#621): still "handled", so the caller does not run it inline.
+        scheduleUnlessDisabling("panel config callback",
+            () -> Bukkit.getScheduler().runTask(UltiTools.getInstance(), callback));
         return true;
     }
 
