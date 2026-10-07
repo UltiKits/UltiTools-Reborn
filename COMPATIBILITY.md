@@ -1594,10 +1594,18 @@ Each corrects a declared behaviour the stream did not deliver. The panel protoco
   arrives once, although Paper also copies it into Log4j; lines about the panel connection, the
   transmitter's own lines and the WebSocket library's (`org.java_websocket.*`) are never sent. If the
   server's Log4j configuration uses asynchronous loggers, the mirror is not installed, a console
-  WARNING says so, and the stream carries plugin lines only. A Log4j `ERROR` line with an exception is
+  WARNING says so, and the stream carries plugin lines only. The same holds when Paper's forwarder
+  (`org.bukkit.craftbukkit.util.ForwardLogHandler`) is not on the `java.util.logging` root logger — a
+  fork, a build that relocates CraftBukkit, or something that replaced the forwarder (#583): without it
+  the mirror cannot tell a forwarded plugin line from a console line and would send every plugin line
+  twice, so it is not installed, one console WARNING per server run says the panel will not mirror the
+  console, and the stream carries plugin lines only. A Log4j `ERROR` line with an exception is
   now also reported to UltiPanel's error collection, once. **New `provided` dependency:**
   `org.apache.logging.log4j:log4j-core` (2.24.1, with `log4j-api` 2.24.1 declared alongside), which
   Paper supplies at runtime; it is not shaded, and a module needs nothing new.
+  中文补充：找不到 Paper 的日志转发器（`org.bukkit.craftbukkit.util.ForwardLogHandler`，例如分支服务端、重定位了
+  CraftBukkit 的构建，或转发器被替换）时，控制台镜像不安装：否则每条插件日志都会被推送两次。此时每次服务器运行只记一条
+  WARNING，说明面板不会镜像控制台，日志流只包含插件日志（#583）。
 - **The panel's remote command result no longer claims to carry the command's output.** A panel
   command is typed into the server console: it runs as the server's own console sender, unchanged for
   modules. Paper 1.21.11 replaces any console sender with the real console before running a command,

@@ -49,6 +49,15 @@ import com.ultikits.ultitools.manager.EarlyLogCapture;
  * appender runs on another thread, where neither the forwarder mark nor the re-entry guard holds.
  * The mirror is then not installed and a warning says so; the stream carries the plugin lines only,
  * as before 6.3.0.
+ * <p>
+ * <b>No forwarder, no mirror (fail closed, UltiTools-Reborn#583 F1).</b> The appender can tell a
+ * forwarded plugin line from a console line only through the forwarder it wrapped. When no root
+ * handler has the binary name {@code org.bukkit.craftbukkit.util.ForwardLogHandler} -- a fork, a build that relocates
+ * CraftBukkit, something that replaced the forwarder -- nothing is wrapped, and an appender would
+ * deliver every plugin line a second time (and stream panel-connection lines the panel must never
+ * get back). The mirror is then not installed: {@link #install()} returns {@code false}, nothing is
+ * added to Log4j, and one WARNING per server run says the panel will not mirror the console; the
+ * stream carries the plugin lines only, as before 6.3.0.
  *
  * @since 6.3.0
  */
@@ -75,11 +84,20 @@ public final class ConsoleMirror {
     /** The Log4j context the appender is installed in. Guarded by {@link #LOCK}. */
     private static LoggerContext context;
 
+    /**
+     * Whether the missing-forwarder WARNING was logged in this server run (#583 F1): {@link
+     * #install()} runs again on every panel reconnect, and the outcome cannot change while the
+     * server runs. Guarded by {@link #LOCK}.
+     */
+    private static boolean forwarderMissingWarned;
+
     private ConsoleMirror() {
     }
 
     /**
-     * Installs the mirror; does nothing when it is already installed.
+     * Installs the mirror; does nothing when it is already installed. Not installed -- and
+     * {@code false} returned -- when the server's Log4j uses asynchronous loggers, or when Paper's
+     * forwarder is not on the root logger (fail closed, see the class description).
      *
      * @return whether the mirror is installed afterwards
      */
@@ -111,7 +129,17 @@ public final class ConsoleMirror {
                     + "stream does not mirror the server console and carries plugin lines only.");
             return false;
         }
-        wrapForwarders();
+        if (wrapForwarders() == 0) {
+            // Fail closed (#583 F1): nothing was wrapped, so nothing was changed, and the appender
+            // could not skip forwarded plugin lines. Warned once per server run.
+            if (!forwarderMissingWarned) {
+                forwarderMissingWarned = true;
+                warn("[UltiPanel] Paper's log forwarder (" + FORWARD_LOG_HANDLER + ") was not found on this "
+                        + "server, so the panel will not mirror the server console and its log stream carries "
+                        + "plugin lines only.");
+            }
+            return false;
+        }
         MirrorAppender created = new MirrorAppender();
         created.start();
         LoggerConfig root = configuration.getRootLogger();
@@ -170,14 +198,22 @@ public final class ConsoleMirror {
                 .startsWith("org.apache.logging.log4j.core.async.");
     }
 
-    private static void wrapForwarders() {
+    /**
+     * Wraps every Paper forwarder on the root logger.
+     *
+     * @return how many were wrapped; {@code 0} means none was found and nothing was changed
+     */
+    private static int wrapForwarders() {
         Logger root = Logger.getLogger("");
+        int wrapped = 0;
         for (Handler handler : root.getHandlers()) {
             if (FORWARD_LOG_HANDLER.equals(handler.getClass().getName())) {
                 root.removeHandler(handler);
                 root.addHandler(new ForwardScope(handler));
+                wrapped++;
             }
         }
+        return wrapped;
     }
 
     private static void unwrapForwarders() {
