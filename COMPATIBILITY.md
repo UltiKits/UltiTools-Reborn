@@ -1312,7 +1312,26 @@ This section governs the third kind.
   class rather than quietly performing an unconditional write — a third-party `DataOperator`
   implementation keeps working for every other method and must implement `updateIf` before a caller
   can rely on it. The framework's own operators implement it (see
-  `ultitools.storage.conditional-update` in `FEATURES.md`).
+  `ultitools.storage.conditional-update` in `FEATURES.md`). **A `null` expected value means `IS NULL`**
+  (#640, maintainer rule of 2026-10-06): a condition `WhereCondition.builder().column(c).value(null)`
+  with the default `EQUAL` comparison holds only while the stored column is unset — on SQLite and
+  MySQL `<c> IS NULL` inside the same single `UPDATE`, on JSON an entry whose field is absent or JSON
+  null — so a compare-and-set against a column that was unset when it was read misses, and keeps the
+  other writer's value, when another server filled the column in between. A `null` value under any
+  other comparison, a column the entity does not map (also with a `null` value), a `null` id and a
+  `null` condition are still refused with `DataAccessException`. The meaning belongs to `updateIf`
+  alone: `getAll`, `exist`, `del` and `page` treat a `null` condition value as before. 6.3.0
+  snapshots published earlier in this cycle refused a `null` expected value; no release ever had
+  `updateIf` (`git tag --contains` on the commit that added it is empty), so only a module compiled
+  against such a snapshot that relied on the refusal must change.
+
+  中文补充：`updateIf` 的期望值为 `null` 时表示 `IS NULL`（#640，维护者 2026-10-06 的规则）：默认 `EQUAL` 比较下，
+  `WhereCondition.builder().column(c).value(null)` 只在库中该列仍未设置时成立——SQLite 与 MySQL 在同一条 `UPDATE` 中使用
+  `<c> IS NULL`，JSON 要求该条目的字段不存在或为 JSON null。因此，对读取时尚未设置的列做比较后写入时，若另一台服务器在
+  读取与写入之间写入了该列，本次写入不生效，另一方的值得以保留。其他比较下的 `null`、实体未映射的列（值为 `null` 时也一样）、
+  `null` id 和 `null` 条件仍抛 `DataAccessException`。这一含义只属于 `updateIf`：`getAll`、`exist`、`del`、`page` 对 `null`
+  条件值的处理不变。本周期较早发布的 6.3.0 快照会拒绝 `null` 期望值；没有任何正式版本包含 `updateIf`，因此只有针对这类快照
+  编译、并依赖该拒绝行为的模块需要修改。
 - An update by a non-null id that matches no row writes nothing and says so (#558, maintainer
   decision of 2026-09-29). `update(T)`, `update(column, value, id)` and `updateAll` now log one
   WARNING naming the table and the id each time, on JSON, SQLite and MySQL, and return normally —

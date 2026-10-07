@@ -39,6 +39,7 @@ import com.google.gson.reflect.TypeToken;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
+import com.ultikits.ultitools.entities.Comparison;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
@@ -642,6 +643,11 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
      * {@link #getAll(WhereCondition...)} uses, and replaced, while this operator's lock is held,
      * so no other write through this operator can come between the check and the write. A JSON
      * store belongs to one server; nothing here coordinates two servers.
+     * <p>
+     * A {@code null} expected value under the default {@link Comparison#EQUAL} is satisfied by an
+     * entry whose field is absent or JSON null, and by no present value (#640). This meaning belongs
+     * to this method alone: {@link #getAll(WhereCondition...)} and {@link #del(WhereCondition...)}
+     * are unchanged.
      */
     @Override
     public synchronized boolean updateIf(T entity, WhereCondition... expected) {
@@ -656,7 +662,13 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
         Map<String, Object> map = GSON.fromJson(GSON.toJson(stored), mapType);
         for (WhereCondition condition : conditions) {
-            if (!matches(map, condition, GSON.toJson(condition.getValue()))) {
+            if (condition.getValue() == null) {
+                // IS NULL (#640): evaluableConditions admitted a null value under EQUAL only. Null
+                // fields are not serialised, so a never-set field is absent from the map.
+                if (JsonPathUtil.getByPath(map, resolveColumn(condition.getColumn())) != null) {
+                    return false;
+                }
+            } else if (!matches(map, condition, GSON.toJson(condition.getValue()))) {
                 return false;
             }
         }
@@ -667,9 +679,10 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
 
     /**
      * The non-empty conditions of an {@link #updateIf} call, each checked before anything is
-     * read: a {@code null} condition, a column the entity does not map with {@code @Column}, and a
-     * {@code null} or non-serialisable value are refused with a {@link DataAccessException}, as
-     * the relational operators refuse them. {@link #getAll(WhereCondition...)} would simply match
+     * read: a {@code null} condition, a column the entity does not map with {@code @Column}, a
+     * {@code null} value under any comparison other than {@link Comparison#EQUAL} (under EQUAL it
+     * means "absent or JSON null", #640), and a non-serialisable value are refused with a
+     * {@link DataAccessException}, as the relational operators refuse them. {@link #getAll(WhereCondition...)} would simply match
      * nothing for an unknown column, but a conditional write that can never apply would make the
      * caller's re-read-and-retry loop spin forever.
      */
@@ -693,8 +706,14 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
                                 + " -- it is not among the entity's @Column mappings.");
             }
             if (condition.getValue() == null) {
-                throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
-                        "updateIf cannot compare column '" + column + "' with a null value.");
+                if (condition.getComparison() != Comparison.EQUAL) {
+                    throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
+                            "updateIf can compare column '" + column + "' with a null value only under "
+                                    + "EQUAL (absent or JSON null); " + condition.getComparison()
+                                    + " has no null meaning.");
+                }
+                conditions.add(condition);
+                continue;
             }
             if (!Serializable.class.isAssignableFrom(condition.getValue().getClass())) {
                 throw new DataAccessException(ErrorCode.DATA_QUERY_FAILED, "Query value is not serializable");

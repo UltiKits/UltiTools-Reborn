@@ -191,16 +191,28 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
      * Like {@link #update(BaseDataEntity)}, every mapped field of {@code entity} is written, and
      * {@code onUpdate()} fires on {@code entity} before the fields are read, whether or not the
      * write then applies.
+     * <p>
+     * <b>A {@code null} expected value means {@code IS NULL}</b> under the default
+     * {@link com.ultikits.ultitools.entities.Comparison#EQUAL} comparison: the condition holds only
+     * while the stored column is unset -- on SQLite and MySQL {@code <column> IS NULL} inside the
+     * same single statement, on JSON an entry whose field is absent or JSON null. A compare-and-set
+     * against a column that was unset when it was read therefore misses, and keeps the value, when
+     * another writer filled the column in between. This meaning belongs to {@code updateIf} alone:
+     * {@link #getAll(WhereCondition...)}, {@link #exist(WhereCondition...)},
+     * {@link #del(WhereCondition...)} and {@link #page(int, int, WhereCondition...)} treat a
+     * {@code null} condition value as they always have. (6.3.0 snapshots published before this
+     * change refused a {@code null} expected value; no release did.)
      *
      * @param entity   the new state of the row, carrying the id of the row to write
      * @param expected the conditions the stored row must still meet
      * @return {@code true} if the row matched and was written; {@code false} if no row with that
      *         id matched every condition, in which case nothing was written
      * @throws com.ultikits.ultitools.exceptions.DataAccessException if {@code entity}'s id is
-     *         {@code null}, a condition names a column the entity does not map with
-     *         {@code @Column}, or a condition's value is {@code null} (no backend can compare with
-     *         it; the write could never apply) -- on every backend, so a misspelt column cannot turn
-     *         a retry loop into an endless one
+     *         {@code null}, a condition is {@code null}, a condition names a column the entity does
+     *         not map with {@code @Column} (also when its value is {@code null}), or a condition's
+     *         value is {@code null} under a comparison other than {@code EQUAL} (only {@code EQUAL}
+     *         gives {@code null} a meaning; under any other the write could never apply) -- on every
+     *         backend, so a misspelt column cannot turn a retry loop into an endless one
      * @throws UnsupportedOperationException if this implementation does not provide conditional
      *         writes -- the default, so a third-party implementation is never silently
      *         unconditional
