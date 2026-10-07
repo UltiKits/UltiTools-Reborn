@@ -7,26 +7,41 @@
 # This script IS that check.
 #
 # Detection contract (do not change this without also updating the allowlist and this comment):
-#   A character is in the contract when it is in the Han script, in CJK Symbols and Punctuation
-#   (U+3000-U+303F), or in Halfwidth and Fullwidth Forms (U+FF00-U+FFEF), matched with
-#   `grep -P '[\p{Han}\x{3000}-\x{303f}\x{ff00}-\x{ffef}]'`. The Han script covers the CJK
-#   Unified Ideographs block (U+4E00-U+9FFF), its extensions (Extension A U+3400-U+4DBF and the
+#   A character is in the contract when its Unicode Script property is Han, or it is in CJK
+#   Symbols and Punctuation (U+3000-U+303F), or in Halfwidth and Fullwidth Forms (U+FF00-U+FFEF),
+#   matched with `grep -P '[\p{sc:Han}\x{3000}-\x{303f}\x{ff00}-\x{ffef}]'`. Script=Han covers the
+#   CJK Unified Ideographs block (U+4E00-U+9FFF), its extensions (Extension A U+3400-U+4DBF and the
 #   supplementary-plane blocks from U+20000), the compatibility ideographs (U+F900-U+FAFF,
 #   U+2F800-U+2FA1F) and the radicals.
 #
-#   This is character for character the contract of the module language guards
-#   (I18nSourceScanner#containsCjk in each module: Character.UnicodeScript.HAN || U+3000-U+303F ||
-#   U+FF00-U+FFEF, iterating code points), widened together in 6.3.0 by the maintainer's decision of
-#   2026-09-29 (UltiRemoteBag#44). Before 6.3.0 the range was U+4E00-U+9FFF only, the range of
-#   CONTEXT.md's original 5,210-line measurement.
+#   `\p{sc:Han}`, not `\p{Han}` (UltiTools-Reborn#588): from PCRE2 10.40 a bare `\p{Han}` matches
+#   the Script_Extensions property, which also takes in Script=Common characters used with Han
+#   text -- U+30FB inside the kana block, U+3190-U+319F, U+3220-U+3247 and others (246 code points
+#   measured with PCRE2 10.42). `sc:` reads the Script property only.
+#
+#   The module language guards read the same properties (I18nSourceScanner#containsCjk in each
+#   module: Character.UnicodeScript.HAN || U+3000-U+303F || U+FF00-U+FFEF, iterating code points;
+#   kana is out there too), widened together in 6.3.0 by the maintainer's decision of 2026-09-29
+#   (UltiRemoteBag#44). Same properties does not mean the same code points on every machine: the
+#   Unicode version follows the toolchain -- PCRE2 on the CI runner here, the JDK in the modules --
+#   so an ideograph a newer Unicode version adds (for example Unicode 15's U+31350-U+323AF, known
+#   to JDK 21 and not to PCRE2 10.42) matches on one side before the other. Before 6.3.0 the range
+#   was U+4E00-U+9FFF only, the range of CONTEXT.md's original 5,210-line measurement.
 #
 #   Explicitly OUT of the contract:
 #     - Hiragana / Katakana (kana)            U+3040-U+30FF
+#     - Script=Common characters that only list Han in their script extensions (U+30FB, U+3231 ...)
 #   Halfwidth katakana (U+FF65-U+FF9F) and halfwidth Hangul (U+FFA0-U+FFDC) lie inside U+FF00-U+FFEF
 #   and are matched, exactly as the module guards match them.
 #   Changing the contract is a deliberate edit, not a silent drift — --self-test pins it in both
 #   directions (assertion 4a: kana must not match; 4b and 8: punctuation, full-width forms and one
-#   planted character per added Han range must).
+#   planted character per added Han range must; 9: Script=Common characters with Han in their
+#   script extensions must not, Han ideographs must).
+#
+#   A pattern the local grep cannot compile (grep exit status 2: an unknown property on an old
+#   PCRE2, or no -P support at all) fails the gate instead of passing it: every grep that uses the
+#   contract goes through cjk_grep(), which turns status 2 into an error naming the pattern and
+#   exit status 2, and the pattern is compiled once before any scan (assertion 10).
 #
 #   The script forces a UTF-8 locale before any matching so the range behaves identically on a
 #   runner whose default locale is C/POSIX, where grep's byte-oriented matching would otherwise
@@ -101,7 +116,7 @@
 #   --self-test             Run the fixture self-test (see .github/scripts/testdata/) and exit.
 #
 # Exit codes: 0 = at or under the threshold (or --report-only); 1 = over threshold;
-#             64 = usage error (unknown flag).
+#             2 = grep rejected the contract pattern or could not read a file; 64 = usage error.
 #
 # Wired into maven-ci.yml (see the "CJK Comment/Javadoc Scope Gate" step, plan 08-18) — invoked
 # there with no threshold flag, so the zero-violation default applies. The migration aid
@@ -127,7 +142,28 @@ else
 fi
 
 # The sole detection contract. See the header above before touching this.
-CJK_RANGE='[\p{Han}\x{3000}-\x{303f}\x{ff00}-\x{ffef}]'
+CJK_RANGE='[\p{sc:Han}\x{3000}-\x{303f}\x{ff00}-\x{ffef}]'
+
+# cjk_grep [GREP-OPTIONS...] [FILE...] — `grep -P <options> -e "$CJK_RANGE" -- <files>` (stdin when
+# no file is given), with exit status 2 (the pattern does not compile, or a file cannot be read)
+# turned into a failure of the gate: an error naming the pattern on stderr, then exit 2 from the
+# shell it runs in. Status 0 and 1 (match, no match) are returned as grep gives them. Never call
+# grep with CJK_RANGE directly, and never inside a pipeline: a bare `if grep ...` reads status 2 as
+# "no match", which passes the gate, and an exit inside a pipeline ends only that pipeline's
+# subshell (#588).
+cjk_grep() {
+    local opts=() status=0
+    while [ $# -gt 0 ] && [ "${1#-}" != "$1" ]; do
+        opts+=("$1")
+        shift
+    done
+    grep -P "${opts[@]}" -e "$CJK_RANGE" -- "$@" || status=$?
+    if [ "$status" -ge 2 ]; then
+        echo "ERROR: grep could not run the CJK contract pattern '${CJK_RANGE}' (exit ${status}${1:+, file $*}); the gate fails closed." >&2
+        exit 2
+    fi
+    return "$status"
+}
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
@@ -259,7 +295,7 @@ is_comment_or_javadoc_line() {
 
     if [ "$comment_start" -ge 0 ]; then
         local after="${text:$comment_start}"
-        if printf '%s' "$after" | grep -qP "$CJK_RANGE"; then
+        if cjk_grep -q <<< "$after"; then
             return 0
         fi
     fi
@@ -269,8 +305,17 @@ is_comment_or_javadoc_line() {
 # scan_file PATH — prints "PATH:LINENO:TEXT" for every CJK line at PATH that is not allowlisted
 # and (for .java files) is comment/javadoc content rather than a pure string-literal occurrence.
 scan_file() {
-    local path="$1"
-    grep -nP "$CJK_RANGE" -- "$path" 2>/dev/null | while IFS=: read -r lineno text; do
+    local path="$1" matches status=0 lineno text
+    # A command substitution, not a pipeline: cjk_grep's exit 2 ends the substitution with status
+    # 2, which is passed on here as the gate's failure (#588).
+    matches="$(cjk_grep -n "$path")" || status=$?
+    if [ "$status" -ge 2 ]; then
+        exit 2
+    fi
+    if [ "$status" -eq 1 ]; then
+        return 0
+    fi
+    while IFS=: read -r lineno text; do
         is_allowlisted "$path" "$text" && continue
         case "$path" in
             *.java)
@@ -278,7 +323,7 @@ scan_file() {
                 ;;
         esac
         printf '%s:%s:%s\n' "$path" "$lineno" "$text"
-    done || true
+    done <<< "$matches"
     return 0
 }
 
@@ -366,13 +411,13 @@ run_self_test() {
     # range in both directions against silent drift.
     local kana='ひらがなカタカナ'
     local fullwidth='。、！？（）'
-    if printf '%s\n' "$kana" | grep -P "$CJK_RANGE" > /dev/null; then
+    if cjk_grep -q <<< "$(printf '%s' "$kana")"; then
         echo "FAIL: assertion 4a — kana must not match the contract."
         failures=1
     else
         echo "PASS: assertion 4a — kana must not match the contract."
     fi
-    if printf '%s\n' "$fullwidth" | grep -P "$CJK_RANGE" > /dev/null; then
+    if cjk_grep -q <<< "$(printf '%s' "$fullwidth")"; then
         echo "PASS: assertion 4b — CJK and full-width punctuation match the contract."
     else
         echo "FAIL: assertion 4b — CJK and full-width punctuation match the contract."
@@ -384,13 +429,62 @@ run_self_test() {
     # compatibility ideograph (U+F900), CJK punctuation (U+3001) and a full-width form (U+FF1A).
     local planted
     for planted in $'\u3400' $'\U00020000' $'\uf900' $'\u3001' $'\uff1a'; do
-        if printf 'x %s x\n' "$planted" | grep -P "$CJK_RANGE" > /dev/null; then
+        if cjk_grep -q <<< "$(printf 'x %s x' "$planted")"; then
             echo "PASS: assertion 8 — planted $(printf '%s' "$planted" | od -An -tx1 | tr -d ' \n') matches."
         else
             echo "FAIL: assertion 8 — planted $(printf '%s' "$planted" | od -An -tx1 | tr -d ' \n') matches."
             failures=1
         fi
     done
+
+    # Assertion 9 (#588): the contract reads the Script property, as Character.UnicodeScript.HAN
+    # does in the module guards, not Script_Extensions. Two Script=Common characters with Han in
+    # their script extensions (U+30FB, inside the kana block; U+3231) must not match; two Han
+    # ideographs (U+4E00, U+20000) must. The fixture carries U+30FB and U+3231 beside a Han
+    # control line, so scanning it must yield exactly that one line.
+    for planted in $'\u30fb' $'\u3231'; do
+        if cjk_grep -q <<< "$(printf 'x %s x' "$planted")"; then
+            echo "FAIL: assertion 9 — planted $(printf '%s' "$planted" | od -An -tx1 | tr -d ' \n') must not match (Script=Common)."
+            failures=1
+        else
+            echo "PASS: assertion 9 — planted $(printf '%s' "$planted" | od -An -tx1 | tr -d ' \n') does not match (Script=Common)."
+        fi
+    done
+    for planted in $'\u4e00' $'\U00020000'; do
+        if cjk_grep -q <<< "$(printf 'x %s x' "$planted")"; then
+            echo "PASS: assertion 9 — planted $(printf '%s' "$planted" | od -An -tx1 | tr -d ' \n') matches (Script=Han)."
+        else
+            echo "FAIL: assertion 9 — planted $(printf '%s' "$planted" | od -An -tx1 | tr -d ' \n') matches (Script=Han)."
+            failures=1
+        fi
+    done
+    local script_common_fixture=".github/scripts/testdata/cjk-fixture-script-common.txt"
+    local n9
+    n9=$(scan_file "$script_common_fixture" | grep -c . || true)
+    if [ "$n9" -eq 1 ]; then
+        echo "PASS: assertion 9 — the Script=Common fixture yields only its Han control line."
+    else
+        echo "FAIL: assertion 9 — the Script=Common fixture yields only its Han control line (got ${n9})."
+        failures=1
+    fi
+
+    # Assertion 10 (#588): a pattern the local grep rejects (grep exit status 2) fails the gate
+    # instead of passing it. Simulated by overriding CJK_RANGE in a subshell with a property no
+    # PCRE2 knows; the scan must exit non-zero and the error must name the pattern.
+    local bad_pattern='[\p{NoSuchScriptForSelfTest}]'
+    local err10 status10
+    err10="$(mktemp)"
+    set +e
+    ( CJK_RANGE="$bad_pattern"; scan_file "$violating_fixture" > /dev/null ) 2> "$err10"
+    status10=$?
+    set -e
+    if [ "$status10" -ne 0 ] && grep -qF "$bad_pattern" "$err10"; then
+        echo "PASS: assertion 10 — a pattern grep rejects fails the gate and names the pattern (exit ${status10})."
+    else
+        echo "FAIL: assertion 10 — a pattern grep rejects fails the gate and names the pattern (exit ${status10})."
+        failures=1
+    fi
+    rm -f "$err10"
 
     # Assertions 5-7 (08-17): is_comment_or_javadoc_line()'s three directions. A whole comment
     # line and a same-line trailing comment must still be counted (the string-literal exclusion
@@ -419,6 +513,10 @@ run_self_test() {
 
     return "$failures"
 }
+
+# Compile the contract pattern once before any scan or self-test: a grep that rejects it exits the
+# script with status 2 here, before a single file is read (#588).
+cjk_grep -q <<< 'x' || true
 
 if [ "$SELF_TEST" -eq 1 ]; then
     run_self_test

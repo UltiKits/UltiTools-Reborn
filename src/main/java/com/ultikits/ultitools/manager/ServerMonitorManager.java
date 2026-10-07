@@ -6,6 +6,7 @@ import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.utils.FrameworkText;
+import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.websocket.PanelConnectionLog;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 import org.bukkit.Bukkit;
@@ -281,11 +282,14 @@ public class ServerMonitorManager {
         UltiTools.getInstance().getLogger().log(Level.INFO, FrameworkText.text("启动服务器状态监控"));
 
         // Send the initial status as soon as the WebSocket connection is established
-        Bukkit.getScheduler().runTaskLater(UltiTools.getInstance(), () -> {
-            if (webSocketClient != null && webSocketClient.isConnected()) {
-                sendBatchUpdate();
-            }
-        }, 20L); // Wait 1 second
+        // Every scheduler call here goes through the #621 check: startMonitoring() is reached from
+        // a completing handshake on the WebSocket thread, which may run while UltiTools disables.
+        PluginInitiationUtils.scheduleUnlessDisabling("initial server status",
+            () -> Bukkit.getScheduler().runTaskLater(UltiTools.getInstance(), () -> {
+                if (webSocketClient != null && webSocketClient.isConnected()) {
+                    sendBatchUpdate();
+                }
+            }, 20L)); // Wait 1 second
 
         // Enable the log transmitter's external drain mode (logs will be sent uniformly via
         // batch_update). Defensive only -- the PRIMARY point this is applied from is
@@ -334,15 +338,17 @@ public class ServerMonitorManager {
                 LOG_FLUSH_POLL_INTERVAL_MS, LOG_FLUSH_POLL_INTERVAL_MS, TimeUnit.MILLISECONDS);
 
         // Start the TPS calculation + CPU sampling task (every second)
-        tpsTask = Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), this::updateTpsAndCpu, 0L, 20L);
+        tpsTask = PluginInitiationUtils.scheduleUnlessDisabling("TPS sampling",
+            () -> Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), this::updateTpsAndCpu, 0L, 20L));
 
         // World/player/plugin status sampling task (every 5 seconds, main thread).
         // Deliberately not folded into the 1Hz task above: world.getLoadedChunks() allocates an
         // array holding every loaded chunk, which is not cheap on a large server -- sampling it
         // at 1Hz would inflate that cost by a factor of 5 for no reason. 100 ticks matches
         // today's actual sampling frequency, just moved to the correct thread.
-        snapshotTask = Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), this::refreshStateSnapshot,
-                0L, SNAPSHOT_INTERVAL_TICKS);
+        snapshotTask = PluginInitiationUtils.scheduleUnlessDisabling("state snapshot",
+            () -> Bukkit.getScheduler().runTaskTimer(UltiTools.getInstance(), this::refreshStateSnapshot,
+                0L, SNAPSHOT_INTERVAL_TICKS));
     }
 
     /**

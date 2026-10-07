@@ -44,6 +44,7 @@ import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.TransactionManager;
+import com.ultikits.ultitools.manager.DataSourceTransactionManager;
 import com.ultikits.ultitools.utils.BasicTypeUtil;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
@@ -246,6 +247,9 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      * @return the number of rows given an id
      * @since 6.3.0
      */
+    // PMD.AvoidCatchingThrowable: any failure, an Error included, must roll the assignment back
+    // before the connection is released (#634); it is rethrown unchanged.
+    @SuppressWarnings({"PMD.AvoidCatchingThrowable", "PMD.CloseResource"})
     protected final int backfillNullIds(String rowIdColumn) {
         String select = "SELECT " + rowIdColumn + " AS " + BACKFILL_ROWID + ", `" + tableName + "`.* FROM `"
                 + tableName + "` WHERE `id` IS NULL";
@@ -256,9 +260,16 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
         int shared = 0;
         int alreadyHeld = 0;
         int unusable = 0;
-        try (Connection conn = dataSource.getConnection()) {
+        Connection conn = null;
+        boolean discarded = false;
+        try {
+            conn = dataSource.getConnection();
             boolean autoCommit = conn.getAutoCommit();
             conn.setAutoCommit(false);
+            // #634: auto-commit is restored only after a commit or a rollback that succeeded --
+            // switching it on over an open transaction commits it -- otherwise the connection is
+            // discarded, so a partial assignment is never stored.
+            boolean ended = false;
             try {
                 List<Object> rowIds = new ArrayList<>();
                 List<String> candidates = new ArrayList<>();
@@ -288,17 +299,38 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                     }
                 }
                 conn.commit();
-            } catch (SQLException e) {
-                conn.rollback();
-                throw e;
+                ended = true;
+            } catch (Throwable failure) {
+                try {
+                    conn.rollback();
+                    ended = true;
+                } catch (Throwable rollbackFailure) {
+                    failure.addSuppressed(rollbackFailure);
+                }
+                throw failure;
             } finally {
-                conn.setAutoCommit(autoCommit);
+                if (ended) {
+                    conn.setAutoCommit(autoCommit);
+                } else {
+                    discarded = true;
+                    DataSourceTransactionManager.discardConnection(dataSource, conn);
+                }
             }
         } catch (SQLException e) {
             LOGGER.log(Level.SEVERE, "Could not assign ids to the rows of table '" + tableName
                     + "' that have none; nothing was changed. Rows without an id cannot be updated or deleted "
                     + "until this succeeds on a later start.", e);
             return 0;
+        } finally {
+            // A discarded connection is not touched again: a pool that evicted it would fail on close.
+            if (conn != null && !discarded) {
+                try {
+                    conn.close();
+                } catch (SQLException e) {
+                    LOGGER.log(Level.WARNING, "Failed to close the id backfill connection of table '"
+                            + tableName + "'", e);
+                }
+            }
         }
         int repaired = reported + generated;
         if (repaired > 0) {
@@ -594,6 +626,25 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      */
     private void appendConditions(StringBuilder sql, List<Object> params, WhereCondition[] conditions,
                                    boolean skipEmpty) {
+        appendConditions(sql, params, conditions, skipEmpty, false);
+    }
+
+    /**
+     * {@link #appendConditions(StringBuilder, List, WhereCondition[], boolean)}, with the switch only
+     * {@link #updateIf} turns on (#640): with {@code nullMeansIsNull} a condition with the default
+     * {@link Comparison#EQUAL} and a {@code null} value renders {@code <column> IS NULL} and binds
+     * nothing for it. Off -- the four read and delete builders -- rendering and binding are exactly
+     * as before ({@code <column> = ?} bound to {@code null}, which matches no row). The caller has
+     * already refused a {@code null} value under any other comparison.
+     *
+     * @param sql             the SQL being built
+     * @param params          the parameter list to append bound values to, in SQL order
+     * @param conditions      the conditions to render; must be non-null and non-empty
+     * @param skipEmpty       whether to skip conditions whose {@code isEmpty()} is true
+     * @param nullMeansIsNull whether an EQUAL condition with a {@code null} value means {@code IS NULL}
+     */
+    private void appendConditions(StringBuilder sql, List<Object> params, WhereCondition[] conditions,
+                                   boolean skipEmpty, boolean nullMeansIsNull) {
         boolean first = true;
         for (WhereCondition condition : conditions) {
             if (skipEmpty && condition.isEmpty()) {
@@ -605,6 +656,11 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                 first = false;
             } else {
                 sql.append(" AND ");
+            }
+            if (nullMeansIsNull && condition.getValue() == null
+                    && condition.getComparison() == Comparison.EQUAL) {
+                sql.append(condition.getColumn()).append(" IS NULL");
+                continue;
             }
             sql.append(condition.getColumn()).append(sqlOperatorFor(condition.getComparison()));
             params.add(likeWrappedValue(condition));
@@ -888,7 +944,10 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      * database's affected-row count decides the result, so the check and the write cannot be
      * separated by another writer, on the same server or another one sharing the database.
      * Condition columns pass the same allow-list as every other WHERE clause here, and values are
-     * bound as parameters.
+     * bound as parameters. A {@code null} expected value under the default {@link Comparison#EQUAL}
+     * renders {@code <column> IS NULL} and binds nothing (#640); this meaning belongs to this method
+     * alone -- {@link #getAll(WhereCondition...)}, {@link #exist(WhereCondition...)},
+     * {@link #del(WhereCondition...)} and {@link #page(int, int, WhereCondition...)} are unchanged.
      */
     @Override
     public boolean updateIf(T entity, WhereCondition... expected) {
@@ -909,16 +968,19 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
                     throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
                             "updateIf was given a null condition for table '" + tableName + "'.");
                 }
-                if (!condition.isEmpty() && condition.getValue() == null) {
-                    // `column = NULL` is never true in SQL, so the write could never apply and a
+                if (!condition.isEmpty() && condition.getValue() == null
+                        && condition.getComparison() != Comparison.EQUAL) {
+                    // A null value has a meaning only under EQUAL (IS NULL, #640); `column > NULL`
+                    // or `column LIKE NULL` is never true, so the write could never apply and a
                     // caller's re-read-and-retry loop would spin forever.
                     throw new DataAccessException(ErrorCode.DATA_ENTITY_INVALID,
-                            "updateIf cannot compare column '" + condition.getColumn() + "' with a null value.");
+                            "updateIf can compare column '" + condition.getColumn() + "' with a null value only under "
+                                    + "EQUAL (IS NULL); " + condition.getComparison() + " has no null meaning.");
                 }
                 conditions.add(condition);
             }
         }
-        appendConditions(sql, params, conditions.toArray(new WhereCondition[0]), true);
+        appendConditions(sql, params, conditions.toArray(new WhereCondition[0]), true, true);
         try {
             return queryRunner.update(sql.toString(), params.toArray()) > 0;
         } catch (SQLException e) {
@@ -952,6 +1014,19 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
 
     // ===== Transaction support =====
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Any {@link Throwable} the action throws -- an {@link Error} included (#634) -- rolls the
+     * transaction back and is rethrown as the same instance, so the thread's transaction context is
+     * gone afterwards and the next {@code transaction(...)} on that thread starts its own. When the
+     * rollback itself throws, the action's throwable still reaches the caller and the rollback
+     * failure is attached to it as suppressed. A commit or rollback that fails never ends in an
+     * implicit commit: see {@code DataSourceTransactionManager}.
+     */
+    // PMD.AvoidCatchingThrowable: an Error must roll the transaction back too (#634); it is
+    // rethrown unchanged, never swallowed.
+    @SuppressWarnings({"PMD.AvoidCatchingThrowable", "PMD.AvoidCatchingGenericException"})
     @Override
     public <R> R transaction(Callable<R> action) throws Exception {
         if (transactionManager == null) {
@@ -962,9 +1037,13 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
             R result = action.call();
             transactionManager.commit();
             return result;
-        } catch (Exception e) {
-            transactionManager.rollback();
-            throw e;
+        } catch (Throwable failure) {
+            try {
+                transactionManager.rollback();
+            } catch (Throwable rollbackFailure) {
+                failure.addSuppressed(rollbackFailure);
+            }
+            throw failure;
         }
     }
 

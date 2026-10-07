@@ -2,6 +2,7 @@ package com.ultikits.ultitools.interfaces.impl.data;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -254,8 +255,13 @@ class ConditionalUpdateTest {
             }
         }
 
+        /**
+         * Expectation changed by the maintainer's rule of 2026-10-06 (#640): a null expected value
+         * under the default EQUAL comparison means IS NULL (JSON: absent or JSON null), so it is no
+         * longer refused. The method keeps its name so the history of this assertion stays readable.
+         */
         @Test
-        @DisplayName("a null expected value throws DataAccessException, since no backend can compare it")
+        @DisplayName("a null expected value means IS NULL: on a NULL column the write applies (#640)")
         void nullExpectedValueThrows() throws Exception {
             for (Backend backend : backends()) {
                 resetTable();
@@ -265,11 +271,11 @@ class ConditionalUpdateTest {
                 Account read = operator.getById(account.getId());
                 read.setOwner("claimed");
 
-                assertThatThrownBy(() -> operator.updateIf(read,
+                Throwable thrown = catchThrowable(() -> assertThat(operator.updateIf(read,
                         WhereCondition.builder().column("owner").value(null).build()))
-                        .as(backend.label)
-                        .isInstanceOf(DataAccessException.class);
-                assertThat(operator.getById(account.getId()).getOwner()).as(backend.label).isNull();
+                        .as(backend.label).isTrue());
+                assertThat(thrown).as("%s: updateIf with a null expected value", backend.label).isNull();
+                assertThat(operator.getById(account.getId()).getOwner()).as(backend.label).isEqualTo("claimed");
             }
         }
     }
