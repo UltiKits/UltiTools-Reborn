@@ -288,8 +288,9 @@ from the module catalogue. Start-up and reload rewrite, in the current language,
 lines above a token entry that the framework can identify as its own (a save, an operator change and a panel edit rewrite no
 comment; a key one of them inserts gets its comment): the entry's comment, as a whole
 or as its trailing run of lines, equal byte for byte to what the framework writes (the entry's
-column, `#`, a space and the text) for the token's text in a catalogue the module's jar ships, for the text the
-module resolves now, or for the bare token. Equality is the only test; the same text without the space
+column, `#`, a space and the text) for the token's text in a catalogue the module's jar ships, for its current text
+in one of the operator's custom language files in the module's `lang/` folder (as of 6.3.0, #615; see the entry on
+official language files and custom names below), for the text the module resolves now, or for the bare token. Equality is the only test; the same text without the space
 after `#` or at another column is the operator's. Every other comment line - a note an operator wrote above a token entry, a framework comment the
 operator edited, a literal-entry comment - is kept byte for byte, permanently (maintainer decision of
 2026-10-04, [#604](https://github.com/UltiKits/UltiTools-Reborn/issues/604); supersedes the earlier
@@ -1050,6 +1051,17 @@ This section governs the third kind.
     left in its folder by an older release. And if a later release starts shipping a code you used as
     a custom name, that file becomes an official file and is restored (with a backup) like any other.
     A server-specific suffix such as `zh-myserver` avoids both;
+  - **configuration comments follow language switches** (as of 6.3.0, #615). While a custom
+    language is selected, a comment the framework writes above a setting comes from your custom
+    file's text for it. Such a comment is recognised as the framework's — its text equals your
+    custom file's current text for that setting — so after you switch to another language it is
+    rewritten in that language, like a comment written from an official file, and switching back
+    writes your text again. The framework reads every custom file in the module's `lang/` folder
+    for this, and only reads it. **If you later change that text in your custom file, a comment
+    written from the earlier text is treated as your own**: it is never rewritten and stays in the
+    language it was written in, and no record of earlier texts is kept to recognise it
+    (maintainer decision of 2026-10-06). A comment you wrote yourself that happens to equal your
+    custom file's text for that same setting is treated as the framework's;
   - **your custom file is never written**, replaced, backed up or recorded by any start, reload,
     upgrade or module update;
   - **for module authors**: `UltiToolsPlugin#getLanguageCode()` now returns the official language
@@ -1071,6 +1083,7 @@ This section governs the third kind.
   修改这个副本，然后在 `plugins/UltiTools/config.yml` 中设置 `language: zh-myserver` 并重启或执行 `/ul reload`。这一个设置同时作用于框架和所有模块，没有按模块的设置。
   副本里缺少的文本使用名称开头对应的官方文件（`zh-myserver` 对应 `zh`）补充，所以只需保留要改的条目；没有 `zh-myserver` 文件的模块直接使用官方 `zh`。
   名称不以已有语言代码开头（如 `myserver`）时，缺少的文本使用英文，并记录一行警告。副本中 `%s`/`%d` 个数与官方文本不同、在官方文本也用到的位置上占位符类型不同（如官方为 `%s` 而副本为 `%d`，或反之；位置按 `String.format` 的规则计算，`%%` 不算占位符；6.3.0 起检查，#615，此前这样的条目会在显示消息时格式化失败）、或缺少官方文本中某个 `{TOKEN}` 的条目（自己添加的占位符会保留）（通常是升级后该消息变了），在内存中改用官方文本并记录一行警告（写明文件和键），文件本身不会被修改。
+  配置文件注释会跟随语言切换（6.3.0 起，#615）：选择自定义语言期间，框架在配置项上方写入的注释取自自定义文件中该项的文本；只要注释与自定义文件当前的该项文本完全一致，就被识别为框架写入的注释，切换到其他语言后会改写为该语言，切换回来会再次写成你的文本。框架为此读取模块 `lang/` 目录下的所有自定义文件，只读不写。之后若你在自定义文件里改了这段文本，按旧文本写入的注释视为你自己的内容：永远不会被改写，保持写入时的语言，框架也不保存旧文本的记录（维护者 2026-10-06 决定）。你自己写的、恰好与自定义文件中同一配置项文本一致的注释会被视为框架写入的注释。
   请使用模块不会自带的名称（如 `zh-myserver`）：不自带所配置官方语言的模块会把它当作自定义名称，日后版本若开始自带你用过的名称，该文件会变成官方文件并被恢复。自定义文件在任何启动、重载、升级或模块更新中都不会被写入、替换、备份或登记。
   模块作者注意：`getLanguageCode()` 现在返回自定义名称所基于的官方语言代码（`zh-myserver` 返回 `zh`），新增的 `getConfiguredLanguage()` 返回配置的名称。
 - Resolving a module's language only after its resources are extracted (#540). Before 6.3.0 the

@@ -859,8 +859,9 @@ public abstract class AbstractConfigEntity {
      * lines above it - is the framework's when it equals, as a whole or as its trailing run of lines, the exact
      * form the framework writes (the key's column, {@code "# "} and the text; identification revision 1, 17-64
      * review round 1 R1-02) of the token's text in a catalogue the module's jar ships, of a text an earlier module
-     * version shipped for the entry ({@link ConfigEntry#previousComments()}), of the text the module resolves now,
-     * or of the bare {@code {key}} token. Equality is the only test: no prefix, similarity, spacing
+     * version shipped for the entry ({@link ConfigEntry#previousComments()}), of the text an operator's custom
+     * language file in the module's {@code lang/} folder holds for the token now (#615 item 1), of the text the module
+     * resolves now, or of the bare {@code {key}} token. Equality is the only test: no prefix, similarity, spacing
      * or language tolerance, so a note the operator wrote above the framework's lines, a framework comment the
      * operator edited, or the framework's text written at another column or without the space after {@code #}
      * is never taken in. Of several matching texts the longest run counts, so a whole-comment match comes first.
@@ -886,10 +887,21 @@ public abstract class AbstractConfigEntity {
     /**
      * Every rendering of a token comment the framework may have written above {@code field}'s key: the token's text
      * in each catalogue the module's jar ships (read without any language-file side effect), the texts earlier module
-     * versions shipped for the entry ({@link ConfigEntry#previousComments()}), the text the module resolves now, and
-     * the bare token - each in the byte form {@link ConfigDocument#setFrameworkComment} writes
+     * versions shipped for the entry ({@link ConfigEntry#previousComments()}), the token's text in each of the
+     * operator's custom language files in the module's {@code lang/} folder ({@link
+     * UltiToolsPlugin#customCatalogueTexts}, #615 item 1), the text the module resolves now, and the bare token - each
+     * in the byte form {@link ConfigDocument#setFrameworkComment} writes
      * it, as {@link ConfigDocument#blockCommentAsWritten(List)} reports it. An empty text is not a rendering: the
      * framework writes no comment for it, so it can never identify an operator's bare {@code #} line.
+     * <p>
+     * <b>Why the custom files' texts cannot take in an operator's own comment.</b> While a custom language is
+     * selected, the framework renders a token comment from that file's text for the same key, so a comment equal to
+     * it, above that key, is a text the framework wrote there; the operator supplied it through their own catalogue,
+     * for this very purpose. Only the text for the comment's own key counts, and only as the whole comment or its
+     * trailing run of lines, with no tolerance. A comment written from an earlier version of that text - edited in the
+     * custom file since - equals no current text and stays the operator's: no record of earlier renderings is kept
+     * (maintainer decision of 2026-10-06, option A). The custom files are only read; nothing records, refreshes or
+     * backs them up.
      */
     private List<List<String>> frameworkRenderings(Field field) {
         String token = field.getAnnotation(ConfigEntry.class).comment().trim();
@@ -900,10 +912,17 @@ public abstract class AbstractConfigEntity {
         catch (RuntimeException unavailable) {
             // Without the shipped catalogues only the current text and the bare token are recognised.
         }
+        List<String> custom = null;
+        try { custom = ultiToolsPlugin.customCatalogueTexts(key); }
+        catch (RuntimeException unavailable) {
+            // Without the custom files a comment written from one is kept as the operator's (the pre-#615 outcome).
+        }
         List<String> texts = new ArrayList<>();
         if (shipped != null) { texts.addAll(shipped); }
         // Texts earlier module versions shipped for this entry (maintainer decision 2026-10-04: registered as the framework's).
         texts.addAll(Arrays.asList(field.getAnnotation(ConfigEntry.class).previousComments()));
+        // The operator's custom language files' current texts (#615 item 1): a comment the framework wrote while one was selected.
+        if (custom != null) { texts.addAll(custom); }
         texts.add(resolvedComment(field));
         texts.add(token);
         for (String text : texts) {

@@ -32,6 +32,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
@@ -222,6 +223,12 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     private Language language;
     /** The language catalogues the module's jar ships, read once on first use (see {@link #shippedCatalogueTexts}). */
     private volatile List<Language> shippedCatalogues;
+    /**
+     * The operator's custom language files last read for comment recognition (see {@link #customCatalogueTexts}),
+     * by path, each with the modification time and size it was read at, so a file is parsed again only after it
+     * changed.
+     */
+    private final Map<String, CustomCatalogue> customCatalogues = new ConcurrentHashMap<>();
     @Getter
     private final String version;
     @Getter
@@ -671,6 +678,101 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         catalogues = Collections.unmodifiableList(read);
         shippedCatalogues = catalogues;
         return catalogues;
+    }
+
+    /**
+     * The texts the operator's custom language files in this module's {@code lang/} folder hold for {@code key}
+     * (#615 item 1; contract-batching decision of 2026-10-06): one entry per custom file that holds the key, in file
+     * name order. A custom file is a language file -- {@code .json}, {@code .yml} or {@code .yaml} -- whose name is a
+     * safe language-code token ({@link Localized#isSafeLanguageCode}) that the module's jar does not ship, such as
+     * {@code zh-myserver.yml}: the files an operator selects as a custom language (#608). The config layer adds them
+     * to the texts it recognises as framework-written comments, so a comment the framework wrote while the operator's
+     * custom language was selected keeps following later language switches.
+     * <p>
+     * Read-only by construction, like {@link #readCustomLanguageFile}: it lists the folder and parses the files, and
+     * never writes, renames, backs up, refreshes or records anything -- no provenance step, no placeholder guard and
+     * nothing logged. A file that cannot be parsed contributes no text (when it is the selected custom language, the
+     * language build has already reported it). A file is parsed again only after its modification time or size
+     * changed, so the texts follow the operator's edits.
+     * <p>
+     * Only the operator's CURRENT custom texts are known: no record of earlier renderings is kept (maintainer
+     * decision of 2026-10-06, option A). A comment written from a text the operator has since edited in the custom
+     * file is therefore the operator's own and stays as it is.
+     *
+     * @param key the catalogue key
+     * @return the custom files' texts for {@code key}, possibly empty, never {@code null}
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    List<String> customCatalogueTexts(String key) {
+        List<String> texts = new ArrayList<>();
+        File langDir = new File(resourceFolderPath, "lang");
+        File[] files = langDir.listFiles();
+        if (files == null) {
+            return texts;
+        }
+        Arrays.sort(files);
+        Set<String> shippedCodes = new LinkedHashSet<>(supported());
+        for (File file : files) {
+            Language custom = customCatalogue(langDir, file, shippedCodes);
+            String text = custom == null ? null : custom.getLocalizedText(key);
+            if (text != null && !text.equals(key)) {
+                texts.add(text);
+            }
+        }
+        return texts;
+    }
+
+    /** The parsed custom file {@code file}, or {@code null} when it is not a custom language file or not readable. */
+    private Language customCatalogue(File langDir, File file, Set<String> shippedCodes) {
+        String name = file.getName();
+        for (String extension : LANGUAGE_EXTENSIONS) {
+            if (!name.endsWith(extension)) {
+                continue;
+            }
+            String code = name.substring(0, name.length() - extension.length());
+            if (!Localized.isSafeLanguageCode(code) || shippedCodes.contains(code) || !file.isFile()
+                    || !isWithinDirectory(langDir, file)) {
+                return null;
+            }
+            long modified = file.lastModified();
+            long length = file.length();
+            CustomCatalogue cached = customCatalogues.get(file.getPath());
+            if (cached != null && cached.modified == modified && cached.length == length) {
+                return cached.language;
+            }
+            Language parsed;
+            try {
+                parsed = parseCustomCatalogue(file, extension);
+            } catch (IOException | RuntimeException unreadable) {
+                parsed = null;
+            }
+            customCatalogues.put(file.getPath(), new CustomCatalogue(modified, length, parsed));
+            return parsed;
+        }
+        return null;
+    }
+
+    private static Language parseCustomCatalogue(File file, String extension) throws IOException {
+        if (".json".equals(extension)) {
+            return new Language(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
+        }
+        try (Reader reader = Files.newBufferedReader(file.toPath(), StandardCharsets.UTF_8)) {
+            return Language.fromYaml(reader);
+        }
+    }
+
+    /** A custom language file as last parsed for comment recognition; {@code language} is null when unreadable. */
+    private static final class CustomCatalogue {
+        private final long modified;
+        private final long length;
+        private final Language language;
+
+        private CustomCatalogue(long modified, long length, Language language) {
+            this.modified = modified;
+            this.length = length;
+            this.language = language;
+        }
     }
 
     /**
