@@ -40,8 +40,9 @@ import com.ultikits.ultitools.websocket.PanelResponderRegistry;
  * programmatic EventBus subscriptions, panel responders and completers are released with it and
  * its replacement's, filed under the same name, survive.
  * <p>
- * Registrations a module makes later, outside its load, carry no instance unless it passes one,
- * and keep the name-only behaviour (UltiTools-Reborn#562).
+ * Registrations a module makes later, outside its load, are recorded against the copy listed under
+ * the name they are filed under (UltiTools-Reborn#562 item 1, maintainer row 01:18 of 2026-10-06);
+ * {@code PostLoadRegistrationAttributionTest} covers them.
  */
 @DisplayName("Registrations made while a module loads are recorded against its instance (#506)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
@@ -80,6 +81,7 @@ class PluginManagerLoadScopeAttributionTest {
         ultiToolsStatic.when(UltiTools::getInstance).thenReturn(ultiTools);
         ultiToolsStatic.when(UltiTools::getPluginVersion).thenReturn(CURRENT_API_VERSION);
         pluginManager = new PluginManager();
+        lenient().when(ultiTools.getPluginManager()).thenReturn(pluginManager);
     }
 
     @AfterEach
@@ -146,8 +148,10 @@ class PluginManagerLoadScopeAttributionTest {
     }
 
     @Test
-    @DisplayName("a registration made after the module loaded, without an instance, keeps the name-only behaviour")
-    void registrationAfterLoadStaysNameOnly() throws Exception {
+    @DisplayName("a registration made after the module loaded, without an instance, leaves with the listed copy (#562)")
+    void registrationAfterLoadLeavesWithTheListedCopy() throws Exception {
+        // Changed by #562 item 1 (maintainer row 01:18, contract batching): before, this registration
+        // was filed under the name only and stayed until the last copy of "Dup" unloaded.
         UltiToolsPlugin older = module("1.0.0");
         UltiToolsPlugin newer = module("2.0.0");
         when(older.registerSelf()).thenReturn(true);
@@ -159,8 +163,6 @@ class PluginManagerLoadScopeAttributionTest {
         pluginManager.register(newer);
 
         assertThat(responders.hasResponder("load-scope.later"))
-                .as("outside any load it cannot be told apart from the newer copy's, so it stays").isTrue();
-        pluginManager.unregister(newer);
-        assertThat(responders.hasResponder("load-scope.later")).isFalse();
+                .as("recorded against the older copy, the one listed as Dup, so it leaves with it").isFalse();
     }
 }
