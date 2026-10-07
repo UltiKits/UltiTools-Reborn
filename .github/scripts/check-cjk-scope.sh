@@ -392,6 +392,55 @@ run_self_test() {
         fi
     done
 
+    # Assertion 9 (#588): the contract reads the Script property, as Character.UnicodeScript.HAN
+    # does in the module guards, not Script_Extensions. Two Script=Common characters with Han in
+    # their script extensions (U+30FB, inside the kana block; U+3231) must not match; two Han
+    # ideographs (U+4E00, U+20000) must. The fixture carries U+30FB and U+3231 beside a Han
+    # control line, so scanning it must yield exactly that one line.
+    for planted in $'\u30fb' $'\u3231'; do
+        if printf 'x %s x\n' "$planted" | grep -P "$CJK_RANGE" > /dev/null; then
+            echo "FAIL: assertion 9 — planted $(printf '%s' "$planted" | od -An -tx1 | tr -d ' \n') must not match (Script=Common)."
+            failures=1
+        else
+            echo "PASS: assertion 9 — planted $(printf '%s' "$planted" | od -An -tx1 | tr -d ' \n') does not match (Script=Common)."
+        fi
+    done
+    for planted in $'\u4e00' $'\U00020000'; do
+        if printf 'x %s x\n' "$planted" | grep -P "$CJK_RANGE" > /dev/null; then
+            echo "PASS: assertion 9 — planted $(printf '%s' "$planted" | od -An -tx1 | tr -d ' \n') matches (Script=Han)."
+        else
+            echo "FAIL: assertion 9 — planted $(printf '%s' "$planted" | od -An -tx1 | tr -d ' \n') matches (Script=Han)."
+            failures=1
+        fi
+    done
+    local script_common_fixture=".github/scripts/testdata/cjk-fixture-script-common.txt"
+    local n9
+    n9=$(scan_file "$script_common_fixture" | grep -c . || true)
+    if [ "$n9" -eq 1 ]; then
+        echo "PASS: assertion 9 — the Script=Common fixture yields only its Han control line."
+    else
+        echo "FAIL: assertion 9 — the Script=Common fixture yields only its Han control line (got ${n9})."
+        failures=1
+    fi
+
+    # Assertion 10 (#588): a pattern the local grep rejects (grep exit status 2) fails the gate
+    # instead of passing it. Simulated by overriding CJK_RANGE in a subshell with a property no
+    # PCRE2 knows; the scan must exit non-zero and the error must name the pattern.
+    local bad_pattern='[\p{NoSuchScriptForSelfTest}]'
+    local err10 status10
+    err10="$(mktemp)"
+    set +e
+    ( CJK_RANGE="$bad_pattern"; scan_file "$violating_fixture" > /dev/null ) 2> "$err10"
+    status10=$?
+    set -e
+    if [ "$status10" -ne 0 ] && grep -qF "$bad_pattern" "$err10"; then
+        echo "PASS: assertion 10 — a pattern grep rejects fails the gate and names the pattern (exit ${status10})."
+    else
+        echo "FAIL: assertion 10 — a pattern grep rejects fails the gate and names the pattern (exit ${status10})."
+        failures=1
+    fi
+    rm -f "$err10"
+
     # Assertions 5-7 (08-17): is_comment_or_javadoc_line()'s three directions. A whole comment
     # line and a same-line trailing comment must still be counted (the string-literal exclusion
     # must not over-correct into silently passing real comment debt); a CJK string literal alone
