@@ -42,7 +42,7 @@ class UltiToolsPluginBootLanguageOrderTest {
     }
 
     @Test
-    @DisplayName("a stale en.yml with en.json deleted: boot uses the freshly extracted en.json, same as reload")
+    @DisplayName("a stale en.yml with en.json deleted: boot uses the jar's en.json, extracted at the commit step, same as reload")
     void bootUsesTheFreshlyExtractedJsonAndMatchesTheNextReload() throws Exception {
         fixture.jarEntry("lang/en.json", "{\"greeting\":\"B from the jar's en.json\"}")
                 .jarEntry("lang/en.yml", "greeting: C from the jar's en.yml\n")
@@ -50,6 +50,9 @@ class UltiToolsPluginBootLanguageOrderTest {
 
         UltiToolsPlugin plugin = fixture.construct("1.0.0");
         String atBoot = plugin.i18n("greeting");
+        // #567 item 1 (contract-batching decision of 2026-10-06): lang/ is extracted at the commit step
+        // PluginManager runs once the load gates accepted the module, no longer during construction.
+        plugin.commitLanguageProvenance();
         plugin.reloadSelf();
         String afterReload = plugin.i18n("greeting");
 

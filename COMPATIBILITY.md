@@ -392,8 +392,9 @@ from the module catalogue. Start-up and reload rewrite, in the current language,
 lines above a token entry that the framework can identify as its own (a save, an operator change and a panel edit rewrite no
 comment; a key one of them inserts gets its comment): the entry's comment, as a whole
 or as its trailing run of lines, equal byte for byte to what the framework writes (the entry's
-column, `#`, a space and the text) for the token's text in a catalogue the module's jar ships, for the text the
-module resolves now, or for the bare token. Equality is the only test; the same text without the space
+column, `#`, a space and the text) for the token's text in a catalogue the module's jar ships, for its current text
+in one of the operator's custom language files in the module's `lang/` folder (as of 6.3.0, #615; see the entry on
+official language files and custom names below), for the text the module resolves now, or for the bare token. Equality is the only test; the same text without the space
 after `#` or at another column is the operator's. Every other comment line - a note an operator wrote above a token entry, a framework comment the
 operator edited, a literal-entry comment - is kept byte for byte, permanently (maintainer decision of
 2026-10-04, [#604](https://github.com/UltiKits/UltiTools-Reborn/issues/604); supersedes the earlier
@@ -403,6 +404,19 @@ lists that text in the new `@ConfigEntry(previousComments = {...})` attribute (a
 a comment equal to a listed text, in the same exact written form, is replaced by the current catalogue
 text and follows the language from then on (maintainer decision of 2026-10-04); otherwise it is kept as
 it is. A token entry without any comment gets the framework's.
+
+A framework comment line the operator deletes, keeping its setting, is written again at the next start
+and at the next `/ul reload`, with or without a language switch, at its place above the setting and in the
+language selected at that moment - unless a comment line of the operator's own remains directly above the
+setting: that line is then the setting's whole comment, it is the operator's, and nothing is written above
+it. No value, key or line the operator wrote changes; with a language switch, the setting's other framework
+comments follow the switch as usual. This holds for a comment written from a shipped catalogue and for one
+written from a custom language file (measured in 6.3.0, plan 17-77; pinned by `DeletedFrameworkCommentTest`).
+Deleting the line alone is therefore not a way to remove the comment: to leave a token setting without the
+framework's comment, replace the line with a comment of your own - even a bare `#` - which the framework
+cannot identify as its own, keeps, and writes nothing above. Deleting
+the whole setting, its comment and its key, brings it back at the next start with its default value and its
+comment, after the remaining settings rather than at its old place.
 Catalogue lookup failure keeps the literal token and warns once per entry per load. Comment text
 uses the document's YAML line-break/control-character sanitation, including the panel payload.
 A failed comment-only rewrite does not fail load or discard bound values, logs one warning and marks
@@ -705,7 +719,7 @@ separate crash-safe multi-file transaction limit.
 - 6.3.0 起，声明的设置写成带点的扁平键时就是该设置（#612）：模块声明 `@ConfigEntry(path = "features.chat")`，文件写的是 `features.chat: false` 而不是 `features:` / `chat: false` 时，模块读到 `false`，与 6.2 经 Bukkit 读取时相同；路径的点以任何方式拆分都算（`a.b.c` 写成 `a.b:` / `c: 1` 也可以）。框架不会再为这种设置补一份嵌套写法：启动补键、模块保存、服主命令（`saveOperatorChange`、`saveOperatorMapEntry`）和面板编辑都经写入闸门写在该设置所在的那一行，面板也只按设置路径显示一次。`@ConditionalOnConfig` 改用同一个文档读取器和同一规则读取，不再用 Bukkit 的 `YamlConfiguration`，所以启动补键前后读到的都是模块绑定的值；仍只认布尔值。`isPresentInFile` 同样按此规则判断（扁平点键也算存在）。同一文件里一个设置写了两种形式（例如 `features.chat: false` 和 `features:` / `chat: true`）时，在模块代码运行前拒绝加载该模块（重载则拒绝重载、保留运行中的值），提示说明该设置写了两种形式，只写文件和设置路径，不写值；`@ConditionalOnConfig` 读取的路径即使没有配置实体声明，写了两种形式时同样拒绝该模块的组件扫描。两种形式的值相同也拒绝：在 3,710 个实际配置文件上实测，没有一个文件把同一设置写了两次；若接受相同的两份，之后某次写入只改其中一份，下次启动就会拒绝模块。删掉其中一行再重启即可。此规则只针对声明的设置路径，映射值里的键仍按完整键处理（如上面的 `o.O`）。文件缺少的设置会插入到文件已有的那个节下面，绝不写成该节的第二种形式（自 6.3.0 起，#614）：插入位置是文件以节的形式（映射，或没有值的键）持有的、设置路径最长的那段前缀，其余部分写成嵌套键。例如文件写了 `a.b:` / `c: 3`、模块声明了 `a.b.d`，启动补键会把 `d:` 写在 `a.b:` 下面；之前会另加一份嵌套的 `a:` / `b:` / `d:`，Bukkit 的 `YamlConfiguration` 会把它当作替换了扁平的 `a.b` 节，用 Bukkit 读取自己文件的模块就读不到 `a.b.c` 了。如果同一节的某个声明设置把路径的剩余部分写成节下的一个带点键（如 `a:` / `  b.c: 3`），缺少的 `a.b.d` 会以同样的方式写在它旁边（`  b.d: 2`），绝不另写嵌套的 `b:` / `d:`（维护者对 #614 修复的第一道审查意见所作的决定）；这样的兄弟设置若拆分方式不同，则按下文拒绝插入。如果文件把这个节写了几种形式，设置会插入到其中唯一一个还持有该节其他声明设置的形式下；没有或不止一个形式持有时拒绝插入：WARNING（服主命令则抛 `ConfigWriteRefusedException`）写明文件、设置和节，从不写值，内存中使用声明默认值。服主命令、服主改动和面板编辑插入设置时同样如此。
 - 保存内容、注释文字、键顺序和支持的文件风格。6.3.0 起，所有自动写入（创建不存在的文件、补写缺失的声明键、启动或重载时改写框架自己的令牌注释、注册批次落盘）都经过同一个写入闸门：每次写入声明自己拥有的键，渲染后其余每一行必须与读取时逐字节相同（含换行符、BOM 和末尾换行），且文件仍是读取时的内容；否则不写，警告一次（只列文件、键和原因，不列值），内存中使用声明默认值。这些写入不会规整排版：手工对齐的文件缺少的键会一直缺少，每次启动警告一次，直到服主自己补上。使用锚点、别名或合并键的文件不会被自动写入，每次运行只提示一次。框架新建文件时独占创建，绝不替换期间出现的文件。模块的显式保存同样经过写入闸门，只拥有它要写的设置（#599，见下）；服主操作写入和面板编辑同样经过写入闸门，只写它们改的设置或映射条目，不再规整排版或展开锚点；闸门拒绝时面板收到注明原因的错误，文件不变（#600）。渲染器只能按一种规范排版写回；文件排版与之不同的地方，闸门无法保留，因此对该文件的**每一次**经闸门写入（启动补键、改写注释、保存、服主操作写入、面板编辑）都会拒绝，无论改的是哪个设置。这是有意的：规则不允许为了让写入通过而规整服主的排版（维护者授权下编排者 2026-10-05 的决定）。文件保持原样，内存中使用相应值，警告列出键和原因，并给出要改的行号（“…would change (line N)”或“…shares line N…”）。实测会拒绝的排版（每种都有测试 `OperatorFileWriterLayoutRefusalListTest` 固定）：只含空格的行或文件；值或节键后面的行尾空格；用多个空格对齐的行内注释（`#` 前只有一个空格的会保留）；冒号后多于一个空格、流式方括号内侧的空格（`[ world ]`）；文档开始标记 `---` 或结束标记 `...`；块标量（`|` 或 `>`）后面跟空行；没有末尾换行的文件里，最后一个值是用 `|`、`|+` 或 `>` 写的块标量（在这种文件末尾它的值没有末尾换行，所以会按 `|-` 或 `>-` 写回；这种文件里其它位置的块标量、以及用 `|-` 或 `>-` 写的最后一个值都会保留——但把文件最后一个值写成以换行结尾的文本的写入会被拒绝，并指出那一行；值永远不会被改动）；一节末尾、空行之后、缩进比下一个键更深的注释，以及任何缩进比下面的键更深的注释；同一文件里两种缩进宽度；混用换行符；续到下一行的普通值、值里的制表符、显式 `? key`、显式标签（`!!str`）；只含 BOM 的文件（原因里注明 BOM）；值为 `null` 且带行内注释的条目（`foo: ~  # placeholder`）被写入改成映射时，YAML 库无法在那里写出该注释，写入被拒绝并指出该键（#624，由 `WriteGateRuntimeFailureTest` 固定）。会保留的排版（其它键的写入照常通过）：`#` 前一个空格的行内注释、后面没有空行的块标量（包括紧跟在它后面的注释行：它被读成下面那个键或列表项的注释，与普通值之后的注释相同，[#592](https://github.com/UltiKits/UltiTools-Reborn/issues/592)；修复前 SnakeYAML 的读法会让该文件之后的每次写入都被拒绝，服主删除 UltiMail 的十一个设置之一来重置它时就会遇到）、内侧无空格的流式映射和列表、带引号的值、全文一致的四空格缩进、与键同列的列表项、全文统一的 CRLF 或 LF、没有末尾换行（含有块标量的文件也一样，上面所说的最后一个值除外）、BOM、`#` 后无空格的注释、多个空行、十六进制数、`~` 和空值。使用锚点的文件整体拒绝，不按行。实测：框架和十五个模块自带的 32 个 YAML 文件、维护者测试服务器 `plugins/UltiTools/` 下 3,710 个配置 YAML 文件，经真实闸门插入一个键全部通过；已知唯一会拒绝的出厂文件是 6.0.0 和 6.0.6 的框架 `config.yml`（见下）。改掉警告指出的那一行，下一次写入即可通过。0 字节文件、只有空行的文件、以及只含行首注释（前面可有空行）的文件在闸门看来是空文档：启动时在已有字节之后补入声明的键（没有其它字节需要保留），服主操作写入或面板编辑插入它指定的设置；保存从不插入。只含空格的文件、含缩进注释的纯注释文件和只含 BOM 的文件按排版拒绝（见上），内存使用默认值、模块照常加载；只含制表符、`---` 或 `...` 的文件无法解析，按无法解析的文件保护（永不写入）；块标量后面依次是缩进大于 0 列的注释行、空行、第二个注释行的文件也一样：SnakeYAML 2.2 在这种排版上会在组装节点时抛出异常（[#617](https://github.com/UltiKits/UltiTools-Reborn/issues/617)，未修复）。读取后被删除的文件，服主操作写入或面板编辑会独占地重新创建它，只含指定的设置及其注释。YAML 库在闸门内部抛出的运行时异常（应用写入的修改、渲染文档、为自检重新解析渲染结果时）与闸门无法保留的排版一样按拒绝处理（#624）：不写入；闸门的一条警告列出文件、键、失败的步骤和异常类名，从不含异常消息（消息可能引用文件内容），例如 `the file cannot be written at autoreply.rules.foo: rendering the document failed (EmitterException)`；这些步骤（包括读取文件）中的其它非受检异常同样按拒绝处理；显式写入（`saveOperatorChange`、`saveOperatorMapEntry`、面板编辑）抛出注明键的 `ConfigWriteRefusedException`，自动写入照常在内存中使用声明默认值。库的运行时异常不会再传到调用方，按约定在 `IOException` 时回滚的模块因此与文件保持一致；修复前此类写入会抛出 `EmitterException`。启动时其它非受检异常不会拒绝模块：一条警告列出文件和异常类名，内存中使用声明默认值。语义无变化不写文件，字节和修改时间不变。浮点数按最短可回读十进制判断，不要求二进制精确。
 - 先临时文件、force、原子替换；仅已允许的原子替换/临时创建拒绝才走备份后原地写。备份文件名为 `<文件名>.ultitools-backup-<16 位小写十六进制>`，独占创建；本次运行已为同一文件写过、且内容未变的备份先从当前文件刷新并原子替换，之后才打开目标。写入器不读取、不写入、不删除任何其它文件，服主自己的 `<文件>.bak` 不受影响。6.3.0 起，原地写入在打开目标之后失败（写到一半中断、force 或关闭失败）不再留下写了一半的目标（#622）：框架先把目标放回原样——按原地方式写回目标在此之前的字节，也就是已 force 的备份里的内容（之所以原地写回，是因为这条退路所替代的原子移动已被拒绝）——再删除该备份，然后才报告 `IOException`；因此文件保持写入前的内容，与在该异常时回滚内存改动的模块一致。面板批次以同样方式放回它打开过的每个文件，并报告失败（#582）。若放回本身也失败：一条 SEVERE 列出文件和备份（从不含内容），备份保留且之后的加载不会删除它；写入该文件的配置在重载重新读取文件之前，把它视为读取后已被改动：`isFileModifiedSinceSnapshot()` 为真，服主操作写入和面板编辑以 `ConfigWriteRefusedException`（“the file changed since it was read: …”）拒绝，`save()` 不写入并以一条 WARNING 列出键。处理方法：对比文件与备份，必要时用备份覆盖文件，然后重载。成功的原地写入所用的备份只在成功严格加载当前文件、且备份内容仍与记录一致时才清理；本次运行未写过或已被改动的同类备份保留，并以 INFO 提示一次。除放回刚失败的那次写入外，不从更早的备份还原，不保证多文件崩溃事务。
-- 不能读取、不能解析、非 UTF-8 文件不会被任何实体写入路径覆盖；初次失败用默认值，重载失败保留运行值。成功加载才解除保护。单独 `{key}` 注释按模块当前语言目录更新，但只改框架能认出是自己写的注释行：该项注释整体或末尾连续几行，与框架对模块 jar 自带任一语言目录中的文字、模块当前解析出的文字或原样 `{key}` 写出的形式逐字节相同（该项的缩进、`#`、一个空格加文字；只按相等判断，`#` 后缺空格或缩进不同即视为服主所写）；服主在令牌项上方手写的注释、改过的框架注释和字面注释逐字节永久保留（#604，维护者 2026-10-04 决定，取代此前“令牌项上的服主注释会被替换”）。已不在任何自带目录中的旧版措辞，只有模块在新增的 `@ConfigEntry(previousComments = {...})`（增量属性，默认为空）中登记了该文字时才算框架所写：逐字节相同即替换为当前目录文字并从此随语言切换（维护者 2026-10-04 决定）；未登记的原样保留。面板编辑以服主同意为准，只替换它指定的键，不再发警告（此前会警告一次列出被覆盖的键，#527）。
+- 不能读取、不能解析、非 UTF-8 文件不会被任何实体写入路径覆盖；初次失败用默认值，重载失败保留运行值。成功加载才解除保护。单独 `{key}` 注释按模块当前语言目录更新，但只改框架能认出是自己写的注释行：该项注释整体或末尾连续几行，与框架对模块 jar 自带任一语言目录中的文字、模块当前解析出的文字或原样 `{key}` 写出的形式逐字节相同（该项的缩进、`#`、一个空格加文字；只按相等判断，`#` 后缺空格或缩进不同即视为服主所写）；服主在令牌项上方手写的注释、改过的框架注释和字面注释逐字节永久保留（#604，维护者 2026-10-04 决定，取代此前“令牌项上的服主注释会被替换”）。已不在任何自带目录中的旧版措辞，只有模块在新增的 `@ConfigEntry(previousComments = {...})`（增量属性，默认为空）中登记了该文字时才算框架所写：逐字节相同即替换为当前目录文字并从此随语言切换（维护者 2026-10-04 决定）；未登记的原样保留。面板编辑以服主同意为准，只替换它指定的键，不再发警告（此前会警告一次列出被覆盖的键，#527）。框架写的注释行被服主删除（设置本身保留）时，下次启动和下次 `/ul reload` 都会把它写回原位，用当时所选的语言，无论是否切换了语言；但如果该设置正上方还留着服主自己的注释行，这行就是该设置的全部注释、属于服主，框架不会在上面再写。服主写的值、键和行都不会变；切换语言时，该设置以外的框架注释照常跟随切换。出厂语言文件写的注释和自定义语言文件写的注释都是如此（6.3.0 实测，计划 17-77，由 `DeletedFrameworkCommentTest` 固定）。所以删除注释行去不掉注释：想让令牌设置不带框架注释，请把该行换成自己的注释（哪怕只是一个 `#`），框架认不出是自己的，就会保留，也不会在上面再写。整个设置（注释和键）一起删除时，下次启动会带着默认值和注释写回，位置在剩余设置之后，而不是原来的位置。
 - 6.3.0 起模块 `save()` 只写模块自上次加载或保存以来改过的设置，并且只在文件该处仍是框架上次读到或写入的值、且该值正是模块的起始值（能无转换警告地转换为上次加载或保存时的设置值）时才写（#599，维护者 2026-10-04 决定）。声明为 `Map` 的设置按条目写（按声明的映射类型逐层进入嵌套映射），只设置或删除模块增、改、删的条目（空映射或被模块删空的映射整体写，因为它的键行随首条或末条一起变）；其他值——列表、Bukkit `Location`/`Vector` 等 `ConfigurationSerializable`、类型化映射中本身不是映射的条目值——都算一个值，要么整体写入要么不写，文件里不会出现模块与服主各占一部分的值。声明为 `Map<String, Object>` 或原始 `Map` 的设置只拆一层，其下的普通嵌套映射算一个值。重载合并（复合值或列表冲突时整体采用文件的值，只列键名）、面板编辑复合值内的字段（以框架上次读到的整个值加上该字段的改动为写入单位，且仅当写入时文件仍保存着该整个值；否则拒绝并注明设置名“文件在读取后已被改动，请先重载”，不写入）以及 `saveOperatorMapEntry`（键深入到非映射条目内部时抛 `IllegalArgumentException`，不写入）都按同一规则判断什么算一个值。保存从不补写文件缺少的键、从不改写注释、从不删除模块没删的映射条目。因此服主在磁盘上改过的值、删掉的键、框架无法使用的值或列表元素（`interval: 3O0`、`[60, 30, 10, abc]`）以及 6.2 拆开的映射条目，无论模块是否改了该设置，保存都不会覆盖（#596）。没写成的改动留在内存，每次保存一条警告列出文件和这些键，不列值；被写入闸门拒绝的键由闸门的警告连同原因列出。其余每一行逐字节不变，否则不写；没有可写内容时不碰文件。“文件仍是读取时的内容”比较的是框架上次读到或写入的文本：服主不经 `/ul reload` 直接在磁盘上改过的设置——哪怕值不变，比如把 `y: 64` 改成 `y: 64.0`——之后模块对该设置的改动不会写入（警告中列出），直到重载重新读取文件；没有任何内容丢失，模块的值留在内存中。`save()` 用于服主通过模块要求的改动，或语言切换后重新渲染出厂文字。此前显式保存会把服主改过的值连同警告一起覆盖（#527），该行为在 6.3.0 依维护者“服主写的配置绝不被自动覆盖”的规则直接取消，没有过渡期。
 - 6.3.0 新增两个服主操作写入方法（增量 API）：`saveOperatorChange(String...)` 只写指定的设置（如 `/setspawn` 指定六个 `spawn.location.*`），`saveOperatorMapEntry(String, String...)` 只写映射设置中的一个条目（如 `/autoreply` 的一条规则；文件缺少时插入，模块映射里已删除时从文件删除；每个映射键是完整键，`play.example` 是一个键）。服主的命令即同意：指定键处以模块的值为准，服主手改过的也替换；文件缺少的指定设置连同注释插入。其余一律不写（模块改过但未指定的设置也不写；用 `saveOperatorChange` 指定整个映射设置会整体写入并丢掉服主手加的条目，只改一个条目的命令应使用 `saveOperatorMapEntry`），写入经写入闸门且只拥有这些键。被拒绝时（文件不可读或无法解析、使用锚点、排版无法逐字节保留、准备写入期间文件被改）抛出新的 `com.ultikits.ultitools.config.ConfigWriteRefusedException`（`IOException` 子类），消息和 `getReason()` 说明原因、不含任何值；文件保持原样，内存中的值不变且仍未保存。路径不是已声明的配置项，或对非映射设置调用条目方法，抛 `IllegalArgumentException` 且不写。两者都在实体锁下执行，须在服务器主线程调用。
 - 6.3.0 新增 `saveOperatorMapEntry(EntryPresence, String, String...)`（增量 API，#623）：映射条目的写入可附带存在性条件，`MUST_BE_ABSENT` 用于新建条目的命令（如 `/autoreply add`），`MUST_BE_PRESENT` 用于修改已有条目的命令（如 `/autoreply setkeyword`），模块不必再用自己的解析器另读一次文件。条件在写入闸门据以校验的同一次读取上判断，闸门在替换文件前还会再核对一次这些字节：服主自加载以来手动添加或删除的条目都能看到，此后保存的改动则让闸门以“文件已被改动”拒绝写入。“存在”指该条目的完整键路径在文件中存在（框架读取该设置的位置：嵌套键或扁平的带点键，#612，再接映射键，每个都是完整键）；值为 `null` 的条目算存在；上级键缺失、为 `null`、为空映射 `{}` 或不是映射时算不存在，缺失、空白或只有注释的文件不含任何条目。条件不成立时不写入（字节和修改时间不变），框架只记 FINE 级日志，并抛出新的 `com.ultikits.ultitools.config.ConfigEntryPresenceException`（`ConfigWriteRefusedException` 的子类）：`getRequired()` 给出不成立的条件，`getReason()` 给出条目的键路径，从不含值。条件为 `null` 时抛 `IllegalArgumentException`。原来的两参数重载不变。源码层面的一个影响：第一个参数直接写字面量 `null` 的调用（`saveOperatorMapEntry(null, "path", "key")`）因两个重载都匹配而不再能编译；这一改动二进制兼容，而且这样的调用在新重载出现之前本来就会抛 `IllegalArgumentException`。
@@ -1142,16 +1156,42 @@ This section governs the third kind.
     with no `zh-myserver` file simply uses its official `zh`. A name that starts with no shipped
     code, such as `myserver`, uses English for what it lacks and logs one WARNING. A name with any
     character other than ASCII letters, digits, `_` and `-` is never used as a file name. A value in
-    your copy whose `%s`/`%d` placeholder count differs from the official value, or which lacks a
-    `{TOKEN}` the official value has (tokens of your own are kept) — typically after an upgrade
-    changed that message — is replaced by the official value for that key
-    in memory, with one WARNING naming the file and the key; your file is not changed, so update the
-    value there;
+    your copy whose `%s`/`%d` placeholder count differs from the official value, which puts a
+    different placeholder type at a position the official value also uses (`%d` where it has `%s`,
+    or the reverse; positions are counted as `String.format` counts them, so `%2$s … %1$d` against
+    `%1$d … %2$s` is the same; `%%` is not a placeholder — as of 6.3.0, #615; before, such a value
+    made the message fail to format when it was shown), or which lacks a `{TOKEN}` the official value
+    has (tokens of your own are kept) — typically after an upgrade changed that message, or a typo —
+    is replaced by the official value for that key in memory, with one WARNING naming the file and
+    the key; your file is not changed, so update the value there;
   - **choose a name no module ships.** A module that does not ship the configured official code
     treats it as a custom name: with `language: en`, a module shipping only `zh` reads a `lang/en.*`
     left in its folder by an older release. And if a later release starts shipping a code you used as
     a custom name, that file becomes an official file and is restored (with a backup) like any other.
     A server-specific suffix such as `zh-myserver` avoids both;
+  - **configuration comments follow language switches** (as of 6.3.0, #615). While a custom
+    language is selected, a comment the framework writes above a setting comes from your custom
+    file's text for it. Such a comment is recognised as the framework's — its text equals your
+    custom file's current text for that setting — so after you switch to another language it is
+    rewritten in that language, like a comment written from an official file, and switching back
+    writes your text again. The framework reads every custom file in the module's `lang/` folder
+    for this, and only reads it. **If you later change that text in your custom file, a comment
+    written from the earlier text is treated as your own**: it is never rewritten and stays in the
+    language it was written in, and no record of earlier texts is kept to recognise it
+    (maintainer decision of 2026-10-06). A comment you wrote yourself that happens to equal your
+    custom file's text for that same setting is treated as the framework's. The same holds for a
+    comment written from a custom file you delete or rename: it then equals no current text and
+    stays in the custom wording. To stop using a custom language, switch `language` first (start
+    or `/ul reload`) and remove the file afterwards, or delete those comment lines and the framework
+    writes them again in the current language. A framework comment line you delete is written again
+    in the language selected at that moment, unless a comment line of your own remains directly
+    above the setting (see the configuration comments entry of the config layer section). Known
+    limitations, documented rather than changed (gate 2 of #636): an unparseable custom `.yml`/`.yaml`
+    file left in `lang/` is reported by Bukkit's YAML reader once per start even when it is not the
+    selected language - fix or remove it; a custom file replaced by one of exactly the same size with
+    its old modification time kept (a copy tool that preserves times) is noticed only at the next
+    start; and a module that overrides `supported()` must list every language its jar ships, or a
+    shipped file is read as a custom one for this recognition;
   - **your custom file is never written**, replaced, backed up or recorded by any start, reload,
     upgrade or module update;
   - **for module authors**: `UltiToolsPlugin#getLanguageCode()` now returns the official language
@@ -1172,7 +1212,8 @@ This section governs the third kind.
   自定义方法：在要修改的目录里把官方文件复制为以语言代码加连字符开头的新名称（保留扩展名，例如 `zh.json` → `zh-myserver.json`），
   修改这个副本，然后在 `plugins/UltiTools/config.yml` 中设置 `language: zh-myserver` 并重启或执行 `/ul reload`。这一个设置同时作用于框架和所有模块，没有按模块的设置。
   副本里缺少的文本使用名称开头对应的官方文件（`zh-myserver` 对应 `zh`）补充，所以只需保留要改的条目；没有 `zh-myserver` 文件的模块直接使用官方 `zh`。
-  名称不以已有语言代码开头（如 `myserver`）时，缺少的文本使用英文，并记录一行警告。副本中 `%s`/`%d` 个数与官方文本不同、或缺少官方文本中某个 `{TOKEN}` 的条目（自己添加的占位符会保留）（通常是升级后该消息变了），在内存中改用官方文本并记录一行警告（写明文件和键），文件本身不会被修改。
+  名称不以已有语言代码开头（如 `myserver`）时，缺少的文本使用英文，并记录一行警告。副本中 `%s`/`%d` 个数与官方文本不同、在官方文本也用到的位置上占位符类型不同（如官方为 `%s` 而副本为 `%d`，或反之；位置按 `String.format` 的规则计算，`%%` 不算占位符；6.3.0 起检查，#615，此前这样的条目会在显示消息时格式化失败）、或缺少官方文本中某个 `{TOKEN}` 的条目（自己添加的占位符会保留）（通常是升级后该消息变了），在内存中改用官方文本并记录一行警告（写明文件和键），文件本身不会被修改。
+  配置文件注释会跟随语言切换（6.3.0 起，#615）：选择自定义语言期间，框架在配置项上方写入的注释取自自定义文件中该项的文本；只要注释与自定义文件当前的该项文本完全一致，就被识别为框架写入的注释，切换到其他语言后会改写为该语言，切换回来会再次写成你的文本。框架为此读取模块 `lang/` 目录下的所有自定义文件，只读不写。之后若你在自定义文件里改了这段文本，按旧文本写入的注释视为你自己的内容：永远不会被改写，保持写入时的语言，框架也不保存旧文本的记录（维护者 2026-10-06 决定）。你自己写的、恰好与自定义文件中同一配置项文本一致的注释会被视为框架写入的注释。从被删除或改名的自定义文件写入的注释同理：它不再等于任何当前文本，会保持自定义措辞。要停用自定义语言，请先切换 `language`（启动或 `/ul reload`）再删除文件，或者删掉这些注释行，框架会用当前语言重新写入。被删除的框架注释行会按当时所选的语言写回，除非该设置正上方还留着你自己的注释行（见配置层一节的说明）。已知限制（#636 门禁 2，只写文档）：`lang/` 中无法解析的自定义 `.yml`/`.yaml` 文件即使未被选用，每次启动也会由 Bukkit 的 YAML 读取器报一次错，请修正或删除；被大小完全相同、且保留旧修改时间的文件替换的自定义文件（保留时间的复制工具），要到下次启动才会被注意到；覆写 `supported()` 的模块必须列出 jar 自带的全部语言，否则自带文件会被当作自定义文件参与识别。
   请使用模块不会自带的名称（如 `zh-myserver`）：不自带所配置官方语言的模块会把它当作自定义名称，日后版本若开始自带你用过的名称，该文件会变成官方文件并被恢复。自定义文件在任何启动、重载、升级或模块更新中都不会被写入、替换、备份或登记。
   模块作者注意：`getLanguageCode()` 现在返回自定义名称所基于的官方语言代码（`zh-myserver` 返回 `zh`），新增的 `getConfiguredLanguage()` 返回配置的名称。
 - Resolving a module's language only after its resources are extracted (#540). Before 6.3.0 the
@@ -1181,7 +1222,10 @@ This section governs the third kind.
   fresh copy, beside an older `lang/<code>.yml`, got the stale `.yml` at start-up and the fresh
   `.json` only at the next `/ul reload` — two catalogues from the same files, with nothing logged.
   As of 6.3.0 extraction runs first in both constructors, so the start-up catalogue is the one the
-  next reload resolves (`ultitools.language.boot-resolve-after-extract`).
+  next reload resolves (`ultitools.language.boot-resolve-after-extract`). Since #567 the constructors
+  extract `config/` and `res/` only; a `lang/` file the disk lacks is read from the jar's copy as if it
+  were extracted, and is extracted at the commit step described in the next entry, so the start-up
+  catalogue is the same.
 - Writing a module's language provenance only after the load gates accept it (#460). The
   refresh of an untouched `lang/` file, its provenance record and the #459 replacement used to run
   inside the module's constructor, before `PluginManager` decided whether to keep the candidate — so
@@ -1191,9 +1235,18 @@ This section governs the third kind.
   new `UltiToolsPlugin#commitLanguageProvenance()` right after the gates pass, on both `register`
   entry points. That method is `@ApiStatus.Internal` and public only because `PluginManager` is in
   another package, like `setContext`; a module never needs to call it. A module that registers
-  through `PluginManager#register(UltiToolsPlugin)` gets this automatically. One thing is
-  unchanged: a language file the candidate's jar ships and the disk lacks is still extracted, with
-  its hash, while the candidate is constructed (`ultitools.language.rejected-candidate-untouched`).
+  through `PluginManager#register(UltiToolsPlugin)` gets this automatically. As of 6.3.0 (#567) a
+  language file the candidate's jar ships and the disk lacks is not extracted during construction
+  either: the constructor resolves it from the jar's copy without writing it, and
+  `commitLanguageProvenance()` extracts it, with its hash, once the gates accepted the module — so a
+  rejected candidate writes no language file at all (`ultitools.language.rejected-candidate-untouched`,
+  `ultitools.language.rejected-copy-no-files`). `config/` and `res/` files are still extracted while
+  the candidate is constructed, because its configuration is read right after; a rejected candidate
+  can still leave one the disk lacked. For module authors: an instance constructed but never
+  registered through `PluginManager` (a test, for example) extracts no `lang/` file; call
+  `commitLanguageProvenance()` as `PluginManager` does if it needs them on disk.
+
+  中文补充：6.3.0 起（#567）模块在构造时只解压 `config/` 和 `res/`；磁盘上缺少的 `lang/` 文件在构造时直接按 jar 内的副本解析、不写盘，等加载闸门接受该模块后由 `commitLanguageProvenance()` 解压并记录哈希。因此被闸门拒绝的模块副本（已加载更新版本的旧副本、要求更新框架的模块）不会写入任何语言文件；`config/`、`res/` 仍在构造时解压，被拒绝的副本仍可能留下磁盘原本缺少的这类文件。模块作者注意：构造后从未经 `PluginManager` 注册的实例（例如测试）不会解压 `lang/` 文件，需要时请像 `PluginManager` 一样调用 `commitLanguageProvenance()`。
 - Unwinding a refused External Plugin API registration (#537). When
   `PluginManager#registerExternal` refused a plugin after recording its data-folder scope — the
   command-executor contract check, the config-binding refusal of #531, or a failed container
@@ -1224,6 +1277,17 @@ This section governs the third kind.
   still unattributable is reported as `an unknown caller`, as before, but once per calling package
   rather than once for all of them, so a second one is no longer silenced
   (`ultitools.economy.attribute-caller`). Log wording and frequency only.
+  **Known limitation (#567, maintainer decision of 2026-10-07: documented, not changed).** The main
+  class's own package counts as a root together with its sub-packages, like a declared root. A
+  module whose main class sits in a broad package shared with other code - for example
+  `com.example`, while other plugins or libraries also live under `com.example` - may therefore be
+  named as the caller for code in that package that is not its own, and that use spends the
+  module's one warning for the session. None of the fifteen first-party modules is affected (each
+  has a scan root equal to its main class's package, measured: eleven declare it, and UltiChat,
+  UltiEconomy, UltiKits and UltiMenu declare none and default to it). **Module authors: put the main
+  class in a package of its own,** such as `com.example.myplugin`, as every first-party module does.
+
+  中文补充：已知限制（#567，维护者 2026-10-07 决定：写入文档，不改代码）。模块主类所在的包连同其子包都算作该模块的归属根，与声明的扫描根相同。主类放在与其他代码共用的宽泛包里（例如 `com.example`，而其他插件或库也在 `com.example` 下）时，该包内并非该模块的代码可能被记到这个模块名下，并用掉该模块本次运行唯一的一次警告。十五个官方模块都不受影响（实测：每个模块的扫描根都等于其主类所在的包，其中十一个显式声明，UltiChat、UltiEconomy、UltiKits、UltiMenu 未声明而默认取主类所在的包）。模块作者请把主类放在自己专用的包里（如 `com.example.myplugin`），官方模块都是这样做的。
 - Three internal methods added to published classes for the fixes above, each
   `@ApiStatus.Internal` and public only because the caller is in another package:
   `UltiToolsPlugin#commitLanguageProvenance()` (#460), `PluginManager#getConnectedExternalScanPackages()`
