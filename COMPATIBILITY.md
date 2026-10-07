@@ -1708,9 +1708,23 @@ Each corrects a declared behaviour the stream did not deliver. The panel protoco
   now also reported to UltiPanel's error collection, once. **New `provided` dependency:**
   `org.apache.logging.log4j:log4j-core` (2.24.1, with `log4j-api` 2.24.1 declared alongside), which
   Paper supplies at runtime; it is not shaded, and a module needs nothing new.
+
   中文补充：找不到 Paper 的日志转发器（`org.bukkit.craftbukkit.util.ForwardLogHandler`，例如分支服务端、重定位了
   CraftBukkit 的构建，或转发器被替换）时，控制台镜像不安装：否则每条插件日志都会被推送两次。此时每次服务器运行只记一条
   WARNING，说明面板不会镜像控制台，日志流只包含插件日志（#583）。
+- **From the moment UltiTools starts disabling, panel requests get no reply** (#621). An inbound
+  panel message, a WebSocket handshake that completes, and every task the WebSocket thread would
+  hand to the server scheduler are dropped with one `FINE` line, instead of scheduling work the
+  scheduler refuses for a disabled plugin (before 6.3.0: one WARNING with an
+  `IllegalPluginAccessException` stack in the stop log, and some requests still answered). A panel
+  action sent while the server stops therefore gets no reply, and the panel's own timeout applies.
+  A remote command caught in the moment the stop begins can be logged in the console and in the
+  remote action log as allowed and still never run, with no result reply.
+
+  中文补充：自 UltiTools 开始禁用起，面板请求不再得到回复（#621）。入站面板消息、完成的 WebSocket 握手，以及 WebSocket 线程
+  原本要交给服务器调度器的每个任务，都只记一条 `FINE` 日志后丢弃，而不是为已禁用的插件调度会被拒绝的任务（6.3.0 之前：停服日志中
+  一条带 `IllegalPluginAccessException` 堆栈的 WARNING，且部分请求仍会得到回复）。因此服务器停止期间发出的面板操作得不到回复，
+  以面板自身的超时为准。恰在停服开始那一刻到达的远程命令，可能已在控制台和远程操作日志中记为允许，却不会执行，也没有结果回复。
 - **The panel's remote command result no longer claims to carry the command's output.** A panel
   command is typed into the server console: it runs as the server's own console sender, unchanged for
   modules. Paper 1.21.11 replaces any console sender with the real console before running a command,
