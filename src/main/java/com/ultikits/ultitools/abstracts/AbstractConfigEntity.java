@@ -33,7 +33,9 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonPrimitive;
 import com.google.common.reflect.TypeToken;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.config.ConfigEntryPresenceException;
 import com.ultikits.ultitools.config.ConfigWriteRefusedException;
+import com.ultikits.ultitools.config.EntryPresence;
 import com.ultikits.ultitools.config.document.ConfigDocument;
 import com.ultikits.ultitools.config.document.ConfigLoadResult;
 import com.ultikits.ultitools.config.document.AtomicConfigWriter;
@@ -104,6 +106,14 @@ public abstract class AbstractConfigEntity {
     /** Whether the last load's comment-only write was refused or failed (it has logged its one warning). */
     @Getter(AccessLevel.NONE)
     private boolean commentWriteNotAppliedAtLoad;
+    /**
+     * Whether a write to this file failed part-way and the file could not be put back from its framework backup (#622):
+     * it may hold part of that write, so the entity treats it as changed since it was read and writes nothing to it until
+     * a load reads it again. Deliberately not part of {@link PanelCheckpoint}: rolling an entity's state back never
+     * forgets that its file is in an unknown state.
+     */
+    @Getter(AccessLevel.NONE)
+    private boolean fileNotRestored;
 
     @Getter(AccessLevel.NONE)
     private final Set<String> warnedCommentKeys = ConcurrentHashMap.newKeySet();
@@ -196,7 +206,9 @@ public abstract class AbstractConfigEntity {
      * Use it for a change the operator asked for through the module, or for shipped text the module re-renders after
      * a language switch. A failed write leaves the effective baseline as it was, so the change is still unsaved.
      *
-     * @throws IOException if publishing the verified file fails
+     * @throws IOException if publishing the verified file fails; the file then holds the bytes it held before, put back
+     *                     from its framework backup when an in-place write failed part-way, or - when even that fails -
+     *                     one SEVERE names the file and the kept backup and later saves write nothing until a reload
      */
     public void save() throws IOException {
         synchronized (this) {
@@ -230,6 +242,11 @@ public abstract class AbstractConfigEntity {
          * hold at write time (17-65 route change, R3-01); {@code null} when the file's value is not a precondition.
          */
         private RawEntry required;
+        /**
+         * For an operator's map-entry write made under a condition: whether the entry must already be in the file, or must
+         * not be, on the read the gate verifies against (#623); {@code null} when presence is not a precondition.
+         */
+        private EntryPresence presence;
 
         private ModuleChange(Field field, List<String> leaf, List<String> path, Object mine, RawEntry read) {
             this.field = field; this.leaf = leaf; this.path = path;
@@ -343,6 +360,12 @@ public abstract class AbstractConfigEntity {
                 else { unwritten.add(describeKey(field, leaf)); }
             }
         }
+        if (fileNotRestored) {
+            // The file may hold part of a failed write (#622): it is not what was read, so nothing is written over it.
+            for (ModuleChange change : writable) { unwritten.add(describeKey(change.field, change.leaf)); }
+            if (!unwritten.isEmpty()) { warnNotWritten(unwritten, NOT_RESTORED); }
+            return;
+        }
         List<ModuleChange> onDisk = new ArrayList<>();
         List<ModuleChange> toWrite = new ArrayList<>();
         for (ModuleChange change : writable) {
@@ -356,8 +379,14 @@ public abstract class AbstractConfigEntity {
         }
         if (!toWrite.isEmpty()) {
             // Against exactly the bytes checked above: a file that changed since is abandoned by the gate, named once.
-            OperatorFileWriter.Result result = OperatorFileWriter.write(target, saveOwnership(toWrite, read),
-                    expectedBase(loaded), candidate -> apply(candidate, toWrite));
+            OperatorFileWriter.Result result;
+            try {
+                result = OperatorFileWriter.write(target, saveOwnership(toWrite, read), expectedBase(loaded),
+                        candidate -> apply(candidate, toWrite));
+            } catch (IOException failure) {
+                noteFailedWrite(failure);
+                throw failure;
+            }
             if (result.applied()) {
                 onDisk.addAll(toWrite);
                 acknowledgeWritten(result.readFingerprint(), result.fingerprint(), result.document(), onDisk);
@@ -365,7 +394,7 @@ public abstract class AbstractConfigEntity {
         } else if (!onDisk.isEmpty()) {
             acknowledgeWritten(loaded.fingerprint(), loaded.fingerprint(), read, onDisk);
         }
-        if (!unwritten.isEmpty()) { warnNotWritten(unwritten); }
+        if (!unwritten.isEmpty()) { warnNotWritten(unwritten, null); }
     }
 
     /**
@@ -529,7 +558,11 @@ public abstract class AbstractConfigEntity {
      *                                      nothing is written
      * @throws IllegalStateException        if called before {@code init}, or off the server thread while a server runs
      * @throws ConfigWriteRefusedException  if the configuration write gate refused the write; nothing is written
-     * @throws IOException                  if publishing the verified file fails
+     * @throws IOException                  if publishing the verified file fails; the file then holds the bytes it held
+     *                                      before, put back from its framework backup when an in-place write failed
+     *                                      part-way, or - when even that fails - one SEVERE names the file and the
+     *                                      kept backup, and this configuration treats the file as changed since it
+     *                                      was read: every later write is refused until a reload reads it again
      * @since 6.3.0
      */
     public final void saveOperatorChange(String... entryPaths) throws IOException {
@@ -578,10 +611,67 @@ public abstract class AbstractConfigEntity {
      *                                      is written
      * @throws IllegalStateException        if called before {@code init}, or off the server thread while a server runs
      * @throws ConfigWriteRefusedException  if the configuration write gate refused the write; nothing is written
-     * @throws IOException                  if publishing the verified file fails
+     * @throws IOException                  if publishing the verified file fails; the file then holds the bytes it held
+     *                                      before, put back from its framework backup when an in-place write failed
+     *                                      part-way, or - when even that fails - one SEVERE names the file and the
+     *                                      kept backup, and this configuration treats the file as changed since it
+     *                                      was read: every later write is refused until a reload reads it again
      * @since 6.3.0
      */
     public final void saveOperatorMapEntry(String entryPath, String... mapKeys) throws IOException {
+        writeOperatorMapEntry(null, entryPath, mapKeys);
+    }
+
+    /**
+     * Writes exactly one entry of a map setting, as {@link #saveOperatorMapEntry(String, String...)} does, but only when
+     * the entry's presence in the file is what the operator's command assumes: {@link EntryPresence#MUST_BE_ABSENT} for a
+     * command that creates the entry ({@code /autoreply add <name>}), {@link EntryPresence#MUST_BE_PRESENT} for one that
+     * changes an existing entry ({@code /autoreply setkeyword <name>}). When the condition does not hold, nothing is
+     * written and {@link ConfigEntryPresenceException} tells the caller which condition failed. A module then needs no
+     * second read of the file to decide whether the command may write.
+     * <p>
+     * <b>What "present" means.</b> The entry is present when its whole key path exists in the file. The path is where the
+     * framework reads the setting (its nested keys, or the flat dotted key the operator wrote), followed by
+     * {@code mapKeys}, each one whole key. An entry holding {@code null} is present. An entry is absent when its key, or a
+     * key above it, is missing, {@code null}, an empty map or not a map. A file that is missing, empty or holds only
+     * comments holds no entry (see {@link EntryPresence}).
+     * <p>
+     * <b>Why it cannot overwrite other operator content.</b> As {@link #saveOperatorMapEntry(String, String...)}: the write
+     * owns only that entry's key at the configuration write gate, which refuses any change to another byte of the file.
+     * The condition adds no second read. It is decided on the same read of the file that the gate verifies the edit
+     * against and that the gate checks again immediately before it replaces the file. An entry the operator added or
+     * deleted by hand before that read is seen. An edit saved after it makes the gate refuse the write, because the file
+     * changed. So {@code add} never replaces an entry the operator wrote, and {@code setkeyword} never writes back an
+     * entry the operator deleted.
+     * <p>
+     * A failed condition logs at FINE only, because the caller reports it to the operator. Every other refusal is as for
+     * the two-argument overload: one WARNING names the file and the keys, never a value.
+     *
+     * @param required  whether the entry must already be in the file, or must not be
+     * @param entryPath the {@link ConfigEntry#path()} of a setting declared as a {@link Map}
+     * @param mapKeys   the keys from that map down to the entry, one whole key each; usually just the entry's key
+     * @throws IllegalArgumentException     if {@code required} is {@code null}, or for any reason the two-argument
+     *                                      overload names; nothing is written
+     * @throws IllegalStateException        if called before {@code init}, or off the server thread while a server runs
+     * @throws ConfigEntryPresenceException if the entry's presence in the file is not {@code required}; nothing is written
+     * @throws ConfigWriteRefusedException  if the configuration write gate refused the write; nothing is written
+     * @throws IOException                  if publishing the verified file fails; the file then holds the bytes it held
+     *                                      before, put back from its framework backup when an in-place write failed
+     *                                      part-way, or - when even that fails - one SEVERE names the file and the
+     *                                      kept backup, and this configuration treats the file as changed since it
+     *                                      was read: every later write is refused until a reload reads it again
+     * @since 6.3.0
+     */
+    public final void saveOperatorMapEntry(EntryPresence required, String entryPath, String... mapKeys) throws IOException {
+        if (required == null) {
+            throw new IllegalArgumentException("Name the presence the map entry of '" + entryPath + "' in " + configFilePath
+                    + " must have (EntryPresence.MUST_BE_PRESENT or MUST_BE_ABSENT)");
+        }
+        writeOperatorMapEntry(required, entryPath, mapKeys);
+    }
+
+    /** Both {@code saveOperatorMapEntry} overloads: {@code required} is {@code null} for the unconditional one. */
+    private void writeOperatorMapEntry(EntryPresence required, String entryPath, String... mapKeys) throws IOException {
         requireOperatorWriteThread("saveOperatorMapEntry");
         synchronized (this) {
             Field field = declaredEntry(entryPath);
@@ -603,8 +693,9 @@ public abstract class AbstractConfigEntity {
                         + " reach inside an entry that is not a map; name the entry itself");
             }
             List<String> path = new ArrayList<>(keys(field)); path.addAll(leaf);
-            writeOperatorChanges(Collections.singletonList(
-                    new ModuleChange(field, leaf, path, plainValue(field, true), acknowledgedRaw.get(field))));
+            ModuleChange change = new ModuleChange(field, leaf, path, plainValue(field, true), acknowledgedRaw.get(field));
+            change.presence = required;
+            writeOperatorChanges(Collections.singletonList(change));
         }
     }
 
@@ -631,7 +722,10 @@ public abstract class AbstractConfigEntity {
      */
     private void writeOperatorChanges(List<ModuleChange> changes) throws IOException {
         if (changes.isEmpty()) { return; }
-        OperatorFileWriter.Result result = stageOperatorChanges(changes).commit();
+        OperatorFileWriter.Staged staged = stageOperatorChanges(changes);
+        OperatorFileWriter.Result result;
+        try { result = staged.commit(); }
+        catch (IOException failure) { noteFailedWrite(failure); throw failure; }
         if (!result.applied()) { throw refused(result.reason()); }
         acknowledgeWritten(result.readFingerprint(), result.fingerprint(), result.document(), changes);
     }
@@ -647,6 +741,7 @@ public abstract class AbstractConfigEntity {
         if (lastLoadUnparseable) {
             throw refused("the file could not be read or parsed when it was last loaded; reload a valid file first");
         }
+        if (fileNotRestored) { throw refused(NOT_RESTORED); }
         ConfigLoadResult loaded = ConfigDocument.load(target);
         if (protectFailedLoad(loaded)) { throw refused("the file cannot be read or parsed"); }
         ConfigDocument read = loaded.state() == ConfigLoadResult.State.LOADED ? loaded.document() : ConfigDocument.empty();
@@ -671,6 +766,14 @@ public abstract class AbstractConfigEntity {
                 throw refused(describeKey(change.field, change.leaf) + ": the file changed since it was read; reload first");
             }
         }
+        for (ModuleChange change : changes) {
+            // An operator's map-entry write under a presence condition (#623), decided on this read: the gate below
+            // verifies the edit against exactly these bytes, and checks them again immediately before it replaces the file.
+            if (change.presence != null
+                    && read.contains(change.path) != (change.presence == EntryPresence.MUST_BE_PRESENT)) {
+                throw presenceRefused(change);
+            }
+        }
         List<Field> inserted = new ArrayList<>();
         for (ModuleChange change : changes) {
             if (change.leaf.isEmpty() && !read.contains(change.path)) { inserted.add(change.field); }
@@ -686,6 +789,15 @@ public abstract class AbstractConfigEntity {
 
     private ConfigWriteRefusedException refused(String reason) {
         return new ConfigWriteRefusedException(ultiToolsPlugin.getConfigFile(configFilePath).getAbsolutePath(), reason);
+    }
+
+    /** The refusal of a map-entry write whose presence condition did not hold: logged at FINE only, the caller reports it (#623). */
+    private ConfigEntryPresenceException presenceRefused(ModuleChange change) {
+        String reason = describeKey(change.field, change.leaf) + (change.presence == EntryPresence.MUST_BE_ABSENT
+                ? " is already in the file, so it was not created" : " is not in the file, so it was not written");
+        String file = ultiToolsPlugin.getConfigFile(configFilePath).getAbsolutePath();
+        LOGGER.fine("Configuration file " + file + " was not written: " + reason);
+        return new ConfigEntryPresenceException(file, reason, change.presence);
     }
 
     /**
@@ -725,13 +837,28 @@ public abstract class AbstractConfigEntity {
         return changes;
     }
 
-    private void warnNotWritten(List<String> keys) {
+    /** @param reason why nothing was written, or {@code null} for the save rule's "not the value made from" */
+    private void warnNotWritten(List<String> keys, String reason) {
         // Values are deliberately omitted: any key may hold a credential.
         Logger logger = UltiTools.getInstance() == null ? LOGGER : UltiTools.getInstance().getLogger();
         logger.log(Level.WARNING, "Configuration file " + ultiToolsPlugin.getConfigFile(configFilePath).getAbsolutePath()
-                + ": the module's changes to " + String.join(", ", keys) + " were not written, because the file does"
-                + " not hold the value they were made from there (edited, deleted or unusable since it was read)."
-                + " The file keeps its text; the module's values stay in memory.");
+                + ": the module's changes to " + String.join(", ", keys) + " were not written, because "
+                + (reason == null ? "the file does not hold the value they were made from there (edited, deleted or"
+                        + " unusable since it was read)" : reason)
+                + ". The file keeps its text; the module's values stay in memory.");
+    }
+
+    /** The refusal reason while {@link #fileNotRestored} holds (#622): a phrase without any value. */
+    private static final String NOT_RESTORED = "the file changed since it was read: a write to it failed part-way and"
+            + " could not be undone, so it may hold part of that write; compare it with the backup the server log names,"
+            + " then reload";
+
+    /**
+     * Records that a write to this file could not be put back after it failed part-way (#622), so the file is treated as
+     * changed since it was read until a load reads it again; any other failure left the file holding its previous bytes.
+     */
+    private void noteFailedWrite(IOException failure) {
+        if (failure instanceof AtomicConfigWriter.RestoreFailedException) { fileNotRestored = true; }
     }
 
     private ConverterRegistry registry() { return ConverterRegistry.forModule(ultiToolsPlugin); }
@@ -1214,20 +1341,6 @@ public abstract class AbstractConfigEntity {
     }
 
     /**
-     * Whether the file on disk differs from the file as it was at the last snapshot point (#510) -
-     * in practice, whether someone edited, replaced or removed it while the server was running. The
-     * snapshot is the bytes this entity last bound or wrote itself, never a fresh read, so an
-     * operator's edit stays visible here until the next load.
-     * <p>
-     * Framework-internal: this method is called only by {@code ConfigManager#saveAll()} and is
-     * {@code public} solely because {@code ConfigManager} lives in another package. Module code
-     * should not call it.
-     *
-     * @return {@code true} if the file's fingerprint changed since the last snapshot; {@code false}
-     *         if it did not, or if no snapshot has been taken yet
-     * @since 6.3.0
-     */
-    /**
      * Whether the last attempt to read this configuration's file failed to parse (#510) - in
      * practice, whether the file on disk holds invalid YAML. Nothing writes configuration at server
      * stop as of 6.3.0; the stop report names such a configuration once as left alone, instead of
@@ -1292,9 +1405,30 @@ public abstract class AbstractConfigEntity {
         bindingRanges.computeIfAbsent(key, k -> new ConcurrentHashMap<>()).put(rule, isValid);
     }
 
+    /**
+     * Whether the file on disk differs from the file as it was at the last snapshot point (#510) -
+     * in practice, whether someone edited, replaced or removed it while the server was running. The
+     * snapshot is the bytes this entity last bound or wrote itself, never a fresh read, so an
+     * operator's edit stays visible here until the next load. It is also {@code true} while a write
+     * to the file failed part-way and could not be put back from its framework backup (#622): the
+     * file may then hold part of that write, so it is treated as changed since it was read until a
+     * load reads it again.
+     * <p>
+     * Framework-internal: no production code calls it as of 6.3.0. Its former caller,
+     * {@code ConfigManager#saveAll()}, no longer writes or compares anything (#510, #599); the
+     * method is kept for the framework's own regression tests of the snapshot. It is {@code public}
+     * only because that former caller lives in another package. Module code should not call it.
+     *
+     * @return {@code true} if the file's fingerprint changed since the last snapshot, or a write to
+     *         it could not be put back; {@code false} if neither, or if no snapshot has been taken yet
+     * @since 6.3.0
+     */
     @ApiStatus.Internal
     public final boolean isFileModifiedSinceSnapshot() {
         synchronized (this) {
+            if (fileNotRestored) {
+                return true;
+            }
             String fingerprint = savedFileFingerprint;
             if (fingerprint == null || ultiToolsPlugin == null) {
                 return false;
@@ -1452,6 +1586,8 @@ public abstract class AbstractConfigEntity {
         }
         validateLoaded(initialize);
         document = next;
+        // This load read the file as it is now; a write below that cannot be put back sets this again (#622).
+        fileNotRestored = false;
         Map<Field, Object> inserted = new LinkedHashMap<>();
         if (initialize) {
             for (Field field : missing) {
@@ -1464,6 +1600,7 @@ public abstract class AbstractConfigEntity {
             // On a refusal the declared defaults run in memory and the raw acknowledgement keeps the keys absent.
             OperatorFileWriter.Result result = null;
             try { result = writeInitialization(inserted, bound, next); }
+            catch (IOException failure) { noteFailedWrite(failure); throw failure; }
             catch (RuntimeException failure) { warnGateFailure("insert the missing keys into", failure); }
             if (result != null && result.applied()) { document = result.document(); bound = result.fingerprint(); }
         } else if (deferInitialization) {
@@ -1583,6 +1720,7 @@ public abstract class AbstractConfigEntity {
                     owned.build(), expectedBase(loaded), this::updateTokenComments);
             return result;
         } catch (IOException | RuntimeException failure) {
+            if (failure instanceof IOException) { noteFailedWrite((IOException) failure); }
             LOGGER.warning("Cannot rewrite comments in " + configFilePath + ": "
                     + failure.getClass().getSimpleName() + "; the file keeps its comments");
             return null;
@@ -1624,7 +1762,7 @@ public abstract class AbstractConfigEntity {
                 "refresh comments " + configFilePath)) { return; }
         synchronized (this) {
             if (document == null || ultiToolsPlugin == null || lastLoadUnparseable || pendingInitialization != null
-                    || commentWriteNotAppliedAtLoad) {
+                    || commentWriteNotAppliedAtLoad || fileNotRestored) {
                 return;
             }
             ConfigLoadResult fresh = ConfigDocument.load(ultiToolsPlugin.getConfigFile(configFilePath).toPath());
@@ -1759,7 +1897,7 @@ public abstract class AbstractConfigEntity {
             if (pending == null || lastLoadUnparseable) { return; }
             OperatorFileWriter.Result result;
             try { result = writeInitialization(pending.inserted, pending.expected, pending.read); }
-            catch (IOException failure) { lastLoadUnparseable = true; throw failure; }
+            catch (IOException failure) { lastLoadUnparseable = true; noteFailedWrite(failure); throw failure; }
             catch (RuntimeException failure) {
                 warnGateFailure("insert the missing keys into", failure);
                 document = pending.read;
@@ -2008,7 +2146,9 @@ public abstract class AbstractConfigEntity {
          */
         public void commit() throws IOException {
             if (staged == null) { return; }
-            OperatorFileWriter.Result result = staged.commit();
+            OperatorFileWriter.Result result;
+            try { result = staged.commit(); }
+            catch (IOException failure) { noteFailedWrite(failure); throw failure; }
             if (!result.applied()) { throw refused(result.reason()); }
             committed = result;
         }
@@ -2033,6 +2173,8 @@ public abstract class AbstractConfigEntity {
             synchronized (AbstractConfigEntity.this) {
                 try {
                     if (staged != null) { staged.restore(); }
+                } catch (IOException failure) {
+                    noteFailedWrite(failure); throw failure;
                 } finally {
                     before.restore(); discard();
                 }
@@ -2667,17 +2809,20 @@ public abstract class AbstractConfigEntity {
         synchronized (this) {
             registry().checkEntityFields(getClass(), ultiToolsPlugin.getPluginName(), configFilePath);
             PanelCheckpoint before = new PanelCheckpoint();
+            boolean notRestored = fileNotRestored;
             boolean loaded = false;
             try {
                 load(false);
                 loaded = true;
             } finally {
                 // Restore on every failure, unchecked errors included, then let it propagate. A file
-                // found unreadable or unparseable stays protected until a later successful load (#589).
+                // found unreadable or unparseable stays protected until a later successful load (#589),
+                // and a file a failed write could not put back stays so until then too (#622).
                 if (!loaded) {
                     boolean protectFile = lastLoadUnparseable;
                     before.restore();
                     lastLoadUnparseable |= protectFile;
+                    fileNotRestored |= notRestored;
                 }
             }
         }
