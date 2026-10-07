@@ -4,12 +4,16 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Logger;
 
 import org.bukkit.command.Command;
 import org.bukkit.entity.Player;
+import org.jetbrains.annotations.ApiStatus;
 
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.command.CmdParam;
@@ -59,6 +63,8 @@ public class TabCompletionManager {
      */
     public static final String TOGGLE = "@toggle";
     
+    private static final Logger LOGGER = Logger.getLogger(TabCompletionManager.class.getName());
+
     private static volatile TabCompletionManager instance;
     
     /**
@@ -278,6 +284,54 @@ public class TabCompletionManager {
             }
         }
         return removed;
+    }
+
+    /**
+     * Releases every completer key registered in a scope that named {@code ownerInstance} and
+     * returns the action that gives them back (#562). {@code PluginManager} calls this for a loaded
+     * copy of a module just before a newer copy of the same module builds its container and runs
+     * {@code registerSelf()}, so the newer copy registers its keys into a registry that holds none
+     * of the older copy's. When the newer copy fails to load, the framework first releases what the
+     * failed copy registered and then runs the returned action, which puts each released completer
+     * back under its key, unchanged; when the newer copy loads, the action is dropped and the older
+     * copy is unloaded. Running the action more than once restores nothing more.
+     * <p>
+     * As in the owner sweeps, a key is removed only while it still holds the registration this call
+     * matched, and put back only while it is free: a key registered again in between keeps its new
+     * completer, and one WARNING names the key -- a copy never takes over another copy's key.
+     * Intended for {@code PluginManager}, not for module authors.
+     *
+     * @param ownerInstance the loaded copy being superseded; {@code null} releases nothing
+     * @return the action that restores what this call released
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public Runnable releaseForSupersede(UltiToolsPlugin ownerInstance) {
+        Map<String, Registration> released = new LinkedHashMap<>();
+        if (ownerInstance != null) {
+            for (Map.Entry<String, Registration> entry : completers.entrySet()) {
+                Registration registration = entry.getValue();
+                if (registration.ownerInstance == ownerInstance && completers.remove(entry.getKey(), registration)) {
+                    released.put(entry.getKey(), registration);
+                }
+            }
+        }
+        AtomicBoolean pending = new AtomicBoolean(true);
+        return () -> {
+            if (pending.compareAndSet(true, false)) {
+                restore(released);
+            }
+        };
+    }
+
+    private void restore(Map<String, Registration> released) {
+        for (Map.Entry<String, Registration> entry : released.entrySet()) {
+            Registration existing = completers.putIfAbsent(entry.getKey(), entry.getValue());
+            if (existing != null && existing != entry.getValue()) {
+                LOGGER.warning(String.format("Tab-completion key '%s' was registered again while module '%s' was being"
+                        + " replaced; the new completer stays.", entry.getKey(), entry.getValue().owner));
+            }
+        }
     }
 
     /**

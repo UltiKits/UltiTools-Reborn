@@ -26,7 +26,7 @@ import com.google.gson.reflect.TypeToken;
 
 /**
  * Records the SHA-256 digest of every resource file {@link
- * com.ultikits.ultitools.abstracts.UltiToolsPlugin#saveResources()} extracts, so a later boot can
+ * com.ultikits.ultitools.abstracts.UltiToolsPlugin#saveResources(boolean)} extracts, so a later boot can
  * distinguish "the operator edited this file" from "an old jar extracted this and nobody has
  * touched it since" (#441, D-05/D-06/D-07).
  * <p>

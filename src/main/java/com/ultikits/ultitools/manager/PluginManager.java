@@ -174,6 +174,16 @@ public class PluginManager {
      */
     private final ThreadLocal<Map.Entry<String, Class<? extends UltiToolsPlugin>>> moduleBeingRegistered =
             new ThreadLocal<>();
+
+    /**
+     * Incoming copy -&gt; the actions that give the copies it supersedes back their registrations
+     * (#562). Filled by {@link #releaseSupersededRegistrations(UltiToolsPlugin)} before the incoming
+     * copy's container refresh, emptied by {@link #discardSupersededRegistrations(UltiToolsPlugin)}
+     * when it activates or by {@link #restoreSupersededRegistrations(UltiToolsPlugin)} when it fails.
+     * Keyed by identity: two copies of one module may be equal to nothing but themselves.
+     */
+    private final Map<UltiToolsPlugin, List<Runnable>> supersedeHandovers =
+            Collections.synchronizedMap(new IdentityHashMap<>());
     private ClassLoader classLoader;
     @Getter
     private TaskManager taskManager;
@@ -448,8 +458,12 @@ public class PluginManager {
             // registerBukkit flag fork plan 04-08 removed made registerBukkit itself identical
             // on both paths too.
             SimpleContainer pluginContext = new SimpleContainer();
+            // #562: the copies this one supersedes give up their registrations before it builds
+            // its container and registers; restored below if it does not load.
+            releaseSupersededRegistrations(plugin);
             assemblePluginContainer(pluginContext, plugin, plugin.getClass(), classLoader);
         } catch (Exception | Error e) {
+            restoreSupersededRegistrations(plugin);
             releaseConfigEntities(plugin);
             logPluginInitializationFailure(plugin.getClass(), plugin.getPluginName(), e);
             return false;
@@ -589,6 +603,35 @@ public class PluginManager {
     }
 
     /**
+     * The module copy a registration filed under {@code moduleName} only belongs to when it is made
+     * outside every module's load scope -- for example from a module's scheduled task after it
+     * loaded (#562 item 1): the copy listed as loaded under that name; when more than one copy is
+     * listed under it, the first listed, the one loaded earliest. A copy the framework is still
+     * loading is not listed yet; what it registers on the loading thread is attributed by its load
+     * scope instead, which the registries consult first. So while a newer copy replaces an older
+     * one, a registration made by name from any other thread belongs to the older copy and leaves
+     * with it. Not part of the module-facing API; public only because the registries live in other
+     * packages.
+     *
+     * @param moduleName the name the registration is filed under; {@code null} matches nothing
+     * @return the listed copy, or {@code null} when no copy is listed under {@code moduleName}, in
+     *         which case the registration stays filed under the name only, as before 6.3.0
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public UltiToolsPlugin findRegistrationOwner(String moduleName) {
+        if (moduleName == null) {
+            return null;
+        }
+        for (UltiToolsPlugin listed : pluginList) {
+            if (moduleName.equals(listed.getPluginName())) {
+                return listed;
+            }
+        }
+        return null;
+    }
+
+    /**
      * Logs one refusal WARNING for a module that failed to initialize, surfacing the innermost
      * {@link UltiToolsException}'s message (module/file/field/value/constraint, per e.g.
      * {@code ConfigurationException.validationFailed(...)}) instead of an outer wrapper's
@@ -669,9 +712,12 @@ public class PluginManager {
      * The three registries a module can file registrations in by name -- tab-completion
      * completers, EventBus handlers and panel responders -- are released by instance first: every
      * registration recorded against this module instance goes, whatever name it was filed under.
-     * Registrations filed under the module's name only are then released by name, unless another
-     * loaded copy of the module shares that name; they cannot be told apart from that copy's, so
-     * they stay until the last copy of the name is unloaded (#506).
+     * As of 6.3.0 that covers what the module registered while it loaded (its load scope, #506)
+     * and what was registered by its name after it loaded, while it was the copy listed under that
+     * name (#562 item 1, see {@link #findRegistrationOwner(String)}). Registrations filed under the
+     * module's name only -- made while no copy was listed under it -- are then released by name,
+     * unless another loaded copy of the module shares that name; they cannot be told apart from
+     * that copy's, so they stay until the last copy of the name is unloaded (#506).
      *
      * @param plugin UltiTools plugin instance
      */
@@ -2201,6 +2247,21 @@ public class PluginManager {
      * registerSelf()} returns false or throws, the caller closes the new container. If the old
      * version had already been unloaded before that point, the module would be left with neither
      * version -- while it was originally running fine.
+     * <p>
+     * Registrations (#562): every registration recorded against an old copy -- panel responders,
+     * EventBus handlers, tab completers -- was already released before the new copy's container
+     * refresh, by {@link #releaseSupersededRegistrations(UltiToolsPlugin)}, so the new copy could
+     * claim the types and keys the old copy held; had the new copy failed, they would have been
+     * given back to the old copy, which keeps running. The order is therefore: release the old
+     * copies' registrations, refresh the new copy's container and run its {@code registerSelf()},
+     * then either unload the old copies here or, on failure, release what the new copy registered
+     * and restore the old copies' registrations. At no point do two copies hold the same type or
+     * key, and a copy never keeps a registration recorded against another copy: every release and
+     * restore matches the recorded instance, not the shared name. Which copy a registration is
+     * recorded against is decided when it is made: a registration made by name outside every load
+     * scope -- in the new copy's constructor, for example -- is recorded against the copy listed
+     * under that name at the time, which during a replacement is the old copy (see {@link
+     * #findRegistrationOwner(String)}).
      */
     private void unregisterSupersededVersions(UltiToolsPlugin plugin) {
         for (UltiToolsPlugin existing : pluginList) {
@@ -2239,6 +2300,86 @@ public class PluginManager {
         }
     }
 
+    /**
+     * The loaded copies {@code plugin} supersedes: same main class, older version. The same
+     * determination {@link #unregisterSupersededVersions(UltiToolsPlugin)} unloads by.
+     */
+    private List<UltiToolsPlugin> copiesSupersededBy(UltiToolsPlugin plugin) {
+        List<UltiToolsPlugin> superseded = new ArrayList<>();
+        for (UltiToolsPlugin existing : pluginList) {
+            if (existing.getMainClass().equals(plugin.getMainClass()) && plugin.isNewerVersionThan(existing)) {
+                superseded.add(existing);
+            }
+        }
+        return superseded;
+    }
+
+    /**
+     * Releases every registration recorded against each copy {@code incoming} supersedes -- panel
+     * responders, EventBus handlers, tab completers -- before {@code incoming}'s container refresh
+     * and {@code registerSelf()} (#562). Called only after the compatibility gates accepted {@code
+     * incoming}. From here until {@code incoming} activates or fails, the superseded copies hold no
+     * registration, so {@code incoming} can claim the panel message types and completer keys they
+     * held, and nothing it publishes while it loads reaches their code. Each registry hands back the
+     * action that restores what it released; they are kept until {@link
+     * #discardSupersededRegistrations(UltiToolsPlugin)} or {@link
+     * #restoreSupersededRegistrations(UltiToolsPlugin)}. Registrations filed under a module name only
+     * are not touched: they belong to whichever copy is listed under that name.
+     */
+    private void releaseSupersededRegistrations(UltiToolsPlugin incoming) {
+        List<UltiToolsPlugin> superseded = copiesSupersededBy(incoming);
+        if (superseded.isEmpty()) {
+            return;
+        }
+        List<Runnable> restores = new ArrayList<>();
+        supersedeHandovers.put(incoming, restores);
+        UltiTools framework = UltiTools.getInstance();
+        EventBus eventBus = framework == null ? null : framework.getEventBus();
+        PanelResponderRegistry panelResponders = framework == null ? null : framework.getPanelResponderRegistry();
+        for (UltiToolsPlugin existing : superseded) {
+            restores.add(TabCompletionManager.getInstance().releaseForSupersede(existing));
+            if (eventBus != null) {
+                restores.add(eventBus.releaseForSupersede(existing));
+            }
+            if (panelResponders != null) {
+                restores.add(panelResponders.releaseForSupersede(existing));
+            }
+        }
+    }
+
+    /**
+     * {@code incoming} activated: the registrations released from the copies it supersedes stay
+     * released, and those copies are unloaded next (#562).
+     */
+    private void discardSupersededRegistrations(UltiToolsPlugin incoming) {
+        supersedeHandovers.remove(incoming);
+    }
+
+    /**
+     * {@code incoming} failed to load: first releases every registration recorded against {@code
+     * incoming} itself in the three registries -- what it registered during its container refresh
+     * and {@code registerSelf()} must not stay behind, answering from its closed container -- then,
+     * when it was superseding loaded copies, gives them back the registrations released before its
+     * container refresh (#562). Those copies were never unloaded, so they keep running as before.
+     * Each step is isolated: a failure is logged and the next step still runs. Safe to call more
+     * than once and for a copy that superseded nothing.
+     */
+    private void restoreSupersededRegistrations(UltiToolsPlugin incoming) {
+        runUnregisterStep(incoming, "release the failed copy's tab-completion completers",
+                () -> releaseCompleters(incoming, true));
+        runUnregisterStep(incoming, "release the failed copy's EventBus handlers",
+                () -> releaseEventHandlers(incoming, true));
+        runUnregisterStep(incoming, "release the failed copy's panel message responders",
+                () -> releasePanelResponders(incoming, true));
+        List<Runnable> restores = supersedeHandovers.remove(incoming);
+        if (restores == null) {
+            return;
+        }
+        for (Runnable restore : restores) {
+            runUnregisterStep(incoming, "give a superseded copy its registrations back", restore);
+        }
+    }
+
     private boolean isUltiToolsVersionCompatible(UltiToolsPlugin plugin) {
         if (plugin.getMinUltiToolsVersion() > UltiTools.getPluginVersion()) {
             Bukkit.getLogger().log(Level.WARNING,
@@ -2270,16 +2411,29 @@ public class PluginManager {
                 // method that actually registers Bukkit commands, is only called after this
                 // method returns -- at this point the new version hasn't registered a single
                 // command yet.
+                //
+                // #562: the superseded copies' registrations, released before this copy's
+                // container refresh, stay released -- the copies are unloaded next.
+                discardSupersededRegistrations(plugin);
                 unregisterSupersededVersions(plugin);
                 onPluginRegistered(plugin);
             } else {
                 try { plugin.getContext().close(); }
-                finally { releaseConfigEntities(plugin); }
+                finally {
+                    try { restoreSupersededRegistrations(plugin); }
+                    finally { releaseConfigEntities(plugin); }
+                }
                 Bukkit.getLogger().log(Level.WARNING,
                         String.format("[UltiTools-API] %s load failed! Version: %s.", plugin.getPluginName(), plugin.getVersion()));
             }
             return registerSelf;
         } catch (Exception | Error e) {
+            if (!pluginList.contains(plugin)) {
+                // #562: registerSelf() (or the close after it returned false) threw; the superseded
+                // copies keep running and get their registrations back. A listed copy failed after
+                // the handover was discarded; unregister below releases its registrations.
+                restoreSupersededRegistrations(plugin);
+            }
             Bukkit.getLogger().log(Level.WARNING, e, String::new);
             Bukkit.getLogger().log(Level.WARNING, String.format("[UltiTools-API] %s load failed!", plugin.getPluginName()));
             // WR-02 (#410): onPluginRegistered() may have already run pluginList.add(plugin)
@@ -2673,9 +2827,14 @@ public class PluginManager {
             // whatever the field currently holds; losing that distinction during the WIRE-05
             // extraction silently dropped every reflectively-injected test loader back to the
             // field's default null.
+            // #562: the copies this one supersedes give up their registrations before it builds
+            // its container and registers; restored below, or in attemptPluginRegistration, if it
+            // does not load.
+            releaseSupersededRegistrations(plugin);
             assemblePluginContainer(pluginContext, plugin, pluginClass, classLoader);
             return plugin;
         } catch (Exception | Error failure) {
+            restoreSupersededRegistrations(plugin);
             releaseConfigEntities(plugin);
             if (failure instanceof Error) { throw (Error) failure; }
             throw new IllegalStateException("Failed to initialize plugin: " + pluginClass.getName(), failure);

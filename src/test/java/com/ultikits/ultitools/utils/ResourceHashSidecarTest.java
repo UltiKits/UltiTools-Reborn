@@ -609,11 +609,18 @@ class ResourceHashSidecarTest {
         field.set(plugin, path);
     }
 
+    /**
+     * Runs both halves of the extraction, as a construction ({@code config/}, {@code res/}) followed by the commit
+     * step ({@code lang/}) does. #567 item 1 (contract-batching decision of 2026-10-06) split {@code saveResources()}
+     * into {@code saveResources(boolean)}; each half records the hashes of the files it extracts exactly as the
+     * single pass did.
+     */
     private static void invokeSaveResources(Object plugin) throws Throwable {
-        Method method = UltiToolsPlugin.class.getDeclaredMethod("saveResources");
+        Method method = UltiToolsPlugin.class.getDeclaredMethod("saveResources", boolean.class);
         method.setAccessible(true);
         try {
-            method.invoke(plugin);
+            method.invoke(plugin, false);
+            method.invoke(plugin, true);
         } catch (InvocationTargetException e) {
             throw e.getCause();
         }
