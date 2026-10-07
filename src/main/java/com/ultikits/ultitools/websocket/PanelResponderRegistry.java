@@ -1,12 +1,17 @@
 package com.ultikits.ultitools.websocket;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
+import java.util.logging.Logger;
+
+import org.jetbrains.annotations.ApiStatus;
 
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
@@ -35,6 +40,8 @@ import com.ultikits.ultitools.utils.PluginInitiationUtils;
  */
 public class PanelResponderRegistry {
 
+    private static final Logger LOGGER = Logger.getLogger(PanelResponderRegistry.class.getName());
+
     /**
      * The bounded wall-clock time {@link #dispatch} gives a registered responder's future to
      * complete before completing exceptionally on the caller's behalf (D-27). One timeout, applied
@@ -49,8 +56,9 @@ public class PanelResponderRegistry {
     /**
      * Pairs a responder function with the module name (and, when recorded, the module instance)
      * that registered it. Never exposed outside this class — {@link #hasResponder(String)},
-     * {@link #unregisterAll(String)} and {@link #unregisterByOwnerInstance(UltiToolsPlugin)} are the
-     * only externally visible views of what this map holds.
+     * {@link #unregisterAll(String)}, {@link #unregisterByOwnerInstance(UltiToolsPlugin)} and
+     * {@link #releaseForSupersede(UltiToolsPlugin)} are the only externally visible views of what this
+     * map holds.
      */
     private final Map<String, ResponderEntry> responders = new ConcurrentHashMap<>();
 
@@ -186,6 +194,60 @@ public class PanelResponderRegistry {
             return;
         }
         responders.values().removeIf(entry -> entry.ownerInstance == ownerInstance);
+    }
+
+    /**
+     * Releases every responder recorded against {@code ownerInstance} and returns the action that
+     * gives them back (#562). {@code PluginManager} calls this for a loaded copy of a module just
+     * before a newer copy of the same module builds its container and runs {@code registerSelf()},
+     * so the newer copy can claim the message types the older copy held: while both copies exist,
+     * a type belongs to exactly one of them, and the older copy holds none of its types while the
+     * newer copy registers. When the newer copy fails to load, the framework first releases what
+     * the failed copy registered and then runs the returned action, which puts each released
+     * responder back under its type, unchanged; when the newer copy loads, the action is dropped
+     * and the older copy is unloaded. Running the action more than once restores nothing more.
+     * <p>
+     * Each responder is removed only while it is still the exact registration this call matched,
+     * and put back only while its type is free: a type another registration claimed in between
+     * keeps that registration, and one WARNING names the type and the module that lost it -- a
+     * copy never takes over, or keeps, a type another copy holds. Intended for {@code
+     * PluginManager}, not for module authors.
+     *
+     * @param ownerInstance the loaded copy being superseded; {@code null} releases nothing
+     * @return the action that restores what this call released
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public Runnable releaseForSupersede(UltiToolsPlugin ownerInstance) {
+        Map<String, ResponderEntry> released = new LinkedHashMap<>();
+        if (ownerInstance != null) {
+            for (Map.Entry<String, ResponderEntry> registered : responders.entrySet()) {
+                ResponderEntry entry = registered.getValue();
+                // remove(key, value) is atomic and compares by identity (ResponderEntry keeps
+                // Object#equals): a type registered again in the meantime is left alone.
+                if (entry.ownerInstance == ownerInstance && responders.remove(registered.getKey(), entry)) {
+                    released.put(registered.getKey(), entry);
+                }
+            }
+        }
+        AtomicBoolean pending = new AtomicBoolean(true);
+        return () -> {
+            if (pending.compareAndSet(true, false)) {
+                restore(released);
+            }
+        };
+    }
+
+    private void restore(Map<String, ResponderEntry> released) {
+        for (Map.Entry<String, ResponderEntry> entry : released.entrySet()) {
+            ResponderEntry existing = responders.putIfAbsent(entry.getKey(), entry.getValue());
+            if (existing != null && existing != entry.getValue()) {
+                LOGGER.warning(String.format("Panel responder type '%s' was claimed by module '%s' while module '%s'"
+                        + " was being replaced; it stays with '%s', and '%s' no longer answers it.",
+                        entry.getKey(), existing.ownerModule, entry.getValue().ownerModule, existing.ownerModule,
+                        entry.getValue().ownerModule));
+            }
+        }
     }
 
     /**

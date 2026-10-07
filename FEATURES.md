@@ -252,6 +252,18 @@ sender), and the rest are unit-pinned because no shipped module reaches them on 
 | ultitools.runtime.usage-limit-reentry | A `@UsageLimit` body that dispatches its own command inline has the nested dispatch refused with the ordinary lock message (`SENDER`: from the same sender; `ALL`: from any sender) without waiting, and its own lock is released when it returns, normally or by throwing (#541) | gate | a module command body carrying `@UsageLimit` that calls `performCommand` or `Bukkit.dispatchCommand` for its own command | n/a | n/a | internal | none | UsageLockValidator#validate, UsageLockValidator#onComplete |
 | ultitools.runtime.usage-lock-release | A `@UsageLimit` lock taken during validation is released when the dispatch is then refused before the body runs — by the cooldown, the argument-count check, parameter parsing, or an exception from a later validator, a parameter parser or the scheduler — and a refused dispatch applies no cooldown; one validator's throwing hook no longer skips a later validator's (before 6.3.0 the lock stayed held until the player quit, and every later call of the mapping was refused, #568) | gate | a player runs a `@UsageLimit` and `@CmdCD` mapping again during its cooldown, or mistypes a parameter of a `@UsageLimit` mapping | n/a | n/a | internal | none | BaseCommandExecutor#onCommand, UsageLockValidator#onRefused |
 
+## Module lifecycle registries
+
+Which copy of a module owns what it registers in the framework's three name-keyed registries — panel responders
+(`PanelResponderRegistry`), EventBus subscriptions and handlers, tab completers — when a newer copy of a loaded module
+replaces it, or when it registers after it loaded (6.3.0, #562). A newer copy replaces a loaded one only when code calls
+`PluginManager#register(...)` with a newer instance; no operator command does (two jars of one module are refused at the
+scan, `/ul reload` reloads configuration only, a module update needs a restart), so these rows are unit-pinned.
+
+| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
+|---|---|---|---|---|---|---|---|---|
+| ultitools.lifecycle.supersede-releases-registrations | When a newer copy of a loaded module replaces it, every panel responder, EventBus handler and tab completer recorded against the older copy is released after the newer copy passes its compatibility gates and before its container refresh and `registerSelf()`, so the newer copy can claim the panel message types and completer keys the older copy held; when the newer copy then fails to load, what it registered is released and the older copy's registrations are put back unchanged, and the older copy keeps running. Before 6.3.0 the newer copy was refused with `Cannot register a panel responder for '<type>': already owned by module '<name>'.`, and a failed newer copy left its completers and subscriptions registered (#562 item 2) | gate | code calling `PluginManager#register(UltiToolsPlugin)` with a newer instance of a loaded module | n/a | n/a | internal | none | PluginManager#releaseSupersededRegistrations/restoreSupersededRegistrations/attemptPluginRegistration; PanelResponderRegistry#releaseForSupersede; EventBus#releaseForSupersede; TabCompletionManager#releaseForSupersede |
+
 ## Data persistence
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |

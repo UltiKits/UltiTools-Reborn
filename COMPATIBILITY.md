@@ -348,6 +348,13 @@ naming the keys" fallback is now the only path. Failed incoming construction, co
 releases only refused incoming configuration owners; existing owners remain registered.
 No constructor deferral, early unload or public storage/transaction API is introduced.
 
+Registrations follow the same rule, with one step earlier (#562): every panel responder, EventBus handler and tab
+completer recorded against the old copy is released after the incoming copy passes its compatibility gates and before its
+container refresh and `registerSelf()`, so the incoming copy can claim the panel message types and completer keys the old
+copy held. When incoming assembly or activation fails, what the incoming copy registered is released and the old copy's
+registrations are put back, unchanged; the old copy keeps running. When it succeeds, the old copy is unloaded as before.
+See "Registrations released per module instance" under "Behavioral changes".
+
 ### Configuration registry server-thread confinement
 
 As of 6.3.0, all ConfigManager registry operations are server-thread confined while a server
@@ -613,7 +620,7 @@ separate crash-safe multi-file transaction limit.
 - 面板编辑 `server.properties` 时只替换它指定的那个键所在行的值文字（#607）：键、分隔符、注释、顺序和其它每个字节保持不变（含 UTF-8 的 `motd`），按服务器读取该文件的方式解码和编码（严格 UTF-8，不是 UTF-8 时用 ISO-8859-1），校验后原子写入。同一个键定义在多行、或定义续到下一行时拒绝，原因注明行号（不含值）；`set_all` 回复把它列在 `failed` 中，并在新增的 `failureReasons` 字段中给出原因，服务器日志对每个被拒的键只记一次。服务器自己下次启动时仍会整份重写该文件，所有 Paper 版本都如此。
 - 6.3.0 新增 `com.ultikits.ultitools.config.OperatorFiles`（增量 API），供模块在服主明确编辑时写入它代为管理的 YAML 文件（礼包、菜单文件）：只写编辑的部分，注释和其它键保留（维护者 2026-10-04 决定）。`read(File)` 返回文件文本（严格 UTF-8）和字节的 SHA-256；`write(Snapshot, Map<List<String>, Object>)` 只写指定的完整键（含点的键是一个键），经写入闸门，且仅当文件仍是快照时的字节，返回 `WRITTEN`、`UNCHANGED`、`FILE_CHANGED` 或 `REFUSED`（排版无法逐字节保留或使用锚点，警告一次列出文件、键和原因）。值必须是普通数据（`ItemStack` 先序列化），否则在碰文件之前抛 `IllegalArgumentException`。它从不创建、删除或重命名文件，不是通用文件 API（#545 仍是以后的功能），也不用于 `@ConfigEntity` 文件。
 - 面板编辑复合值（Bukkit `Vector`、`Location`，或映射条目中的此类值）内的一个字段时，写入的是文件中原样的整个值、只改该字段，其余字段保持服主写下的字节（`y: 64`、`pitch: 0` 不会变成 `64.0`）。面板发送的整数、或文件中该值其它字段里的整数，在模块自身的值为浮点数的位置按浮点数转换（Bukkit 的 `Vector` 自己不放宽），被编辑的字段按该类型写入（`7` 写成 `7.0`），因此编辑后的文件能被重新加载（#609）。文件中 `Vector` 或 `BlockVector` 坐标里的整数（`y: 64`）现在按该数字加载：Bukkit 的 `Vector` 只接受 `Double` 坐标，此前这样的值会以 SEVERE 堆栈失败并使用声明默认值；框架现在只在内存中把 `Vector` 的 `x`、`y`、`z` 放宽为浮点数——文件保持 `y: 64`，未改动的保存不写入，其它类型不放宽。模块在内存中删除且未保存的映射分组，编辑其下的键会被拒绝，注明“not found in memory”。
-- 服务器关闭、模块卸载或卸载删除、模块被新版本替换时，一律不写任何配置（维护者 2026-10-04 决定：生命周期事件不是服主的写入请求，不做整对象的关闭保存或替换保存）。关闭时以及正常卸载或卸载删除时，每个模块在卸载钩子和 `@PreDestroy` 之后、释放之前，凡有从未保存的模块改动的配置各警告一次（列文件和键，不列值），改动随之丢弃；框架最后一步对仍注册的配置同样处理。上次加载无法读取或解析的文件照旧只提示一次。新版本副本直接读取现有文件，旧副本的未保存改动或受保护文件不再阻止替换；新副本激活后警告一次丢弃的键。`ConfigManager#saveAll()` 签名不变、不再写入、改为报告并标记 `@Deprecated(since = "6.3.0")`。模块应在改动发生时用 `save()` 或 `saveOperatorChange`/`saveOperatorMapEntry` 保存。卸载照旧释放实体。已知限制 #578、#580 和多文件崩溃限制 #545 仍存在。
+- 服务器关闭、模块卸载或卸载删除、模块被新版本替换时，一律不写任何配置（维护者 2026-10-04 决定：生命周期事件不是服主的写入请求，不做整对象的关闭保存或替换保存）。关闭时以及正常卸载或卸载删除时，每个模块在卸载钩子和 `@PreDestroy` 之后、释放之前，凡有从未保存的模块改动的配置各警告一次（列文件和键，不列值），改动随之丢弃；框架最后一步对仍注册的配置同样处理。上次加载无法读取或解析的文件照旧只提示一次。新版本副本直接读取现有文件，旧副本的未保存改动或受保护文件不再阻止替换；新副本激活后警告一次丢弃的键。`ConfigManager#saveAll()` 签名不变、不再写入、改为报告并标记 `@Deprecated(since = "6.3.0")`。模块应在改动发生时用 `save()` 或 `saveOperatorChange`/`saveOperatorMapEntry` 保存。卸载照旧释放实体。已知限制 #578、#580 和多文件崩溃限制 #545 仍存在。登记表同样按此顺序（#562）：新副本通过兼容性检查后、刷新容器和运行 `registerSelf()` 之前，先释放旧副本的面板响应器、EventBus 处理器和补全器；新副本失败时释放它自己的登记、把旧副本的登记原样放回，旧副本照常运行（见“Behavioral changes”中的说明）。
 
 ## What the version number means
 
@@ -1368,6 +1375,37 @@ This section governs the third kind.
   `#beginRegistrationScope(UltiToolsPlugin)`, `#endRegistrationScope()` and
   `#unregisterByOwnerInstance(UltiToolsPlugin)`; two `HandlerEntry` constructors and a getter for
   the owner instance. Every name-keyed method keeps its signature and behaviour.
+- A newer copy of a module takes over its older copy's registrations; a failed newer copy gives them
+  back (#562 item 2). Before, the newer copy's `registerSelf()` ran while the older copy still held
+  every registration, so a newer copy that registered a panel responder type its older copy held was
+  refused with `Cannot register a panel responder for '<type>': already owned by module '<name>'.`
+  and did not load; and a newer copy that failed after registering a completer or a subscription left
+  them registered, answering from its closed container (a completer key it registered had also
+  replaced the older copy's). As of 6.3.0 the order is: the compatibility gates accept the newer copy;
+  every panel responder, EventBus handler and tab completer recorded against the older copy is
+  released; the newer copy's container refreshes and its `registerSelf()` runs; then either the older
+  copy is unloaded (success) or everything recorded against the failed newer copy is released and the
+  older copy's registrations are put back exactly as they were (a released EventBus handler at its
+  place in its list, so a `Subscription` the older copy holds still removes it). The older copy is
+  never unloaded before the newer copy succeeds, so a failed replacement leaves it whole. Any failed
+  load now also releases what the failing copy registered in the three registries. A type or key
+  another registration claimed while the older copy was released keeps that registration, and one
+  WARNING names it. Same reach as the entry above: only code calling `PluginManager#register(...)`
+  with a newer instance of a loaded module; no operator command reaches it. Added, `@since 6.3.0` and
+  `@ApiStatus.Internal` (for `PluginManager`, not for module authors):
+  `TabCompletionManager#releaseForSupersede(UltiToolsPlugin)`,
+  `EventBus#releaseForSupersede(UltiToolsPlugin)` and
+  `PanelResponderRegistry#releaseForSupersede(UltiToolsPlugin)`, each returning the action that
+  restores what it released.
+
+  中文补充：模块的新副本接管旧副本的登记；新副本加载失败时把登记还给旧副本（#562 第 2 项）。此前新副本的
+  `registerSelf()` 在旧副本仍占有全部登记时运行，所以新副本若登记旧副本已占有的面板响应器类型，会被拒绝
+  （`already owned by module`）而无法加载；加载失败的新副本登记过的补全器和事件订阅也会留下，继续用已关闭的容器应答。
+  6.3.0 起顺序为：新副本通过兼容性检查后，先释放记在旧副本实例名下的全部面板响应器、EventBus 处理器和补全器，
+  再刷新新副本的容器、运行它的 `registerSelf()`；成功则照旧卸载旧副本，失败则先释放失败副本登记的全部内容，
+  再把旧副本的登记原样放回（EventBus 处理器回到原来的位置），旧副本照常运行。任何加载失败现在都会释放失败副本在这三个登记表中的登记。
+  释放期间被其它登记占用的类型或键归该登记所有，并记一条 WARNING。只有以新实例调用 `PluginManager#register(...)`
+  的代码会走到这条路径，服主命令走不到。
 - `/ul reload` and a module's reload reporting what actually happened (#509, #529, #502). Before
   6.3.0 `reloadSelf()` logged `Module '<name>' reloaded.` before the module's `onReload()` ran and did
   not guard it, so a throwing hook printed the success line followed by a stack trace,

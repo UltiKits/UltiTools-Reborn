@@ -187,6 +187,15 @@ console, which the panel's remote command runs as, is refused because `world` is
 | ultitools.runtime.usage-limit-reentry | not covered — unit-pinned. None of the fifteen modules uses `@UsageLimit` | — | Held by `UsageLimitReentryTest`: `SENDER` and `ALL` nested calls are refused with the lock message (`senderScopeRefusesTheNestedCallAndReleases`, `allScopeRefusesTheNestedCallFromAnySender`, the console included); the lock is free after a normal or throwing outer body (`senderScopeReleasesWhenTheOuterBodyThrows`, `allScopeReleasesWhenTheOuterBodyThrows`) | server | |
 | ultitools.runtime.usage-lock-release | not covered — unit-pinned. None of the fifteen modules uses `@UsageLimit` | — | Held by `UsageLockReleaseOnRefusalTest`: after a cooldown refusal the lock is free (`cooldownRefusalReleasesTheLock`); after a parse failure and after a wrong argument count the next valid call runs (`parseFailureReleasesTheLock`, `argumentCountRefusalReleasesTheLock`); a refusal notifies only the validators that passed and runs no `onComplete` (`refusalNotifiesOnlyPassedValidatorsAndAppliesNoCooldown`); and by `UsageLockReleaseOnThrowTest`: a later validator that throws, and a module parser throwing a plain runtime exception, release the lock (`throwingLaterValidatorReleasesTheLock`, `throwingModuleParserReleasesTheLock`), and an earlier validator's throwing hook does not skip the release (`throwingHookDoesNotSkipTheLockRelease`) | server | |
 
+## Module lifecycle registries
+
+The supersede and post-load attribution rows are unit-pinned: only code calling `PluginManager#register(...)` with a newer
+instance of a loaded module reaches the supersede path (measured, plan 17-79).
+
+| ID | Preconditions | Steps | Expected | Layer | Covers |
+|---|---|---|---|---|---|
+| ultitools.lifecycle.supersede-releases-registrations | not covered — unit-pinned. The only caller of `PluginManager#register` in the framework is the start-up scan, which refuses a second jar of a loaded module (#483), and no operator command registers a module at run time | — | Held by `SupersedeRegistrationHandoverTracerTest`: the newer copy loads, answers the panel type the older copy held and owns the completer, the older copy's subscription receives nothing, and all three were already released when the newer copy's `registerSelf()` ran (`newerCopyClaimsWhatTheOlderCopyHeld`); a newer copy whose `registerSelf()` returns `false` or throws leaves the older copy loaded, answering the type with its own responder, owning the completer and receiving events, with nothing of the failed copy left registered and `M load failed` logged (`newerCopyReturningFalseGivesTheRegistrationsBack`, `newerCopyThrowingGivesTheRegistrationsBack`) | server | |
+
 ## Data persistence
 
 | ID | Preconditions | Steps | Expected | Layer | Covers |

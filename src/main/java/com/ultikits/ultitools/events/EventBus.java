@@ -17,6 +17,8 @@ import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import org.jetbrains.annotations.ApiStatus;
+
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.entities.HandlerEntry;
 import com.ultikits.ultitools.entities.Subscription;
@@ -184,6 +186,77 @@ public class EventBus {
         }
         for (CopyOnWriteArrayList<HandlerEntry> list : handlers.values()) {
             list.removeIf(entry -> entry.getOwnerInstance() == ownerInstance);
+        }
+    }
+
+    /**
+     * Releases every handler recorded against {@code ownerInstance} and returns the action that
+     * gives them back (#562). {@code PluginManager} calls this for a loaded copy of a module just
+     * before a newer copy of the same module builds its container and runs {@code registerSelf()}:
+     * from then on the older copy receives no event, so nothing the newer copy publishes while it
+     * loads reaches code of the copy it replaces. When the newer copy fails to load, the framework
+     * first releases what the failed copy registered and then runs the returned action, which puts
+     * each released handler back at its place in its event type's list, so it is dispatched as
+     * before and a {@link Subscription} the older copy holds still removes it; when the newer copy
+     * loads, the action is dropped and the older copy is unloaded. Running the action more than
+     * once restores nothing more. A handler is never released from, or restored into, another
+     * copy's registrations: only entries recorded against {@code ownerInstance} are matched.
+     * Intended for {@code PluginManager}, not for module authors.
+     *
+     * @param ownerInstance the loaded copy being superseded; {@code null} releases nothing
+     * @return the action that restores what this call released
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public Runnable releaseForSupersede(UltiToolsPlugin ownerInstance) {
+        List<ReleasedHandler> released = new ArrayList<>();
+        if (ownerInstance != null) {
+            for (Map.Entry<Class<? extends ModuleEvent>, CopyOnWriteArrayList<HandlerEntry>> byType : handlers.entrySet()) {
+                CopyOnWriteArrayList<HandlerEntry> list = byType.getValue();
+                int position = 0;
+                for (HandlerEntry entry : list) {
+                    // The iterator is a snapshot; positions are those of the list as it was.
+                    if (entry.getOwnerInstance() == ownerInstance && list.remove(entry)) {
+                        released.add(new ReleasedHandler(byType.getKey(), entry, position));
+                    }
+                    position++;
+                }
+            }
+        }
+        AtomicBoolean pending = new AtomicBoolean(true);
+        return () -> {
+            if (pending.compareAndSet(true, false)) {
+                restore(released);
+            }
+        };
+    }
+
+    private void restore(List<ReleasedHandler> released) {
+        for (ReleasedHandler handler : released) {
+            CopyOnWriteArrayList<HandlerEntry> list = handlers.computeIfAbsent(handler.eventType,
+                    k -> new CopyOnWriteArrayList<>());
+            if (list.contains(handler.entry)) {
+                continue;
+            }
+            try {
+                list.add(Math.min(handler.position, list.size()), handler.entry);
+            } catch (IndexOutOfBoundsException shrunkMeanwhile) {
+                // Another thread removed a handler between size() and add(): keep the handler, at the end.
+                list.add(handler.entry);
+            }
+        }
+    }
+
+    /** One handler {@link #releaseForSupersede(UltiToolsPlugin)} removed, and where it stood. */
+    private static final class ReleasedHandler {
+        private final Class<? extends ModuleEvent> eventType;
+        private final HandlerEntry entry;
+        private final int position;
+
+        private ReleasedHandler(Class<? extends ModuleEvent> eventType, HandlerEntry entry, int position) {
+            this.eventType = eventType;
+            this.entry = entry;
+            this.position = position;
         }
     }
 
