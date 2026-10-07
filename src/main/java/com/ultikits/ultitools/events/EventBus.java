@@ -211,8 +211,9 @@ public class EventBus {
      * each released handler back at its place in its event type's list, so it is dispatched as
      * before and a {@link Subscription} the older copy holds still removes it; when the newer copy
      * loads, the action is dropped and the older copy is unloaded. Running the action more than
-     * once restores nothing more. A handler is never released from, or restored into, another
-     * copy's registrations: only entries recorded against {@code ownerInstance} are matched.
+     * once restores nothing more. A handler recorded against another copy is never released or
+     * restored here: only entries recorded against {@code ownerInstance} are matched, whichever
+     * copy's code registered them.
      * Intended for {@code PluginManager}, not for module authors.
      *
      * @param ownerInstance the loaded copy being superseded; {@code null} releases nothing

@@ -2256,8 +2256,12 @@ public class PluginManager {
      * copies' registrations, refresh the new copy's container and run its {@code registerSelf()},
      * then either unload the old copies here or, on failure, release what the new copy registered
      * and restore the old copies' registrations. At no point do two copies hold the same type or
-     * key, and a copy never keeps a registration another copy made: every release and restore
-     * matches the registering instance, not the shared name.
+     * key, and a copy never keeps a registration recorded against another copy: every release and
+     * restore matches the recorded instance, not the shared name. Which copy a registration is
+     * recorded against is decided when it is made: a registration made by name outside every load
+     * scope -- in the new copy's constructor, for example -- is recorded against the copy listed
+     * under that name at the time, which during a replacement is the old copy (see {@link
+     * #findRegistrationOwner(String)}).
      */
     private void unregisterSupersededVersions(UltiToolsPlugin plugin) {
         for (UltiToolsPlugin existing : pluginList) {
