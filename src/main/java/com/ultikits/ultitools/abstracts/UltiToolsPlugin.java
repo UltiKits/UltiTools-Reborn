@@ -30,6 +30,8 @@ import java.util.Arrays;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.function.BiConsumer;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
@@ -1211,8 +1213,9 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * The two-detector placeholder comparison of {@link #applyPlaceholderArityOverride} (#441, #524), as a pure
      * function shared with an operator's custom language file (#608) and the framework's own custom file: every
      * key of {@code own} whose value lost a placeholder relative to {@code official}'s value for the same key --
-     * a different {@code %s}/{@code %d} arity ({@link #placeholderArity}), a malformed format-argument index, or
-     * a {@code {TOKEN}} the official value has and {@code own}'s lacks ({@link #missingBracePlaceholder}) -- is
+     * a different {@code %s}/{@code %d} arity ({@link #placeholderArity}), a malformed format-argument index, a
+     * different conversion at a position both values use ({@link #conversionMismatch}, #615 item 3), or a {@code
+     * {TOKEN}} the official value has and {@code own}'s lacks ({@link #missingBracePlaceholder}) -- is
      * replaced by the official value, and {@code mismatch} is told the key and the reason phrase (never either
      * value). Keys {@code own} lacks are left out: {@link Language#withFallback} resolves them. In memory only:
      * nothing is read or written here.
@@ -1266,6 +1269,12 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         }
         if (arityMismatch) {
             return "has a different placeholder count than the current bundled version";
+        }
+        // #615 item 3: the same count with a different conversion at a position both values use
+        // (%d where the bundled text has %s, or the reverse) would make String.format throw
+        // IllegalFormatConversionException when the message is formatted.
+        if (conversionMismatch(ownValue, officialValue)) {
+            return "uses a different placeholder type than the current bundled version";
         }
         // #524: the %s/%d check above never sees this module population's actual dialect -- see
         // PLACEHOLDER_PATTERN's javadoc for the install-wide measurement. Only evaluated when the
@@ -1336,6 +1345,63 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             }
         }
         return highestPosition;
+    }
+
+    /**
+     * Reports whether {@code ownValue} and {@code officialValue} use a different {@code String.format}
+     * conversion for an argument position both of them use (#615 item 3; maintainer decision 2026-10-06):
+     * {@code %d} where the other has {@code %s} at the same position, explicit ({@code %2$d}) or implied by the
+     * order of unindexed conversions. Runs only after {@link #placeholderArity} found the same count, and sees
+     * exactly what that count sees ({@link #PLACEHOLDER_PATTERN}: {@code %s} and {@code %d}, optionally indexed;
+     * {@code %%} is not a conversion).
+     * <p>
+     * The rule (decided by plan 17-77, revision 0): for every position BOTH values use, the set of conversion
+     * characters at that position must be equal. A position only one value uses is left to the count comparison,
+     * so a value that keeps the bundled count but drops or reorders arguments with explicit indices keeps the
+     * outcome it had before this check existed; conversions in a different order with the same explicit indices
+     * are the same conversions. Equality, not "would it throw": {@code %s} for a bundled {@code %d} would format,
+     * but the maintainer's decision compares the types, so the text that reaches a player is the one whose
+     * argument types the module was written for.
+     *
+     * @param ownValue      the operator's value
+     * @param officialValue the bundled value of the same key
+     * @return {@code true} if a shared position carries different conversions
+     */
+    private static boolean conversionMismatch(String ownValue, String officialValue) {
+        Map<Integer, Set<Character>> own = placeholderConversions(ownValue);
+        Map<Integer, Set<Character>> official = placeholderConversions(officialValue);
+        for (Map.Entry<Integer, Set<Character>> entry : own.entrySet()) {
+            Set<Character> officialConversions = official.get(entry.getKey());
+            if (officialConversions != null && !officialConversions.equals(entry.getValue())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The {@code String.format} conversions of {@code value} by argument position: an explicit index ({@code
+     * %2$s}) names its position, an unindexed conversion takes the next ordinary position, as {@code
+     * java.util.Formatter} counts them. Called only after {@link #placeholderArity} parsed the same value, so a
+     * malformed index has already been reported.
+     */
+    private static Map<Integer, Set<Character>> placeholderConversions(String value) {
+        Map<Integer, Set<Character>> conversions = new TreeMap<>();
+        if (value == null) {
+            return conversions;
+        }
+        Matcher matcher = PLACEHOLDER_PATTERN.matcher(value);
+        int nextImplicitPosition = 1;
+        while (matcher.find()) {
+            char conversion = matcher.group(2).charAt(0);
+            if (conversion == '%') {
+                continue;
+            }
+            String explicitIndex = matcher.group(1);
+            int position = explicitIndex != null ? Integer.parseInt(explicitIndex) : nextImplicitPosition++;
+            conversions.computeIfAbsent(position, ignored -> new TreeSet<>()).add(conversion);
+        }
+        return conversions;
     }
 
     /**
