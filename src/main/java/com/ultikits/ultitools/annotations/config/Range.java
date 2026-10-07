@@ -8,7 +8,28 @@ import java.lang.annotation.Target;
 /**
  * Validates that a numeric config value falls within the specified range.
  * If the value is out of range, the module refuses to load naming the field, the actual value,
- * and the violated bounds - the config file is never rewritten (D-01).
+ * and the violated bounds - the config file is never rewritten (D-01). On a reload the reload is
+ * refused instead and the running values are kept.
+ * <p>
+ * Since 6.3.0 (#625) the value must satisfy {@code min <= value && value <= max}, compared as a
+ * {@code double}: NaN ({@code .nan} in YAML) is out of every range, and positive or negative infinity
+ * ({@code .inf}, {@code -.inf}) is out of range unless the bound on that side is itself that infinity,
+ * for example {@code max = Double.POSITIVE_INFINITY}.
+ * <p>
+ * {@code @Range} checks numbers only: a primitive number or a {@code Number} such as {@code Integer} or
+ * {@code BigDecimal}.
+ * <p>
+ * On a value type it cannot check, the module is refused at load, before the file is read, naming the field and the
+ * annotation (since 6.3.0, #631; maintainer decision of 2026-10-06). So is this annotation on a field of a config class
+ * that is not a {@code @ConfigEntry} setting.
+ * <p>
+ * It takes effect only on a field that is itself a {@code @ConfigEntry} setting of a config class, judged by that field's
+ * declared type. A declared type that can hold a value the annotation checks - {@code Object}, {@code Serializable},
+ * {@code Comparable}, {@code CharSequence}, {@code Number} or another supertype of a checked kind - is accepted, and the
+ * value bound at load is checked; only a type that can never hold a checkable value is a declaration error. A bound
+ * value of a kind the annotation cannot read (text under {@code @Range}, a number under {@code @Pattern}) is a violation
+ * like any other: the module is refused at load, and a reload is refused with the running values kept. On a field of a value type, a nested class or anything a converter produces it is never checked and not
+ * reported (maintainer decision of 2026-10-06): validate such fields in the module's converter.
  *
  * @see com.ultikits.ultitools.annotations.ConfigEntry
  */

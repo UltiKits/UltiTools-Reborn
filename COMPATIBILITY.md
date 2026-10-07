@@ -39,10 +39,47 @@ error reply naming the reason. Configuration data is not moved out of configurat
 What an operator does about a refusal: read the WARNING, fix the line it names (or, for "the file changed since it was
 read", run `/ul reload` first), and repeat the change; nothing they wrote has been lost.
 
+A write that is not refused but fails to publish throws a plain `IOException`. The file then also holds its previous
+bytes. A write that failed part-way after the file was opened is put back from its framework backup before the exception
+is thrown; if even that fails, one SEVERE names the file and the kept backup, and the configuration refuses every write
+until a reload (see "Rendering and save fallback", [#622](https://github.com/UltiKits/UltiTools-Reborn/issues/622)). So
+a module that rolls its in-memory change back on the `IOException` stays in step with the file.
+
+**A section emptied by deleting its keys is completed again** (as of v6.3.0,
+[#620](https://github.com/UltiKits/UltiTools-Reborn/issues/620)). Deleting a key is how an operator resets a setting: the
+next start puts the key back with its declared default and comment. When the deleted key was the last one of its section,
+the section key is left alone on its line with nothing after the colon (`messages:`), which reads as no value at all. The
+maintainer's decision of 2026-10-06 treats that as most likely accidental, so the framework puts the section's keys back
+below that line instead of refusing at every start. It is the one line outside a write's own keys that the gate lets the
+write touch, and only in this shape: the line keeps the key as written (its indentation and quotes included), the comment
+text and the line ending; only whitespace on it may be normalized - a space before the colon, the spaces before the
+comment, and trailing spaces after the comment or at the end of a line without one (`messages :   # reset  ` comes back
+as `messages: # reset`). The section's value goes from nothing to exactly the inserted keys, and every other line stays
+byte for byte. A child the operator commented out under the line stays where it is, below the restored keys, when its
+comment lines follow the section line directly, as one run without a blank line, at the file's indentation for that level
+(two spaces in a two-space file). Three shapes are refused instead, at every start, with one WARNING naming the line and
+the file unchanged: a blank line between the section line and the commented child; two commented runs separated by a
+blank line; a child commented out deeper than the file's indentation (four spaces in a two-space file). Removing the
+blank line, or moving the comment to the file's indentation, lets the next start put the keys back. The same holds for
+an operator command, an operator change and a panel edit that add a key below such a line - for example the first rule
+added to an emptied `rules:`. A section written with an explicit empty value - `messages: {}`, `messages: ~` or
+`messages: null` - is the operator's own value and is never changed: an insert below it is refused, and the warning says
+what to do ([#610](https://github.com/UltiKits/UltiTools-Reborn/issues/610) item 2; see "Layouts the write gate cannot
+keep").
+
+**For operators: to leave a text setting blank, write an empty string; do not delete the key** (as of v6.3.0,
+maintainer decision of 2026-10-06). Write `key: ''`: for a text setting, an empty string is read as blank and is never
+rewritten - not by a start, a reload, or a save of another setting. A deleted key is put back with its declared default on
+the next start, which is how to reset a setting, not how to blank it. A number, true/false or other non-text setting has
+no blank value: `count: ''` is reported in one WARNING naming the key (`declared as int: found text …`), its declared
+default is used in memory, and the file keeps `''` as written.
+
 The public surface of the contract: `AbstractConfigEntity#save()` (only what the module changed, where the file still
 holds what was read), `#saveOperatorChange(String...)` and `#saveOperatorMapEntry(String, String...)` (exactly what an
-operator's command names), `com.ultikits.ultitools.config.OperatorFiles` (module-managed operator files such as kits), and
-`com.ultikits.ultitools.config.ConfigWriteRefusedException`. Outside YAML, a panel edit of `server.properties` replaces the
+operator's command names), `#saveOperatorMapEntry(EntryPresence, String, String...)` (the same, only while the entry is, or
+is not, in the file: [#623](https://github.com/UltiKits/UltiTools-Reborn/issues/623)),
+`com.ultikits.ultitools.config.OperatorFiles` (module-managed operator files such as kits), and
+`com.ultikits.ultitools.config.ConfigWriteRefusedException` with its subtype `ConfigEntryPresenceException`. Outside YAML, a panel edit of `server.properties` replaces the
 value text of the one line it names, and the framework leaves the shared `plugins/bStats/config.yml` byte for byte unless
 it is absent (see "Behavioral changes that need no migration period").
 
@@ -55,7 +92,11 @@ its fallback for missing keys are completed in this release
 `.ultitools-backup-<hex>` backups, `.ultitools-resource-hashes.json`, the credential store, module JARs and transaction
 records) are not operator configuration.
 
-中文补充（写入约定）：**服主写的配置绝不被自动覆盖**（维护者 2026-10-04 的底层规则）。框架或模块的任何代码都不能改动服主在配置文件里写的内容，除非服主明确要求这一改动；框架用不了的值在代码使用前就挑明（警告并拒绝该值、使用声明默认值，或拒绝模块、拒绝启动），绝不靠改写文件“修好”。按文件类型（维护者 2026-10-04 批准的表）：**出厂配置文件**（主配置、利息设置、`spawn.yml`、框架自己的 `config.yml` 等）代码只能（1）首次创建不存在的文件；（2）补入文件缺少的声明键和框架自己的注释——只插入，不改已有内容；（3）只写服主明确要求改的那一项（命令、面板、GUI，或服主通过模块做出、由模块保存的改动）；（4）语言切换后重新渲染仍与出厂文字逐字节相同的值，以及删除逐字节未改过的旧版出厂文字行。除此之外一律不写：不在关服、卸载或替换时保存，不做整对象的顺带保存，不修复无效值，不规整排版，不清理 6.2 拆开的含点键，不改服主写的注释。**服主自己创建的文件**（礼包、菜单）只在服主明确创建时创建、明确编辑时只写编辑的部分。所有写入经同一个写入闸门：每次写入声明自己拥有的键（或框架自己的注释行），渲染后其余每个字节必须与读取时相同，且文件仍是读取时的内容；否则不写，一条 WARNING 列出文件、键和原因（排版无法保留时给出要改的行号），从不列值，内存中的值照常使用。服主命令调用的 `saveOperatorChange`/`saveOperatorMapEntry` 被拒绝时抛 `ConfigWriteRefusedException`，命令据此回复“未保存”及原因；面板编辑收到注明原因的错误。服主看到拒绝时：按警告改掉它指出的那一行（“文件在读取后已被改动”则先 `/ul reload`），再做一次改动即可，所写内容没有丢失。**官方语言文件归框架所有**，是唯一例外（维护者 2026-10-04 决定）：升级时可能被替换（保留备份并记日志），直接改官方文件不是受支持的定制方式；要定制，请复制官方文件、改名、编辑副本并在主配置中选择它，该副本归服主所有、永不被写入（自定义文件的选择与缺失键的回退在本版本内完成，#608）。
+中文补充（写入约定）：**服主写的配置绝不被自动覆盖**（维护者 2026-10-04 的底层规则）。框架或模块的任何代码都不能改动服主在配置文件里写的内容，除非服主明确要求这一改动；框架用不了的值在代码使用前就挑明（警告并拒绝该值、使用声明默认值，或拒绝模块、拒绝启动），绝不靠改写文件“修好”。按文件类型（维护者 2026-10-04 批准的表）：**出厂配置文件**（主配置、利息设置、`spawn.yml`、框架自己的 `config.yml` 等）代码只能（1）首次创建不存在的文件；（2）补入文件缺少的声明键和框架自己的注释——只插入，不改已有内容；（3）只写服主明确要求改的那一项（命令、面板、GUI，或服主通过模块做出、由模块保存的改动）；（4）语言切换后重新渲染仍与出厂文字逐字节相同的值，以及删除逐字节未改过的旧版出厂文字行。除此之外一律不写：不在关服、卸载或替换时保存，不做整对象的顺带保存，不修复无效值，不规整排版，不清理 6.2 拆开的含点键，不改服主写的注释。**服主自己创建的文件**（礼包、菜单）只在服主明确创建时创建、明确编辑时只写编辑的部分。所有写入经同一个写入闸门：每次写入声明自己拥有的键（或框架自己的注释行），渲染后其余每个字节必须与读取时相同，且文件仍是读取时的内容；否则不写，一条 WARNING 列出文件、键和原因（排版无法保留时给出要改的行号），从不列值，内存中的值照常使用。服主命令调用的 `saveOperatorChange`/`saveOperatorMapEntry` 被拒绝时抛 `ConfigWriteRefusedException`，命令据此回复“未保存”及原因；面板编辑收到注明原因的错误。服主看到拒绝时：按警告改掉它指出的那一行（“文件在读取后已被改动”则先 `/ul reload`），再做一次改动即可，所写内容没有丢失。写入未被拒绝、但发布失败时抛出普通 `IOException`，文件同样保持原来的字节：打开文件后中途失败的写入会在抛出异常前从框架备份放回；连放回也失败时，一条 SEVERE 列出文件和保留的备份，该配置在重载前拒绝一切写入（见 "Rendering and save fallback" 一节，#622）。在该 `IOException` 时回滚内存改动的模块因此与文件保持一致。**官方语言文件归框架所有**，是唯一例外（维护者 2026-10-04 决定）：升级时可能被替换（保留备份并记日志），直接改官方文件不是受支持的定制方式；要定制，请复制官方文件、改名、编辑副本并在主配置中选择它，该副本归服主所有、永不被写入（自定义文件的选择与缺失键的回退在本版本内完成，#608）。
+
+中文补充（被清空的节）：删除一个键就是把该设置重置为默认值，下次启动时框架会连同注释把它补回。如果删掉的是某个节里最后一个键，节的键名会单独留在一行、冒号后什么都没有（`messages:`），读作“没有值”。按维护者 2026-10-06 的决定，这多半是误删，框架会把该节的键补回到这一行下面，而不是每次启动都拒绝写入（自 6.3.0 起，#620）。这是闸门允许一次写入触碰的、写入自身键之外的唯一一行，而且只限这种形状：该行按原样保留键（包括缩进和引号）、注释文字和换行符，只有空白可能被规整——冒号前的空格、注释前的空格，以及注释后或无注释行末尾的空格（`messages :   # reset  ` 补键后成为 `messages: # reset`）；节的值只会从“没有值”变成恰好是补入的那些键；其余每一行逐字节不变。服主在这一行下面注释掉的子键行留在原处、位于补回的键下面，前提是这些注释行紧跟在节所在行之后、连成一段中间没有空行，并且位于文件在该层级的缩进处（两空格缩进的文件里就是两个空格）。以下三种形状则会在每次启动时被拒绝，一条 WARNING 写明行号，文件不变：节所在行与注释掉的子键之间有空行；两段注释之间隔着空行；子键被注释在比文件缩进更深的位置（两空格文件里的四个空格）。删掉空行或把注释移到文件的缩进处，下次启动就会补回键。服主命令、服主改动和面板编辑在这样一行下面添加键时同样如此，例如在被清空的 `rules:` 下添加第一条规则。写成显式空值的节（`messages: {}`、`messages: ~` 或 `messages: null`）是服主自己写的值，绝不会被改动：在它下面插入会被拒绝，警告会写明该节及其行号，并说明可以怎么做——删掉这个值、让该行在冒号处结束（下次启动即补回键），或手动添加这些键（#610 第 2 项）。
+
+中文补充（给服主）：**要让某个文本设置留空，请写空字符串，不要删除这个键**（自 6.3.0 起，维护者 2026-10-06 决定）。写成 `key: ''`：对文本设置，空字符串读作“留空”，启动、重载或保存其他设置时都不会改写它。删除的键会在下次启动时以声明的默认值补回——这是重置设置的方法，不是留空的方法。数字、true/false 等非文本设置没有“留空”的值：`count: ''` 会以一条点名该键的 WARNING 报告（`declared as int: found text …`），内存中使用声明默认值，文件里的 `''` 原样保留。
 
 ### Rendering and save fallback
 
@@ -88,8 +129,13 @@ operator change or a panel edit - whichever setting it changes. Refusing is deli
 operator's layout to make a write pass (orchestrator decision of 2026-10-05 under the maintainer's delegation). The file
 keeps its bytes, the declared or in-memory values run, and the warning names the keys and the reason with the line to fix:
 `the file's layout outside the keys this write owns would change (line N)`, or, for a key sharing its line with another,
-`a key this write owns shares line N with a key it does not own`. Measured layouts that refuse (each pinned by a test,
-`OperatorFileWriterLayoutRefusalListTest`):
+`a key this write owns shares line N with a key it does not own`. An insert below a section written as an explicit empty
+value (`{}`, `~`, `null`, `!!null`) is refused as `the section <key> (line N) is written as an explicit empty value, which the
+framework does not change; to have keys added below it, delete that value so the line ends after the colon, or add the keys
+by hand` (as of v6.3.0, [#610](https://github.com/UltiKits/UltiTools-Reborn/issues/610) item 2; before, the reason was one of
+the two above and did not say what to change). A section left with no value at all (`messages:`) is not refused: the keys
+are put back below it ([#620](https://github.com/UltiKits/UltiTools-Reborn/issues/620), "The write contract"). Measured
+layouts that refuse (each pinned by a test, `OperatorFileWriterLayoutRefusalListTest`):
 
 - a line holding only spaces, and a file holding only spaces;
 - a trailing space after a value or after a section key (`interval: 300 `);
@@ -106,7 +152,10 @@ keeps its bytes, the declared or in-memory values run, and the warning names the
 - two indentation widths in one file (two spaces in one section, four in another);
 - mixed line endings (CRLF on some lines, LF on others);
 - a plain value continued onto the next line, a tab inside a value, an explicit `? key`, an explicit tag (`!!str`);
-- a file holding only a byte-order mark (an emptied file saved as UTF-8 with BOM; the reason names the mark).
+- a file holding only a byte-order mark (an emptied file saved as UTF-8 with BOM; the reason names the mark);
+- an entry holding `null` with an inline comment (`foo: ~  # placeholder`) that a write replaces with a map: the YAML
+  library cannot emit the comment there, so the write is refused naming that key
+  ([#624](https://github.com/UltiKits/UltiTools-Reborn/issues/624), pinned by `WriteGateRuntimeFailureTest`).
 
 Kept byte for byte (a write elsewhere goes through): one space before an inline comment, a block scalar without a blank
 line after it (including a comment line right after it, which is read as the comment of the key or list item below it,
@@ -133,8 +182,19 @@ memory and the module loaded; a file holding only a tab, `---` or `...` cannot b
 unparseable file (never written). So is a file in which a block scalar is followed by a comment line indented above
 column 0, a blank line and a second comment line: SnakeYAML 2.2 throws inside its composer on that layout
 ([#617](https://github.com/UltiKits/UltiTools-Reborn/issues/617), open). An operator change or a panel edit of a file deleted since it was read creates the file,
-exclusively, holding only the named settings with their comments. An unchecked failure inside the gate at start-up never
-refuses the module: one warning names the file and the failure's class, and the declared defaults run in memory.
+exclusively, holding only the named settings with their comments.
+
+A runtime failure of the YAML library inside the gate is a refusal like any layout the gate cannot keep
+([#624](https://github.com/UltiKits/UltiTools-Reborn/issues/624)). This covers a failure while a write's edit is applied
+to the document, while the document is rendered, and while the rendering is parsed back for the self-check, on every gated
+write. Nothing is written. The gate's one warning names the file, the keys, the step that failed and the failure's
+class, never the failure's message, which may quote the file: for example `the file cannot be written at
+autoreply.rules.foo: rendering the document failed (EmitterException)`. Any other unchecked failure in the same steps,
+reading the file included, is refused the same way. An explicit write (`saveOperatorChange`, `saveOperatorMapEntry`, a panel edit) throws
+`ConfigWriteRefusedException` naming the keys. An automatic write keeps its declared defaults in memory, as for any refusal.
+No runtime exception from the library reaches the caller, so a module that rolls back on the documented `IOException` stays
+in step with the file. Before this fix an `EmitterException` escaped such a write. Any other unchecked failure at start-up
+never refuses the module: one warning names the file and the failure's class, and the declared defaults run in memory.
 
 Saving first attempts a forced same-directory temporary file and atomic replacement. Only an unsupported atomic move, EBUSY,
 EXDEV, or a permission/read-only refusal to create the temporary file allows the narrow fallback: exclusively create a backup
@@ -147,11 +207,23 @@ staging or move failures refuse the save. A fallback attempt logs one warning id
 Symbolic links remain links, with the backup beside the resolved target. The writer reads, writes or deletes no other name: an
 operator's own `<file>.bak` (the name the fallback used before 6.3.0's #601) is never touched.
 
-After an in-place write begins, a failure may leave a partial target, but its complete forced backup remains. That backup is
-removed only after the next successful strict UTF-8 storage load, and only while its bytes still match what the writer recorded;
-unreadable or unparseable files keep it. A file of the backup pattern that this server run did not write, or whose bytes changed
+As of 6.3.0, a failure after the in-place write has opened the target no longer leaves a partial target
+([#622](https://github.com/UltiKits/UltiTools-Reborn/issues/622)). Such a failure is a write that stops part-way, or a
+failed force or close. The framework first puts the target back: it writes in place the bytes the target held
+immediately before, which are exactly what the forced backup holds. It writes in place because the atomic move this
+fallback stands in for was refused. It then removes that backup, and only then reports the `IOException`. So the file
+holds what it held before the write, and agrees with a module that rolls its change back on that exception. A panel batch
+puts back every file it opened and reports failure ([#582](https://github.com/UltiKits/UltiTools-Reborn/issues/582)).
+If putting the target back fails too, one SEVERE names the file and the backup, never content. The backup is kept, and no
+load deletes it. The configuration that wrote the file then treats it as changed since it was read, until a reload reads
+it again: `isFileModifiedSinceSnapshot()` is true; an operator change or a panel edit is refused with
+`ConfigWriteRefusedException` ("the file changed since it was read: …"); and `save()` writes nothing, with one WARNING
+naming the keys. To resolve it, compare the file with the backup, copy the backup over the file if needed, then reload. A
+backup that served a successful in-place write is removed only after the next successful strict UTF-8 storage load, and
+only while its bytes still match what the writer recorded; unreadable or unparseable files keep it. A file of the backup pattern that this server run did not write, or whose bytes changed
 after it was written, is kept and named once at INFO; delete it yourself once it is no longer needed. Backup cleanup is best
-effort and cannot turn a successful load into a failure. No automatic restoration policy is introduced.
+effort and cannot turn a successful load into a failure. Apart from putting back the write that just failed, no restoration
+from an older backup is attempted.
 
 ### Declared types, whole map keys and persistence
 
@@ -208,6 +280,19 @@ Two forms holding the same value are refused too; measured on 3,710 live configu
 twice, and accepting equal copies would let a later write change one copy and refuse the module at the next start.
 Delete one of the two lines and restart. This applies to declared setting paths only: keys inside a map value keep
 their whole-key meaning (`o.O` above).
+A setting the file lacks is inserted below the section the file already holds it in, never into a second form of that
+section (as of v6.3.0, [#614](https://github.com/UltiKits/UltiTools-Reborn/issues/614)): below the longest prefix of the
+setting path the file holds as a section (a mapping, or a key with no value), the rest of the path as nested keys. With
+`a.b:` / `c: 3` and a declared `a.b.d`, the start-up insert writes `d:` under `a.b:`; before, it added a nested `a:` /
+`b:` / `d:` copy, which Bukkit's `YamlConfiguration` reads as replacing the flat `a.b` section, so a module reading its
+own file with Bukkit lost `a.b.c`. When a declared setting of the same section is written with the rest of its path as
+one dotted key below the section, such as `a:` / `  b.c: 3`, the missing `a.b.d` is written the same way beside it,
+`  b.d: 2`, never as a nested `b:` / `d:` copy (maintainer decision, gate-1 review of the #614 fix); when such siblings are
+written in different splits, the insert is refused as below. When the file holds that section in several forms, the setting goes below the one
+form that holds another declared setting of the section; when none or more than one does, the insert is refused: the
+WARNING (or, for an operator command, `ConfigWriteRefusedException`) names the file, the settings and the section, never a
+value, and the declared default runs in memory. The same holds for an operator command, an operator change and a panel
+edit that insert a setting.
 For a `Map<String, String>` the wrongly shaped nested value is skipped with a warning.
 Explicit `null` is stored and binds to reference fields (primitive null is a mismatch). UUIDs, enums,
 sets and registered Bukkit values use converter plain output, not Java class tags. A Bukkit value
@@ -269,6 +354,25 @@ throws the new `com.ultikits.ultitools.config.ConfigWriteRefusedException`, an `
 `getReason()` name the reason without any value; the file keeps its bytes and the in-memory value stays, unsaved. A path
 that is not a declared entry, or a map-entry call on a setting not declared as a map, throws `IllegalArgumentException`
 and writes nothing. Both run under the entity monitor and must be called on the server thread.
+
+A map-entry write can also be made conditional on whether the entry is in the file (additive, 6.3.0,
+[#623](https://github.com/UltiKits/UltiTools-Reborn/issues/623)): `#saveOperatorMapEntry(EntryPresence, String, String...)`
+with the new enum `com.ultikits.ultitools.config.EntryPresence`. Use `MUST_BE_ABSENT` for a command that creates an entry
+(`/autoreply add`) and `MUST_BE_PRESENT` for one that changes an existing entry (`/autoreply setkeyword`). A module therefore
+needs no second read of the file with its own parser. The condition is decided on the read whose bytes the write gate
+verifies the edit against, and the gate checks those bytes again immediately before it replaces the file. So an entry the
+operator added or deleted by hand since the load is seen, and an edit saved after that read makes the gate refuse the write
+as "the file changed". "Present" means the entry's whole key path exists where the framework reads the setting: its nested
+keys, or the flat dotted form ([#612](https://github.com/UltiKits/UltiTools-Reborn/issues/612)), followed by the map keys,
+each one whole key. An entry holding `null` is present. An entry under a missing, `null`, empty (`{}`) or non-map key is
+absent, and so is every entry of a missing, empty or comment-only file. When the condition does not hold, nothing is
+written (bytes and modification time stay) and the framework logs nothing above FINE. The call then throws the new
+`com.ultikits.ultitools.config.ConfigEntryPresenceException`, a `ConfigWriteRefusedException`: `getRequired()` names the
+condition that failed, and `getReason()` names the entry's key path, never a value. A `null` condition throws
+`IllegalArgumentException`. The two-argument overload is unchanged. One source-level consequence: a call that passes a
+literal `null` as the first argument, `saveOperatorMapEntry(null, "path", "key")`, no longer compiles, because it is
+ambiguous between the two overloads. The change is binary compatible, and such a call already threw
+`IllegalArgumentException` before 6.3.0's overload existed.
 
 Unreadable, unparseable and non-UTF-8 files are protected on every entity write path. Initial load
 keeps declared defaults and logs one SEVERE naming the file and safe cause. As of 6.3.0 (#589) a
@@ -612,12 +716,13 @@ separate crash-safe multi-file transaction limit.
 
 - 新扩展点是 `ConfigConverter<T>` 和 `@ConfigConverterFor`，转换器必须是扫描包内带 public 无参构造器的 public 顶层类；扫描器不发现嵌套转换器。它不是 IoC bean。未知声明类型在读取或创建文件前拒绝模块加载；官方 UltiRecipe 的配方对象需要模块自己的转换器。
 - 注解 `path` 中的点仍表示嵌套路径；映射里的 `g.m`、`o.O`、`wave.` 从 6.3.0 起按完整键保存。6.2 已经拆开的文件原样读取，不会自动合并，保存也不会删除这些条目，留给服主自己删（维护者 2026-10-04 决定）。完整泛型参与绑定；无效集合元素跳过，无效字段用声明默认值；重载时文件里缺少的键改用声明默认值（上次加载时还在、即服主刚删掉的键警告一次）（模块自上次加载或保存后改过该设置时保留模块的值），两种情况都不改文件，之后的保存也不会补回该键（#596）。允许 null 的引用类型可往返；`Object` 中的 Bukkit 序列化对象读取后仍是普通映射。
-- 6.3.0 起，声明的设置写成带点的扁平键时就是该设置（#612）：模块声明 `@ConfigEntry(path = "features.chat")`，文件写的是 `features.chat: false` 而不是 `features:` / `chat: false` 时，模块读到 `false`，与 6.2 经 Bukkit 读取时相同；路径的点以任何方式拆分都算（`a.b.c` 写成 `a.b:` / `c: 1` 也可以）。框架不会再为这种设置补一份嵌套写法：启动补键、模块保存、服主命令（`saveOperatorChange`、`saveOperatorMapEntry`）和面板编辑都经写入闸门写在该设置所在的那一行，面板也只按设置路径显示一次。`@ConditionalOnConfig` 改用同一个文档读取器和同一规则读取，不再用 Bukkit 的 `YamlConfiguration`，所以启动补键前后读到的都是模块绑定的值；仍只认布尔值。`isPresentInFile` 同样按此规则判断（扁平点键也算存在）。同一文件里一个设置写了两种形式（例如 `features.chat: false` 和 `features:` / `chat: true`）时，在模块代码运行前拒绝加载该模块（重载则拒绝重载、保留运行中的值），提示说明该设置写了两种形式，只写文件和设置路径，不写值；`@ConditionalOnConfig` 读取的路径即使没有配置实体声明，写了两种形式时同样拒绝该模块的组件扫描。两种形式的值相同也拒绝：在 3,710 个实际配置文件上实测，没有一个文件把同一设置写了两次；若接受相同的两份，之后某次写入只改其中一份，下次启动就会拒绝模块。删掉其中一行再重启即可。此规则只针对声明的设置路径，映射值里的键仍按完整键处理（如上面的 `o.O`）。
-- 保存内容、注释文字、键顺序和支持的文件风格。6.3.0 起，所有自动写入（创建不存在的文件、补写缺失的声明键、启动或重载时改写框架自己的令牌注释、注册批次落盘）都经过同一个写入闸门：每次写入声明自己拥有的键，渲染后其余每一行必须与读取时逐字节相同（含换行符、BOM 和末尾换行），且文件仍是读取时的内容；否则不写，警告一次（只列文件、键和原因，不列值），内存中使用声明默认值。这些写入不会规整排版：手工对齐的文件缺少的键会一直缺少，每次启动警告一次，直到服主自己补上。使用锚点、别名或合并键的文件不会被自动写入，每次运行只提示一次。框架新建文件时独占创建，绝不替换期间出现的文件。模块的显式保存同样经过写入闸门，只拥有它要写的设置（#599，见下）；服主操作写入和面板编辑同样经过写入闸门，只写它们改的设置或映射条目，不再规整排版或展开锚点；闸门拒绝时面板收到注明原因的错误，文件不变（#600）。渲染器只能按一种规范排版写回；文件排版与之不同的地方，闸门无法保留，因此对该文件的**每一次**经闸门写入（启动补键、改写注释、保存、服主操作写入、面板编辑）都会拒绝，无论改的是哪个设置。这是有意的：规则不允许为了让写入通过而规整服主的排版（维护者授权下编排者 2026-10-05 的决定）。文件保持原样，内存中使用相应值，警告列出键和原因，并给出要改的行号（“…would change (line N)”或“…shares line N…”）。实测会拒绝的排版（每种都有测试 `OperatorFileWriterLayoutRefusalListTest` 固定）：只含空格的行或文件；值或节键后面的行尾空格；用多个空格对齐的行内注释（`#` 前只有一个空格的会保留）；冒号后多于一个空格、流式方括号内侧的空格（`[ world ]`）；文档开始标记 `---` 或结束标记 `...`；块标量（`|` 或 `>`）后面跟空行；没有末尾换行的文件里，最后一个值是用 `|`、`|+` 或 `>` 写的块标量（在这种文件末尾它的值没有末尾换行，所以会按 `|-` 或 `>-` 写回；这种文件里其它位置的块标量、以及用 `|-` 或 `>-` 写的最后一个值都会保留——但把文件最后一个值写成以换行结尾的文本的写入会被拒绝，并指出那一行；值永远不会被改动）；一节末尾、空行之后、缩进比下一个键更深的注释，以及任何缩进比下面的键更深的注释；同一文件里两种缩进宽度；混用换行符；续到下一行的普通值、值里的制表符、显式 `? key`、显式标签（`!!str`）；只含 BOM 的文件（原因里注明 BOM）。会保留的排版（其它键的写入照常通过）：`#` 前一个空格的行内注释、后面没有空行的块标量（包括紧跟在它后面的注释行：它被读成下面那个键或列表项的注释，与普通值之后的注释相同，[#592](https://github.com/UltiKits/UltiTools-Reborn/issues/592)；修复前 SnakeYAML 的读法会让该文件之后的每次写入都被拒绝，服主删除 UltiMail 的十一个设置之一来重置它时就会遇到）、内侧无空格的流式映射和列表、带引号的值、全文一致的四空格缩进、与键同列的列表项、全文统一的 CRLF 或 LF、没有末尾换行（含有块标量的文件也一样，上面所说的最后一个值除外）、BOM、`#` 后无空格的注释、多个空行、十六进制数、`~` 和空值。使用锚点的文件整体拒绝，不按行。实测：框架和十五个模块自带的 32 个 YAML 文件、维护者测试服务器 `plugins/UltiTools/` 下 3,710 个配置 YAML 文件，经真实闸门插入一个键全部通过；已知唯一会拒绝的出厂文件是 6.0.0 和 6.0.6 的框架 `config.yml`（见下）。改掉警告指出的那一行，下一次写入即可通过。0 字节文件、只有空行的文件、以及只含行首注释（前面可有空行）的文件在闸门看来是空文档：启动时在已有字节之后补入声明的键（没有其它字节需要保留），服主操作写入或面板编辑插入它指定的设置；保存从不插入。只含空格的文件、含缩进注释的纯注释文件和只含 BOM 的文件按排版拒绝（见上），内存使用默认值、模块照常加载；只含制表符、`---` 或 `...` 的文件无法解析，按无法解析的文件保护（永不写入）；块标量后面依次是缩进大于 0 列的注释行、空行、第二个注释行的文件也一样：SnakeYAML 2.2 在这种排版上会在组装节点时抛出异常（[#617](https://github.com/UltiKits/UltiTools-Reborn/issues/617)，未修复）。读取后被删除的文件，服主操作写入或面板编辑会独占地重新创建它，只含指定的设置及其注释。启动时闸门内部的非受检异常不会拒绝模块：一条警告列出文件和异常类名，内存中使用声明默认值。语义无变化不写文件，字节和修改时间不变。浮点数按最短可回读十进制判断，不要求二进制精确。
-- 先临时文件、force、原子替换；仅已允许的原子替换/临时创建拒绝才走备份后原地写。备份文件名为 `<文件名>.ultitools-backup-<16 位小写十六进制>`，独占创建；本次运行已为同一文件写过、且内容未变的备份先从当前文件刷新并原子替换，之后才打开目标。写入器不读取、不写入、不删除任何其它文件，服主自己的 `<文件>.bak` 不受影响。失败保留备份，只有成功严格加载当前文件、且备份内容仍与记录一致时才清理；本次运行未写过或已被改动的同类备份保留，并以 INFO 提示一次。不自动还原，不保证多文件崩溃事务。
+- 6.3.0 起，声明的设置写成带点的扁平键时就是该设置（#612）：模块声明 `@ConfigEntry(path = "features.chat")`，文件写的是 `features.chat: false` 而不是 `features:` / `chat: false` 时，模块读到 `false`，与 6.2 经 Bukkit 读取时相同；路径的点以任何方式拆分都算（`a.b.c` 写成 `a.b:` / `c: 1` 也可以）。框架不会再为这种设置补一份嵌套写法：启动补键、模块保存、服主命令（`saveOperatorChange`、`saveOperatorMapEntry`）和面板编辑都经写入闸门写在该设置所在的那一行，面板也只按设置路径显示一次。`@ConditionalOnConfig` 改用同一个文档读取器和同一规则读取，不再用 Bukkit 的 `YamlConfiguration`，所以启动补键前后读到的都是模块绑定的值；仍只认布尔值。`isPresentInFile` 同样按此规则判断（扁平点键也算存在）。同一文件里一个设置写了两种形式（例如 `features.chat: false` 和 `features:` / `chat: true`）时，在模块代码运行前拒绝加载该模块（重载则拒绝重载、保留运行中的值），提示说明该设置写了两种形式，只写文件和设置路径，不写值；`@ConditionalOnConfig` 读取的路径即使没有配置实体声明，写了两种形式时同样拒绝该模块的组件扫描。两种形式的值相同也拒绝：在 3,710 个实际配置文件上实测，没有一个文件把同一设置写了两次；若接受相同的两份，之后某次写入只改其中一份，下次启动就会拒绝模块。删掉其中一行再重启即可。此规则只针对声明的设置路径，映射值里的键仍按完整键处理（如上面的 `o.O`）。文件缺少的设置会插入到文件已有的那个节下面，绝不写成该节的第二种形式（自 6.3.0 起，#614）：插入位置是文件以节的形式（映射，或没有值的键）持有的、设置路径最长的那段前缀，其余部分写成嵌套键。例如文件写了 `a.b:` / `c: 3`、模块声明了 `a.b.d`，启动补键会把 `d:` 写在 `a.b:` 下面；之前会另加一份嵌套的 `a:` / `b:` / `d:`，Bukkit 的 `YamlConfiguration` 会把它当作替换了扁平的 `a.b` 节，用 Bukkit 读取自己文件的模块就读不到 `a.b.c` 了。如果同一节的某个声明设置把路径的剩余部分写成节下的一个带点键（如 `a:` / `  b.c: 3`），缺少的 `a.b.d` 会以同样的方式写在它旁边（`  b.d: 2`），绝不另写嵌套的 `b:` / `d:`（维护者对 #614 修复的第一道审查意见所作的决定）；这样的兄弟设置若拆分方式不同，则按下文拒绝插入。如果文件把这个节写了几种形式，设置会插入到其中唯一一个还持有该节其他声明设置的形式下；没有或不止一个形式持有时拒绝插入：WARNING（服主命令则抛 `ConfigWriteRefusedException`）写明文件、设置和节，从不写值，内存中使用声明默认值。服主命令、服主改动和面板编辑插入设置时同样如此。
+- 保存内容、注释文字、键顺序和支持的文件风格。6.3.0 起，所有自动写入（创建不存在的文件、补写缺失的声明键、启动或重载时改写框架自己的令牌注释、注册批次落盘）都经过同一个写入闸门：每次写入声明自己拥有的键，渲染后其余每一行必须与读取时逐字节相同（含换行符、BOM 和末尾换行），且文件仍是读取时的内容；否则不写，警告一次（只列文件、键和原因，不列值），内存中使用声明默认值。这些写入不会规整排版：手工对齐的文件缺少的键会一直缺少，每次启动警告一次，直到服主自己补上。使用锚点、别名或合并键的文件不会被自动写入，每次运行只提示一次。框架新建文件时独占创建，绝不替换期间出现的文件。模块的显式保存同样经过写入闸门，只拥有它要写的设置（#599，见下）；服主操作写入和面板编辑同样经过写入闸门，只写它们改的设置或映射条目，不再规整排版或展开锚点；闸门拒绝时面板收到注明原因的错误，文件不变（#600）。渲染器只能按一种规范排版写回；文件排版与之不同的地方，闸门无法保留，因此对该文件的**每一次**经闸门写入（启动补键、改写注释、保存、服主操作写入、面板编辑）都会拒绝，无论改的是哪个设置。这是有意的：规则不允许为了让写入通过而规整服主的排版（维护者授权下编排者 2026-10-05 的决定）。文件保持原样，内存中使用相应值，警告列出键和原因，并给出要改的行号（“…would change (line N)”或“…shares line N…”）。实测会拒绝的排版（每种都有测试 `OperatorFileWriterLayoutRefusalListTest` 固定）：只含空格的行或文件；值或节键后面的行尾空格；用多个空格对齐的行内注释（`#` 前只有一个空格的会保留）；冒号后多于一个空格、流式方括号内侧的空格（`[ world ]`）；文档开始标记 `---` 或结束标记 `...`；块标量（`|` 或 `>`）后面跟空行；没有末尾换行的文件里，最后一个值是用 `|`、`|+` 或 `>` 写的块标量（在这种文件末尾它的值没有末尾换行，所以会按 `|-` 或 `>-` 写回；这种文件里其它位置的块标量、以及用 `|-` 或 `>-` 写的最后一个值都会保留——但把文件最后一个值写成以换行结尾的文本的写入会被拒绝，并指出那一行；值永远不会被改动）；一节末尾、空行之后、缩进比下一个键更深的注释，以及任何缩进比下面的键更深的注释；同一文件里两种缩进宽度；混用换行符；续到下一行的普通值、值里的制表符、显式 `? key`、显式标签（`!!str`）；只含 BOM 的文件（原因里注明 BOM）；值为 `null` 且带行内注释的条目（`foo: ~  # placeholder`）被写入改成映射时，YAML 库无法在那里写出该注释，写入被拒绝并指出该键（#624，由 `WriteGateRuntimeFailureTest` 固定）。会保留的排版（其它键的写入照常通过）：`#` 前一个空格的行内注释、后面没有空行的块标量（包括紧跟在它后面的注释行：它被读成下面那个键或列表项的注释，与普通值之后的注释相同，[#592](https://github.com/UltiKits/UltiTools-Reborn/issues/592)；修复前 SnakeYAML 的读法会让该文件之后的每次写入都被拒绝，服主删除 UltiMail 的十一个设置之一来重置它时就会遇到）、内侧无空格的流式映射和列表、带引号的值、全文一致的四空格缩进、与键同列的列表项、全文统一的 CRLF 或 LF、没有末尾换行（含有块标量的文件也一样，上面所说的最后一个值除外）、BOM、`#` 后无空格的注释、多个空行、十六进制数、`~` 和空值。使用锚点的文件整体拒绝，不按行。实测：框架和十五个模块自带的 32 个 YAML 文件、维护者测试服务器 `plugins/UltiTools/` 下 3,710 个配置 YAML 文件，经真实闸门插入一个键全部通过；已知唯一会拒绝的出厂文件是 6.0.0 和 6.0.6 的框架 `config.yml`（见下）。改掉警告指出的那一行，下一次写入即可通过。0 字节文件、只有空行的文件、以及只含行首注释（前面可有空行）的文件在闸门看来是空文档：启动时在已有字节之后补入声明的键（没有其它字节需要保留），服主操作写入或面板编辑插入它指定的设置；保存从不插入。只含空格的文件、含缩进注释的纯注释文件和只含 BOM 的文件按排版拒绝（见上），内存使用默认值、模块照常加载；只含制表符、`---` 或 `...` 的文件无法解析，按无法解析的文件保护（永不写入）；块标量后面依次是缩进大于 0 列的注释行、空行、第二个注释行的文件也一样：SnakeYAML 2.2 在这种排版上会在组装节点时抛出异常（[#617](https://github.com/UltiKits/UltiTools-Reborn/issues/617)，未修复）。读取后被删除的文件，服主操作写入或面板编辑会独占地重新创建它，只含指定的设置及其注释。YAML 库在闸门内部抛出的运行时异常（应用写入的修改、渲染文档、为自检重新解析渲染结果时）与闸门无法保留的排版一样按拒绝处理（#624）：不写入；闸门的一条警告列出文件、键、失败的步骤和异常类名，从不含异常消息（消息可能引用文件内容），例如 `the file cannot be written at autoreply.rules.foo: rendering the document failed (EmitterException)`；这些步骤（包括读取文件）中的其它非受检异常同样按拒绝处理；显式写入（`saveOperatorChange`、`saveOperatorMapEntry`、面板编辑）抛出注明键的 `ConfigWriteRefusedException`，自动写入照常在内存中使用声明默认值。库的运行时异常不会再传到调用方，按约定在 `IOException` 时回滚的模块因此与文件保持一致；修复前此类写入会抛出 `EmitterException`。启动时其它非受检异常不会拒绝模块：一条警告列出文件和异常类名，内存中使用声明默认值。语义无变化不写文件，字节和修改时间不变。浮点数按最短可回读十进制判断，不要求二进制精确。
+- 先临时文件、force、原子替换；仅已允许的原子替换/临时创建拒绝才走备份后原地写。备份文件名为 `<文件名>.ultitools-backup-<16 位小写十六进制>`，独占创建；本次运行已为同一文件写过、且内容未变的备份先从当前文件刷新并原子替换，之后才打开目标。写入器不读取、不写入、不删除任何其它文件，服主自己的 `<文件>.bak` 不受影响。6.3.0 起，原地写入在打开目标之后失败（写到一半中断、force 或关闭失败）不再留下写了一半的目标（#622）：框架先把目标放回原样——按原地方式写回目标在此之前的字节，也就是已 force 的备份里的内容（之所以原地写回，是因为这条退路所替代的原子移动已被拒绝）——再删除该备份，然后才报告 `IOException`；因此文件保持写入前的内容，与在该异常时回滚内存改动的模块一致。面板批次以同样方式放回它打开过的每个文件，并报告失败（#582）。若放回本身也失败：一条 SEVERE 列出文件和备份（从不含内容），备份保留且之后的加载不会删除它；写入该文件的配置在重载重新读取文件之前，把它视为读取后已被改动：`isFileModifiedSinceSnapshot()` 为真，服主操作写入和面板编辑以 `ConfigWriteRefusedException`（“the file changed since it was read: …”）拒绝，`save()` 不写入并以一条 WARNING 列出键。处理方法：对比文件与备份，必要时用备份覆盖文件，然后重载。成功的原地写入所用的备份只在成功严格加载当前文件、且备份内容仍与记录一致时才清理；本次运行未写过或已被改动的同类备份保留，并以 INFO 提示一次。除放回刚失败的那次写入外，不从更早的备份还原，不保证多文件崩溃事务。
 - 不能读取、不能解析、非 UTF-8 文件不会被任何实体写入路径覆盖；初次失败用默认值，重载失败保留运行值。成功加载才解除保护。单独 `{key}` 注释按模块当前语言目录更新，但只改框架能认出是自己写的注释行：该项注释整体或末尾连续几行，与框架对模块 jar 自带任一语言目录中的文字、模块当前解析出的文字或原样 `{key}` 写出的形式逐字节相同（该项的缩进、`#`、一个空格加文字；只按相等判断，`#` 后缺空格或缩进不同即视为服主所写）；服主在令牌项上方手写的注释、改过的框架注释和字面注释逐字节永久保留（#604，维护者 2026-10-04 决定，取代此前“令牌项上的服主注释会被替换”）。已不在任何自带目录中的旧版措辞，只有模块在新增的 `@ConfigEntry(previousComments = {...})`（增量属性，默认为空）中登记了该文字时才算框架所写：逐字节相同即替换为当前目录文字并从此随语言切换（维护者 2026-10-04 决定）；未登记的原样保留。面板编辑以服主同意为准，只替换它指定的键，不再发警告（此前会警告一次列出被覆盖的键，#527）。框架写的注释行被服主删除（设置本身保留）时，下次启动和下次 `/ul reload` 都会把它写回原位，用当时所选的语言，无论是否切换了语言；但如果该设置正上方还留着服主自己的注释行，这行就是该设置的全部注释、属于服主，框架不会在上面再写。服主写的值、键和行都不会变；切换语言时，该设置以外的框架注释照常跟随切换。出厂语言文件写的注释和自定义语言文件写的注释都是如此（6.3.0 实测，计划 17-77，由 `DeletedFrameworkCommentTest` 固定）。所以删除注释行去不掉注释：想让令牌设置不带框架注释，请把该行换成自己的注释（哪怕只是一个 `#`），框架认不出是自己的，就会保留，也不会在上面再写。整个设置（注释和键）一起删除时，下次启动会带着默认值和注释写回，位置在剩余设置之后，而不是原来的位置。
 - 6.3.0 起模块 `save()` 只写模块自上次加载或保存以来改过的设置，并且只在文件该处仍是框架上次读到或写入的值、且该值正是模块的起始值（能无转换警告地转换为上次加载或保存时的设置值）时才写（#599，维护者 2026-10-04 决定）。声明为 `Map` 的设置按条目写（按声明的映射类型逐层进入嵌套映射），只设置或删除模块增、改、删的条目（空映射或被模块删空的映射整体写，因为它的键行随首条或末条一起变）；其他值——列表、Bukkit `Location`/`Vector` 等 `ConfigurationSerializable`、类型化映射中本身不是映射的条目值——都算一个值，要么整体写入要么不写，文件里不会出现模块与服主各占一部分的值。声明为 `Map<String, Object>` 或原始 `Map` 的设置只拆一层，其下的普通嵌套映射算一个值。重载合并（复合值或列表冲突时整体采用文件的值，只列键名）、面板编辑复合值内的字段（以框架上次读到的整个值加上该字段的改动为写入单位，且仅当写入时文件仍保存着该整个值；否则拒绝并注明设置名“文件在读取后已被改动，请先重载”，不写入）以及 `saveOperatorMapEntry`（键深入到非映射条目内部时抛 `IllegalArgumentException`，不写入）都按同一规则判断什么算一个值。保存从不补写文件缺少的键、从不改写注释、从不删除模块没删的映射条目。因此服主在磁盘上改过的值、删掉的键、框架无法使用的值或列表元素（`interval: 3O0`、`[60, 30, 10, abc]`）以及 6.2 拆开的映射条目，无论模块是否改了该设置，保存都不会覆盖（#596）。没写成的改动留在内存，每次保存一条警告列出文件和这些键，不列值；被写入闸门拒绝的键由闸门的警告连同原因列出。其余每一行逐字节不变，否则不写；没有可写内容时不碰文件。“文件仍是读取时的内容”比较的是框架上次读到或写入的文本：服主不经 `/ul reload` 直接在磁盘上改过的设置——哪怕值不变，比如把 `y: 64` 改成 `y: 64.0`——之后模块对该设置的改动不会写入（警告中列出），直到重载重新读取文件；没有任何内容丢失，模块的值留在内存中。`save()` 用于服主通过模块要求的改动，或语言切换后重新渲染出厂文字。此前显式保存会把服主改过的值连同警告一起覆盖（#527），该行为在 6.3.0 依维护者“服主写的配置绝不被自动覆盖”的规则直接取消，没有过渡期。
 - 6.3.0 新增两个服主操作写入方法（增量 API）：`saveOperatorChange(String...)` 只写指定的设置（如 `/setspawn` 指定六个 `spawn.location.*`），`saveOperatorMapEntry(String, String...)` 只写映射设置中的一个条目（如 `/autoreply` 的一条规则；文件缺少时插入，模块映射里已删除时从文件删除；每个映射键是完整键，`play.example` 是一个键）。服主的命令即同意：指定键处以模块的值为准，服主手改过的也替换；文件缺少的指定设置连同注释插入。其余一律不写（模块改过但未指定的设置也不写；用 `saveOperatorChange` 指定整个映射设置会整体写入并丢掉服主手加的条目，只改一个条目的命令应使用 `saveOperatorMapEntry`），写入经写入闸门且只拥有这些键。被拒绝时（文件不可读或无法解析、使用锚点、排版无法逐字节保留、准备写入期间文件被改）抛出新的 `com.ultikits.ultitools.config.ConfigWriteRefusedException`（`IOException` 子类），消息和 `getReason()` 说明原因、不含任何值；文件保持原样，内存中的值不变且仍未保存。路径不是已声明的配置项，或对非映射设置调用条目方法，抛 `IllegalArgumentException` 且不写。两者都在实体锁下执行，须在服务器主线程调用。
+- 6.3.0 新增 `saveOperatorMapEntry(EntryPresence, String, String...)`（增量 API，#623）：映射条目的写入可附带存在性条件，`MUST_BE_ABSENT` 用于新建条目的命令（如 `/autoreply add`），`MUST_BE_PRESENT` 用于修改已有条目的命令（如 `/autoreply setkeyword`），模块不必再用自己的解析器另读一次文件。条件在写入闸门据以校验的同一次读取上判断，闸门在替换文件前还会再核对一次这些字节：服主自加载以来手动添加或删除的条目都能看到，此后保存的改动则让闸门以“文件已被改动”拒绝写入。“存在”指该条目的完整键路径在文件中存在（框架读取该设置的位置：嵌套键或扁平的带点键，#612，再接映射键，每个都是完整键）；值为 `null` 的条目算存在；上级键缺失、为 `null`、为空映射 `{}` 或不是映射时算不存在，缺失、空白或只有注释的文件不含任何条目。条件不成立时不写入（字节和修改时间不变），框架只记 FINE 级日志，并抛出新的 `com.ultikits.ultitools.config.ConfigEntryPresenceException`（`ConfigWriteRefusedException` 的子类）：`getRequired()` 给出不成立的条件，`getReason()` 给出条目的键路径，从不含值。条件为 `null` 时抛 `IllegalArgumentException`。原来的两参数重载不变。源码层面的一个影响：第一个参数直接写字面量 `null` 的调用（`saveOperatorMapEntry(null, "path", "key")`）因两个重载都匹配而不再能编译；这一改动二进制兼容，而且这样的调用在新重载出现之前本来就会抛 `IllegalArgumentException`。
 - `getConfig()` 在 6.2.5 确实可用，不能冒称符合两个同版删除例外；维护者通过 6.3.0 一次性 carve-out 删除它。改用 `isPresentInFile` 查询上次成功加载时的存在性，修改声明字段后 `save()`。两个已知官方调用在 UltiEssentials 与 UltiRemoteBag；第三方用量未知。
 - 六个旧解析器相关声明在 6.3.0 首次带 `forRemoval`，公告 6.4.0 删除。显式非默认 parser 暂时保留冻结的旧行为；默认 parser 改走注册表。迁移示例见上方，转换器必须满足两条互逆等式，不能单向加值或悄悄丢字段。
 - 注册批次验证完成才开始独立写文件；面板批次先验证并经写入闸门暂存全部文件，在进程内失败时回滚，持久存储故障可能阻止恢复；每个文件替换前再核对一次字节，期间被服主保存的文件整批拒绝（`ConfigWriteRefusedException` 注明文件）、服主的保存保留，已替换的文件恢复为核对时的原字节。面板唯一映射路径走整字段类型转换，歧义和未知变更拒绝整个请求；无关内存/磁盘兄弟项保留。
@@ -1512,6 +1617,62 @@ This section governs the third kind.
   metrics code reads that file at start, before any plugin loads, and rewrites an unparseable copy or one without
   `serverUuid` with fresh defaults (measured on Paper 1.21.11), so on Paper such a file is replaced by the server, never by
   UltiTools, and UltiTools only ever sees a valid file.
+- **`@NotEmpty` on a list, set or map now acts** ([#630](https://github.com/UltiKits/UltiTools-Reborn/issues/630), as of
+  v6.3.0, maintainer decision of 2026-10-06). Before 6.3.0 the check read only the value's text, so an empty list (`[]`)
+  or map (`{}`) passed and the module ran on an empty value its declaration forbids (UltiKits/UltiCleaner#34: an empty
+  `warn-times` silently turned the countdown off). Now a value that a load or reload binds empty - empty or `null` in
+  the file, or a list whose every entry failed to bind - is replaced **in memory** by the field's declared default, and
+  one WARNING names the file, the key, the value kind, the value as written and the default (both redacted when the
+  field name, a key segment, or a map key inside the value or the default is secret-shaped). The module loads and the
+  file is not written, at load and at reload; a later `save()` does not write the default either. The panel shows the
+  file's value (`[]`) while the module runs on the default. A panel write that would empty the value is refused like any
+  other violation, and nothing is written. An operator command that writes that setting with `saveOperatorChange` writes
+  the running value - the default plus the operator's change - in place of `[]`: that is the operator's explicit request
+  for that key. The declared default must itself satisfy the field's constraints - be non-empty, and inside the field's
+  `@Size` if it has one (UltiSideBar's `lines` is `@NotEmpty @Size(min = 1, max = 15)`): a default that does not refuses
+  the module at load as a declaration error naming the field and the constraint, whatever the file holds. `@NotEmpty` on text is
+  unchanged (the module refuses to load naming the field). One case moves the other way: a `@NotEmpty` list written
+  as an explicit `null` (`key: ~`) used to refuse the module and now runs the declared default with the warning.
+
+  中文补充：**`@NotEmpty` 用在列表、集合或映射上现在会生效**（自 6.3.0 起，#630，维护者 2026-10-06 决定）。6.3.0 之前只检查值的文本，空列表 `[]` 或空映射 `{}` 都能通过，模块带着声明为“不得为空”的空值运行（UltiKits/UltiCleaner#34：空的 `warn-times` 让倒计时提示悄悄失效）。现在加载或重载时绑定为空的值——文件中为空或为 `null`，或列表中每一项都无法绑定——会在**内存中**改用字段声明的默认值，并输出一条 WARNING，写明文件、键、值的种类、文件中写的值和默认值（字段名、某一级键名，或值与默认值中的映射键像机密时，两者都隐去）。模块照常加载，加载和重载时都不写文件，之后的 `save()` 也不会把默认值写进去。面板显示的是文件中的值（`[]`），而模块运行的是默认值。面板写入会让该值变空时，与其他违规一样被拒绝，什么都不写。服主命令用 `saveOperatorChange` 写这个设置时，写入的是运行中的值（默认值加上服主的改动），替换掉 `[]`：这是服主对该键的明确要求。声明的默认值本身必须满足该字段的约束——非空，并且若字段带 `@Size` 则在其范围内（UltiSideBar 的 `lines` 是 `@NotEmpty @Size(min = 1, max = 15)`）：不满足时属于声明错误，无论文件里写的是什么，加载时都会拒绝该模块并写明字段和约束。文本上的 `@NotEmpty` 不变（拒绝加载并指明字段）。有一种情况方向相反：写成显式 `null`（`key: ~`）的 `@NotEmpty` 列表以前会拒绝模块，现在改用声明的默认值并给出同一条警告。
+- **`@Range` refuses NaN** ([#625](https://github.com/UltiKits/UltiTools-Reborn/issues/625), as of v6.3.0). The check
+  compared with `<` and `>`, both false for NaN, so `rate: .nan` passed a `@Range(min = 0.0, max = 1.0)` and reached
+  the module (UltiKits/UltiTrade#64). Now a value must satisfy `min <= value <= max`: NaN is out of every range and
+  gets the ordinary out-of-range outcome - the module refuses to load at start, and at `/ul reload` the reload is refused
+  and the running values are kept, naming the field, the value and the bounds. `.inf` and `-.inf` were already out of
+  range for every finite bound and still are; a bound declared as `Double.POSITIVE_INFINITY` (or negative) accepts that
+  infinity.
+
+  中文补充：**`@Range` 拒绝 NaN**（自 6.3.0 起，#625）。原来的检查用 `<` 和 `>` 比较，对 NaN 都为假，因此 `rate: .nan` 能通过 `@Range(min = 0.0, max = 1.0)` 并进入模块（UltiKits/UltiTrade#64）。现在值必须满足 `min <= 值 <= max`：NaN 超出任何范围，按普通越界处理——启动时拒绝加载模块，`/ul reload` 时拒绝这次重载并保留运行中的值，都会写明字段、值和范围。`.inf`、`-.inf` 本来就超出任何有限范围，现在仍然如此；边界声明为 `Double.POSITIVE_INFINITY`（或负无穷）时接受对应的无穷大。
+- **A constraint annotation the framework cannot check refuses the module at load**
+  ([#631](https://github.com/UltiKits/UltiTools-Reborn/issues/631), as of v6.3.0, maintainer decision of 2026-10-06).
+  Before 6.3.0 such a declaration did nothing, with no message: `@Range` on anything but a number, `@Pattern` on anything
+  but text, `@Size` on a map or an array, `@Size` and `@NotEmpty` on numbers, booleans, enums or value types. Now, for a
+  field that is itself a `@ConfigEntry` setting, judged by its declared type. A declared type that can hold a value the
+  annotation checks - `Object`, `Serializable`, `Comparable`, `CharSequence`, `Number` or another supertype of a checked
+  kind - is not a constraint error: the value bound at load is checked. Of these types only `Object` binds without a
+  converter; the others need a module converter (`@ConfigConverterFor`), or the module is refused with `no config
+  converter for ...`. A bound value of a kind the annotation cannot read (text in an `Object` setting under `@Range`, a
+  number under `@Pattern`, `@Size` or `@NotEmpty`) is a violation, with that annotation's usual outcome: refused at
+  load, and at `/ul reload` the reload is refused and the running values are kept; before 6.3.0 it passed silently. The
+  rules for such a field:
+  - `@Size` counts a map's entries and an array's length (a violation refuses the module like any `@Size` violation).
+    Text is a `String` or a `char` for `@NotEmpty`, `@Size` and `@Pattern`.
+  - A declared type that can never hold a checkable value is a declaration error: it refuses the module at load, before
+    its file is read, with one message naming each field, the annotation and why: `@Range` checks numbers only; `@Pattern` checks text only; `@Size` and `@NotEmpty`
+    apply to text, lists, sets, maps and arrays only (`@Range` on a `List<Integer>` is such an error: it does not apply
+    to the list itself). A constraint on a field of a config class that is not a `@ConfigEntry` setting is refused too.
+  - **The constraint annotations take effect only on fields that are themselves `@ConfigEntry` settings of a config
+    class.** An annotation on a field of a value type, a nested class, or anything a converter produces - for example
+    `@NotEmpty` on a field of the class a `Map<String, Item>` setting holds - is never checked and not reported; the
+    framework does not walk into value types ([#633](https://github.com/UltiKits/UltiTools-Reborn/issues/633), closed by
+    the maintainer's decision of 2026-10-06). Validate such fields in the module's converter (skip or refuse the entry
+    there).
+  - First-party modules: UltiRecipe declares `@NotEmpty` and `@Range` on `RecipeConfig.OutputItem`, a value inside its
+    `recipes` setting. They are not checked (it checks them itself), and the module loads; its 6.3.0 build removes the two
+    annotations as cleanup. No first-party module is refused by these declaration checks.
+
+  中文补充：**框架无法检查的约束注解会让模块在加载时被拒绝**（自 6.3.0 起，#631，维护者 2026-10-06 决定）。6.3.0 之前这类声明什么也不做、也没有任何提示：用在非数字上的 `@Range`、非文本上的 `@Pattern`、映射或数组上的 `@Size`、数字/布尔/枚举/值类型上的 `@Size` 与 `@NotEmpty`。现在，对本身就是 `@ConfigEntry` 设置的字段，按其声明类型判断；声明类型若能容纳注解可检查的值（`Object`、`Serializable`、`Comparable`、`CharSequence`、`Number` 或其他被检查种类的父类型），则不算约束错误，加载时绑定的值照常检查；这些类型中只有 `Object` 无需转换器即可绑定，其余类型需要模块转换器（`@ConfigConverterFor`），否则模块会以 `no config converter for ...` 被拒绝；绑定的值若是注解无法读取的种类（`@Range` 下 `Object` 设置里的文本，`@Pattern`、`@Size` 或 `@NotEmpty` 下的数字），按该注解的普通违规处理：启动时拒绝加载，`/ul reload` 时拒绝重载并保留运行中的值（6.3.0 之前会静默通过）；这类字段的规则如下：`@Size` 统计映射的条目数和数组长度（违规时与其他 `@Size` 违规一样拒绝模块）；对 `@NotEmpty`、`@Size`、`@Pattern` 而言，文本指 `String` 或 `char`。只有永远不可能容纳可检查值的声明类型才算声明错误：这类声明会在加载时、读取配置文件之前拒绝模块，一条消息写明每个字段、注解和原因：`@Range` 只检查数字；`@Pattern` 只检查文本；`@Size` 与 `@NotEmpty` 只适用于文本、列表、集合、映射和数组（`List<Integer>` 上的 `@Range` 就属于这种错误：它不适用于列表本身）。配置类中不是 `@ConfigEntry` 设置的字段上的约束同样会被拒绝。**约束注解只对本身就是配置类 `@ConfigEntry` 设置的字段生效。** 值类型的字段、嵌套类的字段，以及转换器产生的任何对象上的注解（例如 `Map<String, Item>` 设置中 `Item` 类字段上的 `@NotEmpty`）既不检查也不报告；框架不会深入值类型（#633，按维护者 2026-10-06 的决定关闭）。请在模块的转换器中校验这些字段（在那里跳过或拒绝该条目）。第一方模块：UltiRecipe 在 `RecipeConfig.OutputItem`（其 `recipes` 设置中的值）上声明了 `@NotEmpty` 和 `@Range`，它们不会被检查（模块自行检查），模块照常加载；它面向 6.3.0 的构建会顺带删除这两个注解。没有第一方模块会被这些声明检查拒绝。
 
 ### Behavioral changes that do need one
 
