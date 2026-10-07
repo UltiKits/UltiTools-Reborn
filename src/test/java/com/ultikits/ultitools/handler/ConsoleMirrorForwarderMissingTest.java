@@ -48,14 +48,9 @@ import com.ultikits.ultitools.utils.TestHelper;
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class ConsoleMirrorForwarderMissingTest {
 
-    /** A forwarder doing what Paper's does, under a binary name the mirror does not recognise. */
-    static final class RelocatedForwardLogHandler extends ForwardLogHandler {
-    }
-
     private final String pluginLoggerName = "ConsoleMirrorForwarderMissingTest-" + UUID.randomUUID();
     private final List<LogRecord> pluginRecords = new CopyOnWriteArrayList<>();
     private UltiPanelLogTransmitter transmitter;
-    private SystemLogHandler handler;
     private Handler forwarder;
     private Handler capture;
     private LoggerContext context;
@@ -95,8 +90,11 @@ class ConsoleMirrorForwarderMissingTest {
         root.setLevel(org.apache.logging.log4j.Level.INFO);
         context.updateLoggers();
 
-        handler = new SystemLogHandler(transmitter);
-        Logger.getLogger("").addHandler(handler);
+        Logger.getLogger("").addHandler(new SystemLogHandler(transmitter));
+    }
+
+    /** A forwarder doing what Paper's does, under a binary name the mirror does not recognise. */
+    static final class RelocatedForwardLogHandler extends ForwardLogHandler {
     }
 
     @AfterEach
