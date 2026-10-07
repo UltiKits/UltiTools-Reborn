@@ -1361,10 +1361,10 @@ This section governs the third kind.
   module instance, and `unregister` releases by instance first. The framework records it for
   everything a module registers in the three registries while it loads — during its container
   refresh, where `@PostConstruct` runs, and during `registerSelf()` — through the ordinary name-only
-  methods, and for every `@ModuleEventHandler` method. A registration made later records it only
-  through the new overloads that take the instance. A registration filed under the module's name
-  only is released by name as before, except while another loaded copy shares that name, when it
-  stays until the last copy of the name is unloaded. One visible consequence: a completer a module
+  methods, and for every `@ModuleEventHandler` method. A registration made later is recorded against
+  the copy listed under the name it is filed under (#562 item 1, the entry after the next). A
+  registration filed under the module's name only is released by name as before, except while
+  another loaded copy shares that name, when it stays until the last copy of the name is unloaded. One visible consequence: a completer a module
   registers in `registerSelf()` is now released when the module unloads; before, only completers
   registered during the container refresh were. Added, all `@since 6.3.0`:
   `TabCompletionManager#beginRegistrationScope(String, UltiToolsPlugin)` and
@@ -1406,6 +1406,30 @@ This section governs the third kind.
   再把旧副本的登记原样放回（EventBus 处理器回到原来的位置），旧副本照常运行。任何加载失败现在都会释放失败副本在这三个登记表中的登记。
   释放期间被其它登记占用的类型或键归该登记所有，并记一条 WARNING。只有以新实例调用 `PluginManager#register(...)`
   的代码会走到这条路径，服主命令走不到。
+- A registration made after load through the name-only APIs belongs to a module instance (#562
+  item 1). `PanelResponderRegistry#registerResponder(type, responder, ownerModule)` and the
+  `EventBus` methods that take an `ownerModule` (`subscribe(..., ownerModule, consumer)` and the
+  name-only `register(...)`), called outside every module's load -- from a scheduled task, a command,
+  a listener -- used to file the registration under the name only, so while a second copy of the
+  module shared the name it could not be told apart from that copy's and stayed, answering from a
+  closed container, until the last copy of the name unloaded. As of 6.3.0 such a registration is
+  recorded against the module the framework is loading on the calling thread, if any (unchanged);
+  otherwise against the copy listed as loaded under `ownerModule`, the first listed when more than
+  one is (`PluginManager#findRegistrationOwner(String)`, added, `@ApiStatus.Internal`). So while a
+  newer copy replaces an older one, a registration made on the loading thread belongs to the newer
+  copy and one made on any other thread to the older copy, and leaves with it. Unloading or
+  superseding a copy releases exactly its own registrations. A name with no loaded copy keeps the
+  name-only behaviour, and the instance overloads and load-time attribution are unchanged. A tab
+  completer registered after load carries no name and stays unowned, as before. Prefer the overloads
+  that take the instance when the module instance is at hand.
+
+  中文补充：模块加载之后通过只带名称的 API 登记的内容属于某个模块实例（#562 第 1 项）。在任何模块加载过程之外
+  （定时任务、命令、监听器中）调用三参数 `registerResponder` 或带 `ownerModule` 的 `EventBus` 方法时，此前只按名称记录，
+  所以在同名的第二个副本存在期间无法与那个副本的登记区分，会一直留到该名称的最后一个副本卸载，并用已关闭的容器应答。
+  6.3.0 起：若调用线程上框架正在加载某个模块，记在该模块名下（不变）；否则记在以 `ownerModule` 列为已加载的副本名下，
+  列出多个时取最先列出的那个（新增 `PluginManager#findRegistrationOwner(String)`，`@ApiStatus.Internal`）。因此新副本替换旧副本期间，
+  加载线程上的登记属于新副本，其它线程上的登记属于旧副本并随它释放。卸载或替换某个副本只释放它自己的登记。没有已加载副本的名称
+  仍按名称记录；带实例的重载和加载期间的归属不变；加载后登记的补全器没有名称，仍不属于任何模块。手上有模块实例时请优先使用带实例的重载。
 - `/ul reload` and a module's reload reporting what actually happened (#509, #529, #502). Before
   6.3.0 `reloadSelf()` logged `Module '<name>' reloaded.` before the module's `onReload()` ran and did
   not guard it, so a throwing hook printed the success line followed by a stack trace,

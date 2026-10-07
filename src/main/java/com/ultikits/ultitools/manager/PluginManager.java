@@ -603,6 +603,35 @@ public class PluginManager {
     }
 
     /**
+     * The module copy a registration filed under {@code moduleName} only belongs to when it is made
+     * outside every module's load scope -- for example from a module's scheduled task after it
+     * loaded (#562 item 1): the copy listed as loaded under that name; when more than one copy is
+     * listed under it, the first listed, the one loaded earliest. A copy the framework is still
+     * loading is not listed yet; what it registers on the loading thread is attributed by its load
+     * scope instead, which the registries consult first. So while a newer copy replaces an older
+     * one, a registration made by name from any other thread belongs to the older copy and leaves
+     * with it. Not part of the module-facing API; public only because the registries live in other
+     * packages.
+     *
+     * @param moduleName the name the registration is filed under; {@code null} matches nothing
+     * @return the listed copy, or {@code null} when no copy is listed under {@code moduleName}, in
+     *         which case the registration stays filed under the name only, as before 6.3.0
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public UltiToolsPlugin findRegistrationOwner(String moduleName) {
+        if (moduleName == null) {
+            return null;
+        }
+        for (UltiToolsPlugin listed : pluginList) {
+            if (moduleName.equals(listed.getPluginName())) {
+                return listed;
+            }
+        }
+        return null;
+    }
+
+    /**
      * Logs one refusal WARNING for a module that failed to initialize, surfacing the innermost
      * {@link UltiToolsException}'s message (module/file/field/value/constraint, per e.g.
      * {@code ConfigurationException.validationFailed(...)}) instead of an outer wrapper's
@@ -683,9 +712,12 @@ public class PluginManager {
      * The three registries a module can file registrations in by name -- tab-completion
      * completers, EventBus handlers and panel responders -- are released by instance first: every
      * registration recorded against this module instance goes, whatever name it was filed under.
-     * Registrations filed under the module's name only are then released by name, unless another
-     * loaded copy of the module shares that name; they cannot be told apart from that copy's, so
-     * they stay until the last copy of the name is unloaded (#506).
+     * As of 6.3.0 that covers what the module registered while it loaded (its load scope, #506)
+     * and what was registered by its name after it loaded, while it was the copy listed under that
+     * name (#562 item 1, see {@link #findRegistrationOwner(String)}). Registrations filed under the
+     * module's name only -- made while no copy was listed under it -- are then released by name,
+     * unless another loaded copy of the module shares that name; they cannot be told apart from
+     * that copy's, so they stay until the last copy of the name is unloaded (#506).
      *
      * @param plugin UltiTools plugin instance
      */

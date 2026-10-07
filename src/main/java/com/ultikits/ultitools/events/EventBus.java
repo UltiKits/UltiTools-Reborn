@@ -19,9 +19,11 @@ import java.util.logging.Logger;
 
 import org.jetbrains.annotations.ApiStatus;
 
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.entities.HandlerEntry;
 import com.ultikits.ultitools.entities.Subscription;
+import com.ultikits.ultitools.manager.PluginManager;
 
 /**
  * Central event bus for inter-module communication.
@@ -93,7 +95,7 @@ public class EventBus {
                          Method method, Object instance) {
         method.setAccessible(true); // NOPMD - required for handler invocation
         HandlerEntry entry = new HandlerEntry(eventType, priority, ignoreCancelled, ownerModule,
-                ownerInstanceOrScope(ownerInstance), method, instance);
+                ownerInstanceOrScope(ownerInstance, ownerModule), method, instance);
         handlers.computeIfAbsent(eventType, k -> new CopyOnWriteArrayList<>()).add(entry);
     }
 
@@ -106,6 +108,13 @@ public class EventBus {
 
     /**
      * Register a programmatic handler with full options.
+     * <p>
+     * As of 6.3.0 the handler is recorded against a module instance (#506, #562 item 1): the module
+     * the framework is loading on this thread, if any; otherwise the copy listed as loaded under
+     * {@code ownerModule} (the first listed when more than one is); otherwise none, and it is filed
+     * under the name only. Unloading or superseding that copy releases it. Prefer {@link
+     * #subscribe(Class, EventPriority, boolean, String, UltiToolsPlugin, Consumer)} when the module
+     * instance is at hand.
      */
     public <T extends ModuleEvent> Subscription subscribe(Class<T> eventType, EventPriority priority,
                                                            boolean ignoreCancelled, String ownerModule,
@@ -118,13 +127,16 @@ public class EventBus {
      * {@link #unregisterByOwnerInstance(UltiToolsPlugin)} releases it whatever name it was filed
      * under. Without an instance, a handler subscribed while the framework loads a module (see
      * {@link #beginRegistrationScope(UltiToolsPlugin)}) is recorded against that module; one
-     * subscribed later is filed under {@code ownerModule} only.
+     * subscribed later is recorded against the copy listed as loaded under {@code ownerModule}
+     * ({@link PluginManager#findRegistrationOwner(String)}), and filed under the name only when no
+     * copy is listed under it (#562 item 1).
      *
      * @param eventType       the event type handled
      * @param priority        the dispatch priority
      * @param ignoreCancelled whether a cancelled event skips this handler
      * @param ownerModule     the owning module's name, used by {@link #unregisterAll(String)}
-     * @param ownerInstance   the owning module instance; {@code null} records the loading module, if any
+     * @param ownerInstance   the owning module instance; {@code null} records the loading module, if
+     *                        any, otherwise the copy listed under {@code ownerModule}, if any
      * @param consumer        the handler
      * @param <T>             the event type
      * @return a subscription for manual unsubscribe
@@ -135,7 +147,7 @@ public class EventBus {
                                                            boolean ignoreCancelled, String ownerModule,
                                                            UltiToolsPlugin ownerInstance, Consumer<T> consumer) {
         HandlerEntry entry = new HandlerEntry(eventType, priority, ignoreCancelled, ownerModule,
-                ownerInstanceOrScope(ownerInstance), (Consumer<? extends ModuleEvent>) consumer);
+                ownerInstanceOrScope(ownerInstance, ownerModule), (Consumer<? extends ModuleEvent>) consumer);
         handlers.computeIfAbsent(eventType, k -> new CopyOnWriteArrayList<>()).add(entry);
 
         AtomicBoolean active = new AtomicBoolean(true);
@@ -288,8 +300,22 @@ public class EventBus {
         registrationScopeOwner.remove();
     }
 
-    private UltiToolsPlugin ownerInstanceOrScope(UltiToolsPlugin ownerInstance) {
-        return ownerInstance != null ? ownerInstance : registrationScopeOwner.get();
+    /**
+     * The module instance a registration is recorded against: the one it names; otherwise the
+     * module the framework is loading on this thread; otherwise the copy listed as loaded under
+     * {@code ownerModule} (#562 item 1); otherwise none.
+     */
+    private UltiToolsPlugin ownerInstanceOrScope(UltiToolsPlugin ownerInstance, String ownerModule) {
+        if (ownerInstance != null) {
+            return ownerInstance;
+        }
+        UltiToolsPlugin scoped = registrationScopeOwner.get();
+        if (scoped != null || ownerModule == null) {
+            return scoped;
+        }
+        UltiTools framework = UltiTools.getInstance();
+        PluginManager modules = framework == null ? null : framework.getPluginManager();
+        return modules == null ? null : modules.findRegistrationOwner(ownerModule);
     }
 
     // --- Dispatch ---

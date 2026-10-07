@@ -14,8 +14,10 @@ import java.util.logging.Logger;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.google.gson.JsonObject;
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.exceptions.PluginModuleException;
+import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
 
 /**
@@ -108,7 +110,13 @@ public class PanelResponderRegistry {
      *                    {@code String.equals} — no case folding, no Unicode normalization
      * @param responder   the responder function, invoked with the inbound message's {@code data}
      *                    and returning a {@link CompletableFuture} that resolves the reply
-     * @param ownerModule the name of the module registering this responder
+     * @param ownerModule the name of the module registering this responder. The responder is
+     *                    recorded against a module instance (#506, #562 item 1): the module the
+     *                    framework is loading on this thread, if any; otherwise the copy listed as
+     *                    loaded under {@code ownerModule} (the first listed when more than one is);
+     *                    otherwise none, and it is filed under the name only. Prefer {@link
+     *                    #registerResponder(String, Function, String, UltiToolsPlugin)} when the
+     *                    module instance is at hand
      * @throws IllegalArgumentException if {@code messageType} or {@code ownerModule} is
      *                                   {@code null}/empty, or {@code responder} is {@code null}
      * @throws PluginModuleException    if the framework already owns {@code messageType}, or
@@ -132,7 +140,9 @@ public class PanelResponderRegistry {
      * @param ownerModule   the name of the module registering this responder
      * @param ownerInstance the module instance registering it; {@code null} records the module the
      *                      framework is loading on this thread, if any (see {@link
-     *                      #beginRegistrationScope(UltiToolsPlugin)}), which is exactly {@link
+     *                      #beginRegistrationScope(UltiToolsPlugin)}), otherwise the copy listed as
+     *                      loaded under {@code ownerModule} ({@link
+     *                      PluginManager#findRegistrationOwner(String)}), which is exactly {@link
      *                      #registerResponder(String, Function, String)}
      * @throws IllegalArgumentException if {@code messageType} or {@code ownerModule} is
      *                                   {@code null}/empty, or {@code responder} is {@code null}
@@ -155,11 +165,24 @@ public class PanelResponderRegistry {
             throw PluginModuleException.responderTypeOwnedByFramework(messageType);
         }
         UltiToolsPlugin recordedOwner = ownerInstance != null ? ownerInstance : registrationScopeOwner.get();
+        if (recordedOwner == null) {
+            recordedOwner = listedCopyNamed(ownerModule);
+        }
         ResponderEntry entry = new ResponderEntry(responder, ownerModule, recordedOwner);
         ResponderEntry existing = responders.putIfAbsent(messageType, entry);
         if (existing != null) {
             throw PluginModuleException.responderTypeAlreadyOwned(messageType, existing.ownerModule);
         }
+    }
+
+    /**
+     * The copy listed as loaded under {@code moduleName}, which a registration made by name outside
+     * every load scope belongs to (#562 item 1); {@code null} before the framework is running.
+     */
+    private static UltiToolsPlugin listedCopyNamed(String moduleName) {
+        UltiTools framework = UltiTools.getInstance();
+        PluginManager modules = framework == null ? null : framework.getPluginManager();
+        return modules == null ? null : modules.findRegistrationOwner(moduleName);
     }
 
     /**
