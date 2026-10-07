@@ -1553,6 +1553,62 @@ This section governs the third kind.
   metrics code reads that file at start, before any plugin loads, and rewrites an unparseable copy or one without
   `serverUuid` with fresh defaults (measured on Paper 1.21.11), so on Paper such a file is replaced by the server, never by
   UltiTools, and UltiTools only ever sees a valid file.
+- **`@NotEmpty` on a list, set or map now acts** ([#630](https://github.com/UltiKits/UltiTools-Reborn/issues/630), as of
+  v6.3.0, maintainer decision of 2026-10-06). Before 6.3.0 the check read only the value's text, so an empty list (`[]`)
+  or map (`{}`) passed and the module ran on an empty value its declaration forbids (UltiKits/UltiCleaner#34: an empty
+  `warn-times` silently turned the countdown off). Now a value that a load or reload binds empty - empty or `null` in
+  the file, or a list whose every entry failed to bind - is replaced **in memory** by the field's declared default, and
+  one WARNING names the file, the key, the value kind, the value as written and the default (both redacted when the
+  field name, a key segment, or a map key inside the value or the default is secret-shaped). The module loads and the
+  file is not written, at load and at reload; a later `save()` does not write the default either. The panel shows the
+  file's value (`[]`) while the module runs on the default. A panel write that would empty the value is refused like any
+  other violation, and nothing is written. An operator command that writes that setting with `saveOperatorChange` writes
+  the running value - the default plus the operator's change - in place of `[]`: that is the operator's explicit request
+  for that key. The declared default must itself satisfy the field's constraints - be non-empty, and inside the field's
+  `@Size` if it has one (UltiSideBar's `lines` is `@NotEmpty @Size(min = 1, max = 15)`): a default that does not refuses
+  the module at load as a declaration error naming the field and the constraint, whatever the file holds. `@NotEmpty` on text is
+  unchanged (the module refuses to load naming the field). One case moves the other way: a `@NotEmpty` list written
+  as an explicit `null` (`key: ~`) used to refuse the module and now runs the declared default with the warning.
+
+  中文补充：**`@NotEmpty` 用在列表、集合或映射上现在会生效**（自 6.3.0 起，#630，维护者 2026-10-06 决定）。6.3.0 之前只检查值的文本，空列表 `[]` 或空映射 `{}` 都能通过，模块带着声明为“不得为空”的空值运行（UltiKits/UltiCleaner#34：空的 `warn-times` 让倒计时提示悄悄失效）。现在加载或重载时绑定为空的值——文件中为空或为 `null`，或列表中每一项都无法绑定——会在**内存中**改用字段声明的默认值，并输出一条 WARNING，写明文件、键、值的种类、文件中写的值和默认值（字段名、某一级键名，或值与默认值中的映射键像机密时，两者都隐去）。模块照常加载，加载和重载时都不写文件，之后的 `save()` 也不会把默认值写进去。面板显示的是文件中的值（`[]`），而模块运行的是默认值。面板写入会让该值变空时，与其他违规一样被拒绝，什么都不写。服主命令用 `saveOperatorChange` 写这个设置时，写入的是运行中的值（默认值加上服主的改动），替换掉 `[]`：这是服主对该键的明确要求。声明的默认值本身必须满足该字段的约束——非空，并且若字段带 `@Size` 则在其范围内（UltiSideBar 的 `lines` 是 `@NotEmpty @Size(min = 1, max = 15)`）：不满足时属于声明错误，无论文件里写的是什么，加载时都会拒绝该模块并写明字段和约束。文本上的 `@NotEmpty` 不变（拒绝加载并指明字段）。有一种情况方向相反：写成显式 `null`（`key: ~`）的 `@NotEmpty` 列表以前会拒绝模块，现在改用声明的默认值并给出同一条警告。
+- **`@Range` refuses NaN** ([#625](https://github.com/UltiKits/UltiTools-Reborn/issues/625), as of v6.3.0). The check
+  compared with `<` and `>`, both false for NaN, so `rate: .nan` passed a `@Range(min = 0.0, max = 1.0)` and reached
+  the module (UltiKits/UltiTrade#64). Now a value must satisfy `min <= value <= max`: NaN is out of every range and
+  gets the ordinary out-of-range outcome - the module refuses to load at start, and at `/ul reload` the reload is refused
+  and the running values are kept, naming the field, the value and the bounds. `.inf` and `-.inf` were already out of
+  range for every finite bound and still are; a bound declared as `Double.POSITIVE_INFINITY` (or negative) accepts that
+  infinity.
+
+  中文补充：**`@Range` 拒绝 NaN**（自 6.3.0 起，#625）。原来的检查用 `<` 和 `>` 比较，对 NaN 都为假，因此 `rate: .nan` 能通过 `@Range(min = 0.0, max = 1.0)` 并进入模块（UltiKits/UltiTrade#64）。现在值必须满足 `min <= 值 <= max`：NaN 超出任何范围，按普通越界处理——启动时拒绝加载模块，`/ul reload` 时拒绝这次重载并保留运行中的值，都会写明字段、值和范围。`.inf`、`-.inf` 本来就超出任何有限范围，现在仍然如此；边界声明为 `Double.POSITIVE_INFINITY`（或负无穷）时接受对应的无穷大。
+- **A constraint annotation the framework cannot check refuses the module at load**
+  ([#631](https://github.com/UltiKits/UltiTools-Reborn/issues/631), as of v6.3.0, maintainer decision of 2026-10-06).
+  Before 6.3.0 such a declaration did nothing, with no message: `@Range` on anything but a number, `@Pattern` on anything
+  but text, `@Size` on a map or an array, `@Size` and `@NotEmpty` on numbers, booleans, enums or value types. Now, for a
+  field that is itself a `@ConfigEntry` setting, judged by its declared type. A declared type that can hold a value the
+  annotation checks - `Object`, `Serializable`, `Comparable`, `CharSequence`, `Number` or another supertype of a checked
+  kind - is not a constraint error: the value bound at load is checked. Of these types only `Object` binds without a
+  converter; the others need a module converter (`@ConfigConverterFor`), or the module is refused with `no config
+  converter for ...`. A bound value of a kind the annotation cannot read (text in an `Object` setting under `@Range`, a
+  number under `@Pattern`, `@Size` or `@NotEmpty`) is a violation, with that annotation's usual outcome: refused at
+  load, and at `/ul reload` the reload is refused and the running values are kept; before 6.3.0 it passed silently. The
+  rules for such a field:
+  - `@Size` counts a map's entries and an array's length (a violation refuses the module like any `@Size` violation).
+    Text is a `String` or a `char` for `@NotEmpty`, `@Size` and `@Pattern`.
+  - A declared type that can never hold a checkable value is a declaration error: it refuses the module at load, before
+    its file is read, with one message naming each field, the annotation and why: `@Range` checks numbers only; `@Pattern` checks text only; `@Size` and `@NotEmpty`
+    apply to text, lists, sets, maps and arrays only (`@Range` on a `List<Integer>` is such an error: it does not apply
+    to the list itself). A constraint on a field of a config class that is not a `@ConfigEntry` setting is refused too.
+  - **The constraint annotations take effect only on fields that are themselves `@ConfigEntry` settings of a config
+    class.** An annotation on a field of a value type, a nested class, or anything a converter produces - for example
+    `@NotEmpty` on a field of the class a `Map<String, Item>` setting holds - is never checked and not reported; the
+    framework does not walk into value types ([#633](https://github.com/UltiKits/UltiTools-Reborn/issues/633), closed by
+    the maintainer's decision of 2026-10-06). Validate such fields in the module's converter (skip or refuse the entry
+    there).
+  - First-party modules: UltiRecipe declares `@NotEmpty` and `@Range` on `RecipeConfig.OutputItem`, a value inside its
+    `recipes` setting. They are not checked (it checks them itself), and the module loads; its 6.3.0 build removes the two
+    annotations as cleanup. No first-party module is refused by these declaration checks.
+
+  中文补充：**框架无法检查的约束注解会让模块在加载时被拒绝**（自 6.3.0 起，#631，维护者 2026-10-06 决定）。6.3.0 之前这类声明什么也不做、也没有任何提示：用在非数字上的 `@Range`、非文本上的 `@Pattern`、映射或数组上的 `@Size`、数字/布尔/枚举/值类型上的 `@Size` 与 `@NotEmpty`。现在，对本身就是 `@ConfigEntry` 设置的字段，按其声明类型判断；声明类型若能容纳注解可检查的值（`Object`、`Serializable`、`Comparable`、`CharSequence`、`Number` 或其他被检查种类的父类型），则不算约束错误，加载时绑定的值照常检查；这些类型中只有 `Object` 无需转换器即可绑定，其余类型需要模块转换器（`@ConfigConverterFor`），否则模块会以 `no config converter for ...` 被拒绝；绑定的值若是注解无法读取的种类（`@Range` 下 `Object` 设置里的文本，`@Pattern`、`@Size` 或 `@NotEmpty` 下的数字），按该注解的普通违规处理：启动时拒绝加载，`/ul reload` 时拒绝重载并保留运行中的值（6.3.0 之前会静默通过）；这类字段的规则如下：`@Size` 统计映射的条目数和数组长度（违规时与其他 `@Size` 违规一样拒绝模块）；对 `@NotEmpty`、`@Size`、`@Pattern` 而言，文本指 `String` 或 `char`。只有永远不可能容纳可检查值的声明类型才算声明错误：这类声明会在加载时、读取配置文件之前拒绝模块，一条消息写明每个字段、注解和原因：`@Range` 只检查数字；`@Pattern` 只检查文本；`@Size` 与 `@NotEmpty` 只适用于文本、列表、集合、映射和数组（`List<Integer>` 上的 `@Range` 就属于这种错误：它不适用于列表本身）。配置类中不是 `@ConfigEntry` 设置的字段上的约束同样会被拒绝。**约束注解只对本身就是配置类 `@ConfigEntry` 设置的字段生效。** 值类型的字段、嵌套类的字段，以及转换器产生的任何对象上的注解（例如 `Map<String, Item>` 设置中 `Item` 类字段上的 `@NotEmpty`）既不检查也不报告；框架不会深入值类型（#633，按维护者 2026-10-06 的决定关闭）。请在模块的转换器中校验这些字段（在那里跳过或拒绝该条目）。第一方模块：UltiRecipe 在 `RecipeConfig.OutputItem`（其 `recipes` 设置中的值）上声明了 `@NotEmpty` 和 `@Range`，它们不会被检查（模块自行检查），模块照常加载；它面向 6.3.0 的构建会顺带删除这两个注解。没有第一方模块会被这些声明检查拒绝。
 
 ### Behavioral changes that do need one
 
