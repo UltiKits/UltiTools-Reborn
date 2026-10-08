@@ -2,6 +2,7 @@ package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -669,6 +670,52 @@ class PlayerCacheManagerTest {
         }
     }
 
+    /**
+     * Throws a checked exception without declaring it, as Lombok {@code @SneakyThrows} or a
+     * Kotlin saver does.
+     */
+    @SuppressWarnings("unchecked")
+    static <T extends Throwable> void sneakyThrow(Throwable failure) throws T {
+        throw (T) failure;
+    }
+
+    /** A saver that throws an undeclared checked IOException. */
+    static class SneakySaverService implements PlayerCacheSaver {
+        @PlayerCache(saveBeforeRemove = true)
+        final Map<UUID, String> sessionCache = new HashMap<>();
+
+        @Override
+        public void savePlayerData(UUID playerId) {
+            PlayerCacheManagerTest.<RuntimeException>sneakyThrow(new IOException("disk full"));
+        }
+    }
+
+    /** A field whose map throws an undeclared checked IOException on removal. */
+    static class SneakyRemovalService {
+        @PlayerCache
+        final Map<UUID, String> cache = new HashMap<UUID, String>() {
+            private static final long serialVersionUID = 1L;
+
+            @Override
+            public String remove(Object key) {
+                PlayerCacheManagerTest.<RuntimeException>sneakyThrow(new IOException("disk full"));
+                return null;
+            }
+        };
+    }
+
+    /** A saver that runs a hook during its save, to register or unregister tracked objects. */
+    static class ReentrantSaverService implements PlayerCacheSaver {
+        @PlayerCache(saveBeforeRemove = true)
+        final Map<UUID, String> state = new HashMap<>();
+        Runnable onSave = () -> { };
+
+        @Override
+        public void savePlayerData(UUID playerId) {
+            onSave.run();
+        }
+    }
+
     /** A saver whose save always fails, as a module's database write does when the store is down. */
     static class FailingSaverService implements PlayerCacheSaver {
         @PlayerCache(saveBeforeRemove = true)
@@ -878,6 +925,86 @@ class PlayerCacheManagerTest {
             assertThat(plain.nameCache).doesNotContainKey(quitting);
             assertThat(failureRecords()).hasSize(1);
             assertThat(failureRecords().get(0).getThrown()).isInstanceOf(NoClassDefFoundError.class);
+        }
+
+        @Test
+        @DisplayName("An undeclared checked exception from a saver is contained and later beans are still swept")
+        void sneakyCheckedExceptionFromSaverIsIsolated() {
+            SneakySaverService sneaky = new SneakySaverService();
+            TestService plain = new TestService();
+            UUID quitting = UUID.randomUUID();
+            sneaky.sessionCache.put(quitting, "a");
+            plain.nameCache.put(quitting, "c");
+            manager.registerBean(sneaky);
+            manager.registerBean(plain);
+
+            assertThatCode(() -> manager.onPlayerQuit(quitting)).doesNotThrowAnyException();
+
+            assertThat(sneaky.sessionCache).doesNotContainKey(quitting);
+            assertThat(plain.nameCache).doesNotContainKey(quitting);
+            List<LogRecord> failures = failureRecords();
+            assertThat(failures).hasSize(1);
+            assertThat(failures.get(0).getThrown()).isInstanceOf(IOException.class).hasMessage("disk full");
+        }
+
+        @Test
+        @DisplayName("An undeclared checked exception from a removal is contained and later beans are still swept")
+        void sneakyCheckedExceptionFromRemovalIsIsolated() {
+            SneakyRemovalService sneaky = new SneakyRemovalService();
+            TestService plain = new TestService();
+            UUID quitting = UUID.randomUUID();
+            plain.nameCache.put(quitting, "c");
+            manager.registerBean(sneaky);
+            manager.registerBean(plain);
+
+            assertThatCode(() -> manager.onPlayerQuit(quitting)).doesNotThrowAnyException();
+
+            assertThat(plain.nameCache).doesNotContainKey(quitting);
+            List<LogRecord> failures = failureRecords();
+            assertThat(failures).hasSize(1);
+            assertThat(failures.get(0).getThrown()).isInstanceOf(IOException.class);
+        }
+
+        @Test
+        @DisplayName("A saver that registers a bean during the quit does not stop the sweep of later beans")
+        void registrationDuringQuitIsTolerated() {
+            ReentrantSaverService reentrant = new ReentrantSaverService();
+            TestService plain = new TestService();
+            TestService late = new TestService();
+            reentrant.onSave = () -> manager.registerBean(late);
+            UUID quitting = UUID.randomUUID();
+            reentrant.state.put(quitting, "a");
+            plain.nameCache.put(quitting, "c");
+            manager.registerBean(reentrant);
+            manager.registerBean(plain);
+
+            assertThatCode(() -> manager.onPlayerQuit(quitting)).doesNotThrowAnyException();
+
+            assertThat(reentrant.state).doesNotContainKey(quitting);
+            assertThat(plain.nameCache).doesNotContainKey(quitting);
+            assertThat(manager.getTrackedBeanCount()).isEqualTo(3);
+            assertThat(failureRecords()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("A saver that unregisters a bean during the quit does not stop the sweep of later beans")
+        void unregistrationDuringQuitIsTolerated() {
+            ReentrantSaverService reentrant = new ReentrantSaverService();
+            TestService removed = new TestService();
+            TestService plain = new TestService();
+            reentrant.onSave = () -> manager.unregisterBean(removed);
+            UUID quitting = UUID.randomUUID();
+            reentrant.state.put(quitting, "a");
+            plain.nameCache.put(quitting, "c");
+            manager.registerBean(reentrant);
+            manager.registerBean(removed);
+            manager.registerBean(plain);
+
+            assertThatCode(() -> manager.onPlayerQuit(quitting)).doesNotThrowAnyException();
+
+            assertThat(plain.nameCache).doesNotContainKey(quitting);
+            assertThat(manager.getTrackedBeanCount()).isEqualTo(2);
+            assertThat(failureRecords()).isEmpty();
         }
 
         @Test
