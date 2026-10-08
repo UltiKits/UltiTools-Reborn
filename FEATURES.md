@@ -157,12 +157,15 @@ count exactly. This section carries 4 rows, not 3, for the same reason as `/upm 
 `/ulticloud help` (also the bare `/ulticloud` with no arguments) reaches
 `CloudLoginCommand#handleHelp` through `BaseCommandExecutor`'s built-in short-circuit, with no
 `@CmdMapping` site of its own — the repository's total `@CmdMapping` count stays 15.
+As of v6.3.0 a fifth row, `ultitools.ulticloud.request-helper`, is not a command: it is the module-facing
+`UltiCloudRequests` helper, which sends an allow-listed UltiCloud request with this server's credential.
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
 | ultitools.ulticloud.help | Show the `/ulticloud` subcommand help text | command | `/ulticloud help` (also the bare `/ulticloud` with no arguments) | none (requireOp=true) | console | admin | none | CloudLoginCommand#handleHelp |
 | ultitools.ulticloud.login | Request a UltiCloud magic-link login for this server | command | `/ulticloud login` | none (requireOp=true) | console | admin | detailed | CloudLoginCommand#login |
 | ultitools.ulticloud.logout | Tear down the cloud connection and clear the saved credential | command | `/ulticloud logout` | none (requireOp=true) | console | admin | brief | CloudLoginCommand#logout |
+| ultitools.ulticloud.request-helper | As of v6.3.0, a module sends `POST /auth/magic-link` or `GET /auth/magic-link/poll` to UltiCloud with this server's UltiCloud credential attached by the framework, without ever receiving the credential; any other method or path returns `PATH_NOT_ALLOWED` and a server not logged in to UltiCloud returns `NOT_CONNECTED`, both with no request made; redirects are not followed; calls on the primary thread throw | gate | module code calling `UltiCloudRequests.post`/`get` from an asynchronous task (UltiLogin's `/panel`) | n/a | n/a | internal | brief | UltiCloudRequests#post; UltiCloudRequests#get |
 | ultitools.ulticloud.status | Show whether this server holds a valid UltiCloud authentication token — checks `CloudAuthManager.hasValidToken()` only, never the live WebSocket connection state, so it reports token/authentication status, not whether the panel socket is actually connected | command | `/ulticloud status` | none (requireOp=true) | console | admin | brief | CloudLoginCommand#status |
 
 ## Boot sequence and listeners
