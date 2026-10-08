@@ -50,13 +50,12 @@ import net.kyori.adventure.text.event.HoverEvent;
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class MessageUtilsComponentDeliveryTest {
 
-    private ServerMock server;
     private PlayerMock player;
 
     @BeforeEach
     void setUp() {
         ensureCleanState();
-        server = MockBukkit.mock();
+        ServerMock server = MockBukkit.mock();
         // A plugin identity is stubbed so a platform-library send path (the defect) can run to
         // completion and be observed, instead of failing early on a missing description.
         TestHelper.mockUltiToolsInstance(ultiTools -> {
