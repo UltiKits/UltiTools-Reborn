@@ -33,7 +33,13 @@ public class DependenceManagers {
      * back to legacy text and drops click and hover events. Send to the {@code Player} directly
      * (Paper implements Adventure's {@code Audience} natively), as
      * {@link com.ultikits.ultitools.utils.MessageUtils#sendMessage(org.bukkit.entity.Player, net.kyori.adventure.text.TextComponent)} does.
+     * {@code adventure-platform-bukkit} is no longer maintained upstream.
+     *
+     * @deprecated as of 6.3.0 send components to the player directly with
+     *             {@code Player#sendMessage(Component)}, which Paper implements natively; this audience provider
+     *             drops click and hover events on Paper 1.21.11
      */
+    @Deprecated(since = "6.3.0")
     @Getter
     private BukkitAudiences adventure;
     @Getter
@@ -53,7 +59,12 @@ public class DependenceManagers {
      * Initialize adventure.
      *
      * @param plugin plugin instance
+     * @deprecated as of 6.3.0 send components to the player directly with
+     *             {@code Player#sendMessage(Component)}, which Paper implements natively; the
+     *             {@code adventure-platform-bukkit} audience provider this creates drops click and hover events on
+     *             Paper 1.21.11
      */
+    @Deprecated(since = "6.3.0")
     public void initAdventure(UltiTools plugin) {
         adventure = BukkitAudiences.create(plugin);
     }

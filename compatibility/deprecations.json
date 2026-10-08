@@ -556,6 +556,26 @@
     "status": "DEPRECATED"
   },
   {
+    "key": "com.ultikits.ultitools.manager.DependenceManagers#adventure",
+    "className": "com.ultikits.ultitools.manager.DependenceManagers",
+    "memberName": "adventure",
+    "kind": "FIELD",
+    "since": "6.3.0",
+    "forRemoval": false,
+    "replacement": "as of 6.3.0 send components to the player directly with {@code Player#sendMessage(Component)}, which Paper implements natively; this audience provider drops click and hover events on Paper 1.21.11",
+    "status": "DEPRECATED"
+  },
+  {
+    "key": "com.ultikits.ultitools.manager.DependenceManagers#initAdventure(com.ultikits.ultitools.UltiTools)",
+    "className": "com.ultikits.ultitools.manager.DependenceManagers",
+    "memberName": "initAdventure",
+    "kind": "METHOD",
+    "since": "6.3.0",
+    "forRemoval": false,
+    "replacement": "as of 6.3.0 send components to the player directly with {@code Player#sendMessage(Component)}, which Paper implements natively; the {@code adventure-platform-bukkit} audience provider this creates drops click and hover events on Paper 1.21.11",
+    "status": "DEPRECATED"
+  },
+  {
     "key": "com.ultikits.ultitools.manager.ListenerManager#register(com.ultikits.ultitools.abstracts.UltiToolsPlugin,org.bukkit.event.Listener)",
     "className": "com.ultikits.ultitools.manager.ListenerManager",
     "memberName": "register",
