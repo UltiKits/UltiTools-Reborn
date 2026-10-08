@@ -4,13 +4,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -635,6 +643,232 @@ class PlayerCacheManagerTest {
             assertThat(scheduled.period())
                     .withFailMessage("period must be a positive, repeating interval, not a one-shot delayed task")
                     .isPositive();
+        }
+    }
+
+    /** A saver whose save always fails, as a module's database write does when the store is down. */
+    static class FailingSaverService implements PlayerCacheSaver {
+        @PlayerCache(saveBeforeRemove = true)
+        final Map<UUID, String> sessionCache = new HashMap<>();
+        int saveAttempts = 0;
+
+        @Override
+        public void savePlayerData(UUID playerId) {
+            saveAttempts++;
+            throw new IllegalStateException("database unavailable");
+        }
+    }
+
+    /** A saver whose save fails with an Error, as a module whose classes are gone does. */
+    static class ErrorSaverService implements PlayerCacheSaver {
+        @PlayerCache(saveBeforeRemove = true)
+        final Map<UUID, String> sessionCache = new HashMap<>();
+
+        @Override
+        public void savePlayerData(UUID playerId) {
+            throw new NoClassDefFoundError("com/example/module/Gone");
+        }
+    }
+
+    /** One bean, two save-before-remove fields, so its saver runs (and fails) once per field. */
+    static class TwoFieldFailingSaverService implements PlayerCacheSaver {
+        @PlayerCache(saveBeforeRemove = true)
+        final Map<UUID, String> first = new HashMap<>();
+        @PlayerCache(saveBeforeRemove = true)
+        final Set<UUID> second = new HashSet<>();
+
+        @Override
+        public void savePlayerData(UUID playerId) {
+            throw new IllegalStateException("database unavailable");
+        }
+    }
+
+    /** A field whose map refuses removal, so the sweep itself throws. */
+    static class UnremovableCacheService {
+        @PlayerCache
+        Map<UUID, String> frozen = new HashMap<>();
+    }
+
+    @Nested
+    @DisplayName("Player quit cleanup isolates one entry's failure (#643)")
+    class QuitIsolation {
+
+        private final List<LogRecord> records = new ArrayList<>();
+        private Logger managerLogger;
+        private Handler capture;
+
+        @BeforeEach
+        void captureLog() {
+            managerLogger = Logger.getLogger(PlayerCacheManager.class.getName());
+            capture = new Handler() {
+                @Override
+                public void publish(LogRecord logRecord) {
+                    records.add(logRecord);
+                }
+
+                @Override
+                public void flush() {
+                    // nothing buffered
+                }
+
+                @Override
+                public void close() {
+                    // nothing to release
+                }
+            };
+            managerLogger.addHandler(capture);
+        }
+
+        @AfterEach
+        void releaseLog() {
+            managerLogger.removeHandler(capture);
+        }
+
+        private List<LogRecord> failureRecords() {
+            List<LogRecord> failures = new ArrayList<>();
+            for (LogRecord logRecord : records) {
+                if (logRecord.getLevel().intValue() >= Level.WARNING.intValue()) {
+                    failures.add(logRecord);
+                }
+            }
+            return failures;
+        }
+
+        @Test
+        @DisplayName("A throwing saver does not stop the save and sweep of every later bean")
+        void laterBeansAreStillSavedAndSwept() {
+            FailingSaverService failing = new FailingSaverService();
+            SavingService saving = new SavingService();
+            TestService plain = new TestService();
+            UUID quitting = UUID.randomUUID();
+            UUID stayer = UUID.randomUUID();
+            failing.sessionCache.put(quitting, "a");
+            failing.sessionCache.put(stayer, "keep");
+            saving.dataCache.put(quitting, "b");
+            plain.nameCache.put(quitting, "c");
+            plain.nameCache.put(stayer, "keep");
+            manager.registerBean(failing);
+            manager.registerBean(saving);
+            manager.registerBean(plain);
+
+            assertThatCode(() -> manager.onPlayerQuit(quitting)).doesNotThrowAnyException();
+
+            assertThat(failing.saveAttempts).isEqualTo(1);
+            assertThat(saving.saveCalled).isTrue();
+            assertThat(saving.savedPlayer).isEqualTo(quitting);
+            assertThat(saving.dataCache).doesNotContainKey(quitting);
+            assertThat(plain.nameCache).doesNotContainKey(quitting).containsKey(stayer);
+        }
+
+        @Test
+        @DisplayName("The failing field's own entry is removed anyway: save-before-remove orders, it does not condition")
+        void failingFieldEntryIsStillRemoved() {
+            FailingSaverService failing = new FailingSaverService();
+            UUID quitting = UUID.randomUUID();
+            UUID stayer = UUID.randomUUID();
+            failing.sessionCache.put(quitting, "a");
+            failing.sessionCache.put(stayer, "keep");
+            manager.registerBean(failing);
+
+            manager.onPlayerQuit(quitting);
+
+            assertThat(failing.sessionCache).doesNotContainKey(quitting).containsKey(stayer);
+        }
+
+        @Test
+        @DisplayName("A throwing saver logs one WARNING naming the bean class, the field and the player")
+        void failureIsLoggedOnceWithBeanFieldAndPlayer() {
+            FailingSaverService failing = new FailingSaverService();
+            UUID quitting = UUID.randomUUID();
+            failing.sessionCache.put(quitting, "a");
+            manager.registerBean(failing);
+
+            manager.onPlayerQuit(quitting);
+
+            List<LogRecord> failures = failureRecords();
+            assertThat(failures).hasSize(1);
+            LogRecord logged = failures.get(0);
+            assertThat(logged.getLevel()).isEqualTo(Level.WARNING);
+            assertThat(logged.getMessage())
+                    .contains(FailingSaverService.class.getName())
+                    .contains("sessionCache")
+                    .contains(quitting.toString());
+            assertThat(logged.getThrown()).isInstanceOf(IllegalStateException.class)
+                    .hasMessage("database unavailable");
+        }
+
+        @Test
+        @DisplayName("Every save-before-remove field of a bean whose saver throws is still swept")
+        void everyFieldOfAFailingBeanIsSwept() {
+            TwoFieldFailingSaverService failing = new TwoFieldFailingSaverService();
+            UUID quitting = UUID.randomUUID();
+            failing.first.put(quitting, "a");
+            failing.second.add(quitting);
+            manager.registerBean(failing);
+
+            assertThatCode(() -> manager.onPlayerQuit(quitting)).doesNotThrowAnyException();
+
+            assertThat(failing.first).doesNotContainKey(quitting);
+            assertThat(failing.second).doesNotContain(quitting);
+            assertThat(failureRecords()).hasSize(2);
+        }
+
+        @Test
+        @DisplayName("A sweep that throws does not stop the sweep of every later bean")
+        void throwingSweepIsIsolated() {
+            UnremovableCacheService unremovable = new UnremovableCacheService();
+            UUID quitting = UUID.randomUUID();
+            Map<UUID, String> frozen = new HashMap<>();
+            frozen.put(quitting, "a");
+            unremovable.frozen = Collections.unmodifiableMap(frozen);
+            TestService plain = new TestService();
+            plain.nameCache.put(quitting, "c");
+            manager.registerBean(unremovable);
+            manager.registerBean(plain);
+
+            assertThatCode(() -> manager.onPlayerQuit(quitting)).doesNotThrowAnyException();
+
+            assertThat(plain.nameCache).doesNotContainKey(quitting);
+            List<LogRecord> failures = failureRecords();
+            assertThat(failures).hasSize(1);
+            assertThat(failures.get(0).getMessage())
+                    .contains(UnremovableCacheService.class.getName())
+                    .contains("frozen")
+                    .contains(quitting.toString());
+            assertThat(failures.get(0).getThrown()).isInstanceOf(UnsupportedOperationException.class);
+        }
+
+        @Test
+        @DisplayName("An Error from a saver is contained like an exception, as module unload steps contain it")
+        void errorFromSaverIsIsolated() {
+            ErrorSaverService failing = new ErrorSaverService();
+            TestService plain = new TestService();
+            UUID quitting = UUID.randomUUID();
+            failing.sessionCache.put(quitting, "a");
+            plain.nameCache.put(quitting, "c");
+            manager.registerBean(failing);
+            manager.registerBean(plain);
+
+            assertThatCode(() -> manager.onPlayerQuit(quitting)).doesNotThrowAnyException();
+
+            assertThat(failing.sessionCache).doesNotContainKey(quitting);
+            assertThat(plain.nameCache).doesNotContainKey(quitting);
+            assertThat(failureRecords()).hasSize(1);
+            assertThat(failureRecords().get(0).getThrown()).isInstanceOf(NoClassDefFoundError.class);
+        }
+
+        @Test
+        @DisplayName("A quit with no failure logs nothing at WARNING or above")
+        void cleanQuitLogsNothing() {
+            SavingService saving = new SavingService();
+            UUID quitting = UUID.randomUUID();
+            saving.dataCache.put(quitting, "b");
+            manager.registerBean(saving);
+
+            manager.onPlayerQuit(quitting);
+
+            assertThat(saving.dataCache).doesNotContainKey(quitting);
+            assertThat(failureRecords()).isEmpty();
         }
     }
 }
