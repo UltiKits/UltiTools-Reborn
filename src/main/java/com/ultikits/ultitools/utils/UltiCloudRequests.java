@@ -38,10 +38,15 @@ import com.ultikits.ultitools.entities.TokenEntity;
  * {@code query} map. The list grows only by a documented contract change in a framework release; a
  * module cannot widen it.
  * <p>
- * <b>The token is never exposed.</b> It is never returned, never logged, never placed in an exception
- * message or in {@link Result#toString()}, and no public member of this class or of {@link Result}
- * is typed {@link TokenEntity}. Redirects are not followed, so the bearer is never re-sent to the
- * host a {@code Location} header names; a 3xx is returned to the caller as an ordinary result.
+ * <b>The token is never exposed.</b> It is never returned, the framework itself never logs it, it is
+ * never placed in an exception message that reaches the caller or in {@link Result#toString()}, and
+ * no public member of this class or of {@link Result} is typed {@link TokenEntity}. Redirects are not
+ * followed, so the bearer is never re-sent to the host a {@code Location} header names; a 3xx is
+ * returned to the caller as an ordinary result. One limit lies outside the framework: the JDK's own
+ * HTTP client logger ({@code sun.net.www.protocol.http.HttpURLConnection}) prints request headers,
+ * the bearer included, when an operator raises it to {@code FINE} or lower. Its default level does
+ * not, and the same applies to every request the framework sends with this credential; do not enable
+ * that logger on a production server.
  * <p>
  * <b>Threading.</b> Both methods block on network I/O (connect timeout 10 s, read timeout 30 s) and
  * refuse to run on the server's primary thread with an {@link IllegalStateException}. Call them from
@@ -174,6 +179,11 @@ public final class UltiCloudRequests {
         }
     }
 
+    // A RuntimeException is caught on purpose: the JDK validates header values and throws an
+    // unchecked IllegalArgumentException whose message is the whole value ("Bearer <token>") when
+    // the stored token contains CR or LF. Letting it reach the module would break the promise that
+    // no exception carries the token, so every failure of the exchange becomes IO_ERROR.
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private static Result exchange(String method, String pathAndQuery, String bearer, byte[] body) {
         String base = HttpRequestUtils.getBaseUrl();
         if (base == null || base.trim().isEmpty()) {
@@ -205,7 +215,7 @@ public final class UltiCloudRequests {
             }
             int status = connection.getResponseCode();
             return new Result(Outcome.OK, status, readBody(connection, status));
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
             // The exception is deliberately dropped, not logged or wrapped: the caller learns only
             // that the exchange did not complete, and no message can carry request headers.
             return Result.withoutExchange(Outcome.IO_ERROR);
@@ -240,7 +250,10 @@ public final class UltiCloudRequests {
     public enum Outcome {
         /** An HTTP exchange completed; read {@link Result#getStatusCode()} (any 2xx-5xx, including 3xx). */
         OK,
-        /** This server is not logged in to UltiCloud; no request was made. */
+        /**
+         * This server holds no valid UltiCloud session (never logged in, logged out, or the credential
+         * expired); no request was made.
+         */
         NOT_CONNECTED,
         /** The method and path are not on the allow-list; no request was made. */
         PATH_NOT_ALLOWED,

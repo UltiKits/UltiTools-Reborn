@@ -1124,12 +1124,19 @@ request as coming from this server. UltiLogin's `/panel` web login link is its f
   `?` or `#` returns `PATH_NOT_ALLOWED` and makes no request. Query parameters go through the `query`
   map only, URL-encoded as UTF-8. The list grows only by a documented contract change in a framework
   release; a module cannot widen it.
-- **Not logged in** (no `/ulticloud login`, or after `/ulticloud logout`): `NOT_CONNECTED`, no request.
-  A module decides its own fallback; UltiLogin falls back to its anonymous request.
-- **The token is never exposed:** it is not returned, logged, placed in an exception message or in
-  `Result.toString()`, and no public member of the class or of `Result` is typed `TokenEntity`.
-  Redirects are not followed, so the credential is never re-sent to another host; a 3xx comes back as
-  an `OK` result with that status.
+- **No valid session** (no `/ulticloud login`, after `/ulticloud logout`, or the saved credential has
+  expired): `NOT_CONNECTED`, no request. A module decides its own fallback; UltiLogin falls back to its
+  anonymous request.
+- **The token is never exposed:** it is not returned, the framework never logs it, and it is not placed
+  in an exception message that reaches the caller (a failure of the exchange, including one the JDK
+  raises with the header value in its message, is `IO_ERROR` with the message dropped) or in
+  `Result.toString()`; no public member of the class or of `Result` is typed `TokenEntity`. Redirects
+  are not followed, so the credential is never re-sent to another host; a 3xx comes back as an `OK`
+  result with that status.
+- **Known limitation:** the JDK's own HTTP client logger, `sun.net.www.protocol.http.HttpURLConnection`,
+  prints request headers, the bearer included, when an operator raises it to `FINE` or lower. Its
+  default level does not, and the limitation applies equally to every request the framework sends with
+  the UltiCloud credential. Do not enable that logger on a production server.
 - **Threading:** both methods block on network I/O (connect timeout 10 s, read timeout 30 s) and throw
   `IllegalStateException` on the server's primary thread. Call them from an asynchronous task.
 - The helper writes nothing: no file, no configuration, no log line.
@@ -1141,10 +1148,12 @@ UltiCloud 凭据代模块发送请求，但**从不把凭据交给模块**：框
 HTTP 交换，不论状态码，由调用方判断。只允许两个请求，按方法精确匹配：`POST /auth/magic-link` 与 `GET /auth/magic-link/poll`；
 其他路径、方法不对，或路径含 `..`、`//`、`\`、`%`、`?`、`#` 时返回 `PATH_NOT_ALLOWED`，不发请求；查询参数只能经 `query`
 映射传入，按 UTF-8 编码。允许列表只会随框架版本中有文档记录的协议变更而扩大，模块无法扩大它。服务器未登录 UltiCloud（未执行
-`/ulticloud login`，或已 `/ulticloud logout`）时返回 `NOT_CONNECTED`，不发请求，由模块自行决定回退方式。令牌不会被返回、
-写入日志、放进异常消息或 `toString()`；不跟随重定向，凭据不会被转发到其他主机，3xx 作为 `OK` 结果原样返回。两个方法都会阻塞
+`/ulticloud login`，或已 `/ulticloud logout`，或保存的凭据已过期）时返回 `NOT_CONNECTED`，不发请求，由模块自行决定回退方式。
+令牌不会被返回，框架自身不会把它写入日志，也不会出现在到达调用方的异常消息（交换失败一律为 `IO_ERROR`，异常消息被丢弃，包括 JDK
+在消息中带出请求头值的情况）或 `toString()` 中；不跟随重定向，凭据不会被转发到其他主机，3xx 作为 `OK` 结果原样返回。两个方法都会阻塞
 网络 I/O（连接超时 10 秒、读取超时 30 秒），在服务器主线程调用时抛出 `IllegalStateException`，请在异步任务中调用。它不写任何
-文件、配置或日志。
+文件、配置或日志。已知限制：服主若把 JDK 自带的 HTTP 客户端日志器 `sun.net.www.protocol.http.HttpURLConnection` 调到 `FINE`
+或更低级别，它会打印包括凭据在内的请求头；默认级别不会，框架用该凭据发出的所有请求都同样如此。请勿在正式服务器上开启该日志器。
 
 ## Behavioral changes
 

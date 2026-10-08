@@ -82,7 +82,7 @@ rather than an error:
 this repository, matching the number of `@CmdMapping` sites in each class exactly — confirmed by
 reading `UltiToolsCommands.java`, `PluginInstallCommands.java` and `CloudLoginCommand.java`
 directly, not by trusting the count alone. This document's own row counts diverge from these
-annotation-site counts for `/upm` (10 rows) and `/ulticloud` (4 rows) — each divergence is
+annotation-site counts for `/upm` (10 rows) and `/ulticloud` (4 command rows plus the `request-helper` gate row) — each divergence is
 explained, with its reason, in that command group's own section below.
 
 ## /ul — framework administration
