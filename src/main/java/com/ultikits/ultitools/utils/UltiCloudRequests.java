@@ -195,6 +195,10 @@ public final class UltiCloudRequests {
         }
         HttpURLConnection connection = null;
         try {
+            // Not caller-controlled: the base is the framework's own env.yml api-url (a jar resource
+            // filled at build time), and pathAndQuery is one of the two allow-listed constants plus a
+            // URL-encoded query; a module cannot choose the host or the path.
+            // nosemgrep: java_ssrf_rule-SSRF
             connection = (HttpURLConnection) new URL(base + pathAndQuery).openConnection();
             // Never follow a redirect: following it would re-send the bearer to whatever host the
             // Location header names. A 3xx is returned to the caller instead.

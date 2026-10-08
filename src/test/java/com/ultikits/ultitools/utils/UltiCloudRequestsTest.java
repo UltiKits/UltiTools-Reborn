@@ -12,7 +12,6 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Type;
 import java.net.InetSocketAddress;
-import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -329,7 +328,8 @@ class UltiCloudRequestsTest {
         assertThat(cloudRequests).hasSize(1);
         assertThat(cloudRequests.get(0).authorization).isEqualTo("Bearer " + TOKEN);
 
-        HttpRequestUtils.setBaseUrlForTesting("http://127.0.0.1:" + closedPort());
+        // Port 0 can never accept a connection, so the exchange fails at connect time.
+        HttpRequestUtils.setBaseUrlForTesting("http://127.0.0.1:0");
         UltiCloudRequests.Result ioError = offMain(() -> UltiCloudRequests.post(CREATE_PATH, "{}"));
         assertThat(ioError.getOutcome()).isEqualTo(UltiCloudRequests.Outcome.IO_ERROR);
         assertThat(ioError.getStatusCode()).isEqualTo(-1);
@@ -382,12 +382,5 @@ class UltiCloudRequestsTest {
         assertThat(seen.rawPath).isEqualTo(POLL_PATH);
         assertThat(seen.rawQuery).isEqualTo("requestId=a+b%26c");
         assertThat(seen.authorization).isEqualTo("Bearer " + TOKEN);
-    }
-
-    /** A port nothing listens on: bound once to obtain a free number, then released. */
-    private static int closedPort() throws IOException {
-        try (ServerSocket socket = new ServerSocket(0)) {
-            return socket.getLocalPort();
-        }
     }
 }
