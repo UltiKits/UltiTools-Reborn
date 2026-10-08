@@ -234,25 +234,61 @@ public class PlayerCacheManager {
 
     /**
      * Called when a player quits. Cleans up all tracked fields across all three supported shapes.
+     * <p>
+     * For each tracked field, in turn: if the field is {@code @PlayerCache(saveBeforeRemove = true)}
+     * and its bean implements {@link PlayerCacheSaver}, {@link PlayerCacheSaver#savePlayerData(UUID)}
+     * runs first; then the quitting player's entry is removed from the field.
+     * <p>
+     * <b>Each field is isolated (as of 6.3.0, #643).</b> A save or a removal that throws -- any
+     * {@link Exception}, such as a module's database error or a checked exception the saver
+     * throws without declaring it (Lombok {@code @SneakyThrows}), or an {@link Error} such as a
+     * {@code NoClassDefFoundError} from a module whose classes are gone, contained here as the
+     * module unload steps contain it -- is logged as one WARNING naming the bean class, the field
+     * and the player, and the cleanup continues with every other field of every tracked bean.
+     * The beans are visited from a snapshot, as {@link #sweepExpiredEntries()} does, so a saver
+     * that registers or unregisters a tracked object during the quit does not end the cleanup.
+     * <p>
+     * A failed save does not keep the entry: the entry is removed anyway (maintainer decision,
+     * 2026-10-08), because {@code saveBeforeRemove} orders the save before the removal and does
+     * not make the removal conditional on it. The framework does not retry the save; a module
+     * that must not lose the data retries or persists it itself, inside {@code savePlayerData}.
+     * Nothing is thrown to the caller (the framework's quit listener). Before 6.3.0 the first
+     * such failure ended the cleanup: that field's entry and the entries of every later field
+     * were left in memory, and the exception escaped into Bukkit's event dispatch.
+     *
+     * @param playerId the UUID of the player who quit
      */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // per-field isolation barrier -- see javadoc above (#643)
     public void onPlayerQuit(UUID playerId) {
-        for (TrackedBean tracked : trackedBeans) {
+        // Snapshot, as sweepExpiredEntries does: a saver may register or unregister a tracked
+        // object (a validator's first-time registration, for example), which must not throw a
+        // ConcurrentModificationException out of the quit cleanup.
+        for (TrackedBean tracked : new ArrayList<>(trackedBeans)) {
             for (TrackedField tf : tracked.fields) {
-                try {
-                    if (tf.saveBeforeRemove && tracked.bean instanceof PlayerCacheSaver) {
+                if (tf.saveBeforeRemove && tracked.bean instanceof PlayerCacheSaver) {
+                    try {
                         ((PlayerCacheSaver) tracked.bean).savePlayerData(playerId);
+                    } catch (Exception | Error e) { // a saver can throw a checked exception it does not declare
+                        logQuitFailure("save", tracked, tf, playerId, e);
                     }
+                }
+                try {
                     Object value = tf.field.get(tracked.bean);
-                    if (value == null) {
-                        continue;
+                    if (value != null) {
+                        sweepField(value, tf.shape, playerId);
                     }
-                    sweepField(value, tf.shape, playerId);
-                } catch (IllegalAccessException e) {
-                    LOGGER.log(Level.WARNING, "Failed to clean player cache field: "
-                            + tf.field.getName() + " on " + tracked.bean.getClass().getName(), e);
+                } catch (Exception | Error e) { // Exception also covers Field#get's IllegalAccessException
+                    logQuitFailure("remove the entry of", tracked, tf, playerId, e);
                 }
             }
         }
+    }
+
+    private static void logQuitFailure(String action, TrackedBean tracked, TrackedField tf, UUID playerId,
+                                       Throwable failure) {
+        LOGGER.log(Level.WARNING, "Failed to " + action + " @PlayerCache field '" + tf.field.getName()
+                + "' on " + tracked.bean.getClass().getName() + " for player " + playerId
+                + " on quit; continuing with the remaining entries", failure);
     }
 
     private static void sweepField(Object value, FieldShape shape, UUID playerId) {
@@ -289,11 +325,12 @@ public class PlayerCacheManager {
      * <p>
      * Every tracked instance that implements {@link ExpiringPlayerCache} has {@link
      * ExpiringPlayerCache#sweepExpired()} invoked once per pass. One participant's hook throwing
-     * is caught, logged, and does not prevent the remaining participants' hooks from running in
-     * the same pass. An instance that does not implement {@link ExpiringPlayerCache} is not
-     * visited at all -- opt-in by type, not by reflection guessing at method names. Tolerates an
-     * empty registry and being invoked mid-shutdown: it touches only this manager's own tracked
-     * list, never the Bukkit API directly.
+     * -- an exception, or (as of 6.3.0, #643) an {@link Error} such as a {@code
+     * NoClassDefFoundError} -- is caught, logged, and does not prevent the remaining
+     * participants' hooks from running in the same pass. An instance that does not implement
+     * {@link ExpiringPlayerCache} is not visited at all -- opt-in by type, not by reflection
+     * guessing at method names. Tolerates an empty registry and being invoked mid-shutdown: it
+     * touches only this manager's own tracked list, never the Bukkit API directly.
      * <p>
      * Sweep period: see {@link #EXPIRY_SWEEP_PERIOD_TICKS} (5 minutes -- see that constant's
      * javadoc for the rationale).
@@ -301,6 +338,7 @@ public class PlayerCacheManager {
      * @since 6.3.0
      */
     @Scheduled(delay = EXPIRY_SWEEP_PERIOD_TICKS, period = EXPIRY_SWEEP_PERIOD_TICKS)
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // per-participant isolation barrier -- see javadoc above
     public void sweepExpiredEntries() {
         // Snapshot before iterating: a participant's hook (or a concurrent unregisterBean call
         // triggered from within it) must not raise a ConcurrentModificationException against the
@@ -309,7 +347,7 @@ public class PlayerCacheManager {
             if (tracked.bean instanceof ExpiringPlayerCache) {
                 try {
                     ((ExpiringPlayerCache) tracked.bean).sweepExpired();
-                } catch (Exception e) {
+                } catch (Exception | Error e) {
                     LOGGER.log(Level.WARNING, "Error running expiry sweep for "
                             + tracked.bean.getClass().getName(), e);
                 }
@@ -329,8 +367,8 @@ public class PlayerCacheManager {
     public interface ExpiringPlayerCache {
         /**
          * Invoked once per {@link #sweepExpiredEntries()} pass. Implementations should be cheap
-         * and must not rely on being called on the main thread. An exception thrown here is
-         * caught and logged by the caller; it aborts only this instance's own sweep for the
+         * and must not rely on being called on the main thread. An exception or {@link Error}
+         * thrown here is caught and logged by the caller; it aborts only this instance's own sweep for the
          * current pass, not the pass as a whole.
          */
         void sweepExpired();
