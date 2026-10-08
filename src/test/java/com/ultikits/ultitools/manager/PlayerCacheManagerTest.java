@@ -142,6 +142,16 @@ class PlayerCacheManagerTest {
         }
     }
 
+    static class ErrorExpiringService implements PlayerCacheManager.ExpiringPlayerCache {
+        @PlayerCache
+        final Map<UUID, String> state = new HashMap<>();
+
+        @Override
+        public void sweepExpired() {
+            throw new NoClassDefFoundError("com/example/module/Gone");
+        }
+    }
+
     static class ExpiringWithDataService implements PlayerCacheManager.ExpiringPlayerCache {
         @PlayerCache
         final Map<UUID, Long> expiryTimestamps = new HashMap<>();
@@ -582,6 +592,19 @@ class PlayerCacheManagerTest {
         @DisplayName("One participant's hook throwing does not prevent the others from running in the same pass")
         void isolatesOneParticipantsFailure() {
             ThrowingExpiringService failing = new ThrowingExpiringService();
+            ExpiringService healthy = new ExpiringService();
+            manager.registerBean(failing);
+            manager.registerBean(healthy);
+
+            assertThatCode(() -> manager.sweepExpiredEntries()).doesNotThrowAnyException();
+
+            assertThat(healthy.sweepCount).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("One participant's hook throwing an Error does not prevent the others from running (#643 class sweep)")
+        void isolatesOneParticipantsError() {
+            ErrorExpiringService failing = new ErrorExpiringService();
             ExpiringService healthy = new ExpiringService();
             manager.registerBean(failing);
             manager.registerBean(healthy);
