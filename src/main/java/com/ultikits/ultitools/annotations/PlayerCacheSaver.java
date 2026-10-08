@@ -16,8 +16,8 @@ public interface PlayerCacheSaver {
      * Called once per {@code @PlayerCache(saveBeforeRemove = true)} field of the implementing
      * bean. An exception or {@link Error} thrown here is logged as a WARNING by the framework and
      * does not keep the entry: it is removed anyway, and the cleanup of every other field
-     * continues (as of 6.3.0, #643). Data that must not be lost on a failed save has to be
-     * retried or persisted by the implementation itself.
+     * continues (as of 6.3.0, #643; maintainer decision, 2026-10-08). The framework does not retry
+     * the save; a module that must not lose the data retries or persists it itself, here.
      *
      * @param playerId the UUID of the player quitting
      */

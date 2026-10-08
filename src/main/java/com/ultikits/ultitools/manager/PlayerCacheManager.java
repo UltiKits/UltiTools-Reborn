@@ -239,28 +239,36 @@ public class PlayerCacheManager {
      * and its bean implements {@link PlayerCacheSaver}, {@link PlayerCacheSaver#savePlayerData(UUID)}
      * runs first; then the quitting player's entry is removed from the field.
      * <p>
-     * <b>Each field is isolated (as of 6.3.0, #643).</b> A save or a removal that throws -- a
-     * {@link RuntimeException} such as a module's database error, or an {@link Error} such as a
+     * <b>Each field is isolated (as of 6.3.0, #643).</b> A save or a removal that throws -- any
+     * {@link Exception}, such as a module's database error or a checked exception the saver
+     * throws without declaring it (Lombok {@code @SneakyThrows}), or an {@link Error} such as a
      * {@code NoClassDefFoundError} from a module whose classes are gone, contained here as the
      * module unload steps contain it -- is logged as one WARNING naming the bean class, the field
      * and the player, and the cleanup continues with every other field of every tracked bean.
-     * A failed save does not keep the entry: the entry is removed anyway, because {@code
-     * saveBeforeRemove} orders the save before the removal and does not make the removal
-     * conditional on it, and nothing retries the save, so a kept entry would only outlive the
-     * player's session. Nothing is thrown to the caller (the framework's quit listener). Before
-     * 6.3.0 the first such failure ended the cleanup: that field's entry and the entries of every
-     * later field were left in memory, and the exception escaped into Bukkit's event dispatch.
+     * The beans are visited from a snapshot, as {@link #sweepExpiredEntries()} does, so a saver
+     * that registers or unregisters a tracked object during the quit does not end the cleanup.
+     * <p>
+     * A failed save does not keep the entry: the entry is removed anyway (maintainer decision,
+     * 2026-10-08), because {@code saveBeforeRemove} orders the save before the removal and does
+     * not make the removal conditional on it. The framework does not retry the save; a module
+     * that must not lose the data retries or persists it itself, inside {@code savePlayerData}.
+     * Nothing is thrown to the caller (the framework's quit listener). Before 6.3.0 the first
+     * such failure ended the cleanup: that field's entry and the entries of every later field
+     * were left in memory, and the exception escaped into Bukkit's event dispatch.
      *
      * @param playerId the UUID of the player who quit
      */
     @SuppressWarnings("PMD.AvoidCatchingGenericException") // per-field isolation barrier -- see javadoc above (#643)
     public void onPlayerQuit(UUID playerId) {
-        for (TrackedBean tracked : trackedBeans) {
+        // Snapshot, as sweepExpiredEntries does: a saver may register or unregister a tracked
+        // object (a validator's first-time registration, for example), which must not throw a
+        // ConcurrentModificationException out of the quit cleanup.
+        for (TrackedBean tracked : new ArrayList<>(trackedBeans)) {
             for (TrackedField tf : tracked.fields) {
                 if (tf.saveBeforeRemove && tracked.bean instanceof PlayerCacheSaver) {
                     try {
                         ((PlayerCacheSaver) tracked.bean).savePlayerData(playerId);
-                    } catch (RuntimeException | Error e) {
+                    } catch (Exception | Error e) { // a saver can throw a checked exception it does not declare
                         logQuitFailure("save", tracked, tf, playerId, e);
                     }
                 }
@@ -269,7 +277,7 @@ public class PlayerCacheManager {
                     if (value != null) {
                         sweepField(value, tf.shape, playerId);
                     }
-                } catch (IllegalAccessException | RuntimeException | Error e) {
+                } catch (Exception | Error e) { // Exception also covers Field#get's IllegalAccessException
                     logQuitFailure("remove the entry of", tracked, tf, playerId, e);
                 }
             }
@@ -319,10 +327,10 @@ public class PlayerCacheManager {
      * ExpiringPlayerCache#sweepExpired()} invoked once per pass. One participant's hook throwing
      * -- an exception, or (as of 6.3.0, #643) an {@link Error} such as a {@code
      * NoClassDefFoundError} -- is caught, logged, and does not prevent the remaining
-     * participants' hooks from running in the same pass. An instance that does not implement {@link ExpiringPlayerCache} is not
-     * visited at all -- opt-in by type, not by reflection guessing at method names. Tolerates an
-     * empty registry and being invoked mid-shutdown: it touches only this manager's own tracked
-     * list, never the Bukkit API directly.
+     * participants' hooks from running in the same pass. An instance that does not implement
+     * {@link ExpiringPlayerCache} is not visited at all -- opt-in by type, not by reflection
+     * guessing at method names. Tolerates an empty registry and being invoked mid-shutdown: it
+     * touches only this manager's own tracked list, never the Bukkit API directly.
      * <p>
      * Sweep period: see {@link #EXPIRY_SWEEP_PERIOD_TICKS} (5 minutes -- see that constant's
      * javadoc for the rationale).
