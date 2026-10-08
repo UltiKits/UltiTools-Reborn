@@ -151,16 +151,21 @@ class UltiCloudRequestsTest {
     }
 
     /** Installs a valid, unexpired token on the current session without touching the disk. */
-    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     private static void connect() throws Exception {
+        installToken(TOKEN, System.currentTimeMillis() / 1000L + 3600L);
+        assertThat(CloudSession.current().hasValidToken()).isTrue();
+    }
+
+    /** Installs {@code accessToken} expiring at {@code expEpochSeconds} on the current session. */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+    private static void installToken(String accessToken, long expEpochSeconds) throws Exception {
         TokenEntity token = new TokenEntity();
-        token.setAccess_token(TOKEN);
+        token.setAccess_token(accessToken);
         token.setRefresh_token("synthetic-refresh-token");
-        token.setExp(System.currentTimeMillis() / 1000L + 3600L);
+        token.setExp(expEpochSeconds);
         Field field = CloudSession.class.getDeclaredField("token");
         field.setAccessible(true);
         field.set(CloudSession.current(), token);
-        assertThat(CloudSession.current().hasValidToken()).isTrue();
     }
 
     private UltiCloudRequests.Result offMain(Callable<UltiCloudRequests.Result> call) throws Exception {
@@ -198,6 +203,60 @@ class UltiCloudRequestsTest {
         assertThat(get.getOutcome()).isEqualTo(UltiCloudRequests.Outcome.NOT_CONNECTED);
         assertThat(post.getStatusCode()).isEqualTo(-1);
         assertThat(post.getBody()).isNull();
+        assertThat(cloudRequests).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Test 2b: an expired token is NOT_CONNECTED and no request is made")
+    void expiredToken_isNotConnected() throws Exception {
+        installToken(TOKEN, System.currentTimeMillis() / 1000L - 60L);
+
+        UltiCloudRequests.Result post = offMain(() -> UltiCloudRequests.post(CREATE_PATH, "{}"));
+        UltiCloudRequests.Result get = offMain(() -> UltiCloudRequests.get(POLL_PATH, null));
+
+        assertThat(post.getOutcome()).isEqualTo(UltiCloudRequests.Outcome.NOT_CONNECTED);
+        assertThat(get.getOutcome()).isEqualTo(UltiCloudRequests.Outcome.NOT_CONNECTED);
+        assertThat(cloudRequests).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Test 2c: an invalidated session still holding a token is NOT_CONNECTED and no request is made")
+    void invalidatedSession_isNotConnected() throws Exception {
+        connect();
+        CloudSession.current().markInvalidatedForTesting();
+
+        UltiCloudRequests.Result post = offMain(() -> UltiCloudRequests.post(CREATE_PATH, "{}"));
+        UltiCloudRequests.Result get = offMain(() -> UltiCloudRequests.get(POLL_PATH, null));
+
+        assertThat(post.getOutcome()).isEqualTo(UltiCloudRequests.Outcome.NOT_CONNECTED);
+        assertThat(get.getOutcome()).isEqualTo(UltiCloudRequests.Outcome.NOT_CONNECTED);
+        assertThat(cloudRequests).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Test 6b: a token the JDK refuses as a header value (CR/LF) never surfaces; the result is IO_ERROR")
+    void tokenRefusedAsAHeaderValue_neverSurfaces() throws Exception {
+        String unsafe = "synthetic-crlf-token\r\nX-Injected: yes";
+        installToken(unsafe, System.currentTimeMillis() / 1000L + 3600L);
+
+        AtomicReference<Throwable> thrown = new AtomicReference<>();
+        Callable<UltiCloudRequests.Result> post = () -> {
+            try {
+                return UltiCloudRequests.post(CREATE_PATH, "{}");
+            } catch (RuntimeException e) {
+                thrown.set(e);
+                return null;
+            }
+        };
+        UltiCloudRequests.Result result = offMain(post);
+
+        assertThat(thrown.get())
+            .as("exception escaping the helper (its message would carry the bearer)")
+            .isNull();
+        assertThat(result.getOutcome()).isEqualTo(UltiCloudRequests.Outcome.IO_ERROR);
+        assertThat(result.getStatusCode()).isEqualTo(-1);
+        assertThat(result.getBody()).isNull();
+        assertThat(result.toString()).doesNotContain("synthetic-crlf-token");
         assertThat(cloudRequests).isEmpty();
     }
 
