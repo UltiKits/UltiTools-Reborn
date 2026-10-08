@@ -1940,6 +1940,28 @@ Each corrects behaviour that contradicted the documentation or left state held b
   javadoc always said. An overridden method is scheduled once, with the most derived declaration's
   annotation; an override without `@Scheduled` is not scheduled. A method that previously never ran
   because an abstract base declared it now runs; none of the fifteen UltiKits modules declares one.
+- **One failing `@PlayerCache` save or removal no longer stops the quit cleanup** (#643). When a player
+  quits, the framework runs `PlayerCacheSaver#savePlayerData` for each `saveBeforeRemove = true` field
+  and then removes the player's entry from every `@PlayerCache` field. Before 6.3.0 the first save or
+  removal that threw (a module's database error, for example) ended the cleanup: that field's entry and
+  the entries of every later field and bean stayed in memory, and the exception escaped into Bukkit's
+  event dispatch. Each field is now handled on its own: a failure (an exception or an `Error`) is
+  logged as one WARNING naming the bean class, the field and the player, and the cleanup goes on. A
+  failed save does not keep the entry; it is removed anyway, because `saveBeforeRemove` orders the
+  save before the removal and nothing retries the save. A saver whose data must not be lost has to
+  retry or persist it itself. The periodic expiry sweep (`PlayerCacheManager.ExpiringPlayerCache`)
+  also contains an `Error` from one bean, so the beans after it are still swept. None of the fifteen
+  UltiKits modules uses `saveBeforeRemove`. No signature changes. See
+  `ultitools.runtime.player-cache-quit` in `FEATURES.md`.
+
+  中文补充：一个 `@PlayerCache` 字段的保存或移除失败，不再中断玩家退出时的清理（#643）。玩家退出时，框架对每个
+  `saveBeforeRemove = true` 的字段调用 `PlayerCacheSaver#savePlayerData`，再从每个 `@PlayerCache` 字段中移除该玩家的条目。
+  6.3.0 之前，第一个抛出异常的保存或移除（例如模块的数据库错误）会结束整个清理：该字段及其后所有字段、所有 bean 中的条目都留在
+  内存里，异常还会进入 Bukkit 的事件分发。现在每个字段单独处理：失败（异常或 `Error`）记录为一条 WARNING，写明 bean 类、字段和
+  玩家，清理继续进行。保存失败不会保留条目，条目照样移除，因为 `saveBeforeRemove` 只规定先保存后移除，且没有任何机制会重试保存；
+  数据不能丢失的保存方需要自行重试或持久化。定期过期清理（`PlayerCacheManager.ExpiringPlayerCache`）同样会拦下单个 bean 抛出的
+  `Error`，其后的 bean 仍会被清理。十五个 UltiKits 模块都没有使用 `saveBeforeRemove`。没有签名变化。见 `FEATURES.md` 中的
+  `ultitools.runtime.player-cache-quit`。
 
 ### Panel log stream and panel reply changes (6.3.0) that need no migration period
 
