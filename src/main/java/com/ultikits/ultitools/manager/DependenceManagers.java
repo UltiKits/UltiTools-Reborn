@@ -26,6 +26,14 @@ import org.jetbrains.annotations.ApiStatus;
  */
 @ApiStatus.Internal
 public class DependenceManagers {
+    /**
+     * The {@code adventure-platform-bukkit} audience provider, kept for binary compatibility.
+     *
+     * <p>Do not send chat components through it on Paper: on Paper 1.21.11 its chat facet falls
+     * back to legacy text and drops click and hover events. Send to the {@code Player} directly
+     * (Paper implements Adventure's {@code Audience} natively), as
+     * {@link com.ultikits.ultitools.utils.MessageUtils#sendMessage(org.bukkit.entity.Player, net.kyori.adventure.text.TextComponent)} does.
+     */
     @Getter
     private BukkitAudiences adventure;
     @Getter
