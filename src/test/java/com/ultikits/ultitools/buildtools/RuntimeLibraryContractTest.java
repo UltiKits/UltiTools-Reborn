@@ -189,6 +189,20 @@ class RuntimeLibraryContractTest {
     }
 
     @Test
+    void apiVersionStaysOneNineteen() throws Exception {
+        Path pluginYml = projectRoot().resolve("target/classes/plugin.yml");
+        assertThat(pluginYml).as("the filtered plugin descriptor must exist").isRegularFile();
+        Object descriptor;
+        try (InputStream input = Files.newInputStream(pluginYml)) {
+            descriptor = new Yaml(new SafeConstructor(new LoaderOptions())).load(input);
+        }
+        assertThat(descriptor).isInstanceOf(Map.class);
+        assertThat(((Map<?, ?>) descriptor).get("api-version"))
+                .as("the Paper compatibility decision keeps the descriptor at 1.19")
+                .isEqualTo("1.19");
+    }
+
+    @Test
     void xseriesIsTheDecidedVersion() throws Exception {
         assertThat(libraryCoordinates()).contains("com.github.cryptomorin:XSeries:13.7.1");
     }
