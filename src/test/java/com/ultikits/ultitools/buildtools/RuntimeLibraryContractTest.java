@@ -188,6 +188,11 @@ class RuntimeLibraryContractTest {
         }
     }
 
+    @Test
+    void xseriesIsTheDecidedVersion() throws Exception {
+        assertThat(libraryCoordinates()).contains("com.github.cryptomorin:XSeries:13.7.1");
+    }
+
     private static List<String> libraryCoordinates() throws Exception {
         Object descriptor;
         try (InputStream input = Files.newInputStream(projectRoot().resolve("target/classes/plugin.yml"))) {
