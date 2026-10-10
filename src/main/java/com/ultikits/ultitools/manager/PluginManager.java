@@ -1554,6 +1554,20 @@ public class PluginManager {
             }
             return aClass.asSubclass(UltiToolsPlugin.class);
         } catch (ClassNotFoundException | LinkageError e) {
+            Throwable frameworkFailure = frameworkLinkageFailure(e);
+            if (frameworkFailure != null) {
+                // The usual cause of this branch on a real server: the operator upgraded the
+                // framework but not the module (or, less often, installed a module newer than the
+                // framework). One plain line says what happened and what to do; the stack trace
+                // tells an operator nothing more, so it moves to FINE. Carrying no Throwable at
+                // SEVERE also keeps SystemLogHandler from filing this as a framework error report
+                // -- the defect is a version mismatch, not a framework fault.
+                Bukkit.getLogger().log(Level.SEVERE,
+                    frameworkApiMismatchRefusal(pluginJar, ymlInfo, mainClassName, frameworkFailure));
+                Bukkit.getLogger().log(Level.FINE,
+                    "[UltiTools-API] Linkage failure behind the refusal of module '" + pluginJar.getName() + "'", e);
+                return null;
+            }
             Bukkit.getLogger().log(Level.SEVERE,
                 "[UltiTools-API] Module '" + pluginJar.getName() + "' declares main: '"
                     + mainClassName + "' in plugin.yml, but it could not be loaded: "
@@ -1564,6 +1578,153 @@ public class PluginManager {
             Bukkit.getLogger().log(Level.WARNING,
                 "[UltiTools-API] Security violation while loading declared main class '"
                     + mainClassName + "' for module '" + pluginJar.getName() + "': " + e.getMessage());
+            return null;
+        }
+    }
+
+    /** The framework's own package, in both the dotted and the internal (slash) spelling. */
+    private static final String FRAMEWORK_PACKAGE = "com.ultikits.ultitools.";
+    private static final String FRAMEWORK_PACKAGE_INTERNAL = "com/ultikits/ultitools/";
+
+    /**
+     * Decides whether a failure to load a module's declared main class means the module was built
+     * against a different UltiTools-API than the one installed -- usually an older one, the case an
+     * operator meets after upgrading the framework but not the module (6.3.0 made
+     * {@code UltiToolsPlugin.unregisterSelf()} and {@code reloadSelf()} final, and every released
+     * module overrides at least the first). The failure alone cannot say which side is older;
+     * {@link #frameworkApiMismatchRefusal} decides that from the module's declared
+     * {@code api-version}.
+     * <p>
+     * Two families qualify, and each only when the failure names a type in the framework package
+     * {@code com.ultikits.ultitools}:
+     * <ul>
+     *   <li>{@link IncompatibleClassChangeError} and its subclasses ({@link NoSuchMethodError},
+     *   {@link NoSuchFieldError}, {@link AbstractMethodError}, {@link IllegalAccessError},
+     *   {@link InstantiationError}). The JVM throws these when a class was compiled against a
+     *   different version of another class than the one present at run time -- a method made final
+     *   (the "overrides final method" case), a member removed or narrowed, a method made abstract.
+     *   They are the definition of a binary-incompatible API change; when the type they name is a
+     *   framework type, the module was compiled against a different framework. A NoSuchMethodError
+     *   naming a Bukkit or library member is the same defect against that other API, and blaming
+     *   the framework would send the operator to replace the wrong thing.</li>
+     *   <li>A missing class: {@link NoClassDefFoundError}, or {@link ClassNotFoundException}
+     *   anywhere in the cause chain, whose missing class is a framework class (a class this release
+     *   removed). A missing third-party class -- an absent optional plugin, an unshaded library -- is
+     *   a different defect with a different fix, so it is not attributed to the framework's age. A
+     *   JAR whose declared main class is itself absent names the module's own class, so it does not
+     *   qualify either. A {@code NoClassDefFoundError} reading "Could not initialize class ..."
+     *   reports a failed static initializer, not a missing class, so its own message never
+     *   qualifies.</li>
+     * </ul>
+     * The cause chain is walked (up to eight levels), so a wrapper never qualifies by itself but
+     * its causes are judged by the same rules: a "Could not initialize class" error or an
+     * {@link ExceptionInInitializerError} whose underlying cause is a qualifying failure -- a static
+     * initializer that died on a removed framework class -- does qualify, because that is the same
+     * version mismatch. One whose cause is anything else keeps the generic refusal, as do
+     * {@link VerifyError} and {@link ClassFormatError} (a corrupt or hand-made class file) and
+     * {@link UnsupportedClassVersionError} (built for a NEWER Java, the opposite remedy).
+     * <p>
+     * This is the cause the entity scan's per-module summary in {@link ModuleScanDiagnostics}
+     * reports, in the same words ({@link ModuleScanDiagnostics#OLDER_API_CAUSE} and
+     * {@link ModuleScanDiagnostics#COMPATIBILITY_POINTER}). That summary covers any class skipped
+     * during the scan and therefore says "usually"; this method accepts only failures that name the
+     * framework, because here the module is refused outright and the line tells the operator what
+     * to replace.
+     *
+     * @param failure the exception caught while loading the declared main class
+     * @return the link of the cause chain that names a framework type the module was compiled
+     *         against -- the one the refusal quotes -- or {@code null} when none does
+     */
+    static Throwable frameworkLinkageFailure(Throwable failure) {
+        int depth = 0;
+        for (Throwable t = failure; t != null && depth < 8; t = t.getCause(), depth++) {
+            String message = t.getMessage();
+            if (message == null) {
+                continue;
+            }
+            if (t instanceof IncompatibleClassChangeError) {
+                if (message.contains(FRAMEWORK_PACKAGE) || message.contains(FRAMEWORK_PACKAGE_INTERNAL)) {
+                    return t;
+                }
+            } else if (t instanceof NoClassDefFoundError || t instanceof ClassNotFoundException) {
+                // The message is the bare missing class name; anything with a space is a sentence
+                // ("Could not initialize class ...", "Failed to load class: ...") and is not a name.
+                String missing = message.trim().replace('/', '.');
+                if (missing.indexOf(' ') < 0 && missing.startsWith(FRAMEWORK_PACKAGE)) {
+                    return t;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The one SEVERE line for a module refused by {@link #frameworkLinkageFailure}: which JAR, what
+     * it declares itself to be (only the keys its plugin.yml declares), why it cannot load, what to
+     * do, and the JVM's own message for whoever investigates further.
+     * <p>
+     * The direction of the advice comes from the same comparison {@link #isUltiToolsVersionCompatible}
+     * applies after instantiation ({@link #requiresNewerFramework}): a module whose declared
+     * {@code api-version} is above the installed framework's was built for a newer UltiTools-API,
+     * so the line says to upgrade the framework. In every other case -- an {@code api-version} equal
+     * to or below the framework's, an absent or non-integer {@code api-version}, or a framework level
+     * that cannot be read -- no comparison says otherwise, and the line keeps the older-module
+     * wording, the cause in practice (an operator upgrading the framework but not the module).
+     */
+    private static String frameworkApiMismatchRefusal(File pluginJar, PluginYmlReader.PluginYmlInfo ymlInfo,
+            String mainClassName, Throwable failure) {
+        List<String> declared = new ArrayList<>();
+        if (ymlInfo.getVersion() != null && !ymlInfo.getVersion().trim().isEmpty()) {
+            declared.add("version " + ymlInfo.getVersion().trim());
+        }
+        if (ymlInfo.getApiVersion() != null && !ymlInfo.getApiVersion().trim().isEmpty()) {
+            declared.add("api-version " + ymlInfo.getApiVersion().trim());
+        }
+        String identity = declared.isEmpty() ? "" : " (" + String.join(", ", declared) + ")";
+        Integer moduleLevel = parseDeclaredApiVersion(ymlInfo.getApiVersion());
+        Integer frameworkLevel = installedFrameworkApiVersion();
+        if (moduleLevel != null && frameworkLevel != null && requiresNewerFramework(moduleLevel, frameworkLevel)) {
+            return "[UltiTools-API] Module '" + pluginJar.getName() + "'" + identity + " declares main: '"
+                    + mainClassName + "', but it requires a newer UltiTools-API (api-version " + moduleLevel
+                    + "; the installed UltiTools-API is at api-version " + frameworkLevel
+                    + ") -- refusing to load. Upgrade UltiTools-API to a release at api-version "
+                    + moduleLevel + " or later, or install a release of the module built for this "
+                    + "UltiTools-API version. Cause: " + failure.getClass().getName() + ": " + failure.getMessage();
+        }
+        return "[UltiTools-API] Module '" + pluginJar.getName() + "'" + identity + " declares main: '"
+                + mainClassName + "', but it was " + ModuleScanDiagnostics.OLDER_API_CAUSE
+                + " and is not compatible with this one -- refusing to load. Upgrade it to a release of "
+                + "the module built for the current UltiTools-API version -- "
+                + ModuleScanDiagnostics.COMPATIBILITY_POINTER + ". Cause: "
+                + failure.getClass().getName() + ": " + failure.getMessage();
+    }
+
+    /**
+     * Whether a module declaring {@code moduleApiVersion} needs a newer framework than one at
+     * {@code frameworkApiVersion}. The single definition of that comparison: both the post-load
+     * gate {@link #isUltiToolsVersionCompatible} and the load-failure wording use it.
+     */
+    static boolean requiresNewerFramework(int moduleApiVersion, int frameworkApiVersion) {
+        return moduleApiVersion > frameworkApiVersion;
+    }
+
+    /** A plugin.yml {@code api-version} as an integer API level, or {@code null} when absent or not an integer. */
+    private static Integer parseDeclaredApiVersion(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        try {
+            return Integer.valueOf(raw.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /** The installed framework's API level, or {@code null} when it cannot be read (no env.yml, malformed version). */
+    private static Integer installedFrameworkApiVersion() {
+        try {
+            return UltiTools.getPluginVersion();
+        } catch (RuntimeException e) {
             return null;
         }
     }
@@ -2381,7 +2542,7 @@ public class PluginManager {
     }
 
     private boolean isUltiToolsVersionCompatible(UltiToolsPlugin plugin) {
-        if (plugin.getMinUltiToolsVersion() > UltiTools.getPluginVersion()) {
+        if (requiresNewerFramework(plugin.getMinUltiToolsVersion(), UltiTools.getPluginVersion())) {
             Bukkit.getLogger().log(Level.WARNING,
                     String.format("[UltiTools-API] %s load failed! UltiTools version is outdated!", plugin.getPluginName()));
             return false;

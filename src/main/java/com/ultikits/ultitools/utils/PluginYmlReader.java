@@ -191,14 +191,21 @@ public final class PluginYmlReader {
         // key is absent, matching loadAfter's own established contract.
         List<String> softDepend = config.getStringList("softdepend");
         List<String> depend = config.getStringList("depend");
-        return new PluginYmlInfo(name, main, loadAfter, softDepend, depend);
+        // getString renders a non-string scalar with toString(), so "api-version: 620" reads as "620".
+        // An unquoted "version: 1.10" is a YAML float and therefore reads as "1.1" -- the same as
+        // UltiToolsPlugin's own getString("version"); released modules quote it ('${project.version}').
+        String version = config.getString("version");
+        String apiVersion = config.getString("api-version");
+        return new PluginYmlInfo(name, main, loadAfter, softDepend, depend, version, apiVersion);
     }
 
     /**
      * The subset of a module's {@code plugin.yml} this framework needs: its declared
      * {@code name:} and {@code main:} (both nullable - absent when the archive has none or
      * reading failed), its {@code loadAfter:} list, and its Bukkit-level {@code softdepend:} /
-     * {@code depend:} lists (all three never null; empty when absent or reading failed).
+     * {@code depend:} lists (all three never null; empty when absent or reading failed), and its
+     * declared {@code version:} and {@code api-version:} as text (both nullable, like name and
+     * main), which the load-failure refusal quotes to identify the module.
      * <p>
      * {@code softDepend} was added for UltiEconomy#20's optional-dependency log-level decision: a class
      * that fails to load only because it references a type belonging to a plugin the module's own
@@ -215,18 +222,27 @@ public final class PluginYmlReader {
 
         /** The empty result every failure path returns. */
         public static final PluginYmlInfo EMPTY = new PluginYmlInfo(
-            null, null, Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
+            null, null, Collections.emptyList(), Collections.emptyList(), Collections.emptyList(), null, null);
 
         private final String name;
         private final String main;
         private final List<String> loadAfter;
         private final List<String> softDepend;
         private final List<String> depend;
+        private final String version;
+        private final String apiVersion;
 
         PluginYmlInfo(String name, String main, List<String> loadAfter, List<String> softDepend,
                 List<String> depend) {
+            this(name, main, loadAfter, softDepend, depend, null, null);
+        }
+
+        PluginYmlInfo(String name, String main, List<String> loadAfter, List<String> softDepend,
+                List<String> depend, String version, String apiVersion) {
             this.name = name;
             this.main = main;
+            this.version = version;
+            this.apiVersion = apiVersion;
             this.loadAfter = Collections.unmodifiableList(
                 loadAfter == null ? Collections.emptyList() : loadAfter);
             this.softDepend = Collections.unmodifiableList(
@@ -285,6 +301,27 @@ public final class PluginYmlReader {
          */
         public List<String> getDepend() {
             return depend;
+        }
+
+        /**
+         * The module's declared {@code plugin.yml} {@code version:} value, as text.
+         *
+         * @return the declared version, or {@code null} if absent or unreadable
+         * @since 6.3.0
+         */
+        public String getVersion() {
+            return version;
+        }
+
+        /**
+         * The module's declared {@code plugin.yml} {@code api-version:} value -- the UltiTools API
+         * level the module was written for -- as text.
+         *
+         * @return the declared api-version, or {@code null} if absent or unreadable
+         * @since 6.3.0
+         */
+        public String getApiVersion() {
+            return apiVersion;
         }
     }
 }
