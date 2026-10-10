@@ -1041,6 +1041,42 @@ replacement surface; the class is now `@ApiStatus.Internal`. Full reasoning, the
 list with its own javap output against the 6.2.5 baseline, and the downstream-author paragraph are
 in [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md)'s own entry for this removal.
 
+**One further exception, added by plan 18-30 (maintainer decision 2026-10-09, issue #652):**
+`manager.DependenceManagers#getAdventure()`, `#initAdventure(UltiTools)` and `#closeAdventure()`
+are removed together with the `net.kyori:adventure-platform-bukkit` library declaration in the POM
+and `plugin.yml`. This records **clause 2 as applied under the one-time 6.3.0 carve-out**, following
+the zero-caller `UltiTools#getEconomy()` precedent above; it does not widen clause 2 for later releases.
+Measured 2026-10-10 with `git grep -n -i -E
+'getAdventure|initAdventure|closeAdventure|BukkitAudiences|adventure\.platform'` on the fetched default
+branch of all **18 repositories** — the fifteen active modules, discontinued `UltiBot`, the POM-only
+`ultikits-module-parent`, and `Tooling/UltiTools-External-Example` — every provider query returns
+**0** matching lines. The same-scope `UltiToolsPlugin` positive control returns **1,206** lines in
+aggregate, including **7** in the external example; the POM-only parent honestly returns **0** for
+that control. These measurements do not prove absence of unknown third-party callers.
+
+`javap -public` on the published **6.2.5** JAR confirms all three methods were public, and
+`javap -v` confirms the class itself already carried **`@ApiStatus.Internal`**. This document's
+internal-only rule would therefore not treat their removal as a public-API compatibility event;
+the entry is retained because the maintainer explicitly requested documentation, with exact
+member-level binary-gate exclusions rather than a class-wide exemption. Replacement: Paper's native
+`Player#sendMessage(Component)`, used by `MessageUtils` since [PR #651](https://github.com/UltiKits/UltiTools-Reborn/pull/651).
+On Paper 1.21.11 the old provider 4.3.2 falls back to legacy text and drops click/hover events,
+making `/upm list` buttons ineffective. The provider was added in August 2023 for Spigot, which has
+no native Adventure support; the framework is now Paper-only and upstream
+[`PaperMC/adventure-platform`](https://github.com/PaperMC/adventure-platform) is archived.
+An un-recompiled class merely containing an invocation of a removed method can still load;
+executing that call site raises `NoSuchMethodError`. Full published signatures, evidence and the
+migration boundary are in the new audience-provider entry in
+[`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md).
+
+中文补充：计划 18-30 按维护者 2026-10-09 的决定删除三个方法及 audience-provider 库，并以
+6.3.0 一次性豁免下第 2 条的零调用方先例记录，不扩大后续版本的豁免条件。18 个仓库均为零引用，
+相同范围的阳性对照合计 1,206 行（外部示例 7 行；仅有 POM 的父项目为 0），不代表未知第三方也无调用。
+三个方法在 6.2.5 为 public，但类当时已标记 `@ApiStatus.Internal`；本来属于内部变更，仍按维护者要求
+留下记录。替代是 Paper 原生 `Player#sendMessage(Component)`。旧库在 Paper 1.21.11 丢失点击和悬停事件，
+其 2023 年为 Spigot 引入的理由已不适用，上游也已归档。旧类仅含调用指令时仍可加载，执行被删除的方法
+才抛出 `NoSuchMethodError`；迁移时应替换调用并重新编译。
+
 ### Measurement notes carried forward from the 6.3.0 survey
 
 How reference counts were measured (informing which removals were low-risk, though never the
