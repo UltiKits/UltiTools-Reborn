@@ -10,7 +10,7 @@
 
 <div align="center"><strong>The Modern Paper Plugin Framework</strong></div>
 
-<p align="center">Build Minecraft plugins the way you'd build a Spring Boot app — annotations, dependency injection, ORM, and scheduled tasks. Works with any Bukkit/Paper plugin. Java 21+, Minecraft 1.21+.</p>
+<p align="center">Build Minecraft plugins the way you'd build a Spring Boot app — annotations, dependency injection, ORM, and scheduled tasks. Works with any Bukkit/Paper plugin. Runs on Paper 1.19.2 (build 163 or later) and newer, on the Java version that Paper line requires.</p>
 
 <br>
 
@@ -19,8 +19,8 @@
 <img alt="GitHub release (latest by date)" src="https://img.shields.io/github/v/release/UltiKits/UltiTools-Reborn?style=flat-square"/>
 <img alt="Maven Central" src="https://img.shields.io/maven-central/v/com.ultikits/UltiTools-API?style=flat-square"/>
 <img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/UltiKits/UltiTools-Reborn?style=flat-square"/>
-<img alt="Minecraft Version" src="https://img.shields.io/badge/Minecraft-1.21+-blue?style=flat-square"/>
-<img alt="Java Version" src="https://img.shields.io/badge/Java-21+-orange?style=flat-square"/>
+<img alt="Paper Version" src="https://img.shields.io/badge/Paper-1.19.2%20build%20163%2B-blue?style=flat-square"/>
+<img alt="Server Java Version" src="https://img.shields.io/badge/Server%20Java-17%20%2F%2021-orange?style=flat-square"/>
 <img alt="Spigot Rating" src="https://img.shields.io/spiget/rating/85214?label=SpigotMC&amp;style=flat-square"/>
 <img alt="bStats Players" src="https://img.shields.io/bstats/players/8652?style=flat-square"/>
 <img alt="bStats Servers" src="https://img.shields.io/bstats/servers/8652?style=flat-square"/>
@@ -66,8 +66,11 @@ Writing Minecraft plugins often means pages of boilerplate — registering comma
 
 ### Requirements
 
-- **Java**: 21 or higher
-- **Minecraft**: 1.21+ (Paper)
+- **Server**: Paper 1.19.2 (build 163 or later) or newer. Plain Spigot is not supported.
+- **Server Java**: the version your Paper line requires: Java 17 for Paper 1.19.2 to 1.20.4, Java 21 from Paper 1.20.5.
+- **Building the framework**: JDK 21 (the bytecode targets Java 8).
+- **Modules**: individual modules may require a newer server. UltiKits, UltiLogin, UltiMail, UltiRemoteBag and UltiTrade need Minecraft 1.21+; see each module's README.
+- **Known gap below Paper 1.20.5**: the UltiPanel console mirror is not installed, and one WARNING at start-up says so; the panel's log stream then carries plugin lines only.
 - **UltiTools Plugin**: Install on your server
 
 ### Add the Dependency

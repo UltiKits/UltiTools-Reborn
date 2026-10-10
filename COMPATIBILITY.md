@@ -2565,6 +2565,10 @@ descriptor changes can only be recorded after the fact; we cannot guarantee to c
 | Bytecode target | Java 8 (`-source`/`-target`, not `--release`) |
 | `api-version` in `plugin.yml` | `1.19` (Bukkit API level, unrelated to the two rows above) |
 | `api-version` in a module's `plugin.yml` | `620` (UltiTools API level, unrelated to Bukkit's field of the same name) |
+| Minimum server | Paper 1.19.2 build 163, the first build bundling SnakeYAML 1.32 (as of 6.3.0). On Paper 1.19.0, 1.19.1 and 1.19.2 builds before 163 the framework fails to enable with a `NoSuchMethodError` on `LoaderOptions.setProcessComments`; Paper 1.18.2 and older refuse `api-version: '1.19'` ("Unsupported API version") and do not load it |
+| Server Java | The version the chosen Paper line requires: Java 17 for Paper 1.19.2 to 1.20.4, Java 21 from Paper 1.20.5. This is independent of the build JDK and the bytecode target above |
+| Modules | The framework's floor is not a module's floor. UltiKits, UltiLogin, UltiMail, UltiRemoteBag and UltiTrade need Minecraft 1.21+: their compiled classes call `InventoryView` methods as interface methods, `InventoryView` is a class before 1.21, so those calls throw `IncompatibleClassChangeError` when their code path runs, and Paper's bytecode rewriting does not reach modules loaded through the framework's own class loader. See each module's README |
+| Known gap on Paper 1.19.2 to 1.20.4 | The panel's console mirror is not installed, and one WARNING at start-up says the panel will not mirror the server console; the log stream carries plugin lines only. Those builds relocate CraftBukkit's log forwarder (`ForwardLogHandler`), so the mirror cannot find it. This is measured, existing behaviour, documented here and not changed |
 
 ### Where runtime dependencies come from
 
@@ -2573,14 +2577,22 @@ The framework JAR bundles exactly two libraries: obliviate-invs (GUI) and Univer
 
 | Delivery route | Version decided by | Examples |
 |---|---|---|
-| The `libraries:` block in `plugin.yml`, downloaded by Paper from coordinates | **This repository** | Gson, MySQL Connector/J, HikariCP, Java-WebSocket, ByteBuddy, XSeries |
-| Shipped by the Paper server itself | **The Paper build the server owner installed** | log4j, the Maven resolver Paper uses internally for `libraries:` and its dependencies |
+| The `libraries:` block in `plugin.yml`, downloaded by Paper from coordinates | **This repository** | commons-dbutils, Java-WebSocket, ByteBuddy, JavaMail (`com.sun.mail:javax.mail`), HikariCP, XSeries |
+| Shipped by the Paper server itself | **The Paper build the server owner installed** | Gson, MySQL Connector/J, protobuf, slf4j, the SQLite driver, native Adventure, log4j, the Maven resolver Paper uses internally for `libraries:` and its dependencies |
+
+As of 6.3.0, Gson, MySQL Connector/J, protobuf and slf4j are no longer listed under `libraries:`. Paper
+bundles all four on every build measured across the supported range (Paper 1.19.2 builds 163 and 307,
+and the latest build of thirteen Paper versions from 1.19.4 to 1.21.11), and Paper's own copy always
+loaded first, so those entries never took effect. The MySQL driver a server uses is therefore the one its Paper build ships,
+and the protobuf version pin from issue #220 never took effect. `adventure-platform-bukkit` is no longer
+delivered at all; the framework uses Paper's native Adventure (see the plan 18-30 entry under
+[Same-release exceptions applied in 6.3.0](#same-release-exceptions-applied-in-630)).
 
 **XSeries moved out of the bundled JAR in 6.3.0.** Through 6.2.5 it was shaded in — the sentence
 above used to say "three libraries", XSeries among them. From 6.3.0 it is `provided` scope and
-delivered through the `libraries:` route in the table instead, the same way Gson and HikariCP
-already were. If you shade this framework's JAR into your own uber-jar, XSeries no longer comes
-along for the ride: declare it yourself (`com.github.cryptomorin:XSeries:13.0.0`, or your own
+delivered through the `libraries:` route in the table instead, the same way HikariCP already
+was. If you shade this framework's JAR into your own uber-jar, XSeries no longer comes
+along for the ride: declare it yourself (`com.github.cryptomorin:XSeries:13.7.1`, or your own
 pinned version) if your module uses it.
 
 This boundary determines who fixes a third-party security advisory. For anything in the first
