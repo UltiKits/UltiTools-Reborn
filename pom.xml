@@ -680,6 +680,21 @@
                                  still present, only this one method is gone. Replacement:
                                  EconomyUtils.getEconomy(), the pre-existing façade six modules already call. -->
                             <exclude>com.ultikits.ultitools.UltiTools#getEconomy()</exclude>
+                            <!-- 18-30-PLAN.md (maintainer decision 2026-10-09, item 4, #652,
+                                 same-release exception clause 2): remove the archived adventure-platform
+                                 audience provider; Paper supplies native Adventure audiences.
+                                 DependenceManagers carried @ApiStatus.Internal in released 6.2.5.
+                                 These three public members have zero measured downstream callers.
+                                 Member-level excludes only: the class and its other members remain. -->
+                            <exclude>com.ultikits.ultitools.manager.DependenceManagers#getAdventure()</exclude>
+                            <exclude>com.ultikits.ultitools.manager.DependenceManagers#initAdventure(com.ultikits.ultitools.UltiTools)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.DependenceManagers#closeAdventure()</exclude>
+                            <!-- 18-30 coordinator ruling: the private adventure field is the storage
+                                 behind the three approved accessor removals, not a wider API exclusion.
+                                 As with com.ultikits.ultitools.UltiTools#versionWrapper above,
+                                 this exact member entry satisfies the removal-ledger pom-sync check;
+                                 see its private-field treatment and the matching precedent note. -->
+                            <exclude>com.ultikits.ultitools.manager.DependenceManagers#adventure</exclude>
                             <!-- 16-02-PLAN.md (D-01, #419/#455): UltiToolsPlugin.unregisterSelf() gains
                                  `final` so a module can no longer override it and skip the framework's
                                  own CommandManager/ListenerManager unregistration; the class itself
@@ -1078,13 +1093,6 @@
             <groupId>org.java-websocket</groupId>
             <artifactId>Java-WebSocket</artifactId>
             <version>1.5.4</version>
-            <scope>provided</scope>
-        </dependency>
-        <!-- Adventure - Paper 1.16.5+ 原生支持，无需打包 -->
-        <dependency>
-            <groupId>net.kyori</groupId>
-            <artifactId>adventure-platform-bukkit</artifactId>
-            <version>4.3.2</version>
             <scope>provided</scope>
         </dependency>
         <dependency>

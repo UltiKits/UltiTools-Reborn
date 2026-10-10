@@ -839,9 +839,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
         }
 
         PluginInitiationUtils.stopCredentialSchedulers();
-        if (dependenceManagers != null) {
-            dependenceManagers.closeAdventure();
-        }
         stopWebsocket();
         if (pluginManager != null) {
             pluginManager.close();
