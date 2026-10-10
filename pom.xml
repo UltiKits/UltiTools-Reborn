@@ -1053,7 +1053,8 @@
             <version>1.7.1</version>
             <scope>provided</scope>
         </dependency>
-        <!-- JSON 统一使用 Gson - Paper libraries 自动下载 -->
+        <!-- Compile-only Gson declaration; Paper supplies its bundled copy at runtime.
+             Gson 仅用于编译声明；运行时使用 Paper 自带的副本。 -->
         <dependency>
             <groupId>com.google.code.gson</groupId>
             <artifactId>gson</artifactId>
@@ -1069,25 +1070,9 @@
             <scope>provided</scope>
         </dependency>
 
-        <!-- MySQL Connector - Paper libraries 自动下载 -->
-        <dependency>
-            <groupId>com.mysql</groupId>
-            <artifactId>mysql-connector-j</artifactId>
-            <version>8.3.0</version>
-            <scope>provided</scope>
-        </dependency>
-        <!--
-            protobuf-java —— 不是本项目直接用的库，是 mysql-connector-j 的传递依赖。
-            显式声明只为把版本从 3.25.1 抬到 3.25.5，规避 GHSA-735f-pc8j-v9w8。
-            provided 作用域与 plugin.yml 的 libraries: 对应（Paper 在运行时下载）。
-            删掉这一条会静默退回 3.25.1，因为传递解析还在。见 issue #220。
-        -->
-        <dependency>
-            <groupId>com.google.protobuf</groupId>
-            <artifactId>protobuf-java</artifactId>
-            <version>3.25.5</version>
-            <scope>provided</scope>
-        </dependency>
+        <!-- MySQL JDBC and protobuf are supplied by Paper, not declared or downloaded here.
+             The framework has no protobuf references; a plugin version pin cannot override Paper.
+             MySQL JDBC 与 protobuf 由 Paper 提供；框架不引用 protobuf，插件版本声明不能覆盖 Paper。 -->
         <!-- Java-WebSocket - Paper libraries 自动下载 -->
         <dependency>
             <groupId>org.java-websocket</groupId>
@@ -1148,29 +1133,8 @@
             <version>5.1.0</version>
             <scope>provided</scope>
         </dependency>
-        <!-- slf4j-api - explicitly declared so it is no longer an undeclared-but-used dependency
-             (FOUND-05, T-01-03b). HikariCP above is the real consumer (it calls
-             org.slf4j.LoggerFactory.getLogger internally) but is itself provided-scope, and Maven
-             does not propagate a provided dependency's own compile-scope transitives - so slf4j-api
-             was never actually on this project's classpath at all until this declaration, only
-             listed in plugin.yml's libraries: block for Paper to download at runtime. 2.0.x is the
-             current stable line; 1.8.0-beta4 (the version that plugin.yml previously named) was
-             never finalised. provided scope: Paper downloads it at runtime via the libraries: entry
-             below, it does not enter the shaded artifact.
-             slf4j-api —— 显式声明,使其不再是“已使用但未声明”的依赖(FOUND-05, T-01-03b)。
-             上面的 HikariCP 是真正的使用方(内部调用 org.slf4j.LoggerFactory.getLogger),但
-             HikariCP 自身是 provided 作用域,而 Maven 不会传递一个 provided 依赖自身的
-             compile 作用域传递依赖——所以 slf4j-api 此前从未真正出现在本项目的 classpath
-             上,只是被 plugin.yml 的 libraries: 块列出供 Paper 在运行时下载。2.0.x 是当前
-             稳定线;plugin.yml 此前记录的 1.8.0-beta4 是一个从未定稿的 beta 版本。
-             provided 作用域:Paper 通过下面 plugin.yml 里的 libraries 条目在运行时下载,
-             不会进入 shaded 产物。 -->
-        <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-api</artifactId>
-            <version>2.0.17</version>
-            <scope>provided</scope>
-        </dependency>
+        <!-- Paper supplies slf4j at runtime; the framework needs no direct compile declaration.
+             Paper 在运行时提供 slf4j；框架无需直接编译依赖声明。 -->
         <!-- JUnit 5 dependencies for testing -->
         <dependency>
             <groupId>net.kyori</groupId>
