@@ -192,6 +192,8 @@ public final class PluginYmlReader {
         List<String> softDepend = config.getStringList("softdepend");
         List<String> depend = config.getStringList("depend");
         // getString renders a non-string scalar with toString(), so "api-version: 620" reads as "620".
+        // An unquoted "version: 1.10" is a YAML float and therefore reads as "1.1" -- the same as
+        // UltiToolsPlugin's own getString("version"); released modules quote it ('${project.version}').
         String version = config.getString("version");
         String apiVersion = config.getString("api-version");
         return new PluginYmlInfo(name, main, loadAfter, softDepend, depend, version, apiVersion);
@@ -201,7 +203,9 @@ public final class PluginYmlReader {
      * The subset of a module's {@code plugin.yml} this framework needs: its declared
      * {@code name:} and {@code main:} (both nullable - absent when the archive has none or
      * reading failed), its {@code loadAfter:} list, and its Bukkit-level {@code softdepend:} /
-     * {@code depend:} lists (all three never null; empty when absent or reading failed).
+     * {@code depend:} lists (all three never null; empty when absent or reading failed), and its
+     * declared {@code version:} and {@code api-version:} as text (both nullable, like name and
+     * main), which the load-failure refusal quotes to identify the module.
      * <p>
      * {@code softDepend} was added for UltiEconomy#20's optional-dependency log-level decision: a class
      * that fails to load only because it references a type belonging to a plugin the module's own

@@ -1,6 +1,8 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.CALLS_REAL_METHODS;
+import static org.mockito.Mockito.mockStatic;
 
 import java.io.File;
 import java.io.IOException;
@@ -29,6 +31,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockbukkit.mockbukkit.MockBukkit;
+import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
@@ -38,19 +41,24 @@ import net.bytebuddy.jar.asm.MethodVisitor;
 import net.bytebuddy.jar.asm.Opcodes;
 
 /**
- * A module JAR built against an older UltiTools-API is refused with one plain SEVERE line that says
- * so, names the module's declared version and api-version, and tells the operator what to do --
- * instead of a raw linkage message plus a full stack trace. Every other declared-main-class load
- * failure keeps its original generic SEVERE line, stack trace included.
+ * A module JAR built against a different UltiTools-API is refused with one plain SEVERE line that
+ * says so, names the module's declared version and api-version (when declared), and tells the
+ * operator what to do -- instead of a raw linkage message plus a full stack trace. The remedy
+ * points at the side that is behind: a module declaring an {@code api-version} above the installed
+ * framework's asks for a framework upgrade; otherwise the module is called older and the operator
+ * is told to replace it. Every other declared-main-class load failure keeps its original generic
+ * SEVERE line, stack trace included.
  */
-@DisplayName("PluginManager: modules built against an older UltiTools-API are refused with an upgrade hint")
+@DisplayName("PluginManager: modules built against a different UltiTools-API are refused with an upgrade hint")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
-@SuppressWarnings("PMD.AvoidAccessibilityAlteration")
 class PluginManagerLegacyModuleLoadTest {
 
     private static final String LEGACY_MAIN = "com.ultikits.testfixtures.legacymodule.LegacyModule";
     private static final String OLDER_API = "built against an older UltiTools-API version";
     private static final String GENERIC = "but it could not be loaded";
+    private static final String NEWER_API = "requires a newer UltiTools-API";
+    private static final String UPGRADE_FRAMEWORK = "Upgrade UltiTools-API";
+    private static final int INSTALLED_API_LEVEL = 630;
 
     @TempDir
     File tempDir;
@@ -150,8 +158,100 @@ class PluginManagerLegacyModuleLoadTest {
         assertThat(loadWith(jar, defs)).isNull();
 
         LogRecord line = onlySevereNaming(jar.getName());
-        assertThat(line.getMessage()).contains(OLDER_API).doesNotContain("version null").doesNotContain("()");
+        assertThat(line.getMessage()).contains(OLDER_API).doesNotContain("version null").doesNotContain("()")
+                .contains("'UltiNoMeta.jar' declares main:");
         assertThat(line.getThrown()).isNull();
+    }
+
+    @Test
+    @DisplayName("only the declared keys are listed: version alone, then api-version alone")
+    void identity_listsOnlyTheDeclaredKeys() throws Exception {
+        File versionOnly = moduleJar("UltiVersionOnly.jar", LEGACY_MAIN, "3.1.4", null);
+        File apiOnly = moduleJar("UltiApiOnly.jar", LEGACY_MAIN, null, "620");
+        Map<String, Object> defs = new HashMap<>();
+        defs.put(LEGACY_MAIN, new NoClassDefFoundError("com/ultikits/ultitools/Gone"));
+
+        assertThat(loadWith(versionOnly, defs)).isNull();
+        assertThat(loadWith(apiOnly, defs)).isNull();
+
+        assertThat(onlySevereNaming(versionOnly.getName()).getMessage())
+                .contains("'UltiVersionOnly.jar' (version 3.1.4) declares main:").doesNotContain("api-version");
+        assertThat(onlySevereNaming(apiOnly.getName()).getMessage())
+                .contains("'UltiApiOnly.jar' (api-version 620) declares main:");
+    }
+
+    @Test
+    @DisplayName("a module declaring an api-version above the installed framework's asks for a framework upgrade")
+    void newerModule_asksForAFrameworkUpgrade() throws Exception {
+        File jar = moduleJar("UltiFuture.jar", LEGACY_MAIN, "9.0.0", "9999");
+        Map<String, Object> defs = new HashMap<>();
+        defs.put(LEGACY_MAIN, new NoClassDefFoundError("com/ultikits/ultitools/abstracts/FutureHook"));
+
+        assertThat(loadWithInstalledApiLevel(jar, defs, INSTALLED_API_LEVEL)).isNull();
+
+        LogRecord line = onlySevereNaming(jar.getName());
+        assertThat(line.getMessage())
+                .contains(NEWER_API)
+                .contains("api-version 9999")
+                .contains("installed UltiTools-API is at api-version 630")
+                .contains(UPGRADE_FRAMEWORK)
+                .contains("refusing to load")
+                .contains("FutureHook")
+                .doesNotContain(OLDER_API)
+                .doesNotContain("Upgrade it to a release of the module");
+        assertThat(line.getThrown()).isNull();
+    }
+
+    @Test
+    @DisplayName("an api-version equal to or below the installed framework's keeps the older-module wording")
+    void equalOrLowerApiVersion_keepsTheOlderModuleWording() throws Exception {
+        File equal = moduleJar("UltiEqual.jar", LEGACY_MAIN, "1.0.0", String.valueOf(INSTALLED_API_LEVEL));
+        File lower = moduleJar("UltiLower.jar", LEGACY_MAIN, "1.0.0", "620");
+        Map<String, Object> defs = new HashMap<>();
+        defs.put(LEGACY_MAIN, legacyModuleOverridingFinalUnregisterSelf());
+
+        assertThat(loadWithInstalledApiLevel(equal, defs, INSTALLED_API_LEVEL)).isNull();
+        assertThat(loadWithInstalledApiLevel(lower, defs, INSTALLED_API_LEVEL)).isNull();
+
+        for (File jar : new File[] {equal, lower}) {
+            assertThat(onlySevereNaming(jar.getName()).getMessage())
+                    .contains(OLDER_API).doesNotContain(NEWER_API).doesNotContain(UPGRADE_FRAMEWORK);
+        }
+    }
+
+    @Test
+    @DisplayName("an api-version that cannot be compared keeps the older-module wording")
+    void uncomparableApiVersion_keepsTheOlderModuleWording() throws Exception {
+        File unparsable = moduleJar("UltiWordy.jar", LEGACY_MAIN, "1.0.0", "six-forty");
+        File noFrameworkLevel = moduleJar("UltiNoLevel.jar", LEGACY_MAIN, "1.0.0", "9999");
+        Map<String, Object> defs = new HashMap<>();
+        defs.put(LEGACY_MAIN, new NoClassDefFoundError("com/ultikits/ultitools/Gone"));
+
+        assertThat(loadWithInstalledApiLevel(unparsable, defs, INSTALLED_API_LEVEL)).isNull();
+        // No stub: the test fixture's UltiTools instance has no env.yml, so the framework's own
+        // level cannot be read and no comparison is possible.
+        assertThat(loadWith(noFrameworkLevel, defs)).isNull();
+
+        for (File jar : new File[] {unparsable, noFrameworkLevel}) {
+            assertThat(onlySevereNaming(jar.getName()).getMessage())
+                    .contains(OLDER_API).doesNotContain(NEWER_API);
+        }
+    }
+
+    @Test
+    @DisplayName("the Cause names the failure that matched, not the wrapper around it")
+    void cause_namesTheMatchedFailure() throws Exception {
+        File jar = moduleJar("UltiWrapped.jar", LEGACY_MAIN, "1.0.0", "620");
+        Map<String, Object> defs = new HashMap<>();
+        defs.put(LEGACY_MAIN, new NoClassDefFoundError("Could not initialize class " + LEGACY_MAIN)
+                .initCause(new NoClassDefFoundError("com/ultikits/ultitools/Gone")));
+
+        assertThat(loadWith(jar, defs)).isNull();
+
+        assertThat(onlySevereNaming(jar.getName()).getMessage())
+                .contains(OLDER_API)
+                .contains("Cause: java.lang.NoClassDefFoundError: com/ultikits/ultitools/Gone")
+                .doesNotContain("Could not initialize class");
     }
 
     @Test
@@ -184,6 +284,7 @@ class PluginManagerLegacyModuleLoadTest {
 
     @Test
     @DisplayName("a refused older-API module does not stop the next module in the folder from loading")
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     void refusedLegacyModule_doesNotBlockOtherModules() throws Exception {
         File modules = new File(tempDir, "modules");
         assertThat(modules.mkdirs()).isTrue();
@@ -201,8 +302,8 @@ class PluginManagerLegacyModuleLoadTest {
     }
 
     @Test
-    @DisplayName("classification: which linkage failures mean 'built against an older UltiTools-API'")
-    void classification() throws Exception {
+    @DisplayName("classification: which linkage failures mean 'built against a different UltiTools-API'")
+    void classification() {
         String fw = "com.ultikits.ultitools.abstracts.UltiToolsPlugin";
         assertThat(classify(new IncompatibleClassChangeError(
                 "class a.B overrides final method " + fw + ".unregisterSelf()V"))).isTrue();
@@ -224,14 +325,32 @@ class PluginManagerLegacyModuleLoadTest {
         assertThat(classify(new UnsupportedClassVersionError(fw + " has been compiled by a more recent "
                 + "version of the Java Runtime"))).isFalse();
         assertThat(classify(new ClassFormatError("Truncated class file"))).isFalse();
+
+        // The internal (slash) spelling, as older JVMs render linkage messages, still names the framework.
+        assertThat(classify(new IllegalAccessError("tried to access method "
+                + "com/ultikits/ultitools/abstracts/UltiToolsPlugin.hidden()V from class a/B"))).isTrue();
+        // A sentence that merely starts with a framework name is not a bare class name.
+        assertThat(classify(new NoClassDefFoundError("com/ultikits/ultitools/X (wrong name: a/B)"))).isFalse();
+        // A wrapper does not count by itself, but its cause chain is still examined: a static
+        // initializer that died on a missing framework class is the same defect.
+        assertThat(classify(new NoClassDefFoundError("Could not initialize class a.B").initCause(
+                new ExceptionInInitializerError(new NoClassDefFoundError("com/ultikits/ultitools/Gone"))))).isTrue();
+        assertThat(classify(new ExceptionInInitializerError(new IllegalStateException("boom in " + fw))))
+                .isFalse();
     }
 
     // ---------------------------------------------------------------- helpers
 
-    private boolean classify(Throwable failure) throws Exception {
-        Method method = PluginManager.class.getDeclaredMethod("isBuiltAgainstOlderFrameworkApi", Throwable.class);
-        method.setAccessible(true);
-        return (Boolean) method.invoke(null, failure);
+    private static boolean classify(Throwable failure) {
+        return PluginManager.frameworkLinkageFailure(failure) != null;
+    }
+
+    private Class<? extends UltiToolsPlugin> loadWithInstalledApiLevel(File jar, Map<String, Object> defs,
+            int installedApiLevel) throws Exception {
+        try (MockedStatic<UltiTools> ultiToolsStatic = mockStatic(UltiTools.class, CALLS_REAL_METHODS)) {
+            ultiToolsStatic.when(UltiTools::getPluginVersion).thenReturn(installedApiLevel);
+            return loadWith(jar, defs);
+        }
     }
 
     private LogRecord onlySevereNaming(String jarName) {
@@ -246,6 +365,7 @@ class PluginManagerLegacyModuleLoadTest {
         return matching.get(0);
     }
 
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     private Class<? extends UltiToolsPlugin> loadWith(File jar, Map<String, Object> defs) throws Exception {
         try (URLClassLoader loader = new FixtureLoader(defs)) {
             injectUltiToolsClassLoader(loader);
@@ -258,13 +378,14 @@ class PluginManagerLegacyModuleLoadTest {
         }
     }
 
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "PMD.AvoidAccessibilityAlteration"})
     private List<Class<?>> pluginClassList() throws Exception {
         Field field = PluginManager.class.getDeclaredField("pluginClassList");
         field.setAccessible(true);
         return (List<Class<?>>) field.get(pluginManager);
     }
 
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     private void injectUltiToolsClassLoader(URLClassLoader loader) throws Exception {
         if (UltiTools.getInstance() == null) {
             return;

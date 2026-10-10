@@ -2306,11 +2306,19 @@ use, unlike the first two occurrences in this section — the class naming its o
 exactly what an `IncompatibleClassChangeError` for an overridden final method reports.
 
 **What a server operator sees.** The framework refuses such a module with one SEVERE line, with no
-stack trace at SEVERE (the trace is logged at FINE), naming the module JAR and its declared
-`version` and `api-version`, saying it was built against an older UltiTools-API version and is not
-compatible with this one, and ending with the JVM's original message; every other module still
-loads. The fix is to replace that JAR with a release of the module built for the current
-UltiTools-API version.
+stack trace at SEVERE (the trace is logged at FINE), naming the module JAR and — only when its
+`plugin.yml` declares them — its `version` and `api-version`, saying it was built against an older
+UltiTools-API version and is not compatible with this one, and ending with the JVM's original
+message. Every other module that does not depend on it still loads; a module that lists it under
+`depend:` is refused along with it, as for any missing hard dependency. The fix is to replace that
+JAR with a release of the module built for the current UltiTools-API version.
+
+The opposite mismatch is reported the other way round. When the same kind of failure comes from a
+module whose declared `api-version` is above the installed framework's — a module built for a newer
+UltiTools-API, installed without upgrading the framework — the line says the module requires a newer
+UltiTools-API, gives both API levels, and tells the operator to upgrade UltiTools-API (or install a
+release of the module built for this version). When the module declares no `api-version`, or one
+that is not an integer, the line keeps the older-module wording above.
 
 **Migration guide for module authors.** The fix is a rename or a deletion — never a rewrite — with at
 most a `super` call or a now-dead `lang` key to drop alongside it:
