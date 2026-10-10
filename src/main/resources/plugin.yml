@@ -10,8 +10,8 @@ softdepend:
   - PlaceholderAPI
 
 # Maven Central libraries downloaded by Paper for the framework.
-# Gson, MySQL, protobuf and slf4j use Paper's bundled copies on every supported build.
-# Paper 为框架下载的 Maven Central 依赖；Gson、MySQL、protobuf、slf4j 使用所有受支持构建自带的副本。
+# Gson, MySQL, protobuf and slf4j use Paper's bundled copies on every build measured (see COMPATIBILITY.md).
+# Paper 为框架下载的 Maven Central 依赖；Gson、MySQL、protobuf、slf4j 使用 Paper 自带的副本（所有实测构建均自带，见 COMPATIBILITY.md）。
 libraries:
   - commons-dbutils:commons-dbutils:1.8.1
   - org.java-websocket:Java-WebSocket:1.5.4
