@@ -170,6 +170,37 @@
                 <artifactId>maven-dependency-plugin</artifactId>
                 <version>3.11.0</version>
                 <executions>
+                    <!-- Old SnakeYAML versions are isolated test fixtures, never runtime dependencies. -->
+                    <execution>
+                        <id>snakeyaml-floor-fixtures</id>
+                        <phase>generate-test-resources</phase>
+                        <goals>
+                            <goal>copy</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.directory}/snakeyaml-floor/</outputDirectory>
+                            <artifactItems>
+                                <artifactItem>
+                                    <groupId>org.yaml</groupId>
+                                    <artifactId>snakeyaml</artifactId>
+                                    <version>1.32</version>
+                                    <type>jar</type>
+                                </artifactItem>
+                                <artifactItem>
+                                    <groupId>org.yaml</groupId>
+                                    <artifactId>snakeyaml</artifactId>
+                                    <version>1.33</version>
+                                    <type>jar</type>
+                                </artifactItem>
+                                <artifactItem>
+                                    <groupId>org.yaml</groupId>
+                                    <artifactId>snakeyaml</artifactId>
+                                    <version>2.0</version>
+                                    <type>jar</type>
+                                </artifactItem>
+                            </artifactItems>
+                        </configuration>
+                    </execution>
                     <execution>
                         <id>analyze-dependencies</id>
                         <phase>verify</phase>
@@ -680,6 +711,21 @@
                                  still present, only this one method is gone. Replacement:
                                  EconomyUtils.getEconomy(), the pre-existing façade six modules already call. -->
                             <exclude>com.ultikits.ultitools.UltiTools#getEconomy()</exclude>
+                            <!-- 18-30-PLAN.md (maintainer decision 2026-10-09, item 4, #652,
+                                 same-release exception clause 2): remove the archived adventure-platform
+                                 audience provider; Paper supplies native Adventure audiences.
+                                 DependenceManagers carried @ApiStatus.Internal in released 6.2.5.
+                                 These three public members have zero measured downstream callers.
+                                 Member-level excludes only: the class and its other members remain. -->
+                            <exclude>com.ultikits.ultitools.manager.DependenceManagers#getAdventure()</exclude>
+                            <exclude>com.ultikits.ultitools.manager.DependenceManagers#initAdventure(com.ultikits.ultitools.UltiTools)</exclude>
+                            <exclude>com.ultikits.ultitools.manager.DependenceManagers#closeAdventure()</exclude>
+                            <!-- 18-30 coordinator ruling: the private adventure field is the storage
+                                 behind the three approved accessor removals, not a wider API exclusion.
+                                 As with com.ultikits.ultitools.UltiTools#versionWrapper above,
+                                 this exact member entry satisfies the removal-ledger pom-sync check;
+                                 see its private-field treatment and the matching precedent note. -->
+                            <exclude>com.ultikits.ultitools.manager.DependenceManagers#adventure</exclude>
                             <!-- 16-02-PLAN.md (D-01, #419/#455): UltiToolsPlugin.unregisterSelf() gains
                                  `final` so a module can no longer override it and skip the framework's
                                  own CommandManager/ListenerManager unregistration; the class itself
@@ -1038,7 +1084,8 @@
             <version>1.7.1</version>
             <scope>provided</scope>
         </dependency>
-        <!-- JSON 统一使用 Gson - Paper libraries 自动下载 -->
+        <!-- Compile-only Gson declaration; Paper supplies its bundled copy at runtime.
+             Gson 仅用于编译声明；运行时使用 Paper 自带的副本。 -->
         <dependency>
             <groupId>com.google.code.gson</groupId>
             <artifactId>gson</artifactId>
@@ -1054,37 +1101,14 @@
             <scope>provided</scope>
         </dependency>
 
-        <!-- MySQL Connector - Paper libraries 自动下载 -->
-        <dependency>
-            <groupId>com.mysql</groupId>
-            <artifactId>mysql-connector-j</artifactId>
-            <version>8.3.0</version>
-            <scope>provided</scope>
-        </dependency>
-        <!--
-            protobuf-java —— 不是本项目直接用的库，是 mysql-connector-j 的传递依赖。
-            显式声明只为把版本从 3.25.1 抬到 3.25.5，规避 GHSA-735f-pc8j-v9w8。
-            provided 作用域与 plugin.yml 的 libraries: 对应（Paper 在运行时下载）。
-            删掉这一条会静默退回 3.25.1，因为传递解析还在。见 issue #220。
-        -->
-        <dependency>
-            <groupId>com.google.protobuf</groupId>
-            <artifactId>protobuf-java</artifactId>
-            <version>3.25.5</version>
-            <scope>provided</scope>
-        </dependency>
+        <!-- MySQL JDBC and protobuf are supplied by Paper, not declared or downloaded here.
+             The framework has no protobuf references; a plugin version pin cannot override Paper.
+             MySQL JDBC 与 protobuf 由 Paper 提供；框架不引用 protobuf，插件版本声明不能覆盖 Paper。 -->
         <!-- Java-WebSocket - Paper libraries 自动下载 -->
         <dependency>
             <groupId>org.java-websocket</groupId>
             <artifactId>Java-WebSocket</artifactId>
             <version>1.5.4</version>
-            <scope>provided</scope>
-        </dependency>
-        <!-- Adventure - Paper 1.16.5+ 原生支持，无需打包 -->
-        <dependency>
-            <groupId>net.kyori</groupId>
-            <artifactId>adventure-platform-bukkit</artifactId>
-            <version>4.3.2</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
@@ -1130,7 +1154,7 @@
         <dependency>
             <groupId>com.github.cryptomorin</groupId>
             <artifactId>XSeries</artifactId>
-            <version>13.0.0</version>
+            <version>13.7.1</version>
             <scope>provided</scope>
         </dependency>
         <!-- https://mvnrepository.com/artifact/com.zaxxer/HikariCP -->
@@ -1140,29 +1164,8 @@
             <version>5.1.0</version>
             <scope>provided</scope>
         </dependency>
-        <!-- slf4j-api - explicitly declared so it is no longer an undeclared-but-used dependency
-             (FOUND-05, T-01-03b). HikariCP above is the real consumer (it calls
-             org.slf4j.LoggerFactory.getLogger internally) but is itself provided-scope, and Maven
-             does not propagate a provided dependency's own compile-scope transitives - so slf4j-api
-             was never actually on this project's classpath at all until this declaration, only
-             listed in plugin.yml's libraries: block for Paper to download at runtime. 2.0.x is the
-             current stable line; 1.8.0-beta4 (the version that plugin.yml previously named) was
-             never finalised. provided scope: Paper downloads it at runtime via the libraries: entry
-             below, it does not enter the shaded artifact.
-             slf4j-api —— 显式声明,使其不再是“已使用但未声明”的依赖(FOUND-05, T-01-03b)。
-             上面的 HikariCP 是真正的使用方(内部调用 org.slf4j.LoggerFactory.getLogger),但
-             HikariCP 自身是 provided 作用域,而 Maven 不会传递一个 provided 依赖自身的
-             compile 作用域传递依赖——所以 slf4j-api 此前从未真正出现在本项目的 classpath
-             上,只是被 plugin.yml 的 libraries: 块列出供 Paper 在运行时下载。2.0.x 是当前
-             稳定线;plugin.yml 此前记录的 1.8.0-beta4 是一个从未定稿的 beta 版本。
-             provided 作用域:Paper 通过下面 plugin.yml 里的 libraries 条目在运行时下载,
-             不会进入 shaded 产物。 -->
-        <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-api</artifactId>
-            <version>2.0.17</version>
-            <scope>provided</scope>
-        </dependency>
+        <!-- Paper supplies slf4j at runtime; the framework needs no direct compile declaration.
+             Paper 在运行时提供 slf4j；框架无需直接编译依赖声明。 -->
         <!-- JUnit 5 dependencies for testing -->
         <dependency>
             <groupId>net.kyori</groupId>

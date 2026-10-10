@@ -40,8 +40,9 @@ import com.ultikits.ultitools.utils.PluginInstallUtils;
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
 import org.mockbukkit.mockbukkit.entity.PlayerMock;
+import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.TextComponent;
-import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
+import net.kyori.adventure.text.event.ClickEvent;
 
 @DisplayName("PluginInstallCommands Enhanced Coverage Tests")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
@@ -106,18 +107,11 @@ class PluginInstallCommandsEnhancedTest {
                     p.sendMessage(msg);
                     return null;
                 });
-            mockedMessageUtils.when(() -> MessageUtils.sendMessage(
-                    (Player) org.mockito.ArgumentMatchers.any(), 
-                    (TextComponent) org.mockito.ArgumentMatchers.any()))
+            mockedMessageUtils.when(() -> MessageUtils.sendMessage(any(Player.class), any(TextComponent.class)))
                 .thenAnswer(invocation -> {
-                    try {
-                        Player p = invocation.getArgument(0);
-                        TextComponent t = invocation.getArgument(1);
-                        String msg = LegacyComponentSerializer.legacySection().serialize(t);
-                        p.sendMessage(msg);
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                    }
+                    Player p = invocation.getArgument(0);
+                    TextComponent t = invocation.getArgument(1);
+                    p.sendMessage(t);
                     return null;
                 });
             mockingAvailable = true;
@@ -270,6 +264,32 @@ class PluginInstallCommandsEnhancedTest {
             .contains("Plugin2").contains("未安装")
             .contains("Plugin3").contains("未安装")
             .contains("第1页");
+    }
+
+    @Test
+    @DisplayName("Player list - install and uninstall buttons keep their run-command click events")
+    void testPlayerListButtonsKeepClickEvents() {
+        assertThat(mockingAvailable).as("the component-delivery fixture must be available").isTrue();
+
+        UltiToolsPlugin installed = mock(UltiToolsPlugin.class);
+        when(installed.getPluginName()).thenReturn("UltiTools-Economy");
+        when(installed.getIdentifyString()).thenReturn("com.ultikits.economy");
+        when(mockPluginManager.getPluginList()).thenReturn(Collections.singletonList(installed));
+        mockedUtils.when(() -> PluginInstallUtils.getPluginList(1, 10)).thenReturn(Arrays.asList(
+                createPlugin("UltiEconomy", "com.ultikits.economy", "Installed module"),
+                createPlugin("UltiMail", "com.ultikits.mail", "Available module")));
+
+        executor.listPlugins(player, "1");
+        server.getScheduler().performTicks(2);
+
+        Component received = player.nextComponentMessage();
+        assertThat(received).as("the player must receive the list component").isNotNull();
+        List<String> commands = new ArrayList<>();
+        collectRunCommands(received, commands);
+        assertThat(commands)
+                .as("uninstall uses the loaded runtime name; install uses the catalogue identifier")
+                .containsExactly("/upm uninstall UltiTools-Economy", "/upm install com.ultikits.mail");
+        assertThat(player.nextComponentMessage()).as("one list component is one message").isNull();
     }
 
     @Test
@@ -657,6 +677,16 @@ class PluginInstallCommandsEnhancedTest {
             messages.add(msg);
         }
         return messages;
+    }
+
+    private static void collectRunCommands(Component component, List<String> commands) {
+        ClickEvent click = component.clickEvent();
+        if (click != null && click.action() == ClickEvent.Action.RUN_COMMAND) {
+            commands.add(click.value());
+        }
+        for (Component child : component.children()) {
+            collectRunCommands(child, commands);
+        }
     }
 
     private void waitForAsync() {
