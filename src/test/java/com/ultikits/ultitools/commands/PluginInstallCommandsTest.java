@@ -41,6 +41,9 @@ import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
 import org.mockbukkit.mockbukkit.entity.PlayerMock;
 
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.event.ClickEvent;
+
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class PluginInstallCommandsTest {
 
@@ -1253,6 +1256,71 @@ class PluginInstallCommandsTest {
             entry.setIdentifyString("  com.ultikits.economy  ");
 
             assertThat(PluginInstallCommands.isSameModule(economy, entry)).isTrue();
+        }
+    }
+
+    /**
+     * Phase 18 real-machine finding: on Paper 1.21.11 the {@code /upm list} install and uninstall
+     * buttons arrived with text and colour only, so clicking them did nothing. The command built the
+     * right click event; the send path dropped it. These tests read what the player actually received.
+     *
+     * <p>中文：真机上 {@code /upm list} 的安装/卸载按钮点击无反应；按钮带的点击事件在发送途中丢失。
+     */
+    @Nested
+    @DisplayName("/upm list buttons reach the player with their click events")
+    class ListButtonClickDeliveryTests {
+
+        @Test
+        @DisplayName("installed entry's Uninstall button runs /upm uninstall <runtime name>; missing entry's Install button runs /upm install <identify string>")
+        void listButtonsCarryRunCommandClickEvents() {
+            UltiTools instance = UltiTools.getInstance();
+            when(instance.getName()).thenReturn("UltiTools");
+            when(instance.getDescription()).thenReturn(new org.bukkit.plugin.PluginDescriptionFile(
+                    "UltiTools", "6.3.0", "com.ultikits.ultitools.UltiTools"));
+            when(instance.getLogger()).thenReturn(java.util.logging.Logger.getLogger("UltiTools"));
+            when(instance.isEnabled()).thenReturn(true);
+            UltiToolsPlugin economy = mock(UltiToolsPlugin.class);
+            when(economy.getPluginName()).thenReturn("UltiTools-Economy");
+            when(economy.getIdentifyString()).thenReturn("com.ultikits.economy");
+            when(mockPluginManager.getPluginList()).thenReturn(Collections.singletonList(economy));
+
+            PluginEntity installed = new PluginEntity();
+            installed.setName("UltiEconomy");
+            installed.setIdentifyString("com.ultikits.economy");
+            installed.setShortDescription("economy");
+            PluginEntity missing = new PluginEntity();
+            missing.setName("UltiMail");
+            missing.setIdentifyString("com.ultikits.mail");
+            missing.setShortDescription("mail");
+            mockedUtils.when(() -> PluginInstallUtils.getPluginList(1, 10))
+                    .thenReturn(Arrays.asList(installed, missing));
+
+            executor.listPlugins(player, "1");
+            server.getScheduler().performTicks(2);
+
+            List<String> commands = new ArrayList<>();
+            int componentMessages = 0;
+            Component received;
+            while ((received = player.nextComponentMessage()) != null) {
+                componentMessages++;
+                collectRunCommands(received, commands);
+            }
+            assertThat(commands)
+                    .as("each button must carry the command it advertises; without it a click does nothing")
+                    .containsExactly("/upm uninstall UltiTools-Economy", "/upm install com.ultikits.mail");
+            assertThat(componentMessages)
+                    .as("the whole list is one component; a legacy-text fallback splits it per line")
+                    .isEqualTo(1);
+        }
+
+        private void collectRunCommands(Component node, List<String> out) {
+            ClickEvent click = node.clickEvent();
+            if (click != null && click.action() == ClickEvent.Action.RUN_COMMAND) {
+                out.add(click.value());
+            }
+            for (Component child : node.children()) {
+                collectRunCommands(child, out);
+            }
         }
     }
 }
