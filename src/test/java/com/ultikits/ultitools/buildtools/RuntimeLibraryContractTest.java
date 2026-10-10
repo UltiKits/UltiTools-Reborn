@@ -10,6 +10,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -139,6 +143,67 @@ class RuntimeLibraryContractTest {
         assertThat(providerDependencies)
                 .as("pom.xml must not depend on the adventure-platform audience provider")
                 .isEmpty();
+    }
+
+    @Test
+    void pluginYmlLibrariesAreExactlyTheDecidedSet() throws Exception {
+        // Paper 1.19.2 builds 163 and 307 supply Gson, MySQL, protobuf and slf4j.
+        // Decision: 18-32-paper-1.19.2-libraries measurement, 2026-10-10.
+        Set<String> expected = new HashSet<>(Arrays.asList(
+                "commons-dbutils:commons-dbutils", "org.java-websocket:Java-WebSocket",
+                "net.bytebuddy:byte-buddy", "com.sun.mail:javax.mail",
+                "com.zaxxer:HikariCP", "com.github.cryptomorin:XSeries"));
+        List<String> coordinates = libraryCoordinates();
+        List<String> actual = coordinates.stream()
+                .map(coordinate -> coordinate.substring(0, coordinate.lastIndexOf(':')))
+                .collect(Collectors.toList());
+        assertThat(actual).doesNotHaveDuplicates().containsExactlyInAnyOrderElementsOf(expected);
+    }
+
+    @Test
+    void everyLibraryVersionEqualsThePomVersion() throws Exception {
+        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+        factory.setNamespaceAware(true);
+        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+        factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+        factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+        factory.setXIncludeAware(false);
+        factory.setExpandEntityReferences(false);
+        Document pom;
+        try (InputStream input = Files.newInputStream(projectRoot().resolve("pom.xml"))) {
+            pom = factory.newDocumentBuilder().parse(input);
+        }
+        Map<String, String> versions = new LinkedHashMap<>();
+        NodeList dependencies = pom.getElementsByTagNameNS("*", "dependency");
+        for (int index = 0; index < dependencies.getLength(); index++) {
+            Element dependency = (Element) dependencies.item(index);
+            versions.put(childText(dependency, "groupId") + ":" + childText(dependency, "artifactId"),
+                    childText(dependency, "version"));
+        }
+        for (String coordinate : libraryCoordinates()) {
+            String[] parts = coordinate.split(":");
+            assertThat(versions).as("POM declares " + coordinate).containsKey(parts[0] + ":" + parts[1]);
+            assertThat(parts[2]).as(coordinate + " matches its compile dependency")
+                    .isEqualTo(versions.get(parts[0] + ":" + parts[1]));
+        }
+    }
+
+    private static List<String> libraryCoordinates() throws Exception {
+        Object descriptor;
+        try (InputStream input = Files.newInputStream(projectRoot().resolve("target/classes/plugin.yml"))) {
+            descriptor = new Yaml(new SafeConstructor(new LoaderOptions())).load(input);
+        }
+        assertThat(descriptor).isInstanceOf(Map.class);
+        Object libraries = ((Map<?, ?>) descriptor).get("libraries");
+        assertThat(libraries).isInstanceOf(List.class);
+        List<String> result = new ArrayList<>();
+        for (Object library : (List<?>) libraries) {
+            assertThat(library).isInstanceOf(String.class);
+            String coordinate = (String) library;
+            assertThat(coordinate.split(":")).as("Maven library coordinate").hasSize(3);
+            result.add(coordinate);
+        }
+        return result;
     }
 
     /**
