@@ -1101,6 +1101,60 @@ When to migrate depends on who you are:
   leaves you a real transition window — the release that completes tab completion (6.3.0) is the same
   release that removes the old base class, so migrating at that point leaves no buffer at all.
 
+## Additions in 6.3.0
+
+New public API in a MINOR release. An addition breaks no existing module: nothing below changes a
+signature or a behaviour a module already relies on.
+
+### `UltiCloudRequests`: authenticated UltiCloud requests on a module's behalf
+
+`com.ultikits.ultitools.utils.UltiCloudRequests` (public, `@since 6.3.0`) sends an UltiCloud request
+with this server's UltiCloud credential **without giving the module the credential**. The framework
+still never hands a module the cloud token: the session that holds it is package-private, and no public
+static member of `com.ultikits.ultitools.utils` accepts or returns a `TokenEntity` (the 6.3.0 rule that
+a structural test enforces). The helper is the only way for a module to make UltiCloud recognise a
+request as coming from this server. UltiLogin's `/panel` web login link is its first user.
+
+- `post(String path, String jsonBody)` and `get(String path, Map<String, String> query)` return a
+  `Result` with an `Outcome` (`OK`, `NOT_CONNECTED`, `PATH_NOT_ALLOWED`, `IO_ERROR`), the HTTP status
+  (`-1` when no exchange completed) and the response body (`null` when no exchange completed). `OK`
+  means an exchange completed, whatever its status; the caller reads the status code.
+- **Allow-list, exact match per method:** `POST /auth/magic-link` and `GET /auth/magic-link/poll`.
+  Any other path, an allowed path with the other method, or a path containing `..`, `//`, `\`, `%`,
+  `?` or `#` returns `PATH_NOT_ALLOWED` and makes no request. Query parameters go through the `query`
+  map only, URL-encoded as UTF-8. The list grows only by a documented contract change in a framework
+  release; a module cannot widen it.
+- **No valid session** (no `/ulticloud login`, after `/ulticloud logout`, or the saved credential has
+  expired): `NOT_CONNECTED`, no request. A module decides its own fallback; UltiLogin falls back to its
+  anonymous request.
+- **The token is never exposed:** it is not returned, the framework never logs it, and it is not placed
+  in an exception message that reaches the caller (a failure of the exchange, including one the JDK
+  raises with the header value in its message, is `IO_ERROR` with the message dropped) or in
+  `Result.toString()`; no public member of the class or of `Result` is typed `TokenEntity`. Redirects
+  are not followed, so the credential is never re-sent to another host; a 3xx comes back as an `OK`
+  result with that status.
+- **Known limitation:** the JDK's own HTTP client logger, `sun.net.www.protocol.http.HttpURLConnection`,
+  prints request headers, the bearer included, when an operator raises it to `FINE` or lower. Its
+  default level does not, and the limitation applies equally to every request the framework sends with
+  the UltiCloud credential. Do not enable that logger on a production server.
+- **Threading:** both methods block on network I/O (connect timeout 10 s, read timeout 30 s) and throw
+  `IllegalStateException` on the server's primary thread. Call them from an asynchronous task.
+- The helper writes nothing: no file, no configuration, no log line.
+
+中文补充：6.3.0 新增公开类 `com.ultikits.ultitools.utils.UltiCloudRequests`（增量 API，不影响现有模块）。它以本服务器的
+UltiCloud 凭据代模块发送请求，但**从不把凭据交给模块**：框架仍不向模块提供云令牌，`utils` 包中没有任何公开静态成员接收或返回
+`TokenEntity`（6.3.0 的规则，由结构测试保证）。`post`/`get` 返回 `Result`：结果类型 `Outcome`（`OK`、`NOT_CONNECTED`、
+`PATH_NOT_ALLOWED`、`IO_ERROR`）、HTTP 状态码（未完成交换时为 `-1`）和响应正文（未完成交换时为 `null`）；`OK` 表示完成了一次
+HTTP 交换，不论状态码，由调用方判断。只允许两个请求，按方法精确匹配：`POST /auth/magic-link` 与 `GET /auth/magic-link/poll`；
+其他路径、方法不对，或路径含 `..`、`//`、`\`、`%`、`?`、`#` 时返回 `PATH_NOT_ALLOWED`，不发请求；查询参数只能经 `query`
+映射传入，按 UTF-8 编码。允许列表只会随框架版本中有文档记录的协议变更而扩大，模块无法扩大它。服务器未登录 UltiCloud（未执行
+`/ulticloud login`，或已 `/ulticloud logout`，或保存的凭据已过期）时返回 `NOT_CONNECTED`，不发请求，由模块自行决定回退方式。
+令牌不会被返回，框架自身不会把它写入日志，也不会出现在到达调用方的异常消息（交换失败一律为 `IO_ERROR`，异常消息被丢弃，包括 JDK
+在消息中带出请求头值的情况）或 `toString()` 中；不跟随重定向，凭据不会被转发到其他主机，3xx 作为 `OK` 结果原样返回。两个方法都会阻塞
+网络 I/O（连接超时 10 秒、读取超时 30 秒），在服务器主线程调用时抛出 `IllegalStateException`，请在异步任务中调用。它不写任何
+文件、配置或日志。已知限制：服主若把 JDK 自带的 HTTP 客户端日志器 `sun.net.www.protocol.http.HttpURLConnection` 调到 `FINE`
+或更低级别，它会打印包括凭据在内的请求头；默认级别不会，框架用该凭据发出的所有请求都同样如此。请勿在正式服务器上开启该日志器。
+
 ## Behavioral changes
 
 Some changes leave every method signature untouched yet alter how your module behaves at runtime: a
@@ -2304,6 +2358,21 @@ com.ultikits.ultitools.abstracts.UltiToolsPlugin.unregisterSelf()V` (or `reloadS
 loud, named failure at load time, not a silent no-op and not a delayed `NoSuchMethodError` on first
 use, unlike the first two occurrences in this section — the class naming its own offending method is
 exactly what an `IncompatibleClassChangeError` for an overridden final method reports.
+
+**What a server operator sees.** The framework refuses such a module with one SEVERE line, with no
+stack trace at SEVERE (the trace is logged at FINE), naming the module JAR and — only when its
+`plugin.yml` declares them — its `version` and `api-version`, saying it was built against an older
+UltiTools-API version and is not compatible with this one, and ending with the JVM's original
+message. Every other module that does not depend on it still loads; a module that lists it under
+`depend:` is refused along with it, as for any missing hard dependency. The fix is to replace that
+JAR with a release of the module built for the current UltiTools-API version.
+
+The opposite mismatch is reported the other way round. When the same kind of failure comes from a
+module whose declared `api-version` is above the installed framework's — a module built for a newer
+UltiTools-API, installed without upgrading the framework — the line says the module requires a newer
+UltiTools-API, gives both API levels, and tells the operator to upgrade UltiTools-API (or install a
+release of the module built for this version). When the module declares no `api-version`, or one
+that is not an integer, the line keeps the older-module wording above.
 
 **Migration guide for module authors.** The fix is a rename or a deletion — never a rewrite — with at
 most a `super` call or a now-dead `lang` key to drop alongside it:

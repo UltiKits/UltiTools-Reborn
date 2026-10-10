@@ -82,7 +82,7 @@ rather than an error:
 this repository, matching the number of `@CmdMapping` sites in each class exactly — confirmed by
 reading `UltiToolsCommands.java`, `PluginInstallCommands.java` and `CloudLoginCommand.java`
 directly, not by trusting the count alone. This document's own row counts diverge from these
-annotation-site counts for `/upm` (10 rows) and `/ulticloud` (4 rows) — each divergence is
+annotation-site counts for `/upm` (10 rows) and `/ulticloud` (4 command rows plus the `request-helper` gate row) — each divergence is
 explained, with its reason, in that command group's own section below.
 
 ## /ul — framework administration
@@ -157,12 +157,15 @@ count exactly. This section carries 4 rows, not 3, for the same reason as `/upm 
 `/ulticloud help` (also the bare `/ulticloud` with no arguments) reaches
 `CloudLoginCommand#handleHelp` through `BaseCommandExecutor`'s built-in short-circuit, with no
 `@CmdMapping` site of its own — the repository's total `@CmdMapping` count stays 15.
+As of v6.3.0 a fifth row, `ultitools.ulticloud.request-helper`, is not a command: it is the module-facing
+`UltiCloudRequests` helper, which sends an allow-listed UltiCloud request with this server's credential.
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
 | ultitools.ulticloud.help | Show the `/ulticloud` subcommand help text | command | `/ulticloud help` (also the bare `/ulticloud` with no arguments) | none (requireOp=true) | console | admin | none | CloudLoginCommand#handleHelp |
 | ultitools.ulticloud.login | Request a UltiCloud magic-link login for this server | command | `/ulticloud login` | none (requireOp=true) | console | admin | detailed | CloudLoginCommand#login |
 | ultitools.ulticloud.logout | Tear down the cloud connection and clear the saved credential | command | `/ulticloud logout` | none (requireOp=true) | console | admin | brief | CloudLoginCommand#logout |
+| ultitools.ulticloud.request-helper | As of v6.3.0, a module sends `POST /auth/magic-link` or `GET /auth/magic-link/poll` to UltiCloud with this server's UltiCloud credential attached by the framework, without ever receiving the credential; any other method or path returns `PATH_NOT_ALLOWED` and a server not logged in to UltiCloud returns `NOT_CONNECTED`, both with no request made; redirects are not followed; calls on the primary thread throw | gate | module code calling `UltiCloudRequests.post`/`get` from an asynchronous task (UltiLogin's `/panel`) | n/a | n/a | internal | brief | UltiCloudRequests#post; UltiCloudRequests#get |
 | ultitools.ulticloud.status | Show whether this server holds a valid UltiCloud authentication token — checks `CloudAuthManager.hasValidToken()` only, never the live WebSocket connection state, so it reports token/authentication status, not whether the panel socket is actually connected | command | `/ulticloud status` | none (requireOp=true) | console | admin | brief | CloudLoginCommand#status |
 
 ## Boot sequence and listeners
@@ -569,4 +572,4 @@ total including both `env.yml` keys is 53.
 | ultitools.config.config.ultipanel.logging.excluded-loggers | Logger name prefixes excluded from the log stream sent to the panel; purely opt-in, same as `batch.enabled` above. An entry matches a line whose logger name starts with it, whichever logging framework wrote it: `java.util.logging` names (`Minecraft` for everything logged through `Bukkit.getLogger()`, a plugin's own name, `com.ultikits.ultitools.*` class loggers) and, through the console mirror, Log4j names (`net.minecraft.*` and other server classes, the empty root name Paper's console sender writes to, a library's own name). Empty by default, so the stream mirrors the whole console (before 6.3.0 the default held six entries that could match none of the names the stream then received, #485) | config | `config-example.yml: ultipanel.logging.excluded-loggers (default: [])` | n/a | n/a | admin | none | SystemLogHandler#loadConfiguration |
 | ultitools.config.config.ultipanel.logging.levels | Log levels transmitted to the panel's live log stream; purely opt-in, same as `batch.enabled` above | config | `config-example.yml: ultipanel.logging.levels (default when present: [info, warning, error])` | n/a | n/a | admin | none | SystemLogHandler#loadConfiguration |
 | ultitools.config.env.api-url | UltiCloud API base URL; Maven-filtered at build time from the `ultitools.api.url` property, not editable at runtime by the server operator | config | `src/main/resources/env.yml: api-url (default: https://api.ultikits.com, from pom.xml property ultitools.api.url)` | n/a | n/a | admin | none | UltiTools#getEnv |
-| ultitools.config.env.version | The framework's own version string, used to gate version-dependent behaviour and drive the update check's "current version" comparison; Maven-filtered at build time from `${project.version}`, not editable at runtime | config | `src/main/resources/env.yml: version (default: the pom.xml project version at build time, e.g. 6.3.0-SNAPSHOT)` | n/a | n/a | admin | brief | UpdateManager#checkFrameworkUpdate (reads `UltiTools.getEnv().getString("version")`; `UltiTools#getPluginVersion` returns the parsed `int` used only by the module-compatibility gate, a different member entirely) |
+| ultitools.config.env.version | The framework's own version string, used to gate version-dependent behaviour and drive the update check's "current version" comparison, read by `UpdateManager#checkFrameworkUpdate` (not `UltiTools#getPluginVersion`, which returns a separately-parsed `int` used only by the unrelated module-compatibility gate); Maven-filtered at build time from `${project.version}`, not editable at runtime | config | `src/main/resources/env.yml: version (default: the pom.xml project version at build time, e.g. 6.3.0-SNAPSHOT)` | n/a | n/a | admin | brief | UpdateManager#checkFrameworkUpdate |
