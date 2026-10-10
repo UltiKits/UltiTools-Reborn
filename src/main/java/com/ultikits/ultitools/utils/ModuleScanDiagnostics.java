@@ -59,6 +59,17 @@ public final class ModuleScanDiagnostics {
         DIAGNOSTICS_LOGGER.addHandler(new PluginLoggerBridge(Level.ALL));
     }
 
+    /**
+     * The cause phrase shared by this class's scan summary and {@code PluginManager}'s refusal of a
+     * module whose declared main class fails to link against this framework, so an operator reads one
+     * wording for one cause.
+     */
+    public static final String OLDER_API_CAUSE = "built against an older UltiTools-API version";
+
+    /** The pointer to the compatibility record that follows {@link #OLDER_API_CAUSE} in both places. */
+    public static final String COMPATIBILITY_POINTER =
+            "see COMPATIBILITY.md for the list of APIs removed or changed in this release";
+
     /** One accumulator entry per module currently being scanned; cleared as each is emitted. */
     private static final Map<String, List<String>> SKIPPED_CLASSES_BY_MODULE = new ConcurrentHashMap<>();
 
@@ -109,8 +120,7 @@ public final class ModuleScanDiagnostics {
         String message = "Module '" + moduleName + "' skipped " + skipped.size()
                 + " class(es) that failed to load during startup and continued loading without "
                 + "them: " + String.join(", ", skipped) + ". This usually means the module was "
-                + "built against an older UltiTools-API version -- see COMPATIBILITY.md for the "
-                + "list of APIs removed or changed in this release.";
+                + OLDER_API_CAUSE + " -- " + COMPATIBILITY_POINTER + ".";
         DIAGNOSTICS_LOGGER.log(Level.SEVERE, message);
     }
 

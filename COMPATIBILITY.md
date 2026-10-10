@@ -2305,6 +2305,13 @@ loud, named failure at load time, not a silent no-op and not a delayed `NoSuchMe
 use, unlike the first two occurrences in this section — the class naming its own offending method is
 exactly what an `IncompatibleClassChangeError` for an overridden final method reports.
 
+**What a server operator sees.** The framework refuses such a module with one SEVERE line, with no
+stack trace at SEVERE (the trace is logged at FINE), naming the module JAR and its declared
+`version` and `api-version`, saying it was built against an older UltiTools-API version and is not
+compatible with this one, and ending with the JVM's original message; every other module still
+loads. The fix is to replace that JAR with a release of the module built for the current
+UltiTools-API version.
+
 **Migration guide for module authors.** The fix is a rename or a deletion — never a rewrite — with at
 most a `super` call or a now-dead `lang` key to drop alongside it:
 
