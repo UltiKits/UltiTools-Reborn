@@ -34,6 +34,7 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonParseException;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.manager.ModuleApiLevels;
 
 /**
  * The files of the module subsystem and the transactions that change them: which folder modules
@@ -517,6 +518,11 @@ public final class ModuleFileTransactions {
         try {
             latest = catalogue.latestVersion(identifyString);
             link = latest == null ? null : catalogue.downloadLink(identifyString, latest);
+        } catch (NoCompatibleVersionException e) {
+            // The catalogue has versions of this module, none of which this framework installs
+            // (plan 18-40): nothing to stage, said as such rather than as "no download".
+            return StageResult.failed(previousFailure, Keys.REASON_NO_COMPATIBLE_UPDATE, identifyString,
+                    e.getFrameworkLevel(), ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL, e.getFrameworkLevel());
         } catch (RuntimeException e) {
             return StageResult.failed(previousFailure, Keys.REASON_DOWNLOAD_FAILED, describe(e));
         }
@@ -614,8 +620,9 @@ public final class ModuleFileTransactions {
     }
 
     /**
-     * Checks the downloaded JAR -- the size/entry guard, its identity, and that it declares the
-     * version the catalogue offered -- and on success records its version and SHA-256.
+     * Checks the downloaded JAR -- the size/entry guard, its identity, that it declares the version
+     * the catalogue offered, and that its {@code api-version} is one this framework installs
+     * ({@link ModuleApiLevels}; plan 18-40) -- and on success records its version and SHA-256.
      *
      * @return the refusal, with the staging discarded, or {@code null} when the JAR is accepted
      */
@@ -635,6 +642,10 @@ public final class ModuleFileTransactions {
         StageResult wrongVersion = refuseOtherVersion(work, targetName, stagedVersion, latest, previousFailure);
         if (wrongVersion != null) {
             return wrongVersion;
+        }
+        StageResult wrongLevel = refuseOtherApiLevel(work, staged, previousFailure);
+        if (wrongLevel != null) {
+            return wrongLevel;
         }
         record.newVersion = stagedVersion;
         record.stagedSha256 = stagedHash;
@@ -656,6 +667,32 @@ public final class ModuleFileTransactions {
         discardStaging(work);
         return StageResult.failed(previousFailure, Keys.REASON_WRONG_VERSION, targetName, stagedVersion.trim(),
                 latest.trim());
+    }
+
+    /**
+     * A download must declare an {@code api-version} this framework installs: from
+     * {@link ModuleApiLevels#MIN_INSTALLABLE_API_LEVEL} to its own level. A catalogue that does not
+     * filter by level, or a version recorded wrongly, can otherwise stage a module that cannot load
+     * here -- one built before 6.3.0 overrides the now-final {@code unregisterSelf()} -- and every
+     * start would roll it back (plan 18-40).
+     *
+     * @return the refusal, with the staging discarded, or {@code null} when the level is accepted
+     */
+    private static StageResult refuseOtherApiLevel(File work, File staged, String previousFailure) {
+        int level = ModuleApiLevels.frameworkLevel();
+        int floor = ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL;
+        String declared = PluginYmlReader.readFromJarFile(staged).getApiVersion();
+        if (declared == null || declared.trim().isEmpty()) {
+            discardStaging(work);
+            return StageResult.failed(previousFailure, Keys.REASON_NO_API_LEVEL, staged.getName(), level, floor, level);
+        }
+        Integer moduleLevel = ModuleApiLevels.parse(declared);
+        if (moduleLevel != null && ModuleApiLevels.isInstallable(moduleLevel, floor, level)) {
+            return null;
+        }
+        discardStaging(work);
+        return StageResult.failed(previousFailure, Keys.REASON_INCOMPATIBLE_API_LEVEL, staged.getName(), declared.trim(),
+                level, floor, level);
     }
 
     /** Writes the {@code PENDING} record of a staged JAR, under the lock; the staging is discarded when it cannot be. */
@@ -2207,6 +2244,8 @@ public final class ModuleFileTransactions {
          *
          * @param identifyString the module's identify-string
          * @return the version, or {@code null} when there is none
+         * @throws NoCompatibleVersionException when the catalogue has versions of the module but
+         *         none this framework installs
          */
         String latestVersion(String identifyString);
 
@@ -2218,6 +2257,30 @@ public final class ModuleFileTransactions {
          * @return the link, or {@code null} when there is none
          */
         String downloadLink(String identifyString, String version);
+    }
+
+    /**
+     * Thrown by {@link Catalogue#latestVersion} when the catalogue answers that versions of the
+     * module exist but none is compatible with this framework's API level (HTTP 409 from the
+     * level-filtered {@code latest}; plan 18-40), so staging can say so instead of "no download".
+     */
+    public static final class NoCompatibleVersionException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        private final int frameworkLevel;
+
+        /**
+         * @param frameworkLevel the API level the request carried
+         */
+        public NoCompatibleVersionException(int frameworkLevel) {
+            super("the catalogue has no version compatible with UltiTools API level " + frameworkLevel);
+            this.frameworkLevel = frameworkLevel;
+        }
+
+        /** @return the API level the request carried */
+        public int getFrameworkLevel() {
+            return frameworkLevel;
+        }
     }
 
     /** How a JAR is downloaded. */
@@ -2560,6 +2623,15 @@ public final class ModuleFileTransactions {
         public static final String REASON_AMBIGUOUS_IDENTIFY_STRING =
                 "identify-string %s 同时由位于不同 JAR 的多个已加载模块声明（%s），无法确定要更新哪一个";
         public static final String REASON_NO_DOWNLOAD = "云端没有 %s 的可下载版本";
+        /** Args: the staged file name, its declared api-version as written, framework level, floor, framework level. */
+        public static final String REASON_INCOMPATIBLE_API_LEVEL =
+                "下载的 %s 声明 api-version %s，本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块";
+        /** Args: the staged file name, framework level, floor, framework level. */
+        public static final String REASON_NO_API_LEVEL =
+                "下载的 %s 没有声明 api-version，本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块";
+        /** Args: the identify-string, framework level, floor, framework level. */
+        public static final String REASON_NO_COMPATIBLE_UPDATE =
+                "云端没有 %s 可以安装在本服务器上的版本（本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块）";
         public static final String REASON_OTHER_COPY_LOADS_FIRST =
                 "下次启动时会由该模块的另一份副本代替新 JAR %s 加载：模块目录中的以下 JAR 声明了同一个主类，且文件名排在它之前：%s；请先移走它们，再执行 /upm update";
         public static final String REASON_DOWNLOAD_FAILED = "下载失败：%s";

@@ -22,6 +22,7 @@ import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.annotations.command.RunAsync;
 import com.ultikits.ultitools.entities.PluginEntity;
 import com.ultikits.ultitools.entities.UpdateInfo;
+import com.ultikits.ultitools.manager.ModuleApiLevels;
 import com.ultikits.ultitools.manager.UpdateManager;
 import com.ultikits.ultitools.utils.MessageUtils;
 import com.ultikits.ultitools.utils.ModuleFileTransactions;
@@ -196,6 +197,15 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         List<String> pluginVersions = PluginInstallUtils.getPluginVersions(plugin);
         if (pluginVersions == null) {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("获取版本列表失败！"));
+            return;
+        }
+        if (pluginVersions.isEmpty()) {
+            // The catalogue lists only the versions this framework installs (plan 18-40): an empty
+            // list means none, which an empty table would not say.
+            int level = ModuleApiLevels.frameworkLevel();
+            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n(
+                    "%s 没有可以安装在本服务器上的版本。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。"),
+                    plugin, level, ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL, level));
             return;
         }
         StringBuilder stringBuilder = new StringBuilder();

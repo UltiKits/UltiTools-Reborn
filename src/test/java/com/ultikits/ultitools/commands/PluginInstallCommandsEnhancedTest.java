@@ -563,7 +563,9 @@ class PluginInstallCommandsEnhancedTest {
         List<String> messages = collectAllMessages(player);
         String fullMessage = String.join("\n", messages);
         
-        assertThat(fullMessage).contains("可用版本列表");
+        // 18-40: the catalogue lists only versions this framework installs, so an empty list is
+        // reported as "no version can be installed on this server", not as an empty table.
+        assertThat(fullMessage).contains("没有可以安装在本服务器上的版本").doesNotContain("可用版本列表");
     }
 
     @Test

@@ -53,11 +53,24 @@ public class PluginInstallUtils {
     static final java.util.function.Function<UltiToolsPlugin, File> DEFAULT_MODULE_CODE_SOURCE =
             module -> codeSourceLocationOf(module.getClass());
 
-    /** The UltiCloud catalogue, as the update transaction asks it. */
-    private static final ModuleFileTransactions.Catalogue CATALOGUE = new ModuleFileTransactions.Catalogue() {
+    /**
+     * The UltiCloud catalogue, as the update transaction asks it. A 409 from the level-filtered
+     * {@code latest} -- versions exist, none this framework installs -- is thrown as
+     * {@link ModuleFileTransactions.NoCompatibleVersionException} (plan 18-40).
+     */
+    static final ModuleFileTransactions.Catalogue CATALOGUE = new ModuleFileTransactions.Catalogue() {
         @Override
         public String latestVersion(String identifyString) {
-            return getPluginLatestVersion(identifyString);
+            int level = ModuleApiLevels.frameworkLevel();
+            PluginEntity plugin = getPlugin(identifyString, level);
+            if (plugin == null) {
+                return null;
+            }
+            CatalogueAnswer latest = catalogueString(catalogueUrl("/plugin/" + plugin.getId() + "/latest", level));
+            if (latest.noCompatibleVersion()) {
+                throw new ModuleFileTransactions.NoCompatibleVersionException(level);
+            }
+            return latest.data;
         }
 
         @Override
