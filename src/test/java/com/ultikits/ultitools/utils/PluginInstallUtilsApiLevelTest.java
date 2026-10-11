@@ -198,9 +198,27 @@ class PluginInstallUtilsApiLevelTest {
         }
         for (String pair : request.substring(question + 1).split("&")) {
             int equals = pair.indexOf('=');
-            parameters.put(equals < 0 ? pair : pair.substring(0, equals), equals < 0 ? "" : pair.substring(equals + 1));
+            String key = equals < 0 ? pair : pair.substring(0, equals);
+            // The catalogue answers 400 to a repeated level parameter (contract section 3), so a
+            // request carrying one twice must fail here rather than be read as its last value.
+            assertThat(parameters).as("parameter %s repeated in %s", key, request).doesNotContainKey(key);
+            parameters.put(key, equals < 0 ? "" : pair.substring(equals + 1));
         }
         return parameters;
+    }
+
+    /** A file in this test's modules folder, which lives under the JUnit {@code @TempDir}. */
+    private File inModules(String name) {
+        // Test-only path under the JUnit @TempDir; every name is a constant of this class.
+        // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
+        return new File(modules, name);
+    }
+
+    /** The bytes of a file in this test's modules folder. */
+    private byte[] bytesInModules(String name) throws IOException {
+        // Test-only read under the JUnit @TempDir; every name is a constant of this class.
+        // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
+        return Files.readAllBytes(inModules(name).toPath());
     }
 
     @Test
@@ -308,19 +326,19 @@ class PluginInstallUtilsApiLevelTest {
     @Test
     @DisplayName("a stale .part file of the same name is replaced, and an accepted install leaves no .part file")
     void stalePartFile_isReplaced() throws IOException {
-        Files.write(new File(modules, "demo-1.1.jar.part").toPath(), "stale".getBytes(StandardCharsets.UTF_8));
+        Files.write(inModules("demo-1.1.jar.part").toPath(), "stale".getBytes(StandardCharsets.UTF_8));
         jars.put("1.1", moduleJar("1.1", "630"));
 
         assertThat(PluginInstallUtils.installReporting("demo", null).isInstalled()).isTrue();
 
         assertThat(modulesFolderNames()).containsExactly("demo-1.1.jar");
-        assertThat(Files.readAllBytes(new File(modules, "demo-1.1.jar").toPath())).isEqualTo(jars.get("1.1"));
+        assertThat(bytesInModules("demo-1.1.jar")).isEqualTo(jars.get("1.1"));
     }
 
     @Test
     @DisplayName("an accepted install over an existing file of the final name replaces it, as the download always did")
     void existingFinalName_isOverwritten() throws IOException {
-        try (OutputStream out = Files.newOutputStream(new File(modules, "demo-1.1.jar").toPath())) {
+        try (OutputStream out = Files.newOutputStream(inModules("demo-1.1.jar").toPath())) {
             out.write("old".getBytes(StandardCharsets.UTF_8));
         }
         jars.put("1.1", moduleJar("1.1", "630"));
@@ -328,7 +346,7 @@ class PluginInstallUtilsApiLevelTest {
         assertThat(PluginInstallUtils.installReporting("demo", null).isInstalled()).isTrue();
 
         assertThat(modulesFolderNames()).containsExactly("demo-1.1.jar");
-        assertThat(Files.readAllBytes(new File(modules, "demo-1.1.jar").toPath())).isEqualTo(jars.get("1.1"));
+        assertThat(bytesInModules("demo-1.1.jar")).isEqualTo(jars.get("1.1"));
     }
 
     @Test
