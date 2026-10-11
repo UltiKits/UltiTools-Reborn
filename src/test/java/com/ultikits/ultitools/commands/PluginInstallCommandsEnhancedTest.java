@@ -119,10 +119,8 @@ class PluginInstallCommandsEnhancedTest {
             // Setup default behaviors
             mockedUtils.when(() -> PluginInstallUtils.getPluginList(anyInt(), anyInt()))
                     .thenReturn(new ArrayList<>());
-            mockedUtils.when(() -> PluginInstallUtils.installPlugin(anyString(), anyString()))
-                    .thenReturn(true);
-            mockedUtils.when(() -> PluginInstallUtils.installLatestPlugin(anyString()))
-                    .thenReturn(true);
+            mockedUtils.when(() -> PluginInstallUtils.installReporting(anyString(), any()))
+                    .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
             mockedUtils.when(() -> PluginInstallUtils.getPluginVersions(anyString()))
                     .thenReturn(Arrays.asList("1.0.0", "1.0.1", "1.1.0"));
             mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(anyString(), anyList()))
@@ -429,8 +427,8 @@ class PluginInstallCommandsEnhancedTest {
     void testInstallPluginWithVersion() {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.installPlugin("test-plugin", "1.0.0"))
-                .thenReturn(true);
+        mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", "1.0.0"))
+                .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
         
         executor.onCommand(player, mockCommand, "upm", 
                 new String[]{"install", "test-plugin", "1.0.0"});
@@ -447,8 +445,8 @@ class PluginInstallCommandsEnhancedTest {
     void testInstallPluginWithVersionFailure() {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.installPlugin("bad-plugin", "1.0.0"))
-                .thenReturn(false);
+        mockedUtils.when(() -> PluginInstallUtils.installReporting("bad-plugin", "1.0.0"))
+                .thenReturn(PluginInstallUtils.InstallResult.failed());
         
         executor.onCommand(player, mockCommand, "upm", 
                 new String[]{"install", "bad-plugin", "1.0.0"});
@@ -463,8 +461,8 @@ class PluginInstallCommandsEnhancedTest {
     void testInstallLatestPlugin() {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.installLatestPlugin("latest-plugin"))
-                .thenReturn(true);
+        mockedUtils.when(() -> PluginInstallUtils.installReporting("latest-plugin", null))
+                .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
         
         executor.onCommand(player, mockCommand, "upm", 
                 new String[]{"install", "latest-plugin"});
@@ -481,8 +479,8 @@ class PluginInstallCommandsEnhancedTest {
     void testInstallLatestPluginFailure() {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.installLatestPlugin("fail-plugin"))
-                .thenReturn(false);
+        mockedUtils.when(() -> PluginInstallUtils.installReporting("fail-plugin", null))
+                .thenReturn(PluginInstallUtils.InstallResult.failed());
         
         executor.onCommand(player, mockCommand, "upm", 
                 new String[]{"install", "fail-plugin"});
@@ -497,8 +495,8 @@ class PluginInstallCommandsEnhancedTest {
     void testInstallFromConsole() {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.installLatestPlugin("console-plugin"))
-                .thenReturn(true);
+        mockedUtils.when(() -> PluginInstallUtils.installReporting("console-plugin", null))
+                .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
         
         boolean result = executor.onCommand(console, mockCommand, "upm", 
                 new String[]{"install", "console-plugin"});

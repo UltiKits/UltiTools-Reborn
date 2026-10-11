@@ -168,17 +168,24 @@ public class PluginInstallCommands extends BaseCommandExecutor {
 
     @CmdMapping(format = "install <plugin> <version>")
     public void installPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin, @CmdParam("version") String version) {
-        if (PluginInstallUtils.installPlugin(plugin, version)) {
-            sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("安装成功！请重启服务器！请务必删除旧版本模块！"));
-        } else {
-            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("安装失败！"));
-        }
+        sendInstallResult(sender, PluginInstallUtils.installReporting(plugin, version));
     }
 
     @CmdMapping(format = "install <plugin>")
     public void installPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin) {
-        if (PluginInstallUtils.installLatestPlugin(plugin)) {
+        sendInstallResult(sender, PluginInstallUtils.installReporting(plugin, null));
+    }
+
+    /**
+     * Tells the operator what an install did: the success line, the reason when the module's API
+     * level was why it was not installed (plan 18-40), or the bare failure line otherwise.
+     */
+    private static void sendInstallResult(CommandSender sender, PluginInstallUtils.InstallResult result) {
+        if (result.isInstalled()) {
             sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("安装成功！请重启服务器！请务必删除旧版本模块！"));
+        } else if (result.getReasonKey() != null) {
+            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n(result.getReasonKey()),
+                    result.getReasonArgs()));
         } else {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("安装失败！"));
         }

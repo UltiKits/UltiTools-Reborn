@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.commands;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -92,10 +93,8 @@ class PluginInstallCommandsTest {
             // Setup default mock behaviors
             mockedUtils.when(() -> PluginInstallUtils.getPluginList(anyInt(), anyInt()))
                     .thenReturn(new ArrayList<>());
-            mockedUtils.when(() -> PluginInstallUtils.installPlugin(anyString(), anyString()))
-                    .thenReturn(true);
-            mockedUtils.when(() -> PluginInstallUtils.installLatestPlugin(anyString()))
-                    .thenReturn(true);
+            mockedUtils.when(() -> PluginInstallUtils.installReporting(anyString(), any()))
+                    .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
             mockedUtils.when(() -> PluginInstallUtils.getPluginVersions(anyString()))
                     .thenReturn(Arrays.asList("1.0.0", "1.0.1"));
             mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(anyString(), anyList()))
@@ -273,8 +272,8 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.installPlugin("test-plugin", "1.0.0"))
-                .thenReturn(true);
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", "1.0.0"))
+                .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -295,8 +294,8 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.installPlugin("test-plugin", "1.0.0"))
-                .thenReturn(false);
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", "1.0.0"))
+                .thenReturn(PluginInstallUtils.InstallResult.failed());
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -317,8 +316,8 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.installLatestPlugin("test-plugin"))
-                .thenReturn(true);
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", null))
+                .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -339,8 +338,8 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.installLatestPlugin("test-plugin"))
-                .thenReturn(false);
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", null))
+                .thenReturn(PluginInstallUtils.InstallResult.failed());
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -726,8 +725,8 @@ class PluginInstallCommandsTest {
         ConsoleCommandSender console = server.getConsoleSender();
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.installLatestPlugin("test-plugin"))
-                .thenReturn(true);
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", null))
+                .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -1343,9 +1342,11 @@ class PluginInstallCommandsTest {
                 english = new com.google.gson.Gson().fromJson(reader,
                         new com.google.gson.reflect.TypeToken<Map<String, String>>() { }.getType());
             }
+            // Read the instance first: a static-mock call inside when(...) leaves the stubbing unfinished.
+            UltiTools instance = UltiTools.getInstance();
             org.mockito.Mockito.doAnswer(invocation -> english.getOrDefault(invocation.getArgument(0),
                     "<missing en.json entry: " + invocation.getArgument(0) + ">"))
-                    .when(UltiTools.getInstance()).i18n(anyString());
+                    .when(instance).i18n(anyString());
         }
 
         private String englishOf(String key, Object... args) {
