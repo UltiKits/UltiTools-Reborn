@@ -1397,6 +1397,31 @@ class PluginInstallCommandsTest {
         }
 
         @Test
+        @DisplayName("/upm install demo 2.0.0, that version incompatible: the English 'that version cannot be installed' line")
+        void namedVersionIncompatible_repliesWithTheRange() {
+            if (executor == null) return;
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", "2.0.0")).thenReturn(
+                    PluginInstallUtils.InstallResult.refused(PluginInstallUtils.InstallResult.REASON_VERSION_INCOMPATIBLE,
+                            "demo", "2.0.0", 630, 630, 630));
+
+            assertThat(reply("install", "demo", "2.0.0")).isEqualTo(org.bukkit.ChatColor.RED + englishOf(
+                    PluginInstallUtils.InstallResult.REASON_VERSION_INCOMPATIBLE, "demo", "2.0.0", 630, 630, 630));
+        }
+
+        @Test
+        @DisplayName("/upm versions demo with no compatible version: one English line naming the range, not an empty list")
+        void versionsWithNoCompatibleVersion_saysSo() {
+            if (executor == null) return;
+            mockedUltiTools.when(UltiTools::getPluginVersion).thenReturn(630);
+            mockedUtils.when(() -> PluginInstallUtils.getPluginVersions("demo")).thenReturn(Collections.emptyList());
+
+            assertThat(reply("versions", "demo")).isEqualTo(org.bukkit.ChatColor.RED + englishOf(
+                    "%s 没有可以安装在本服务器上的版本。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。",
+                    "demo", 630, 630, 630));
+            assertThat(player.nextMessage()).isNull();
+        }
+
+        @Test
         @DisplayName("a failure without a reason keeps the bare failure line; a success keeps the success line")
         void otherOutcomes_keepTheirLines() {
             if (executor == null) return;

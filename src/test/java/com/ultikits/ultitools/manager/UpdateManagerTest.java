@@ -328,4 +328,101 @@ class UpdateManagerTest {
                     .isFalse();
         }
     }
+
+    /**
+     * The module update check reports only versions this framework can install (plan 18-40; the
+     * maintainer's ruling of 2026-10-11): it asks the catalogue's level-filtered {@code latest}, and
+     * a 409 (no compatible version) is no offer -- never "needs a newer framework".
+     */
+    @Nested
+    @DisplayName("module update check asks with the API level and offers only what this framework installs (18-40)")
+    class ApiLevelUpdateCheck {
+
+        private com.sun.net.httpserver.HttpServer server;
+        private final List<String> latestRequests = Collections.synchronizedList(new ArrayList<>());
+        private int latestStatus;
+
+        @BeforeEach
+        void startCatalogue() throws java.io.IOException {
+            server = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+            server.createContext("/", exchange -> {
+                String path = exchange.getRequestURI().getRawPath();
+                String query = exchange.getRequestURI().getRawQuery();
+                int status = 200;
+                String body;
+                if ("/plugin/get".equals(path)) {
+                    body = "{\"code\":\"200\",\"msg\":\"Success\",\"data\":{\"id\":7,\"identifyString\":\"demo\"}}";
+                } else if ("/plugin/7/latest".equals(path)) {
+                    latestRequests.add(query);
+                    status = latestStatus;
+                    body = status == 200 ? "{\"code\":\"200\",\"msg\":\"Success\",\"data\":\"1.1\"}"
+                            : "{\"code\":\"409\",\"msg\":\"No version of this module is compatible\"}";
+                } else {
+                    status = 404;
+                    body = "{\"code\":\"404\",\"msg\":\"Not found\"}";
+                }
+                byte[] bytes = body.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                exchange.sendResponseHeaders(status, bytes.length);
+                exchange.getResponseBody().write(bytes);
+                exchange.close();
+            });
+            server.start();
+            com.ultikits.ultitools.utils.PluginInstallUtilsTestAccess.setBaseUrl(
+                    "http://127.0.0.1:" + server.getAddress().getPort());
+        }
+
+        @AfterEach
+        void stopCatalogue() {
+            com.ultikits.ultitools.utils.PluginInstallUtilsTestAccess.resetBaseUrl();
+            server.stop(0);
+        }
+
+        private void check() {
+            try (MockedStatic<VersionUtils> versionMock = mockStatic(VersionUtils.class);
+                 MockedStatic<UltiTools> ultiMock = mockStatic(UltiTools.class)) {
+                org.bukkit.configuration.file.YamlConfiguration env = new org.bukkit.configuration.file.YamlConfiguration();
+                env.set("version", "6.3.0");
+                ultiMock.when(UltiTools::getEnv).thenReturn(env);
+                ultiMock.when(UltiTools::getPluginVersion).thenReturn(630);
+                UltiTools instance = mock(UltiTools.class);
+                UltiToolsPlugin demo = mock(UltiToolsPlugin.class);
+                when(demo.getIdentifyString()).thenReturn("demo");
+                when(demo.getPluginName()).thenReturn("Demo");
+                when(demo.getVersion()).thenReturn("1.0");
+                PluginManager pm = mock(PluginManager.class);
+                when(pm.getPluginList()).thenReturn(Collections.singletonList(demo));
+                when(instance.getPluginManager()).thenReturn(pm);
+                when(instance.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
+                ultiMock.when(UltiTools::getInstance).thenReturn(instance);
+                versionMock.when(VersionUtils::getUltiToolsNewestVersion).thenReturn(null);
+
+                updateManager.checkUpdatesSync();
+            }
+        }
+
+        @Test
+        @DisplayName("the latest request carries apiLevel=630 and minApiLevel=630, and a compatible newer version is offered")
+        void compatibleNewerVersion_isOfferedAndTheRequestCarriesTheLevel() {
+            latestStatus = 200;
+
+            check();
+
+            assertThat(latestRequests).hasSize(1);
+            assertThat(latestRequests.get(0)).contains("apiLevel=630").contains("minApiLevel=630");
+            assertThat(updateManager.getModuleUpdates()).containsKey("Demo");
+            assertThat(updateManager.getModuleUpdates().get("Demo").getLatestVersion()).isEqualTo("1.1");
+        }
+
+        @Test
+        @DisplayName("the catalogue answering 409 (no compatible version): no offer, and nothing about a newer framework")
+        void noCompatibleVersion_isNoOffer() {
+            latestStatus = 409;
+
+            check();
+
+            assertThat(latestRequests).hasSize(1);
+            assertThat(updateManager.getModuleUpdates()).isEmpty();
+            assertThat(updateManager.hasAnyUpdates()).isFalse();
+        }
+    }
 }

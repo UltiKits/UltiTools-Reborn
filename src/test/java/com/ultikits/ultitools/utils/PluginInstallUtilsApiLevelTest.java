@@ -330,4 +330,46 @@ class PluginInstallUtilsApiLevelTest {
         assertThat(modulesFolderNames()).containsExactly("demo-1.1.jar");
         assertThat(Files.readAllBytes(new File(modules, "demo-1.1.jar").toPath())).isEqualTo(jars.get("1.1"));
     }
+
+    @Test
+    @DisplayName("/upm install demo 2.0.0, the catalogue answering 409 for that version: refused as 'this version cannot be installed', nothing downloaded")
+    void namedVersionConflict_isRefusedWithoutDownload() {
+        incompatibleVersions.add("2.0.0");
+
+        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", "2.0.0");
+
+        assertThat(result.isInstalled()).isFalse();
+        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.REASON_VERSION_INCOMPATIBLE);
+        assertThat(result.getReasonArgs()).containsExactly("demo", "2.0.0", 630, 630, 630);
+        assertThat(PluginInstallUtils.installPlugin("demo", "2.0.0")).isFalse();
+        assertThat(downloadedAnything()).isFalse();
+        assertThat(modulesFolderNames()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("/upm install demo 1.0.0 from a catalogue that does not filter, the JAR declaring 620: refused after download, nothing left")
+    void namedVersionFromUnfilteredCatalogue_isRefusedAfterDownload() throws IOException {
+        jars.put("1.0.0", moduleJar("1.0.0", "620"));
+
+        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", "1.0.0");
+
+        assertThat(result.isInstalled()).isFalse();
+        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.REASON_JAR_LEVEL_REFUSED);
+        assertThat(result.getReasonArgs()).containsExactly("demo", "1.0.0", "620", 630, 630, 630);
+        assertThat(downloadedAnything()).isTrue();
+        assertThat(modulesFolderNames()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("/upm versions reads the level-filtered list: the request carries both parameters and an empty answer is an empty list, not a failure")
+    void versionsRequestCarriesTheLevel() {
+        versions = new ArrayList<>();
+
+        assertThat(PluginInstallUtils.getPluginVersions("demo")).isEmpty();
+
+        assertThat(catalogueRequests()).anySatisfy(request -> {
+            assertThat(request).startsWith("/plugin/7/versions?");
+            assertThat(queryOf(request)).containsEntry("apiLevel", "630").containsEntry("minApiLevel", "630");
+        });
+    }
 }

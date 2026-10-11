@@ -67,6 +67,24 @@ public final class ModuleUpdateFixtures {
      * @throws IOException when it cannot be written
      */
     public static File moduleJar(File file, String name, String version, String identifyString) throws IOException {
+        return moduleJar(file, name, version, identifyString, "630");
+    }
+
+    /**
+     * {@link #moduleJar(File, String, String, String)} with a chosen {@code api-version}. The
+     * four-argument form declares {@code 630}, the level a module built for 6.3.0 declares, which
+     * is what {@code /upm} stages (plan 18-40).
+     *
+     * @param file           where to write it
+     * @param name           the {@code name:} value
+     * @param version        the {@code version:} value
+     * @param identifyString the {@code identify-string:} value, or {@code null} for none
+     * @param apiVersion     the {@code api-version:} value as written, or {@code null} for none
+     * @return the file
+     * @throws IOException when it cannot be written
+     */
+    public static File moduleJar(File file, String name, String version, String identifyString, String apiVersion)
+            throws IOException {
         File parent = file.getParentFile();
         if (parent != null) {
             Files.createDirectories(parent.toPath());
@@ -79,6 +97,9 @@ public final class ModuleUpdateFixtures {
                 .append("main: ").append(mainPackage).append(".DemoModule\n");
         if (identifyString != null) {
             yml.append("identify-string: ").append(identifyString).append('\n');
+        }
+        if (apiVersion != null) {
+            yml.append("api-version: ").append(apiVersion).append('\n');
         }
         try (JarOutputStream out = new JarOutputStream(new FileOutputStream(file))) {
             out.putNextEntry(new JarEntry("plugin.yml"));
@@ -147,6 +168,12 @@ public final class ModuleUpdateFixtures {
     /** A downloader that writes a module JAR with the given metadata under the requested name. */
     public static ModuleFileTransactions.Downloader downloading(String name, String version, String identifyString) {
         return (link, fileName, dir) -> moduleJar(new File(dir, fileName), name, version, identifyString);
+    }
+
+    /** A downloader that writes a module JAR declaring the given {@code api-version}, or none when {@code null}. */
+    public static ModuleFileTransactions.Downloader downloading(String name, String version, String identifyString,
+                                                                String apiVersion) {
+        return (link, fileName, dir) -> moduleJar(new File(dir, fileName), name, version, identifyString, apiVersion);
     }
 
     /** A downloader that fails the way a network error does. */
