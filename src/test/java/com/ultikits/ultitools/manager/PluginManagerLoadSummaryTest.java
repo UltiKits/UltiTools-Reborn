@@ -178,6 +178,77 @@ class PluginManagerLoadSummaryTest {
         assertThat(lines(SUMMARY_PREFIX)).isEmpty();
     }
 
+    // ---------------------------------------------------------------- every other path
+
+    @Test
+    @DisplayName("a module excluded because a required plugin is missing is counted in Failed")
+    void missingRequiredPlugin_isCounted() throws Exception {
+        moduleJar("alpha-1.0.jar", "AlphaModule", module("AlphaModule"), "630");
+        moduleJar("bravo-1.0.jar", "BravoModule", module("BravoModule", "NoSuchModule"), "630");
+
+        start();
+
+        assertThat(lines(SUMMARY_PREFIX)).containsExactly("[UltiTools-API] Succeeded loaded 1, Failed 1.");
+    }
+
+    @Test
+    @DisplayName("two modules in a dependency cycle are each counted in Failed")
+    void dependencyCycle_isCounted() throws Exception {
+        moduleJar("alpha-1.0.jar", "AlphaModule", module("AlphaModule"), "630");
+        moduleJar("charlie-1.0.jar", "CharlieModule", module("CharlieModule", "DeltaModule"), "630");
+        moduleJar("delta-1.0.jar", "DeltaModule", module("DeltaModule", "CharlieModule"), "630");
+
+        start();
+
+        assertThat(lines(SUMMARY_PREFIX)).containsExactly("[UltiTools-API] Succeeded loaded 1, Failed 2.");
+    }
+
+    @Test
+    @DisplayName("a module whose registration fails is counted once, as before")
+    void failedRegistration_isCountedOnce() throws Exception {
+        moduleJar("alpha-1.0.jar", "AlphaModule", module("AlphaModule"), "630");
+        moduleJar("bravo-1.0.jar", "BravoModule", module("BravoModule"), "630");
+        failingRegistration.add(PACKAGE + "BravoModule");
+
+        start();
+
+        assertThat(lines(SUMMARY_PREFIX)).containsExactly("[UltiTools-API] Succeeded loaded 1, Failed 1.");
+    }
+
+    @Test
+    @DisplayName("two copies of one loadable module: 'Succeeded loaded 1, Failed 0.' and the duplicate-copies warning naming both")
+    void secondCopyOfALoadedModule_isNotCounted() throws Exception {
+        moduleJar("alpha-1.0.jar", "AlphaModule", module("AlphaModule"), "630");
+        moduleJar("alpha-copy.jar", "AlphaModule", module("AlphaModule"), "630");
+
+        start();
+
+        assertThat(lines(SUMMARY_PREFIX)).containsExactly("[UltiTools-API] Succeeded loaded 1, Failed 0.");
+        assertThat(logs).anyMatch(record -> Level.WARNING.equals(record.getLevel())
+                && String.valueOf(record.getMessage()).contains(PACKAGE + "AlphaModule")
+                && String.valueOf(record.getMessage()).contains("alpha-1.0.jar, alpha-copy.jar"));
+    }
+
+    @Test
+    @DisplayName("a JAR whose plugin.yml has no main: and a file that fails the JAR validation are each counted")
+    void noMainAndInvalidArchive_areCounted() throws Exception {
+        moduleJar("alpha-1.0.jar", "AlphaModule", module("AlphaModule"), "630");
+        File noMain = new File(modules, "library-1.0.jar");
+        try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(noMain.toPath()))) {
+            out.putNextEntry(new JarEntry("plugin.yml"));
+            out.write("name: Library\nversion: '1.0'\n".getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+        Files.write(new File(modules, "broken.jar").toPath(), "not a jar".getBytes(StandardCharsets.UTF_8));
+
+        start();
+
+        assertThat(severeNaming("library-1.0.jar")).isTrue();
+        assertThat(logs).anyMatch(record -> Level.SEVERE.equals(record.getLevel())
+                && String.valueOf(record.getMessage()).contains("Security validation failed for jar: broken.jar"));
+        assertThat(lines(SUMMARY_PREFIX)).containsExactly("[UltiTools-API] Succeeded loaded 1, Failed 2.");
+    }
+
     // ---------------------------------------------------------------- fixtures
 
     private File moduleJar(String fileName, String simpleName, byte[] classBytes, String apiVersion)
