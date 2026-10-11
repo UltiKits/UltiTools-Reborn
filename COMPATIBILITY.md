@@ -1522,6 +1522,41 @@ This section governs the third kind.
   the names it was given or their JARs declare, and their JARs), not only on the name typed.
   `PluginInstallUtils.uninstallPlugin(String)` does this too; the command reads the cancelled
   versions through `uninstallPluginReporting(String, List)` (`@ApiStatus.Internal`).
+- `/upm` installs only modules built for this UltiTools-API's API level (plan 18-40, maintainer
+  rulings of 2026-10-11). Every UltiCloud request `/upm` makes now carries `apiLevel` (this
+  framework's API level, 630 for 6.3.0) and `minApiLevel=630`, and the catalogue answers `latest`,
+  `versions` and the downloads with compatible versions only. `/upm install <plugin>`,
+  `/upm install <plugin> <version>` and `/upm update` additionally check what they download: the
+  JAR is written as `<id>-<version>.jar.part`, a name the module loader never reads, its
+  `plugin.yml` is read again, and a module whose `api-version` is absent, not an integer, below 630
+  or above the framework's level is refused with nothing written to the modules folder (an update's
+  staging is discarded and nothing is recorded); the reply names the declared level, the framework's
+  level and the accepted range. When the catalogue answers that no version is compatible (HTTP 409),
+  nothing is downloaded and the reply says so; `/upm versions` with no compatible version prints one
+  line naming the range; the update check offers only versions this framework installs and never
+  mentions one that needs a newer UltiTools-API. `PluginInstallUtils.installLatestPlugin(String)`,
+  `installPlugin(String, String)` and `updatePlugin(String)` keep their signatures and return
+  `false` for such a module; `PluginInstallUtils.installReporting(String, String)`
+  (`@ApiStatus.Internal`) returns the reason. **Consequence for operators:** a module built for
+  UltiTools-API 6.2.x (`api-version: 620`) is refused by `/upm` — every such build overrides
+  `UltiToolsPlugin.unregisterSelf()`, which 6.3.0 made final, so it could not load anyway. A JAR an
+  operator places in the modules folder by hand is still judged by the module loader's unchanged
+  rule. `/upm list` still lists every catalogue module; Install on one with no compatible version
+  replies with the reason.
+
+  中文补充：自 6.3.0 起，`/upm` 只安装为本 UltiTools-API 的 API 级别构建的模块（计划 18-40，维护者
+  2026-10-11 的裁定）。`/upm` 发往 UltiCloud 的每个请求都带上 `apiLevel`（本框架的 API 级别，6.3.0 为
+  630）和 `minApiLevel=630`，云端的 `latest`、`versions` 和下载只返回兼容的版本。`/upm install`、
+  `/upm install <插件> <版本>` 和 `/upm update` 还会检查下载到的文件：先写成模块加载器永远不读的
+  `<id>-<version>.jar.part`，重新读取其中的 `plugin.yml`，`api-version` 缺失、不是整数、低于 630
+  或高于框架级别的模块一律拒绝，模块目录不写入任何东西（更新的暂存会被丢弃，不写记录）；回复写明模块声明的级别、
+  框架的级别和接受的范围。云端回答没有兼容版本（HTTP 409）时不下载任何东西，回复说明原因；
+  `/upm versions` 没有兼容版本时打印一行说明范围；更新检查只提示本框架能安装的版本，从不提示需要更新框架的版本。
+  `PluginInstallUtils.installLatestPlugin(String)`、`installPlugin(String, String)` 和
+  `updatePlugin(String)` 签名不变，对这类模块返回 `false`；`PluginInstallUtils.installReporting(String, String)`
+  （`@ApiStatus.Internal`）返回原因。**对服主的影响：**为 UltiTools-API 6.2.x 构建的模块（`api-version: 620`）
+  会被 `/upm` 拒绝——这类构建都覆盖了 6.3.0 改为 final 的 `UltiToolsPlugin.unregisterSelf()`，本来也无法加载。
+  服主手动放进模块目录的 JAR 仍按模块加载器原有的规则判断。`/upm list` 仍列出云端的全部模块；对没有兼容版本的模块点“安装”会回复原因。
 - `PluginInstallUtils.uninstallPlugin(String)` also deletes a JAR whose `plugin.yml` `main:` names
   the loaded module's main class, whatever `name:` it declares (#516). The module loader identifies
   a module JAR by that entry alone (since #548), and its start-up scan now records, per main class,
