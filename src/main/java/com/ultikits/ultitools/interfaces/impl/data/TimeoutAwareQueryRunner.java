@@ -15,6 +15,7 @@ import org.apache.commons.dbutils.QueryRunner;
  * shared transaction deadline rather than a fixed value (D-10 -- Spring's approach: each
  * statement gets the time <em>remaining</em> in the transaction's budget, not a fresh full
  * allowance).
+ * This is package-private framework plumbing for {@link AbstractRelationalDataOperator}.
  * <p>
  * Overrides {@link org.apache.commons.dbutils.AbstractQueryRunner#prepareStatement(Connection,
  * String)} -- the one override point {@code AbstractQueryRunner}'s own javadoc documents for
@@ -44,7 +45,7 @@ import org.apache.commons.dbutils.QueryRunner;
  * @author wisdomme
  * @since 6.3.0
  */
-public class TimeoutAwareQueryRunner extends QueryRunner {
+class TimeoutAwareQueryRunner extends QueryRunner {
 
     /**
      * The smallest query timeout, in seconds, this runner will ever apply. {@code
@@ -69,7 +70,7 @@ public class TimeoutAwareQueryRunner extends QueryRunner {
      * @param deadlineSupplier supplies the current transaction's deadline ({@link
      *                         System#nanoTime()} value), or {@code null} when no timeout applies
      */
-    public TimeoutAwareQueryRunner(DataSource dataSource, Supplier<Long> deadlineSupplier) {
+    TimeoutAwareQueryRunner(DataSource dataSource, Supplier<Long> deadlineSupplier) {
         super(dataSource);
         this.deadlineSupplier = deadlineSupplier;
     }

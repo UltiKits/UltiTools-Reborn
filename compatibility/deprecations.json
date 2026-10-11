@@ -563,7 +563,8 @@
     "since": "6.3.0",
     "forRemoval": false,
     "replacement": "as of 6.3.0 send components to the player directly with {@code Player#sendMessage(Component)}, which Paper implements natively; this audience provider drops click and hover events on Paper 1.21.11",
-    "status": "DEPRECATED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.manager.DependenceManagers#initAdventure(com.ultikits.ultitools.UltiTools)",
@@ -573,7 +574,8 @@
     "since": "6.3.0",
     "forRemoval": false,
     "replacement": "as of 6.3.0 send components to the player directly with {@code Player#sendMessage(Component)}, which Paper implements natively; the {@code adventure-platform-bukkit} audience provider this creates drops click and hover events on Paper 1.21.11",
-    "status": "DEPRECATED"
+    "status": "REMOVED",
+    "removedIn": "6.3.0"
   },
   {
     "key": "com.ultikits.ultitools.manager.ListenerManager#register(com.ultikits.ultitools.abstracts.UltiToolsPlugin,org.bukkit.event.Listener)",

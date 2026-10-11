@@ -17,7 +17,6 @@ import com.ultikits.ultitools.utils.VersionComparatorUtil;
 
 import lombok.Getter;
 import mc.obliviate.inventory.InventoryAPI;
-import net.kyori.adventure.platform.bukkit.BukkitAudiences;
 import org.bukkit.Bukkit;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -26,22 +25,6 @@ import org.jetbrains.annotations.ApiStatus;
  */
 @ApiStatus.Internal
 public class DependenceManagers {
-    /**
-     * The {@code adventure-platform-bukkit} audience provider, kept for binary compatibility.
-     *
-     * <p>Do not send chat components through it on Paper: on Paper 1.21.11 its chat facet falls
-     * back to legacy text and drops click and hover events. Send to the {@code Player} directly
-     * (Paper implements Adventure's {@code Audience} natively), as
-     * {@link com.ultikits.ultitools.utils.MessageUtils#sendMessage(org.bukkit.entity.Player, net.kyori.adventure.text.TextComponent)} does.
-     * {@code adventure-platform-bukkit} is no longer maintained upstream.
-     *
-     * @deprecated as of 6.3.0 send components to the player directly with
-     *             {@code Player#sendMessage(Component)}, which Paper implements natively; this audience provider
-     *             drops click and hover events on Paper 1.21.11
-     */
-    @Deprecated(since = "6.3.0")
-    @Getter
-    private BukkitAudiences adventure;
     @Getter
     private SimpleContainer context;
 
@@ -50,23 +33,8 @@ public class DependenceManagers {
         this.context.setClassLoader(classLoader);
         // Register the main plugin so modules can resolve Plugin/JavaPlugin dependencies
         context.registerSingleton("ultiTools", plugin);
-        initAdventure(plugin);
         initInventoryAPI(plugin);
         initCoreServices(plugin);
-    }
-
-    /**
-     * Initialize adventure.
-     *
-     * @param plugin plugin instance
-     * @deprecated as of 6.3.0 send components to the player directly with
-     *             {@code Player#sendMessage(Component)}, which Paper implements natively; the
-     *             {@code adventure-platform-bukkit} audience provider this creates drops click and hover events on
-     *             Paper 1.21.11
-     */
-    @Deprecated(since = "6.3.0")
-    public void initAdventure(UltiTools plugin) {
-        adventure = BukkitAudiences.create(plugin);
     }
 
     /**
@@ -139,15 +107,6 @@ public class DependenceManagers {
      */
     public java.util.Comparator<String> getVersionComparator() {
         return VersionComparatorUtil.COMPARATOR;
-    }
-
-    /**
-     * Close adventure.
-     */
-    public void closeAdventure() {
-        if (adventure != null) {
-            adventure.close();
-        }
     }
 
     /**

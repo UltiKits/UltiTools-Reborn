@@ -36,8 +36,6 @@ import com.ultikits.ultitools.utils.VersionComparatorUtil;
 
 import java.util.Comparator;
 
-import net.kyori.adventure.platform.bukkit.BukkitAudiences;
-
 /**
  * DependenceManagers 测试
  */
@@ -124,34 +122,6 @@ class DependenceManagersTest {
     }
 
     @Nested
-    @DisplayName("closeAdventure 测试")
-    class CloseAdventureTests {
-
-        @Test
-        @DisplayName("adventure 为 null 时不应抛出异常")
-        void shouldNotThrowWhenAdventureIsNull() throws Exception {
-            // Arrange
-            DependenceManagers managers = createManagersWithMockedFields();
-            setField(managers, "adventure", null);
-
-            // Act & Assert - 不应该抛出异常
-            assertDoesNotThrow(() -> managers.closeAdventure());
-        }
-
-        @Test
-        @DisplayName("关闭 adventure 应该正常执行")
-        void shouldNotThrowOnClose() throws Exception {
-            // Arrange
-            DependenceManagers managers = createManagersWithMockedFields();
-            BukkitAudiences mockAdventure = mock(BukkitAudiences.class);
-            setField(managers, "adventure", mockAdventure);
-
-            // Act & Assert - 不应该抛出异常
-            assertDoesNotThrow(() -> managers.closeAdventure());
-        }
-    }
-
-    @Nested
     @DisplayName("closeContext 测试")
     class CloseContextTests {
 
@@ -214,26 +184,6 @@ class DependenceManagersTest {
     }
 
     @Nested
-    @DisplayName("getAdventure 测试")
-    class GetAdventureTests {
-
-        @Test
-        @DisplayName("应该返回设置的 adventure")
-        void shouldReturnAdventure() throws Exception {
-            // Arrange
-            DependenceManagers managers = createManagersWithMockedFields();
-            BukkitAudiences mockAdventure = mock(BukkitAudiences.class);
-            setField(managers, "adventure", mockAdventure);
-
-            // Act
-            BukkitAudiences result = managers.getAdventure();
-
-            // Assert
-            assertThat(result).isEqualTo(mockAdventure);
-        }
-    }
-
-    @Nested
     @DisplayName("静态字段测试")
     class StaticFieldTests {
 
@@ -267,33 +217,11 @@ class DependenceManagersTest {
             });
         }
 
-        @Test
-        @DisplayName("多次关闭 adventure 不应抛出异常")
-        void multipleCloseAdventureShouldNotThrow() throws Exception {
-            // Arrange
-            DependenceManagers managers = createManagersWithMockedFields();
-            BukkitAudiences mockAdventure = mock(BukkitAudiences.class);
-            setField(managers, "adventure", mockAdventure);
-
-            // Act & Assert - 多次调用不应该抛出异常
-            assertDoesNotThrow(() -> {
-                managers.closeAdventure();
-                managers.closeAdventure();
-                managers.closeAdventure();
-            });
-        }
     }
 
     @Nested
     @DisplayName("字段初始化测试")
     class FieldInitializationTests {
-
-        @Test
-        @DisplayName("adventure 字段应该存在")
-        void adventureFieldShouldExist() throws Exception {
-            Field field = DependenceManagers.class.getDeclaredField("adventure");
-            assertThat(field).isNotNull();
-        }
 
         @Test
         @DisplayName("context 字段应该存在")
@@ -306,13 +234,6 @@ class DependenceManagersTest {
     @Nested
     @DisplayName("Getter 注解测试")
     class GetterAnnotationTests {
-
-        @Test
-        @DisplayName("getAdventure 方法应该存在")
-        void getAdventureMethodShouldExist() throws Exception {
-            java.lang.reflect.Method method = DependenceManagers.class.getMethod("getAdventure");
-            assertThat(method).isNotNull();
-        }
 
         @Test
         @DisplayName("getContext 方法应该存在")
@@ -360,41 +281,6 @@ class DependenceManagersTest {
 
             // Assert
             org.mockito.Mockito.verify(mockContext).close();
-        }
-    }
-
-    @Nested
-    @DisplayName("BukkitAudiences 测试")
-    class BukkitAudiencesTests {
-
-        @Test
-        @DisplayName("closeAdventure 应该调用 adventure.close()")
-        void closeAdventureShouldCallClose() throws Exception { // NOPMD - uses Mockito verify()
-            // Arrange
-            DependenceManagers managers = createManagersWithMockedFields();
-            BukkitAudiences mockAdventure = mock(BukkitAudiences.class);
-            setField(managers, "adventure", mockAdventure);
-
-            // Act
-            managers.closeAdventure();
-
-            // Assert
-            org.mockito.Mockito.verify(mockAdventure).close();
-        }
-
-        @Test
-        @DisplayName("getAdventure 返回正确的实例")
-        void getAdventureReturnsCorrectInstance() throws Exception {
-            // Arrange
-            DependenceManagers managers = createManagersWithMockedFields();
-            BukkitAudiences mockAdventure = mock(BukkitAudiences.class);
-            setField(managers, "adventure", mockAdventure);
-
-            // Act
-            BukkitAudiences result = managers.getAdventure();
-
-            // Assert
-            assertThat(result).isSameAs(mockAdventure);
         }
     }
 
@@ -449,23 +335,9 @@ class DependenceManagersTest {
     class MethodAccessibilityTests {
 
         @Test
-        @DisplayName("initAdventure 是公开方法")
-        void initAdventureIsPublic() throws Exception {
-            java.lang.reflect.Method method = DependenceManagers.class.getMethod("initAdventure", com.ultikits.ultitools.UltiTools.class);
-            assertThat(java.lang.reflect.Modifier.isPublic(method.getModifiers())).isTrue();
-        }
-
-        @Test
         @DisplayName("initInventoryAPI 是公开方法")
         void initInventoryAPIIsPublic() throws Exception {
             java.lang.reflect.Method method = DependenceManagers.class.getMethod("initInventoryAPI", com.ultikits.ultitools.UltiTools.class);
-            assertThat(java.lang.reflect.Modifier.isPublic(method.getModifiers())).isTrue();
-        }
-
-        @Test
-        @DisplayName("closeAdventure 是公开方法")
-        void closeAdventureIsPublic() throws Exception {
-            java.lang.reflect.Method method = DependenceManagers.class.getMethod("closeAdventure");
             assertThat(java.lang.reflect.Modifier.isPublic(method.getModifiers())).isTrue();
         }
 
@@ -480,13 +352,6 @@ class DependenceManagersTest {
     @Nested
     @DisplayName("字段修饰符测试")
     class FieldModifierTests {
-
-        @Test
-        @DisplayName("adventure 是私有字段")
-        void adventureIsPrivate() throws Exception {
-            Field field = DependenceManagers.class.getDeclaredField("adventure");
-            assertThat(java.lang.reflect.Modifier.isPrivate(field.getModifiers())).isTrue();
-        }
 
         @Test
         @DisplayName("context 是私有字段")

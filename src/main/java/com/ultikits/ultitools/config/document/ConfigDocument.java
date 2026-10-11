@@ -1550,6 +1550,8 @@ public final class ConfigDocument {
 
         PlainRepresenter(DumperOptions options) {
             super(options);
+            // SnakeYAML 2.1 and older leave this unset unless a Yaml object sets it; Paper 1.19.2 build 163 to 1.20.1 ship 1.32-2.0.
+            setDefaultScalarStyle(options.getDefaultScalarStyle());
             setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
         }
     }
