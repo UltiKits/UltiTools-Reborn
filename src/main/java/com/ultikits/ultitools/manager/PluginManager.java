@@ -277,6 +277,15 @@ public class PluginManager {
         if (!discoverModuleClasses(pluginFolder)) {
             return;
         }
+        loadDiscoveredModules();
+    }
+
+    /**
+     * The part of {@link #init(ClassLoader)} after discovery: orders the discovered module classes
+     * by their dependencies, registers each, and logs the load summary. Package-private so a test
+     * can drive it after {@link #discoverModuleClasses(File)} over a folder of its own.
+     */
+    void loadDiscoveredModules() {
         int success = 0;
         if (pluginClassList.isEmpty()) {
             Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] No UltiTools plugin found.");
