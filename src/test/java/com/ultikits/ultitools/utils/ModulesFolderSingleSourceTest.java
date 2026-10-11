@@ -103,8 +103,13 @@ class ModulesFolderSingleSourceTest {
         assertThat(body(ultiTools, "URL[] getModuleUrls")).contains("modulesFolder(");
         assertThat(body(ultiTools, "void initPluginModules")).contains("modulesFolder(");
         String install = read("utils/PluginInstallUtils.java");
-        assertThat(body(install, "boolean installLatestPlugin")).contains("modulesFolder(");
-        assertThat(body(install, "boolean installPlugin")).contains("modulesFolder(");
+        // 18-40: both install entry points delegate to installReporting, which hands the known version
+        // to installVersion; its download step is the one place an install reads the modules folder.
+        assertThat(body(install, "boolean installLatestPlugin")).contains("installReporting(");
+        assertThat(body(install, "boolean installPlugin")).contains("installReporting(");
+        assertThat(body(install, "InstallResult installReporting")).contains("installVersion(");
+        assertThat(body(install, "InstallResult installVersion")).contains("downloadAndAdmit(");
+        assertThat(body(install, "InstallResult downloadAndAdmit")).contains("modulesFolder(");
         assertThat(body(install, "File modulesFolder")).contains("ModuleFileTransactions.modulesFolder(");
         String transactions = read("utils/ModuleFileTransactions.java");
         assertThat(body(transactions, "public ModuleFileTransactions")).contains("modulesFolder(dataFolder)");

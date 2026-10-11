@@ -63,9 +63,10 @@ class PluginInstallUtilsTest {
         try {
             PluginInstallUtils.setBaseUrlForTesting("http://localhost:" + server.getAddress().getPort());
             assertThat(PluginInstallUtils.getPluginLatestVersion("  UltiTrade  ")).isEqualTo("1.0.0");
-            assertThat(request.get()).isEqualTo("identifyString=ultitrade");
+            // Every catalogue request also carries the API level (plan 18-40); no UltiTools here, so the floor.
+            assertThat(request.get()).isEqualTo("identifyString=ultitrade&apiLevel=630&minApiLevel=630");
             assertThat(PluginInstallUtils.getPlugin(" bad name+/")).isNotNull();
-            assertThat(request.get()).isEqualTo("identifyString=bad+name%2B%2F");
+            assertThat(request.get()).isEqualTo("identifyString=bad+name%2B%2F&apiLevel=630&minApiLevel=630");
             assertThat(PluginInstallUtils.getPluginVersionDownloadLink("UltiTrade", "release candidate"))
                     .isEqualTo("https://example.invalid/artifact.jar");
             assertThat(versionPath.get()).isEqualTo("/plugin/7/release%20candidate/download");

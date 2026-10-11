@@ -22,6 +22,7 @@ import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.annotations.command.RunAsync;
 import com.ultikits.ultitools.entities.PluginEntity;
 import com.ultikits.ultitools.entities.UpdateInfo;
+import com.ultikits.ultitools.manager.ModuleApiLevels;
 import com.ultikits.ultitools.manager.UpdateManager;
 import com.ultikits.ultitools.utils.MessageUtils;
 import com.ultikits.ultitools.utils.ModuleFileTransactions;
@@ -168,17 +169,24 @@ public class PluginInstallCommands extends BaseCommandExecutor {
 
     @CmdMapping(format = "install <plugin> <version>")
     public void installPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin, @CmdParam("version") String version) {
-        if (PluginInstallUtils.installPlugin(plugin, version)) {
-            sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("安装成功！请重启服务器！请务必删除旧版本模块！"));
-        } else {
-            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("安装失败！"));
-        }
+        sendInstallResult(sender, PluginInstallUtils.installReporting(plugin, version));
     }
 
     @CmdMapping(format = "install <plugin>")
     public void installPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin) {
-        if (PluginInstallUtils.installLatestPlugin(plugin)) {
+        sendInstallResult(sender, PluginInstallUtils.installReporting(plugin, null));
+    }
+
+    /**
+     * Tells the operator what an install did: the success line, the reason when the module's API
+     * level was why it was not installed (plan 18-40), or the bare failure line otherwise.
+     */
+    private static void sendInstallResult(CommandSender sender, PluginInstallUtils.InstallResult result) {
+        if (result.isInstalled()) {
             sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("安装成功！请重启服务器！请务必删除旧版本模块！"));
+        } else if (result.getReasonKey() != null) {
+            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n(result.getReasonKey()),
+                    result.getReasonArgs()));
         } else {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("安装失败！"));
         }
@@ -189,6 +197,15 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         List<String> pluginVersions = PluginInstallUtils.getPluginVersions(plugin);
         if (pluginVersions == null) {
             sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("获取版本列表失败！"));
+            return;
+        }
+        if (pluginVersions.isEmpty()) {
+            // The catalogue lists only the versions this framework installs (plan 18-40): an empty
+            // list means none, which an empty table would not say.
+            int level = ModuleApiLevels.frameworkLevel();
+            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n(
+                    "%s 没有可以安装在本服务器上的版本。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。"),
+                    plugin, level, ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL, level));
             return;
         }
         StringBuilder stringBuilder = new StringBuilder();

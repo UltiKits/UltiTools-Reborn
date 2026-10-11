@@ -160,6 +160,18 @@ public class PluginManager {
     private final List<Class<? extends UltiToolsPlugin>> pluginClassList = new ArrayList<>();
 
     /**
+     * Module JARs the last discovery tried and could not turn into a module class (18-41): refused
+     * while its declared main class was read -- no {@code main:}, not an {@code UltiToolsPlugin}, a
+     * main class from another JAR, a linkage failure, a failed JAR validation. A second copy of a
+     * module whose classes load from another JAR is not one of them; the duplicate-copies warning
+     * reports it.
+     */
+    private int discoveryRefusals;
+
+    /** Copies skipped by discovery because their module's classes load from another JAR. */
+    private int duplicateCopiesSkipped;
+
+    /**
      * What the start-up scan read: per declared main class, every JAR in the modules folder that
      * declares it, and the JAR its class was loaded from (#516). {@code /upm uninstall} reads it to
      * find every file of a loaded module.
@@ -277,8 +289,25 @@ public class PluginManager {
         if (!discoverModuleClasses(pluginFolder)) {
             return;
         }
+        loadDiscoveredModules();
+    }
+
+    /**
+     * The part of {@link #init(ClassLoader)} after discovery: orders the discovered module classes
+     * by their dependencies, registers each, and logs the load summary. Package-private so a test
+     * can drive it after {@link #discoverModuleClasses(File)} over a folder of its own.
+     *
+     * <p>The summary's {@code Failed} is every module JAR of this start that did not end up loaded
+     * (18-41): the JARs discovery refused, the module classes dependency resolution excluded (a
+     * cycle or a missing required plugin -- absent from the sorted list), and those whose
+     * registration failed. Before, it was {@code sorted - success}, which counted none of the first
+     * two, so a boot that refused a module printed {@code Failed 0}. A folder whose every JAR was
+     * refused still prints the summary; {@code No UltiTools plugin found.} is kept for a folder with
+     * no module JAR at all.
+     */
+    void loadDiscoveredModules() {
         int success = 0;
-        if (pluginClassList.isEmpty()) {
+        if (pluginClassList.isEmpty() && discoveryRefusals == 0) {
             Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] No UltiTools plugin found.");
             return;
         }
@@ -295,7 +324,8 @@ public class PluginManager {
         Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Plugin Loading completed.");
         Bukkit.getLogger().log(
                 Level.INFO,
-                String.format("[UltiTools-API] Succeeded loaded %d, Failed %d.", success, sortedPlugins.size() - success)
+                String.format("[UltiTools-API] Succeeded loaded %d, Failed %d.", success,
+                        discoveryRefusals + pluginClassList.size() - success)
         );
     }
 
@@ -315,12 +345,17 @@ public class PluginManager {
 
         Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Found " + plugins.length + " file(s):");
 
+        int refused = 0;
         for (File file : plugins) {
+            int copiesBefore = duplicateCopiesSkipped;
             Class<? extends UltiToolsPlugin> pluginClass = loadPluginMainClass(classLoader, file);
             if (pluginClass != null) {
                 pluginClassList.add(pluginClass);
+            } else if (duplicateCopiesSkipped == copiesBefore) {
+                refused++;
             }
         }
+        discoveryRefusals = refused;
         warnOnDuplicateModuleJars();
         return true;
     }
@@ -1537,6 +1572,8 @@ public class PluginManager {
                     // (warnOnDuplicateModuleJars), not here once per copy.
                     moduleJarIndex.record(mainClassName, actualJarFile);
                     moduleJarIndex.recordSupplier(mainClassName, actualJarFile);
+                    // Not a refusal: the load summary does not count it as failed (18-41).
+                    duplicateCopiesSkipped++;
                     Bukkit.getLogger().log(Level.FINE, "[UltiTools-API] Module '" + pluginJar.getName()
                             + "' is another copy of " + mainClassName + ", whose classes load from '"
                             + actualJarFile.getName() + "'");

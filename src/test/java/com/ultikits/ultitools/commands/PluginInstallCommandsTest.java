@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.commands;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -92,10 +93,8 @@ class PluginInstallCommandsTest {
             // Setup default mock behaviors
             mockedUtils.when(() -> PluginInstallUtils.getPluginList(anyInt(), anyInt()))
                     .thenReturn(new ArrayList<>());
-            mockedUtils.when(() -> PluginInstallUtils.installPlugin(anyString(), anyString()))
-                    .thenReturn(true);
-            mockedUtils.when(() -> PluginInstallUtils.installLatestPlugin(anyString()))
-                    .thenReturn(true);
+            mockedUtils.when(() -> PluginInstallUtils.installReporting(anyString(), any()))
+                    .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
             mockedUtils.when(() -> PluginInstallUtils.getPluginVersions(anyString()))
                     .thenReturn(Arrays.asList("1.0.0", "1.0.1"));
             mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(anyString(), anyList()))
@@ -273,8 +272,8 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.installPlugin("test-plugin", "1.0.0"))
-                .thenReturn(true);
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", "1.0.0"))
+                .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -295,8 +294,8 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.installPlugin("test-plugin", "1.0.0"))
-                .thenReturn(false);
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", "1.0.0"))
+                .thenReturn(PluginInstallUtils.InstallResult.failed());
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -317,8 +316,8 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.installLatestPlugin("test-plugin"))
-                .thenReturn(true);
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", null))
+                .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -339,8 +338,8 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.installLatestPlugin("test-plugin"))
-                .thenReturn(false);
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", null))
+                .thenReturn(PluginInstallUtils.InstallResult.failed());
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -726,8 +725,8 @@ class PluginInstallCommandsTest {
         ConsoleCommandSender console = server.getConsoleSender();
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.installLatestPlugin("test-plugin"))
-                .thenReturn(true);
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", null))
+                .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -1321,6 +1320,119 @@ class PluginInstallCommandsTest {
             for (Component child : node.children()) {
                 collectRunCommands(child, out);
             }
+        }
+    }
+
+    /**
+     * The replies {@code /upm install} gives when the API-level check refuses a module (plan 18-40),
+     * read through {@code lang/en.json} as a server with {@code language: en} reads them: each one
+     * names the module, the level where known, this framework's level and the accepted range.
+     */
+    @Nested
+    @DisplayName("API-level refusals reply with the reason, in English under language: en (18-40)")
+    class ApiLevelReplies {
+
+        private Map<String, String> english;
+
+        @BeforeEach
+        void englishCatalogue() throws IOException {
+            try (java.io.Reader reader = new java.io.InputStreamReader(
+                    PluginInstallCommandsTest.class.getResourceAsStream("/lang/en.json"),
+                    java.nio.charset.StandardCharsets.UTF_8)) {
+                english = new com.google.gson.Gson().fromJson(reader,
+                        new com.google.gson.reflect.TypeToken<Map<String, String>>() { }.getType());
+            }
+            // Read the instance first: a static-mock call inside when(...) leaves the stubbing unfinished.
+            UltiTools instance = UltiTools.getInstance();
+            org.mockito.Mockito.doAnswer(invocation -> english.getOrDefault(invocation.getArgument(0),
+                    "<missing en.json entry: " + invocation.getArgument(0) + ">"))
+                    .when(instance).i18n(anyString());
+        }
+
+        private String englishOf(String key, Object... args) {
+            assertThat(english).as("lang/en.json carries " + key).containsKey(key);
+            return String.format(english.get(key), args);
+        }
+
+        private String reply(String... args) {
+            executor.onCommand(player, mockCommand, "upm", args);
+            server.getScheduler().performOneTick();
+            return player.nextMessage();
+        }
+
+        @Test
+        @DisplayName("/upm install demo, the downloaded JAR declaring api-version 620: the English refusal naming 620, 630 and 630..630")
+        void downloadedJarRefused_repliesWithTheLevels() {
+            if (executor == null) return;
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", null)).thenReturn(
+                    PluginInstallUtils.InstallResult.refused(PluginInstallUtils.InstallResult.Keys.REASON_JAR_LEVEL_REFUSED,
+                            "demo", "1.1", "620", 630, 630, 630));
+
+            assertThat(reply("install", "demo")).isEqualTo(org.bukkit.ChatColor.RED + englishOf(
+                    PluginInstallUtils.InstallResult.Keys.REASON_JAR_LEVEL_REFUSED, "demo", "1.1", "620", 630, 630, 630));
+        }
+
+        @Test
+        @DisplayName("/upm install demo, the downloaded JAR declaring no api-version: the English refusal saying it declares none")
+        void downloadedJarWithoutLevel_repliesWithTheRange() {
+            if (executor == null) return;
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", null)).thenReturn(
+                    PluginInstallUtils.InstallResult.refused(PluginInstallUtils.InstallResult.Keys.REASON_JAR_NO_LEVEL,
+                            "demo", "1.1", 630, 630, 630));
+
+            assertThat(reply("install", "demo")).isEqualTo(org.bukkit.ChatColor.RED + englishOf(
+                    PluginInstallUtils.InstallResult.Keys.REASON_JAR_NO_LEVEL, "demo", "1.1", 630, 630, 630));
+        }
+
+        @Test
+        @DisplayName("/upm install demo, the catalogue having no compatible version: the English 'no version this server can install' line")
+        void noCompatibleVersion_repliesWithTheRange() {
+            if (executor == null) return;
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", null)).thenReturn(
+                    PluginInstallUtils.InstallResult.refused(PluginInstallUtils.InstallResult.Keys.REASON_NO_COMPATIBLE_VERSION,
+                            "demo", 630, 630, 630));
+
+            assertThat(reply("install", "demo")).isEqualTo(org.bukkit.ChatColor.RED + englishOf(
+                    PluginInstallUtils.InstallResult.Keys.REASON_NO_COMPATIBLE_VERSION, "demo", 630, 630, 630));
+        }
+
+        @Test
+        @DisplayName("/upm install demo 2.0.0, that version incompatible: the English 'that version cannot be installed' line")
+        void namedVersionIncompatible_repliesWithTheRange() {
+            if (executor == null) return;
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", "2.0.0")).thenReturn(
+                    PluginInstallUtils.InstallResult.refused(PluginInstallUtils.InstallResult.Keys.REASON_VERSION_INCOMPATIBLE,
+                            "demo", "2.0.0", 630, 630, 630));
+
+            assertThat(reply("install", "demo", "2.0.0")).isEqualTo(org.bukkit.ChatColor.RED + englishOf(
+                    PluginInstallUtils.InstallResult.Keys.REASON_VERSION_INCOMPATIBLE, "demo", "2.0.0", 630, 630, 630));
+        }
+
+        @Test
+        @DisplayName("/upm versions demo with no compatible version: one English line naming the range, not an empty list")
+        void versionsWithNoCompatibleVersion_saysSo() {
+            if (executor == null) return;
+            mockedUltiTools.when(UltiTools::getPluginVersion).thenReturn(630);
+            mockedUtils.when(() -> PluginInstallUtils.getPluginVersions("demo")).thenReturn(Collections.emptyList());
+
+            assertThat(reply("versions", "demo")).isEqualTo(org.bukkit.ChatColor.RED + englishOf(
+                    "%s 没有可以安装在本服务器上的版本。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。",
+                    "demo", 630, 630, 630));
+            assertThat(player.nextMessage()).isNull();
+        }
+
+        @Test
+        @DisplayName("a failure without a reason keeps the bare failure line; a success keeps the success line")
+        void otherOutcomes_keepTheirLines() {
+            if (executor == null) return;
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("gone", null))
+                    .thenReturn(PluginInstallUtils.InstallResult.failed());
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", null))
+                    .thenReturn(PluginInstallUtils.InstallResult.installed("demo-1.1.jar"));
+
+            assertThat(reply("install", "gone")).isEqualTo(org.bukkit.ChatColor.RED + englishOf("安装失败！"));
+            assertThat(reply("install", "demo")).isEqualTo(org.bukkit.ChatColor.GREEN
+                    + englishOf("安装成功！请重启服务器！请务必删除旧版本模块！"));
         }
     }
 }

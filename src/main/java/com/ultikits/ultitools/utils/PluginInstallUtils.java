@@ -9,6 +9,9 @@ import java.lang.reflect.Type;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.io.UnsupportedEncodingException;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -30,6 +33,7 @@ import com.google.gson.reflect.TypeToken;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.entities.PluginEntity;
+import com.ultikits.ultitools.manager.ModuleApiLevels;
 import com.ultikits.ultitools.manager.ModuleJarIndex;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.utils.SimpleHttpClient.Response;
@@ -49,11 +53,24 @@ public class PluginInstallUtils {
     static final java.util.function.Function<UltiToolsPlugin, File> DEFAULT_MODULE_CODE_SOURCE =
             module -> codeSourceLocationOf(module.getClass());
 
-    /** The UltiCloud catalogue, as the update transaction asks it. */
-    private static final ModuleFileTransactions.Catalogue CATALOGUE = new ModuleFileTransactions.Catalogue() {
+    /**
+     * The UltiCloud catalogue, as the update transaction asks it. A 409 from the level-filtered
+     * {@code latest} -- versions exist, none this framework installs -- is thrown as
+     * {@link ModuleFileTransactions.NoCompatibleVersionException} (plan 18-40).
+     */
+    static final ModuleFileTransactions.Catalogue CATALOGUE = new ModuleFileTransactions.Catalogue() {
         @Override
         public String latestVersion(String identifyString) {
-            return getPluginLatestVersion(identifyString);
+            int level = ModuleApiLevels.frameworkLevel();
+            PluginEntity plugin = getPlugin(identifyString, level);
+            if (plugin == null) {
+                return null;
+            }
+            CatalogueAnswer latest = catalogueString(catalogueUrl("/plugin/" + plugin.getId() + "/latest", level));
+            if (latest.noCompatibleVersion()) {
+                throw new ModuleFileTransactions.NoCompatibleVersionException(level);
+            }
+            return latest.data;
         }
 
         @Override
@@ -71,6 +88,12 @@ public class PluginInstallUtils {
     
     // Custom base URL for testing purposes
     private static String customBaseUrl;
+
+    /** The HTTP status with which the catalogue answers that nothing this framework installs is offered. */
+    private static final int HTTP_CONFLICT = 409;
+
+    /** The suffix of a download not yet checked; the module loader reads only {@code *.jar}. */
+    static final String PART_SUFFIX = ".part";
     
     /**
      * Get the base URL for API calls.
@@ -129,6 +152,53 @@ public class PluginInstallUtils {
 
     private static String encodePathSegment(String value) {
         return encodeQueryValue(value).replace("+", "%20");
+    }
+
+    /**
+     * The URL of a catalogue request: {@code path}, with its own query if it has one, under the base
+     * URL, followed by {@code apiLevel} (this framework's level) and {@code minApiLevel}
+     * ({@link ModuleApiLevels#MIN_INSTALLABLE_API_LEVEL}). Every catalogue request {@code /upm} makes
+     * is built here, so none can omit them; the catalogue filters {@code latest}, {@code versions}
+     * and the download routes by them and ignores them elsewhere (plan 18-40).
+     *
+     * @param path           the route, starting with {@code /}, optionally with a query
+     * @param frameworkLevel this framework's API level
+     * @return the full URL
+     */
+    static String catalogueUrl(String path, int frameworkLevel) {
+        return getBaseUrl() + path + (path.indexOf('?') < 0 ? "?" : "&")
+                + "apiLevel=" + encodeQueryValue(String.valueOf(frameworkLevel))
+                + "&minApiLevel=" + encodeQueryValue(String.valueOf(ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL));
+    }
+
+    private static String catalogueUrl(String path) {
+        return catalogueUrl(path, ModuleApiLevels.frameworkLevel());
+    }
+
+    /** A catalogue answer whose {@code data} is a string, with its HTTP status kept. */
+    private static final class CatalogueAnswer {
+        private final int status;
+        private final String data;
+
+        private CatalogueAnswer(int status, String data) {
+            this.status = status;
+            this.data = data;
+        }
+
+        /**
+         * HTTP 409: the module or version exists but nothing this framework installs is offered.
+         * Read from the status, never from the message text, which the catalogue may reword.
+         */
+        private boolean noCompatibleVersion() {
+            return status == HTTP_CONFLICT;
+        }
+    }
+
+    private static CatalogueAnswer catalogueString(String url) {
+        try (Response httpResponse = SimpleHttpClient.get(url)) {
+            return new CatalogueAnswer(httpResponse.getStatus(),
+                    httpResponse.isOk() ? unwrapStringData(httpResponse.body()) : null);
+        }
     }
 
     static String installedJarName(String idString, String version) {
@@ -232,7 +302,7 @@ public class PluginInstallUtils {
      */
     public static List<PluginEntity> getPluginList(int page, int pageSize) {
         List<PluginEntity> pluginEntities = new ArrayList<>();
-        try (Response httpResponse = SimpleHttpClient.get(getBaseUrl() + "/plugin/list?page=" + page + "&pageSize=" + pageSize)) {
+        try (Response httpResponse = SimpleHttpClient.get(catalogueUrl("/plugin/list?page=" + page + "&pageSize=" + pageSize))) {
             if (!httpResponse.isOk()) {
                 return pluginEntities;
             }
@@ -280,12 +350,8 @@ public class PluginInstallUtils {
         if (version == null || version.trim().isEmpty()) {
             return null;
         }
-        try (Response httpResponse = SimpleHttpClient.get(getBaseUrl() + "/plugin/" + plugin.getId() + "/" + encodePathSegment(version.trim()) + "/download")) {
-            if (!httpResponse.isOk()) {
-                return null;
-            }
-            return unwrapStringData(httpResponse.body());
-        }
+        return catalogueString(catalogueUrl("/plugin/" + plugin.getId() + "/" + encodePathSegment(version.trim())
+                + "/download")).data;
     }
 
     /**
@@ -299,7 +365,7 @@ public class PluginInstallUtils {
         if (plugin == null) {
             return null;
         }
-        try (Response httpResponse = SimpleHttpClient.get(getBaseUrl() + "/plugin/" + plugin.getId() + "/versions")) {
+        try (Response httpResponse = SimpleHttpClient.get(catalogueUrl("/plugin/" + plugin.getId() + "/versions"))) {
             if (!httpResponse.isOk()) {
                 return null;
             }
@@ -319,12 +385,7 @@ public class PluginInstallUtils {
         if (plugin == null) {
             return null;
         }
-        try (Response httpResponse = SimpleHttpClient.get(getBaseUrl() + "/plugin/" + plugin.getId() + "/latest")) {
-            if (!httpResponse.isOk()) {
-                return null;
-            }
-            return unwrapStringData(httpResponse.body());
-        }
+        return catalogueString(catalogueUrl("/plugin/" + plugin.getId() + "/latest")).data;
     }
 
     /**
@@ -338,12 +399,7 @@ public class PluginInstallUtils {
         if (plugin == null) {
             return null;
         }
-        try (Response httpResponse = SimpleHttpClient.get(getBaseUrl() + "/plugin/" + plugin.getId() + "/latest/download")) {
-            if (!httpResponse.isOk()) {
-                return null;
-            }
-            return unwrapStringData(httpResponse.body());
-        }
+        return catalogueString(catalogueUrl("/plugin/" + plugin.getId() + "/latest/download")).data;
     }
 
     /**
@@ -353,11 +409,16 @@ public class PluginInstallUtils {
      * @return Plugin entity or null if not found
      */
     public static PluginEntity getPlugin(String idString) {
+        return getPlugin(idString, ModuleApiLevels.frameworkLevel());
+    }
+
+    private static PluginEntity getPlugin(String idString, int frameworkLevel) {
         String normalized = normalizeIdentifyString(idString);
         if (normalized == null) {
             return null;
         }
-        try (Response httpResponse = SimpleHttpClient.get(getBaseUrl() + "/plugin/get?identifyString=" + encodeQueryValue(normalized))) {
+        try (Response httpResponse = SimpleHttpClient.get(catalogueUrl("/plugin/get?identifyString="
+                + encodeQueryValue(normalized), frameworkLevel))) {
             if (!httpResponse.isOk()) {
                 return null;
             }
@@ -368,56 +429,257 @@ public class PluginInstallUtils {
     /**
      * Install latest plugin.
      *
+     * <p>As of 6.3.0 only a module whose {@code plugin.yml} declares an {@code api-version} from
+     * {@link ModuleApiLevels#MIN_INSTALLABLE_API_LEVEL} up to this framework's level is installed;
+     * for any other this returns {@code false} and writes nothing to the modules folder. See
+     * {@link #installReporting(String, String)}.
+     *
      * @param idString the plugin ID
      * @return whether the install succeeded
      */
     public static boolean installLatestPlugin(String idString) {
-        String latestVersion = getPluginLatestVersion(idString);
-        String pluginVersionDownloadLink = getPluginVersionDownloadLink(idString, latestVersion);
-        String fileName = installedJarName(idString, latestVersion);
-        if (pluginVersionDownloadLink == null || fileName == null) {
-            return false;
-        }
-
-        try {
-            HttpDownloadUtils.download(pluginVersionDownloadLink,
-                    fileName,
-                    modulesFolder().getPath());
-            forgetDeferredRemoval(fileName);
-            return true;
-        } catch (IOException e) {
-            UltiTools.getInstance().getLogger().severe("Failed to download plugin: " + e.getMessage());
-            return false;
-        }
+        return installReporting(idString, null).isInstalled();
     }
 
     /**
      * Install plugin.
+     *
+     * <p>As of 6.3.0 only a module whose {@code plugin.yml} declares an {@code api-version} from
+     * {@link ModuleApiLevels#MIN_INSTALLABLE_API_LEVEL} up to this framework's level is installed;
+     * for any other this returns {@code false} and writes nothing to the modules folder. See
+     * {@link #installReporting(String, String)}.
      *
      * @param idString the plugin ID
      * @param version  the version
      * @return whether the install succeeded
      */
     public static boolean installPlugin(String idString, String version) {
-        PluginEntity plugin = getPlugin(idString);
-        if (plugin == null) {
-            return false;
-        }
-        String pluginVersionDownloadLink = getPluginVersionDownloadLink(idString, version);
-        String fileName = installedJarName(idString, version);
-        if (pluginVersionDownloadLink == null || fileName == null) {
-            return false;
-        }
+        return installReporting(idString, version == null ? "" : version).isInstalled();
+    }
 
+    /**
+     * Installs a module from the catalogue and says why when it does not (plan 18-40).
+     *
+     * <p>Every catalogue request carries this framework's API level ({@link #catalogueUrl}). The
+     * JAR is downloaded into the modules folder as {@code <final name>.part}, a name the module
+     * loader never lists or puts on the class path (it reads only {@code *.jar}), on the same file
+     * system so that accepting it is one atomic rename. Its {@code plugin.yml} is then read again,
+     * and the module is refused -- the download deleted, the modules folder as it was -- unless its
+     * {@code api-version} is an integer from {@link ModuleApiLevels#MIN_INSTALLABLE_API_LEVEL} to
+     * this framework's level. That check is the backstop for a catalogue that does not filter (one
+     * deployed before the filter, a self-hosted {@code api-url}) or a version recorded wrongly. An
+     * accepted JAR replaces a file of the same final name, as the download always did.
+     *
+     * @param idString      the module's identify-string
+     * @param versionOrNull the version, or {@code null} for the latest version the catalogue offers
+     *                      this framework
+     * @return the outcome, carrying an i18n reason key and its arguments when the API level is the
+     *         reason; a failure without a key is reported as before
+     */
+    @ApiStatus.Internal
+    public static InstallResult installReporting(String idString, String versionOrNull) {
+        int level = ModuleApiLevels.frameworkLevel();
+        int floor = ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL;
+        String requested = idString == null ? null : idString.trim();
+        PluginEntity plugin = getPlugin(idString, level);
+        if (plugin == null) {
+            return InstallResult.failed();
+        }
+        String version = versionOrNull;
+        if (version == null) {
+            CatalogueAnswer latest = catalogueString(catalogueUrl("/plugin/" + plugin.getId() + "/latest", level));
+            if (latest.noCompatibleVersion()) {
+                return InstallResult.refused(InstallResult.Keys.REASON_NO_COMPATIBLE_VERSION, requested, level, floor, level);
+            }
+            version = latest.data;
+        }
+        if (version == null || version.trim().isEmpty()) {
+            return InstallResult.failed();
+        }
+        return installVersion(plugin, idString, requested, version.trim(), level);
+    }
+
+    /** The second half of {@link #installReporting}: the version is known; fetch its link and install it. */
+    private static InstallResult installVersion(PluginEntity plugin, String idString, String requested, String version,
+                                                int level) {
+        CatalogueAnswer link = catalogueString(catalogueUrl("/plugin/" + plugin.getId() + "/"
+                + encodePathSegment(version) + "/download", level));
+        if (link.noCompatibleVersion()) {
+            return InstallResult.refused(InstallResult.Keys.REASON_VERSION_INCOMPATIBLE, requested, version, level,
+                    ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL, level);
+        }
+        String fileName = installedJarName(idString, version);
+        if (link.data == null || fileName == null) {
+            return InstallResult.failed();
+        }
+        return downloadAndAdmit(link.data, fileName, requested, version, level);
+    }
+
+    /**
+     * Downloads to {@code <fileName>.part}, checks it, and either renames it to {@code fileName} or
+     * deletes it. The {@code .part} file never survives this method, whatever happens.
+     */
+    private static InstallResult downloadAndAdmit(String link, String fileName, String requested, String version,
+                                                  int level) {
+        File folder = modulesFolder();
+        File part = new File(folder, fileName + PART_SUFFIX);
+        boolean admitted = false;
         try {
-            HttpDownloadUtils.download(pluginVersionDownloadLink,
-                    fileName,
-                    modulesFolder().getPath());
-            forgetDeferredRemoval(fileName);
-            return true;
+            Files.deleteIfExists(part.toPath());
+            HttpDownloadUtils.download(link, part.getName(), folder.getPath());
+            InstallResult refusal = refusalOf(part, requested, version, level);
+            if (refusal != null) {
+                return refusal;
+            }
+            moveIntoPlace(part, new File(folder, fileName));
+            admitted = true;
         } catch (IOException e) {
             UltiTools.getInstance().getLogger().severe("Failed to download plugin: " + e.getMessage());
+            return InstallResult.failed();
+        } finally {
+            if (!admitted) {
+                deleteQuietly(part);
+            }
+        }
+        forgetDeferredRemoval(fileName);
+        return InstallResult.installed(fileName);
+    }
+
+    /**
+     * Why a downloaded JAR is not installed, or {@code null} to install it: the archive guard the
+     * module loader applies ({@link SecurityPolicy#isSafeFileStructure}; the {@code .jar} suffix
+     * check of {@link SecurityPolicy#isValidModuleJar} does not apply to the {@code .part} name), then
+     * the declared {@code api-version}.
+     */
+    private static InstallResult refusalOf(File part, String requested, String version, int level) {
+        int floor = ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL;
+        if (!isSafeArchive(part)) {
+            return InstallResult.refused(InstallResult.Keys.REASON_JAR_INVALID, requested, version);
+        }
+        String declared = PluginYmlReader.readFromJarFile(part).getApiVersion();
+        if (declared == null || declared.trim().isEmpty()) {
+            return InstallResult.refused(InstallResult.Keys.REASON_JAR_NO_LEVEL, requested, version, level, floor, level);
+        }
+        Integer moduleLevel = ModuleApiLevels.parse(declared);
+        if (moduleLevel == null || !ModuleApiLevels.isInstallable(moduleLevel, floor, level)) {
+            return InstallResult.refused(InstallResult.Keys.REASON_JAR_LEVEL_REFUSED, requested, version, declared.trim(),
+                    level, floor, level);
+        }
+        return null;
+    }
+
+    private static boolean isSafeArchive(File file) {
+        try (java.util.jar.JarFile jar = new java.util.jar.JarFile(file)) {
+            return SecurityPolicy.isSafeFileStructure(file.length(), jar.size());
+        } catch (IOException | SecurityException e) {
+            LOGGER.log(Level.FINE, "Downloaded file is not a readable JAR: " + file.getName(), e);
             return false;
+        }
+    }
+
+    /** Renames the checked download to its final name in one step, replacing a file of that name. */
+    private static void moveIntoPlace(File part, File target) throws IOException {
+        try {
+            Files.move(part.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING);
+        } catch (AtomicMoveNotSupportedException e) {
+            Files.move(part.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    private static void deleteQuietly(File file) {
+        try {
+            Files.deleteIfExists(file.toPath());
+        } catch (IOException | SecurityException e) {
+            LOGGER.log(Level.WARNING, "Could not delete the unchecked download " + file.getAbsolutePath(), e);
+        }
+    }
+
+    /**
+     * What {@link #installReporting(String, String)} did. The reason strings are i18n keys
+     * (Chinese, with their English values in {@code lang/en.json}), formatted with
+     * {@link #getReasonArgs()}.
+     */
+    @ApiStatus.Internal
+    public static final class InstallResult {
+
+        private final boolean installed;
+        private final String fileName;
+        private final String reasonKey;
+        private final Object[] reasonArgs;
+
+        private InstallResult(boolean installed, String fileName, String reasonKey, Object[] reasonArgs) {
+            this.installed = installed;
+            this.fileName = fileName;
+            this.reasonKey = reasonKey;
+            this.reasonArgs = reasonArgs;
+        }
+
+        /**
+         * @param fileName the file written into the modules folder
+         * @return an install that succeeded
+         */
+        public static InstallResult installed(String fileName) {
+            return new InstallResult(true, fileName, null, new Object[0]);
+        }
+
+        /** @return a failure with no reason to report beyond "install failed" */
+        public static InstallResult failed() {
+            return new InstallResult(false, null, null, new Object[0]);
+        }
+
+        /**
+         * @param reasonKey  one of the {@link Keys} reasons
+         * @param reasonArgs its arguments
+         * @return a refusal with its reason
+         */
+        public static InstallResult refused(String reasonKey, Object... reasonArgs) {
+            return new InstallResult(false, null, reasonKey, reasonArgs.clone());
+        }
+
+        /** @return whether the module was installed */
+        public boolean isInstalled() {
+            return installed;
+        }
+
+        /** @return the file written into the modules folder, or {@code null} */
+        public String getFileName() {
+            return fileName;
+        }
+
+        /** @return the reason's i18n key, or {@code null} */
+        public String getReasonKey() {
+            return reasonKey;
+        }
+
+        /** @return the reason's arguments, empty when there is no reason */
+        public Object[] getReasonArgs() {
+            return reasonArgs.clone();
+        }
+
+        /**
+         * The reasons, as catalogue keys (Chinese, with their English values in
+         * {@code lang/en.json}); a nested {@code Keys} holder like {@link ModuleFileTransactions.Keys}.
+         */
+        public static final class Keys {
+            /** Args: module, framework level, floor, framework level. */
+            public static final String REASON_NO_COMPATIBLE_VERSION =
+                    "无法安装 %s：云端没有可以安装在本服务器上的版本。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。模块目录没有任何改动。";
+            /** Args: module, version, framework level, floor, framework level. */
+            public static final String REASON_VERSION_INCOMPATIBLE =
+                    "无法安装 %s %s：该版本不能安装在本服务器上。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。模块目录没有任何改动。";
+            /** Args: module, version, declared api-version as written, framework level, floor, framework level. */
+            public static final String REASON_JAR_LEVEL_REFUSED =
+                    "已拒绝安装 %s %s：下载的 JAR 声明 api-version %s。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。下载的文件已删除，模块目录没有任何改动。";
+            /** Args: module, version, framework level, floor, framework level. */
+            public static final String REASON_JAR_NO_LEVEL =
+                    "已拒绝安装 %s %s：下载的 JAR 没有声明 api-version。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。下载的文件已删除，模块目录没有任何改动。";
+            /** Args: module, version. */
+            public static final String REASON_JAR_INVALID =
+                    "已拒绝安装 %s %s：下载的文件不是有效的模块 JAR。下载的文件已删除，模块目录没有任何改动。";
+
+            private Keys() {
+            }
         }
     }
 
