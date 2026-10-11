@@ -297,10 +297,13 @@ public class PluginManager {
      * by their dependencies, registers each, and logs the load summary. Package-private so a test
      * can drive it after {@link #discoverModuleClasses(File)} over a folder of its own.
      *
-     * <p>The summary's {@code Failed} counts the JARs discovery refused (18-41) and the modules whose
-     * registration failed. Before, a JAR refused at discovery was counted nowhere, so a boot that
-     * refused a module printed {@code Failed 0}. A folder whose every JAR was refused still prints
-     * the summary; {@code No UltiTools plugin found.} is kept for a folder with no module JAR at all.
+     * <p>The summary's {@code Failed} is every module JAR of this start that did not end up loaded
+     * (18-41): the JARs discovery refused, the module classes dependency resolution excluded (a
+     * cycle or a missing required plugin -- absent from the sorted list), and those whose
+     * registration failed. Before, it was {@code sorted - success}, which counted none of the first
+     * two, so a boot that refused a module printed {@code Failed 0}. A folder whose every JAR was
+     * refused still prints the summary; {@code No UltiTools plugin found.} is kept for a folder with
+     * no module JAR at all.
      */
     void loadDiscoveredModules() {
         int success = 0;
@@ -322,7 +325,7 @@ public class PluginManager {
         Bukkit.getLogger().log(
                 Level.INFO,
                 String.format("[UltiTools-API] Succeeded loaded %d, Failed %d.", success,
-                        discoveryRefusals + sortedPlugins.size() - success)
+                        discoveryRefusals + pluginClassList.size() - success)
         );
     }
 
