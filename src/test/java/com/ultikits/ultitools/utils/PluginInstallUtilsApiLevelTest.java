@@ -228,7 +228,7 @@ class PluginInstallUtilsApiLevelTest {
         PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", null);
 
         assertThat(result.isInstalled()).isFalse();
-        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.REASON_JAR_LEVEL_REFUSED);
+        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_JAR_LEVEL_REFUSED);
         assertThat(result.getReasonArgs()).containsExactly("demo", "1.1", "620", 630, 630, 630);
         assertThat(downloadedAnything()).isTrue();
         assertThat(modulesFolderNames()).isEmpty();
@@ -244,7 +244,7 @@ class PluginInstallUtilsApiLevelTest {
         PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", null);
 
         assertThat(result.isInstalled()).isFalse();
-        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.REASON_JAR_LEVEL_REFUSED);
+        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_JAR_LEVEL_REFUSED);
         assertThat(result.getReasonArgs()).containsExactly("demo", "1.1", "640", 630, 630, 630);
         assertThat(modulesFolderNames()).isEmpty();
     }
@@ -273,7 +273,7 @@ class PluginInstallUtilsApiLevelTest {
         PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", null);
 
         assertThat(result.isInstalled()).isFalse();
-        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.REASON_JAR_NO_LEVEL);
+        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_JAR_NO_LEVEL);
         assertThat(result.getReasonArgs()).containsExactly("demo", "1.1", 630, 630, 630);
         assertThat(modulesFolderNames()).isEmpty();
     }
@@ -286,7 +286,7 @@ class PluginInstallUtilsApiLevelTest {
         PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", null);
 
         assertThat(result.isInstalled()).isFalse();
-        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.REASON_JAR_LEVEL_REFUSED);
+        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_JAR_LEVEL_REFUSED);
         assertThat(result.getReasonArgs()).containsExactly("demo", "1.1", "1.19", 630, 630, 630);
         assertThat(modulesFolderNames()).isEmpty();
     }
@@ -299,7 +299,7 @@ class PluginInstallUtilsApiLevelTest {
         PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", null);
 
         assertThat(result.isInstalled()).isFalse();
-        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.REASON_NO_COMPATIBLE_VERSION);
+        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_NO_COMPATIBLE_VERSION);
         assertThat(result.getReasonArgs()).containsExactly("demo", 630, 630, 630);
         assertThat(downloadedAnything()).isFalse();
         assertThat(modulesFolderNames()).isEmpty();
@@ -339,7 +339,7 @@ class PluginInstallUtilsApiLevelTest {
         PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", "2.0.0");
 
         assertThat(result.isInstalled()).isFalse();
-        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.REASON_VERSION_INCOMPATIBLE);
+        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_VERSION_INCOMPATIBLE);
         assertThat(result.getReasonArgs()).containsExactly("demo", "2.0.0", 630, 630, 630);
         assertThat(PluginInstallUtils.installPlugin("demo", "2.0.0")).isFalse();
         assertThat(downloadedAnything()).isFalse();
@@ -354,7 +354,7 @@ class PluginInstallUtilsApiLevelTest {
         PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", "1.0.0");
 
         assertThat(result.isInstalled()).isFalse();
-        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.REASON_JAR_LEVEL_REFUSED);
+        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_JAR_LEVEL_REFUSED);
         assertThat(result.getReasonArgs()).containsExactly("demo", "1.0.0", "620", 630, 630, 630);
         assertThat(downloadedAnything()).isTrue();
         assertThat(modulesFolderNames()).isEmpty();

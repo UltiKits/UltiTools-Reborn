@@ -1365,11 +1365,11 @@ class PluginInstallCommandsTest {
         void downloadedJarRefused_repliesWithTheLevels() {
             if (executor == null) return;
             mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", null)).thenReturn(
-                    PluginInstallUtils.InstallResult.refused(PluginInstallUtils.InstallResult.REASON_JAR_LEVEL_REFUSED,
+                    PluginInstallUtils.InstallResult.refused(PluginInstallUtils.InstallResult.Keys.REASON_JAR_LEVEL_REFUSED,
                             "demo", "1.1", "620", 630, 630, 630));
 
             assertThat(reply("install", "demo")).isEqualTo(org.bukkit.ChatColor.RED + englishOf(
-                    PluginInstallUtils.InstallResult.REASON_JAR_LEVEL_REFUSED, "demo", "1.1", "620", 630, 630, 630));
+                    PluginInstallUtils.InstallResult.Keys.REASON_JAR_LEVEL_REFUSED, "demo", "1.1", "620", 630, 630, 630));
         }
 
         @Test
@@ -1377,11 +1377,11 @@ class PluginInstallCommandsTest {
         void downloadedJarWithoutLevel_repliesWithTheRange() {
             if (executor == null) return;
             mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", null)).thenReturn(
-                    PluginInstallUtils.InstallResult.refused(PluginInstallUtils.InstallResult.REASON_JAR_NO_LEVEL,
+                    PluginInstallUtils.InstallResult.refused(PluginInstallUtils.InstallResult.Keys.REASON_JAR_NO_LEVEL,
                             "demo", "1.1", 630, 630, 630));
 
             assertThat(reply("install", "demo")).isEqualTo(org.bukkit.ChatColor.RED + englishOf(
-                    PluginInstallUtils.InstallResult.REASON_JAR_NO_LEVEL, "demo", "1.1", 630, 630, 630));
+                    PluginInstallUtils.InstallResult.Keys.REASON_JAR_NO_LEVEL, "demo", "1.1", 630, 630, 630));
         }
 
         @Test
@@ -1389,11 +1389,11 @@ class PluginInstallCommandsTest {
         void noCompatibleVersion_repliesWithTheRange() {
             if (executor == null) return;
             mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", null)).thenReturn(
-                    PluginInstallUtils.InstallResult.refused(PluginInstallUtils.InstallResult.REASON_NO_COMPATIBLE_VERSION,
+                    PluginInstallUtils.InstallResult.refused(PluginInstallUtils.InstallResult.Keys.REASON_NO_COMPATIBLE_VERSION,
                             "demo", 630, 630, 630));
 
             assertThat(reply("install", "demo")).isEqualTo(org.bukkit.ChatColor.RED + englishOf(
-                    PluginInstallUtils.InstallResult.REASON_NO_COMPATIBLE_VERSION, "demo", 630, 630, 630));
+                    PluginInstallUtils.InstallResult.Keys.REASON_NO_COMPATIBLE_VERSION, "demo", 630, 630, 630));
         }
 
         @Test
@@ -1401,11 +1401,11 @@ class PluginInstallCommandsTest {
         void namedVersionIncompatible_repliesWithTheRange() {
             if (executor == null) return;
             mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", "2.0.0")).thenReturn(
-                    PluginInstallUtils.InstallResult.refused(PluginInstallUtils.InstallResult.REASON_VERSION_INCOMPATIBLE,
+                    PluginInstallUtils.InstallResult.refused(PluginInstallUtils.InstallResult.Keys.REASON_VERSION_INCOMPATIBLE,
                             "demo", "2.0.0", 630, 630, 630));
 
             assertThat(reply("install", "demo", "2.0.0")).isEqualTo(org.bukkit.ChatColor.RED + englishOf(
-                    PluginInstallUtils.InstallResult.REASON_VERSION_INCOMPATIBLE, "demo", "2.0.0", 630, 630, 630));
+                    PluginInstallUtils.InstallResult.Keys.REASON_VERSION_INCOMPATIBLE, "demo", "2.0.0", 630, 630, 630));
         }
 
         @Test

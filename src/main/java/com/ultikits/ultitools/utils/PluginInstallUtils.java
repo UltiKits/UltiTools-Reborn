@@ -488,7 +488,7 @@ public class PluginInstallUtils {
         if (version == null) {
             CatalogueAnswer latest = catalogueString(catalogueUrl("/plugin/" + plugin.getId() + "/latest", level));
             if (latest.noCompatibleVersion()) {
-                return InstallResult.refused(InstallResult.REASON_NO_COMPATIBLE_VERSION, requested, level, floor, level);
+                return InstallResult.refused(InstallResult.Keys.REASON_NO_COMPATIBLE_VERSION, requested, level, floor, level);
             }
             version = latest.data;
         }
@@ -499,7 +499,7 @@ public class PluginInstallUtils {
         CatalogueAnswer link = catalogueString(catalogueUrl("/plugin/" + plugin.getId() + "/"
                 + encodePathSegment(version) + "/download", level));
         if (link.noCompatibleVersion()) {
-            return InstallResult.refused(InstallResult.REASON_VERSION_INCOMPATIBLE, requested, version, level, floor,
+            return InstallResult.refused(InstallResult.Keys.REASON_VERSION_INCOMPATIBLE, requested, version, level, floor,
                     level);
         }
         String fileName = installedJarName(idString, version);
@@ -548,15 +548,15 @@ public class PluginInstallUtils {
     private static InstallResult refusalOf(File part, String requested, String version, int level) {
         int floor = ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL;
         if (!isSafeArchive(part)) {
-            return InstallResult.refused(InstallResult.REASON_JAR_INVALID, requested, version);
+            return InstallResult.refused(InstallResult.Keys.REASON_JAR_INVALID, requested, version);
         }
         String declared = PluginYmlReader.readFromJarFile(part).getApiVersion();
         if (declared == null || declared.trim().isEmpty()) {
-            return InstallResult.refused(InstallResult.REASON_JAR_NO_LEVEL, requested, version, level, floor, level);
+            return InstallResult.refused(InstallResult.Keys.REASON_JAR_NO_LEVEL, requested, version, level, floor, level);
         }
         Integer moduleLevel = ModuleApiLevels.parse(declared);
         if (moduleLevel == null || !ModuleApiLevels.isInstallable(moduleLevel, floor, level)) {
-            return InstallResult.refused(InstallResult.REASON_JAR_LEVEL_REFUSED, requested, version, declared.trim(),
+            return InstallResult.refused(InstallResult.Keys.REASON_JAR_LEVEL_REFUSED, requested, version, declared.trim(),
                     level, floor, level);
         }
         return null;
@@ -596,21 +596,31 @@ public class PluginInstallUtils {
      */
     @ApiStatus.Internal
     public static final class InstallResult {
-        /** Args: module, framework level, floor, framework level. */
-        public static final String REASON_NO_COMPATIBLE_VERSION =
-                "无法安装 %s：云端没有可以安装在本服务器上的版本。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。模块目录没有任何改动。";
-        /** Args: module, version, framework level, floor, framework level. */
-        public static final String REASON_VERSION_INCOMPATIBLE =
-                "无法安装 %s %s：该版本不能安装在本服务器上。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。模块目录没有任何改动。";
-        /** Args: module, version, declared api-version as written, framework level, floor, framework level. */
-        public static final String REASON_JAR_LEVEL_REFUSED =
-                "已拒绝安装 %s %s：下载的 JAR 声明 api-version %s。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。下载的文件已删除，模块目录没有任何改动。";
-        /** Args: module, version, framework level, floor, framework level. */
-        public static final String REASON_JAR_NO_LEVEL =
-                "已拒绝安装 %s %s：下载的 JAR 没有声明 api-version。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。下载的文件已删除，模块目录没有任何改动。";
-        /** Args: module, version. */
-        public static final String REASON_JAR_INVALID =
-                "已拒绝安装 %s %s：下载的文件不是有效的模块 JAR。下载的文件已删除，模块目录没有任何改动。";
+
+        /**
+         * The reasons, as catalogue keys (Chinese, with their English values in
+         * {@code lang/en.json}); a nested {@code Keys} holder like {@link ModuleFileTransactions.Keys}.
+         */
+        public static final class Keys {
+            /** Args: module, framework level, floor, framework level. */
+            public static final String REASON_NO_COMPATIBLE_VERSION =
+                    "无法安装 %s：云端没有可以安装在本服务器上的版本。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。模块目录没有任何改动。";
+            /** Args: module, version, framework level, floor, framework level. */
+            public static final String REASON_VERSION_INCOMPATIBLE =
+                    "无法安装 %s %s：该版本不能安装在本服务器上。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。模块目录没有任何改动。";
+            /** Args: module, version, declared api-version as written, framework level, floor, framework level. */
+            public static final String REASON_JAR_LEVEL_REFUSED =
+                    "已拒绝安装 %s %s：下载的 JAR 声明 api-version %s。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。下载的文件已删除，模块目录没有任何改动。";
+            /** Args: module, version, framework level, floor, framework level. */
+            public static final String REASON_JAR_NO_LEVEL =
+                    "已拒绝安装 %s %s：下载的 JAR 没有声明 api-version。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。下载的文件已删除，模块目录没有任何改动。";
+            /** Args: module, version. */
+            public static final String REASON_JAR_INVALID =
+                    "已拒绝安装 %s %s：下载的文件不是有效的模块 JAR。下载的文件已删除，模块目录没有任何改动。";
+
+            private Keys() {
+            }
+        }
 
         private final boolean installed;
         private final String fileName;
@@ -638,7 +648,7 @@ public class PluginInstallUtils {
         }
 
         /**
-         * @param reasonKey  one of the {@code REASON_*} keys
+         * @param reasonKey  one of the {@link Keys} reasons
          * @param reasonArgs its arguments
          * @return a refusal with its reason
          */
