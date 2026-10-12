@@ -73,6 +73,10 @@ class UpdateCheckShutdownAndOutcomeTest {
     private volatile Answer latest = new Answer(200, "{\"code\":\"200\",\"msg\":\"Success\",\"data\":\"1.0\"}");
     /** Runs inside the stub while it answers the framework lookup (before the answer is sent). */
     private volatile Runnable onNewest = () -> { };
+    /** Runs inside the stub while it answers a module's plugin/get lookup (before the answer is sent). */
+    private volatile Runnable onPluginGet = () -> { };
+    /** Runs for every record the check logs, after it is captured. */
+    private volatile java.util.function.Consumer<LogRecord> onRecord = r -> { };
 
     private Logger logger;
     private UpdateManager updateManager;
@@ -99,6 +103,7 @@ class UpdateCheckShutdownAndOutcomeTest {
                 onNewest.run();
                 answer = newest;
             } else if ("/plugin/get".equals(path)) {
+                onPluginGet.run();
                 answer = pluginGet;
             } else if ("/plugin/7/latest".equals(path)) {
                 answer = latest;
@@ -120,6 +125,7 @@ class UpdateCheckShutdownAndOutcomeTest {
             @Override
             public void publish(LogRecord record) {
                 records.add(record);
+                onRecord.accept(record);
             }
 
             @Override
@@ -283,6 +289,35 @@ class UpdateCheckShutdownAndOutcomeTest {
             }
 
             assertThat(messagesAtOrAbove(Level.WARNING)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("disabling between a module's two requests (during plugin/get): its latest request is not sent")
+        void stopBetweenAModulesTwoRequestsSendsNoSecond() {
+            onPluginGet = updateManager::stop;
+
+            check(Collections.singletonList(demo));
+
+            assertThat(requests).containsExactly("/plugin/ultitools/newest", "/plugin/get");
+            assertThat(messagesAtOrAbove(Level.INFO)).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("disabling while the result lines print: no INFO line follows the one being written")
+        void stopWhileResultsPrintSilencesTheRest() {
+            newest = new Answer(200, "{\"code\":\"200\",\"msg\":\"Success\",\"data\":\"6.4.0\"}");
+            latest = new Answer(200, "{\"code\":\"200\",\"msg\":\"Success\",\"data\":\"1.1\"}");
+            onRecord = r -> {
+                if (r.getMessage().contains("UltiTools-API有新版本")) {
+                    updateManager.stop();
+                }
+            };
+
+            check(Collections.singletonList(demo));
+
+            List<String> visible = messagesAtOrAbove(Level.INFO);
+            assertThat(visible).hasSize(2);
+            assertThat(visible.get(1)).contains("6.4.0");
         }
 
         @Test

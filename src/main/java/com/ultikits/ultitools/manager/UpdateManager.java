@@ -213,7 +213,7 @@ public class UpdateManager {
                 continue;
             }
             try {
-                VersionLookup lookup = PluginInstallUtils.lookUpPluginLatestVersion(idString);
+                VersionLookup lookup = PluginInstallUtils.lookUpPluginLatestVersion(idString, this::isStopped);
                 if (lookup.isFailed()) {
                     recordFailedLookup(failed, plugin.getPluginName(), lookup);
                     continue;
@@ -255,28 +255,38 @@ public class UpdateManager {
         logger.log(stopped ? Level.FINE : Level.WARNING, message);
     }
 
+    /**
+     * One INFO line of the result, unless {@link #stop()} has been called: a disable that arrives
+     * while the result is being written silences the lines still to come.
+     */
+    private void info(String message) {
+        if (!stopped) {
+            logger.log(Level.INFO, message);
+        }
+    }
+
     private void logResults(List<String> failed) {
         if (frameworkUpdate != null) {
-            logger.log(Level.INFO, String.format("[UltiTools-API] "
+            info(String.format("[UltiTools-API] "
                     + UltiTools.getInstance().i18n("UltiTools-API有新版本 %s 可用（当前：%s）"),
                 frameworkUpdate.getLatestVersion(), frameworkUpdate.getCurrentVersion()));
-            logger.log(Level.INFO, String.format("[UltiTools-API] "
+            info(String.format("[UltiTools-API] "
                     + UltiTools.getInstance().i18n("下载地址：%s"),
                 "https://github.com/UltiKits/UltiTools-Reborn/releases/latest"));
         }
         if (!moduleUpdates.isEmpty()) {
-            logger.log(Level.INFO, String.format("[UltiTools-API] "
+            info(String.format("[UltiTools-API] "
                     + UltiTools.getInstance().i18n("模块更新可用（%d个）："), moduleUpdates.size()));
             for (UpdateInfo info : moduleUpdates.values()) {
-                logger.log(Level.INFO, String.format("[UltiTools-API]   %s %s -> %s",
+                info(String.format("[UltiTools-API]   %s %s -> %s",
                     info.getPluginName(), info.getCurrentVersion(), info.getLatestVersion()));
             }
         }
         if (!failed.isEmpty()) {
-            logger.log(Level.INFO, LOG_PREFIX + String.format(
+            info(LOG_PREFIX + String.format(
                     UltiTools.getInstance().i18n("更新检查未完成：无法确认 %s 的最新版本。"), String.join(", ", failed)));
         } else if (frameworkUpdate == null && moduleUpdates.isEmpty()) {
-            logger.log(Level.INFO, LOG_PREFIX
+            info(LOG_PREFIX
                     + UltiTools.getInstance().i18n("所有插件已是最新版本！"));
         }
     }

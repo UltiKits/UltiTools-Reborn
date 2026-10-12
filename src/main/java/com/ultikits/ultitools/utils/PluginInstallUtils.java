@@ -420,6 +420,23 @@ public class PluginInstallUtils {
      */
     @ApiStatus.Internal
     public static VersionLookup lookUpPluginLatestVersion(String idString) {
+        return lookUpPluginLatestVersion(idString, () -> false);
+    }
+
+    /**
+     * {@link #lookUpPluginLatestVersion(String)}, with a stop signal read between its two requests
+     * (Phase 19, D19-032): when {@code stopped} is true once the module is found, the
+     * {@code latest} request is not sent and the lookup is {@link VersionLookup.Outcome#FAILED}
+     * with the failure {@code "stopped"}. The start-up update check passes its own stop flag, so a
+     * check stopped by the plugin's disable sends no further request.
+     *
+     * @param idString the module's identify string
+     * @param stopped  read once, after the first request answers
+     * @return the lookup's outcome, never {@code null}
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public static VersionLookup lookUpPluginLatestVersion(String idString, java.util.function.BooleanSupplier stopped) {
         String normalized = normalizeIdentifyString(idString);
         if (normalized == null) {
             return VersionLookup.none();
@@ -436,7 +453,10 @@ public class PluginInstallUtils {
             }
             plugin = unwrapData(httpResponse.body(), PluginEntity.class);
         }
-        return plugin == null ? VersionLookup.failed(VersionLookup.UNREADABLE) : lookUpLatestOf(plugin, frameworkLevel);
+        if (plugin == null) {
+            return VersionLookup.failed(VersionLookup.UNREADABLE);
+        }
+        return stopped.getAsBoolean() ? VersionLookup.failed("stopped") : lookUpLatestOf(plugin, frameworkLevel);
     }
 
     /** The {@code latest} half of {@link #lookUpPluginLatestVersion(String)}, for a module the catalogue knows. */

@@ -139,7 +139,7 @@ class UpdateManagerTest {
                 when(instance.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
 
                 versionMock.when(VersionUtils::lookUpUltiToolsNewestVersion).thenReturn(VersionLookup.found("6.2.0"));
-                installMock.when(() -> PluginInstallUtils.lookUpPluginLatestVersion("ultichat"))
+                installMock.when(() -> PluginInstallUtils.lookUpPluginLatestVersion(eq("ultichat"), any()))
                     .thenReturn(VersionLookup.found("1.1.0"));
 
                 updateManager.checkUpdatesSync();
