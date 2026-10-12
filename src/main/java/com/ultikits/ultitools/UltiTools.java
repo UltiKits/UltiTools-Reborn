@@ -786,14 +786,9 @@ public final class UltiTools extends JavaPlugin implements Localized {
                 getLogger().log(Level.WARNING, i18n("获取服务器UUID失败！") + e.getMessage());
             }
 
-            // Start async update check
+            // Start the async update check; onDisable stops it (D19-032).
             updateManager = new UpdateManager(getLogger());
-            new org.bukkit.scheduler.BukkitRunnable() {
-                @Override
-                public void run() {
-                    updateManager.checkUpdatesSync();
-                }
-            }.runTaskAsynchronously(UltiTools.this);
+            updateManager.start(UltiTools.this);
 
             // Register join listener for OP notifications
             Bukkit.getPluginManager().registerEvents(new UpdateJoinListener(updateManager), UltiTools.this);
@@ -806,6 +801,14 @@ public final class UltiTools extends JavaPlugin implements Localized {
         // and every scheduler hand-off from the WebSocket thread is dropped with one FINE line,
         // instead of scheduling a task the scheduler refuses for a disabled plugin.
         PluginInitiationUtils.stopAcceptingPanelMessages();
+        // Phase 19 D19-032, the same shape of race: the start-up update check runs on an async task
+        // that can still be looking things up now. Stopping it cancels the task if it has not
+        // started; a running check makes no further lookup and logs nothing at INFO or above, and
+        // what it throws once this plugin's JAR closes stays at FINE. Not waited for: an HTTP call
+        // cannot be interrupted, and waiting could hold the shutdown for the 30-second read timeout.
+        if (updateManager != null) {
+            updateManager.stop();
+        }
         // Plugin shutdown logic
         EarlyLogCapture.release();
         ConsoleMirror.uninstall();
