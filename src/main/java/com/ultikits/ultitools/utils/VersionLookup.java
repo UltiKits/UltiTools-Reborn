@@ -11,8 +11,6 @@ import org.jetbrains.annotations.ApiStatus;
  * {@link PluginInstallUtils#getPluginLatestVersion(String)}) fold the last two into {@code null} and
  * keep doing so; this type exists so the update check can report "incomplete" instead of "up to
  * date" when a lookup failed (Phase 19, D19-032).
- * <br>
- * 一次目录版本查询的结果：找到版本、确认没有可提供的版本、或查询失败。
  *
  * @since 6.3.0
  */

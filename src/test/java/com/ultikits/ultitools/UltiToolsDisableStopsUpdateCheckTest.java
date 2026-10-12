@@ -62,6 +62,7 @@ class UltiToolsDisableStopsUpdateCheckTest {
     }
 
     @Test
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // the assertions are Mockito InOrder verifications
     @DisplayName("the update check is stopped, and before the command manager closes")
     void onDisableStopsTheUpdateCheckFirst() {
         ultiTools.onDisable();
@@ -72,6 +73,7 @@ class UltiToolsDisableStopsUpdateCheckTest {
     }
 
     @Test
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // the assertion is a Mockito verification
     @DisplayName("no update manager (disabled before the start-up task ran): onDisable completes")
     void onDisableWithoutUpdateManager() throws Exception {
         setField("updateManager", null);

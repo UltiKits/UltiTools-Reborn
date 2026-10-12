@@ -436,9 +436,11 @@ public class PluginInstallUtils {
             }
             plugin = unwrapData(httpResponse.body(), PluginEntity.class);
         }
-        if (plugin == null) {
-            return VersionLookup.failed(VersionLookup.UNREADABLE);
-        }
+        return plugin == null ? VersionLookup.failed(VersionLookup.UNREADABLE) : lookUpLatestOf(plugin, frameworkLevel);
+    }
+
+    /** The {@code latest} half of {@link #lookUpPluginLatestVersion(String)}, for a module the catalogue knows. */
+    private static VersionLookup lookUpLatestOf(PluginEntity plugin, int frameworkLevel) {
         CatalogueAnswer answer = catalogueString(catalogueUrl("/plugin/" + plugin.getId() + "/latest", frameworkLevel));
         if (answer.data != null) {
             return VersionLookup.found(answer.data);

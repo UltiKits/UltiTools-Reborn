@@ -79,7 +79,14 @@ class VersionLookupContractTest {
         body = b;
     }
 
+    /**
+     * A local port nothing listens on, so a request to it is refused at once. A closed plain
+     * socket is used because a stopped {@code HttpServer} keeps accepting for a while and the
+     * request would wait for the 30-second read timeout instead.
+     */
     private static int closedPort() throws IOException {
+        // Test-only: binds a loopback port and closes it at once; no data is ever sent over it.
+        // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket
         try (ServerSocket socket = new ServerSocket(0)) {
             return socket.getLocalPort();
         }
