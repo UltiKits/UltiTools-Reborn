@@ -14,6 +14,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.entities.UpdateInfo;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
+import com.ultikits.ultitools.utils.VersionLookup;
 import com.ultikits.ultitools.utils.VersionUtils;
 
 @DisplayName("UpdateManager Tests")
@@ -50,7 +51,7 @@ class UpdateManagerTest {
                 // Mock i18n to return the key itself
                 when(instance.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
 
-                versionMock.when(VersionUtils::getUltiToolsNewestVersion).thenReturn("6.3.0");
+                versionMock.when(VersionUtils::lookUpUltiToolsNewestVersion).thenReturn(VersionLookup.found("6.3.0"));
 
                 updateManager.checkUpdatesSync();
 
@@ -78,7 +79,7 @@ class UpdateManagerTest {
                 ultiMock.when(UltiTools::getInstance).thenReturn(instance);
                 when(instance.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
 
-                versionMock.when(VersionUtils::getUltiToolsNewestVersion).thenReturn("6.3.0");
+                versionMock.when(VersionUtils::lookUpUltiToolsNewestVersion).thenReturn(VersionLookup.found("6.3.0"));
 
                 updateManager.checkUpdatesSync();
 
@@ -104,11 +105,12 @@ class UpdateManagerTest {
                 ultiMock.when(UltiTools::getInstance).thenReturn(instance);
                 when(instance.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
 
-                versionMock.when(VersionUtils::getUltiToolsNewestVersion).thenReturn(null);
+                versionMock.when(VersionUtils::lookUpUltiToolsNewestVersion).thenReturn(VersionLookup.failed("HTTP 500"));
 
                 updateManager.checkUpdatesSync();
 
                 assertThat(updateManager.getFrameworkUpdate()).isNull();
+                assertThat(updateManager.getUnconfirmed()).containsExactly(UpdateManager.FRAMEWORK_NAME);
             }
         }
 
@@ -136,9 +138,9 @@ class UpdateManagerTest {
                 ultiMock.when(UltiTools::getInstance).thenReturn(instance);
                 when(instance.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
 
-                versionMock.when(VersionUtils::getUltiToolsNewestVersion).thenReturn("6.2.0");
-                installMock.when(() -> PluginInstallUtils.getPluginLatestVersion("ultichat"))
-                    .thenReturn("1.1.0");
+                versionMock.when(VersionUtils::lookUpUltiToolsNewestVersion).thenReturn(VersionLookup.found("6.2.0"));
+                installMock.when(() -> PluginInstallUtils.lookUpPluginLatestVersion("ultichat"))
+                    .thenReturn(VersionLookup.found("1.1.0"));
 
                 updateManager.checkUpdatesSync();
 
@@ -172,7 +174,7 @@ class UpdateManagerTest {
                 ultiMock.when(UltiTools::getInstance).thenReturn(instance);
                 when(instance.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
 
-                versionMock.when(VersionUtils::getUltiToolsNewestVersion).thenReturn("6.2.0");
+                versionMock.when(VersionUtils::lookUpUltiToolsNewestVersion).thenReturn(VersionLookup.found("6.2.0"));
 
                 updateManager.checkUpdatesSync();
 
@@ -394,7 +396,7 @@ class UpdateManagerTest {
                 when(instance.getPluginManager()).thenReturn(pm);
                 when(instance.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
                 ultiMock.when(UltiTools::getInstance).thenReturn(instance);
-                versionMock.when(VersionUtils::getUltiToolsNewestVersion).thenReturn(null);
+                versionMock.when(VersionUtils::lookUpUltiToolsNewestVersion).thenReturn(VersionLookup.found("6.3.0"));
 
                 updateManager.checkUpdatesSync();
             }

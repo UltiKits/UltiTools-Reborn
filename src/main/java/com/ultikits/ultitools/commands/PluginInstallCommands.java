@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.file.FileSystemException;
 import java.nio.file.NoSuchFileException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import org.bukkit.ChatColor;
@@ -476,7 +477,9 @@ public class PluginInstallCommands extends BaseCommandExecutor {
     public void checkUpdates(@CmdSender CommandSender sender) {
         UpdateManager updateManager = UltiTools.getInstance().getUpdateManager();
         if (updateManager == null || !updateManager.hasAnyUpdates()) {
-            sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("没有可用的更新。"));
+            if (!sendIncompleteIfAny(sender, unconfirmed(updateManager))) {
+                sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("没有可用的更新。"));
+            }
             return;
         }
         sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("可用更新列表："));
@@ -492,6 +495,38 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             sender.sendMessage(ChatColor.YELLOW + String.format("  %s %s → %s",
                 info.getPluginName(), info.getCurrentVersion(), info.getLatestVersion()));
         }
+        sendIncompleteIfAny(sender, unconfirmed(updateManager));
+    }
+
+    /**
+     * What the start-up check could not confirm (D19-032), or an empty list when there is no
+     * update manager yet.
+     */
+    private static List<String> unconfirmed(UpdateManager updateManager) {
+        return updateManager == null ? Collections.<String>emptyList() : updateManager.getUnconfirmed();
+    }
+
+    /**
+     * Phase 19 D19-032: when a lookup of the start-up check failed, "No updates available." is not
+     * known to be true for what it could not confirm; this says so instead, naming it, with the same
+     * line the console shows at start-up.
+     *
+     * @return whether a line was sent
+     */
+    private static boolean sendIncompleteIfAny(CommandSender sender, List<String> names) {
+        if (names.isEmpty()) {
+            return false;
+        }
+        sender.sendMessage(ChatColor.YELLOW + String.format(
+            UltiTools.getInstance().i18n("更新检查未完成：无法确认 %s 的最新版本。"), String.join(", ", names)));
+        return true;
+    }
+
+    /** {@link #unconfirmed(UpdateManager)} without the framework: {@code /upm update all} updates modules only. */
+    private static List<String> unconfirmedModules(UpdateManager updateManager) {
+        List<String> modules = new ArrayList<>(unconfirmed(updateManager));
+        modules.remove(UpdateManager.FRAMEWORK_NAME);
+        return modules;
     }
 
     @CmdMapping(format = "update <plugin>")
@@ -508,7 +543,11 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         }
         UpdateInfo info = updateManager.getModuleUpdates().get(pluginName);
         if (info == null) {
-            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("没有可用的更新。"));
+            if (updateManager.getUnconfirmed().contains(pluginName)) {
+                sendIncompleteIfAny(sender, Collections.singletonList(pluginName));
+            } else {
+                sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("没有可用的更新。"));
+            }
             return;
         }
         sender.sendMessage(ChatColor.YELLOW + String.format(
@@ -568,7 +607,9 @@ public class PluginInstallCommands extends BaseCommandExecutor {
     private void updateAllPlugins(CommandSender sender) {
         UpdateManager updateManager = UltiTools.getInstance().getUpdateManager();
         if (updateManager == null || updateManager.getModuleUpdates().isEmpty()) {
-            sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("没有可用的更新。"));
+            if (!sendIncompleteIfAny(sender, unconfirmedModules(updateManager))) {
+                sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("没有可用的更新。"));
+            }
             return;
         }
         int staged = 0;
@@ -585,6 +626,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         sender.sendMessage(ChatColor.GREEN + String.format(
             UltiTools.getInstance().i18n("全部处理完成：%d 个已暂存，%d 个未能暂存。已暂存的更新将在下次启动时生效。"),
             staged, notStaged));
+        sendIncompleteIfAny(sender, unconfirmedModules(updateManager));
     }
 
     /**

@@ -1,4 +1,5 @@
 {
+  "更新检查未完成：无法确认 %s 的最新版本。": "Update check incomplete: could not confirm the latest version of %s.",
   "卸载完成：已删除识别为该模块的 JAR 文件：%s": "Uninstall done: the JAR files identified as this module's have been deleted: %s",
   "（没有需要删除的文件）": "(no file needed deleting)",
   "模块目录 %s 无法读取，因此无法确认其中是否还有该模块的 JAR 文件。": "The modules folder %s could not be read, so it cannot be confirmed whether it still holds a JAR of this module.",

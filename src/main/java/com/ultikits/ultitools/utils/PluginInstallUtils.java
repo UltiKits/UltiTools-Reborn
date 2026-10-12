@@ -92,6 +92,12 @@ public class PluginInstallUtils {
     /** The HTTP status with which the catalogue answers that nothing this framework installs is offered. */
     private static final int HTTP_CONFLICT = 409;
 
+    /**
+     * The HTTP status with which the catalogue answers that it does not know a module, or knows it
+     * but has no finalized version of it.
+     */
+    private static final int HTTP_NOT_FOUND = 404;
+
     /** The suffix of a download not yet checked; the module loader reads only {@code *.jar}. */
     static final String PART_SUFFIX = ".part";
     
@@ -179,10 +185,13 @@ public class PluginInstallUtils {
     private static final class CatalogueAnswer {
         private final int status;
         private final String data;
+        /** For a non-2xx answer, {@link VersionLookup#describe(int, String)} of it; otherwise {@code null}. */
+        private final String failure;
 
-        private CatalogueAnswer(int status, String data) {
+        private CatalogueAnswer(int status, String data, String failure) {
             this.status = status;
             this.data = data;
+            this.failure = failure;
         }
 
         /**
@@ -196,8 +205,10 @@ public class PluginInstallUtils {
 
     private static CatalogueAnswer catalogueString(String url) {
         try (Response httpResponse = SimpleHttpClient.get(url)) {
+            boolean ok = httpResponse.isOk();
             return new CatalogueAnswer(httpResponse.getStatus(),
-                    httpResponse.isOk() ? unwrapStringData(httpResponse.body()) : null);
+                    ok ? unwrapStringData(httpResponse.body()) : null,
+                    ok ? null : VersionLookup.describe(httpResponse.getStatus(), httpResponse.body()));
         }
     }
 
@@ -377,15 +388,65 @@ public class PluginInstallUtils {
     /**
      * Get plugin latest version.
      *
+     * <p>Returns {@code null} for a blank id, a module the catalogue does not know, no version this
+     * framework can install, and every failure (an error status, an unreadable body, an unreachable
+     * catalogue); this contract is unchanged as of 6.3.0. The start-up update check uses
+     * {@link #lookUpPluginLatestVersion(String)} instead, which tells those apart.
+     *
      * @param idString the plugin ID
-     * @return the plugin's latest version
+     * @return the plugin's latest version, or {@code null}
      */
     public static String getPluginLatestVersion(String idString) {
-        PluginEntity plugin = getPlugin(idString);
-        if (plugin == null) {
-            return null;
+        return lookUpPluginLatestVersion(idString).getVersion();
+    }
+
+    /**
+     * Looks up a module's latest version for this framework's API level and says whether the
+     * lookup established anything (Phase 19, D19-032). {@link VersionLookup.Outcome#FOUND} carries
+     * the version exactly as {@link #getPluginLatestVersion(String)} returns it.
+     * {@link VersionLookup.Outcome#NONE} is a confirmed "nothing to offer": a blank id, the
+     * catalogue not knowing the module ({@code plugin/get} answers 404), or knowing it with no
+     * version this framework can install or no finalized version ({@code latest} answers 409 or
+     * 404). Every other answer -- another non-2xx status, an error envelope, a missing
+     * {@code data}, an unreadable body, an unreachable catalogue -- is
+     * {@link VersionLookup.Outcome#FAILED}.
+     * <p>
+     * An exception thrown while asking propagates, exactly as it does from
+     * {@link #getPluginLatestVersion(String)}.
+     *
+     * @param idString the module's identify string
+     * @return the lookup's outcome, never {@code null}
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public static VersionLookup lookUpPluginLatestVersion(String idString) {
+        String normalized = normalizeIdentifyString(idString);
+        if (normalized == null) {
+            return VersionLookup.none();
         }
-        return catalogueString(catalogueUrl("/plugin/" + plugin.getId() + "/latest")).data;
+        int frameworkLevel = ModuleApiLevels.frameworkLevel();
+        PluginEntity plugin;
+        try (Response httpResponse = SimpleHttpClient.get(catalogueUrl("/plugin/get?identifyString="
+                + encodeQueryValue(normalized), frameworkLevel))) {
+            if (httpResponse.getStatus() == HTTP_NOT_FOUND) {
+                return VersionLookup.none();
+            }
+            if (!httpResponse.isOk()) {
+                return VersionLookup.failed(VersionLookup.describe(httpResponse.getStatus(), httpResponse.body()));
+            }
+            plugin = unwrapData(httpResponse.body(), PluginEntity.class);
+        }
+        if (plugin == null) {
+            return VersionLookup.failed(VersionLookup.UNREADABLE);
+        }
+        CatalogueAnswer answer = catalogueString(catalogueUrl("/plugin/" + plugin.getId() + "/latest", frameworkLevel));
+        if (answer.data != null) {
+            return VersionLookup.found(answer.data);
+        }
+        if (answer.noCompatibleVersion() || answer.status == HTTP_NOT_FOUND) {
+            return VersionLookup.none();
+        }
+        return VersionLookup.failed(answer.failure != null ? answer.failure : VersionLookup.UNREADABLE);
     }
 
     /**
