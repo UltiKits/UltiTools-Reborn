@@ -14,10 +14,15 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.FileAttribute;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.UnaryOperator;
 import java.util.logging.Level;
 
@@ -112,6 +117,10 @@ public final class CredentialStore {
      * restoring the default production resolution. Package-private -- production code must never
      * call this.
      */
+    /** Owner read and write only: the mode of every credential file this class writes on POSIX (D19-060). */
+    private static final Set<PosixFilePermission> OWNER_ONLY =
+            Collections.unmodifiableSet(EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE));
+
     private static volatile Path targetPathOverride;
 
     /**
@@ -532,10 +541,21 @@ public final class CredentialStore {
         Path tempFile = (parent != null ? parent : target).resolve(TEMP_FILE_NAME);
         boolean moved = false;
         try {
-            try (FileChannel channel = FileChannel.open(tempFile, StandardOpenOption.CREATE,
-                    StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+            // The temporary file becomes the credential file at the atomic move below, so its mode is the file's
+            // mode. On a POSIX file system it is created owner-only (rw-------), and narrowed again in case an
+            // earlier, interrupted write left it with another mode; otherwise every token refresh would widen a
+            // file the operator restricted to 600 to the process umask (D19-060). Other file systems are unchanged.
+            boolean posix = tempFile.getFileSystem().supportedFileAttributeViews().contains("posix");
+            FileAttribute<?>[] ownerOnly = posix
+                    ? new FileAttribute<?>[] {PosixFilePermissions.asFileAttribute(OWNER_ONLY)}
+                    : new FileAttribute<?>[0];
+            try (FileChannel channel = FileChannel.open(tempFile, EnumSet.of(StandardOpenOption.CREATE,
+                    StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE), ownerOnly);
                  Writer writer = new BufferedWriter(new OutputStreamWriter(
                          Channels.newOutputStream(channel), StandardCharsets.UTF_8.newEncoder()))) {
+                if (posix) {
+                    Files.setPosixFilePermissions(tempFile, OWNER_ONLY);
+                }
                 GSON.toJson(data, writer);
                 writer.flush();
                 // The bytes must reach the disk before the rename can, or a power loss could leave
