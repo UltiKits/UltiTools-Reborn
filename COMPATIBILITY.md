@@ -573,8 +573,9 @@ write). At stop, and at a normal unload or uninstall, after each module's unload
 changes that were never saved is named in one WARNING - the file and the changed keys, never values -
 and the changes are dropped; the framework's final step at stop names, the same way, anything still
 registered. A superseded copy is named once by the replacement's own drop warning instead. A configuration whose file
-could not be read or parsed at its last load is named once instead (6.2.5 rewrote such a file from the module's in-memory
-values at stop). An operator's edit made
+could not be read or parsed at its last load is named once instead (6.2.5 rewrote such a file as soon as it loaded it - with the
+declared defaults at start-up, with the running values at a reload - and again from the module's in-memory values at
+stop). An operator's edit made
 while the server runs is never touched at stop. A module persists a change when it makes it, with
 `save()` (only what the module changed, where the file still holds what was read) or
 `saveOperatorChange`/`saveOperatorMapEntry` (exactly what an operator's command names).
@@ -606,8 +607,8 @@ changed it (one warning, naming the file and key, when the previous load still h
 deleted it), and keeps its live value when the module had (both with the declared-default baseline); the file is not
 written.
 Unreadable/unparseable reloads keep live values, protect the file and throw
-`ConfigurationException` naming the file and the safe cause (#589); 6.2.5 read such a file as an empty configuration
-and rewrote it from the module's in-memory values at stop.
+`ConfigurationException` naming the file and the safe cause (#589); 6.2.5 read such a file as an empty configuration,
+rewrote it from the module's running values during the reload itself, and rewrote it again at stop.
 After a module's language is rebuilt in the reload steps, and before its own reload hook, the framework rewrites
 only its own comment lines of that module's configurations in the new language, through the write gate over a fresh
 read; no value, key or other comment line is written ([#594](https://github.com/UltiKits/UltiTools-Reborn/issues/594)).
@@ -821,7 +822,7 @@ separate crash-safe multi-file transaction limit.
 - 面板编辑 `server.properties` 时只替换它指定的那个键所在行的值文字（#607）：键、分隔符、注释、顺序和其它每个字节保持不变（含 UTF-8 的 `motd`），按服务器读取该文件的方式解码和编码（严格 UTF-8，不是 UTF-8 时用 ISO-8859-1），校验后原子写入。同一个键定义在多行、或定义续到下一行时拒绝，原因注明行号（不含值）；`set_all` 回复把它列在 `failed` 中，并在新增的 `failureReasons` 字段中给出原因，服务器日志对每个被拒的键只记一次。服务器自己下次启动时仍会整份重写该文件（在 Paper 1.21.11 上实测）。
 - 6.3.0 新增 `com.ultikits.ultitools.config.OperatorFiles`（增量 API），供模块在服主明确编辑时写入它代为管理的 YAML 文件（礼包、菜单文件）：只写编辑的部分，注释和其它键保留（维护者 2026-10-04 决定）。`read(File)` 返回文件文本（严格 UTF-8）和字节的 SHA-256；`write(Snapshot, Map<List<String>, Object>)` 只写指定的完整键（含点的键是一个键），经写入闸门，且仅当文件仍是快照时的字节，返回 `WRITTEN`、`UNCHANGED`、`FILE_CHANGED` 或 `REFUSED`（排版无法逐字节保留或使用锚点，警告一次列出文件、键和原因）。值必须是普通数据（`ItemStack` 先序列化），否则在碰文件之前抛 `IllegalArgumentException`。它从不创建、删除或重命名文件，不是通用文件 API（#545 仍是以后的功能），也不用于 `@ConfigEntity` 文件。
 - 面板编辑复合值（Bukkit `Vector`、`Location`，或映射条目中的此类值）内的一个字段时，写入的是文件中原样的整个值、只改该字段，其余字段保持服主写下的字节（`y: 64`、`pitch: 0` 不会变成 `64.0`）。面板发送的整数、或文件中该值其它字段里的整数，在模块自身的值为浮点数的位置按浮点数转换（Bukkit 的 `Vector` 自己不放宽），被编辑的字段按该类型写入（`7` 写成 `7.0`），因此编辑后的文件能被重新加载（#609）。文件中 `Vector` 或 `BlockVector` 坐标里的整数（`y: 64`）现在按该数字加载：Bukkit 的 `Vector` 只接受 `Double` 坐标，此前这样的值会以 SEVERE 堆栈失败并使用声明默认值；框架现在只在内存中把 `Vector` 的 `x`、`y`、`z` 放宽为浮点数——文件保持 `y: 64`，未改动的保存不写入，其它类型不放宽。模块在内存中删除且未保存的映射分组，编辑其下的键会被拒绝，注明“not found in memory”。
-- 服务器关闭、模块卸载或卸载删除、模块被新版本替换时，一律不写任何配置（维护者 2026-10-04 决定：生命周期事件不是服主的写入请求，不做整对象的关闭保存或替换保存）。关闭时以及正常卸载或卸载删除时，每个模块在卸载钩子和 `@PreDestroy` 之后、释放之前，凡有从未保存的模块改动的配置各警告一次（列文件和键，不列值），改动随之丢弃；框架最后一步对仍注册的配置同样处理。上次加载无法读取或解析的文件只提示一次（6.2.5 会在关闭时用模块内存中的值把它重写）。新版本副本直接读取现有文件，旧副本的未保存改动或受保护文件不会阻止替换；新副本激活后警告一次丢弃的键。`ConfigManager#saveAll()` 签名不变、不再写入、改为报告并标记 `@Deprecated(since = "6.3.0")`。6.2.5 及以前在服务器关闭时由 `saveAll()` 用模块内存中的值重写所有已注册的配置文件，6.3.0 直接取消，没有过渡期。模块应在改动发生时用 `save()` 或 `saveOperatorChange`/`saveOperatorMapEntry` 保存。卸载时释放该模块的配置实体（6.2.5 不释放）。已知限制：#578 中仍适用的是符号链接后跟 `..` 的临时文件路径和 Unicode 文件的样式检测耗时；锚点容器与别名注释两项不会发生，因为任何写入路径都不写入使用锚点、别名或合并键的文件。#580（见上文读取器无法读取的排版）和多文件崩溃限制 #545 仍存在。登记表同样按此顺序（#562）：新副本通过兼容性检查后、刷新容器和运行 `registerSelf()` 之前，先释放旧副本的面板响应器、EventBus 处理器和补全器；新副本失败时释放它自己的登记、把旧副本的登记原样放回，旧副本照常运行（见“Behavioral changes”中的说明）。
+- 服务器关闭、模块卸载或卸载删除、模块被新版本替换时，一律不写任何配置（维护者 2026-10-04 决定：生命周期事件不是服主的写入请求，不做整对象的关闭保存或替换保存）。关闭时以及正常卸载或卸载删除时，每个模块在卸载钩子和 `@PreDestroy` 之后、释放之前，凡有从未保存的模块改动的配置各警告一次（列文件和键，不列值），改动随之丢弃；框架最后一步对仍注册的配置同样处理。上次加载无法读取或解析的文件只提示一次（6.2.5 在加载时就会重写它：启动时写入声明默认值，重载时写入运行中的值；关闭时再用模块内存中的值重写一次）。新版本副本直接读取现有文件，旧副本的未保存改动或受保护文件不会阻止替换；新副本激活后警告一次丢弃的键。`ConfigManager#saveAll()` 签名不变、不再写入、改为报告并标记 `@Deprecated(since = "6.3.0")`。6.2.5 及以前在服务器关闭时由 `saveAll()` 用模块内存中的值重写所有已注册的配置文件，6.3.0 直接取消，没有过渡期。模块应在改动发生时用 `save()` 或 `saveOperatorChange`/`saveOperatorMapEntry` 保存。卸载时释放该模块的配置实体（6.2.5 不释放）。已知限制：#578 中仍适用的是符号链接后跟 `..` 的临时文件路径和 Unicode 文件的样式检测耗时；锚点容器与别名注释两项不会发生，因为任何写入路径都不写入使用锚点、别名或合并键的文件。#580（见上文读取器无法读取的排版）和多文件崩溃限制 #545 仍存在。登记表同样按此顺序（#562）：新副本通过兼容性检查后、刷新容器和运行 `registerSelf()` 之前，先释放旧副本的面板响应器、EventBus 处理器和补全器；新副本失败时释放它自己的登记、把旧副本的登记原样放回，旧副本照常运行（见“Behavioral changes”中的说明）。
 
 ## What the version number means
 
@@ -1776,9 +1777,9 @@ This section governs the third kind.
   refresh, where `@PostConstruct` runs, and during `registerSelf()` — through the ordinary name-only
   methods, and for every `@ModuleEventHandler` method. A registration made later is recorded against
   the copy listed under the name it is filed under (#562 item 1, the entry after the next). A
-  registration filed under the module's name only is released by name (6.2.x released only EventBus handlers, by name), except while
+  registration filed under the module's name only is released by name (6.2.5 released only EventBus handlers, by name), except while
   another loaded copy shares that name, when it stays until the last copy of the name is unloaded. One visible consequence: a completer a module
-  registers while it loads, including in `registerSelf()`, is now released when the module unloads; 6.2.x released no
+  registers while it loads, including in `registerSelf()`, is now released when the module unloads; 6.2.5 released no
   completer at unload. Added, all `@since 6.3.0`:
   `TabCompletionManager#beginRegistrationScope(String, UltiToolsPlugin)` and
   `#unregisterByOwnerInstance(UltiToolsPlugin)`; `EventBus#register(...)` and `EventBus#subscribe(...)`
