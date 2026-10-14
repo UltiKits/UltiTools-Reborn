@@ -19,9 +19,9 @@ explains it; the sections below are the reference and stay authoritative where t
 8. Move each legacy parser (`@ConfigEntry(parser = …)`, `Parser`, `ObjectConfigSerializer`, `ConfigParser`, `DefaultConfigParser`, `StringHashMapParser`) to a public top-level `ConfigConverter` annotated `@ConfigConverterFor` in a scanned package, and register a converter for any declared field type the framework does not support, which otherwise refuses the module; the legacy parsers are deprecated in 6.3.0 and announced for removal in 6.4.0 (see [Migrating legacy parsers to converters](#migrating-legacy-parsers-to-converters)).
 9. If a field uses `@Scheduled(config = …, periodKey/delayKey = …)` or `@CmdCD(config = …, key = …)`, declare `api-version: 630`, keep a bound `@Scheduled` synchronous, and drop any `@Range` on the bound field, whose range the binding replaces (see [A floor no linker enforces](#a-floor-no-linker-enforces-config-bound-scheduled-and-cmdcd-630)).
 10. Check command bodies for the one-tick delay they no longer get: a synchronous body now runs at dispatch, so code inside an `InventoryClickEvent` that opens or closes an inventory or dispatches a command must defer it with `runTask`, and a body that dispatches its own command meets `@UsageLimit` and `@CmdCD` on the same tick (see [Command bodies run at dispatch](#command-bodies-run-at-dispatch-630--changed-without-a-migration-period)).
-11. Review the runtime changes that took effect without a migration period and adjust code that relied on the old behaviour - for example JSON-backend reads now return detached copies, so a change needs `update(...)`; `PluginManager#getPluginList()` returns an unmodifiable snapshot; `@NotEmpty` on lists, sets and maps now acts and a constraint the framework cannot check refuses the module at load (see [Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period)).
-12. Keep the framework out of your JAR, and if your module uses XSeries declare it yourself (`com.github.cryptomorin:XSeries:13.7.1` or your own pin): the framework no longer shades it, and Gson, MySQL Connector/J, protobuf and slf4j come from the Paper build the server runs (see [Where runtime dependencies come from](#where-runtime-dependencies-come-from)).
-13. Know the framework's own server requirements - Paper 1.19.2 build 163 or newer, Java 17 below Paper 1.20.5 and Java 21 from it - and state for your module only the UltiTools-API version it supports (6.3.0 or later for `api-version: 630`), as the UltiKits modules do (see [Support matrix](#support-matrix)).
+11. Review the runtime changes that took effect without a migration period and adjust code that relied on the old behaviour - for example JSON-backend reads now return detached copies, so a change needs `update(...)`; `PluginManager#getPluginList()` returns an unmodifiable snapshot; `@NotEmpty` on lists, sets and maps now acts; a constraint the framework cannot check refuses the module at load; and a value that violates `@Range`, `@Size`, `@Pattern` or `@NotEmpty` on text now refuses the module at load (and the reload at `/ul reload`), where 6.2.5 reset it to its default and saved the file (see [Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period)).
+12. Keep the framework out of your JAR, and if your module uses XSeries declare it yourself as `provided`/`compileOnly` (`com.github.cryptomorin:XSeries:13.7.1` or your own pin): the framework no longer shades it but still delivers it at runtime through its `libraries:` block, and Gson, MySQL Connector/J, protobuf and slf4j come from the Paper build the server runs (see [Where runtime dependencies come from](#where-runtime-dependencies-come-from)).
+13. Know the framework's own server requirements: Paper 1.19.2 build 163 or newer, Java 17 below Paper 1.20.5 and Java 21 from it; the UltiKits modules state only the UltiTools-API version they support (6.3.0 or later for `api-version: 630`) (see [Support matrix](#support-matrix)).
 
 ### 中文补充：模块从 6.2.5 升级到 6.3.0 的检查清单
 
@@ -37,9 +37,9 @@ explains it; the sections below are the reference and stay authoritative where t
 8. 把每个旧解析器（`@ConfigEntry(parser = …)`、`Parser`、`ObjectConfigSerializer`、`ConfigParser`、`DefaultConfigParser`、`StringHashMapParser`）改写为扫描包内带 `@ConfigConverterFor` 的 public 顶层 `ConfigConverter`，并为框架不支持的声明字段类型注册转换器，否则模块会被拒绝；旧解析器在 6.3.0 弃用，公告在 6.4.0 删除（见 [Migrating legacy parsers to converters](#migrating-legacy-parsers-to-converters)）。
 9. 字段使用 `@Scheduled(config = …, periodKey/delayKey = …)` 或 `@CmdCD(config = …, key = …)` 时，声明 `api-version: 630`，绑定配置的 `@Scheduled` 保持同步，并删除该字段上的 `@Range`（由绑定自带的范围取代）（见 [A floor no linker enforces](#a-floor-no-linker-enforces-config-bound-scheduled-and-cmdcd-630)）。
 10. 检查依赖“延后一刻执行”的命令代码：同步命令体现在于分发时立即执行，因此在 `InventoryClickEvent` 中打开或关闭物品栏、或分发命令的代码要用 `runTask` 推迟，分发自身命令的命令体会在同一刻遇到 `@UsageLimit` 和 `@CmdCD`（见 [Command bodies run at dispatch](#command-bodies-run-at-dispatch-630--changed-without-a-migration-period)）。
-11. 查看未设过渡期就生效的运行时变化，调整依赖旧行为的代码——例如 JSON 存储的读取现在返回独立副本，改动必须调用 `update(...)` 才会保存；`PluginManager#getPluginList()` 返回不可修改的快照；列表、集合和映射上的 `@NotEmpty` 现在生效，框架无法检查的约束注解会让模块在加载时被拒绝（见 [Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period)）。
-12. 不要把框架打进自己的 JAR；模块用到 XSeries 时请自行声明（`com.github.cryptomorin:XSeries:13.7.1` 或你自己固定的版本）：框架不再内嵌它，Gson、MySQL Connector/J、protobuf 和 slf4j 由服务器所用的 Paper 构建提供（见 [Where runtime dependencies come from](#where-runtime-dependencies-come-from)）。
-13. 了解框架本身的服务器要求——Paper 1.19.2 build 163 或更新，Paper 1.20.5 以下用 Java 17，1.20.5 起用 Java 21——模块只需写明它支持的 UltiTools-API 版本（`api-version: 630` 即 6.3.0 或更高），UltiKits 官方模块也是这样做的（见 [Support matrix](#support-matrix)）。
+11. 查看未设过渡期就生效的运行时变化，调整依赖旧行为的代码——例如 JSON 存储的读取现在返回独立副本，改动必须调用 `update(...)` 才会保存；`PluginManager#getPluginList()` 返回不可修改的快照；列表、集合和映射上的 `@NotEmpty` 现在生效；框架无法检查的约束注解会让模块在加载时被拒绝；违反 `@Range`、`@Size`、`@Pattern` 或文本上 `@NotEmpty` 的值现在会让模块加载被拒绝（`/ul reload` 时拒绝这次重载），而 6.2.5 会把它重置为默认值并保存文件（见 [Behavioral changes that need no migration period](#behavioral-changes-that-need-no-migration-period)）。
+12. 不要把框架打进自己的 JAR；模块用到 XSeries 时请自行以 `provided`/`compileOnly` 声明（`com.github.cryptomorin:XSeries:13.7.1` 或你自己固定的版本）：框架不再内嵌它，但仍通过自己的 `libraries:` 在运行时提供，Gson、MySQL Connector/J、protobuf 和 slf4j 由服务器所用的 Paper 构建提供（见 [Where runtime dependencies come from](#where-runtime-dependencies-come-from)）。
+13. 了解框架本身的服务器要求：Paper 1.19.2 build 163 或更新，Paper 1.20.5 以下用 Java 17，1.20.5 起用 Java 21；UltiKits 官方模块只写明它们支持的 UltiTools-API 版本（`api-version: 630` 即 6.3.0 或更高）（见 [Support matrix](#support-matrix)）。
 
 ## Config layer (6.3.0)
 
@@ -578,8 +578,9 @@ while the server runs is never touched at stop. A module persists a change when 
 `save()` (only what the module changed, where the file still holds what was read) or
 `saveOperatorChange`/`saveOperatorMapEntry` (exactly what an operator's command names).
 `ConfigManager#saveAll()` keeps its signature, writes nothing, reports as above and is
-`@Deprecated(since = "6.3.0")`. Public existing signatures are unchanged. Until 6.3.0,
-`ConfigManager#saveAll()` saved every changed configuration at server stop; 6.3.0 removes that save without a migration
+`@Deprecated(since = "6.3.0")`. Public existing signatures are unchanged. Through 6.2.5,
+`ConfigManager#saveAll()` rewrote every registered configuration file from the module's in-memory values at server
+stop; 6.3.0 removes that save without a migration
 period; see "Behavioral changes that need no migration period".
 
 ### Configuration init and reload thread contract
@@ -818,7 +819,7 @@ separate crash-safe multi-file transaction limit.
 - 面板编辑 `server.properties` 时只替换它指定的那个键所在行的值文字（#607）：键、分隔符、注释、顺序和其它每个字节保持不变（含 UTF-8 的 `motd`），按服务器读取该文件的方式解码和编码（严格 UTF-8，不是 UTF-8 时用 ISO-8859-1），校验后原子写入。同一个键定义在多行、或定义续到下一行时拒绝，原因注明行号（不含值）；`set_all` 回复把它列在 `failed` 中，并在新增的 `failureReasons` 字段中给出原因，服务器日志对每个被拒的键只记一次。服务器自己下次启动时仍会整份重写该文件（在 Paper 1.21.11 上实测）。
 - 6.3.0 新增 `com.ultikits.ultitools.config.OperatorFiles`（增量 API），供模块在服主明确编辑时写入它代为管理的 YAML 文件（礼包、菜单文件）：只写编辑的部分，注释和其它键保留（维护者 2026-10-04 决定）。`read(File)` 返回文件文本（严格 UTF-8）和字节的 SHA-256；`write(Snapshot, Map<List<String>, Object>)` 只写指定的完整键（含点的键是一个键），经写入闸门，且仅当文件仍是快照时的字节，返回 `WRITTEN`、`UNCHANGED`、`FILE_CHANGED` 或 `REFUSED`（排版无法逐字节保留或使用锚点，警告一次列出文件、键和原因）。值必须是普通数据（`ItemStack` 先序列化），否则在碰文件之前抛 `IllegalArgumentException`。它从不创建、删除或重命名文件，不是通用文件 API（#545 仍是以后的功能），也不用于 `@ConfigEntity` 文件。
 - 面板编辑复合值（Bukkit `Vector`、`Location`，或映射条目中的此类值）内的一个字段时，写入的是文件中原样的整个值、只改该字段，其余字段保持服主写下的字节（`y: 64`、`pitch: 0` 不会变成 `64.0`）。面板发送的整数、或文件中该值其它字段里的整数，在模块自身的值为浮点数的位置按浮点数转换（Bukkit 的 `Vector` 自己不放宽），被编辑的字段按该类型写入（`7` 写成 `7.0`），因此编辑后的文件能被重新加载（#609）。文件中 `Vector` 或 `BlockVector` 坐标里的整数（`y: 64`）现在按该数字加载：Bukkit 的 `Vector` 只接受 `Double` 坐标，此前这样的值会以 SEVERE 堆栈失败并使用声明默认值；框架现在只在内存中把 `Vector` 的 `x`、`y`、`z` 放宽为浮点数——文件保持 `y: 64`，未改动的保存不写入，其它类型不放宽。模块在内存中删除且未保存的映射分组，编辑其下的键会被拒绝，注明“not found in memory”。
-- 服务器关闭、模块卸载或卸载删除、模块被新版本替换时，一律不写任何配置（维护者 2026-10-04 决定：生命周期事件不是服主的写入请求，不做整对象的关闭保存或替换保存）。关闭时以及正常卸载或卸载删除时，每个模块在卸载钩子和 `@PreDestroy` 之后、释放之前，凡有从未保存的模块改动的配置各警告一次（列文件和键，不列值），改动随之丢弃；框架最后一步对仍注册的配置同样处理。上次加载无法读取或解析的文件照旧只提示一次。新版本副本直接读取现有文件，旧副本的未保存改动或受保护文件不再阻止替换；新副本激活后警告一次丢弃的键。`ConfigManager#saveAll()` 签名不变、不再写入、改为报告并标记 `@Deprecated(since = "6.3.0")`。6.2.5 及以前在服务器关闭时由 `saveAll()` 保存所有改动过的配置，6.3.0 直接取消，没有过渡期。模块应在改动发生时用 `save()` 或 `saveOperatorChange`/`saveOperatorMapEntry` 保存。卸载照旧释放实体。已知限制：#578 中仍适用的是符号链接后跟 `..` 的临时文件路径和 Unicode 文件的样式检测耗时；锚点容器与别名注释两项不会发生，因为任何写入路径都不写入使用锚点、别名或合并键的文件。#580（见上文读取器无法读取的排版）和多文件崩溃限制 #545 仍存在。登记表同样按此顺序（#562）：新副本通过兼容性检查后、刷新容器和运行 `registerSelf()` 之前，先释放旧副本的面板响应器、EventBus 处理器和补全器；新副本失败时释放它自己的登记、把旧副本的登记原样放回，旧副本照常运行（见“Behavioral changes”中的说明）。
+- 服务器关闭、模块卸载或卸载删除、模块被新版本替换时，一律不写任何配置（维护者 2026-10-04 决定：生命周期事件不是服主的写入请求，不做整对象的关闭保存或替换保存）。关闭时以及正常卸载或卸载删除时，每个模块在卸载钩子和 `@PreDestroy` 之后、释放之前，凡有从未保存的模块改动的配置各警告一次（列文件和键，不列值），改动随之丢弃；框架最后一步对仍注册的配置同样处理。上次加载无法读取或解析的文件照旧只提示一次。新版本副本直接读取现有文件，旧副本的未保存改动或受保护文件不再阻止替换；新副本激活后警告一次丢弃的键。`ConfigManager#saveAll()` 签名不变、不再写入、改为报告并标记 `@Deprecated(since = "6.3.0")`。6.2.5 及以前在服务器关闭时由 `saveAll()` 用模块内存中的值重写所有已注册的配置文件，6.3.0 直接取消，没有过渡期。模块应在改动发生时用 `save()` 或 `saveOperatorChange`/`saveOperatorMapEntry` 保存。卸载照旧释放实体。已知限制：#578 中仍适用的是符号链接后跟 `..` 的临时文件路径和 Unicode 文件的样式检测耗时；锚点容器与别名注释两项不会发生，因为任何写入路径都不写入使用锚点、别名或合并键的文件。#580（见上文读取器无法读取的排版）和多文件崩溃限制 #545 仍存在。登记表同样按此顺序（#562）：新副本通过兼容性检查后、刷新容器和运行 `registerSelf()` 之前，先释放旧副本的面板响应器、EventBus 处理器和补全器；新副本失败时释放它自己的登记、把旧副本的登记原样放回，旧副本照常运行（见“Behavioral changes”中的说明）。
 
 ## What the version number means
 
@@ -1915,7 +1916,7 @@ This section governs the third kind.
   because a migration period would mean continuing to overwrite operators' files: a module's `save()`
   writes only what the module changed, where the file still holds what was read, and never writes over an
   operator's disk edit, deleted key or unusable value (it names the change as not written instead of
-  overwriting with a warning); a panel edit writes only what it touches; and nothing writes configuration at
+  overwriting it, as 6.2.5 did); a panel edit writes only what it touches; and nothing writes configuration at
   server stop, module unload or module replacement - a never-saved module change is named at stop and
   dropped, and `ConfigManager#saveAll()` is deprecated and writes nothing. A module that relied on the stop
   to persist an in-memory change must call `save()` (or `saveOperatorChange`) when it makes the change; the
@@ -2576,8 +2577,10 @@ In other words, the guidance elsewhere in this document — that a lagging pin i
 does not need to be changed for its own sake — **does not apply here**. That guidance says not to move
 the pin without a reason; a descriptor change is a reason.
 
-As for how often to check: from 6.3.0 every framework build runs the japicmp gate against the last
-release and fails on any binary-incompatible change that is not explicitly excluded in `pom.xml`. Re-verify your
+As for how often to check: from 6.3.0 the framework's CI build (`mvn verify`, on every push and pull
+request) runs the japicmp gate against the configured baseline release (6.2.5 for 6.3.0) and fails on any
+binary-incompatible change to a public or protected member that is not excluded in `pom.xml`; a build made with
+`mvn package` alone does not run it. Re-verify your
 module whenever you raise its pin or its `api-version`.
 
 - This document states above that a PATCH removes no public API. That promise covers *intentional*
@@ -2585,8 +2588,9 @@ module whenever you raise its pin or its `api-version`.
   descriptor change is by definition on no schedule, **so it can appear in a PATCH as well**. That
   sentence began as an inference; the second instance in this section (6.2.0 → 6.2.1) confirmed it —
   that was a PATCH. **"Watching MINOR releases is enough" does not hold.**
-- With the japicmp gate wired up (6.3.0), binary compatibility is verified per method by a machine in
-  every build, a PATCH included; a binary-incompatible change can ship only if it is explicitly excluded.
+- With the japicmp gate wired up (6.3.0), binary compatibility against the baseline release is verified per
+  method by a machine in every CI build, a PATCH included; a binary-incompatible change can pass only if it is
+  explicitly excluded.
 
 ### A floor no linker enforces: config-bound `@Scheduled` and `@CmdCD` (6.3.0)
 
@@ -2624,9 +2628,10 @@ over.
 
 A human process cannot catch this class of change: it would require an author changing a field type to
 realise that this alters the descriptor of a public method. What can catch it is a machine comparing
-descriptors method by method, that is, the japicmp gate (issue #216). That gate runs in every
-framework build from 6.3.0 against the last release and fails on any binary-incompatible change that is not
-explicitly excluded in `pom.xml`, so an unintentional descriptor change can no longer ship unnoticed.
+descriptors method by method, that is, the japicmp gate (issue #216). From 6.3.0 that gate
+runs in the framework's CI build (`mvn verify`) against the configured baseline release and fails on any
+binary-incompatible change to a public or protected member that is not excluded in `pom.xml`, so an unintentional
+descriptor change can no longer pass CI unnoticed.
 
 ## Support matrix
 
@@ -2639,7 +2644,7 @@ explicitly excluded in `pom.xml`, so an unintentional descriptor change can no l
 | `api-version` in a module's `plugin.yml` | `630` for a module built for 6.3.0 (UltiTools API level, unrelated to Bukkit's field of the same name); all fifteen UltiKits modules declare `630` |
 | Minimum server | Paper 1.19.2 build 163, the first build bundling SnakeYAML 1.32 (as of 6.3.0). On Paper 1.19.0, 1.19.1 and 1.19.2 builds before 163 the framework fails to enable with a `NoSuchMethodError` on `LoaderOptions.setProcessComments`; Paper 1.18.2 and older refuse `api-version: '1.19'` ("Unsupported API version") and do not load it |
 | Server Java | The version the chosen Paper line requires: Java 17 for Paper 1.19.2 to 1.20.4, Java 21 from Paper 1.20.5. This is independent of the build JDK and the bytecode target above |
-| Modules | A module states only the UltiTools-API version it supports, through the `api-version` in its `plugin.yml`: each of the fifteen UltiKits modules built for 6.3.0 requires UltiTools-API 6.3.0 or later. The server rows of this table are the framework's own requirements |
+| Modules | Each of the fifteen UltiKits modules built for 6.3.0 states only the UltiTools-API version it supports: 6.3.0 or later (`api-version: 630`). The server rows of this table are the framework's own requirements |
 | Known gap on Paper 1.19.2 to 1.20.4 | The panel's console mirror is not installed, and one WARNING at start-up says the panel will not mirror the server console; the log stream carries plugin lines only. Those builds relocate CraftBukkit's log forwarder (`ForwardLogHandler`), so the mirror cannot find it. This is measured, existing behaviour, documented here and not changed |
 
 ### Where runtime dependencies come from
