@@ -1,0 +1,7 @@
+// Full-file lexical fixtures; deliberate comment violations are test data.
+class CommentCases {
+    int inline = 1; /* 中文内联 */
+    String literal = "中文字符串 /* not a comment */ // still literal"; // English comment
+    char quote = '\'';
+    int line = 2; // 中文尾注
+}
