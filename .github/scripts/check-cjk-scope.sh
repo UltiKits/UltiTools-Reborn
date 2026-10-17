@@ -112,7 +112,7 @@
 #   --self-test             Run the fixture self-test (see .github/scripts/testdata/) and exit.
 #
 # Exit codes: 0 = at or under the threshold (or --report-only); 1 = over threshold;
-#             2 = grep rejected the contract pattern or could not read a file; 64 = usage error.
+#             2 = matcher/helper/read failure; 64 = usage error.
 #
 # Wired into maven-ci.yml (see the "CJK Comment/Javadoc Scope Gate" step, plan 08-18) — invoked
 # there with no threshold flag, so the zero-violation default applies. The migration aid
@@ -235,11 +235,17 @@ load_allowlist() {
 
 # is_allowlisted PATH TEXT — true (0) when TEXT at PATH matches an allowlist entry.
 is_allowlisted() {
-    local path="$1" text="$2" i
+    local path="$1" text="$2" i status
     for i in "${!ALLOW_GLOBS[@]}"; do
         case "$path" in
             ${ALLOW_GLOBS[$i]})
-                if grep -Eq -- "${ALLOW_REGEXES[$i]}" <<< "$text"; then
+                status=0
+                grep -Eq -- "${ALLOW_REGEXES[$i]}" <<< "$text" || status=$?
+                if [ "$status" -ge 2 ]; then
+                    echo "ERROR: cannot match allowlist pattern '${ALLOW_REGEXES[$i]}' for '$path'; the gate fails closed." >&2
+                    exit 2
+                fi
+                if [ "$status" -eq 0 ]; then
                     return 0
                 fi
                 ;;
@@ -507,17 +513,37 @@ run_self_test() {
     fi
     rm -f "$err10"
 
-    # Assertions 5-7: the same full-file implementation serves normal scans and self-tests.
-    local java_fixture java_matches
+    # Assertions 5-7: every fixture line has an explicit verdict through the shared scanner.
+    local java_fixture java_matches java_expected="" java_lineno java_line
+    local java_lines=()
     java_fixture="$(mktemp --suffix=.java)"
     cp .github/scripts/testdata/cjk-java-comments.java.txt "$java_fixture"
+    mapfile -t java_lines < "$java_fixture"
     java_matches="$(scan_file "$java_fixture")" || { rm -f "$java_fixture"; return 2; }
-    if [[ "$java_matches" == *":3:    int inline = 1; /* 中文内联 */"* ]] &&
-       [[ "$java_matches" == *":6:    int line = 2; // 中文尾注"* ]] &&
-       [ "$(printf %s "$java_matches" | grep -c .)" -eq 2 ]; then
-        echo "PASS: assertions 5-7 — full-file inline/trailing comments rejected; literals excluded."
-    else
-        echo "FAIL: assertions 5-7 — full-file Java fixture classification."
+    for java_lineno in "${!java_lines[@]}"; do
+        java_line="${java_lines[$java_lineno]}"
+        case "$((java_lineno + 1))" in
+            3|6|9|12|14|15|24|26)
+                java_expected+="${java_fixture}:$((java_lineno + 1)):${java_line}"$'\n'
+                if [[ "$java_matches" == *"${java_fixture}:$((java_lineno + 1)):${java_line}"* ]]; then
+                    echo "PASS: Java fixture line $((java_lineno + 1)) — comment violation."
+                else
+                    echo "FAIL: Java fixture line $((java_lineno + 1)) — missing comment violation."
+                    failures=1
+                fi
+                ;;
+            *)
+                if [[ "$java_matches" == *"${java_fixture}:$((java_lineno + 1)):"* ]]; then
+                    echo "FAIL: Java fixture line $((java_lineno + 1)) — nonviolating control rejected."
+                    failures=1
+                else
+                    echo "PASS: Java fixture line $((java_lineno + 1)) — nonviolating control."
+                fi
+                ;;
+        esac
+    done
+    if [ "$java_matches" != "${java_expected%$'\n'}" ]; then
+        echo "FAIL: full-file Java fixture diagnostics differ from the exact expected lines."
         failures=1
     fi
     rm -f "$java_fixture"
