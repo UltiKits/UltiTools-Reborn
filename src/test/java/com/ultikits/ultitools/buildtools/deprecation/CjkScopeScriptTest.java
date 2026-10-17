@@ -49,6 +49,156 @@ class CjkScopeScriptTest {
         assertThat(result.output).contains("SUMMARY: 0 CJK violation(s)");
     }
 
+    @Test
+    void asciiOpenedUnstarredContinuationIsRejected() throws Exception {
+        String source = "class Sample {\n    /* ASCII opener\n    unstarred 中文续行\n    */\n}\n";
+        prepare(source);
+        Result result = gate();
+        assertThat(result.exit).as(result.output).isEqualTo(1);
+        assertThat(result.output).contains(SAMPLE + ":3:    unstarred 中文续行");
+    }
+
+    @Test
+    void fullFileMatrixHasExactViolationLines() throws Exception {
+        assertMatrix(new String(Files.readAllBytes(FIXTURE), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void crlfMatrixRetainsOriginalBytesAndDiagnostics() throws Exception {
+        assertMatrix(new String(Files.readAllBytes(FIXTURE), StandardCharsets.UTF_8).replace("\n", "\r\n"));
+    }
+
+    @Test
+    void missingFinalNewlineStillReportsFinalComment() throws Exception {
+        String source = new String(Files.readAllBytes(FIXTURE), StandardCharsets.UTF_8);
+        assertMatrix(source.substring(0, source.length() - 1));
+    }
+
+    private void assertMatrix(String source) throws Exception {
+        prepare(source);
+        byte[] before = Files.readAllBytes(temp.resolve(SAMPLE));
+        Result result = gate();
+        assertThat(result.exit).as(result.output).isEqualTo(1);
+        List<Integer> expected = Arrays.asList(3, 6, 9, 12, 14, 15, 24, 26);
+        String[] lines = source.split("\n", -1);
+        for (int i = 0; i < lines.length; i++) {
+            String prefix = SAMPLE + ":" + (i + 1) + ":";
+            if (expected.contains(i + 1)) {
+                assertThat(result.output).contains(prefix + lines[i] + "\n");
+            } else {
+                assertThat(result.output).doesNotContain(prefix);
+            }
+        }
+        assertThat(result.output).contains("SUMMARY: 8 CJK violation(s) across 1 file(s).");
+        assertThat(Files.readAllBytes(temp.resolve(SAMPLE))).isEqualTo(before);
+    }
+
+    @Test
+    void expandedFixtureSelfTestPasses() throws Exception {
+        prepare("class Sample {}\n");
+        Result result = gate("--self-test");
+        assertThat(result.exit).as(result.output).isZero();
+        assertThat(result.output).doesNotContain("FAIL:");
+    }
+
+    @Test
+    void unicodeContractIsPinnedInBothDirections() throws Exception {
+        prepare("// ひらがなカタカナ・㈱\n");
+        assertThat(gate().exit).isZero();
+        for (String planted : Arrays.asList("一", "㐀", "𠀀", "豈", "、", "：", "ｶ", "ﾠ")) {
+            write(SAMPLE, "// " + planted + "\n");
+            Result result = gate();
+            assertThat(result.exit).as(planted + ": " + result.output).isEqualTo(1);
+            assertThat(result.output).contains(SAMPLE + ":1:// " + planted);
+        }
+    }
+
+    @Test
+    void allowlistMatchesOriginalLineButNotWholeFile() throws Exception {
+        prepare("int i = 0; /* 中文 */ // allowed-marker\n// 中文不豁免\n");
+        write(".github/cjk-allowlist.txt", SAMPLE + ":allowed-marker$\n");
+        Result result = gate();
+        assertThat(result.exit).as(result.output).isEqualTo(1);
+        assertThat(result.output).doesNotContain(SAMPLE + ":1:")
+                .contains(SAMPLE + ":2:// 中文不豁免");
+    }
+
+    @Test
+    void invalidAllowlistRegexFailsClosedEvenInReportOnlyMode() throws Exception {
+        prepare("// 中文\n");
+        write(".github/cjk-allowlist.txt", SAMPLE + ":[\n");
+        Result result = gate("--report-only");
+        assertThat(result.exit).as(result.output).isEqualTo(2);
+        assertThat(result.output).contains("ERROR:", "allowlist");
+    }
+
+    @Test
+    void invalidContractRegexFailsBeforeScanning() throws Exception {
+        prepare("class Sample {}\n");
+        Path script = temp.resolve(SCRIPT);
+        String source = new String(Files.readAllBytes(script), StandardCharsets.UTF_8);
+        write(SCRIPT, source.replace("CJK_RANGE='[\\p{sc:Han}\\x{3000}-\\x{303f}\\x{ff00}-\\x{ffef}]'", "CJK_RANGE='['"));
+        Result result = gate("--report-only");
+        assertThat(result.exit).as(result.output).isEqualTo(2);
+        assertThat(result.output).contains("ERROR:", "contract pattern");
+    }
+
+    @Test
+    void unreadableTrackedJavaDoesNotBecomeEmptySuccess() throws Exception {
+        prepare("class Sample {}\n");
+        Files.delete(temp.resolve(SAMPLE));
+        Result result = gate("--report-only");
+        assertThat(result.exit).as(result.output).isEqualTo(2);
+        assertThat(result.output).contains("ERROR:", "Java comment helper failed", SAMPLE);
+    }
+
+    @Test
+    void helperFailureDoesNotBecomeEmptySuccess() throws Exception {
+        prepare("// 中文\n");
+        Path script = temp.resolve(SCRIPT);
+        String source = new String(Files.readAllBytes(script), StandardCharsets.UTF_8);
+        assertThat(source).contains("use strict;");
+        write(SCRIPT, source.replace("use strict;", "die qq(injected helper failure\\n);\nuse strict;"));
+        Result result = gate("--report-only");
+        assertThat(result.exit).as(result.output).isEqualTo(2);
+        assertThat(result.output).contains("injected helper failure", "Java comment helper failed");
+    }
+
+    @Test
+    void yamlStillChecksWholeLinesIncludingQuotedText() throws Exception {
+        prepare("class Sample {}\n");
+        String workflow = ".github/workflows/fixture.yml";
+        write(workflow, "name: '中文'\n");
+        assertThat(command("git", "add", "--", workflow).exit).isZero();
+        Result result = gate();
+        assertThat(result.exit).as(result.output).isEqualTo(1);
+        assertThat(result.output).contains(workflow + ":1:name: '中文'");
+    }
+
+    @Test
+    void structuralExclusionsAndUntrackedFilesRemainExcluded() throws Exception {
+        prepare("class Sample {}\n");
+        write("src/main/resources/lang/en.json", "{\"key\":\"中文\"}\n");
+        write("src/main/resources/lang/zh.json", "{\"key\":\"中文\"}\n");
+        assertThat(command("git", "add", "--", "src/main/resources/lang").exit).isZero();
+        write("src/main/java/Untracked.java", "// 中文\n");
+        Result result = gate("--scope", "src/main", "--scope", ".github/scripts/testdata");
+        assertThat(result.exit).as(result.output).isZero();
+        assertThat(result.output).contains("SUMMARY: 0 CJK violation(s)");
+    }
+
+    @Test
+    void zeroScopeIsExplicitAndThresholdConventionsRemain() throws Exception {
+        prepare("// 中文\n");
+        Result empty = gate("--scope", "missing-scope");
+        assertThat(empty.exit).as(empty.output).isZero();
+        assertThat(empty.output).contains("matched zero tracked files", "SUMMARY: 0");
+        assertThat(gate().exit).isEqualTo(1);
+        assertThat(gate("--max-violations", "1").exit).isZero();
+        assertThat(gate("--report-only").exit).isZero();
+        assertThat(gate("--unknown").exit).isEqualTo(64);
+    }
+
     private String fixtureLine(String marker) throws IOException {
         return Files.readAllLines(FIXTURE, StandardCharsets.UTF_8).stream()
                 .filter(line -> line.contains(marker)).findFirst()
