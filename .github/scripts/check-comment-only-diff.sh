@@ -158,7 +158,8 @@ fi
 # probe is not absence: a successful tree listing must certify the missing side.
 blob_exists() {
     local ref="$1" path="$2"
-    checked_capture "$EVIDENCE_DIR/existence" "existence tree $ref:$path"         git ls-tree -r --name-only "$ref" -- "$path"
+    checked_capture "$EVIDENCE_DIR/existence" "existence tree $ref:$path" \
+        git ls-tree -r --name-only "$ref" -- "$path"
     read_capture "$EVIDENCE_DIR/existence"
     [ "$REPLY" = "$path" ] && return 0
     [ -z "$REPLY" ] && return 1
@@ -182,7 +183,7 @@ is_comment_shaped() {
 # ---------------------------------------------------------------------------
 # Assertion A support: per-file block-comment-open state cache.
 #
-# get_state_cache_file REF PATH prints the path to a temp file with one line per source line,
+# get_state_cache_file REF PATH sets REPLY to a temp file with one line per source line,
 # each holding 0 or 1 for whether a block comment is already open ENTERING that line (i.e. before
 # that line's own content is scanned). Built once per (ref, path) pair and memoized.
 # ---------------------------------------------------------------------------
@@ -335,7 +336,8 @@ run_assertion_a() {
     local diff_out cur_old_path="" cur_new_path="" old_line=0 new_line=0
     local hunk_info old_spec new_spec content
 
-    checked_capture "$EVIDENCE_DIR/a-diff" "assertion A unified diff $BASE_REF..$HEAD_REF"         git diff --no-color --unified=0 "${BASE_REF}..${HEAD_REF}" -- "${SCOPES[@]}"
+    checked_capture "$EVIDENCE_DIR/a-diff" "assertion A unified diff $BASE_REF..$HEAD_REF" \
+        git diff --no-color --unified=0 "${BASE_REF}..${HEAD_REF}" -- "${SCOPES[@]}"
     read_capture "$EVIDENCE_DIR/a-diff"
     diff_out="$REPLY"
 
@@ -437,7 +439,8 @@ ASSERTION_B_VIOLATIONS=()
 
 extract_i18n_literals() {
     local ref="$1" path tree status
-    checked_capture "$EVIDENCE_DIR/literal-tree" "literal tree $ref"         git ls-tree -r --name-only "$ref" -- "${SCOPES[@]}"
+    checked_capture "$EVIDENCE_DIR/literal-tree" "literal tree $ref" \
+        git ls-tree -r --name-only "$ref" -- "${SCOPES[@]}"
     read_capture "$EVIDENCE_DIR/literal-tree"
     tree="$REPLY"
     while IFS= read -r path; do
@@ -478,16 +481,17 @@ ASSERTION_C_NOTES=()
 
 is_crlf() {
     # Read the complete blob before matching: no early grep/SIGPIPE or masked Git error.
-    local status=0
+    local status=0 count
     checked_capture "$EVIDENCE_DIR/crlf-blob" "CRLF blob $1:$2" git show "$1:$2"
-    grep -ca $'\r' "$EVIDENCE_DIR/crlf-blob" > "$EVIDENCE_DIR/crlf-count" || status=$?
+    count="$(grep -ca $'\r' "$EVIDENCE_DIR/crlf-blob")" || status=$?
     [ "$status" -le 1 ] || evidence_error "CRLF matcher $1:$2 (exit $status)"
     return "$status"
 }
 
 run_assertion_c() {
     local changed_files path base_crlf head_crlf base_desc head_desc status
-    checked_capture "$EVIDENCE_DIR/c-diff" "assertion C name-only diff $BASE_REF..$HEAD_REF"         git diff --name-only "${BASE_REF}..${HEAD_REF}" -- "${SCOPES[@]}"
+    checked_capture "$EVIDENCE_DIR/c-diff" "assertion C name-only diff $BASE_REF..$HEAD_REF" \
+        git diff --name-only "${BASE_REF}..${HEAD_REF}" -- "${SCOPES[@]}"
     read_capture "$EVIDENCE_DIR/c-diff"
     changed_files="$REPLY"
     while IFS= read -r path; do
@@ -536,8 +540,8 @@ run_assertion_c() {
 # self_test_fixture_content FD — writes >64 KiB of comment-shaped CRLF text to the given fd.
 self_test_fixture_content() {
     local i
-    for i in $(seq 1 3000); do
-        printf '// self-test fixture line %04d padding padding padding padding\r\n' "$i"
+    for ((i = 1; i <= 3000; i++)); do
+        printf '// self-test fixture line %04d padding padding padding padding\r\n' "$i" || return 2
     done
 }
 
@@ -548,28 +552,28 @@ run_self_test() {
     local blob_crlf blob_lf tree_crlf tree_lf
     local commit_base commit_head_unchanged commit_head_converted
 
-    crlf_file="$(mktemp)"
-    lf_file="$(mktemp)"
-    self_test_fixture_content > "$crlf_file"
-    tr -d '\r' < "$crlf_file" > "$lf_file"
+    crlf_file="$(mktemp "$EVIDENCE_DIR/self-test.XXXXXX")" || evidence_error "self-test mktemp (crlf_file)"
+    lf_file="$(mktemp "$EVIDENCE_DIR/self-test.XXXXXX")" || evidence_error "self-test mktemp (lf_file)"
+    self_test_fixture_content > "$crlf_file" || evidence_error "self-test fixture content"
+    tr -d '\r' < "$crlf_file" > "$lf_file" || evidence_error "self-test fixture content"
 
-    size=$(wc -c < "$crlf_file")
+    size=$(wc -c < "$crlf_file") || evidence_error "self-test wc (size)"
     if [ "$size" -le 65536 ]; then
         echo "FAIL: self-test setup — fixture is only ${size} bytes, must exceed the 64 KiB pipe buffer."
         rm -f "$crlf_file" "$lf_file"
         return 1
     fi
 
-    blob_crlf="$(git hash-object -w "$crlf_file")"
-    blob_lf="$(git hash-object -w "$lf_file")"
+    blob_crlf="$(git hash-object -w "$crlf_file")" || evidence_error "self-test hash-object (blob_crlf)"
+    blob_lf="$(git hash-object -w "$lf_file")" || evidence_error "self-test hash-object (blob_lf)"
     rm -f "$crlf_file" "$lf_file"
 
-    tree_crlf="$(printf '100644 blob %s\t%s\n' "$blob_crlf" "$fixture_path" | git mktree)"
-    tree_lf="$(printf '100644 blob %s\t%s\n' "$blob_lf" "$fixture_path" | git mktree)"
+    tree_crlf="$(printf '100644 blob %s\t%s\n' "$blob_crlf" "$fixture_path" | git mktree)" || evidence_error "self-test mktree (tree_crlf)"
+    tree_lf="$(printf '100644 blob %s\t%s\n' "$blob_lf" "$fixture_path" | git mktree)" || evidence_error "self-test mktree (tree_lf)"
 
-    commit_base="$(git commit-tree "$tree_crlf" -m 'check-comment-only-diff.sh self-test: base (CRLF)')"
-    commit_head_unchanged="$(git commit-tree "$tree_crlf" -m 'check-comment-only-diff.sh self-test: head, unchanged (CRLF)')"
-    commit_head_converted="$(git commit-tree "$tree_lf" -m 'check-comment-only-diff.sh self-test: head, converted (LF)')"
+    commit_base="$(git commit-tree "$tree_crlf" -m 'check-comment-only-diff.sh self-test: base (CRLF)')" || evidence_error "self-test commit-tree (commit_base)"
+    commit_head_unchanged="$(git commit-tree "$tree_crlf" -m 'check-comment-only-diff.sh self-test: head, unchanged (CRLF)')" || evidence_error "self-test commit-tree (commit_head_unchanged)"
+    commit_head_converted="$(git commit-tree "$tree_lf" -m 'check-comment-only-diff.sh self-test: head, converted (LF)')" || evidence_error "self-test commit-tree (commit_head_converted)"
 
     # Assertion 1: a large genuinely-CRLF blob is reported as CRLF, not LF — the direction the
     # SIGPIPE race used to get wrong.
@@ -625,26 +629,26 @@ run_self_test() {
     local a_tree_base a_tree_comment_only a_tree_code_change
     local a_commit_base a_commit_comment_only a_commit_code_change
 
-    a_base_f="$(mktemp)"
-    a_comment_only_f="$(mktemp)"
-    a_code_change_f="$(mktemp)"
+    a_base_f="$(mktemp "$EVIDENCE_DIR/self-test.XXXXXX")" || evidence_error "self-test mktemp (a_base_f)"
+    a_comment_only_f="$(mktemp "$EVIDENCE_DIR/self-test.XXXXXX")" || evidence_error "self-test mktemp (a_comment_only_f)"
+    a_code_change_f="$(mktemp "$EVIDENCE_DIR/self-test.XXXXXX")" || evidence_error "self-test mktemp (a_code_change_f)"
 
-    printf '        return 5; // old comment\n        int x = 5; // unrelated marker\n' > "$a_base_f"
-    printf '        return 5; // new comment\n        int x = 5; // unrelated marker\n' > "$a_comment_only_f"
-    printf '        return 6; // old comment\n        int x = 5; // unrelated marker\n' > "$a_code_change_f"
+    printf '        return 5; // old comment\n        int x = 5; // unrelated marker\n' > "$a_base_f" || evidence_error "self-test fixture content"
+    printf '        return 5; // new comment\n        int x = 5; // unrelated marker\n' > "$a_comment_only_f" || evidence_error "self-test fixture content"
+    printf '        return 6; // old comment\n        int x = 5; // unrelated marker\n' > "$a_code_change_f" || evidence_error "self-test fixture content"
 
-    a_blob_base="$(git hash-object -w "$a_base_f")"
-    a_blob_comment_only="$(git hash-object -w "$a_comment_only_f")"
-    a_blob_code_change="$(git hash-object -w "$a_code_change_f")"
+    a_blob_base="$(git hash-object -w "$a_base_f")" || evidence_error "self-test hash-object (a_blob_base)"
+    a_blob_comment_only="$(git hash-object -w "$a_comment_only_f")" || evidence_error "self-test hash-object (a_blob_comment_only)"
+    a_blob_code_change="$(git hash-object -w "$a_code_change_f")" || evidence_error "self-test hash-object (a_blob_code_change)"
     rm -f "$a_base_f" "$a_comment_only_f" "$a_code_change_f"
 
-    a_tree_base="$(printf '100644 blob %s\t%s\n' "$a_blob_base" "$a_fixture_path" | git mktree)"
-    a_tree_comment_only="$(printf '100644 blob %s\t%s\n' "$a_blob_comment_only" "$a_fixture_path" | git mktree)"
-    a_tree_code_change="$(printf '100644 blob %s\t%s\n' "$a_blob_code_change" "$a_fixture_path" | git mktree)"
+    a_tree_base="$(printf '100644 blob %s\t%s\n' "$a_blob_base" "$a_fixture_path" | git mktree)" || evidence_error "self-test mktree (a_tree_base)"
+    a_tree_comment_only="$(printf '100644 blob %s\t%s\n' "$a_blob_comment_only" "$a_fixture_path" | git mktree)" || evidence_error "self-test mktree (a_tree_comment_only)"
+    a_tree_code_change="$(printf '100644 blob %s\t%s\n' "$a_blob_code_change" "$a_fixture_path" | git mktree)" || evidence_error "self-test mktree (a_tree_code_change)"
 
-    a_commit_base="$(git commit-tree "$a_tree_base" -m 'check-comment-only-diff.sh self-test: assertion A base')"
-    a_commit_comment_only="$(git commit-tree "$a_tree_comment_only" -m 'check-comment-only-diff.sh self-test: assertion A comment-only edit')"
-    a_commit_code_change="$(git commit-tree "$a_tree_code_change" -m 'check-comment-only-diff.sh self-test: assertion A code-change edit')"
+    a_commit_base="$(git commit-tree "$a_tree_base" -m 'check-comment-only-diff.sh self-test: assertion A base')" || evidence_error "self-test commit-tree (a_commit_base)"
+    a_commit_comment_only="$(git commit-tree "$a_tree_comment_only" -m 'check-comment-only-diff.sh self-test: assertion A comment-only edit')" || evidence_error "self-test commit-tree (a_commit_comment_only)"
+    a_commit_code_change="$(git commit-tree "$a_tree_code_change" -m 'check-comment-only-diff.sh self-test: assertion A code-change edit')" || evidence_error "self-test commit-tree (a_commit_code_change)"
 
     # Assertion 4: a same-line trailing-comment-only edit is rescued (no violation reported).
     ASSERTION_A_VIOLATIONS=()

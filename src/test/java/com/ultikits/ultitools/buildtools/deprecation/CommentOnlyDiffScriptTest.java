@@ -49,6 +49,28 @@ class CommentOnlyDiffScriptTest {
         assertInability(result, "diff");
     }
 
+    @Test void resolvedEndpointsStayImmutableWhenNamedRefsMove() throws Exception {
+        Fixture f = fixture("// before\n", "// after\n");
+        f.git("branch", "moving-base", f.base);
+        f.git("branch", "moving-head", f.head);
+        f.write("Changed.java", "int changedCode = 99;\n");
+        String code = f.commit();
+        Files.createDirectories(f.bin);
+        String wrapper = "#!/usr/bin/env bash\nset -eu\n"
+                + "if [[ ${1:-} == diff && ! -f '" + f.bin.resolve("hit") + "' ]]; then\n"
+                + " /usr/bin/git update-ref refs/heads/moving-head '" + code + "'\n"
+                + " printf '%s\\n' moved >> '" + f.bin.resolve("hit") + "'\nfi\n"
+                + "exec /usr/bin/git \"$@\"\n";
+        Path executable = f.bin.resolve("git");
+        Files.write(executable, wrapper.getBytes(StandardCharsets.UTF_8));
+        assertThat(executable.toFile().setExecutable(true)).isTrue();
+        Result result = f.check("moving-base", "moving-head");
+        f.assertHit();
+        assertThat(f.git("rev-parse", "moving-head")).isEqualTo(code);
+        assertThat(result.exit).as(result.output).isZero();
+        assertThat(result.output).contains("SUMMARY: assertion A PASS, assertion B PASS, assertion C PASS.");
+    }
+
     @Test void finiteGitEvidenceReadFailuresAreReached() throws Exception {
         // Mixed lines reach A's cache before B's full-tree extraction and C's full-blob check.
         String before = "class Changed { int n = 1; // before\n}\n";
@@ -103,6 +125,10 @@ class CommentOnlyDiffScriptTest {
             {"cat", "--", "literal-tree", "2", "read capture"},
             {"cat", "--", "literal-diff", "1", "read capture"},
             {"cat", "--", "c-diff", "1", "read capture"},
+            {"cat", "--", "existence", "1", "read capture"},
+            {"cat", "--", "existence", "2", "read capture"},
+            {"cat", "--", "existence", "3", "read capture"},
+            {"cat", "--", "existence", "4", "read capture"},
             {"sed", "-n", "state.", "1", "read state cache"},
             {"sed", "-n", "state.", "2", "read state cache"},
             {"grep", "-oP", "literal-blob", "1", "literal matcher"},
@@ -122,6 +148,19 @@ class CommentOnlyDiffScriptTest {
             Result result = f.check(f.base, f.head);
             f.assertHit();
             assertInability(result, c[4]);
+        }
+    }
+
+    @Test void evidenceCaptureWriteFailuresCannotBecomeEmptyInputs() throws Exception {
+        for (String capture : Arrays.asList("main-diff", "a-diff", "existence", "state-blob",
+                "literal-tree", "literal-blob", "base-literals", "head-literals", "base-list",
+                "head-list", "literal-diff", "c-diff", "crlf-blob")) {
+            Fixture f = fixture("int n = 1; // before\n", "int n = 1; // after\n");
+            assertThat(f.check(f.base, f.head).exit).isZero();
+            f.blockCapture(capture);
+            Result result = f.check(f.base, f.head);
+            f.assertHit();
+            assertInability(result, "evidence");
         }
     }
 
@@ -290,6 +329,16 @@ class CommentOnlyDiffScriptTest {
                     + "'; printf 'injected evidence read failure\\n' >&2; exit 73; fi\nfi\n"
                     + "exec /usr/bin/" + tool + " \"$@\"\n";
             Path executable = bin.resolve(tool);
+            Files.write(executable, wrapper.getBytes(StandardCharsets.UTF_8));
+            assertThat(executable.toFile().setExecutable(true)).isTrue();
+        }
+        void blockCapture(String name) throws IOException {
+            Files.createDirectories(bin);
+            String wrapper = "#!/usr/bin/env bash\nset -eu\n"
+                    + "dir=$(/usr/bin/mktemp \"$@\")\n"
+                    + "if [[ ${1:-} == -d ]]; then mkdir \"$dir/" + name + "\"; printf '%s\\n' 'blocked capture "
+                    + name + "' >> '" + bin.resolve("hit") + "'; fi\nprintf '%s\\n' \"$dir\"\n";
+            Path executable = bin.resolve("mktemp");
             Files.write(executable, wrapper.getBytes(StandardCharsets.UTF_8));
             assertThat(executable.toFile().setExecutable(true)).isTrue();
         }
