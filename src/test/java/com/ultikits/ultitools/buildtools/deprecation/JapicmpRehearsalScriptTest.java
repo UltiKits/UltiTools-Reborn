@@ -127,6 +127,7 @@ class JapicmpRehearsalScriptTest {
         Fixture f = new Fixture(temp);
         f.mode = "restore-final";
         f.installFaultWrappers();
+        Map<String, String> before = f.manifest();
         byte[] original = Files.readAllBytes(f.root.resolve("compatibility/deprecations.json"));
         byte[] index = Files.readAllBytes(f.root.resolve(".git/index"));
         Result result = f.run();
@@ -144,22 +145,29 @@ class JapicmpRehearsalScriptTest {
         assertThat(Files.readAllBytes(backup.resolve("original-2"))).isEqualTo(original);
         assertThat(backup.resolve("manifest.tsv")).isNotEmptyFile();
         assertThat(Files.readAllBytes(f.root.resolve(".git/index"))).isEqualTo(index);
+        Map<String, String> otherOriginals = new TreeMap<>(before);
+        otherOriginals.remove("repo/compatibility/deprecations.json");
+        assertThat(f.manifest()).as("all other paths still restore when one copy fails").isEqualTo(otherOriginals);
         // The wrapper fails an actual copy, not an assumed chmod effect; originals remain usable.
-        Files.copy(backup.resolve("original-2"), f.root.resolve("compatibility/deprecations.json"));
+        Files.copy(backup.resolve("original-2"), f.root.resolve("compatibility/deprecations.json"),
+                java.nio.file.StandardCopyOption.COPY_ATTRIBUTES);
         assertThat(Files.readAllBytes(f.root.resolve("compatibility/deprecations.json"))).isEqualTo(original);
+        assertThat(f.manifest()).as("reported originals recover the complete original state").isEqualTo(before);
     }
 
     @Test
     void handledSignalsStopAndRestore(@TempDir Path temp) throws Exception {
         for (String signal : Arrays.asList("INT", "TERM")) {
-            Fixture f = new Fixture(Files.createDirectories(temp.resolve(signal)));
-            f.mode = "signal-" + signal;
-            Map<String, String> before = f.manifest();
-            Result result = f.run();
-            assertThat(f.read("stage")).isEqualTo("install");
-            assertThat(result.exit).as(result.output).isEqualTo(signal.equals("INT") ? 130 : 143);
-            assertThat(f.manifest()).as(signal).isEqualTo(before);
-            assertThat(f.read("calls").split("\n")).hasSize(1);
+            for (String stage : Arrays.asList("install", "green", "red")) {
+                Fixture f = new Fixture(Files.createDirectories(temp.resolve(signal + "-" + stage)));
+                f.mode = "signal-" + signal + "-" + stage;
+                Map<String, String> before = f.manifest();
+                Result result = f.run();
+                assertThat(f.read("stage")).isEqualTo(stage);
+                assertThat(result.exit).as(result.output).isEqualTo(signal.equals("INT") ? 130 : 143);
+                assertThat(f.manifest()).as(signal + " at " + stage).isEqualTo(before);
+                assertThat(f.read("calls").split("\n")).hasSize(stage.equals("install") ? 1 : stage.equals("green") ? 2 : 3);
+            }
         }
     }
 
@@ -283,7 +291,7 @@ class JapicmpRehearsalScriptTest {
                     + "printf 'generated' > .flattened-pom.xml\n"
                     + "if [[ \" $* \" == *' install '* ]]; then\n"
                     + "printf install > stage\n"
-                    + "case \"$REHEARSAL_TEST_MODE\" in install-fail) exit 21;; signal-*) kill -s \"${REHEARSAL_TEST_MODE#signal-}\" \"$PPID\";; esac\n"
+                    + "case \"$REHEARSAL_TEST_MODE\" in install-fail) exit 21;; signal-*-install) signal=${REHEARSAL_TEST_MODE#signal-}; kill -s \"${signal%-install}\" \"$PPID\";; esac\n"
                     + "exit 0; fi\n"
                     + "printf green > stage\n"
                     + "if /usr/bin/grep -q 'public final class' " + SOURCE + "; then\n"
@@ -294,6 +302,7 @@ class JapicmpRehearsalScriptTest {
                     + "red-infrastructure) echo '[ERROR] dependency resolution failed for UltiPanelLogTransmitter'; exit 1;;\n"
                     + "esac\n"
                     + "elif [[ \"$REHEARSAL_TEST_MODE\" == green-fail ]]; then exit 22; fi\n"
+                    + "stage=$(<stage); case \"$REHEARSAL_TEST_MODE\" in signal-*-$stage) signal=${REHEARSAL_TEST_MODE#signal-}; signal=${signal%-$stage}; kill -s \"$signal\" \"$PPID\"; exit 0;; esac\n"
                     + "echo '[INFO] --- maven-compiler-plugin:3.11.0:compile (default-compile) @ UltiTools-API ---'\n"
                     + "echo '[INFO] Compiling 1 source file with javac [debug target 8] to target/classes'\n"
                     + "echo '[INFO] --- japicmp-maven-plugin:0.26.1:cmp (default) @ UltiTools-API ---'\n"

@@ -44,8 +44,8 @@ usage() {
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --candidate-version) CANDIDATE_VERSION="${2:-}"; shift 2 ;;
-        --break-target)      BREAK_TARGET="${2:-}"; shift 2 ;;
+        --candidate-version) [ $# -ge 2 ] || { echo "::error::--candidate-version needs a value" >&2; exit 64; }; CANDIDATE_VERSION="$2"; shift 2 ;;
+        --break-target)      [ $# -ge 2 ] || { echo "::error::--break-target needs a value" >&2; exit 64; }; BREAK_TARGET="$2"; shift 2 ;;
         --keep-artifacts)    KEEP_ARTIFACTS=1; shift ;;
         --dry-run)            DRY_RUN=1; shift ;;
         -h|--help)            usage; exit 0 ;;
@@ -72,6 +72,7 @@ cd "$REPO_ROOT"
 
 command -v mvn  >/dev/null 2>&1 || die_usage "mvn not found on PATH."
 command -v perl >/dev/null 2>&1 || die_usage "perl not found on PATH."
+command -v python3 >/dev/null 2>&1 || die_usage "python3 not found on PATH."
 [ -f pom.xml ] || die_usage "pom.xml not found at the repository root (${REPO_ROOT})."
 
 BREAK_TARGET_FILE="src/main/java/$(echo "$BREAK_TARGET" | tr '.' '/').java"
@@ -82,7 +83,10 @@ BREAK_TARGET_SIMPLE_NAME="${BREAK_TARGET##*.}"
 # A subclass in-tree would stop `final` from compiling, failing the RED leg for the wrong
 # reason (a compile error, not a japicmp finding) -- verified for the default target at
 # authoring time (08-01-PLAN.md flagged assumption A4); re-checked here for any override too.
-if grep -rlE "extends[[:space:]]+${BREAK_TARGET_SIMPLE_NAME}\\b" src/main src/test >/dev/null 2>&1; then
+SUBCLASS_STATUS=0
+grep -rlE "extends[[:space:]]+${BREAK_TARGET_SIMPLE_NAME}\\b" src/main src/test >/dev/null || SUBCLASS_STATUS=$?
+[ "$SUBCLASS_STATUS" -le 1 ] || die_usage "Cannot check the break target for in-tree subclasses."
+if [ "$SUBCLASS_STATUS" = 0 ]; then
     die_usage "--break-target ${BREAK_TARGET} has an in-tree subclass; making it final would not compile. Pick a different class."
 fi
 
@@ -124,6 +128,7 @@ LOCAL_FAMILY="${LOCAL_REPOSITORY}/com/ultikits/UltiTools-API"
 # - run-owned: this unique snapshot/log directory;
 # - disposable: target (Maven clean); no other maintained paths are owned by the rehearsal.
 # Serialize Maven users of this coordinate family for the duration of the rehearsal.
+INDEX_PATH=$(git rev-parse --git-path index) || die_fail "Cannot locate index."
 SNAPSHOT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/japicmp-rehearsal.XXXXXX") \
     || die_fail "Cannot allocate original snapshots; no mutation performed."
 CLEANUP_DONE=0
@@ -135,7 +140,6 @@ MISSING_PARENTS=()
 for path in "$LOCAL_REPOSITORY/com" "$LOCAL_REPOSITORY/com/ultikits" compatibility; do
     [ -e "$path" ] || MISSING_PARENTS+=("$path")
 done
-INDEX_PATH=$(git rev-parse --git-path index) || die_fail "Cannot locate index."
 GREEN_LOG="$SNAPSHOT_DIR/green.log"
 RED_LOG="$SNAPSHOT_DIR/red.log"
 
@@ -166,12 +170,11 @@ cleanup() {
             restore_original "$n" || failed=1
         done
         # Remove only empty ancestors that did not exist before this run, innermost first.
-        if [ "$KEEP_ARTIFACTS" != 1 ]; then
-            for ((n=${#MISSING_PARENTS[@]}-1; n>=0; n--)); do
-                path=${MISSING_PARENTS[$n]}
-                if [ -d "$path" ]; then rmdir -- "$path" || failed=1; fi
-            done
-        fi
+        for ((n=${#MISSING_PARENTS[@]}-1; n>=0; n--)); do
+            path=${MISSING_PARENTS[$n]}
+            if [ "$KEEP_ARTIFACTS" = 1 ] && [ "$path" != compatibility ]; then continue; fi
+            if [ -d "$path" ]; then rmdir -- "$path" || failed=1; fi
+        done
     fi
     if [ "$SNAPSHOT_READY" = 1 ]; then
         cmp -s -- "$SNAPSHOT_DIR/index" "$INDEX_PATH" || failed=1
@@ -297,9 +300,35 @@ if [ "$RED_EXIT" -eq 0 ]; then
     die_fail "RED leg unexpectedly succeeded (exit 0) -- the injected break in ${BREAK_TARGET} did not turn the build red. The gate is not proving what ROADMAP criterion 1 claims."
 fi
 
-if ! grep -q "$BREAK_TARGET_SIMPLE_NAME" "$RED_LOG"; then
-    die_fail "RED leg failed (exit ${RED_EXIT}) but the failure output does not name ${BREAK_TARGET_SIMPLE_NAME} -- cannot confirm the break was correctly attributed."
-fi
+# A compiler/dependency failure naming the target is NOT a binary-compatibility RED.
+# clean verify must reach japicmp after compiling product sources. Parse the fresh class record,
+# not a substring anywhere in the log (nor a member change under a different class).
+cp -a -- target/japicmp/japicmp.xml "$SNAPSHOT_DIR/japicmp.xml" \
+    || die_fail "RED leg has no readable japicmp XML; compatibility break not proven."
+python3 -I - "$RED_LOG" "$SNAPSHOT_DIR/japicmp.xml" "$BREAK_TARGET" <<'PY' \
+    || die_fail "RED leg failed but the exact compiled japicmp break was not proven."
+from pathlib import Path
+import re
+import sys
+import xml.etree.ElementTree as ET
+
+log = re.sub(r'\x1b\[[0-9;]*m', '', Path(sys.argv[1]).read_text())
+compile_goal = re.search(r'--- maven-compiler-plugin:[^\s:]+:compile \(default-compile\)', log)
+compiled = re.search(r'Compiling [1-9][0-9]* source files? with javac', log)
+comparison = re.search(r'--- japicmp-maven-plugin:[^\s:]+:cmp ', log)
+failure = re.search(r'Failed to execute goal [^\s]*japicmp-maven-plugin:[^\s:]+:cmp', log)
+if not (compile_goal and compiled and comparison and failure
+        and compile_goal.start() < compiled.start() < comparison.start() < failure.start()
+        and 'COMPILATION ERROR' not in log):
+    raise SystemExit('RED attribution refused: successful compilation followed by japicmp failure is required')
+report = ET.parse(sys.argv[2]).getroot()
+classes = [c for c in report.findall('./classes/class') if c.get('fullyQualifiedName') == sys.argv[3]]
+if (report.tag != 'japicmp' or len(classes) != 1 or classes[0].get('binaryCompatible') != 'false'
+        or not any(c.get('type') == 'CLASS_NOW_NOT_EXTENDABLE' and c.get('binaryCompatible') == 'false'
+                   for c in classes[0].findall('./compatibilityChanges/compatibilityChange'))):
+    raise SystemExit('RED attribution refused: exact binary-incompatible CLASS_NOW_NOT_EXTENDABLE required')
+print('Attributed RED: ' + sys.argv[3] + ' CLASS_NOW_NOT_EXTENDABLE (binaryCompatible=false; compilation completed)')
+PY
 
 notice "Rehearsal proved the pair: GREEN leg exit ${GREEN_EXIT}, RED leg exit ${RED_EXIT} naming ${BREAK_TARGET}."
 echo
