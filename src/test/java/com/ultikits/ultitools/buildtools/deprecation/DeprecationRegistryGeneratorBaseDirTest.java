@@ -243,6 +243,18 @@ class DeprecationRegistryGeneratorBaseDirTest {
                         + "]\n").getBytes(StandardCharsets.UTF_8));
     }
 
+    @Test
+    void lifecycleHarnessControlsRejectWrongArtifactsAndCwd(@TempDir Path output) throws Exception {
+        Path log = output.resolve("harness.log");
+        Process process = new ProcessBuilder("bash", ".github/scripts/test-buildtool-lifecycle.sh", "--self-test")
+                .redirectErrorStream(true).redirectOutput(log.toFile()).start();
+        assertThat(process.waitFor(20, TimeUnit.SECONDS)).as("bounded harness controls").isTrue();
+        assertThat(process.exitValue()).as(new String(Files.readAllBytes(log), StandardCharsets.UTF_8))
+                .isZero();
+        assertThat(new String(Files.readAllBytes(log), StandardCharsets.UTF_8))
+                .contains("SELF-TEST PASSED", "positive controls", "negative controls");
+    }
+
     private static String projectVersion(Document doc) {
         NodeList children = doc.getDocumentElement().getChildNodes();
         for (int i = 0; i < children.getLength(); i++) {
