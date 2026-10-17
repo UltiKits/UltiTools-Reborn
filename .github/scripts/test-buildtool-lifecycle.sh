@@ -29,6 +29,8 @@ import java.io.BufferedWriter;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
@@ -44,6 +46,8 @@ import org.codehaus.plexus.util.xml.Xpp3Dom;
 /** Invocation-local observer, never compiled into the product or test classpath. */
 public final class LifecycleObserver implements EventSpy {
     private BufferedWriter writer;
+    private Path finalPath;
+    private Path partialPath;
     private String token;
     private int sequence;
     private MavenSession outer;
@@ -60,7 +64,12 @@ public final class LifecycleObserver implements EventSpy {
             System.setProperty("p20.lifecycle.duplicate." + token, "true");
             throw new IllegalStateException("Duplicate lifecycle observer");
         }
-        writer = Files.newBufferedWriter(Paths.get(path), StandardCharsets.UTF_8,
+        finalPath = Paths.get(path).toAbsolutePath().normalize();
+        partialPath = finalPath.resolveSibling(finalPath.getFileName() + ".partial");
+        if (Files.exists(finalPath, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IllegalStateException("Lifecycle final file already exists");
+        }
+        writer = Files.newBufferedWriter(partialPath, StandardCharsets.UTF_8,
                 StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
         emit("ObserverStarted", new LinkedHashMap<String, String>());
     }
@@ -140,11 +149,16 @@ public final class LifecycleObserver implements EventSpy {
 
     public synchronized void close() throws Exception {
         if (writer != null) {
-            Map<String, String> data = new LinkedHashMap<String, String>();
-            data.put("complete", Boolean.toString(!failed && outer != null
-                    && !Boolean.getBoolean("p20.lifecycle.duplicate." + token)));
-            emit("ObserverClosed", data);
             writer.close();
+            if (failed || outer == null || Boolean.getBoolean("p20.lifecycle.duplicate." + token)) {
+                throw new IllegalStateException("Unhealthy lifecycle observer; partial retained");
+            }
+            // The final name is the publication signal, not an in-stream close claim.
+            // A same-directory native link atomically creates a name WITHOUT replacement;
+            // ATOMIC_MOVE can overwrite an existing target on supported JDK providers.
+            // Both names retain the same closed bytes. No fallible cleanup follows publish,
+            // and unsupported link creation fails closed without a weaker fallback.
+            Files.createLink(finalPath, partialPath);
         }
     }
 
@@ -265,6 +279,7 @@ def prepare_observer(folder):
                          '<implementation>lifecycle.observer.LifecycleObserver</implementation>'
                          '</component></components></component-set>')
     return {'token': uuid.uuid4().hex, 'events': str(folder / 'events.jsonl'),
+            'partial': str(folder / 'events.jsonl.partial'),
             'jar': str(jar), 'jarSha256': digest(jar), 'compileCommand': command}
 
 
@@ -273,17 +288,16 @@ def read_observation(observation, root):
     path = Path(observation['events'])
     require(path.is_file(), 'Missing native event file')
     events = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
-    require(len(events) >= 6, 'Incomplete native observation')
+    require(len(events) >= 5, 'Incomplete native observation')
     require(all(isinstance(event, dict) for event in events), 'Invalid native event')
     require([event.get('sequence') for event in events] == [str(i) for i in range(len(events))],
             'Missing or duplicate native event sequence')
     require(all(event.get('token') == observation['token'] for event in events), 'Wrong invocation token')
     require([event.get('type') for event in events].count('ObserverStarted') == 1
             and events[0]['type'] == 'ObserverStarted', 'Missing or duplicate observer start')
-    require([event.get('type') for event in events].count('ObserverClosed') == 1
-            and events[-1]['type'] == 'ObserverClosed' and events[-1].get('complete') == 'true',
-            'Incomplete or failed observer close')
-    body = events[1:-1]
+    # Only close-and-health-success can create the final name. Never inspect partials
+    # or trust a success line emitted before the final I/O operation.
+    body = events[1:]
     require(all(event.get('session') == 'outer' for event in body), 'Wrong native session')
     require(all(event.get('root') == str(root.resolve()) for event in body), 'Wrong native root')
     require(all(event.get('project') in ('', str(root.resolve())) for event in body), 'Wrong native project')
@@ -342,7 +356,7 @@ def check_lifecycle(log, mode, root, started=None, observation=None):
     expected_flags = ('true' if mode == 'skip-execution' else 'false',
                       'true' if mode == 'skip-compilation' else 'false')
     require(all((event.get('skipTests'), event.get('mavenTestSkip')) == expected_flags
-                for event in events[1:-1]), 'Wrong native test flags')
+                for event in events[1:]), 'Wrong native test flags')
     mojo_pair(events, ('org.apache.maven.plugins', 'maven-surefire-plugin', '3.2.5', 'test', 'default-test'))
     reports = list((root / 'target/surefire-reports').glob('TEST-*.xml'))
     if mode == 'skip-compilation':
@@ -563,10 +577,15 @@ def self_test():
         helper.parent.mkdir(parents=True)
         helper.write_bytes(b'compiled helper positive control')
         (product / 'compatibility').mkdir()
+        # Explicit virtual causal order: generator starts at T, outputs are written at
+        # T+1 ms. Fixture construction time and filesystem scheduling are irrelevant.
+        now = '1600000000000'
+        output_ns = (int(now) + 1) * 1000000
         for name in ('deprecations.json', 'DEPRECATIONS.md'):
-            (product / 'compatibility' / name).write_text('positive generated output')
+            output = product / 'compatibility' / name
+            output.write_text('positive generated output')
+            os.utime(output, ns=(output_ns, output_ns))
         observation = {'events': str(fixture / 'events.jsonl'), 'token': 'control-invocation'}
-        now = str(int(time.time() * 1000) - 1)
         common = {'session': 'outer', 'root': str(product), 'project': str(product),
                   'skipTests': 'false', 'mavenTestSkip': 'true', 'sessionErrors': 'false'}
         events = [{'type': 'ObserverStarted'}, dict(common, type='SessionStarted'),
@@ -582,10 +601,9 @@ def self_test():
             events.extend([dict(mojo, type='MojoStarted'), dict(mojo, type='MojoSucceeded')])
         for name in ('deprecations.json', 'DEPRECATIONS.md'):
             output = product / 'compatibility' / name
-            events[-1].update({name + '.path': str(output), name + '.mtime': str(int(output.stat().st_mtime * 1000)),
+            events[-1].update({name + '.path': str(output), name + '.mtime': str(output.stat().st_mtime_ns // 1000000),
                                name + '.sha256': digest(output)})
-        events += [dict(common, type='ProjectSucceeded'), dict(common, type='SessionEnded'),
-                   {'type': 'ObserverClosed', 'complete': 'true'}]
+        events += [dict(common, type='ProjectSucceeded'), dict(common, type='SessionEnded')]
 
         def save(rows):
             for i, row in enumerate(rows):
@@ -604,6 +622,12 @@ def self_test():
         check_lifecycle('', 'skip-compilation', product, observation=observation)
         positives += 2
         rejects('stdout cannot replace observer', lambda: check_lifecycle(noise, 'skip-compilation', product), 'Missing native')
+        final = Path(observation['events'])
+        partial = final.with_suffix('.partial')
+        final.rename(partial)
+        rejects('unpublished partial', lambda: check_lifecycle(noise, 'skip-compilation', product,
+                observation=observation), 'Missing native event file')
+        partial.rename(final)
 
         def mutation(name, change, reason):
             rows = copy.deepcopy(events)
@@ -620,9 +644,9 @@ def self_test():
         mutation('wrong project', lambda rows: rows[3].update(project=str(fixture / 'wrong')), 'Wrong native project')
         mutation('wrong session', lambda rows: rows[3].update(session='inner'), 'Wrong native session')
         mutation('wrong token', lambda rows: rows[3].update(token='old-invocation'), 'Wrong invocation token')
-        mutation('missing close', lambda rows: rows.pop(), 'observer close')
-        mutation('failed observer', lambda rows: rows[-1].update(complete='false'), 'observer close')
-        mutation('duplicate observer', lambda rows: rows.append(copy.deepcopy(rows[-1])), 'observer close')
+        mutation('missing session end', lambda rows: rows.pop(), 'Missing or duplicate SessionEnded')
+        mutation('failed observer session', lambda rows: rows[-1].update(sessionErrors='true'), 'Native session failed')
+        mutation('duplicate observer', lambda rows: rows.insert(1, dict(rows[0])), 'duplicate observer start')
         mutation('duplicate session', lambda rows: rows.insert(2, dict(rows[1])), 'duplicate SessionStarted')
         mutation('duplicate generator', lambda rows: rows.insert(11, dict(rows[10])), 'native mojo')
         mutation('failed generator', lambda rows: rows[10].update(type='MojoFailed'), 'failed or skipped')
@@ -649,7 +673,7 @@ def self_test():
         compiled_test.parent.mkdir(parents=True)
         compiled_test.write_bytes(b'test compiled helper')
         for mode in ('normal', 'skip-execution'):
-            for row in events[1:-1]:
+            for row in events[1:]:
                 row.update(skipTests='true' if mode == 'skip-execution' else 'false', mavenTestSkip='false')
             save(events)
             if mode == 'normal':
