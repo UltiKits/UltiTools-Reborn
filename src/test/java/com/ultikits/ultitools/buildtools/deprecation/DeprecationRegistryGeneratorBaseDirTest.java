@@ -159,6 +159,13 @@ class DeprecationRegistryGeneratorBaseDirTest {
         // own 55-entry ledger (which would prove baseDir was silently ignored in favour of cwd).
         String jsonContent = new String(Files.readAllBytes(writtenJson), StandardCharsets.UTF_8).trim();
         assertThat(jsonContent).isEqualTo("[]");
+        byte[] generatedJson = Files.readAllBytes(writtenJson);
+        byte[] generatedMarkdown = Files.readAllBytes(writtenMarkdown);
+        DeprecationRegistryGenerator.run(tempProjectRoot);
+        assertThat(Files.readAllBytes(writtenJson)).isEqualTo(generatedJson);
+        assertThat(Files.readAllBytes(writtenMarkdown)).isEqualTo(generatedMarkdown);
+        assertThat(Files.readAllBytes(realLedgerJson)).isEqualTo(realJsonBefore);
+        assertThat(Files.readAllBytes(realLedgerMarkdown)).isEqualTo(realMarkdownBefore);
     }
 
     @Test
@@ -166,6 +173,8 @@ class DeprecationRegistryGeneratorBaseDirTest {
             + "gone from source fails as REPORT_MISSING_OR_EMPTY, not as a raw LedgerMergeConflictException")
     void emptyReportWithVanishedAnnouncedEntryFailsAsReportMissingNotMergeConflict(
             @TempDir Path tempProjectRoot) throws IOException {
+        byte[] realJsonBefore = Files.readAllBytes(Paths.get("compatibility/deprecations.json"));
+        byte[] realMarkdownBefore = Files.readAllBytes(Paths.get("compatibility/DEPRECATIONS.md"));
         buildVanishedAnnouncedEntryFixture(tempProjectRoot);
         // No target/japicmp/japicmp.xml is written at all - readJapicmpReport falls back to
         // JapicmpReportReader.Report.empty(), reproducing the exact infrastructure state the
@@ -180,12 +189,16 @@ class DeprecationRegistryGeneratorBaseDirTest {
                 .isNotInstanceOf(LedgerMergeConflictException.class)
                 .hasMessageContaining("REPORT_MISSING_OR_EMPTY")
                 .hasMessageContaining("the japicmp report is missing or empty");
+        assertThat(Files.readAllBytes(Paths.get("compatibility/deprecations.json"))).isEqualTo(realJsonBefore);
+        assertThat(Files.readAllBytes(Paths.get("compatibility/DEPRECATIONS.md"))).isEqualTo(realMarkdownBefore);
     }
 
     @Test
     @DisplayName("Codex P2, PR #480 round 2: a zero-byte japicmp.xml (exists, but nothing to parse) "
             + "is treated the same as a missing one - REPORT_MISSING_OR_EMPTY, not a raw XML parse failure")
     void zeroByteReportIsTreatedAsEmptyNotAsAParseFailure(@TempDir Path tempProjectRoot) throws IOException {
+        byte[] realJsonBefore = Files.readAllBytes(Paths.get("compatibility/deprecations.json"));
+        byte[] realMarkdownBefore = Files.readAllBytes(Paths.get("compatibility/DEPRECATIONS.md"));
         buildVanishedAnnouncedEntryFixture(tempProjectRoot);
         // Unlike the sibling test above, target/japicmp/japicmp.xml DOES exist here - so
         // Files.exists alone can no longer distinguish this from a genuine report, exactly the
@@ -203,6 +216,8 @@ class DeprecationRegistryGeneratorBaseDirTest {
                 .isNotInstanceOf(LedgerMergeConflictException.class)
                 .hasMessageContaining("REPORT_MISSING_OR_EMPTY")
                 .hasMessageContaining("the japicmp report is missing or empty");
+        assertThat(Files.readAllBytes(Paths.get("compatibility/deprecations.json"))).isEqualTo(realJsonBefore);
+        assertThat(Files.readAllBytes(Paths.get("compatibility/DEPRECATIONS.md"))).isEqualTo(realMarkdownBefore);
     }
 
     /**
