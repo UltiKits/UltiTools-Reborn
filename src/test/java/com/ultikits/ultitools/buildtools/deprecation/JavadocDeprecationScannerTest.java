@@ -219,6 +219,25 @@ class JavadocDeprecationScannerTest {
     }
 
     @Test
+    void nestedGenericBoundRetainsItsDeclaringOwner(@TempDir Path root) throws Exception {
+        Path source = write(root.resolve("source/probe/Lexical.java"),
+                "package probe; import java.util.Date; public class Lexical<T extends Date> {"
+                        + " public class Inner { public class Date {}"
+                        + " @Deprecated public void bound(T value) {} } }");
+        Path classes = compile(root, source);
+        // The inner same-spelled class must not rewrite the outer type variable's erasure.
+        try (URLClassLoader loader = loader(classes)) {
+            List<DeprecationEntry> entries = new ArrayList<>();
+            org.assertj.core.api.Assertions.assertThatCode(() -> entries.addAll(
+                    new JavadocDeprecationScanner(loader).scan(source.getParent())))
+                    .as("bound names resolve in their declaring owner, not a nested consuming owner")
+                    .doesNotThrowAnyException();
+            assertThat(entries).extracting(e -> e.getKey().toString())
+                    .containsExactly("probe.Lexical$Inner#bound(java.util.Date)");
+        }
+    }
+
+    @Test
     void sourceAndBytecodeMustAgreeOnRealDeprecatedAnnotation(@TempDir Path root) throws Exception {
         Path source = write(root.resolve("source/probe/NotDeprecated.java"),
                 "package probe; public class NotDeprecated { public void plain() {} }");
