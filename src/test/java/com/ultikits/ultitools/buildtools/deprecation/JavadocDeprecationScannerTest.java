@@ -26,6 +26,49 @@ import org.junit.jupiter.api.Test;
 @DisplayName("JavadocDeprecationScanner")
 class JavadocDeprecationScannerTest {
 
+    private static final String MATRIX = "com.ultikits.testfixtures.deprecationscan.DeclarationMatrixSubject";
+
+    private List<DeprecationEntry> matrixEntries() throws IOException {
+        return new JavadocDeprecationScanner(getClass().getClassLoader())
+                .scan(Paths.get("src/test/java/com/ultikits/testfixtures/deprecationscan"));
+    }
+
+    private DeprecationEntry exactEntry(String key) throws IOException {
+        return matrixEntries().stream().filter(e -> e.getKey().toString().equals(key)).findFirst().orElse(null);
+    }
+
+    @Test
+    void documentedMemberIsPositiveControl() throws IOException {
+        DeprecationEntry entry = exactEntry(MATRIX + "#documented()");
+        assertThat(entry).isNotNull();
+        assertThat(entry.getKind()).isEqualTo(DeprecationEntry.Kind.METHOD);
+        assertThat(entry.getSince()).isEqualTo("6.2.3");
+        assertThat(entry.isForRemoval()).isTrue();
+        assertThat(entry.getRemoveIn()).isEqualTo("7.0.0");
+        assertThat(entry.getReplacement()).isEqualTo("Use String instead.");
+        assertThat(entry.getStatus()).isEqualTo(DeprecationEntry.Status.ANNOUNCED);
+    }
+
+    @Test
+    void annotationOnlyDeclarationIsRegistered() throws IOException {
+        DeprecationEntry entry = exactEntry(MATRIX + "#annotationOnly()");
+        assertThat(entry).as("annotation-only exact METHOD key").isNotNull();
+        assertThat(entry.getKind()).isEqualTo(DeprecationEntry.Kind.METHOD);
+        assertThat(entry.getSince()).isEqualTo("6.2.0");
+        assertThat(entry.getReplacement()).isEmpty();
+        assertThat(entry.getRemoveIn()).isNull();
+        assertThat(exactEntry(MATRIX + "#ordinaryDoc()")).isNotNull();
+    }
+
+    @Test
+    void initializedFieldHasFieldKey() throws IOException {
+        DeprecationEntry entry = exactEntry(MATRIX + "#initializedField");
+        assertThat(entry).as("initialized field exact FIELD key without parentheses").isNotNull();
+        assertThat(entry.getKind()).isEqualTo(DeprecationEntry.Kind.FIELD);
+        assertThat(entry.getKey().isField()).isTrue();
+        assertThat(entry.getSince()).isEqualTo("6.2.2");
+    }
+
     @Nested
     @DisplayName("scanBalancedParens")
     class ScanBalancedParens {
