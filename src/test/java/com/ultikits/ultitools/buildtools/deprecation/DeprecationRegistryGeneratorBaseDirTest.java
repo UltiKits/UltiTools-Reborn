@@ -270,6 +270,87 @@ class DeprecationRegistryGeneratorBaseDirTest {
                 .contains("SELF-TEST PASSED", "positive controls", "negative controls");
     }
 
+    @Test
+    void nonemptyRealLedgerPreservesEveryPriorPropertyAndAddsDeclarations(@TempDir Path project) throws Exception {
+        Path realJson = Paths.get("compatibility/deprecations.json");
+        Path realMarkdown = Paths.get("compatibility/DEPRECATIONS.md");
+        byte[] priorBytes = Files.readAllBytes(realJson);
+        byte[] markdownBefore = Files.readAllBytes(realMarkdown);
+        com.google.gson.JsonArray prior = com.google.gson.JsonParser.parseString(
+                new String(priorBytes, StandardCharsets.UTF_8)).getAsJsonArray();
+        assertThat(prior).as("a nonempty real ledger, not an empty replacement baseline").isNotEmpty();
+        Files.copy(Paths.get("pom.xml"), project.resolve("pom.xml"));
+        Path sourceRoot = Paths.get("src/main/java");
+        try (java.util.stream.Stream<Path> sources = Files.walk(sourceRoot)) {
+            for (Path source : sources.filter(Files::isRegularFile).collect(java.util.stream.Collectors.toList())) {
+                Path copy = project.resolve("src/main/java").resolve(sourceRoot.relativize(source));
+                Files.createDirectories(copy.getParent());
+                Files.copy(source, copy);
+            }
+        }
+        Path matrix = project.resolve("src/main/java/com/ultikits/testfixtures/deprecationscan/DeclarationMatrixSubject.java");
+        Files.createDirectories(matrix.getParent());
+        Files.copy(Paths.get("src/test/java/com/ultikits/testfixtures/deprecationscan/DeclarationMatrixSubject.java"), matrix);
+        Path compatibility = Files.createDirectories(project.resolve("compatibility"));
+        Files.write(compatibility.resolve("deprecations.json"), priorBytes);
+        // This fixture is about source discovery/history, not a new binary comparison. Keep a
+        // nonempty protected-scope report with unchanged class controls for every existing exclude;
+        // no synthetic removal, deadline or exclusion adjustment is used to obtain a passing merge.
+        java.util.Set<String> classes = new java.util.TreeSet<>();
+        java.util.Set<String> excludedClasses = new java.util.HashSet<>();
+        for (RegistryKey key : DeprecationRegistryGenerator.readPomExcludeKeys(
+                DeprecationRegistryGenerator.readPomDocument(project))) {
+            if (key.isClassLevel()) {
+                excludedClasses.add(key.getClassName());
+            } else {
+                classes.add(key.getClassName());
+            }
+        }
+        // Do not invent old-side visibility for excluded classes: this fixture makes no
+        // admissibility claim about them. Existing dedicated invariant tests cover that gate.
+        classes.removeAll(excludedClasses);
+        classes.add("com.example.UnchangedControl");
+        StringBuilder report = new StringBuilder("<japicmp accessModifier=\"PROTECTED\"><classes>");
+        for (String name : classes) {
+            report.append("<class binaryCompatible=\"true\" changeStatus=\"UNCHANGED\" fullyQualifiedName=\"")
+                    .append(name).append("\" sourceCompatible=\"true\"/>");
+        }
+        report.append("</classes></japicmp>");
+        Path reportDir = Files.createDirectories(project.resolve("target/japicmp"));
+        Files.write(reportDir.resolve("japicmp.xml"), report.toString().getBytes(StandardCharsets.UTF_8));
+
+        DeprecationRegistryGenerator.run(project);
+
+        Path outputJson = compatibility.resolve("deprecations.json");
+        com.google.gson.JsonArray output = com.google.gson.JsonParser.parseString(
+                new String(Files.readAllBytes(outputJson), StandardCharsets.UTF_8)).getAsJsonArray();
+        java.util.Map<String, com.google.gson.JsonObject> byKey = new java.util.LinkedHashMap<>();
+        output.forEach(row -> byKey.put(row.getAsJsonObject().get("key").getAsString(), row.getAsJsonObject()));
+        for (com.google.gson.JsonElement row : prior) {
+            String key = row.getAsJsonObject().get("key").getAsString();
+            assertThat(byKey.get(key)).as("all prior properties, absent/null schema and history for %s", key)
+                    .isEqualTo(row.getAsJsonObject());
+        }
+        java.util.Set<String> priorKeys = new java.util.HashSet<>();
+        prior.forEach(row -> priorKeys.add(row.getAsJsonObject().get("key").getAsString()));
+        java.util.Set<String> additions = new java.util.TreeSet<>(byKey.keySet());
+        additions.removeAll(priorKeys);
+        java.util.Set<String> declaredFixtureKeys = new java.util.TreeSet<>();
+        new JavadocDeprecationScanner(getClass().getClassLoader()).scan(matrix.getParent())
+                .forEach(entry -> declaredFixtureKeys.add(entry.getKey().toString()));
+        assertThat(additions).as("only documented compiled fixture declarations may be added")
+                .isEqualTo(declaredFixtureKeys).contains(
+                        "com.ultikits.testfixtures.deprecationscan.DeclarationMatrixSubject#annotationOnly()",
+                        "com.ultikits.testfixtures.deprecationscan.DeclarationMatrixSubject#initializedField");
+        byte[] onceJson = Files.readAllBytes(outputJson);
+        byte[] onceMarkdown = Files.readAllBytes(compatibility.resolve("DEPRECATIONS.md"));
+        DeprecationRegistryGenerator.run(project);
+        assertThat(Files.readAllBytes(outputJson)).isEqualTo(onceJson);
+        assertThat(Files.readAllBytes(compatibility.resolve("DEPRECATIONS.md"))).isEqualTo(onceMarkdown);
+        assertThat(Files.readAllBytes(realJson)).isEqualTo(priorBytes);
+        assertThat(Files.readAllBytes(realMarkdown)).isEqualTo(markdownBefore);
+    }
+
     private static String projectVersion(Document doc) {
         NodeList children = doc.getDocumentElement().getChildNodes();
         for (int i = 0; i < children.getLength(); i++) {
