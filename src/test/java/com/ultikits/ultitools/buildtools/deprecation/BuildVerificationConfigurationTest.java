@@ -194,6 +194,165 @@ class BuildVerificationConfigurationTest {
         assertThat(read(output)).contains("SELF-TEST PASSED");
     }
 
+    @Test
+    void observerCloseFailureCannotPublishLifecycleEvidence(@org.junit.jupiter.api.io.TempDir Path temporary)
+            throws Exception {
+        String output = runLifecycleProbe(temporary, "close");
+        assertThat(output).contains("\"closeFailureWronglyAccepted\": false", "publication-conflict",
+                "duplicate-registration");
+    }
+
+    @Test
+    void lifecycleFixturesDeclareCausalTimestamps(@org.junit.jupiter.api.io.TempDir Path temporary)
+            throws Exception {
+        assertThat(runLifecycleProbe(temporary, "fixture")).contains("SELF-TEST PASSED");
+    }
+
+    private static String runLifecycleProbe(Path temporary, String scenario) throws Exception {
+        Path output = temporary.resolve("probe.log");
+        Process process = new ProcessBuilder("python3", "-I", "-c", LIFECYCLE_PROBE,
+                Paths.get("").toAbsolutePath().toString(), temporary.toString(), scenario)
+                .redirectErrorStream(true).redirectOutput(output.toFile()).start();
+        boolean finished = process.waitFor(90, TimeUnit.SECONDS);
+        if (!finished) {
+            process.destroyForcibly();
+        }
+        assertThat(finished).as("bounded native collector fixture must terminate").isTrue();
+        String text = read(output);
+        System.out.println("LIFECYCLE PROBE " + scenario + " " + text);
+        assertThat(process.exitValue()).as("native lifecycle %s oracle: %s", scenario, text).isZero();
+        return text;
+    }
+
+    // Minimal plugin-free Maven fixture only; never recursively build this product.
+    private static final String LIFECYCLE_PROBE = String.join("\n",
+            "import contextlib",
+            "import io",
+            "import json",
+            "from pathlib import Path",
+            "import subprocess",
+            "import sys",
+            "import types",
+            "",
+            "root, temporary, scenario = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]",
+            "script = root / '.github/scripts/test-buildtool-lifecycle.sh'",
+            "body = script.read_text().split(\"<<'PY'\\n\", 1)[1].rsplit('\\nPY', 1)[0]",
+            "prefix = body.rsplit('\\ntry:\\n    args = sys.argv[2:]', 1)[0]",
+            "sys.argv = [str(script), str(root)]",
+            "namespace = {'__name__': 'bounded_lifecycle_regression'}",
+            "exec(compile(prefix, str(script), 'exec'), namespace)",
+            "if scenario == 'fixture':",
+            "    # A virtual fixture-construction delay: no real clock changes, sleep, or retries.",
+            "    # Positive synthetic lifecycle data must explicitly order its own timestamps.",
+            "    namespace['time'] = types.SimpleNamespace(time=lambda: 1900000000.0)",
+            "    text = io.StringIO()",
+            "    try:",
+            "        with contextlib.redirect_stdout(text):",
+            "            namespace['self_test']()",
+            "    except AssertionError as error:",
+            "        print(json.dumps({'scenario': scenario, 'fixtureFailure': str(error)}))",
+            "        sys.exit(1)",
+            "    print(text.getvalue())",
+            "    sys.exit(0)",
+            "",
+            "project = temporary / 'project'",
+            "project.mkdir()",
+            "(project / 'pom.xml').write_text('<project xmlns=\"http://maven.apache.org/POM/4.0.0\"><modelVersion>4.0.0</modelVersion><groupId>control</groupId><artifactId>collector</artifactId><version>1</version><packaging>pom</packaging></project>')",
+            "original = namespace['OBSERVER_SOURCE']",
+            "records = []",
+            "",
+            "",
+            "def execute(name, injection=''):",
+            "    folder = temporary / name",
+            "    folder.mkdir()",
+            "    # Only the ephemeral observer fixture's writer is wrapped. Production source,",
+            "    # close implementation, Maven dispatcher, CLI and reader remain the real ones.",
+            "    anchor = 'emit(\"ObserverStarted\", new LinkedHashMap<String, String>());'",
+            "    assert original.count(anchor) == 1",
+            "    namespace['OBSERVER_SOURCE'] = original.replace(anchor, anchor + injection)",
+            "    observation = namespace['prepare_observer'](folder)",
+            "    final = Path(observation['events'])",
+            "    if name == 'init-conflict':",
+            "        final.write_bytes(b'existing-final-sentinel')",
+            "    if name == 'partial-conflict':",
+            "        Path(str(final) + '.partial').write_bytes(b'partial-sentinel')",
+            "    command = ['mvn', '-B', '-o', '-f', str(project / 'pom.xml'),",
+            "               '-Dmaven.ext.class.path=' + observation['jar'],",
+            "               '-Dp20.lifecycle.events=' + str(final),",
+            "               '-Dp20.lifecycle.token=' + observation['token'], 'validate']",
+            "    process = subprocess.run(command, cwd=root, capture_output=True, text=True)",
+            "    log = process.stdout + process.stderr",
+            "    (folder / 'maven.log').write_text(log)",
+            "    try:",
+            "        namespace['read_observation'](observation, project)",
+            "        accepted, reason = True, ''",
+            "    except (AssertionError, ValueError, OSError) as error:",
+            "        accepted, reason = False, str(error)",
+            "    record = {'name': name, 'command': command, 'mavenExit': process.returncode,",
+            "              'readerAccepted': accepted, 'readerReason': reason,",
+            "              'finalExists': final.exists(), 'partialExists': Path(str(final) + '.partial').exists(),",
+            "              'finalText': final.read_text() if final.is_file() else '', 'mavenLog': log}",
+            "    records.append(record)",
+            "    return record",
+            "",
+            "",
+            "positive = execute('positive')",
+            "assert positive['mavenExit'] == 0 and positive['readerAccepted'], positive",
+            "fault = execute('close-fault', '''",
+            "        writer = new BufferedWriter(writer) {",
+            "            @Override public void close() throws java.io.IOException {",
+            "                super.close();",
+            "                throw new java.io.IOException(\"CONTROLLED_CLOSE_AFTER_FLUSH\");",
+            "            }",
+            "        };",
+            "''')",
+            "assert fault['mavenExit'] == 0 and 'CONTROLLED_CLOSE_AFTER_FLUSH' in fault['mavenLog'], fault",
+            "# Accumulate actual behavior before the target oracle; old implementation must RED",
+            "# on accepted-after-close-failure, never on compilation/discovery/setup.",
+            "if fault['readerAccepted']:",
+            "    assert 'ObserverClosed' in fault['finalText'] and '\"complete\":\"true\"' in fault['finalText']",
+            "    print(json.dumps({'scenario': scenario, 'closeFailureWronglyAccepted': True, 'records': records}))",
+            "    sys.exit(1)",
+            "assert not fault['finalExists'] and fault['partialExists'], fault",
+            "conflict = execute('init-conflict')",
+            "assert not conflict['readerAccepted'] and conflict['finalText'] == 'existing-final-sentinel', conflict",
+            "partial = execute('partial-conflict')",
+            "assert not partial['readerAccepted'] and not partial['finalExists'], partial",
+            "collision = execute('publication-conflict', '''",
+            "        final java.nio.file.Path collision = Paths.get(path);",
+            "        writer = new BufferedWriter(writer) {",
+            "            @Override public void close() throws java.io.IOException {",
+            "                super.close();",
+            "                Files.write(collision, \"publication-sentinel\".getBytes(StandardCharsets.UTF_8),",
+            "                        StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);",
+            "            }",
+            "        };",
+            "''')",
+            "assert collision['mavenExit'] == 0 and not collision['readerAccepted'], collision",
+            "assert collision['finalText'] == 'publication-sentinel' and collision['partialExists'], collision",
+            "# Actual duplicate registration remains fail-closed, independently of publication.",
+            "folder = temporary / 'duplicate'",
+            "folder.mkdir()",
+            "namespace['OBSERVER_SOURCE'] = original",
+            "observation = namespace['prepare_observer'](folder)",
+            "import zipfile",
+            "jar = folder / 'duplicate.jar'",
+            "with zipfile.ZipFile(observation['jar']) as source, zipfile.ZipFile(jar, 'w') as target:",
+            "    for name in source.namelist():",
+            "        data = source.read(name)",
+            "        if name == 'META-INF/plexus/components.xml':",
+            "            text = data.decode()",
+            "            component = text.split('<components>', 1)[1].split('</components>', 1)[0]",
+            "            data = text.replace('</components>', component.replace('lifecycle-observer', 'duplicate-observer') + '</components>').encode()",
+            "        target.writestr(name, data)",
+            "command = ['mvn', '-B', '-o', '-f', str(project / 'pom.xml'), '-Dmaven.ext.class.path=' + str(jar),",
+            "           '-Dp20.lifecycle.events=' + observation['events'], '-Dp20.lifecycle.token=' + observation['token'], 'validate']",
+            "process = subprocess.run(command, cwd=root, capture_output=True, text=True)",
+            "assert process.returncode != 0 and not Path(observation['events']).exists()",
+            "records.append({'name': 'duplicate-registration', 'command': command, 'mavenExit': process.returncode,",
+            "                'mavenLog': process.stdout + process.stderr, 'finalExists': False})",
+            "print(json.dumps({'scenario': scenario, 'closeFailureWronglyAccepted': False, 'records': records}))");
+
     @SuppressWarnings("unchecked")
     private static List<Map<String, Object>> dependabotUpdates() throws IOException {
         List<Map<String, Object>> updates = (List<Map<String, Object>>) yaml(Paths.get(".github/dependabot.yml"))
