@@ -103,6 +103,94 @@ class BuildVerificationConfigurationTest {
         assertThat(diagnostic).contains("-B package javadoc:javadoc -DskipTests");
     }
 
+    @Test
+    void bothDependabotEcosystemsTargetAlpha() throws IOException {
+        for (Map<String, Object> update : dependabotUpdates()) {
+            assertThat(update).as("explicit integration target for %s", update.get("package-ecosystem"))
+                    .containsEntry("target-branch", "alpha");
+        }
+    }
+
+    @Test
+    void dependabotRetainsExactlyTwoWeeklyRootEcosystemsAndExistingLimits() throws IOException {
+        Map<String, Object> config = yaml(Paths.get(".github/dependabot.yml"));
+        assertThat(config).containsOnlyKeys("version", "updates").containsEntry("version", 2);
+        List<Map<String, Object>> updates = dependabotUpdates();
+        assertThat(updates).extracting(update -> update.get("package-ecosystem"))
+                .containsExactly("maven", "github-actions");
+        for (Map<String, Object> update : updates) {
+            assertThat(update).containsEntry("directory", "/");
+            assertThat(update.get("schedule")).isEqualTo(java.util.Collections.singletonMap("interval", "weekly"));
+            if ("maven".equals(update.get("package-ecosystem"))) {
+                assertThat(update).containsEntry("open-pull-requests-limit", 10);
+            } else {
+                assertThat(update).doesNotContainKey("open-pull-requests-limit");
+            }
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void ciRetainsTriggersJobsPermissionsAndRunsLightweightSelfTests() throws IOException {
+        Map<String, Object> workflow = yaml(Paths.get(".github/workflows/maven-ci.yml"));
+        // SnakeYAML's YAML 1.1 resolver represents the unquoted GitHub Actions `on` key as true.
+        Map<String, Object> triggers = (Map<String, Object>) workflow.get(Boolean.TRUE);
+        assertThat(triggers).containsOnlyKeys("push", "pull_request");
+        assertThat(triggers.get("push")).isEqualTo(java.util.Collections.singletonMap(
+                "branches", java.util.Collections.singletonList("**")));
+        assertThat(triggers.get("pull_request")).isEqualTo(java.util.Collections.singletonMap(
+                "branches", java.util.Arrays.asList("main", "alpha")));
+        Map<String, Map<String, Object>> jobs = (Map<String, Map<String, Object>>) workflow.get("jobs");
+        assertThat(jobs).containsOnlyKeys("test", "test-isolated", "build-snapshot");
+        for (Map<String, Object> job : jobs.values()) {
+            assertThat(job.get("permissions")).isEqualTo(java.util.Collections.singletonMap("contents", "read"));
+            assertThat(job.get("runs-on")).isEqualTo("ubuntu-latest");
+        }
+        assertThat(jobs.get("test").get("name")).isEqualTo("🧪 Test & Coverage");
+        assertThat(jobs.get("test-isolated").get("name")).isEqualTo("🧪 Isolated Tests");
+        assertThat(jobs.get("build-snapshot").get("name")).isEqualTo("🔨 Build SNAPSHOT");
+        assertThat(jobs.get("build-snapshot").get("needs")).isEqualTo("test");
+        assertThat(jobs.get("build-snapshot").get("if"))
+                .isEqualTo("github.event_name == 'push' && github.ref == 'refs/heads/alpha'");
+        String runs = workflowRuns("maven-ci.yml", "test");
+        assertThat(runs.split("\\n")).contains("mvn -B clean verify", ".github/scripts/check-cjk-scope.sh",
+                "bash .github/scripts/check-cjk-scope.sh --self-test",
+                "bash .github/scripts/test-buildtool-lifecycle.sh --self-test");
+        assertThat(runs).doesNotContain("--matrix", "check-comment-only-diff.sh --self-test");
+        assertThat(calls(workflowRuns("maven-ci.yml", "test-isolated")))
+                .containsExactly("-B test -Dgroups=isolated -DexcludedGroups=");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void mainPromotionSourceGuardStillRequiresSameRepositoryAlpha() throws IOException {
+        Map<String, Object> guard = yaml(Paths.get(".github/workflows/pr-source-guard.yml"));
+        assertThat(guard.get(Boolean.TRUE)).isEqualTo(java.util.Collections.singletonMap("pull_request",
+                java.util.Collections.singletonMap("branches", java.util.Collections.singletonList("main"))));
+        Map<String, Map<String, Object>> jobs = (Map<String, Map<String, Object>>) guard.get("jobs");
+        assertThat(jobs).containsOnlyKeys("check-source");
+        assertThat(jobs.get("check-source").get("permissions"))
+                .isEqualTo(java.util.Collections.singletonMap("contents", "read"));
+        String script = workflowRuns("pr-source-guard.yml", "check-source");
+        assertThat(script).contains("if [ \"$HEAD_REPO\" != \"$THIS_REPO\" ]; then",
+                "if [ \"$HEAD_REF\" != \"alpha\" ]; then", "exit 1");
+        assertThat(script).doesNotContain("dependabot", "hotfix", "continue-on-error");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> dependabotUpdates() throws IOException {
+        List<Map<String, Object>> updates = (List<Map<String, Object>>) yaml(Paths.get(".github/dependabot.yml"))
+                .get("updates");
+        assertThat(updates).hasSize(2);
+        return updates;
+    }
+
+    private static Map<String, Object> yaml(Path path) throws IOException {
+        try (InputStream input = Files.newInputStream(path)) {
+            return new Yaml().load(input);
+        }
+    }
+
     private static Document pom() throws Exception {
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
         factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
