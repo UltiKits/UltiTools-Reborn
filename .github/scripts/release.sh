@@ -126,8 +126,8 @@ echo "▶ 校验通过：${TAG} 未被占用"
 
 # ---------------------------------------------------------------- 构建
 
-echo "▶ 构建（mvn -B clean package，含测试）"
-mvn -B clean package
+echo "Verifying and building (mvn -B clean verify, including tests)"
+mvn -B clean verify
 
 # 必须写全文件名。target/ 下 mvn package 会留下四个 jar：
 #   UltiTools-API-<v>.jar            ← 要的，shade 之后的
