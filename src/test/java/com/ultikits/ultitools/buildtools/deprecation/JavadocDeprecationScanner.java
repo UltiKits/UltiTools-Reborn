@@ -147,8 +147,8 @@ public final class JavadocDeprecationScanner {
             }
             String binary = parent == null ? qualify(tree.getSimpleName().toString())
                     : parent.binary + "$" + tree.getSimpleName();
-            Scope scope = new Scope(parent == null ? null : parent.scope, tree.getTypeParameters());
-            Owner owner = new Owner(binary, parent, scope);
+            Owner owner = new Owner(binary, parent, tree.getTypeParameters());
+            Scope scope = owner.scope;
             addEntry(path, tree.getModifiers().getAnnotations(), owner, scope, entries);
             for (Tree member : tree.getMembers()) {
                 TreePath memberPath = new TreePath(path, member);
@@ -157,7 +157,7 @@ public final class JavadocDeprecationScanner {
                 } else if (member instanceof MethodTree) {
                     MethodTree method = (MethodTree) member;
                     addEntry(memberPath, method.getModifiers().getAnnotations(), owner,
-                            new Scope(scope, method.getTypeParameters()), entries);
+                            new Scope(scope, method.getTypeParameters(), owner), entries);
                 } else if (member instanceof VariableTree) {
                     addEntry(memberPath, ((VariableTree) member).getModifiers().getAnnotations(), owner, scope, entries);
                 }
@@ -196,11 +196,17 @@ public final class JavadocDeprecationScanner {
                     reflected = compiledOwner;
                 } else if (declaration instanceof VariableTree) {
                     VariableTree variable = (VariableTree) declaration;
-                    Field field = compiledOwner.getDeclaredField(variable.getName().toString());
                     Set<String> types = resolve(variable.getType(), owner, scope, new HashSet<>());
-                    if (!types.contains(typeName(field.getType()))) {
-                        throw new IllegalStateException("No reflected field matched type " + types + "; candidates: " + field);
+                    List<Field> candidates = Arrays.asList(compiledOwner.getDeclaredFields());
+                    List<Field> matches = candidates.stream()
+                            .filter(f -> f.getName().contentEquals(variable.getName())
+                                    && types.contains(typeName(f.getType())))
+                            .collect(Collectors.toList());
+                    if (matches.size() != 1) {
+                        throw new IllegalStateException((matches.isEmpty() ? "No reflected field matched " : "Ambiguous field match ")
+                                + variable.getName() + " " + types + "; candidates: " + candidates + "; matches: " + matches);
                     }
+                    Field field = matches.get(0);
                     key = RegistryKey.forField(compiledOwner.getName(), field.getName());
                     kind = DeprecationEntry.Kind.FIELD;
                     reflected = field;
@@ -331,7 +337,7 @@ public final class JavadocDeprecationScanner {
                     throw new IllegalStateException("Cyclic type-variable erasure: " + name);
                 }
                 Set<String> types = bound.tree == null ? Collections.singleton("java.lang.Object")
-                        : resolve(bound.tree, owner, bound.scope, resolving);
+                        : resolve(bound.tree, bound.scope.owner, bound.scope, resolving);
                 resolving.remove(bound);
                 return types;
             }
@@ -440,10 +446,10 @@ public final class JavadocDeprecationScanner {
         final Owner parent;
         final Scope scope;
 
-        Owner(String binary, Owner parent, Scope scope) {
+        Owner(String binary, Owner parent, List<? extends TypeParameterTree> parameters) {
             this.binary = binary;
             this.parent = parent;
-            this.scope = scope;
+            this.scope = new Scope(parent == null ? null : parent.scope, parameters, this);
         }
     }
 
@@ -460,10 +466,12 @@ public final class JavadocDeprecationScanner {
 
     private static final class Scope {
         final Scope parent;
+        final Owner owner;
         final Map<String, Bound> bounds = new LinkedHashMap<>();
 
-        Scope(Scope parent, List<? extends TypeParameterTree> parameters) {
+        Scope(Scope parent, List<? extends TypeParameterTree> parameters, Owner owner) {
             this.parent = parent;
+            this.owner = owner;
             for (TypeParameterTree parameter : parameters) {
                 bounds.put(parameter.getName().toString(), new Bound(
                         parameter.getBounds().isEmpty() ? null : parameter.getBounds().get(0), this));
