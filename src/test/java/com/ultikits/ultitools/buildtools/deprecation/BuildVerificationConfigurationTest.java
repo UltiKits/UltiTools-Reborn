@@ -11,6 +11,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.xml.XMLConstants;
@@ -21,7 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.w3c.dom.Document;
 import org.yaml.snakeyaml.Yaml;
 
-/** Static contracts only: publication scripts are never executed by these tests. */
+/** Configuration and isolated controls only: no publication scripts or product Maven recursion. */
 class BuildVerificationConfigurationTest {
     private static final Pattern MAVEN_CALL = Pattern.compile(
             "(?m)(?:^\\h*(?:if\\h+)?|\\$\\()mvn\\h+([^\\r\\n]+)");
@@ -175,6 +176,22 @@ class BuildVerificationConfigurationTest {
         assertThat(script).contains("if [ \"$HEAD_REPO\" != \"$THIS_REPO\" ]; then",
                 "if [ \"$HEAD_REF\" != \"alpha\" ]; then", "exit 1");
         assertThat(script).doesNotContain("dependabot", "hotfix", "continue-on-error");
+    }
+
+    @Test
+    void lifecycleEvidenceIgnoresMavenLikeTestOutput(@org.junit.jupiter.api.io.TempDir Path temporary)
+            throws Exception {
+        Path output = temporary.resolve("lifecycle-controls.log");
+        Process process = new ProcessBuilder("bash", ".github/scripts/test-buildtool-lifecycle.sh", "--self-test")
+                .redirectErrorStream(true).redirectOutput(output.toFile()).start();
+        boolean finished = process.waitFor(30, TimeUnit.SECONDS);
+        if (!finished) {
+            process.destroyForcibly();
+        }
+        assertThat(finished).as("bounded isolated controls must terminate").isTrue();
+        assertThat(process.exitValue()).as("Maven-like test stdout must not corrupt lifecycle evidence: %s",
+                read(output)).isZero();
+        assertThat(read(output)).contains("SELF-TEST PASSED");
     }
 
     @SuppressWarnings("unchecked")

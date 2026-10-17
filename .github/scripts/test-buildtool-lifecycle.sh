@@ -300,6 +300,14 @@ def self_test():
             'DeprecationRegistryGenerator: wrote ' + str(product / 'compatibility/deprecations.json')
             + ' and ' + str(product / 'compatibility/DEPRECATIONS.md'),
             'Not compiling test sources', 'Tests are skipped.'])
+        # Ordinary tests may print Maven-like banners and generator diagnostics.
+        # These lines must neither reorder nor manufacture outer lifecycle events.
+        noise = '\n'.join([
+            'DeprecationRegistryGenerator: wrote fixture output',
+            '[INFO] --- exec-maven-plugin:3.6.3:java (generate-deprecation-registry) @ fixture ---',
+            '[INFO] --- japicmp-maven-plugin:0.26.1:cmp (default) @ fixture ---'])
+        check_lifecycle(noise + '\n' + log, 'skip-compilation', product)
+        positives += 1
         check_lifecycle(log, 'skip-compilation', product)
         positives += 1
         rejects('missing generator', lambda: check_lifecycle(log.replace('exec-maven-plugin:', 'missing:'), 'skip-compilation', product))
