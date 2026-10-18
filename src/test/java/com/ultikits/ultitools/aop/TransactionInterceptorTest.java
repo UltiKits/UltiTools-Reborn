@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -29,6 +30,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -126,6 +128,23 @@ class TransactionInterceptorTest {
         @Transactional(isolation = Isolation.REPEATABLE_READ, readOnly = true, timeout = 60)
         public String withAllSettings() {
             return "all_settings";
+        }
+    }
+
+    /**
+     * REQUIRES_NEW methods that also declare a transaction setting, for
+     * {@link SettingsFailureCleanupTests}. Top level for the Java 8 / JUnit 5 {@code @Nested}
+     * reason documented on {@link SelfInvocationBean}.
+     */
+    public static class SettingsFailureService {
+        @Transactional(propagation = Propagation.REQUIRES_NEW, isolation = Isolation.SERIALIZABLE)
+        public String requiresNewWithIsolation() {
+            return "requires_new_isolated";
+        }
+
+        @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
+        public String requiresNewReadOnly() {
+            return "requires_new_read";
         }
     }
 
@@ -1552,6 +1571,135 @@ class TransactionInterceptorTest {
             verify(secondConnection).commit();
             verify(secondConnection).close();
             assertThat(realManager.hasActiveTransaction()).isFalse();
+        }
+
+        @Test
+        @DisplayName("REQUIRES_NEW on a real JDBC manager: a refused inner isolation level rolls "
+                + "back and releases the inner connection, and the resumed outer transaction "
+                + "commits normally")
+        void requiresNewSettingsFailureRollsBackInnerAndResumesOuter() throws Throwable {
+            DataSource dataSource = mock(DataSource.class);
+            Connection outerConnection = mock(Connection.class);
+            Connection innerConnection = mock(Connection.class);
+            when(dataSource.getConnection()).thenReturn(outerConnection, innerConnection);
+            doThrow(new SQLException("isolation level refused")).when(innerConnection)
+                    .setTransactionIsolation(Isolation.SERIALIZABLE.getLevel());
+            DataSourceTransactionManager realManager = new DataSourceTransactionManager(dataSource);
+            TransactionInterceptor realInterceptor = new TransactionInterceptor(realManager);
+
+            realManager.begin(); // the outer transaction, active on this thread
+
+            MethodInvocation inner = mock(MethodInvocation.class);
+            when(inner.getMethod())
+                    .thenReturn(SettingsFailureService.class.getMethod("requiresNewWithIsolation"));
+
+            assertThrows(DataAccessException.class, () -> realInterceptor.invoke(inner));
+
+            verify(inner, never()).proceed();
+            verify(innerConnection).rollback();
+            verify(innerConnection).close();
+            verify(innerConnection, never()).commit();
+
+            assertThat(realManager.hasActiveTransaction()).isTrue();
+            assertThat(realManager.getConnection()).isSameAs(outerConnection);
+            assertThat(realManager.getTransactionDepth()).isEqualTo(1);
+
+            realManager.commit();
+
+            verify(outerConnection).commit();
+            verify(outerConnection, never()).rollback();
+            verify(outerConnection).close();
+            assertThat(realManager.hasActiveTransaction()).isFalse();
+        }
+
+        @Test
+        @DisplayName("REQUIRED: the settings failure is rethrown unchanged, with a failing "
+                + "rollback attached as suppressed")
+        void requiredSettingsFailureSurvivesRollbackFailure() throws Throwable {
+            IllegalStateException settingsFailure = new IllegalStateException("read-only refused");
+            IllegalStateException rollbackFailure = new IllegalStateException("rollback failed");
+            when(mockInvocation.getMethod())
+                    .thenReturn(TransactionSettingsService.class.getMethod("readOnly"));
+            doThrow(settingsFailure).when(transactionManager).setReadOnly(true);
+            doThrow(rollbackFailure).when(transactionManager).rollback();
+
+            Throwable thrown = assertThrows(Throwable.class, () -> interceptor.invoke(mockInvocation));
+
+            assertThat(thrown).isSameAs(settingsFailure);
+            assertThat(thrown.getSuppressed()).containsExactly(rollbackFailure);
+            verify(transactionManager, times(1)).rollback();
+            verify(transactionManager, never()).commit();
+            verify(mockInvocation, never()).proceed();
+        }
+
+        @Test
+        @DisplayName("REQUIRES_NEW: the settings failure survives a failing rollback, and the "
+                + "suspended handle is still resumed after the inner cleanup")
+        void requiresNewSettingsFailureSurvivesRollbackFailureAndResumes() throws Throwable {
+            IllegalStateException settingsFailure = new IllegalStateException("read-only refused");
+            IllegalStateException rollbackFailure = new IllegalStateException("rollback failed");
+            Object suspendedHandle = new Object();
+            when(mockInvocation.getMethod())
+                    .thenReturn(SettingsFailureService.class.getMethod("requiresNewReadOnly"));
+            when(transactionManager.suspend()).thenReturn(suspendedHandle);
+            doThrow(settingsFailure).when(transactionManager).setReadOnly(true);
+            doThrow(rollbackFailure).when(transactionManager).rollback();
+
+            Throwable thrown = assertThrows(Throwable.class, () -> interceptor.invoke(mockInvocation));
+
+            assertThat(thrown).isSameAs(settingsFailure);
+            assertThat(thrown.getSuppressed()).containsExactly(rollbackFailure);
+            InOrder order = inOrder(transactionManager);
+            order.verify(transactionManager).suspend();
+            order.verify(transactionManager).begin();
+            order.verify(transactionManager).rollback();
+            order.verify(transactionManager).resume(suspendedHandle);
+            verify(transactionManager, times(1)).rollback();
+            verify(transactionManager, never()).commit();
+            verify(mockInvocation, never()).proceed();
+        }
+
+        @Test
+        @DisplayName("A failing isolation setting leads to exactly one rollback and no commit")
+        void isolationFailureRollsBackOnce() throws Throwable {
+            DataAccessException settingsFailure = new DataAccessException("isolation refused");
+            doThrow(settingsFailure).when(transactionManager)
+                    .setIsolationLevel(Isolation.SERIALIZABLE.getLevel());
+
+            assertSettingFailureRollsBackOnce("withIsolation", settingsFailure);
+        }
+
+        @Test
+        @DisplayName("A failing read-only setting leads to exactly one rollback and no commit")
+        void readOnlyFailureRollsBackOnce() throws Throwable {
+            UnsupportedOperationException settingsFailure =
+                    new UnsupportedOperationException("read-only refused");
+            doThrow(settingsFailure).when(transactionManager).setReadOnly(true);
+
+            assertSettingFailureRollsBackOnce("readOnly", settingsFailure);
+        }
+
+        @Test
+        @DisplayName("A failing timeout setting leads to exactly one rollback and no commit")
+        void timeoutFailureRollsBackOnce() throws Throwable {
+            IllegalArgumentException settingsFailure = new IllegalArgumentException("timeout refused");
+            doThrow(settingsFailure).when(transactionManager).setTimeout(30);
+
+            assertSettingFailureRollsBackOnce("withTimeout", settingsFailure);
+        }
+
+        private void assertSettingFailureRollsBackOnce(String fixtureMethod,
+                RuntimeException settingsFailure) throws Throwable {
+            when(mockInvocation.getMethod())
+                    .thenReturn(TransactionSettingsService.class.getMethod(fixtureMethod));
+
+            Throwable thrown = assertThrows(Throwable.class, () -> interceptor.invoke(mockInvocation));
+
+            assertThat(thrown).isSameAs(settingsFailure);
+            verify(transactionManager).begin();
+            verify(transactionManager, times(1)).rollback();
+            verify(transactionManager, never()).commit();
+            verify(mockInvocation, never()).proceed();
         }
     }
 }
