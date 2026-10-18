@@ -112,7 +112,7 @@
 #   --self-test             Run the fixture self-test (see .github/scripts/testdata/) and exit.
 #
 # Exit codes: 0 = at or under the threshold (or --report-only); 1 = over threshold;
-#             2 = matcher/helper/read failure; 64 = usage error.
+#             2 = matcher/helper/read, file-enumeration or result-sort failure; 64 = usage error.
 #
 # Wired into maven-ci.yml (see the "CJK Comment/Javadoc Scope Gate" step, plan 08-18) — invoked
 # there with no threshold flag, so the zero-violation default applies. The migration aid
@@ -357,12 +357,24 @@ scan_file() {
 # run_scan — enumerates the current SCOPES via `git ls-files` and prints violations for every
 # candidate file, applying the two structural exclusions (lang/*.json catalogues, this script's
 # own testdata fixtures). Prints an explicit note to stderr for any scope matching zero tracked
-# files — an empty scope is never a silent pass.
+# files — an empty scope is never a silent pass. A failed enumeration is not an empty scope:
+# when `git ls-files` exits non-zero, the scan prints an ERROR naming the scope and exits 2,
+# like matcher, helper and read failures, before any count or SUMMARY.
 run_scan() {
-    local scope f files
+    local scope f files listing status
     for scope in "${SCOPES[@]}"; do
         files=()
-        mapfile -t files < <(git ls-files -- "$scope" 2>/dev/null || true)
+        listing=""
+        status=0
+        listing="$(git ls-files -- "$scope")" || status=$?
+        if [ "$status" -ne 0 ]; then
+            echo "ERROR: git ls-files failed for scope '${scope}' (exit ${status}); the gate fails closed." >&2
+            exit 2
+        fi
+        # A here-string of an empty string yields one empty element, so fill only from real output.
+        if [ -n "$listing" ]; then
+            mapfile -t files <<< "$listing"
+        fi
         if [ ${#files[@]} -eq 0 ]; then
             echo "NOTE: scope '${scope}' matched zero tracked files." >&2
             continue
@@ -419,14 +431,24 @@ run_self_test() {
     SCOPES=("no/such/scope/at/all/for/self/test")
     local stderr_capture
     stderr_capture="$(mktemp)"
-    local n3
-    n3=$(run_scan 2>"$stderr_capture" | grep -c . || true)
+    # run_scan's exit status is captured on its own, never through a pipeline: a failed
+    # enumeration also yields zero output lines, so the count alone cannot tell it from success.
+    local n3=0 status3=0 out3 line3
+    out3="$(run_scan 2>"$stderr_capture")" || status3=$?
+    while IFS= read -r line3; do
+        if [ -n "$line3" ]; then
+            n3=$((n3 + 1))
+        fi
+    done <<< "$out3"
     local msg3
     msg3="$(cat "$stderr_capture")"
     rm -f "$stderr_capture"
     SCOPES=("${saved_scopes[@]}")
-    if [ "$n3" -eq 0 ] && printf '%s' "$msg3" | grep -q "matched zero tracked files"; then
+    if [ "$status3" -eq 0 ] && [ "$n3" -eq 0 ] && printf '%s' "$msg3" | grep -q "matched zero tracked files"; then
         echo "PASS: assertion 3 — empty scope yields zero violations with an explicit message."
+    elif [ "$status3" -ne 0 ]; then
+        echo "FAIL: assertion 3 — empty scope yields zero violations with an explicit message. (run_scan exit ${status3})"
+        failures=1
     else
         echo "FAIL: assertion 3 — empty scope yields zero violations with an explicit message."
         failures=1
@@ -566,12 +588,22 @@ fi
 load_allowlist "$ALLOWLIST"
 
 VIOLATIONS_RAW="$(mktemp)"
-trap 'rm -f "$VIOLATIONS_RAW"' EXIT
+# Initialised before the trap is registered, so the trap never expands an unset variable under
+# set -u; one EXIT trap removes both temporary files on every exit, including the exit-2 paths.
+VIOLATIONS_SORTED=""
+trap 'rm -f "$VIOLATIONS_RAW" "$VIOLATIONS_SORTED"' EXIT
 
 run_scan > "$VIOLATIONS_RAW"
 
 VIOLATIONS_SORTED="$(mktemp)"
-sort -t: -k1,1 -k2,2n "$VIOLATIONS_RAW" > "$VIOLATIONS_SORTED" 2>/dev/null || true
+# The sorted file is consumed only after sort exited 0: a failed sort leaves it truncated, which
+# would otherwise read as zero violations.
+SORT_STATUS=0
+sort -t: -k1,1 -k2,2n "$VIOLATIONS_RAW" > "$VIOLATIONS_SORTED" || SORT_STATUS=$?
+if [ "$SORT_STATUS" -ne 0 ]; then
+    echo "ERROR: sorting the violation list failed (exit ${SORT_STATUS}); the gate fails closed." >&2
+    exit 2
+fi
 
 TOTAL=$(wc -l < "$VIOLATIONS_SORTED" | tr -d ' ')
 FILES=$(cut -d: -f1 "$VIOLATIONS_SORTED" | sort -u | wc -l | tr -d ' ')
