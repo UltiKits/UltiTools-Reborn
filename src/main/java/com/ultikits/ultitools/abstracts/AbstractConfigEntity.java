@@ -755,11 +755,13 @@ public abstract class AbstractConfigEntity {
      * module's plain map there does not hold as given is read through that key type and replaced by the one key of the
      * module's map that reads back to the same key, else by the one such key of the value last read from the file, so
      * {@code "1"} reaches the entry the file spells {@code '01'}. Text that does not convert, or that no key reads back
-     * to, is kept as given; levels keyed by {@code String} or {@code Object} are not changed.
+     * to, is kept as given; levels keyed by {@code String} or {@code Object} are not changed. A setting with its own legacy
+     * {@link ConfigEntry#parser()} owns its keys: they are kept as given (PR #687 local Codex run 2).
      *
      * @throws ConfigWriteRefusedException if several keys at one level read back to the same key; nothing is written
      */
     private List<String> spelledLeaf(Field field, List<String> leaf, Object mine) throws ConfigWriteRefusedException {
+        if (!registryConverts(field)) { return leaf; }
         RawEntry read = acknowledgedRaw.get(field);
         Object moduleLevel = mine;
         Object fileLevel = read == null || !read.present ? null : read.value;
@@ -837,9 +839,11 @@ public abstract class AbstractConfigEntity {
      * Every typed map key that {@code read} holds for {@code field} in several spellings, relative to the setting and
      * ending in its first spelling in file order (#673, case 52). Decided from the file's keys alone through the
      * converter's file-key ambiguity scan - the same key index the writer binds keys with - so a key the module removed
-     * or never held still counts.
+     * or never held still counts. A setting with its own legacy {@link ConfigEntry#parser()} has none: its parser, not
+     * the default key converter, decides which file keys are one key (PR #687 local Codex run 2).
      */
     private List<List<String>> severalSpellings(ConfigDocument read, Field field) {
+        if (!registryConverts(field)) { return Collections.emptyList(); }
         List<String> location = keysIn(read, field);
         if (!read.contains(location)) { return Collections.emptyList(); }
         List<List<String>> leaves = new ArrayList<>();
@@ -848,6 +852,17 @@ public abstract class AbstractConfigEntity {
             leaves.add(new ArrayList<>(path.subList(setting, path.size())));
         }
         return leaves;
+    }
+
+    /**
+     * Whether the converter registry converts {@code field}, as {@code toPlainResult} decides: an explicit non-default
+     * legacy {@link ConfigEntry#parser()} keeps conversion ownership, so no default typed-key spelling rule applies to it.
+     */
+    // Explicit legacy parsers remain supported; the comparison names the deprecated default parser class.
+    @SuppressWarnings("removal")
+    private static boolean registryConverts(Field field) {
+        ConfigEntry entry = field.getAnnotation(ConfigEntry.class);
+        return entry == null || entry.parser() == com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser.class;
     }
 
     /** An operator write of a setting whose typed map keys {@code read} holds in several spellings is refused. */
