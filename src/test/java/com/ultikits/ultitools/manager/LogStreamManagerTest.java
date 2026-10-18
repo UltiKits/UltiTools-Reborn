@@ -1905,6 +1905,10 @@ class LogStreamManagerTest {
             
             SystemLogHandler mockHandler = mock(SystemLogHandler.class);
             when(mockHandler.getConfigurationInfo()).thenReturn("test config info");
+            // The start lines obey the handler's enabled levels (case 29b95cd4); an unstubbed mock
+            // returns an empty set, which means no level is enabled, so stub the shipped default.
+            when(mockHandler.getEnabledLevels()).thenReturn(
+                    new java.util.HashSet<>(java.util.Arrays.asList("info", "warning", "error")));
             setSystemLogHandler(mockHandler);
             
             // Act - 调用 sendInitializationLogs

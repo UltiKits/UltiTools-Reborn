@@ -238,15 +238,18 @@ public class LogStreamManager implements Listener {
     }
     
     /**
-     * Sends the initialization-complete logs.
+     * Sends the initialization-complete logs. Both lines are direct entries at {@code "info"} and
+     * obey the panel's levels like every other direct entry ({@link #isDirectLevelEnabled}).
      */
     private void sendInitializationLogs() {
-        // Send the server-startup information
-        logTransmitter.info(FrameworkText.text("UltiTools 日志传输系统已启动"), "plugin:UltiTools");
+        if (isDirectLevelEnabled("info")) {
+            // Send the server-startup information
+            logTransmitter.info(FrameworkText.text("UltiTools 日志传输系统已启动"), "plugin:UltiTools");
 
-        // Send the current online-player-count information
-        int onlineCount = Bukkit.getOnlinePlayers().size();
-        logTransmitter.info(FrameworkText.format("当前在线玩家数量: %d", onlineCount), "server");
+            // Send the current online-player-count information
+            int onlineCount = Bukkit.getOnlinePlayers().size();
+            logTransmitter.info(FrameworkText.format("当前在线玩家数量: %d", onlineCount), "server");
+        }
 
         // Send the system configuration information
         if (systemLogHandler != null) {
