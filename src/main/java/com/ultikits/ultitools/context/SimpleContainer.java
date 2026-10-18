@@ -636,12 +636,16 @@ public class SimpleContainer {
 
     /**
      * Close the container.
+     * <p>
+     * {@code @PreDestroy} runs once per singleton <em>instance</em>, not once per name: an object
+     * bound under several names (a {@code @Bean(name = {primary, alias})} product, or any other
+     * {@link #addSingleton} alias) is released once (C50).
      */
     public void close() {
         LOGGER.info("Closing container...");
         
-        // Invoke @PreDestroy methods on all singleton beans
-        for (Object bean : singletonObjects.values()) {
+        // Invoke @PreDestroy methods once on each distinct singleton instance (C50)
+        for (Object bean : distinctSingletonInstances()) {
             invokePreDestroyMethods(bean);
         }
         
@@ -755,12 +759,43 @@ public class SimpleContainer {
     }
 
     /**
-     * Get all singleton bean instances registered in this container (not including parent).
+     * Get all singleton bean instances registered in this container (not including parent),
+     * each distinct instance exactly once.
+     * <p>
+     * Every per-instance consumer -- {@code @Scheduled} scheduling, {@code @PlayerCache}
+     * registration, {@code @ModuleEventHandler} registration and their release -- iterates this
+     * view, so it is deduplicated by reference identity: an object bound under several names (a
+     * {@code @Bean(name = {primary, alias})} product, or any other {@link #addSingleton} alias)
+     * appears once, while two distinct objects appear twice even if they are {@code equals()}
+     * (C50). The names themselves are untouched: each alias still resolves through
+     * {@link #getBean(String)} and is still reported by {@link #getBeanNamesForType(Class)}.
+     * <p>
+     * The returned collection is a snapshot taken at the time of the call, in the iteration order
+     * of the underlying name map.
      *
-     * @return unmodifiable collection of singleton beans
+     * @return unmodifiable collection holding each distinct singleton instance once
      */
     public java.util.Collection<Object> getSingletonValues() {
-        return java.util.Collections.unmodifiableCollection(singletonObjects.values());
+        return java.util.Collections.unmodifiableCollection(distinctSingletonInstances());
+    }
+
+    /**
+     * Each distinct singleton instance in this container once, by reference identity -- the same
+     * {@link IdentityHashMap} technique {@link #getOrderedBeansOfType(Class)} uses, and for the
+     * same reason: a bean may override {@code equals()}, and only the same object reached through
+     * two names may collapse (C50).
+     *
+     * @return a new list of distinct singleton instances
+     */
+    private List<Object> distinctSingletonInstances() {
+        Map<Object, Boolean> seenByIdentity = new IdentityHashMap<>();
+        List<Object> distinct = new ArrayList<>();
+        for (Object bean : singletonObjects.values()) {
+            if (seenByIdentity.put(bean, Boolean.TRUE) == null) {
+                distinct.add(bean);
+            }
+        }
+        return distinct;
     }
 
     /**
