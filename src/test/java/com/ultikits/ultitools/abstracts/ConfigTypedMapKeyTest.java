@@ -11,12 +11,18 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -190,6 +196,16 @@ class ConfigTypedMapKeyTest {
         String other = "default";
 
         AmbiguousKeyConfig(String configFilePath) {
+            super(configFilePath);
+        }
+    }
+
+    @SuppressWarnings("unused") // read reflectively by the binder and by the assertions below
+    static class OtherOnlyConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "other")
+        String other = "default";
+
+        OtherOnlyConfig(String configFilePath) {
             super(configFilePath);
         }
     }
@@ -545,13 +561,13 @@ class ConfigTypedMapKeyTest {
         try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
             config.save();
             assertThat(warnings.messages()).as("one warning names the setting and the reason").singleElement()
-                    .satisfies(message -> assertThat(message).contains("'limits'", "several spellings")
+                    .satisfies(message -> assertThat(message).contains("typed-keys.yml", "'limits'", "several spellings")
                             .doesNotContain("alpha-value", "beta-value", "changed-value"));
         }
         assertThat(text()).isEqualTo(AMBIGUOUS);
 
         assertThatThrownBy(() -> config.saveOperatorChange("limits")).isInstanceOf(ConfigWriteRefusedException.class)
-                .hasMessageContaining("several spellings").hasMessageContaining("'limits'");
+                .hasMessageContaining("typed-keys.yml").hasMessageContaining("several spellings").hasMessageContaining("'limits'");
         assertThat(text()).isEqualTo(AMBIGUOUS);
         assertThatThrownBy(() -> config.saveOperatorMapEntry("limits", "1")).isInstanceOf(ConfigWriteRefusedException.class)
                 .hasMessageContaining("several spellings").hasMessageNotContaining("changed-value");
@@ -647,6 +663,64 @@ class ConfigTypedMapKeyTest {
         }
 
         assertThat(text()).isEqualTo(fixed.replace("  1: alpha-value\n", "  1: changed-value\n"));
+    }
+
+    @Test
+    @DisplayName("documented limit (control): a binary value used as a map key refuses a neighbour save and keeps the file")
+    void binaryMapKeyRefusesANeighbourSave() throws IOException {
+        String yaml = "blobs: {!!binary 'YWI=': 1}\nother: kept\n";
+        long modified = put(yaml);
+        OtherOnlyConfig config = new OtherOnlyConfig(PATH);
+        assertThatCode(() -> config.init(plugin)).doesNotThrowAnyException();
+
+        config.other = "changed";
+        // The write gate logs its refusal under the framework's root logger, not the entity's.
+        Logger framework = Logger.getLogger("com.ultikits.ultitools");
+        List<String> refusals = new ArrayList<>();
+        Handler capture = new Handler() {
+            @Override
+            public void publish(LogRecord logRecord) {
+                if (logRecord.getLevel().intValue() >= Level.WARNING.intValue()) { refusals.add(logRecord.getMessage()); }
+            }
+
+            @Override
+            public void flush() {
+                // Records are kept in memory; there is nothing to flush.
+            }
+
+            @Override
+            public void close() {
+                // No resource is held; there is nothing to close.
+            }
+        };
+        framework.addHandler(capture);
+        try {
+            config.save();
+        } finally {
+            framework.removeHandler(capture);
+        }
+
+        assertThat(refusals).as("one refusal warning").singleElement()
+                .satisfies(message -> assertThat(message).contains("typed-keys.yml"));
+        assertThat(text()).isEqualTo(yaml);
+        assertThat(file().lastModified()).as("modification time").isEqualTo(modified);
+    }
+
+    @Test
+    @DisplayName("documented workaround (control): a set written in flow form does not block a neighbour save")
+    void flowFormSetAllowsANeighbourSave() throws IOException {
+        String yaml = "tags: !!set {a: null, b: null}\nother: kept\n";
+        put(yaml);
+        OtherOnlyConfig config = new OtherOnlyConfig(PATH);
+        assertThatCode(() -> config.init(plugin)).doesNotThrowAnyException();
+
+        config.other = "changed";
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            config.save();
+            assertThat(warnings.messages()).as("no warning").isEmpty();
+        }
+
+        assertThat(text()).isEqualTo("tags: !!set {a: null, b: null}\nother: changed\n");
     }
 
     private SpelledKeyConfig initialized() {
