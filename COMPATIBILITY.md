@@ -1619,7 +1619,15 @@ This section governs the third kind.
   recorded file (same SHA-256); the failure it raises is
   `PluginInstallUtils.RemovalDeferredException` (`@ApiStatus.Internal`), a
   `java.nio.file.FileSystemException` that names every recorded file. Only when the record cannot
-  be written is a plain `FileSystemException` naming the files thrown instead.
+  be written is a plain `FileSystemException` thrown instead. It names only the module JARs still on
+  disk, and the record failure travels with it as a suppressed
+  `PluginInstallUtils.RemovalNotRecordedException` (`@ApiStatus.Internal`), an `IOException` that is
+  not a `FileSystemException` and names no file to delete (#676). The `/upm uninstall` reply then
+  lists only those JARs to delete by hand and says on a line of its own that the deletion was not
+  recorded, so the next start will not delete them. At the start that applies a record, a recorded
+  JAR whose content cannot be read to confirm that it is still the recorded file is neither deleted
+  nor dropped: it stays in the modules folder, keeps its entry in the record unchanged for the next
+  start, and is reported as one SEVERE line with the read error (#676).
 - The modules folder is computed in one place, `<plugin data folder>/plugins` (#517). Before 6.3.0
   the start-up scan read `System.getProperty("user.dir")` + `/plugins/UltiTools/plugins` while the
   module class loader, install, update and uninstall read the data folder; on a server whose JVM was
@@ -2480,9 +2488,12 @@ exactly what an `IncompatibleClassChangeError` for an overridden final method re
 stack trace at SEVERE (the trace is logged at FINE), naming the module JAR and — only when its
 `plugin.yml` declares them — its `version` and `api-version`, saying it was built against an older
 UltiTools-API version and is not compatible with this one, and ending with the JVM's original
-message. Every other module that does not depend on it still loads; a module that lists it under
-`depend:` is refused along with it, as for any missing hard dependency. The fix is to replace that
-JAR with a release of the module built for the current UltiTools-API version.
+message. Every other module still loads, except a module that names it in
+`@PluginDependency(depends = ...)`, which is refused along with it, as for any missing hard
+dependency. `plugin.yml`'s `depend:` lists Bukkit server plugins and is not the path by which one
+module's refusal reaches another; a module that names it only under `softDepends`, `loadBefore` or
+`loadAfter` still loads. The fix is to replace that JAR with a release of the module built for the
+current UltiTools-API version.
 
 The opposite mismatch is reported the other way round. When the same kind of failure comes from a
 module whose declared `api-version` is above the installed framework's — a module built for a newer
