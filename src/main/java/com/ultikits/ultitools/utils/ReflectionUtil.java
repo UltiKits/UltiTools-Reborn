@@ -7,12 +7,17 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 import javax.annotation.Nullable;
 
+import org.jetbrains.annotations.ApiStatus;
+
+import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.aop.ProxyFactory;
 
 /**
@@ -545,6 +550,45 @@ public final class ReflectionUtil {
             }
         }
         return result;
+    }
+
+    /**
+     * The command mappings of {@code clazz}, keyed by {@code @CmdMapping} format: the one
+     * statement of which methods of a command executor are mappings.
+     * <p>
+     * The rule: walk {@link #getAllMethods(Class)} -- subclass first, each overridden method
+     * collapsed to its most derived declaration (#190, so an AOP proxy, which declares overrides
+     * only for intercepted methods, keeps every mapping) -- and keep each method carrying
+     * {@code @CmdMapping}. The first method for a format wins, so a subclass's own mapping
+     * shadows a base mapping that uses the same format. Inherited, unoverridden mappings are
+     * included; an override that does not repeat {@code @CmdMapping} is not a mapping, because
+     * the most derived declaration is the one consulted.
+     * <p>
+     * {@code BaseCommandExecutor} builds its dispatch table from this map, and
+     * {@code CmdTargetComposition} checks exactly these mappings at load (case 57), so the two
+     * cannot disagree about which inherited mappings exist. On a proxy class an intercepted
+     * mapping appears as the proxy's override; {@link #resolveMethodOrClassAnnotation(Method,
+     * Class, Class)} maps such an override back to its author's declaration for class-level
+     * metadata (case 36).
+     *
+     * @param clazz the command class to scan, may be null
+     * @return an unmodifiable map from format to mapping method, in discovery order; empty if
+     *         {@code clazz} is null
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public static Map<String, Method> getEffectiveCommandMappings(@Nullable Class<?> clazz) {
+        if (clazz == null) {
+            return Collections.emptyMap();
+        }
+        Map<String, Method> mappings = new LinkedHashMap<>();
+        for (Method method : getAllMethods(clazz)) {
+            CmdMapping mapping = method.getAnnotation(CmdMapping.class);
+            if (mapping != null && !mappings.containsKey(mapping.format())) {
+                mappings.put(mapping.format(), method);
+            }
+        }
+        return Collections.unmodifiableMap(mappings);
     }
 
     /**

@@ -38,7 +38,6 @@ import com.ultikits.ultitools.abstracts.data.AuditableDataEntity;
 import com.ultikits.ultitools.annotations.PreDestroy;
 import com.ultikits.ultitools.annotations.command.AsyncCommand;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
-import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdParam;
 import com.ultikits.ultitools.annotations.command.CmdSender;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
@@ -201,19 +200,8 @@ public abstract class BaseCommandExecutor implements TabExecutor {
      * Scans methods for command mappings.
      */
     private void scanCommandMappings() {
-        // Walk the hierarchy: on an AOP proxy, getDeclaredMethods() returns only the intercepted
-        // overrides, so scanning it directly would drop every other @CmdMapping on the class and
-        // silently disable those subcommands. See issue #190.
-        // getAllMethods() lists subclass overrides before the methods they hide, so the first
-        // insertion for a given format is always the most specific one. putIfAbsent (rather than
-        // put) keeps that first entry: if a subclass declares its own @CmdMapping method reusing a
-        // parent's format string, the subclass's method wins, matching normal override semantics.
-        for (Method method : ReflectionUtil.getAllMethods(this.getClass())) {
-            if (method.isAnnotationPresent(CmdMapping.class)) {
-                CmdMapping mapping = method.getAnnotation(CmdMapping.class);
-                mappings.putIfAbsent(mapping.format(), method);
-            }
-        }
+        // The discovery rule lives in ReflectionUtil.getEffectiveCommandMappings; see its javadoc.
+        mappings.putAll(ReflectionUtil.getEffectiveCommandMappings(this.getClass()));
     }
     
     /**

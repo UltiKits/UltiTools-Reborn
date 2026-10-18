@@ -7,10 +7,13 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Method;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -25,12 +28,15 @@ import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.command.validation.CmdTargetComposition;
 import com.ultikits.ultitools.annotations.ExceptionCatch;
 import com.ultikits.ultitools.annotations.command.CmdCD;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
+import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.annotations.command.UsageLimit;
 import com.ultikits.ultitools.aop.AopEligibility;
 import com.ultikits.ultitools.aop.ProxyFactory;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 
 /**
  * Case 36 (CORR-08): a mapping inherited from a base class that carries a class-level
@@ -96,6 +102,29 @@ class ProxiedInheritedMappingMetadataTest {
 
     /** Declares nothing: the mapping and the lock are both inherited. */
     public static class LockInheritor extends LockBase {
+    }
+
+    // ========== Fixtures: inherited sender-type narrowing ==========
+
+    /** No class-level target; declares an intercepted mapping narrowed to players. */
+    public abstract static class PlayerMappingBase extends BaseCommandExecutor {
+        public final AtomicInteger bodies = new AtomicInteger();
+
+        @Override
+        protected void handleHelp(CommandSender sender) {
+            // Not exercised.
+        }
+
+        @ExceptionCatch
+        @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
+        @CmdMapping(format = "p")
+        public void p(CommandSender sender) {
+            bodies.incrementAndGet();
+        }
+    }
+
+    /** Declares nothing: the PLAYER mapping is inherited. */
+    public static class PlayerMappingInheritor extends PlayerMappingBase {
     }
 
     @BeforeEach
@@ -206,5 +235,42 @@ class ProxiedInheritedMappingMetadataTest {
     @DisplayName("control, ordinary: a base class's class-level @UsageLimit(ALL) serialises the inherited mapping")
     void ordinaryInheritedMappingHonoursBaseClassUsageLimit() {
         assertUsageLimitSerialises(new LockInheritor());
+    }
+
+    // ========== Task 3: one discovery view, and runtime agreement with the load check ==========
+
+    @Test
+    @DisplayName("dispatch registers exactly the effective mappings the load-time check reads, proxied or not")
+    void discoveryAndCompositionAgree() throws Exception {
+        for (Class<? extends BaseCommandExecutor> userClass
+                : Arrays.<Class<? extends BaseCommandExecutor>>asList(PlayerMappingInheritor.class, CooldownInheritor.class)) {
+            Set<String> effective = ReflectionUtil.getEffectiveCommandMappings(userClass).keySet();
+            BaseCommandExecutor ordinary = userClass.getDeclaredConstructor().newInstance();
+            BaseCommandExecutor proxied = proxyOf(userClass);
+
+            assertFalse(effective.isEmpty(), "precondition: " + userClass.getSimpleName() + " has mappings");
+            assertEquals(effective, ordinary.getMappings().keySet(), "ordinary " + userClass.getSimpleName());
+            assertEquals(effective, proxied.getMappings().keySet(), "proxied " + userClass.getSimpleName());
+            assertTrue(CmdTargetComposition.check(userClass).isEmpty(), "the load-time check accepts "
+                    + userClass.getSimpleName());
+        }
+    }
+
+    @Test
+    @DisplayName("an inherited PLAYER narrowing refuses a console and runs for a player, proxied or not")
+    void inheritedNarrowingResolvesTheSameAtRuntime() throws Exception {
+        PlayerMappingInheritor proxied = proxyOf(PlayerMappingInheritor.class);
+        assertStoredMappingIsAProxyOverride(proxied, "p");
+
+        for (PlayerMappingInheritor executor : Arrays.asList(new PlayerMappingInheritor(), proxied)) {
+            CommandSender console = mock(CommandSender.class);
+            executor.onCommand(console, command, "inherited", new String[]{"p"});
+            // SenderTypeValidator's player-only message; i18n returns its key in this test.
+            verify(console).sendMessage("只有游戏内可以执行这个指令！");
+            assertEquals(0, executor.bodies.get(), "a console must not run the inherited PLAYER mapping");
+
+            executor.onCommand(player(), command, "inherited", new String[]{"p"});
+            assertEquals(1, executor.bodies.get(), "a player runs the inherited PLAYER mapping");
+        }
     }
 }
