@@ -103,12 +103,12 @@ class JavadocDeprecationScannerTest {
         expected.put(MATRIX + "$Named#nested(" + MATRIX + "$Named$InnerType)", DeprecationEntry.Kind.METHOD);
         expected.put(MATRIX + "$Inner#Inner(" + MATRIX + ",java.lang.String)", DeprecationEntry.Kind.CONSTRUCTOR);
         List<DeprecationEntry> entries = matrixEntries();
-        expected.forEach((key, kind) -> {
-            List<DeprecationEntry> matches = entries.stream().filter(e -> e.getKey().toString().equals(key))
-                    .collect(Collectors.toList());
-            assertThat(matches).as("exact signature %s", key).hasSize(1);
-            assertThat(matches.get(0).getKind()).isEqualTo(kind);
-        });
+        for (Map.Entry<String, DeprecationEntry.Kind> row : expected.entrySet()) {
+            List<DeprecationEntry> matches = entries.stream()
+                    .filter(e -> e.getKey().toString().equals(row.getKey())).collect(Collectors.toList());
+            assertThat(matches).as("exact signature %s", row.getKey()).hasSize(1);
+            assertThat(matches.get(0).getKind()).isEqualTo(row.getValue());
+        }
     }
 
     @Test

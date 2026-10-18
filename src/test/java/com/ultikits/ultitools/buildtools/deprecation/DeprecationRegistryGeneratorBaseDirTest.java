@@ -173,7 +173,10 @@ class DeprecationRegistryGeneratorBaseDirTest {
             + "gone from source fails as REPORT_MISSING_OR_EMPTY, not as a raw LedgerMergeConflictException")
     void emptyReportWithVanishedAnnouncedEntryFailsAsReportMissingNotMergeConflict(
             @TempDir Path tempProjectRoot) throws IOException {
+        // Fixed repository-relative literal: the real ledger this test proves untouched.
+        // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
         byte[] realJsonBefore = Files.readAllBytes(Paths.get("compatibility/deprecations.json"));
+        // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
         byte[] realMarkdownBefore = Files.readAllBytes(Paths.get("compatibility/DEPRECATIONS.md"));
         buildVanishedAnnouncedEntryFixture(tempProjectRoot);
         // No target/japicmp/japicmp.xml is written at all - readJapicmpReport falls back to
@@ -189,7 +192,10 @@ class DeprecationRegistryGeneratorBaseDirTest {
                 .isNotInstanceOf(LedgerMergeConflictException.class)
                 .hasMessageContaining("REPORT_MISSING_OR_EMPTY")
                 .hasMessageContaining("the japicmp report is missing or empty");
+        // Fixed repository-relative literal: the real ledger this test proves untouched.
+        // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
         assertThat(Files.readAllBytes(Paths.get("compatibility/deprecations.json"))).isEqualTo(realJsonBefore);
+        // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
         assertThat(Files.readAllBytes(Paths.get("compatibility/DEPRECATIONS.md"))).isEqualTo(realMarkdownBefore);
     }
 
@@ -197,7 +203,10 @@ class DeprecationRegistryGeneratorBaseDirTest {
     @DisplayName("Codex P2, PR #480 round 2: a zero-byte japicmp.xml (exists, but nothing to parse) "
             + "is treated the same as a missing one - REPORT_MISSING_OR_EMPTY, not a raw XML parse failure")
     void zeroByteReportIsTreatedAsEmptyNotAsAParseFailure(@TempDir Path tempProjectRoot) throws IOException {
+        // Fixed repository-relative literal: the real ledger this test proves untouched.
+        // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
         byte[] realJsonBefore = Files.readAllBytes(Paths.get("compatibility/deprecations.json"));
+        // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
         byte[] realMarkdownBefore = Files.readAllBytes(Paths.get("compatibility/DEPRECATIONS.md"));
         buildVanishedAnnouncedEntryFixture(tempProjectRoot);
         // Unlike the sibling test above, target/japicmp/japicmp.xml DOES exist here - so
@@ -216,7 +225,10 @@ class DeprecationRegistryGeneratorBaseDirTest {
                 .isNotInstanceOf(LedgerMergeConflictException.class)
                 .hasMessageContaining("REPORT_MISSING_OR_EMPTY")
                 .hasMessageContaining("the japicmp report is missing or empty");
+        // Fixed repository-relative literal: the real ledger this test proves untouched.
+        // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
         assertThat(Files.readAllBytes(Paths.get("compatibility/deprecations.json"))).isEqualTo(realJsonBefore);
+        // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
         assertThat(Files.readAllBytes(Paths.get("compatibility/DEPRECATIONS.md"))).isEqualTo(realMarkdownBefore);
     }
 

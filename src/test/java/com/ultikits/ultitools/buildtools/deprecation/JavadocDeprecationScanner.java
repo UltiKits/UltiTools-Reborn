@@ -276,7 +276,7 @@ public final class JavadocDeprecationScanner {
                     if (tag instanceof DeprecatedTree) {
                         paragraph = joinDoc(((DeprecatedTree) tag).getBody());
                     } else if (tag instanceof UnknownBlockTagTree
-                            && ((UnknownBlockTagTree) tag).getTagName().equals("removeIn")) {
+                            && "removeIn".equals(((UnknownBlockTagTree) tag).getTagName())) {
                         String text = joinDoc(((UnknownBlockTagTree) tag).getContent()).trim();
                         removeIn = text.isEmpty() ? null : text.split("\\s+")[0];
                     }
@@ -293,21 +293,9 @@ public final class JavadocDeprecationScanner {
         private Executable uniqueMatch(List<Executable> candidates, List<Set<String>> parameters,
                 Class<?> owner, boolean constructor) {
             List<Executable> matches = new ArrayList<>();
-            int hidden = constructor && owner.isEnum() ? 2
-                    : constructor && owner.isMemberClass() && !Modifier.isStatic(owner.getModifiers()) ? 1 : 0;
+            int hidden = hiddenParameters(owner, constructor);
             for (Executable candidate : candidates) {
-                Class<?>[] types = candidate.getParameterTypes();
-                if (types.length != parameters.size() + hidden) {
-                    continue;
-                }
-                boolean same = true;
-                for (int i = 0; i < parameters.size(); i++) {
-                    if (!parameters.get(i).contains(typeName(types[i + hidden]))) {
-                        same = false;
-                        break;
-                    }
-                }
-                if (same) {
+                if (parametersMatch(candidate.getParameterTypes(), parameters, hidden)) {
                     matches.add(candidate);
                 }
             }
@@ -323,11 +311,7 @@ public final class JavadocDeprecationScanner {
                 return resolve(((AnnotatedTypeTree) tree).getUnderlyingType(), owner, scope, resolving);
             }
             if (tree instanceof ArrayTypeTree) {
-                Set<String> result = new LinkedHashSet<>();
-                for (String type : resolve(((ArrayTypeTree) tree).getType(), owner, scope, resolving)) {
-                    result.add(type + "[]");
-                }
-                return result;
+                return arrayOf(resolve(((ArrayTypeTree) tree).getType(), owner, scope, resolving));
             }
             if (tree instanceof ParameterizedTypeTree) {
                 return resolve(((ParameterizedTypeTree) tree).getType(), owner, scope, resolving);
@@ -337,37 +321,27 @@ public final class JavadocDeprecationScanner {
                 return Collections.singleton(name);
             }
             Bound bound = scope == null ? null : scope.find(name);
-            if (bound != null) {
-                if (!resolving.add(bound)) {
-                    throw new IllegalStateException("Cyclic type-variable erasure: " + name);
-                }
-                Set<String> types = bound.tree == null ? Collections.singleton("java.lang.Object")
-                        : resolve(bound.tree, bound.scope.owner, bound.scope, resolving);
-                resolving.remove(bound);
-                return types;
+            return bound != null ? resolveBound(bound, name, resolving) : resolveName(name, owner);
+        }
+
+        private Set<String> resolveBound(Bound bound, String name, Set<Bound> resolving) {
+            if (!resolving.add(bound)) {
+                throw new IllegalStateException("Cyclic type-variable erasure: " + name);
             }
-            return resolveName(name, owner);
+            Set<String> types = bound.tree == null ? Collections.singleton("java.lang.Object")
+                    : resolve(bound.tree, bound.scope.owner, bound.scope, resolving);
+            resolving.remove(bound);
+            return types;
         }
 
         private Set<String> resolveName(String name, Owner owner) {
             int dot = name.indexOf('.');
             if (dot >= 0) {
-                Set<String> result = loadableNames(name);
-                for (String prefix : resolveName(name.substring(0, dot), owner)) {
-                    result.addAll(loadableNames(prefix + "." + name.substring(dot + 1)));
-                }
-                return result;
+                return resolveQualified(name, dot, owner);
             }
-            for (Owner lexical = owner; lexical != null; lexical = lexical.parent) {
-                Set<String> found = new LinkedHashSet<>();
-                if (lexical.binary.substring(lexical.binary.lastIndexOf('$') + 1)
-                        .equals(name) || lexical.binary.equals(qualify(name))) {
-                    found.addAll(loadableNames(lexical.binary));
-                }
-                found.addAll(loadableNames(lexical.binary + "$" + name));
-                if (!found.isEmpty()) {
-                    return found;
-                }
+            Set<String> lexical = resolveLexical(name, owner);
+            if (!lexical.isEmpty()) {
+                return lexical;
             }
             if (imports.containsKey(name)) {
                 Set<String> found = new LinkedHashSet<>();
@@ -385,6 +359,30 @@ public final class JavadocDeprecationScanner {
                 found.addAll(loadableNames(prefix + "." + name));
             }
             return found;
+        }
+
+        private Set<String> resolveQualified(String name, int dot, Owner owner) {
+            Set<String> result = loadableNames(name);
+            for (String prefix : resolveName(name.substring(0, dot), owner)) {
+                result.addAll(loadableNames(prefix + "." + name.substring(dot + 1)));
+            }
+            return result;
+        }
+
+        /** The innermost enclosing owner that is, or declares, the simple name wins. */
+        private Set<String> resolveLexical(String name, Owner owner) {
+            for (Owner lexical = owner; lexical != null; lexical = lexical.parent) {
+                Set<String> found = new LinkedHashSet<>();
+                if (lexical.binary.substring(lexical.binary.lastIndexOf('$') + 1)
+                        .equals(name) || lexical.binary.equals(qualify(name))) {
+                    found.addAll(loadableNames(lexical.binary));
+                }
+                found.addAll(loadableNames(lexical.binary + "$" + name));
+                if (!found.isEmpty()) {
+                    return found;
+                }
+            }
+            return Collections.emptySet();
         }
 
         private Set<String> loadableNames(String spelling) {
@@ -414,6 +412,36 @@ public final class JavadocDeprecationScanner {
         // Build-only names come from parsed repository declarations/imports, never invocation.
         // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
         return Class.forName(binaryName, false, classLoader);
+    }
+
+    private static int hiddenParameters(Class<?> owner, boolean constructor) {
+        if (!constructor) {
+            return 0;
+        }
+        if (owner.isEnum()) {
+            return 2;
+        }
+        return owner.isMemberClass() && !Modifier.isStatic(owner.getModifiers()) ? 1 : 0;
+    }
+
+    private static boolean parametersMatch(Class<?>[] types, List<Set<String>> parameters, int hidden) {
+        if (types.length != parameters.size() + hidden) {
+            return false;
+        }
+        for (int i = 0; i < parameters.size(); i++) {
+            if (!parameters.get(i).contains(typeName(types[i + hidden]))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static Set<String> arrayOf(Set<String> components) {
+        Set<String> result = new LinkedHashSet<>();
+        for (String type : components) {
+            result.add(type + "[]");
+        }
+        return result;
     }
 
     private static String typeSpelling(Tree tree) {

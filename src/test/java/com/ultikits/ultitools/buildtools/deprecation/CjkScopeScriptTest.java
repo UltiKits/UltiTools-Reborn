@@ -380,6 +380,8 @@ class CjkScopeScriptTest {
 
     private Result command(Map<String, String> environment, String... argv) throws Exception {
         Path output = Files.createTempFile(temp, "process-", ".log");
+        // Test harness: argv comes from this class (the gate script, git and shims it writes) and runs inside @TempDir.
+        // nosemgrep: java_inject_rule-CommandInjection, java.lang.security.audit.command-injection-process-builder.command-injection-process-builder
         ProcessBuilder builder = new ProcessBuilder(argv).directory(temp.toFile())
                 .redirectErrorStream(true).redirectOutput(output.toFile());
         builder.environment().putAll(environment);

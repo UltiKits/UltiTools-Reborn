@@ -75,33 +75,20 @@ class CommentOnlyDiffScriptTest {
         // Mixed lines reach A's cache before B's full-tree extraction and C's full-blob check.
         String before = "class Changed { int n = 1; // before\n}\n";
         String after = "class Changed { int n = 1; // after\n}\n";
+        // {operation, verb, selector with {oid} for the side's commit, diagnostic, occurrence}
+        String[][] reads = {
+            {"cache-tree", "ls-tree", "{oid} -- src/main/java/Changed.java", "existence tree", "1"},
+            {"cache-blob", "show", "{oid}:src/main/java/Changed.java", "state-cache blob", "1"},
+            // A scoped tree selector must not also match A/C's path-specific existence queries.
+            {"literal-tree", "ls-tree", "{oid} -- src/main/java|END", "literal tree", "1"},
+            {"literal-changed", "show", "{oid}:src/main/java/Changed.java", "literal blob", "2"},
+            {"literal-unchanged", "show", "{oid}:src/main/java/Unchanged.java", "literal blob", "1"},
+            {"crlf-tree", "ls-tree", "{oid} -- src/main/java/Changed.java", "existence tree", "2"},
+            {"crlf-blob", "show", "{oid}:src/main/java/Changed.java", "CRLF blob", "3"},
+        };
         for (String side : Arrays.asList("base", "head")) {
-            for (String operation : Arrays.asList("cache-tree", "cache-blob", "literal-tree",
-                    "literal-changed", "literal-unchanged", "crlf-tree", "crlf-blob")) {
-                Fixture f = fixture(before, after);
-                assertThat(f.check(f.base, f.head).exit).isZero();
-                String oid = "base".equals(side) ? f.base : f.head;
-                String path = "src/main/java/Changed.java";
-                String verb;
-                String selector;
-                String diagnostic;
-                int occurrence = 1;
-                switch (operation) {
-                    case "cache-tree": verb = "ls-tree"; selector = oid + " -- " + path; diagnostic = "existence tree"; break;
-                    case "cache-blob": verb = "show"; selector = oid + ":" + path; diagnostic = "state-cache blob"; break;
-                    case "literal-tree": verb = "ls-tree"; selector = oid + " -- src/main/java"; diagnostic = "literal tree"; break;
-                    case "literal-changed": verb = "show"; selector = oid + ":" + path; diagnostic = "literal blob"; occurrence = 2; break;
-                    case "literal-unchanged": verb = "show"; selector = oid + ":src/main/java/Unchanged.java"; diagnostic = "literal blob"; break;
-                    case "crlf-tree": verb = "ls-tree"; selector = oid + " -- " + path; diagnostic = "existence tree"; occurrence = 2; break;
-                    default: verb = "show"; selector = oid + ":" + path; diagnostic = "CRLF blob"; occurrence = 3;
-                }
-                // A scoped tree selector must not also match A/C's path-specific existence queries.
-                if ("literal-tree".equals(operation)) selector += "|END";
-                f.inject("git", verb, selector, occurrence);
-                Result result = f.check(f.base, f.head);
-                f.assertHit();
-                assertInability(result, diagnostic);
-                assertThat(result.output).contains(oid);
+            for (String[] read : reads) {
+                assertGitReadFailureReached(before, after, side, read);
             }
         }
         for (String kind : Arrays.asList("unified", "changed")) {
@@ -113,6 +100,18 @@ class CommentOnlyDiffScriptTest {
             f.assertHit();
             assertInability(result, "unified".equals(kind) ? "assertion A" : "assertion C");
         }
+    }
+
+    private void assertGitReadFailureReached(String before, String after, String side, String[] read)
+            throws Exception {
+        Fixture f = fixture(before, after);
+        assertThat(f.check(f.base, f.head).exit).isZero();
+        String oid = "base".equals(side) ? f.base : f.head;
+        f.inject("git", read[1], read[2].replace("{oid}", oid), Integer.parseInt(read[4]));
+        Result result = f.check(f.base, f.head);
+        f.assertHit();
+        assertInability(result, read[3]);
+        assertThat(result.output).as("%s %s", side, read[0]).contains(oid);
     }
 
     @Test void captureCacheMatcherSortAndComparisonFailuresAreReached() throws Exception {
@@ -305,6 +304,8 @@ class CommentOnlyDiffScriptTest {
             return run(Arrays.asList("bash", ".github/scripts/check-comment-only-diff.sh", "--self-test"), true);
         }
         Result run(List<String> command, boolean fault) throws Exception {
+            // Test harness: the command is the checked script or /usr/bin/git with fixture arguments, run inside @TempDir.
+            // nosemgrep: java_inject_rule-CommandInjection, java.lang.security.audit.command-injection-process-builder.command-injection-process-builder
             ProcessBuilder builder = new ProcessBuilder(command).directory(root.toFile()).redirectErrorStream(true);
             Map<String, String> env = builder.environment();
             env.put("GIT_CONFIG_NOSYSTEM", "1");

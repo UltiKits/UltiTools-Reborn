@@ -26,19 +26,11 @@ final class CompiledDeprecationReader {
     private static final String DEPRECATED = "Ljava/lang/Deprecated;";
     private static final String CLASS_KEY = "";
 
-    /** Deprecated metadata of one compiled declaration. */
-    static final class Metadata {
-        final String since;
-        final boolean forRemoval;
-
-        Metadata(String since, boolean forRemoval) {
-            this.since = since;
-            this.forRemoval = forRemoval;
-        }
-    }
-
     private static final Metadata NOT_DEPRECATED = new Metadata(null, false);
     private static final Map<Class<?>, String> PRIMITIVES = new HashMap<>();
+
+    private final String className;
+    private final Map<String, Metadata> declarations = new HashMap<>();
 
     static {
         PRIMITIVES.put(boolean.class, "Z");
@@ -52,9 +44,6 @@ final class CompiledDeprecationReader {
         PRIMITIVES.put(void.class, "V");
     }
 
-    private final String className;
-    private final Map<String, Metadata> declarations = new HashMap<>();
-
     private CompiledDeprecationReader(String className) {
         this.className = className;
     }
@@ -62,13 +51,12 @@ final class CompiledDeprecationReader {
     /** Parses the class file the given loader serves for {@code type}; nothing is loaded or run. */
     static CompiledDeprecationReader read(ClassLoader loader, Class<?> type) throws IOException {
         String resource = type.getName().replace('.', '/') + ".class";
-        InputStream stream = loader.getResourceAsStream(resource);
-        if (stream == null) {
-            throw new IllegalStateException("Compiled class file not found: " + resource);
-        }
         CompiledDeprecationReader reader = new CompiledDeprecationReader(type.getName());
-        try (DataInputStream in = new DataInputStream(new BufferedInputStream(stream))) {
-            reader.parse(in);
+        try (InputStream stream = loader.getResourceAsStream(resource)) {
+            if (stream == null) {
+                throw new IllegalStateException("Compiled class file not found: " + resource);
+            }
+            reader.parse(new DataInputStream(new BufferedInputStream(stream)));
         }
         return reader;
     }
@@ -265,5 +253,16 @@ final class CompiledDeprecationReader {
             return PRIMITIVES.get(type);
         }
         return "L" + type.getName().replace('.', '/') + ";";
+    }
+
+    /** Deprecated metadata of one compiled declaration. */
+    static final class Metadata {
+        final String since;
+        final boolean forRemoval;
+
+        Metadata(String since, boolean forRemoval) {
+            this.since = since;
+            this.forRemoval = forRemoval;
+        }
     }
 }

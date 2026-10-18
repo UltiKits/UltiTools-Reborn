@@ -98,8 +98,9 @@ SOURCE_STATUS=$(git status --porcelain -- "$BREAK_TARGET_FILE") || die_usage "Ca
 [ -z "$SOURCE_STATUS" ] || die_usage "${BREAK_TARGET_FILE} already carries uncommitted changes; run with a clean break target."
 # Compatibility edits (including partial staging) are allowed: their actual bytes are saved.
 for path in pom.xml "$BREAK_TARGET_FILE" compatibility/deprecations.json compatibility/DEPRECATIONS.md .flattened-pom.xml; do
-    [ ! -L "$path" ] && { [ ! -e "$path" ] || [ -f "$path" ]; } \
-        || die_usage "Protected path must be an ordinary file or absent: ${path}"
+    if [ -L "$path" ] || { [ -e "$path" ] && [ ! -f "$path" ]; }; then
+        die_usage "Protected path must be an ordinary file or absent: ${path}"
+    fi
 done
 
 if [ "$DRY_RUN" = 1 ]; then
@@ -119,8 +120,9 @@ LOCAL_REPOSITORY=$(printf '%s' "$LOCAL_REPOSITORY" | perl -pe 's/\e\[[0-9;]*m//g
 [ -d "$LOCAL_REPOSITORY" ] || die_usage "Effective local repository does not exist."
 LOCAL_REPOSITORY=$(cd -- "$LOCAL_REPOSITORY" && pwd -P)
 LOCAL_FAMILY="${LOCAL_REPOSITORY}/com/ultikits/UltiTools-API"
-[ ! -L "$LOCAL_FAMILY" ] && { [ ! -e "$LOCAL_FAMILY" ] || [ -d "$LOCAL_FAMILY" ]; } \
-    || die_usage "Local coordinate family must be a directory or absent."
+if [ -L "$LOCAL_FAMILY" ] || { [ -e "$LOCAL_FAMILY" ] && [ ! -d "$LOCAL_FAMILY" ]; }; then
+    die_usage "Local coordinate family must be a directory or absent."
+fi
 
 # Finite write set, established before the first mutation:
 # - protected: POM, chosen source, both registry outputs, root flatten output, coordinate family;

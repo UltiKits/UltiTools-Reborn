@@ -485,7 +485,8 @@ is_crlf() {
     checked_capture "$EVIDENCE_DIR/crlf-blob" "CRLF blob $1:$2" git show "$1:$2"
     count="$(grep -ca $'\r' "$EVIDENCE_DIR/crlf-blob")" || status=$?
     [ "$status" -le 1 ] || evidence_error "CRLF matcher $1:$2 (exit $status)"
-    return "$status"
+    # Decide on the drained count itself; grep's status only separates errors from "no match".
+    [ "$count" -gt 0 ]
 }
 
 run_assertion_c() {

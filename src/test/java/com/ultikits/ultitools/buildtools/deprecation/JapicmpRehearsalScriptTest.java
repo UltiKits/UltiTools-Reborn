@@ -353,6 +353,8 @@ class JapicmpRehearsalScriptTest {
             List<String> argv = new ArrayList<>(Arrays.asList("git"));
             argv.addAll(Arrays.asList(args));
             Path log = scratch.resolve("git.log");
+            // Test harness: argv is git or the rehearsal script with arguments from this class, run inside @TempDir.
+            // nosemgrep: java.lang.security.audit.command-injection-process-builder.command-injection-process-builder
             ProcessBuilder builder = new ProcessBuilder(argv).directory(root.toFile())
                     .redirectErrorStream(true).redirectOutput(log.toFile());
             builder.environment().put("GIT_OPTIONAL_LOCKS", "0");
@@ -366,6 +368,8 @@ class JapicmpRehearsalScriptTest {
             argv.addAll(Arrays.asList(args));
             Map<String, String> before = manifest();
             Path log = scratch.resolve("run.log");
+            // Test harness: argv is git or the rehearsal script with arguments from this class, run inside @TempDir.
+            // nosemgrep: java.lang.security.audit.command-injection-process-builder.command-injection-process-builder
             ProcessBuilder builder = new ProcessBuilder(argv).directory(root.toFile())
                     .redirectErrorStream(true).redirectOutput(log.toFile());
             builder.environment().put("HOME", home.toString());
