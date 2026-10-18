@@ -5,8 +5,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.lang.management.LockInfo;
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadInfo;
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -140,9 +145,187 @@ class SimpleTempListenerRegistrationLockTest {
                 .isEqualTo(2);
     }
 
+    @Test
+    @DisplayName("Concurrent registration and asynchronous auto-unregistration of distinct listeners keep every marker")
+    void concurrentRegistrationAndAutoUnregistrationKeepEveryMarker() throws Exception {
+        int threadsPerSide = 4;
+        int listenersPerThread = 50;
+        int listenerCount = threadsPerSide * listenersPerThread;
+
+        AtomicInteger[] syncDelivered = counters(listenerCount);
+        List<SimpleTempListener<SyncProbeEvent>> registeredSide = new ArrayList<>();
+        for (int i = 0; i < listenerCount; i++) {
+            AtomicInteger counter = syncDelivered[i];
+            registeredSide.add(new SimpleTempListener<>(SyncProbeEvent.class, EventPriority.NORMAL, event -> {
+                counter.incrementAndGet();
+                return false;
+            }, event -> true));
+        }
+
+        AtomicInteger[] asyncDelivered = counters(listenerCount);
+        List<SimpleTempListener<AsyncProbeEvent>> unregisteredSide = new ArrayList<>();
+        for (int i = 0; i < listenerCount; i++) {
+            int id = i;
+            AtomicInteger counter = asyncDelivered[i];
+            SimpleTempListener<AsyncProbeEvent> listener = new SimpleTempListener<>(
+                    AsyncProbeEvent.class, EventPriority.NORMAL, event -> {
+                        counter.incrementAndGet();
+                        return true;
+                    }, event -> event.getId() == id);
+            listener.register();
+            unregisteredSide.add(listener);
+        }
+
+        CountDownLatch start = new CountDownLatch(1);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        List<Thread> threads = new ArrayList<>();
+        for (int t = 0; t < threadsPerSide; t++) {
+            int first = t * listenersPerThread;
+            threads.add(newThread("registrar-" + t, () -> {
+                awaitStart(start);
+                for (int i = first; i < first + listenersPerThread; i++) {
+                    registeredSide.get(i).register();
+                }
+            }, failure));
+            threads.add(newThread("async-firer-" + t, () -> {
+                awaitStart(start);
+                for (int i = first; i < first + listenersPerThread; i++) {
+                    server.getPluginManager().callEvent(new AsyncProbeEvent(i));
+                }
+            }, failure));
+        }
+        for (Thread thread : threads) {
+            thread.start();
+        }
+        start.countDown();
+        for (Thread thread : threads) {
+            joinBounded(thread);
+        }
+        assertThat(failure.get()).isNull();
+
+        Set<?> registered = registrationSet();
+        for (int i = 0; i < listenerCount; i++) {
+            SimpleTempListener<AsyncProbeEvent> listener = unregisteredSide.get(i);
+            assertThat(asyncDelivered[i].get()).as("async listener %d delivered once", i).isEqualTo(1);
+            assertThat(registered.contains(listener)).as("async listener %d marker cleared", i).isFalse();
+            assertThat(isRegisteredWithBukkit(listener, AsyncProbeEvent.getHandlerList()))
+                    .as("async listener %d unregistered from Bukkit", i).isFalse();
+        }
+        for (int i = 0; i < listenerCount; i++) {
+            assertThat(registered.contains(registeredSide.get(i))).as("listener %d marker kept", i).isTrue();
+        }
+
+        for (SimpleTempListener<SyncProbeEvent> listener : registeredSide) {
+            listener.register();
+        }
+        server.getPluginManager().callEvent(new SyncProbeEvent(0));
+        for (int i = 0; i < listenerCount; i++) {
+            assertThat(syncDelivered[i].get())
+                    .as("a repeated register() on listener %d must not add a second delivery", i)
+                    .isEqualTo(1);
+        }
+    }
+
+    @Test
+    @DisplayName("A listener whose Bukkit registration was removed is not retained by the registration set")
+    @SuppressWarnings("PMD.DoNotCallGarbageCollectionExplicitly") // the only way to observe a weak key
+    void droppedListenerIsNotRetainedByTheRegistrationSet() throws Exception {
+        WeakReference<SimpleTempListener<SyncProbeEvent>> ref = registerThenRemoveFromBukkitOnly();
+
+        for (int i = 0; i < 50 && ref.get() != null; i++) {
+            System.gc();
+            Thread.sleep(20);
+        }
+
+        assertThat(ref.get())
+                .as("the registration set must hold listeners weakly")
+                .isNull();
+    }
+
+    @Test
+    @DisplayName("A handler unregistering during synchronous dispatch while another thread registers does not deadlock")
+    void handlerUnregisteringDuringConcurrentRegistrationDoesNotDeadlock() throws Exception {
+        int rounds = 200;
+        AtomicInteger selfUnregistered = new AtomicInteger();
+        List<SimpleTempListener<SyncProbeEvent>> selfUnregistering = new CopyOnWriteArrayList<>();
+        CountDownLatch start = new CountDownLatch(1);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+
+        Thread dispatcher = newThread("sync-dispatcher", () -> {
+            awaitStart(start);
+            for (int i = 0; i < rounds; i++) {
+                int id = i;
+                SimpleTempListener<SyncProbeEvent> listener = new SimpleTempListener<>(
+                        SyncProbeEvent.class, EventPriority.NORMAL, event -> {
+                            selfUnregistered.incrementAndGet();
+                            return true;
+                        }, event -> event.getId() == id);
+                selfUnregistering.add(listener);
+                listener.register();
+                server.getPluginManager().callEvent(new SyncProbeEvent(id));
+            }
+        }, failure);
+        Thread registrar = newThread("registrar", () -> {
+            awaitStart(start);
+            for (int i = 0; i < rounds; i++) {
+                new SimpleTempListener<>(SyncProbeEvent.class, EventPriority.NORMAL,
+                        event -> false, event -> true).register();
+            }
+        }, failure);
+
+        dispatcher.start();
+        registrar.start();
+        start.countDown();
+        joinBounded(dispatcher);
+        joinBounded(registrar);
+
+        assertThat(failure.get()).isNull();
+        assertThat(selfUnregistered.get()).isEqualTo(rounds);
+        Set<?> registered = registrationSet();
+        for (SimpleTempListener<SyncProbeEvent> listener : selfUnregistering) {
+            assertThat(registered.contains(listener)).isFalse();
+            assertThat(isRegisteredWithBukkit(listener, SyncProbeEvent.getHandlerList())).isFalse();
+        }
+    }
+
     // ---------------------------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------------------------
+
+    /**
+     * Registers a listener, then removes only its Bukkit registration (not through
+     * {@code unregister()}), so its marker stays in the set. Kept in its own method so no local
+     * variable of the test method keeps the listener reachable.
+     */
+    private static WeakReference<SimpleTempListener<SyncProbeEvent>> registerThenRemoveFromBukkitOnly()
+            throws ReflectiveOperationException {
+        SimpleTempListener<SyncProbeEvent> listener = new SimpleTempListener<>(
+                SyncProbeEvent.class, EventPriority.NORMAL, event -> false, event -> true);
+        listener.register();
+        assertThat(registrationSet().contains(listener)).as("marker present after register()").isTrue();
+        HandlerList.unregisterAll(listener);
+        assertThat(isRegisteredWithBukkit(listener, SyncProbeEvent.getHandlerList())).isFalse();
+        return new WeakReference<>(listener);
+    }
+
+    private static AtomicInteger[] counters(int size) {
+        AtomicInteger[] counters = new AtomicInteger[size];
+        for (int i = 0; i < size; i++) {
+            counters[i] = new AtomicInteger();
+        }
+        return counters;
+    }
+
+    private static void awaitStart(CountDownLatch start) {
+        try {
+            if (!start.await(JOIN_MILLIS, TimeUnit.MILLISECONDS)) {
+                throw new IllegalStateException("start gate was not opened in time");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
 
     /**
      * Reads the private static registration set. Production visibility is deliberately not
