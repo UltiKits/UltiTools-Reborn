@@ -19,17 +19,28 @@ import java.util.List;
 import java.util.function.BiConsumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
+import org.assertj.core.api.SoftAssertions;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Mockito;
+import org.mockito.invocation.Invocation;
 
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.manager.ConfigManager;
+import com.ultikits.ultitools.manager.RemoteActionLog;
 import com.ultikits.ultitools.manager.ServerPropertiesManager;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
@@ -56,18 +67,29 @@ class PluginInitiationUtilsConfigUpdateTest {
     private ServerPropertiesManager mockServerProperties;
     private UltiPanelWebSocketClient mockWebSocket;
     private Object previousPanelWs;
+    private UltiTools ultiToolsMock;
+    private RemoteActionLog mockRemoteActionLog;
+    /** The live config the capability gate reads; rows set their switches on it, never re-stub. */
+    private YamlConfiguration panelConfig;
+    /** What getServerPropertiesManager() answers; a row may swap in a real manager (no re-stubbing, issue #250). */
+    private ServerPropertiesManager serverPropertiesManager;
 
     @BeforeEach
     void setUp() throws Exception {
         mockLogger = mock(Logger.class);
         mockConfigManager = mock(ConfigManager.class);
         mockServerProperties = mock(ServerPropertiesManager.class);
+        mockRemoteActionLog = mock(RemoteActionLog.class);
+        panelConfig = new YamlConfiguration();
+        serverPropertiesManager = mockServerProperties;
 
         // 必须用 Consumer 重载：先打桩、后发布。见 TestHelper 的 javadoc 与 issue #250。
-        TestHelper.mockUltiToolsInstance(ultiTools -> {
+        ultiToolsMock = TestHelper.mockUltiToolsInstance(ultiTools -> {
             lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
             lenient().when(ultiTools.getConfigManager()).thenReturn(mockConfigManager);
-            lenient().when(ultiTools.getServerPropertiesManager()).thenReturn(mockServerProperties);
+            lenient().when(ultiTools.getServerPropertiesManager()).thenAnswer(invocation -> serverPropertiesManager);
+            lenient().when(ultiTools.getConfig()).thenReturn(panelConfig);
+            lenient().when(ultiTools.getRemoteActionLog()).thenReturn(mockRemoteActionLog);
         });
 
         mockWebSocket = mock(UltiPanelWebSocketClient.class);
@@ -128,6 +150,161 @@ class PluginInitiationUtilsConfigUpdateTest {
         ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
         verify(mockWebSocket).sendMessage(captor.capture());
         return captor.getValue();
+    }
+
+    // ========== Inbound update_config capability (case 180e5fe3, D-04) ==========
+
+    private static final String NAMED_FILE = "config/lang.yml";
+    private static final String NAMED_CONTENT = "{\"language\":\"zh\"}";
+    private static final String WHOLE_CONTENT = "{\"UltiTools\":{\"config/lang.yml\":{\"language\":\"zh\"}}}";
+    private static final String SERVER_PROPERTIES_CONTENT = "{\"motd\":\"synthetic\"}";
+
+    /** The four update_config target shapes the handler routes differently. */
+    enum UpdateTarget {
+        /** fileName server_properties, no content: the handler's get branch. */
+        SERVER_PROPERTIES_GET(Capability.SERVER_PROPERTIES),
+        /** fileName server_properties with content: the handler's applySetAll branch. */
+        SERVER_PROPERTIES_WRITE(Capability.SERVER_PROPERTIES),
+        /** A named config file with content. */
+        NAMED_FILE(Capability.FILE_WRITE),
+        /** No fileName, whole nested config as content. */
+        WHOLE_CONFIG(Capability.FILE_WRITE);
+
+        private final Capability governing;
+
+        UpdateTarget(Capability governing) {
+            this.governing = governing;
+        }
+
+        JsonObject data(String requestId) {
+            switch (this) {
+                case SERVER_PROPERTIES_GET:
+                    return panelMessage("server_properties", null, requestId);
+                case SERVER_PROPERTIES_WRITE:
+                    return panelMessage("server_properties", SERVER_PROPERTIES_CONTENT, requestId);
+                case NAMED_FILE:
+                    return panelMessage(PluginInitiationUtilsConfigUpdateTest.NAMED_FILE, NAMED_CONTENT, requestId);
+                default:
+                    return panelMessage(null, WHOLE_CONTENT, requestId);
+            }
+        }
+    }
+
+    static Stream<Arguments> switchesByTarget() {
+        List<Arguments> rows = new ArrayList<>();
+        for (boolean fileWrite : new boolean[] {true, false}) {
+            for (boolean serverProperties : new boolean[] {true, false}) {
+                for (UpdateTarget target : UpdateTarget.values()) {
+                    rows.add(Arguments.of(fileWrite, serverProperties, target));
+                }
+            }
+        }
+        return rows.stream();
+    }
+
+    private void setSwitches(boolean fileWrite, boolean serverProperties) {
+        panelConfig.set(Capability.FILE_WRITE.getConfigPath(), fileWrite);
+        panelConfig.set(Capability.SERVER_PROPERTIES.getConfigPath(), serverProperties);
+    }
+
+    private static JsonObject updateConfigMessage(JsonObject data) {
+        JsonObject message = new JsonObject();
+        message.addProperty("type", "update_config");
+        if (data != null) {
+            message.add("data", data);
+        }
+        return message;
+    }
+
+    /** Counts the invocations of {@code methodName} on {@code mock}, any overload. */
+    private static long invocationsOf(Object mock, String methodName) {
+        return Mockito.mockingDetails(mock).getInvocations().stream()
+                .map(Invocation::getMethod)
+                .filter(method -> method.getName().equals(methodName))
+                .count();
+    }
+
+    /** Counts handleServerProperties calls whose data asks for action get. */
+    private long serverPropertiesGets() {
+        return Mockito.mockingDetails(mockServerProperties).getInvocations().stream()
+                .filter(invocation -> invocation.getMethod().getName().equals("handleServerProperties"))
+                .map(invocation -> (JsonObject) invocation.getArgument(0))
+                .filter(data -> data != null && data.has("action") && "get".equals(data.get("action").getAsString()))
+                .count();
+    }
+
+    private List<RemoteActionLog.Entry> recordedVerdicts() {
+        ArgumentCaptor<RemoteActionLog.Entry> captor = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
+        verify(mockRemoteActionLog, Mockito.atLeast(0)).record(captor.capture());
+        return captor.getAllValues();
+    }
+
+    private List<JsonObject> sentOfType(String type) {
+        ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
+        verify(mockWebSocket, Mockito.atLeast(0)).sendMessage(captor.capture());
+        return captor.getAllValues().stream()
+                .filter(sent -> sent.has("type") && type.equals(sent.get("type").getAsString()))
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Case 180e5fe3 (D-04): update_config's capability follows the target the handler actually
+     * routes to. A server_properties get or write is governed by the server-properties switch
+     * alone; a named-file or whole-config write by the file-write switch alone. Sent as a full
+     * inbound message through the real dispatch table and gate, so the refusal, the verdict and
+     * the publish decision are the ones panel traffic observes.
+     *
+     * <p>Assertions are grouped so a failure names its kind: routing and verdict (soft, reported
+     * together) first, then capability naming.
+     */
+    @ParameterizedTest(name = "file-write={0}, server-properties={1}, target={2}")
+    @MethodSource("switchesByTarget")
+    @DisplayName("update_config capability follows the payload target")
+    void updateConfigCapabilityFollowsPayloadTarget(boolean fileWrite, boolean serverProperties,
+                                                    UpdateTarget target) {
+        setSwitches(fileWrite, serverProperties);
+        lenient().when(mockServerProperties.applySetAll(any(JsonObject.class)))
+                .thenReturn(new ServerPropertiesManager.SetAllResult(singletonList("motd"), emptyList(),
+                        emptyList(), emptyList(), emptyList(), emptyList()));
+        String requestId = "req-matrix-" + target.name();
+        Capability expected = target.governing;
+        boolean allowed = expected == Capability.FILE_WRITE ? fileWrite : serverProperties;
+
+        PluginInitiationUtils.handleInboundMessage(updateConfigMessage(target.data(requestId)));
+
+        long gets = serverPropertiesGets();
+        long setAlls = invocationsOf(mockServerProperties, "applySetAll");
+        long configWrites = invocationsOf(mockConfigManager, "loadFromJson");
+        long eventBusReads = invocationsOf(ultiToolsMock, "getEventBus");
+        List<RemoteActionLog.Entry> verdicts = recordedVerdicts();
+        List<JsonObject> denials = sentOfType("capability_denied");
+
+        SoftAssertions routingAndVerdict = new SoftAssertions();
+        routingAndVerdict.assertThat(gets).as("routing: server_properties get calls")
+                .isEqualTo(allowed && target == UpdateTarget.SERVER_PROPERTIES_GET ? 1L : 0L);
+        routingAndVerdict.assertThat(setAlls).as("routing: applySetAll calls")
+                .isEqualTo(allowed && target == UpdateTarget.SERVER_PROPERTIES_WRITE ? 1L : 0L);
+        routingAndVerdict.assertThat(configWrites).as("routing: config writer calls")
+                .isEqualTo(allowed && expected == Capability.FILE_WRITE ? 1L : 0L);
+        routingAndVerdict.assertThat(eventBusReads > 0).as("routing: PanelMessageEvent publish consulted")
+                .isEqualTo(allowed);
+        routingAndVerdict.assertThat(verdicts).as("verdict: gate-owned entries").hasSize(1);
+        routingAndVerdict.assertThat(verdicts).extracting(RemoteActionLog.Entry::getVerdict)
+                .as("verdict: kind")
+                .containsExactly(allowed ? RemoteActionLog.Verdict.ALLOWED : RemoteActionLog.Verdict.DENIED);
+        routingAndVerdict.assertThat(denials).as("verdict: capability_denied messages").hasSize(allowed ? 0 : 1);
+        routingAndVerdict.assertAll();
+
+        assertThat(verdicts.get(0).getCapability()).as("capability: verdict entry names the governing switch")
+                .isEqualTo(expected.name());
+        if (!allowed) {
+            JsonObject refusal = denials.get(0).getAsJsonObject("data");
+            assertThat(refusal.get("capability").getAsString()).as("capability: capability_denied names it")
+                    .isEqualTo(expected.name());
+            assertThat(refusal.get("configKey").getAsString()).as("capability: capability_denied config key")
+                    .isEqualTo(expected.getConfigPath());
+            assertThat(refusal.get("requestId").getAsString()).as("refusal echoes requestId").isEqualTo(requestId);
+        }
     }
 
     @Nested
