@@ -128,6 +128,43 @@ class PluginManagerDependencyOrderTest {
         @Override protected void onUnregister() { /* nothing to release: this fixture owns no state */ }
     }
 
+    public static class OrderPluginB extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override protected void onUnregister() { /* nothing to release: this fixture owns no state */ }
+    }
+
+    // Refused for its missing hard dependency; its loadBefore on OrderPluginB is ordering only.
+    @PluginDependency(depends = {"OrderMissingModule"}, loadBefore = {"OrderPluginB"})
+    public static class OrderMissingDepLoadBeforeB extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override protected void onUnregister() { /* nothing to release: this fixture owns no state */ }
+    }
+
+    // Only optionally uses the refused module above, so it must still load.
+    @PluginDependency(softDepends = {"OrderMissingDepLoadBeforeB"})
+    public static class OrderSoftDependsOnRefused extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override protected void onUnregister() { /* nothing to release: this fixture owns no state */ }
+    }
+
+    @Test
+    @DisplayName("a missing hard dependency keeps the optional and ordering dependents of the "
+            + "refused module in the load list")
+    void missingHardDependencyKeepsOptionalAndOrderingDependents() throws Exception {
+        List<Class<? extends UltiToolsPlugin>> input = new ArrayList<>();
+        input.add(OrderMissingDepLoadBeforeB.class);
+        input.add(OrderSoftDependsOnRefused.class);
+        input.add(OrderPluginB.class);
+        input.add(OrderPluginA.class);
+
+        List<Class<? extends UltiToolsPlugin>> result = invokeSort(input);
+
+        // Exactly the declaring module is left out; the loadBefore target, the optional
+        // dependent and the unrelated module are all loaded.
+        assertThat(result).containsExactlyInAnyOrder(
+            OrderPluginB.class, OrderSoftDependsOnRefused.class, OrderPluginA.class);
+    }
+
     @Test
     @DisplayName("一个依赖环只拒绝其成员，未受影响的模块仍出现在返回列表中")
     void cycleRefusesOnlyAffectedModulesWhileUnrelatedModuleSurvives() throws Exception {

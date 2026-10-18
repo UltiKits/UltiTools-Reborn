@@ -130,7 +130,7 @@ class PluginDependencyResolverTest {
                 new URL[]{jar.toURI().toURL()},
                 Thread.currentThread().getContextClassLoader(),
                 fixtureClass.getName());
-        // The class name is not attacker-controllable: every one of this helper's nine call
+        // The class name is not attacker-controllable: every one of this helper's call
         // sites passes a compile-time class literal (JarModuleTarget.class and friends), so
         // fixtureClass.getName() is resolved by javac, never from input. The loader is the
         // test's own jar-backed ChildFirstClassLoader built two lines above.
@@ -237,6 +237,22 @@ class PluginDependencyResolverTest {
     // Depends on a plugin that itself has a missing hard dependency.
     @PluginDependency(depends = {"PluginWithMissingDep"})
     public static class PluginDependsOnMissingDepPlugin extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override protected void onUnregister() { /* no-op fixture: nothing to release */ }
+    }
+
+    // Refused for its own missing hard dependency, and also orders itself before PluginB. The
+    // loadBefore entry is an ordering edge only, so PluginB must not be refused with it.
+    @PluginDependency(depends = {"MissingPlugin"}, loadBefore = {"PluginB"})
+    public static class PluginWithMissingDepLoadBeforeB extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override protected void onUnregister() { /* no-op fixture: nothing to release */ }
+    }
+
+    // Only optionally uses a module that is refused for a missing hard dependency, so it must
+    // still load.
+    @PluginDependency(softDepends = {"PluginWithMissingDep"})
+    public static class PluginSoftDependsOnMissingDepPlugin extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
         @Override protected void onUnregister() { /* no-op fixture: nothing to release */ }
     }
@@ -517,6 +533,50 @@ class PluginDependencyResolverTest {
                 new HashSet<>(Arrays.asList("PluginWithMissingDep", "PluginDependsOnMissingDepPlugin")),
                 ex.getRefusedPlugins()
             );
+        }
+
+        @Test
+        @DisplayName("missing-dependency refusal follows only depends edges; optional and ordering "
+                + "dependents survive and stay ordered")
+        void missingDependencyRefusalFollowsOnlyHardEdges() throws Exception {
+            Class<? extends UltiToolsPlugin> loadAfterRefused = loadJarBackedFixture(
+                "loadafter-refused.jar", JarModuleWithLoadAfter.class,
+                "name: LoadAfterModule\nloadAfter:\n  - PluginWithMissingDep\n");
+            List<Class<? extends UltiToolsPlugin>> plugins = Arrays.asList(
+                PluginWithMissingDep.class,
+                PluginWithMissingDepLoadBeforeB.class,
+                PluginDependsOnMissingDepPlugin.class,
+                PluginSoftDependsOnMissingDepPlugin.class,
+                PluginB.class,
+                loadAfterRefused,
+                PluginLoadBeforeC.class,
+                PluginC.class,
+                PluginA.class,
+                PluginSoftDependsOnA.class
+            );
+
+            MissingDependencyException ex = assertThrows(MissingDependencyException.class,
+                () -> resolver.resolve(plugins));
+
+            List<Class<? extends UltiToolsPlugin>> prefix = ex.getSortedPrefix();
+            // Only the two declaring modules and their one hard dependent are refused.
+            assertEquals(
+                new HashSet<>(Arrays.asList(
+                    "PluginWithMissingDep", "PluginWithMissingDepLoadBeforeB",
+                    "PluginDependsOnMissingDepPlugin")),
+                ex.getRefusedPlugins(),
+                "refusal for a missing hard dependency must spread only along depends edges");
+            // The optional dependent, the loadBefore target and the plugin.yml loadAfter module
+            // all load.
+            assertTrue(prefix.contains(PluginSoftDependsOnMissingDepPlugin.class), prefix.toString());
+            assertTrue(prefix.contains(PluginB.class), prefix.toString());
+            assertTrue(prefix.contains(loadAfterRefused), prefix.toString());
+            assertEquals(7, prefix.size(), prefix.toString());
+            // Surviving modules keep every ordering constraint among themselves.
+            assertTrue(prefix.indexOf(PluginLoadBeforeC.class) < prefix.indexOf(PluginC.class),
+                prefix.toString());
+            assertTrue(prefix.indexOf(PluginA.class) < prefix.indexOf(PluginSoftDependsOnA.class),
+                prefix.toString());
         }
 
         @Test
