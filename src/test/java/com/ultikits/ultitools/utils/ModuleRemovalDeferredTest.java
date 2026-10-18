@@ -227,6 +227,9 @@ class ModuleRemovalDeferredTest {
         assertThat(reports.get(0).getLevel()).isEqualTo(Level.SEVERE);
         assertThat(reports.get(0).getKey()).isNotEqualTo(ModuleFileTransactions.Keys.REMOVAL_SKIPPED);
         assertThat(Arrays.asList(reports.get(0).getArgs())).contains(jar.getAbsolutePath());
+        assertThat(reports.get(0).getKey()).isEqualTo(ModuleFileTransactions.Keys.REMOVAL_UNREADABLE);
+        assertThat(reports.get(0).getArgs()).hasSize(2);
+        assertThat(reports.get(0).getArgs()[1].toString()).contains("AccessDeniedException");
 
         readable(jar);
         ModuleFileTransactions laterStart = new ModuleFileTransactions(dataFolder);
@@ -261,5 +264,8 @@ class ModuleRemovalDeferredTest {
         JsonObject otherAfter = removals.get(0).getAsJsonObject();
         assertThat(otherAfter.keySet()).isEqualTo(otherBefore.keySet());
         assertThat(otherAfter).isEqualTo(otherBefore);
+        assertThat(start.pendingReports()).extracting(ModuleFileTransactions.Report::getKey)
+                .containsExactlyInAnyOrder(ModuleFileTransactions.Keys.REMOVAL_UNREADABLE,
+                        ModuleFileTransactions.Keys.REMOVED);
     }
 }

@@ -68,7 +68,10 @@ import com.ultikits.ultitools.manager.ModuleApiLevels;
  * <p><b>Deferred removal.</b> An uninstall whose JAR cannot be deleted while the server runs --
  * Windows holds every module JAR open through the shared module class loader -- records the file
  * ({@link #recordDeferredRemoval(String, List)}), and the next start deletes it before any module
- * loads, if it is still that file (#518).
+ * loads, if it is still that file (#518). Only a file confirmed to be the recorded one is deleted; one
+ * confirmed to be a different file is left alone and its entry dropped; one whose content cannot be
+ * read at that start stays recorded, unchanged, for the next start to try again -- a transient read
+ * failure never cancels an uninstall the operator asked for.
  *
  * <p><b>Where the records live.</b> Under the server root, beside the credential store
  * ({@link #transactionsFolder(File)}), not under {@code plugins/}: the panel's file interface can
@@ -1713,9 +1716,13 @@ public final class ModuleFileTransactions {
     }
 
     /**
-     * Deletes the JARs an uninstall recorded, before any module loads: each only if it is still
-     * the file that was recorded. One that still cannot be deleted stays recorded for the next
-     * start and is reported; one replaced since is left alone and reported.
+     * Deletes the JARs an uninstall recorded, before any module loads: each only if it is confirmed
+     * to still be the file that was recorded. One that still cannot be deleted stays recorded for the
+     * next start and is reported; one confirmed to be a different file -- replaced since -- is left
+     * alone, reported, and its entry dropped. One whose content cannot be read to confirm it is not
+     * deleted either, and keeps its entry exactly as recorded, reported SEVERE with the read error:
+     * whether it is still the recorded file is unknown, and dropping the entry would let a module the
+     * operator uninstalled load at every later start.
      */
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void applyRemoval(Record record) throws RecordRefused {
@@ -1734,7 +1741,14 @@ public final class ModuleFileTransactions {
             if (!exists(file)) {
                 continue;
             }
-            if (!isStillRecorded(removal, file)) {
+            RecordedIdentity identity = recordedIdentity(removal, file);
+            if (identity.readError != null) {
+                report(Level.SEVERE, Keys.REMOVAL_UNREADABLE, file.getAbsolutePath(), describe(identity.readError));
+                remaining.add(removal);
+                pendingRemovals.add(removal.name);
+                continue;
+            }
+            if (!identity.same) {
                 report(Level.WARNING, Keys.REMOVAL_SKIPPED, file.getAbsolutePath());
                 continue;
             }
@@ -1761,11 +1775,51 @@ public final class ModuleFileTransactions {
     /**
      * Whether a file is still the one an uninstall recorded: same size, same modification time,
      * same content. A copy put back after the uninstall has a new timestamp even when its bytes are
-     * the same.
+     * the same. Three outcomes, not two: a file whose content cannot be read is neither confirmed
+     * the same nor confirmed different.
      */
-    private static boolean isStillRecorded(Removal removal, File file) {
-        return removal.sha256 != null && file.length() == removal.size
-                && file.lastModified() == removal.lastModified && removal.sha256.equals(sha256Of(file));
+    private static RecordedIdentity recordedIdentity(Removal removal, File file) {
+        if (removal.sha256 == null || file.length() != removal.size || file.lastModified() != removal.lastModified) {
+            return RecordedIdentity.DIFFERENT;
+        }
+        try {
+            return removal.sha256.equals(readSha256(file)) ? RecordedIdentity.SAME : RecordedIdentity.DIFFERENT;
+        } catch (IOException e) {
+            return new RecordedIdentity(false, e);
+        }
+    }
+
+    /**
+     * What {@link #recordedIdentity} found: the same file, a different file, or -- with the read
+     * error -- a file whose content could not be read to tell.
+     */
+    private static final class RecordedIdentity {
+        static final RecordedIdentity SAME = new RecordedIdentity(true, null);
+        static final RecordedIdentity DIFFERENT = new RecordedIdentity(false, null);
+
+        final boolean same;
+        /** Why the content could not be read; {@code null} when it was read. */
+        final IOException readError;
+
+        RecordedIdentity(boolean same, IOException readError) {
+            this.same = same;
+            this.readError = readError;
+        }
+    }
+
+    /**
+     * A file's SHA-256, failing with the reason it cannot be read. {@link #sha256Of(File)} returns
+     * {@code null} instead, which its other callers treat as a refusal or a held state; a recorded
+     * removal needs the reason, and must not read "cannot be read" as "a different file".
+     */
+    private static String readSha256(File file) throws IOException {
+        try {
+            return ResourceHashSidecar.sha256(file);
+        } catch (java.io.UncheckedIOException e) {
+            throw e.getCause();
+        } catch (SecurityException e) {
+            throw new IOException(file.getAbsolutePath() + ": access denied: " + describe(e), e);
+        }
     }
 
     /** Whether {@code file} is the JAR this transaction staged, by content. */
@@ -2612,6 +2666,9 @@ public final class ModuleFileTransactions {
         public static final String REMOVED = "已删除卸载时未能删除的模块 JAR：%s。";
         public static final String REMOVAL_FAILED = "卸载时记录的模块 JAR %s 仍无法删除（%s）；本次启动会再次加载它，下次启动会再试。";
         public static final String REMOVAL_SKIPPED = "卸载时记录的模块 JAR %s 自卸载后已被替换，未删除。";
+        /** Args: the JAR's path, the read error. */
+        public static final String REMOVAL_UNREADABLE =
+                "卸载时记录的模块 JAR %s 无法读取，无法确认它仍是记录的文件（%s）；未删除，本次启动会再次加载它，下次启动会再试。";
         public static final String RECORD_REFUSED = "更新记录 %s 已拒绝执行：%s";
         public static final String RECORD_UNREADABLE = "更新记录 %s 无法读取，已跳过：%s";
         public static final String RECORD_WRITE_FAILED = "更新记录 %s 无法写入：%s";
