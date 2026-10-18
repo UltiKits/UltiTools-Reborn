@@ -290,4 +290,52 @@ class UltiPanelLogTransmitterReplayTest {
         assertThat(ids).containsExactlyElementsOf(all.subList(sentCount, 300));
         assertThat(transmitter.getReplayQueueSize()).isZero();
     }
+
+    // Case b1fcfdbc (#677): admission to the replay queue is memory-only and does not depend on the
+    // connection; sending still waits for a connected client, and the transmission switch still
+    // gates admission. Characterization controls of 20.7-03's admission change.
+
+    @Test
+    @DisplayName("records replayed while disconnected are queued, not dropped, and nothing is sent")
+    void replayWhileDisconnectedIsQueuedNotDropped() {
+        connected.set(false);
+
+        replay(3, 0);
+
+        assertThat(transmitter.getReplayQueueSize()).isEqualTo(3);
+        assertThat(sent).as("nothing is sent while disconnected").isEmpty();
+    }
+
+    @Test
+    @DisplayName("a queued replay is sent only once the client is connected, oldest first")
+    void queuedReplayIsSentOnlyOnceConnectedOldestFirst() {
+        connected.set(false);
+        replay(3, 0);
+
+        transmitter.sendReplayBatch();
+        assertThat(sent).as("the replay sender waits for a connected client").isEmpty();
+        assertThat(transmitter.getReplayQueueSize()).isEqualTo(3);
+
+        connected.set(true);
+        drainManually(5);
+
+        assertThat(replayedIds()).containsExactlyElementsOf(expected(3));
+        assertThat(transmitter.getReplayQueueSize()).isZero();
+    }
+
+    @Test
+    @DisplayName("with log transmission switched off, a replay queues nothing")
+    void transmissionSwitchedOffStillQueuesNothing() {
+        transmitter.setLogTransmissionEnabled(false);
+
+        replay(3, 0);
+
+        assertThat(transmitter.getReplayQueueSize()).as("switched off").isZero();
+        assertThat(sent).isEmpty();
+
+        // Control: the same replay is admitted once transmission is switched back on.
+        transmitter.setLogTransmissionEnabled(true);
+        replay(3, 0);
+        assertThat(transmitter.getReplayQueueSize()).as("switched on").isEqualTo(3);
+    }
 }
