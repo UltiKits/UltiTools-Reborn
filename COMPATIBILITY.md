@@ -1919,6 +1919,68 @@ This section governs the third kind.
   unparseable one, never overwritten). A module that already handles the declared `IOException`
   needs no change. Separately, each credential write now forces the file and its directory to disk
   around the atomic rename, which adds the cost of two disk syncs to each credential write.
+  When both the pre-6.3.0 `plugins/UltiTools/data.json` and the current `.ultikits/credentials.json` under the server
+  root exist, the old copy is removed only after the current file has been read as a credential document - any JSON
+  object, `{}` included ([#672](https://github.com/UltiKits/UltiTools-Reborn/issues/672)); the current file's content
+  wins and is never overwritten with the old one's. A current file that is empty, whitespace-only, the JSON literal
+  `null`, not valid JSON, a string or a number instead of an object, or not a regular file does not count: both files are
+  kept unchanged, one WARNING names both paths (never any content), no server UUID is generated and no UltiCloud token is
+  written or cleared, and `CredentialStore.write` refuses with a `DataAccessException` while a readable pre-6.3.0 copy
+  waits behind such a file. The next access after the current file is fixed - restored from a backup, or moved out of the
+  way so the old copy migrates - completes the cleanup. A current file that cannot be opened (permission denied) also keeps
+  both files and fails the access. Before this change the old copy was deleted as soon as the current file existed, so an
+  unreadable current file left no readable credential at all. Migration to a current file that does not exist yet is
+  unchanged: the copy is written, read back and compared with the old data before the old file is removed.
+
+  中文补充：两份凭据文件并存时，只有当前文件（服务器根目录下的 `.ultikits/credentials.json`）能被读成凭据文档（任何 JSON 对象，包括 `{}`）之后，才会删除 6.3.0 之前的旧副本（`plugins/UltiTools/data.json`）（#672）；以当前文件的内容为准，不会被旧内容覆盖。当前文件为空、只含空白、为 `null`、不是合法 JSON、是字符串或数字而不是对象，或不是普通文件时，两个文件都原样保留，一条 WARNING 写明两个路径（不含任何文件内容），不生成服务器 UUID，也不写入或清除 UltiCloud 令牌；旧副本可读而当前文件不可读期间，`CredentialStore.write` 以 `DataAccessException` 拒绝。修好当前文件（从备份恢复，或把它移开让旧副本迁移）之后的下一次访问会完成清理。当前文件无法打开（权限不足）时同样保留两个文件，并使这次访问失败。此前只要当前文件存在就会删除旧副本，当前文件不可读时就不剩任何可读的凭据。当前文件尚不存在时的迁移不变：先写入、读回并与旧数据比较，之后才删除旧文件。
+- **A remote file request uses the object it authorizes** ([#672](https://github.com/UltiKits/UltiTools-Reborn/issues/672),
+  as of v6.3.0). The remote file API (`read`, `write`, `list`, `delete`) used to judge one form of the requested path and
+  use another: the check ran on the path with every `name/..` pair removed textually, while the I/O used the path as
+  sent, so a `..` after a symbolic link could reach a file outside the editable roots that the check never looked at, and
+  a write to a dangling link created the link's target. Each request is now resolved on the filesystem once, and that one
+  result is both what is judged and what is read, written, listed or deleted. What an operator or a panel author sees:
+  a request whose real target lies outside every editable root is refused with the configurable
+  `ultipanel.files.editable-roots` refusal, and a `list` marks such an entry `accessible: false` with
+  `reason: OUTSIDE_ROOTS` (an alias to an outside file used to be listed as accessible); a path that cannot be located safely is
+  refused and no configuration changes that - `.` or `..` in the part of the path that does not exist yet, a dangling or
+  looping symbolic link, a directory that cannot be searched, and a `delete` that names no ordinary entry (`/`, `.`,
+  `dir/.`, `dir/..`; these used to remove the contents of the directory they collapse to); a symbolic link inside a root
+  that points to a protected file (a credential file, the remote action log's directory) is refused like that file, and a
+  `list` marks it `PROTECTED_CREDENTIAL`; a `delete` of a terminal symbolic link - to a file, to a directory with
+  `recursive` absent, `false` or `true`, or to nothing - removes only the link and leaves its target and everything under
+  it alone (a link to a directory deleted with `recursive: true` used to empty the directory it pointed to first). Every
+  refusal is one `DENIED` entry in the remote action log; a refusal reached while the path was being resolved on disk was
+  recorded `ALLOWED` before. A permitted request that then fails for an ordinary reason (a missing file, a path of the
+  wrong type, a write without content) is still one `ALLOWED` entry and a failure reply, and a `list` still records one
+  entry for the directory, never one per row. A panel that stays inside its roots sees no difference; one that reached a
+  file through a `..` after a link is now refused, and the operator who wants that content reachable adds its real
+  directory to `ultipanel.files.editable-roots`.
+
+  中文补充：**远程文件请求使用的就是被授权的那个对象**（自 6.3.0 起，#672）。远程文件 API（`read`、`write`、`list`、`delete`）原来判断的是路径的一种形式，实际使用的却是另一种：检查时先把路径中每个 `名称/..` 在文本上消去，I/O 却用原样的路径，所以符号链接后面的 `..` 可能到达检查从未看过的可编辑根之外的文件，向悬空链接写入还会创建链接指向的目标。现在每个请求只在文件系统上解析一次，这一个结果既是被判断的对象，也是被读取、写入、列出或删除的对象。服主和面板作者会看到：真实目标在所有可编辑根之外的请求，以可配置的 `ultipanel.files.editable-roots` 拒绝，`list` 会把这样的条目标为 `accessible: false`、`reason: OUTSIDE_ROOTS`（指向根外文件的别名原来被列为可访问）；无法被安全定位的路径一律拒绝且无法通过配置放行——路径中尚不存在的部分里的 `.` 或 `..`、悬空或循环的符号链接、无法搜索的目录，以及不指向任何普通条目的 `delete`（`/`、`.`、`dir/.`、`dir/..`，这些原来会清掉它们所折叠到的目录的内容）；根内指向受保护文件（凭据文件、远程操作日志目录）的符号链接，与该文件本身一样被拒绝，`list` 将其标为 `PROTECTED_CREDENTIAL`；对末端符号链接的 `delete`——无论指向文件、指向目录（`recursive` 缺省、`false` 或 `true`）还是什么都不指向——只删除链接本身，目标及其下的一切不动（带 `recursive: true` 删除指向目录的链接，原来会先清空链接所指的目录）。每次拒绝都在远程操作日志里记为一条 `DENIED`；此前在磁盘上解析路径时才发生的拒绝被记为 `ALLOWED`。获准之后因普通原因失败的请求（文件不存在、类型不符、写入不带内容）仍是一条 `ALLOWED` 加一条失败回复，`list` 仍只为目录记一条，不会每行一条。只在根内活动的面板看不到差别；通过链接后面的 `..` 到达文件的面板现在会被拒绝，想让那些内容可达的服主，请把真实目录加入 `ultipanel.files.editable-roots`。
+- **`update_config` is gated by the target it routes to** ([#672](https://github.com/UltiKits/UltiTools-Reborn/issues/672),
+  as of v6.3.0). The message was gated by `ultipanel.capabilities.file-write` whatever it carried, although a `fileName` of
+  `server_properties` is handed to the server-properties editor (a read without content, a write with it). A message for
+  that target now needs `ultipanel.capabilities.server-properties` and nothing else, and every other `update_config` (a
+  named configuration file, the whole configuration) needs `ultipanel.capabilities.file-write` and nothing else; a
+  `fileName` the handler cannot read as one string needs `file-write` and reaches no editor. A refusal is the existing
+  `capability_denied` reply naming the switch, with the request's `requestId`, and one `DENIED` entry in the remote action
+  log. So a panel that edited `server.properties` through `update_config` with only `file-write` on is refused until the
+  operator turns `server-properties` on, and with `server-properties` on and `file-write` off the same message is allowed.
+  The safe-key whitelist is unchanged: a key outside it still gets an error reply naming the key, and the file is not
+  touched.
+
+  中文补充：**`update_config` 按它实际路由到的目标选择开关**（自 6.3.0 起，#672）。原来这条消息无论内容是什么都由 `ultipanel.capabilities.file-write` 把关，而 `fileName` 为 `server_properties` 的消息其实交给服务器属性编辑器处理（不带内容为读取，带内容为写入）。现在该目标只需要 `ultipanel.capabilities.server-properties`，别无其他；其余所有 `update_config`（指名的配置文件、整份配置）只需要 `ultipanel.capabilities.file-write`；处理器读不成单个字符串的 `fileName` 需要 `file-write`，也到不了任何编辑器。拒绝时仍是现有的、点明开关的 `capability_denied` 回复（带上请求的 `requestId`），并在远程操作日志里记一条 `DENIED`。因此只开了 `file-write` 就通过 `update_config` 编辑 `server.properties` 的面板，在服主打开 `server-properties` 之前会被拒绝；开着 `server-properties`、关着 `file-write` 时，同一条消息现在被允许。安全键白名单不变：白名单之外的键仍得到点明该键的错误回复，文件不被改动。
+- **A malformed `ultipanel.commands.blocklist` is rejected whole** ([#672](https://github.com/UltiKits/UltiTools-Reborn/issues/672),
+  as of v6.3.0). The value was read through a converting list getter, so a plain string, an empty string or a list holding a
+  mapping installed an empty or partial blocklist, and the panel could run commands the operator meant to block. When the
+  framework loads the key at server start it now accepts only a list of which every element is a string (each trimmed and
+  lower-cased); anything else - a scalar, a map, or a list with an element that is a mapping, a nested list, null, a number or
+  a boolean - is ignored as a whole. One WARNING names `ultipanel.commands.blocklist` and the kind of the value, never the
+  value, and the ten-command default stays in force. An explicit empty list `[]` is valid and blocks nothing, and an absent
+  key, or `blocklist: ~`, keeps the default. The file is never rewritten. To block nothing, write `[]`; to block a command,
+  write it as a string element.
+
+  中文补充：**格式错误的 `ultipanel.commands.blocklist` 会被整体拒绝**（自 6.3.0 起，#672）。原来这个值经由会做类型转换的列表读取方法读入，所以普通字符串、空字符串或含映射的列表会装入一个空的或残缺的黑名单，面板就能执行服主本想拦截的命令。现在框架在服务器启动时加载该键，只接受每个元素都是字符串的列表（每项去掉首尾空白并转小写）；其他任何形式——标量、映射，或含映射、嵌套列表、null、数字、布尔元素的列表——都整体忽略，输出一条 WARNING，写明 `ultipanel.commands.blocklist` 和值的种类（不写值本身），十条命令的默认值继续生效。显式的空列表 `[]` 合法，表示不拦截任何命令；键缺失或写成 `blocklist: ~` 时保留默认值。文件绝不被改写。想不拦截任何命令请写 `[]`；想拦截某条命令，把它写成字符串元素。
 - Configuration writes follow the maintainer's rule that operator-written configuration is never
   overwritten automatically (2026-10-04, "what code may write, by file type";
   [#599](https://github.com/UltiKits/UltiTools-Reborn/issues/599)). Changed without a migration period,

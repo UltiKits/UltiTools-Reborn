@@ -203,6 +203,25 @@ worked before/after examples, and measurement evidence for every item below are 
 - `CommandExecutionManager.isCommandAllowed` and `FileOperationManager.isPathAllowed` change
   return type from `boolean` to `AccessDecision` (an internal, non-public-API change; recorded
   here because `japicmp` reports it, not because it is a compatibility event for module authors).
+- A remote file request now uses the object it authorizes: `read`, `write`, `list` and `delete` resolve the
+  requested path on the filesystem once, so a `..` after a symbolic link, a link whose target lies outside every
+  editable root and a dangling or looping link can no longer reach an unauthorized file, a path that cannot be
+  located safely is refused, and a `list` marks an alias to an outside file `OUTSIDE_ROOTS` (#672).
+- A panel `delete` of a symbolic link removes only the link, never its target, whether the link points to a file,
+  to a directory (with `recursive` absent, `false` or `true`) or to nothing (#672).
+- A symbolic link inside an editable root that points to a protected file (a credential file, the remote action
+  log's directory) is refused like that file, and a `list` marks it `PROTECTED_CREDENTIAL` (#672).
+- Every refused remote file request is one `DENIED` entry in the remote action log, including a refusal reached
+  while the path is resolved on disk; a permitted request that then fails for an ordinary reason stays one
+  `ALLOWED` entry (#672).
+- `update_config` is gated by the target it routes to: a `server_properties` target needs only
+  `ultipanel.capabilities.server-properties`, every other target only `ultipanel.capabilities.file-write` (#672).
+- A malformed `ultipanel.commands.blocklist` (not a list, or a list with an element that is not a string) is
+  ignored as a whole with one warning and the default blocklist stays in force, instead of installing an empty
+  or partial one; an explicit `[]` stays valid (#672).
+- When both the pre-6.3.0 credential file and the current one exist, the old file is removed only after the
+  current file reads as a credential document; otherwise both are kept, a warning names both paths, and no
+  identity or token is written until the current file is fixed (#672).
 
 ## Where to look for more detail
 
