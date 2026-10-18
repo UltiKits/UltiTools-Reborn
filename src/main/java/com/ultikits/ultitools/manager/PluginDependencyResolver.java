@@ -202,20 +202,24 @@ public class PluginDependencyResolver {
         // and its plugin.yml name: - the two naming conventions this framework already mixes.
         Map<String, String> aliasMap = buildAliasMap(nodes);
 
-        // Build the adjacency list once, over the full node set. A missing hard dependency simply
-        // produces no edge (its target is not a node), so this can run before the missing-dependency
-        // check below and that check can then use the same edges to find every transitive dependent.
+        // Build the adjacency list once, over the full node set and every edge kind (depends,
+        // present softDepends, loadBefore, plugin.yml loadAfter). It decides load ORDER only. A
+        // missing hard dependency simply produces no edge (its target is not a node).
         Map<String, Set<String>> adjacencyList = buildAdjacencyList(nodes, availablePlugins, aliasMap);
 
         // Missing hard dependencies: collect-all instead of throw-on-first (D-10), and every
         // missing dependency PER NODE is collected too, not just the first (#361 / WR-05). A
         // node whose hard dependency does not exist as a node is unloadable; everything that
-        // transitively depends on it (forward along the same edges Kahn's sort would use) is
-        // unloadable with it.
+        // transitively DEPENDS on it (forward along depends edges only, #676) is unloadable with
+        // it. A module that only softDepends on, is named by a loadBefore of, or lists in
+        // plugin.yml loadAfter a refused module is not refused for that: those edges order
+        // modules that are present and never refuse anything. The survivors are then still
+        // sorted on the full adjacency, so every ordering constraint among them holds.
         Map<String, List<String>> missingDependenciesByNode =
             collectMissingHardDependencies(nodes, availablePlugins, aliasMap);
         if (!missingDependenciesByNode.isEmpty()) {
-            Set<String> refused = expandForward(missingDependenciesByNode.keySet(), adjacencyList);
+            Map<String, Set<String>> hardAdjacency = buildHardAdjacencyList(nodes, aliasMap);
+            Set<String> refused = expandForward(missingDependenciesByNode.keySet(), hardAdjacency);
             Set<String> survivorNames = new LinkedHashSet<>(nodes.keySet());
             survivorNames.removeAll(refused);
 
@@ -403,11 +407,11 @@ public class PluginDependencyResolver {
     }
 
     /**
-     * Expands a seed set of node names forward along the adjacency edges (dependency -&gt;
-     * dependent), returning the seeds plus every node transitively reachable from them. Used both
-     * to compute the refused set for a missing hard dependency (this method) and, implicitly, by
-     * Kahn's own partition for a cycle (a node depending on a cycle member never reaches
-     * in-degree 0, so it is already excluded from {@code sortedNames} without needing this call).
+     * Expands a seed set of node names forward along the given adjacency edges (dependency -&gt;
+     * dependent), returning the seeds plus every node transitively reachable from them. Its only
+     * caller passes the hard-only adjacency from {@link #buildHardAdjacencyList}, so the refused
+     * set for a missing hard dependency follows {@code depends} edges alone (#676). A cycle does
+     * not use this method: Kahn's own partition already leaves out every node it cannot place.
      */
     private Set<String> expandForward(Set<String> seeds, Map<String, Set<String>> adjacencyList) {
         Set<String> visited = new LinkedHashSet<>(seeds);
@@ -546,6 +550,30 @@ public class PluginDependencyResolver {
         }
 
         return adjacencyList;
+    }
+
+    /**
+     * Builds the hard-only adjacency list: an edge from A to B exactly when B declares
+     * {@code depends} on A (resolved through {@code aliasMap}) and A is present. This is the only
+     * graph a missing-dependency refusal propagates over (#676); {@code softDepends},
+     * {@code loadBefore} and {@code plugin.yml} {@code loadAfter} only order modules that are
+     * present and never carry a refusal.
+     */
+    private Map<String, Set<String>> buildHardAdjacencyList(
+            Map<String, PluginNode> nodes, Map<String, String> aliasMap) {
+        Map<String, Set<String>> hardAdjacency = new HashMap<>();
+        for (String name : nodes.keySet()) {
+            hardAdjacency.put(name, new HashSet<>());
+        }
+        for (PluginNode node : nodes.values()) {
+            for (String dep : node.getHardDependencies()) {
+                Set<String> dependents = hardAdjacency.get(resolveAlias(dep, aliasMap));
+                if (dependents != null) {
+                    dependents.add(node.getPluginName());
+                }
+            }
+        }
+        return hardAdjacency;
     }
 
     /**
