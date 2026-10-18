@@ -535,13 +535,42 @@ public abstract class AbstractConfigEntity {
     /** The key a warning names for a change: the setting's path, then the map keys, any key below a secret-shaped one redacted. */
     private String describeKey(Field field, List<String> leaf) {
         StringBuilder text = new StringBuilder(fieldPath(field));
-        boolean secret = isSecretShapedFieldName(field.getName());
-        for (String key : keys(field)) { secret |= isSecretShapedFieldName(key); }
-        for (String key : leaf) {
-            text.append('.').append(secret ? "<redacted>" : key);
+        for (String key : displayKeys(secretSetting(field), leaf)) { text.append('.').append(key); }
+        return "'" + text + "'";
+    }
+
+    /**
+     * The one display rule for map keys in every configuration diagnostic bound for the server log or the panel (#673,
+     * case 54): once the setting or a key above is secret-shaped, every deeper key shows as {@code <redacted>}; the
+     * secret-shaped key itself is shown, so the operator still sees which setting to fix. Only the displayed text is
+     * redacted - whether a value is secret is decided from the real keys ({@link #secretPath}), never from this text.
+     *
+     * @param secretAbove whether a key above {@code keys} - the field name or a declared path segment - is secret-shaped
+     * @param keys        the real keys, outermost first
+     * @return the keys to display, in the same order
+     */
+    private List<String> displayKeys(boolean secretAbove, List<String> keys) {
+        List<String> shown = new ArrayList<>(keys.size());
+        boolean secret = secretAbove;
+        for (String key : keys) {
+            shown.add(secret ? "<redacted>" : key);
             secret |= isSecretShapedFieldName(key);
         }
-        return "'" + text + "'";
+        return shown;
+    }
+
+    /** Whether a setting is secret-shaped: its field name or a segment of its declared path. */
+    private boolean secretSetting(Field field) {
+        boolean secret = isSecretShapedFieldName(field.getName());
+        for (String key : keys(field)) { secret |= isSecretShapedFieldName(key); }
+        return secret;
+    }
+
+    /** Whether a value of {@code field} at {@code leaf} is secret: the setting or a real key down to it is secret-shaped. */
+    private boolean secretPath(Field field, List<String> leaf) {
+        boolean secret = secretSetting(field);
+        for (String key : leaf) { secret |= isSecretShapedFieldName(key); }
+        return secret;
     }
 
     /**
@@ -1615,7 +1644,7 @@ public abstract class AbstractConfigEntity {
             baseline.put(field, theirs);
             if (!initialize && savedSnapshot != null && savedSnapshot.containsKey(field)) {
                 Object merged = mergeReload(savedSnapshot.get(field), mine.get(field), theirs, declaredType(field),
-                        fieldPath(field), isSecretShapedFieldName(field.getName()), conflicts);
+                        field, new ArrayList<>(), conflicts);
                 try {
                     Object value = registry().fromPlainResult(merged, declaredType(field), configFilePath,
                             keys(field), field.getAnnotation(ConfigEntry.class)).value();
@@ -1892,9 +1921,14 @@ public abstract class AbstractConfigEntity {
      * such as a Bukkit {@code Location} or {@code Vector}, a typed map's value that is not a map - is one value: the
      * module's, the file's, or on a conflict the file's whole, never a value mixed from both (17-65 review round 2 R2-01,
      * the same rule as the save's {@link #changedLeaves}). A conflict over a composite value or a list names the key only.
+     * <p>
+     * The recursion carries the setting and the real keys down to the value. A conflict's key is displayed through
+     * {@link #describeKey}, so a key below a secret-shaped field name, declared path segment or map key is never named,
+     * and whether the discarded value is redacted is decided from the real keys (#673, case 54). The merged map keeps the
+     * real keys.
      */
     @SuppressWarnings("PMD.NPathComplexity") // The recursive three-way merge explicitly distinguishes absence, order and secret-valued conflicts.
-    private Object mergeReload(Object base, Object mine, Object theirs, Type declared, String path, boolean secret,
+    private Object mergeReload(Object base, Object mine, Object theirs, Type declared, Field field, List<String> leaf,
             List<String> conflicts) {
         if (orderedEquals(mine, base)) { return theirs; }
         if (orderedEquals(theirs, base) || orderedEquals(mine, theirs)) { return mine; }
@@ -1904,10 +1938,10 @@ public abstract class AbstractConfigEntity {
             Set<Object> keys = new java.util.LinkedHashSet<>(); keys.addAll(t.keySet()); keys.addAll(m.keySet()); keys.addAll(b.keySet());
             Map<String, Object> merged = new LinkedHashMap<>();
             for (Object key : keys) {
+                List<String> child = new ArrayList<>(leaf); child.add(String.valueOf(key));
                 Object value = mergeReload(b.containsKey(key) ? b.get(key) : ABSENT_RELOAD_VALUE,
                         m.containsKey(key) ? m.get(key) : ABSENT_RELOAD_VALUE,
-                        t.containsKey(key) ? t.get(key) : ABSENT_RELOAD_VALUE, valueType,
-                        path + "." + key, secret || isSecretShapedFieldName(String.valueOf(key)), conflicts);
+                        t.containsKey(key) ? t.get(key) : ABSENT_RELOAD_VALUE, valueType, field, child, conflicts);
                 if (value != ABSENT_RELOAD_VALUE) { merged.put(String.valueOf(key), value); }
             }
             return merged;
@@ -1915,12 +1949,12 @@ public abstract class AbstractConfigEntity {
         if (mine instanceof Map || mine instanceof List) {
             // A composite value or a list is replaced whole; its contents are not listed (they may hold anything;
             // 17-65 review round 3 R3-I3).
-            conflicts.add("reload conflict at '" + path + "': discarded the in-memory value; file wins");
+            conflicts.add("reload conflict at " + describeKey(field, leaf) + ": discarded the in-memory value; file wins");
             return theirs;
         }
-        String value = secret || isSecretShapedFieldName(path) || containsSecret(mine) ? "<redacted>"
+        String value = secretPath(field, leaf) || containsSecret(mine) ? "<redacted>"
                 : mine == ABSENT_RELOAD_VALUE ? "<absent>" : String.valueOf(mine);
-        conflicts.add("reload conflict at '" + path + "': discarded in-memory value " + value + "; file wins");
+        conflicts.add("reload conflict at " + describeKey(field, leaf) + ": discarded in-memory value " + value + "; file wins");
         return theirs;
     }
 
