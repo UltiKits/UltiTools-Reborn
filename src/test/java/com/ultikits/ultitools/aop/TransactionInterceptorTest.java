@@ -8,6 +8,8 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -33,6 +35,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import com.ultikits.ultitools.annotations.Isolation;
 import com.ultikits.ultitools.annotations.Propagation;
 import com.ultikits.ultitools.annotations.Transactional;
+import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.interfaces.TransactionManager;
 import com.ultikits.ultitools.manager.DataSourceTransactionManager;
 import com.zaxxer.hikari.HikariConfig;
@@ -1495,6 +1498,60 @@ class TransactionInterceptorTest {
             realManager.begin();
             assertThat(realManager.getTransactionDepth()).isEqualTo(1);
             realManager.rollback();
+        }
+    }
+
+    /**
+     * C04: a transaction setting (isolation, read-only, timeout) that fails after {@code begin()}
+     * must not strand the transaction that invocation began. The interceptor rolls that
+     * transaction back, rethrows the settings failure, and leaves no active context on the
+     * thread, so the next REQUIRED call begins and commits its own transaction instead of joining
+     * a leaked one.
+     */
+    @Nested
+    @DisplayName("C04: a failed transaction setting rolls back the transaction it began")
+    class SettingsFailureCleanupTests {
+
+        @Test
+        @DisplayName("REQUIRED on a real JDBC manager: a refused isolation level rolls back and "
+                + "releases the connection, and the next REQUIRED call begins and commits its own")
+        void requiredSettingsFailureRollsBackAndNextCallBeginsFresh() throws Throwable {
+            DataSource dataSource = mock(DataSource.class);
+            Connection firstConnection = mock(Connection.class);
+            Connection secondConnection = mock(Connection.class);
+            when(dataSource.getConnection()).thenReturn(firstConnection, secondConnection);
+            SQLException refused = new SQLException("isolation level refused");
+            doThrow(refused).when(firstConnection)
+                    .setTransactionIsolation(Isolation.SERIALIZABLE.getLevel());
+            DataSourceTransactionManager realManager = new DataSourceTransactionManager(dataSource);
+            TransactionInterceptor realInterceptor = new TransactionInterceptor(realManager);
+
+            MethodInvocation failing = mock(MethodInvocation.class);
+            when(failing.getMethod())
+                    .thenReturn(TransactionSettingsService.class.getMethod("withIsolation"));
+
+            DataAccessException thrown = assertThrows(DataAccessException.class,
+                    () -> realInterceptor.invoke(failing));
+
+            assertThat(thrown.getCause()).isSameAs(refused);
+            verify(failing, never()).proceed();
+            assertThat(realManager.hasActiveTransaction())
+                    .as("no transaction context may remain active after a settings failure")
+                    .isFalse();
+            verify(firstConnection).rollback();
+            verify(firstConnection).close();
+            verify(firstConnection, never()).commit();
+
+            MethodInvocation next = mock(MethodInvocation.class);
+            when(next.getMethod()).thenReturn(PropagationService.class.getMethod("required"));
+            when(next.proceed()).thenReturn("next");
+
+            assertThat(realInterceptor.invoke(next)).isEqualTo("next");
+
+            verify(secondConnection).setAutoCommit(false);
+            verify(secondConnection).commit();
+            verify(secondConnection).close();
+            assertThat(realManager.hasActiveTransaction()).isFalse();
         }
     }
 }
