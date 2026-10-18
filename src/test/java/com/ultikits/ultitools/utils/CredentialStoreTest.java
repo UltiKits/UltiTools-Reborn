@@ -852,6 +852,29 @@ class CredentialStoreTest {
                 Files.setPosixFilePermissions(current, original);
             }
         }
+
+        /** An anonymous logger that keeps every record it receives, as anUnreadableFileIsReportedOnceAsSevere does. */
+        static Logger recordingLogger(List<LogRecord> records) {
+            Logger logger = Logger.getAnonymousLogger();
+            logger.setUseParentHandlers(false);
+            logger.addHandler(new Handler() {
+                @Override
+                public void publish(LogRecord logRecord) {
+                    records.add(logRecord);
+                }
+
+                @Override
+                public void flush() {
+                    // nothing buffered
+                }
+
+                @Override
+                public void close() {
+                    // nothing to release
+                }
+            });
+            return logger;
+        }
     }
 
     @ParameterizedTest(name = "{0}")
@@ -977,6 +1000,83 @@ class CredentialStoreTest {
         softly.assertThat(namesIn(files.current.getParent())).as("nothing appears beside it")
                 .containsExactly("credentials.json");
         softly.assertAll();
+    }
+
+    /** Current files that read as credential documents, with the document read() then returns. */
+    static Stream<Arguments> readableCurrentContents() {
+        Map<String, Object> differentDocument = new LinkedHashMap<>();
+        differentDocument.put("uuid", "synthetic-current-uuid");
+        return Stream.of(
+                Arguments.of("a valid document different from the pre-6.3.0 one",
+                        "{\"uuid\":\"synthetic-current-uuid\"}", differentDocument),
+                Arguments.of("the empty document {}", "{}", new LinkedHashMap<String, Object>()),
+                // Characterization, not a new rule: Gson's map adapter reads a JSON array as a list of
+                // key/value pairs, so [] is the empty document under the existing reader contract.
+                Arguments.of("a JSON array [] (characterized: parsed as the empty document)", "[]",
+                        new LinkedHashMap<String, Object>()));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("readableCurrentContents")
+    @DisplayName("a current file that reads as a credential document wins: it keeps its bytes and the pre-6.3.0 copy is removed (case cc22e454, D-06)")
+    void readableCurrentFileWinsAndLegacyCopyIsRemoved(String kind, String content, Map<String, Object> document)
+            throws IOException {
+        DualFileFixture files = new DualFileFixture(tempDir);
+        byte[] currentBefore = files.placeCurrent(content);
+
+        CredentialStore.ReadResult result = CredentialStore.read();
+
+        assertThat(Files.exists(files.legacy)).as("%s: the pre-6.3.0 copy is removed after validation", kind)
+                .isFalse();
+        assertThat(Files.readAllBytes(files.current))
+                .as("%s: the current file keeps its bytes, never overwritten with the old content", kind)
+                .isEqualTo(currentBefore);
+        assertThat(namesIn(files.current.getParent())).containsExactly("credentials.json");
+        assertThat(result.isParsed()).as("%s: read() returns the current document", kind).isTrue();
+        assertThat(result.data()).isEqualTo(document);
+    }
+
+    @Test
+    @DisplayName("a kept-both conflict is logged as one WARNING naming both paths, never credential content (case cc22e454, D-06)")
+    void keptBothConflictIsWarnedOncePerEpisodeWithoutCredentialContent() throws IOException {
+        DualFileFixture files = new DualFileFixture(tempDir);
+        files.placeCurrent("{\"uuid\":\"synthetic-current-uuid\",\"cloud_token\":{\"access_token\":\"synthetic-current-tok");
+        List<LogRecord> records = new ArrayList<>();
+        UltiTools plugin = mock(UltiTools.class);
+        when(plugin.getLogger()).thenReturn(DualFileFixture.recordingLogger(records));
+        try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class)) {
+            ultiTools.when(UltiTools::getInstance).thenReturn(plugin);
+
+            assertThat(CredentialStore.read().isParseFailure()).isTrue();
+            assertThat(CredentialStore.read().isParseFailure()).isTrue();
+        }
+
+        assertThat(records.stream().filter(r -> Level.WARNING.equals(r.getLevel())).collect(Collectors.toList()))
+                .as("two reads during one conflict log exactly one WARNING")
+                .hasSize(1)
+                .allSatisfy(r -> assertThat(r.getMessage())
+                        .contains(files.legacy.toString(), files.current.toString(), "both files have been kept"));
+        assertThat(records).as("no log line carries credential content")
+                .noneSatisfy(r -> assertThat(r.getMessage()).containsAnyOf(SYNTHETIC_LEGACY_UUID,
+                        SYNTHETIC_LEGACY_TOKEN, "synthetic-current-uuid", "synthetic-current-tok"));
+        assertThat(Files.exists(files.legacy)).as("and both files are still there").isTrue();
+    }
+
+    @Test
+    @DisplayName("once the unreadable current file is fixed, the next read completes the cleanup and returns the current document (case cc22e454, D-06)")
+    void fixingTheCurrentFileLetsTheNextReadCompleteTheCleanup() throws IOException {
+        DualFileFixture files = new DualFileFixture(tempDir);
+        files.placeCurrent("");
+        assertThat(CredentialStore.read().isParseFailure()).isTrue();
+        assertThat(Files.exists(files.legacy)).as("the pre-6.3.0 copy waits while the conflict lasts").isTrue();
+
+        byte[] fixed = files.placeCurrent("{\"uuid\":\"synthetic-restored-uuid\"}");
+        CredentialStore.ReadResult result = CredentialStore.read();
+
+        assertThat(result.isParsed()).isTrue();
+        assertThat(result.data()).containsOnlyKeys("uuid").containsEntry("uuid", "synthetic-restored-uuid");
+        assertThat(Files.exists(files.legacy)).as("the next access removes the pre-6.3.0 copy").isFalse();
+        assertThat(Files.readAllBytes(files.current)).as("the fixed current file keeps its bytes").isEqualTo(fixed);
     }
 
     @Test
