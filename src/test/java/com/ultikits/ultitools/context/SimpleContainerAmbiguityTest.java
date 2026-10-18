@@ -8,9 +8,13 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.concurrent.TimeUnit;
+
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import com.ultikits.ultitools.annotations.Service;
 import com.ultikits.ultitools.annotations.Transactional;
@@ -618,6 +622,227 @@ class SimpleContainerAmbiguityTest {
 
             assertEquals("proxied-high", resolved.greet());
             assertFalse(resolved instanceof PlainLowPriorityGreeter);
+        }
+    }
+
+    // === C58: adjudicate on definitions before constructing any candidate ===
+
+    interface Shape {
+    }
+
+    @Service(value = "sHigh", priority = 10)
+    static class HighShape implements Shape {
+        static int constructed;
+
+        HighShape() {
+            constructed++;
+        }
+    }
+
+    /** Lower priority, and its only constructor takes the very type it implements. */
+    @Service(value = "sLow", priority = 0)
+    static class LowShapeNeedingShape implements Shape {
+        final Shape delegate;
+
+        LowShapeNeedingShape(Shape delegate) {
+            this.delegate = delegate;
+        }
+    }
+
+    @Service(value = "sLowNoArg", priority = 0)
+    static class LowNoArgShape implements Shape {
+        static int constructed;
+
+        LowNoArgShape() {
+            constructed++;
+        }
+    }
+
+    @Service(value = "sTieA", priority = 7)
+    static class TieShapeA implements Shape {
+        static int constructed;
+
+        TieShapeA() {
+            constructed++;
+        }
+    }
+
+    @Service(value = "sTieB", priority = 7)
+    static class TieShapeB implements Shape {
+        static int constructed;
+
+        TieShapeB() {
+            constructed++;
+        }
+    }
+
+    /** Registered as an already-created instance, never as a definition. */
+    @Service(priority = 5)
+    static class MidShape implements Shape {
+    }
+
+    @Service(value = "sLowest", priority = 1)
+    static class LowestShape implements Shape {
+        static int constructed;
+
+        LowestShape() {
+            constructed++;
+        }
+    }
+
+    /** Made deterministically unresolvable by {@link PoisoningResolver}. */
+    @Service(value = "sPoisoned", priority = 3)
+    static class PoisonedShape implements Shape {
+    }
+
+    /**
+     * Throws {@link NoClassDefFoundError} for {@link PoisonedShape} from {@code resolve}, the call
+     * {@code createBean} makes before construction -- the same place a module class referencing a
+     * symbol absent from the classpath fails in production (07-21), so {@code createBean} memoizes
+     * the bean as deterministically unresolvable (07-23). Counts how often the poisoned class was
+     * touched.
+     */
+    static class PoisoningResolver extends AopProxyResolver {
+        int poisonedTouches;
+
+        @Override
+        public Class<?> resolve(Class<?> beanClass) {
+            if (beanClass == PoisonedShape.class) {
+                poisonedTouches++;
+                throw new NoClassDefFoundError("simulated: a symbol PoisonedShape references is absent");
+            }
+            return super.resolve(beanClass);
+        }
+    }
+
+    /**
+     * C58: {@code getBean(Class)} used to build every assignable candidate (through
+     * {@code getOrderedBeansOfType}) before picking one, so a losing candidate was constructed for
+     * nothing, and a losing candidate whose constructor needs the requested type re-entered its
+     * own creation until the stack overflowed. The winner must be decided on definitions first and
+     * only the winner built.
+     */
+    @Nested
+    @DisplayName("C58: by-type resolution decides the winner before constructing anything")
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    class PriorityBeforeConstructionTests {
+
+        @BeforeEach
+        void resetCounters() {
+            HighShape.constructed = 0;
+            LowNoArgShape.constructed = 0;
+            TieShapeA.constructed = 0;
+            TieShapeB.constructed = 0;
+            LowestShape.constructed = 0;
+        }
+
+        @Test
+        @DisplayName("a lower-priority bean whose constructor takes the same type resolves without overflowing the stack")
+        void lowerPriorityConstructorTakingSameTypeResolves() {
+            SimpleContainer container = new SimpleContainer();
+            container.registerBean(HighShape.class);
+            container.registerBean(LowShapeNeedingShape.class);
+
+            Object bean = assertDoesNotThrow(() -> container.getBean("sLow"),
+                    "resolving the Shape constructor argument must pick the priority-10 HighShape "
+                            + "without constructing the priority-0 bean that is asking for it");
+
+            assertTrue(bean instanceof LowShapeNeedingShape);
+            assertTrue(((LowShapeNeedingShape) bean).delegate instanceof HighShape,
+                    "the injected Shape must be the higher-priority implementation");
+        }
+
+        @Test
+        @DisplayName("only the winner is constructed: the lower-priority definition is never built")
+        void loserIsNeverConstructed() {
+            SimpleContainer container = new SimpleContainer();
+            container.registerBean(HighShape.class);
+            container.registerBean(LowNoArgShape.class);
+
+            Shape bean = container.getBean(Shape.class);
+
+            assertTrue(bean instanceof HighShape);
+            assertEquals(1, HighShape.constructed);
+            assertEquals(0, LowNoArgShape.constructed,
+                    "a candidate that loses the priority comparison must not be constructed");
+        }
+
+        @Test
+        @DisplayName("equal top priorities still throw the ambiguity error, and neither candidate is constructed")
+        void equalTopPrioritiesThrowWithoutConstructing() {
+            SimpleContainer container = new SimpleContainer();
+            container.registerBean(TieShapeA.class);
+            container.registerBean(TieShapeB.class);
+
+            ContainerException thrown = assertThrows(ContainerException.class,
+                    () -> container.getBean(Shape.class));
+
+            assertTrue(thrown.getMessage().contains(TieShapeA.class.getName()));
+            assertTrue(thrown.getMessage().contains(TieShapeB.class.getName()));
+            assertEquals(0, TieShapeA.constructed + TieShapeB.constructed,
+                    "an ambiguous resolution returns nothing, so it must build nothing");
+        }
+
+        @Test
+        @DisplayName("an existing instance (priority 5) loses to a priority-10 definition, which is then created")
+        void existingInstanceLosesToHigherDefinition() {
+            SimpleContainer container = new SimpleContainer();
+            container.registerSingleton("midInstance", new MidShape());
+            container.registerBean(HighShape.class);
+
+            Shape bean = container.getBean(Shape.class);
+
+            assertTrue(bean instanceof HighShape);
+            assertEquals(1, HighShape.constructed);
+        }
+
+        @Test
+        @DisplayName("an existing instance (priority 5) beats a priority-1 definition, which is never created")
+        void existingInstanceBeatsLowerDefinitionWithoutCreatingIt() {
+            SimpleContainer container = new SimpleContainer();
+            MidShape mid = new MidShape();
+            container.registerSingleton("midInstance", mid);
+            container.registerBean(LowestShape.class);
+
+            Shape bean = container.getBean(Shape.class);
+
+            assertSame(mid, bean);
+            assertEquals(0, LowestShape.constructed,
+                    "a definition that loses to an existing instance must not be constructed");
+        }
+
+        @Test
+        @DisplayName("a deterministically unresolvable definition that loses is never touched, and resolution succeeds")
+        void poisonedLoserIsNeverTouched() {
+            SimpleContainer container = new SimpleContainer();
+            PoisoningResolver resolver = new PoisoningResolver();
+            container.setAopProxyResolver(resolver);
+            container.registerBean(HighShape.class);
+            container.registerBean(PoisonedShape.class);
+
+            Shape bean = assertDoesNotThrow(() -> container.getBean(Shape.class),
+                    "a poisoned candidate that loses on priority must not break the resolution");
+
+            assertTrue(bean instanceof HighShape);
+            assertEquals(0, resolver.poisonedTouches,
+                    "the losing poisoned definition must never be created");
+        }
+
+        @Test
+        @DisplayName("a deterministically unresolvable definition that wins still rethrows its original error")
+        void poisonedWinnerRethrowsOriginalError() {
+            SimpleContainer container = new SimpleContainer();
+            container.setAopProxyResolver(new PoisoningResolver());
+            container.registerBean(PoisonedShape.class);
+            container.registerBean(LowNoArgShape.class);
+            NoClassDefFoundError original = assertThrows(NoClassDefFoundError.class,
+                    () -> container.getBean("sPoisoned"));
+
+            NoClassDefFoundError thrown = assertThrows(NoClassDefFoundError.class,
+                    () -> container.getBean(Shape.class));
+
+            assertSame(original, thrown, "the memoized original error must be rethrown unchanged");
+            assertEquals(0, LowNoArgShape.constructed);
         }
     }
 }
