@@ -19,6 +19,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
@@ -1184,6 +1188,107 @@ class SimpleJsonDataOperatorTest {
 
             assertStoredValueHasNoCallerChange("committed, after update(T)");
             assertFlushedBytesHaveNoCallerChange();
+        }
+    }
+
+    /** An entity whose onDelete hook writes a marker field, for {@link DeleteHookIsolationTests}. */
+    @Table("marked_rows")
+    public static class MarkedRow extends BaseDataEntity<String> {
+        static final AtomicInteger ON_DELETE_COUNT = new AtomicInteger();
+
+        @Column("name")
+        private String name;
+        @Column("marker")
+        private String marker;
+
+        public MarkedRow() {
+        }
+
+        MarkedRow(String id, String name) {
+            setId(id);
+            this.name = name;
+        }
+
+        public String getMarker() {
+            return marker;
+        }
+
+        @Override
+        public void onDelete() {
+            ON_DELETE_COUNT.incrementAndGet();
+            marker = "changed-by-onDelete";
+        }
+    }
+
+    /**
+     * onDelete fires on a detached copy of the entry being deleted, so nothing the hook changes
+     * on the entity reaches a committed value -- in particular not through a delete that is then
+     * rolled back.
+     */
+    @Nested
+    @DisplayName("onDelete runs on a detached copy and never changes a committed value")
+    class DeleteHookIsolationTests {
+
+        private SimpleJsonDataOperator<MarkedRow> rows;
+
+        @BeforeEach
+        void setUpRows() {
+            File rowsDir = new File(storeDir, "marked-rows");
+            rowsDir.mkdirs();
+            rows = new SimpleJsonDataOperator<>(rowsDir.getAbsolutePath(), MarkedRow.class);
+            rows.insert(new MarkedRow("row-1", "kept"));
+            MarkedRow.ON_DELETE_COUNT.set(0);
+        }
+
+        @Test
+        @DisplayName("inside a transaction: a rolled-back delById leaves no onDelete change on the committed entry, and another thread never sees one")
+        void rolledBackDeleteLeavesNoHookChange() throws Exception {
+            CountDownLatch deleted = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+            Thread deleter = new Thread(() -> {
+                try {
+                    rows.transaction(() -> {
+                        rows.delById("row-1");
+                        deleted.countDown();
+                        release.await(10, TimeUnit.SECONDS);
+                        throw new IllegalStateException("roll the delete back");
+                    });
+                } catch (IllegalStateException expected) {
+                    // the scripted rollback
+                } catch (Throwable t) {
+                    failure.set(t);
+                } finally {
+                    deleted.countDown();
+                }
+            }, "delete-hook-deleter");
+            deleter.start();
+            try {
+                assertThat(deleted.await(10, TimeUnit.SECONDS)).isTrue();
+                // This thread only reads.
+                MarkedRow seen = rows.getById("row-1");
+                assertThat(seen).as("committed entry while the delete is staged").isNotNull();
+                assertThat(seen.getMarker()).as("onDelete change seen by another thread").isNull();
+            } finally {
+                release.countDown();
+                deleter.join(TimeUnit.SECONDS.toMillis(10));
+            }
+
+            assertThat(deleter.isAlive()).isFalse();
+            assertThat(failure.get()).isNull();
+            assertThat(MarkedRow.ON_DELETE_COUNT.get()).as("onDelete fired at the call").isEqualTo(1);
+            MarkedRow afterRollback = rows.getById("row-1");
+            assertThat(afterRollback).as("the rolled-back delete left the entry").isNotNull();
+            assertThat(afterRollback.getMarker()).as("onDelete change left on the committed entry").isNull();
+        }
+
+        @Test
+        @DisplayName("outside a transaction: delById fires onDelete exactly once and removes the entry")
+        void plainDeleteFiresOnDeleteOnceAndRemoves() {
+            assertThat(rows.deleteByIdCounted("row-1")).isEqualTo(1);
+
+            assertThat(MarkedRow.ON_DELETE_COUNT.get()).isEqualTo(1);
+            assertThat(rows.getById("row-1")).isNull();
         }
     }
 }
