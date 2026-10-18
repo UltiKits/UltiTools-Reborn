@@ -65,7 +65,8 @@
 #
 # Exit codes: 0 = all three invariants hold (including the empty-range case), or --self-test
 #             passed; 1 = at least one invariant violated, a line could not be classified, or
-#             --self-test failed; 64 = usage error (unknown flag, or --base missing without
+#             --self-test failed; 2 = evidence/tool read failure (no comparison verdict);
+#             64 = usage error (unknown flag, or --base missing without
 #             --self-test).
 #
 # assertion C / is_crlf() pipefail note (WINDOWS.md #28, 08-CONTROL-DOC-CORRECTIONS.md C-06):
@@ -96,9 +97,15 @@ USAGE
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --base)      BASE_REF="$2"; shift 2 ;;
-        --head)      HEAD_REF="$2"; shift 2 ;;
-        --scope)     SCOPES+=("$2"); shift 2 ;;
+        --base)
+            [ "$#" -ge 2 ] && [ -n "$2" ] || { usage; exit 64; }
+            BASE_REF="$2"; shift 2 ;;
+        --head)
+            [ "$#" -ge 2 ] && [ -n "$2" ] || { usage; exit 64; }
+            HEAD_REF="$2"; shift 2 ;;
+        --scope)
+            [ "$#" -ge 2 ] && [ -n "$2" ] || { usage; exit 64; }
+            SCOPES+=("$2"); shift 2 ;;
         --self-test) SELF_TEST=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *)
@@ -109,9 +116,27 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
-cd "$REPO_ROOT"
+evidence_error() {
+    echo "ERROR: unable to obtain comparison evidence: $*" >&2
+    exit 2
+}
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || evidence_error "script directory"
+REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)" || evidence_error "repository root"
+cd "$REPO_ROOT" || evidence_error "repository directory"
+EVIDENCE_DIR="$(mktemp -d)" || evidence_error "temporary evidence directory"
+trap 'rm -rf -- "$EVIDENCE_DIR"' EXIT
+
+# Capture before consuming: a failed producer must never look like an empty input.
+checked_capture() {
+    local destination="$1" operation="$2"
+    shift 2
+    "$@" > "$destination" || evidence_error "$operation"
+}
+read_capture() {
+    REPLY="$(cat -- "$1")" || evidence_error "read capture $1"
+}
+
 
 if [ "$SELF_TEST" -eq 0 ]; then
     if [ -z "$BASE_REF" ]; then
@@ -129,9 +154,16 @@ fi
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-# blob_exists REF PATH — true (0) when PATH exists as a blob at REF.
+# 0 = present, 1 = certified absent, 2 = evidence failure. A failed cat-file
+# probe is not absence: a successful tree listing must certify the missing side.
 blob_exists() {
-    git cat-file -e "${1}:${2}" 2>/dev/null
+    local ref="$1" path="$2"
+    checked_capture "$EVIDENCE_DIR/existence" "existence tree $ref:$path" \
+        git ls-tree -r --name-only "$ref" -- "$path"
+    read_capture "$EVIDENCE_DIR/existence"
+    [ "$REPLY" = "$path" ] && return 0
+    [ -z "$REPLY" ] && return 1
+    evidence_error "unexpected existence tree entry for $ref:$path"
 }
 
 # is_comment_shaped TEXT — true (0) when TEXT, after stripping leading whitespace, is empty or
@@ -151,33 +183,28 @@ is_comment_shaped() {
 # ---------------------------------------------------------------------------
 # Assertion A support: per-file block-comment-open state cache.
 #
-# get_state_cache_file REF PATH prints the path to a temp file with one line per source line,
+# get_state_cache_file REF PATH sets REPLY to a temp file with one line per source line,
 # each holding 0 or 1 for whether a block comment is already open ENTERING that line (i.e. before
 # that line's own content is scanned). Built once per (ref, path) pair and memoized.
 # ---------------------------------------------------------------------------
 
 declare -A STATE_CACHE_FILE
-STATE_CACHE_TMP_FILES=()
-
+# Called directly (not in a subshell), so memoization and temporary ownership persist.
 get_state_cache_file() {
-    local ref="$1" path="$2" key
+    local ref="$1" path="$2" key tmpf state=0 remaining srcline status
     key="${ref}:::${path}"
     if [ -n "${STATE_CACHE_FILE[$key]:-}" ]; then
-        printf '%s' "${STATE_CACHE_FILE[$key]}"
+        REPLY="${STATE_CACHE_FILE[$key]}"
         return 0
     fi
-    local tmpf
-    tmpf="$(mktemp)"
-    STATE_CACHE_TMP_FILES+=("$tmpf")
-    if ! blob_exists "$ref" "$path"; then
-        STATE_CACHE_FILE[$key]="$tmpf"
-        printf '%s' "$tmpf"
-        return 0
-    fi
-    local state=0 remaining
-    while IFS= read -r srcline || [ -n "$srcline" ]; do
-        # Record the state ENTERING this line, before scanning its own content.
-        printf '%s\n' "$state" >> "$tmpf"
+    tmpf="$(mktemp "$EVIDENCE_DIR/state.XXXXXX")" || evidence_error "state cache allocation $ref:$path"
+    status=0
+    blob_exists "$ref" "$path" || status=$?
+    [ "$status" -eq 0 ] || evidence_error "state cache requires existing blob $ref:$path (status $status)"
+    checked_capture "$EVIDENCE_DIR/state-blob" "state-cache blob $ref:$path" git show "$ref:$path"
+    read_capture "$EVIDENCE_DIR/state-blob"
+    while IFS= read -r srcline; do
+        printf '%s\n' "$state" >> "$tmpf" || evidence_error "write state cache $ref:$path"
         remaining="$srcline"
         while true; do
             if [ "$state" -eq 0 ]; then
@@ -192,29 +219,23 @@ get_state_cache_file() {
                 esac
             fi
         done
-    done < <(git show "${ref}:${path}" 2>/dev/null)
+    done <<< "$REPLY"
     STATE_CACHE_FILE[$key]="$tmpf"
-    printf '%s' "$tmpf"
+    REPLY="$tmpf"
 }
 
-# is_inside_open_block_comment REF PATH LINE_NO — true (0) when a block comment opened before
-# LINE_NO (per the cache above) and has not yet closed.
+# Boolean consumers must retain the third (unavailable) direction.
 is_inside_open_block_comment() {
     local ref="$1" path="$2" line_no="$3" cache_file state
-    cache_file="$(get_state_cache_file "$ref" "$path")"
-    state="$(sed -n "${line_no}p" "$cache_file" 2>/dev/null || true)"
-    [ "$state" = "1" ]
+    get_state_cache_file "$ref" "$path" || return 2
+    cache_file="$REPLY"
+    state="$(sed -n "${line_no}p" "$cache_file")" || evidence_error "read state cache $ref:$path:$line_no"
+    case "$state" in
+        1) return 0 ;;
+        0) return 1 ;;
+        *) evidence_error "missing state cache line $ref:$path:$line_no" ;;
+    esac
 }
-
-cleanup_state_cache() {
-    local exit_code=$?
-    local f
-    for f in "${STATE_CACHE_TMP_FILES[@]:-}"; do
-        [ -n "$f" ] && rm -f "$f"
-    done
-    exit "$exit_code"
-}
-trap cleanup_state_cache EXIT
 
 # ---------------------------------------------------------------------------
 # Assertion A: comments-only over the diff.
@@ -315,7 +336,10 @@ run_assertion_a() {
     local diff_out cur_old_path="" cur_new_path="" old_line=0 new_line=0
     local hunk_info old_spec new_spec content
 
-    diff_out="$(git diff --no-color --unified=0 "${BASE_REF}..${HEAD_REF}" -- "${SCOPES[@]}" 2>/dev/null || true)"
+    checked_capture "$EVIDENCE_DIR/a-diff" "assertion A unified diff $BASE_REF..$HEAD_REF" \
+        git diff --no-color --unified=0 "${BASE_REF}..${HEAD_REF}" -- "${SCOPES[@]}"
+    read_capture "$EVIDENCE_DIR/a-diff"
+    diff_out="$REPLY"
 
     while IFS= read -r dline; do
         case "$dline" in
@@ -352,7 +376,7 @@ run_assertion_a() {
             '+'*)
                 content="${dline#+}"
                 if [ "$cur_new_path" != "/dev/null" ] && [ -n "$cur_new_path" ]; then
-                    classify_a_line "$cur_new_path" "$new_line" "$content" "$HEAD_REF"
+                    classify_a_line "$cur_new_path" "$new_line" "$content" "$HEAD_REF" || return 2
                     HUNK_ADDED+=("${new_line}"$'\x1e'"${content}")
                 fi
                 new_line=$((new_line + 1))
@@ -360,7 +384,7 @@ run_assertion_a() {
             '-'*)
                 content="${dline#-}"
                 if [ "$cur_old_path" != "/dev/null" ] && [ -n "$cur_old_path" ]; then
-                    classify_a_line "$cur_old_path" "$old_line" "$content" "$BASE_REF"
+                    classify_a_line "$cur_old_path" "$old_line" "$content" "$BASE_REF" || return 2
                     HUNK_REMOVED+=("${old_line}"$'\x1e'"${content}")
                 fi
                 old_line=$((old_line + 1))
@@ -395,7 +419,11 @@ classify_a_line() {
     if is_comment_shaped "$content"; then
         return 0
     fi
-    if is_inside_open_block_comment "$ref" "$path" "$line_no"; then
+    local status=0
+    is_inside_open_block_comment "$ref" "$path" "$line_no" || status=$?
+    if [ "$status" -eq 2 ]; then
+        return 2
+    elif [ "$status" -eq 0 ]; then
         ASSERTION_A_REFUSALS+=("${path}:${line_no}: change lands inside a block comment opened on an earlier unchanged line — classifier cannot decide; re-split this commit so the change is isolated to a self-evidently comment-shaped line.")
     else
         ASSERTION_A_VIOLATIONS+=("${path}:${line_no}: non-comment change")
@@ -410,24 +438,32 @@ classify_a_line() {
 ASSERTION_B_VIOLATIONS=()
 
 extract_i18n_literals() {
-    local ref="$1" path
+    local ref="$1" path tree status
+    checked_capture "$EVIDENCE_DIR/literal-tree" "literal tree $ref" \
+        git ls-tree -r --name-only "$ref" -- "${SCOPES[@]}"
+    read_capture "$EVIDENCE_DIR/literal-tree"
+    tree="$REPLY"
     while IFS= read -r path; do
         [ -z "$path" ] && continue
-        git show "${ref}:${path}" 2>/dev/null | grep -oP 'i18n\("[^"]*"\)' || true
-    done < <(git ls-tree -r --name-only "$ref" -- "${SCOPES[@]}" 2>/dev/null || true)
+        checked_capture "$EVIDENCE_DIR/literal-blob" "literal blob $ref:$path" git show "$ref:$path"
+        status=0
+        grep -oP 'i18n\("[^"]*"\)' "$EVIDENCE_DIR/literal-blob" || status=$?
+        [ "$status" -le 1 ] || evidence_error "literal matcher $ref:$path (exit $status)"
+    done <<< "$tree"
+    return 0
 }
 
 run_assertion_b() {
-    local base_list head_list diff_out
-    base_list="$(mktemp)"
-    head_list="$(mktemp)"
-    extract_i18n_literals "$BASE_REF" | sort > "$base_list"
-    extract_i18n_literals "$HEAD_REF" | sort > "$head_list"
-    diff_out="$(diff "$base_list" "$head_list" || true)"
-    rm -f "$base_list" "$head_list"
-    if [ -z "$diff_out" ]; then
-        return 0
-    fi
+    local base_list="$EVIDENCE_DIR/base-list" head_list="$EVIDENCE_DIR/head-list" diff_out status=0
+    checked_capture "$EVIDENCE_DIR/base-literals" "base literal capture $BASE_REF" extract_i18n_literals "$BASE_REF"
+    checked_capture "$EVIDENCE_DIR/head-literals" "head literal capture $HEAD_REF" extract_i18n_literals "$HEAD_REF"
+    checked_capture "$base_list" "base literal sort $BASE_REF" sort "$EVIDENCE_DIR/base-literals"
+    checked_capture "$head_list" "head literal sort $HEAD_REF" sort "$EVIDENCE_DIR/head-literals"
+    diff "$base_list" "$head_list" > "$EVIDENCE_DIR/literal-diff" || status=$?
+    [ "$status" -le 1 ] || evidence_error "literal multiset diff (exit $status)"
+    read_capture "$EVIDENCE_DIR/literal-diff"
+    diff_out="$REPLY"
+    [ "$status" -eq 0 ] && return 0
     while IFS= read -r dl; do
         case "$dl" in
             '< '*) ASSERTION_B_VIOLATIONS+=("removed: ${dl#< }") ;;
@@ -444,43 +480,50 @@ ASSERTION_C_VIOLATIONS=()
 ASSERTION_C_NOTES=()
 
 is_crlf() {
-    # true (0) when REF:PATH contains at least one carriage return.
-    #
-    # Deliberately `grep -c`, not `grep -q`: `-q` exits at the first match, which on a large CRLF
-    # blob can SIGPIPE `git show` before it finishes writing under `set -o pipefail`, silently
-    # misreporting a genuinely-CRLF file as LF (see the header note above, WINDOWS.md #28,
-    # 08-CONTROL-DOC-CORRECTIONS.md C-06). `-c` drains the whole stream, so there is no early
-    # exit and therefore no SIGPIPE race — correctness does not depend on scheduling.
-    local count
-    count="$(git show "${1}:${2}" 2>/dev/null | grep -ca $'\r' || true)"
-    [ "${count:-0}" != "0" ]
+    # Read the complete blob before matching: no early grep/SIGPIPE or masked Git error.
+    local status=0 count
+    checked_capture "$EVIDENCE_DIR/crlf-blob" "CRLF blob $1:$2" git show "$1:$2"
+    count="$(grep -ca $'\r' "$EVIDENCE_DIR/crlf-blob")" || status=$?
+    [ "$status" -le 1 ] || evidence_error "CRLF matcher $1:$2 (exit $status)"
+    # Decide on the drained count itself; grep's status only separates errors from "no match".
+    [ "$count" -gt 0 ]
 }
 
 run_assertion_c() {
-    local changed_files path base_crlf head_crlf base_desc head_desc
-    changed_files="$(git diff --name-only "${BASE_REF}..${HEAD_REF}" -- "${SCOPES[@]}" 2>/dev/null || true)"
-
+    local changed_files path base_crlf head_crlf base_desc head_desc status
+    checked_capture "$EVIDENCE_DIR/c-diff" "assertion C name-only diff $BASE_REF..$HEAD_REF" \
+        git diff --name-only "${BASE_REF}..${HEAD_REF}" -- "${SCOPES[@]}"
+    read_capture "$EVIDENCE_DIR/c-diff"
+    changed_files="$REPLY"
     while IFS= read -r path; do
         [ -z "$path" ] && continue
-
-        if ! blob_exists "$BASE_REF" "$path"; then
-            ASSERTION_C_NOTES+=("${path}: added at head (no base blob) — skipped")
-            continue
-        fi
-        if ! blob_exists "$HEAD_REF" "$path"; then
-            ASSERTION_C_NOTES+=("${path}: removed at head (no head blob) — skipped")
-            continue
-        fi
-
-        if is_crlf "$BASE_REF" "$path"; then base_crlf=1; else base_crlf=0; fi
-        if is_crlf "$HEAD_REF" "$path"; then head_crlf=1; else head_crlf=0; fi
-
+        status=0
+        blob_exists "$BASE_REF" "$path" || status=$?
+        case "$status" in
+            0) ;;
+            1) ASSERTION_C_NOTES+=("${path}: added at head (no base blob) — skipped"); continue ;;
+            *) return 2 ;;
+        esac
+        status=0
+        blob_exists "$HEAD_REF" "$path" || status=$?
+        case "$status" in
+            0) ;;
+            1) ASSERTION_C_NOTES+=("${path}: removed at head (no head blob) — skipped"); continue ;;
+            *) return 2 ;;
+        esac
+        status=0
+        is_crlf "$BASE_REF" "$path" || status=$?
+        case "$status" in 0) base_crlf=1 ;; 1) base_crlf=0 ;; *) return 2 ;; esac
+        status=0
+        is_crlf "$HEAD_REF" "$path" || status=$?
+        case "$status" in 0) head_crlf=1 ;; 1) head_crlf=0 ;; *) return 2 ;; esac
         if [ "$base_crlf" != "$head_crlf" ]; then
             [ "$base_crlf" = 1 ] && base_desc="CRLF" || base_desc="LF"
             [ "$head_crlf" = 1 ] && head_desc="CRLF" || head_desc="LF"
             ASSERTION_C_VIOLATIONS+=("${path}: line-ending type changed ${base_desc} -> ${head_desc}")
         fi
     done <<< "$changed_files"
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -498,8 +541,8 @@ run_assertion_c() {
 # self_test_fixture_content FD — writes >64 KiB of comment-shaped CRLF text to the given fd.
 self_test_fixture_content() {
     local i
-    for i in $(seq 1 3000); do
-        printf '// self-test fixture line %04d padding padding padding padding\r\n' "$i"
+    for ((i = 1; i <= 3000; i++)); do
+        printf '// self-test fixture line %04d padding padding padding padding\r\n' "$i" || return 2
     done
 }
 
@@ -510,34 +553,36 @@ run_self_test() {
     local blob_crlf blob_lf tree_crlf tree_lf
     local commit_base commit_head_unchanged commit_head_converted
 
-    crlf_file="$(mktemp)"
-    lf_file="$(mktemp)"
-    self_test_fixture_content > "$crlf_file"
-    tr -d '\r' < "$crlf_file" > "$lf_file"
+    crlf_file="$(mktemp "$EVIDENCE_DIR/self-test.XXXXXX")" || evidence_error "self-test mktemp (crlf_file)"
+    lf_file="$(mktemp "$EVIDENCE_DIR/self-test.XXXXXX")" || evidence_error "self-test mktemp (lf_file)"
+    self_test_fixture_content > "$crlf_file" || evidence_error "self-test fixture content"
+    tr -d '\r' < "$crlf_file" > "$lf_file" || evidence_error "self-test fixture content"
 
-    size=$(wc -c < "$crlf_file")
+    size=$(wc -c < "$crlf_file") || evidence_error "self-test wc (size)"
     if [ "$size" -le 65536 ]; then
         echo "FAIL: self-test setup — fixture is only ${size} bytes, must exceed the 64 KiB pipe buffer."
         rm -f "$crlf_file" "$lf_file"
         return 1
     fi
 
-    blob_crlf="$(git hash-object -w "$crlf_file")"
-    blob_lf="$(git hash-object -w "$lf_file")"
+    blob_crlf="$(git hash-object -w "$crlf_file")" || evidence_error "self-test hash-object (blob_crlf)"
+    blob_lf="$(git hash-object -w "$lf_file")" || evidence_error "self-test hash-object (blob_lf)"
     rm -f "$crlf_file" "$lf_file"
 
-    tree_crlf="$(printf '100644 blob %s\t%s\n' "$blob_crlf" "$fixture_path" | git mktree)"
-    tree_lf="$(printf '100644 blob %s\t%s\n' "$blob_lf" "$fixture_path" | git mktree)"
+    tree_crlf="$(printf '100644 blob %s\t%s\n' "$blob_crlf" "$fixture_path" | git mktree)" || evidence_error "self-test mktree (tree_crlf)"
+    tree_lf="$(printf '100644 blob %s\t%s\n' "$blob_lf" "$fixture_path" | git mktree)" || evidence_error "self-test mktree (tree_lf)"
 
-    commit_base="$(git commit-tree "$tree_crlf" -m 'check-comment-only-diff.sh self-test: base (CRLF)')"
-    commit_head_unchanged="$(git commit-tree "$tree_crlf" -m 'check-comment-only-diff.sh self-test: head, unchanged (CRLF)')"
-    commit_head_converted="$(git commit-tree "$tree_lf" -m 'check-comment-only-diff.sh self-test: head, converted (LF)')"
+    commit_base="$(git commit-tree "$tree_crlf" -m 'check-comment-only-diff.sh self-test: base (CRLF)')" || evidence_error "self-test commit-tree (commit_base)"
+    commit_head_unchanged="$(git commit-tree "$tree_crlf" -m 'check-comment-only-diff.sh self-test: head, unchanged (CRLF)')" || evidence_error "self-test commit-tree (commit_head_unchanged)"
+    commit_head_converted="$(git commit-tree "$tree_lf" -m 'check-comment-only-diff.sh self-test: head, converted (LF)')" || evidence_error "self-test commit-tree (commit_head_converted)"
 
     # Assertion 1: a large genuinely-CRLF blob is reported as CRLF, not LF — the direction the
     # SIGPIPE race used to get wrong.
     if is_crlf "$commit_base" "$fixture_path"; then
         echo "PASS: assertion 1 — large genuinely-CRLF blob (${size} bytes) reported as CRLF."
     else
+        local status=$?
+        [ "$status" -eq 1 ] || return 2
         echo "FAIL: assertion 1 — large genuinely-CRLF blob (${size} bytes) reported as CRLF (is_crlf returned false)."
         failures=1
     fi
@@ -550,7 +595,7 @@ run_self_test() {
     BASE_REF="$commit_base"
     HEAD_REF="$commit_head_converted"
     SCOPES=("$fixture_path")
-    run_assertion_c
+    run_assertion_c || return 2
     if [ ${#ASSERTION_C_VIOLATIONS[@]} -eq 1 ]; then
         echo "PASS: assertion 2 — genuine CRLF -> LF change on a large file is still caught."
     else
@@ -565,7 +610,7 @@ run_self_test() {
     BASE_REF="$commit_base"
     HEAD_REF="$commit_head_unchanged"
     SCOPES=("$fixture_path")
-    run_assertion_c
+    run_assertion_c || return 2
     if [ ${#ASSERTION_C_VIOLATIONS[@]} -eq 0 ]; then
         echo "PASS: assertion 3 — unchanged large CRLF file reports no violation (control)."
     else
@@ -585,26 +630,26 @@ run_self_test() {
     local a_tree_base a_tree_comment_only a_tree_code_change
     local a_commit_base a_commit_comment_only a_commit_code_change
 
-    a_base_f="$(mktemp)"
-    a_comment_only_f="$(mktemp)"
-    a_code_change_f="$(mktemp)"
+    a_base_f="$(mktemp "$EVIDENCE_DIR/self-test.XXXXXX")" || evidence_error "self-test mktemp (a_base_f)"
+    a_comment_only_f="$(mktemp "$EVIDENCE_DIR/self-test.XXXXXX")" || evidence_error "self-test mktemp (a_comment_only_f)"
+    a_code_change_f="$(mktemp "$EVIDENCE_DIR/self-test.XXXXXX")" || evidence_error "self-test mktemp (a_code_change_f)"
 
-    printf '        return 5; // old comment\n        int x = 5; // unrelated marker\n' > "$a_base_f"
-    printf '        return 5; // new comment\n        int x = 5; // unrelated marker\n' > "$a_comment_only_f"
-    printf '        return 6; // old comment\n        int x = 5; // unrelated marker\n' > "$a_code_change_f"
+    printf '        return 5; // old comment\n        int x = 5; // unrelated marker\n' > "$a_base_f" || evidence_error "self-test fixture content"
+    printf '        return 5; // new comment\n        int x = 5; // unrelated marker\n' > "$a_comment_only_f" || evidence_error "self-test fixture content"
+    printf '        return 6; // old comment\n        int x = 5; // unrelated marker\n' > "$a_code_change_f" || evidence_error "self-test fixture content"
 
-    a_blob_base="$(git hash-object -w "$a_base_f")"
-    a_blob_comment_only="$(git hash-object -w "$a_comment_only_f")"
-    a_blob_code_change="$(git hash-object -w "$a_code_change_f")"
+    a_blob_base="$(git hash-object -w "$a_base_f")" || evidence_error "self-test hash-object (a_blob_base)"
+    a_blob_comment_only="$(git hash-object -w "$a_comment_only_f")" || evidence_error "self-test hash-object (a_blob_comment_only)"
+    a_blob_code_change="$(git hash-object -w "$a_code_change_f")" || evidence_error "self-test hash-object (a_blob_code_change)"
     rm -f "$a_base_f" "$a_comment_only_f" "$a_code_change_f"
 
-    a_tree_base="$(printf '100644 blob %s\t%s\n' "$a_blob_base" "$a_fixture_path" | git mktree)"
-    a_tree_comment_only="$(printf '100644 blob %s\t%s\n' "$a_blob_comment_only" "$a_fixture_path" | git mktree)"
-    a_tree_code_change="$(printf '100644 blob %s\t%s\n' "$a_blob_code_change" "$a_fixture_path" | git mktree)"
+    a_tree_base="$(printf '100644 blob %s\t%s\n' "$a_blob_base" "$a_fixture_path" | git mktree)" || evidence_error "self-test mktree (a_tree_base)"
+    a_tree_comment_only="$(printf '100644 blob %s\t%s\n' "$a_blob_comment_only" "$a_fixture_path" | git mktree)" || evidence_error "self-test mktree (a_tree_comment_only)"
+    a_tree_code_change="$(printf '100644 blob %s\t%s\n' "$a_blob_code_change" "$a_fixture_path" | git mktree)" || evidence_error "self-test mktree (a_tree_code_change)"
 
-    a_commit_base="$(git commit-tree "$a_tree_base" -m 'check-comment-only-diff.sh self-test: assertion A base')"
-    a_commit_comment_only="$(git commit-tree "$a_tree_comment_only" -m 'check-comment-only-diff.sh self-test: assertion A comment-only edit')"
-    a_commit_code_change="$(git commit-tree "$a_tree_code_change" -m 'check-comment-only-diff.sh self-test: assertion A code-change edit')"
+    a_commit_base="$(git commit-tree "$a_tree_base" -m 'check-comment-only-diff.sh self-test: assertion A base')" || evidence_error "self-test commit-tree (a_commit_base)"
+    a_commit_comment_only="$(git commit-tree "$a_tree_comment_only" -m 'check-comment-only-diff.sh self-test: assertion A comment-only edit')" || evidence_error "self-test commit-tree (a_commit_comment_only)"
+    a_commit_code_change="$(git commit-tree "$a_tree_code_change" -m 'check-comment-only-diff.sh self-test: assertion A code-change edit')" || evidence_error "self-test commit-tree (a_commit_code_change)"
 
     # Assertion 4: a same-line trailing-comment-only edit is rescued (no violation reported).
     ASSERTION_A_VIOLATIONS=()
@@ -618,7 +663,7 @@ run_self_test() {
     BASE_REF="$a_commit_base"
     HEAD_REF="$a_commit_comment_only"
     SCOPES=("$a_fixture_path")
-    run_assertion_a
+    run_assertion_a || return 2
     if [ ${#ASSERTION_A_VIOLATIONS[@]} -eq 0 ]; then
         echo "PASS: assertion 4 — a same-line trailing-comment-only edit is rescued."
     else
@@ -641,7 +686,7 @@ run_self_test() {
     BASE_REF="$a_commit_base"
     HEAD_REF="$a_commit_code_change"
     SCOPES=("$a_fixture_path")
-    run_assertion_a
+    run_assertion_a || return 2
     if [ ${#ASSERTION_A_VIOLATIONS[@]} -eq 2 ]; then
         echo "PASS: assertion 5 — a genuine code change on a mixed line is still caught."
     else
@@ -653,24 +698,31 @@ run_self_test() {
 }
 
 if [ "$SELF_TEST" -eq 1 ]; then
-    run_self_test
-    exit $?
+    status=0
+    run_self_test || status=$?
+    exit "$status"
 fi
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
-CHANGED_FILES="$(git diff --name-only "${BASE_REF}..${HEAD_REF}" -- "${SCOPES[@]}" 2>/dev/null || true)"
+BASE_INPUT="$BASE_REF"
+HEAD_INPUT="$HEAD_REF"
+BASE_REF="$(git rev-parse --verify --end-of-options "${BASE_INPUT}^{commit}")" || evidence_error "base ref '$BASE_INPUT'"
+HEAD_REF="$(git rev-parse --verify --end-of-options "${HEAD_INPUT}^{commit}")" || evidence_error "head ref '$HEAD_INPUT'"
+checked_capture "$EVIDENCE_DIR/main-diff" "main name-only diff $BASE_REF..$HEAD_REF"     git diff --name-only "${BASE_REF}..${HEAD_REF}" -- "${SCOPES[@]}"
+read_capture "$EVIDENCE_DIR/main-diff"
+CHANGED_FILES="$REPLY"
 
 if [ -z "$CHANGED_FILES" ]; then
     echo "Empty range: no files changed between '${BASE_REF}' and '${HEAD_REF}' within scope(s): ${SCOPES[*]}."
     exit 0
 fi
 
-run_assertion_a
-run_assertion_b
-run_assertion_c
+run_assertion_a || exit 2
+run_assertion_b || exit 2
+run_assertion_c || exit 2
 
 FAILED=0
 

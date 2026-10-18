@@ -124,6 +124,29 @@
                         </path>
                     </annotationProcessorPaths>
                 </configuration>
+                <executions>
+                    <!-- Build helpers share maintained test sources, not the test lifecycle/output. -->
+                    <execution>
+                        <id>compile-deprecation-buildtools</id>
+                        <phase>process-classes</phase>
+                        <goals>
+                            <goal>compile</goal>
+                        </goals>
+                        <configuration>
+                            <compileSourceRoots>
+                                <compileSourceRoot>${project.basedir}/src/test/java</compileSourceRoot>
+                            </compileSourceRoots>
+                            <includes>
+                                <include>com/ultikits/ultitools/buildtools/deprecation/**/*.java</include>
+                            </includes>
+                            <excludes>
+                                <exclude>**/*Test.java</exclude>
+                            </excludes>
+                            <outputDirectory>${project.build.directory}/buildtools-classes</outputDirectory>
+                            <proc>none</proc>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
             <!--
                 Animal Sniffer — 看守 Java 8 API 边界。
@@ -772,7 +795,10 @@
                 <version>3.6.3</version>
                 <configuration>
                     <mainClass>com.ultikits.ultitools.buildtools.deprecation.DeprecationRegistryGenerator</mainClass>
-                    <classpathScope>test</classpathScope>
+                    <classpathScope>compile</classpathScope>
+                    <additionalClasspathElements>
+                        <additionalClasspathElement>${project.build.directory}/buildtools-classes</additionalClasspathElement>
+                    </additionalClasspathElements>
                     <!-- #461: this goal runs in-process, in the Maven JVM's own working
                          directory - NOT ${project.basedir} - so an invocation launched with
                          `mvn -f <other-tree>/pom.xml` from a different shell cwd silently

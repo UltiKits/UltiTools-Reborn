@@ -44,8 +44,8 @@ usage() {
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --candidate-version) CANDIDATE_VERSION="${2:-}"; shift 2 ;;
-        --break-target)      BREAK_TARGET="${2:-}"; shift 2 ;;
+        --candidate-version) [ $# -ge 2 ] || { echo "::error::--candidate-version needs a value" >&2; exit 64; }; CANDIDATE_VERSION="$2"; shift 2 ;;
+        --break-target)      [ $# -ge 2 ] || { echo "::error::--break-target needs a value" >&2; exit 64; }; BREAK_TARGET="$2"; shift 2 ;;
         --keep-artifacts)    KEEP_ARTIFACTS=1; shift ;;
         --dry-run)            DRY_RUN=1; shift ;;
         -h|--help)            usage; exit 0 ;;
@@ -62,14 +62,17 @@ die_fail()  { echo "::error::$*" >&2; exit 1; }
 note()      { echo "-- $*"; }
 notice()    { echo "::notice::$*"; }
 
-[ -n "$CANDIDATE_VERSION" ] || die_usage "--candidate-version needs a value."
-[ -n "$BREAK_TARGET" ]      || die_usage "--break-target needs a value."
+[[ "$CANDIDATE_VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die_usage "--candidate-version needs a Maven version, not a path."
+[[ "$BREAK_TARGET" =~ ^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+$ ]] || die_usage "--break-target needs a top-level class FQN."
+# Read-only Git probes must not refresh/rewrite the maintainer's index.
+export GIT_OPTIONAL_LOCKS=0
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || die_usage "Not inside a git repository."
 cd "$REPO_ROOT"
 
 command -v mvn  >/dev/null 2>&1 || die_usage "mvn not found on PATH."
 command -v perl >/dev/null 2>&1 || die_usage "perl not found on PATH."
+command -v python3 >/dev/null 2>&1 || die_usage "python3 not found on PATH."
 [ -f pom.xml ] || die_usage "pom.xml not found at the repository root (${REPO_ROOT})."
 
 BREAK_TARGET_FILE="src/main/java/$(echo "$BREAK_TARGET" | tr '.' '/').java"
@@ -80,51 +83,131 @@ BREAK_TARGET_SIMPLE_NAME="${BREAK_TARGET##*.}"
 # A subclass in-tree would stop `final` from compiling, failing the RED leg for the wrong
 # reason (a compile error, not a japicmp finding) -- verified for the default target at
 # authoring time (08-01-PLAN.md flagged assumption A4); re-checked here for any override too.
-if grep -rlE "extends[[:space:]]+${BREAK_TARGET_SIMPLE_NAME}\\b" src/main src/test >/dev/null 2>&1; then
+SUBCLASS_STATUS=0
+grep -rlE "extends[[:space:]]+${BREAK_TARGET_SIMPLE_NAME}\\b" src/main src/test >/dev/null || SUBCLASS_STATUS=$?
+[ "$SUBCLASS_STATUS" -le 1 ] || die_usage "Cannot check the break target for in-tree subclasses."
+if [ "$SUBCLASS_STATUS" = 0 ]; then
     die_usage "--break-target ${BREAK_TARGET} has an in-tree subclass; making it final would not compile. Pick a different class."
 fi
 
 # ---------------------------------------------------------------- preconditions
 
-if [ -n "$(git status --porcelain -- pom.xml)" ]; then
-    die_usage "pom.xml already carries uncommitted changes. This script mutates and restores pom.xml via 'git checkout', so an already-dirty pom would be destroyed by the restore step. Commit or stash first, then re-run."
-fi
-
-if [ -n "$(git status --porcelain -- "$BREAK_TARGET_FILE")" ]; then
-    die_usage "${BREAK_TARGET_FILE} already carries uncommitted changes; the same restore-step hazard applies."
-fi
+POM_STATUS=$(git status --porcelain -- pom.xml) || die_usage "Cannot check pom.xml precondition."
+[ -z "$POM_STATUS" ] || die_usage "pom.xml already carries uncommitted changes; run the rehearsal only with a clean POM."
+SOURCE_STATUS=$(git status --porcelain -- "$BREAK_TARGET_FILE") || die_usage "Cannot check break-target precondition."
+[ -z "$SOURCE_STATUS" ] || die_usage "${BREAK_TARGET_FILE} already carries uncommitted changes; run with a clean break target."
+# Compatibility edits (including partial staging) are allowed: their actual bytes are saved.
+for path in pom.xml "$BREAK_TARGET_FILE" compatibility/deprecations.json compatibility/DEPRECATIONS.md .flattened-pom.xml; do
+    if [ -L "$path" ] || { [ -e "$path" ] && [ ! -f "$path" ]; }; then
+        die_usage "Protected path must be an ordinary file or absent: ${path}"
+    fi
+done
 
 if [ "$DRY_RUN" = 1 ]; then
     note "dry-run: candidate-version=${CANDIDATE_VERSION} break-target=${BREAK_TARGET}"
-    note "dry-run: would install a ${CANDIDATE_VERSION} candidate, empty <excludes> with japicmp.baseline.version advanced to ${CANDIDATE_VERSION} and ignoreMissingOldVersion flipped to false, run 'mvn verify' (expect green), add 'final' to ${BREAK_TARGET_SIMPLE_NAME}, re-run 'mvn verify' (expect red naming ${BREAK_TARGET}), then restore pom.xml, ${BREAK_TARGET_FILE} and compatibility/ via git checkout."
+    note "dry-run: would install a ${CANDIDATE_VERSION} candidate, empty <excludes> with japicmp.baseline.version advanced to ${CANDIDATE_VERSION} and ignoreMissingOldVersion flipped to false, run 'mvn verify' (expect green), add 'final' to ${BREAK_TARGET_SIMPLE_NAME}, re-run 'mvn verify' (expect red naming ${BREAK_TARGET}), then restore the saved original bytes/existence/modes of the POM, break source, two compatibility outputs, .flattened-pom.xml and local coordinate family; the index stays unchanged (target is disposable)."
     note "dry-run: nothing was mutated. Exiting 0."
     exit 0
 fi
 
-# ---------------------------------------------------------------- restore trap
+# Resolve settings/command-line local-repository selection without dumping settings or secrets.
+# The help goal is read-only with respect to product outputs; missing offline cache is a failure.
+LOCAL_REPOSITORY=$(mvn -B -o help:evaluate -Dexpression=settings.localRepository -q -DforceStdout) \
+    || die_usage "Cannot resolve the effective offline Maven local repository."
+LOCAL_REPOSITORY=$(printf '%s' "$LOCAL_REPOSITORY" | perl -pe 's/\e\[[0-9;]*m//g')
+[[ "$LOCAL_REPOSITORY" = /* && "$LOCAL_REPOSITORY" != *$'\n'* ]] \
+    || die_usage "Effective local repository is not one absolute path."
+[ -d "$LOCAL_REPOSITORY" ] || die_usage "Effective local repository does not exist."
+LOCAL_REPOSITORY=$(cd -- "$LOCAL_REPOSITORY" && pwd -P)
+LOCAL_FAMILY="${LOCAL_REPOSITORY}/com/ultikits/UltiTools-API"
+if [ -L "$LOCAL_FAMILY" ] || { [ -e "$LOCAL_FAMILY" ] && [ ! -d "$LOCAL_FAMILY" ]; }; then
+    die_usage "Local coordinate family must be a directory or absent."
+fi
 
+# Finite write set, established before the first mutation:
+# - protected: POM, chosen source, both registry outputs, root flatten output, coordinate family;
+# - read-only: index (snapshot + equality check, never Git checkout/restore);
+# - run-owned: this unique snapshot/log directory;
+# - disposable: target (Maven clean); no other maintained paths are owned by the rehearsal.
+# Serialize Maven users of this coordinate family for the duration of the rehearsal.
+INDEX_PATH=$(git rev-parse --git-path index) || die_fail "Cannot locate index."
+SNAPSHOT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/japicmp-rehearsal.XXXXXX") \
+    || die_fail "Cannot allocate original snapshots; no mutation performed."
 CLEANUP_DONE=0
-GREEN_LOG=""
-RED_LOG=""
+SNAPSHOT_READY=0
+MUTATION_STARTED=0
+PROTECTED=(pom.xml "$BREAK_TARGET_FILE" compatibility/deprecations.json compatibility/DEPRECATIONS.md .flattened-pom.xml "$LOCAL_FAMILY")
+EXISTED=()
+MISSING_PARENTS=()
+for path in "$LOCAL_REPOSITORY/com" "$LOCAL_REPOSITORY/com/ultikits" compatibility; do
+    [ -e "$path" ] || MISSING_PARENTS+=("$path")
+done
+GREEN_LOG="$SNAPSHOT_DIR/green.log"
+RED_LOG="$SNAPSHOT_DIR/red.log"
+
+restore_original() {
+    local n=$1 path=${PROTECTED[$1]}
+    if [ "${EXISTED[$n]}" = 1 ]; then
+        # Only this enumerated family is recursive; ordinary files are never broad Git resets.
+        if [ "$n" = 5 ]; then
+            rm -rf -- "$path" || return 1
+        else
+            rm -f -- "$path" || return 1
+        fi
+        cp -a -- "$SNAPSHOT_DIR/original-$n" "$path" || return 1
+    else
+        if [ "$n" = 5 ]; then rm -rf -- "$path"; else rm -f -- "$path"; fi
+    fi
+}
 
 cleanup() {
-    if [ "$CLEANUP_DONE" = 1 ]; then
-        return
-    fi
+    local status=$? failed=0 n
+    [ "$CLEANUP_DONE" = 0 ] || return
     CLEANUP_DONE=1
-    note "restoring pom.xml, ${BREAK_TARGET_FILE} and compatibility/ via git checkout"
-    git checkout -- pom.xml "$BREAK_TARGET_FILE" compatibility/ 2>/dev/null || true
-    if [ "$KEEP_ARTIFACTS" != 1 ]; then
-        LOCAL_ARTIFACT_DIR="${HOME}/.m2/repository/com/ultikits/UltiTools-API/${CANDIDATE_VERSION}"
-        if [ -d "$LOCAL_ARTIFACT_DIR" ]; then
-            rm -rf "$LOCAL_ARTIFACT_DIR"
-            note "removed local candidate artifact ${LOCAL_ARTIFACT_DIR}"
-        fi
+    trap '' INT TERM
+    if [ "$MUTATION_STARTED" = 1 ]; then
+        note "restoring saved pre-run bytes, existence and modes (index is read-only)"
+        for n in "${!PROTECTED[@]}"; do
+            if [ "$n" = 5 ] && [ "$KEEP_ARTIFACTS" = 1 ]; then continue; fi
+            restore_original "$n" || failed=1
+        done
+        # Remove only empty ancestors that did not exist before this run, innermost first.
+        for ((n=${#MISSING_PARENTS[@]}-1; n>=0; n--)); do
+            path=${MISSING_PARENTS[$n]}
+            if [ "$KEEP_ARTIFACTS" = 1 ] && [ "$path" != compatibility ]; then continue; fi
+            if [ -d "$path" ]; then rmdir -- "$path" || failed=1; fi
+        done
     fi
-    [ -n "$GREEN_LOG" ] && [ -f "$GREEN_LOG" ] && rm -f "$GREEN_LOG"
-    [ -n "$RED_LOG" ] && [ -f "$RED_LOG" ] && rm -f "$RED_LOG"
+    if [ "$SNAPSHOT_READY" = 1 ]; then
+        cmp -s -- "$SNAPSHOT_DIR/index" "$INDEX_PATH" || failed=1
+    fi
+    if [ "$failed" != 0 ]; then
+        echo "::error::Restoration failed; recoverable originals and manifest retained at ${SNAPSHOT_DIR}" >&2
+        status=1
+    else
+        rm -rf -- "$SNAPSHOT_DIR" || { echo "::error::Cannot remove owned snapshots: ${SNAPSHOT_DIR}" >&2; status=1; }
+    fi
+    exit "$status"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+for n in "${!PROTECTED[@]}"; do
+    path=${PROTECTED[$n]}
+    if [ -e "$path" ]; then
+        EXISTED+=(1)
+        cp -a -- "$path" "$SNAPSHOT_DIR/original-$n" \
+            || die_fail "Snapshot failed for ${path}; no mutation performed."
+    else
+        EXISTED+=(0)
+    fi
+    printf '%s\t%s\t%s\n' "$n" "${EXISTED[$n]}" "$path" >> "$SNAPSHOT_DIR/manifest.tsv" \
+        || die_fail "Cannot record finite snapshot manifest; no mutation performed."
+done
+cp -a -- "$INDEX_PATH" "$SNAPSHOT_DIR/index" || die_fail "Cannot snapshot index; no mutation performed."
+SNAPSHOT_READY=1
+MUTATION_STARTED=1
 
 # ---------------------------------------------------------------- install the candidate
 
@@ -138,12 +221,12 @@ perl -i -pe "s/<version>\\Q${CURRENT_VERSION}\\E<\\/version>/<version>${CANDIDAT
 # install exists only to place the candidate coordinate in the local repository; japicmp's real
 # comparison happens below, once the scratch pom points ignoreMissingOldVersion/excludes/baseline
 # at it. If either property name below is wrong this install fails loudly and immediately.
-if ! mvn -B -o clean install -DskipTests -Djapicmp.skip=true -Dexec.skip=true; then
+if ! mvn -B -o "-Dmaven.repo.local=$LOCAL_REPOSITORY" clean install -DskipTests -Djapicmp.skip=true -Dexec.skip=true; then
     die_fail "Installing the ${CANDIDATE_VERSION} candidate failed -- see the mvn output above. If the failure names 'japicmp.skip' or 'exec.skip' as unknown, the property name is wrong (flagged assumption A1); fix the property, do not remove the skip."
 fi
 
-git checkout -- pom.xml
-note "candidate installed; pom.xml restored to ${CURRENT_VERSION}"
+restore_original 0 || die_fail "Mid-script POM restoration failed; final recovery will run from saved originals."
+note "candidate installed; original pom.xml restored to ${CURRENT_VERSION}"
 
 # ---------------------------------------------------------------- GREEN leg
 
@@ -192,9 +275,8 @@ grep -q "<excludes></excludes>" pom.xml \
     || die_fail "Failed to empty the japicmp <excludes> block -- pom.xml mutation did not match. Aborting before running mvn."
 
 note "GREEN leg: mvn -B -o clean verify -DskipTests (exclusion list empty, baseline ${CANDIDATE_VERSION})"
-GREEN_LOG="$(mktemp)"
 GREEN_EXIT=0
-mvn -B -o clean verify -DskipTests >"$GREEN_LOG" 2>&1 || GREEN_EXIT=$?
+mvn -B -o "-Dmaven.repo.local=$LOCAL_REPOSITORY" clean verify -DskipTests >"$GREEN_LOG" 2>&1 || GREEN_EXIT=$?
 cat "$GREEN_LOG"
 note "GREEN leg exit code: ${GREEN_EXIT}"
 
@@ -211,9 +293,8 @@ grep -qE "public final class ${BREAK_TARGET_SIMPLE_NAME}\\b" "$BREAK_TARGET_FILE
     || die_fail "Failed to inject the 'final' modifier into ${BREAK_TARGET_FILE} -- pattern did not match ${BREAK_TARGET_SIMPLE_NAME}'s declaration."
 
 note "RED leg: mvn -B -o clean verify -DskipTests (same scratch pom, ${BREAK_TARGET_SIMPLE_NAME} now final)"
-RED_LOG="$(mktemp)"
 RED_EXIT=0
-mvn -B -o clean verify -DskipTests >"$RED_LOG" 2>&1 || RED_EXIT=$?
+mvn -B -o "-Dmaven.repo.local=$LOCAL_REPOSITORY" clean verify -DskipTests >"$RED_LOG" 2>&1 || RED_EXIT=$?
 cat "$RED_LOG"
 note "RED leg exit code: ${RED_EXIT}"
 
@@ -221,9 +302,35 @@ if [ "$RED_EXIT" -eq 0 ]; then
     die_fail "RED leg unexpectedly succeeded (exit 0) -- the injected break in ${BREAK_TARGET} did not turn the build red. The gate is not proving what ROADMAP criterion 1 claims."
 fi
 
-if ! grep -q "$BREAK_TARGET_SIMPLE_NAME" "$RED_LOG"; then
-    die_fail "RED leg failed (exit ${RED_EXIT}) but the failure output does not name ${BREAK_TARGET_SIMPLE_NAME} -- cannot confirm the break was correctly attributed."
-fi
+# A compiler/dependency failure naming the target is NOT a binary-compatibility RED.
+# clean verify must reach japicmp after compiling product sources. Parse the fresh class record,
+# not a substring anywhere in the log (nor a member change under a different class).
+cp -a -- target/japicmp/japicmp.xml "$SNAPSHOT_DIR/japicmp.xml" \
+    || die_fail "RED leg has no readable japicmp XML; compatibility break not proven."
+python3 -I - "$RED_LOG" "$SNAPSHOT_DIR/japicmp.xml" "$BREAK_TARGET" <<'PY' \
+    || die_fail "RED leg failed but the exact compiled japicmp break was not proven."
+from pathlib import Path
+import re
+import sys
+import xml.etree.ElementTree as ET
+
+log = re.sub(r'\x1b\[[0-9;]*m', '', Path(sys.argv[1]).read_text())
+compile_goal = re.search(r'--- maven-compiler-plugin:[^\s:]+:compile \(default-compile\)', log)
+compiled = re.search(r'Compiling [1-9][0-9]* source files? with javac', log)
+comparison = re.search(r'--- japicmp-maven-plugin:[^\s:]+:cmp ', log)
+failure = re.search(r'Failed to execute goal [^\s]*japicmp-maven-plugin:[^\s:]+:cmp', log)
+if not (compile_goal and compiled and comparison and failure
+        and compile_goal.start() < compiled.start() < comparison.start() < failure.start()
+        and 'COMPILATION ERROR' not in log):
+    raise SystemExit('RED attribution refused: successful compilation followed by japicmp failure is required')
+report = ET.parse(sys.argv[2]).getroot()
+classes = [c for c in report.findall('./classes/class') if c.get('fullyQualifiedName') == sys.argv[3]]
+if (report.tag != 'japicmp' or len(classes) != 1 or classes[0].get('binaryCompatible') != 'false'
+        or not any(c.get('type') == 'CLASS_NOW_NOT_EXTENDABLE' and c.get('binaryCompatible') == 'false'
+                   for c in classes[0].findall('./compatibilityChanges/compatibilityChange'))):
+    raise SystemExit('RED attribution refused: exact binary-incompatible CLASS_NOW_NOT_EXTENDABLE required')
+print('Attributed RED: ' + sys.argv[3] + ' CLASS_NOW_NOT_EXTENDABLE (binaryCompatible=false; compilation completed)')
+PY
 
 notice "Rehearsal proved the pair: GREEN leg exit ${GREEN_EXIT}, RED leg exit ${RED_EXIT} naming ${BREAK_TARGET}."
 echo

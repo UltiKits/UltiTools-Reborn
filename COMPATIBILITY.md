@@ -969,7 +969,13 @@ The removal list is generated at `mvn verify` from the `@Deprecated(forRemoval =
 annotations in the source, cross-checked against the japicmp binary-compatibility report so a
 disagreement between the two fails the build (`DeprecationRegistryGenerator` produces
 `compatibility/DEPRECATIONS.md`; see `compatibility/deprecations.json` for the machine-readable
-form). This document no longer carries the table itself — three artifacts now split the job:
+form). As of v6.3.0, the mandatory generator is compiled into `target/buildtools-classes`
+independently of test compilation. Both `mvn verify -DskipTests` and
+`mvn verify -Dmaven.test.skip=true` still run it after japicmp: `skipTests` skips only test
+execution, while `maven.test.skip` also skips test compilation. Neither skips registry generation;
+existing registry identities and removal history remain cumulative.
+
+This document no longer carries the table itself — three artifacts now split the job:
 
 - **This document** — policy: what removal means, when an API becomes eligible, the same-release
   exception, and permanent lessons.

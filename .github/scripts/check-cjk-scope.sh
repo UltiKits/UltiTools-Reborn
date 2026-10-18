@@ -88,16 +88,12 @@
 # a string line — this measured 158 such violations across the repository before this fix, which
 # is the gate measuring a superset of what GATE-02 actually requires.
 #
-# is_comment_or_javadoc_line() (below) makes that distinction for .java files only (YAML has no
-# comparable code/string split worth making — a workflow's echoed step-summary text is still
-# genuinely in scope, per 08-17's own conversion of maven-ci.yml). A CJK-containing line counts as
-# a violation when EITHER: the line, stripped of leading whitespace, starts with `//`, `/*`, or
-# `*` (a whole comment/javadoc line); OR the line contains a `//` that is not inside a
-# double-quoted string literal, with CJK appearing at or after that position (a same-line trailing
-# comment). Otherwise the CJK is inside a string literal only, and is excluded. This is the same
-# quote-tracking approach as check-comment-only-diff.sh's find_code_half() — kept as an
-# independent implementation here rather than sourcing that script, since the two tools have
-# different processes, different failure semantics, and no shared runtime today.
+# java_comment_text() walks each complete Java file before Unicode matching. It retains only
+# comment spans, carrying block, string, char and escape state across ASCII-only lines as well.
+# Non-comment bytes are masked and line boundaries retained; diagnostics and allowlist matching
+# still use the original source line. YAML keeps its existing whole-line policy: echoed workflow
+# text remains in scope. This lexical pass is deliberately independent of the comment-only diff
+# gate, whose conservative refusal contract serves a different purpose.
 #
 # Allowlist format: .github/cjk-allowlist.txt, one `<path-glob>:<extended-regex>` pair per
 # non-comment line, split on the FIRST colon. An entry exempts a LINE, not a file — the path glob
@@ -116,7 +112,7 @@
 #   --self-test             Run the fixture self-test (see .github/scripts/testdata/) and exit.
 #
 # Exit codes: 0 = at or under the threshold (or --report-only); 1 = over threshold;
-#             2 = grep rejected the contract pattern or could not read a file; 64 = usage error.
+#             2 = matcher/helper/read, file-enumeration or result-sort failure; 64 = usage error.
 #
 # Wired into maven-ci.yml (see the "CJK Comment/Javadoc Scope Gate" step, plan 08-18) — invoked
 # there with no threshold flag, so the zero-violation default applies. The migration aid
@@ -239,11 +235,17 @@ load_allowlist() {
 
 # is_allowlisted PATH TEXT — true (0) when TEXT at PATH matches an allowlist entry.
 is_allowlisted() {
-    local path="$1" text="$2" i
+    local path="$1" text="$2" i status
     for i in "${!ALLOW_GLOBS[@]}"; do
         case "$path" in
             ${ALLOW_GLOBS[$i]})
-                if grep -Eq -- "${ALLOW_REGEXES[$i]}" <<< "$text"; then
+                status=0
+                grep -Eq -- "${ALLOW_REGEXES[$i]}" <<< "$text" || status=$?
+                if [ "$status" -ge 2 ]; then
+                    echo "ERROR: cannot match allowlist pattern '${ALLOW_REGEXES[$i]}' for '$path'; the gate fails closed." >&2
+                    exit 2
+                fi
+                if [ "$status" -eq 0 ]; then
                     return 0
                 fi
                 ;;
@@ -256,59 +258,86 @@ is_allowlisted() {
 # Scanning
 # ---------------------------------------------------------------------------
 
-# is_comment_or_javadoc_line TEXT — true (0) when TEXT (already known to contain CJK) is
-# comment/javadoc content per GATE-02's actual criterion; false (1) when the CJK is inside a
-# string literal only. See the header note above ("String-literal exclusion for .java files").
-is_comment_or_javadoc_line() {
-    local text="$1"
-    local stripped="${text#"${text%%[![:space:]]*}"}"
-    case "$stripped" in
-        '//'* | '/*'* | '*'*) return 0 ;;
-    esac
-
-    # Find the first `//` that is not inside a double-quoted string literal (simple
-    # backslash-escape aware, same approach as check-comment-only-diff.sh's find_code_half()).
-    local i=0 len=${#text} ch nextch in_string=0 escape=0 comment_start=-1
-    while [ "$i" -lt "$len" ]; do
-        ch="${text:$i:1}"
-        if [ "$in_string" -eq 1 ]; then
-            if [ "$escape" -eq 1 ]; then
-                escape=0
-            elif [ "$ch" = '\' ]; then
-                escape=1
-            elif [ "$ch" = '"' ]; then
-                in_string=0
-            fi
-        else
-            if [ "$ch" = '"' ]; then
-                in_string=1
-            elif [ "$ch" = '/' ]; then
-                nextch="${text:$((i + 1)):1}"
-                if [ "$nextch" = '/' ]; then
-                    comment_start=$i
-                    break
-                fi
-            fi
-        fi
-        i=$((i + 1))
-    done
-
-    if [ "$comment_start" -ge 0 ]; then
-        local after="${text:$comment_start}"
-        if cjk_grep -q <<< "$after"; then
-            return 0
-        fi
-    fi
-    return 1
+# java_comment_text PATH — mask non-comment bytes, preserving physical line positions.
+# Read the entire file before matching: an ASCII opener can govern later CJK lines.
+# Perl operates on bytes; only ASCII delimiters are interpreted, not Unicode policy.
+java_comment_text() {
+    perl - "$1" <<'PERL'
+use strict;
+use warnings;
+my $path = shift @ARGV;
+open my $fh, '<:raw', $path or die "Cannot open Java source $path: $!\n";
+my $source = '';
+while (1) {
+    my $size = read($fh, my $chunk, 65536);
+    defined $size or die "Cannot read Java source $path: $!\n";
+    last unless $size;
+    $source .= $chunk;
+}
+close $fh or die "Cannot close Java source $path: $!\n";
+my $state = 'code';
+my $escaped = 0;
+my $out = '';
+for (my $i = 0; $i < length($source); $i++) {
+    my $ch = substr($source, $i, 1);
+    my $pair = substr($source, $i, 2);
+    if ($ch eq "\n" || $ch eq "\r") {
+        $out .= $ch;
+        $state = 'code' if $state eq 'line';
+        next;
+    }
+    if ($state eq 'line') {
+        $out .= $ch;
+    } elsif ($state eq 'block') {
+        if ($pair eq '*/') {
+            $out .= '*/';
+            $i++;
+            $state = 'code';
+        } else {
+            $out .= $ch;
+        }
+    } elsif ($state eq 'string' || $state eq 'char') {
+        $out .= ' ';
+        if ($escaped) {
+            $escaped = 0;
+        } elsif ($ch eq "\\") {
+            $escaped = 1;
+        } elsif (($state eq 'string' && $ch eq '"') ||
+                 ($state eq 'char' && $ch eq "'")) {
+            $state = 'code';
+        }
+    } elsif ($pair eq '//' || $pair eq '/*') {
+        $out .= $pair;
+        $i++;
+        $state = $pair eq '//' ? 'line' : 'block';
+    } else {
+        $out .= ' ';
+        $state = 'string' if $ch eq '"';
+        $state = 'char' if $ch eq "'";
+    }
+}
+print $out or die "Cannot emit Java comments for $path: $!\n";
+PERL
 }
 
-# scan_file PATH — prints "PATH:LINENO:TEXT" for every CJK line at PATH that is not allowlisted
-# and (for .java files) is comment/javadoc content rather than a pure string-literal occurrence.
+# scan_file PATH — print original PATH:LINENO:TEXT, matching only Java comment spans.
 scan_file() {
-    local path="$1" matches status=0 lineno text
-    # A command substitution, not a pipeline: cjk_grep's exit 2 ends the substitution with status
-    # 2, which is passed on here as the gate's failure (#588).
-    matches="$(cjk_grep -n "$path")" || status=$?
+    local path="$1" matches status=0 lineno text comments
+    local source_lines=()
+    case "$path" in
+        *.java)
+            comments="$(java_comment_text "$path")" || {
+                echo "ERROR: Java comment helper failed for '$path'; the gate fails closed." >&2
+                exit 2
+            }
+            if ! mapfile -t source_lines < "$path"; then
+                echo "ERROR: cannot read original Java source '$path'; the gate fails closed." >&2
+                exit 2
+            fi
+            matches="$(cjk_grep -n <<< "$comments")" || status=$?
+            ;;
+        *) matches="$(cjk_grep -n "$path")" || status=$? ;;
+    esac
     if [ "$status" -ge 2 ]; then
         exit 2
     fi
@@ -316,12 +345,10 @@ scan_file() {
         return 0
     fi
     while IFS=: read -r lineno text; do
-        is_allowlisted "$path" "$text" && continue
         case "$path" in
-            *.java)
-                is_comment_or_javadoc_line "$text" || continue
-                ;;
+            *.java) text="${source_lines[$((lineno - 1))]}" ;;
         esac
+        is_allowlisted "$path" "$text" && continue
         printf '%s:%s:%s\n' "$path" "$lineno" "$text"
     done <<< "$matches"
     return 0
@@ -330,12 +357,24 @@ scan_file() {
 # run_scan — enumerates the current SCOPES via `git ls-files` and prints violations for every
 # candidate file, applying the two structural exclusions (lang/*.json catalogues, this script's
 # own testdata fixtures). Prints an explicit note to stderr for any scope matching zero tracked
-# files — an empty scope is never a silent pass.
+# files — an empty scope is never a silent pass. A failed enumeration is not an empty scope:
+# when `git ls-files` exits non-zero, the scan prints an ERROR naming the scope and exits 2,
+# like matcher, helper and read failures, before any count or SUMMARY.
 run_scan() {
-    local scope f files
+    local scope f files listing status
     for scope in "${SCOPES[@]}"; do
         files=()
-        mapfile -t files < <(git ls-files -- "$scope" 2>/dev/null || true)
+        listing=""
+        status=0
+        listing="$(git ls-files -- "$scope")" || status=$?
+        if [ "$status" -ne 0 ]; then
+            echo "ERROR: git ls-files failed for scope '${scope}' (exit ${status}); the gate fails closed." >&2
+            exit 2
+        fi
+        # A here-string of an empty string yields one empty element, so fill only from real output.
+        if [ -n "$listing" ]; then
+            mapfile -t files <<< "$listing"
+        fi
         if [ ${#files[@]} -eq 0 ]; then
             echo "NOTE: scope '${scope}' matched zero tracked files." >&2
             continue
@@ -392,14 +431,24 @@ run_self_test() {
     SCOPES=("no/such/scope/at/all/for/self/test")
     local stderr_capture
     stderr_capture="$(mktemp)"
-    local n3
-    n3=$(run_scan 2>"$stderr_capture" | grep -c . || true)
+    # run_scan's exit status is captured on its own, never through a pipeline: a failed
+    # enumeration also yields zero output lines, so the count alone cannot tell it from success.
+    local n3=0 status3=0 out3 line3
+    out3="$(run_scan 2>"$stderr_capture")" || status3=$?
+    while IFS= read -r line3; do
+        if [ -n "$line3" ]; then
+            n3=$((n3 + 1))
+        fi
+    done <<< "$out3"
     local msg3
     msg3="$(cat "$stderr_capture")"
     rm -f "$stderr_capture"
     SCOPES=("${saved_scopes[@]}")
-    if [ "$n3" -eq 0 ] && printf '%s' "$msg3" | grep -q "matched zero tracked files"; then
+    if [ "$status3" -eq 0 ] && [ "$n3" -eq 0 ] && printf '%s' "$msg3" | grep -q "matched zero tracked files"; then
         echo "PASS: assertion 3 — empty scope yields zero violations with an explicit message."
+    elif [ "$status3" -ne 0 ]; then
+        echo "FAIL: assertion 3 — empty scope yields zero violations with an explicit message. (run_scan exit ${status3})"
+        failures=1
     else
         echo "FAIL: assertion 3 — empty scope yields zero violations with an explicit message."
         failures=1
@@ -486,30 +535,40 @@ run_self_test() {
     fi
     rm -f "$err10"
 
-    # Assertions 5-7 (08-17): is_comment_or_javadoc_line()'s three directions. A whole comment
-    # line and a same-line trailing comment must still be counted (the string-literal exclusion
-    # must not over-correct into silently passing real comment debt); a CJK string literal alone
-    # must be excluded (the actual fix).
-    if is_comment_or_javadoc_line '     * 中文注释'; then
-        echo "PASS: assertion 5 — a whole javadoc/comment line is still counted."
-    else
-        echo "FAIL: assertion 5 — a whole javadoc/comment line is still counted."
+    # Assertions 5-7: every fixture line has an explicit verdict through the shared scanner.
+    local java_fixture java_matches java_expected="" java_lineno java_line
+    local java_lines=()
+    java_fixture="$(mktemp --suffix=.java)"
+    cp .github/scripts/testdata/cjk-java-comments.java.txt "$java_fixture"
+    mapfile -t java_lines < "$java_fixture"
+    java_matches="$(scan_file "$java_fixture")" || { rm -f "$java_fixture"; return 2; }
+    for java_lineno in "${!java_lines[@]}"; do
+        java_line="${java_lines[$java_lineno]}"
+        case "$((java_lineno + 1))" in
+            3|6|9|12|14|15|24|26)
+                java_expected+="${java_fixture}:$((java_lineno + 1)):${java_line}"$'\n'
+                if [[ "$java_matches" == *"${java_fixture}:$((java_lineno + 1)):${java_line}"* ]]; then
+                    echo "PASS: Java fixture line $((java_lineno + 1)) — comment violation."
+                else
+                    echo "FAIL: Java fixture line $((java_lineno + 1)) — missing comment violation."
+                    failures=1
+                fi
+                ;;
+            *)
+                if [[ "$java_matches" == *"${java_fixture}:$((java_lineno + 1)):"* ]]; then
+                    echo "FAIL: Java fixture line $((java_lineno + 1)) — nonviolating control rejected."
+                    failures=1
+                else
+                    echo "PASS: Java fixture line $((java_lineno + 1)) — nonviolating control."
+                fi
+                ;;
+        esac
+    done
+    if [ "$java_matches" != "${java_expected%$'\n'}" ]; then
+        echo "FAIL: full-file Java fixture diagnostics differ from the exact expected lines."
         failures=1
     fi
-
-    if is_comment_or_javadoc_line '        return 5; // 中文尾注'; then
-        echo "PASS: assertion 6 — a same-line trailing comment is still counted."
-    else
-        echo "FAIL: assertion 6 — a same-line trailing comment is still counted."
-        failures=1
-    fi
-
-    if is_comment_or_javadoc_line '        String s = "中文字符串";'; then
-        echo "FAIL: assertion 7 — a CJK string literal (no comment on the line) is excluded."
-        failures=1
-    else
-        echo "PASS: assertion 7 — a CJK string literal (no comment on the line) is excluded."
-    fi
+    rm -f "$java_fixture"
 
     return "$failures"
 }
@@ -529,12 +588,22 @@ fi
 load_allowlist "$ALLOWLIST"
 
 VIOLATIONS_RAW="$(mktemp)"
-trap 'rm -f "$VIOLATIONS_RAW"' EXIT
+# Initialised before the trap is registered, so the trap never expands an unset variable under
+# set -u; one EXIT trap removes both temporary files on every exit, including the exit-2 paths.
+VIOLATIONS_SORTED=""
+trap 'rm -f "$VIOLATIONS_RAW" "$VIOLATIONS_SORTED"' EXIT
 
 run_scan > "$VIOLATIONS_RAW"
 
 VIOLATIONS_SORTED="$(mktemp)"
-sort -t: -k1,1 -k2,2n "$VIOLATIONS_RAW" > "$VIOLATIONS_SORTED" 2>/dev/null || true
+# The sorted file is consumed only after sort exited 0: a failed sort leaves it truncated, which
+# would otherwise read as zero violations.
+SORT_STATUS=0
+sort -t: -k1,1 -k2,2n "$VIOLATIONS_RAW" > "$VIOLATIONS_SORTED" || SORT_STATUS=$?
+if [ "$SORT_STATUS" -ne 0 ]; then
+    echo "ERROR: sorting the violation list failed (exit ${SORT_STATUS}); the gate fails closed." >&2
+    exit 2
+fi
 
 TOTAL=$(wc -l < "$VIOLATIONS_SORTED" | tr -d ' ')
 FILES=$(cut -d: -f1 "$VIOLATIONS_SORTED" | sort -u | wc -l | tr -d ' ')

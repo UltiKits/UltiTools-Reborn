@@ -1,0 +1,26 @@
+// Full-file lexical fixtures; deliberate comment violations are test data.
+class CommentCases {
+    int inline = 1; /* 中文内联 */
+    String literal = "中文字符串 /* not a comment */ // still literal"; // English comment
+    char quote = '\'';
+    int line = 2; // 中文尾注
+    /*
+    ASCII block preface
+    unstarred 中文续行
+    */ String afterBlock = "中文/* literal */";
+    /** ASCII javadoc
+     * 中文文档
+     */
+    int spans = 0; /* 中文一 */ String middle = "中文"; /* 中文二 */ // English
+    int trailing = 0; /* English */ // 中文结尾
+    String escaped = "中文\" /* still literal */ // still literal"; // English
+    String slash = "中文\\///*"; // English
+    char apostrophe = '\'';
+    char backslash = '\\';
+    char slashChar = '/';
+    char han = '中';
+    String afterChars = "中文"; // English
+    // ひらがなカタカナ・㈱
+    // 㐀𠀀豈、：ｶﾠ
+}
+// 中文末行

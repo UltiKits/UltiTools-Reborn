@@ -69,6 +69,7 @@ All commands run from the repository root.
 | Goal | Command |
 |---|---|
 | Build shaded JAR | `mvn clean package` → `target/UltiTools-API-<version>.jar` |
+| Full verification | `mvn clean verify` — package plus Java 8 API, dependency, japicmp and deprecation-registry checks |
 | Test | `mvn test` |
 | Single test class | `mvn test -Dtest=ClassName` |
 | Include isolated tests | `mvn test -DexcludedGroups=` |
@@ -79,9 +80,10 @@ All commands run from the repository root.
   them.
 - JaCoCo runs automatically during `mvn test` → `target/site/jacoco/index.html`. **No coverage threshold is
   enforced** — the `check` rule exists but is commented out.
-- `mvn package` also runs `ultitools-maven-plugin`, which copies the JAR to `${ultitools.deploy.folder}`
-  (default `target/deploy/`). Override it on the command line to deploy to a local test server:
-  `mvn package -Dultitools.deploy.folder=/path/to/server/plugins`. **Never hard-code a local path into
+- `mvn package` does **not** run `ultitools-maven-plugin`: its POM declaration has no bound executions.
+  To request a local server copy, invoke the goal explicitly:
+  `mvn package ultitools:install -Dultitools.deploy.folder=/path/to/server/plugins`.
+  Without an override, that explicit goal uses `target/deploy/`. **Never hard-code a local path into
   `pom.xml`** — see "Public repository hygiene".
 
 ## CI

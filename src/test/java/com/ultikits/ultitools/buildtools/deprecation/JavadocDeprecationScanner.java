@@ -1,730 +1,576 @@
 package com.ultikits.ultitools.buildtools.deprecation;
 
+import com.sun.source.doctree.DeprecatedTree;
+import com.sun.source.doctree.DocCommentTree;
+import com.sun.source.doctree.DocTree;
+import com.sun.source.doctree.UnknownBlockTagTree;
+import com.sun.source.tree.AnnotatedTypeTree;
+import com.sun.source.tree.AnnotationTree;
+import com.sun.source.tree.ArrayTypeTree;
+import com.sun.source.tree.ClassTree;
+import com.sun.source.tree.CompilationUnitTree;
+import com.sun.source.tree.ImportTree;
+import com.sun.source.tree.MemberSelectTree;
+import com.sun.source.tree.MethodTree;
+import com.sun.source.tree.ParameterizedTypeTree;
+import com.sun.source.tree.Tree;
+import com.sun.source.tree.TypeParameterTree;
+import com.sun.source.tree.VariableTree;
+import com.sun.source.util.DocTrees;
+import com.sun.source.util.JavacTask;
+import com.sun.source.util.TreePath;
+
+import javax.tools.Diagnostic;
+import javax.tools.DiagnosticCollector;
+import javax.tools.JavaCompiler;
+import javax.tools.JavaFileObject;
+import javax.tools.StandardJavaFileManager;
+import javax.tools.ToolProvider;
 import java.io.IOException;
-import java.lang.reflect.Constructor;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.SimpleFileVisitor;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.Supplier;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
- * Scans {@code src/main/java} for {@code @Deprecated}-annotated declarations and builds one
- * {@link DeprecationEntry} per site.
- *
- * <p><b>Why this cannot be a bytecode-only or annotation-processor tool</b> (07-RESEARCH.md
- * Priority 2): the {@code @deprecated} javadoc paragraph text is verifiably absent from compiled
- * {@code .class} files, and an annotation processor runs at {@code compile} time, before
- * japicmp's {@code verify}-phase report D-22 requires this scan to cross-check against exists.
- *
- * <p><b>Implementation shape.</b> This scans raw source text rather than a full
- * {@code com.sun.source.util.JavacTask} parse tree - a deliberate implementation-style choice
- * (07-RESEARCH.md leaves Doclet-vs-JavacTask-vs-equivalent open as "not blocked", and
- * 07-CONTEXT.md's own Claude's Discretion list includes the exact extraction mechanics). Source
- * text is masked (comments and string/char literals blanked to spaces, preserving length and
- * newlines) before any brace-depth walk, so a javadoc {@code {@link}}'s braces never get counted
- * as code braces. Once a declaration site is located and its simple parameter-type text is known,
- * {@link Class#getDeclaredMethod}/{@code getDeclaredConstructor}/{@code getDeclaredField}
- * reflection against the already-compiled class (this generator runs at {@code verify}, after
- * {@code compile}) resolves the final fully-qualified parameter types - the one piece source text
- * alone cannot give reliably (generics, imports).
+ * Build-only declaration discovery. The full JDK owns Java syntax; documentation is optional.
+ * Only {@link JavacTask#parse()} and DocTrees are used, with processing disabled. Reflection
+ * inspects already compiled declarations without initialization, invocation or field reads.
+ * Deprecated presence and its {@code since}/{@code forRemoval} values come from the class file
+ * ({@link CompiledDeprecationReader}), never from reflective annotation access, which would
+ * resolve co-located annotation values and so initialize enum types they name. Reading the
+ * compiled constants also accepts any javac compile-time constant expression without evaluating it.
+ * Neither this tool nor its compiler API dependencies belong in the runtime plugin artifact.
  */
 public final class JavadocDeprecationScanner {
-
-    private static final Pattern JAVADOC_COMMENT = Pattern.compile("/\\*\\*.*?\\*/", Pattern.DOTALL);
-    private static final Pattern PACKAGE_DECL = Pattern.compile("(?m)^\\s*package\\s+([\\w.]+)\\s*;");
-    private static final Pattern CLASS_OPEN = Pattern.compile(
-            "\\b(?:class|interface|enum|@\\s*interface)\\s+(\\w+)");
-    private static final Pattern SINCE_ARG = Pattern.compile("since\\s*=\\s*\"([^\"]*)\"");
-    private static final Pattern FOR_REMOVAL_ARG = Pattern.compile("forRemoval\\s*=\\s*(true|false)");
-    private static final Pattern REMOVE_IN_TAG = Pattern.compile(
-            "(?m)^\\s*\\*\\s*@removeIn\\s+(\\S+)");
-    /**
-     * Matches the real {@code @deprecated} javadoc BLOCK tag - anchored to a javadoc line start
-     * (optional leading whitespace, a {@code *}, optional whitespace) so a prose mention like
-     * {@code see the {@code @deprecated} note} inside the paragraph's own description is never
-     * mistaken for the tag itself. Stops at the next block tag or the comment's closing
-     * {@code * /}, never bleeding into it.
-     */
-    private static final Pattern DEPRECATED_TAG_BODY = Pattern.compile(
-            "(?m)^[ \\t]*\\*[ \\t]*@deprecated\\b(.*?)(?=\\n[ \\t]*\\*[ \\t]*@\\w|\\n[ \\t]*\\*/|\\z)", Pattern.DOTALL);
-
     private final ClassLoader classLoader;
+    private final Supplier<JavaCompiler> compilerSupplier;
+    private final MemberTypeScope memberTypes = new MemberTypeScope(this::load);
 
     public JavadocDeprecationScanner(ClassLoader classLoader) {
+        this(classLoader, ToolProvider::getSystemJavaCompiler);
+    }
+
+    JavadocDeprecationScanner(ClassLoader classLoader, Supplier<JavaCompiler> compilerSupplier) {
         this.classLoader = classLoader;
+        this.compilerSupplier = compilerSupplier;
     }
 
     public List<DeprecationEntry> scan(Path srcRoot) throws IOException {
-        List<DeprecationEntry> result = new ArrayList<>();
-        for (Path file : collectJavaFiles(srcRoot)) {
-            result.addAll(scanFile(file));
+        JavaCompiler compiler = compilerSupplier.get();
+        if (compiler == null) {
+            throw new IllegalStateException("A full JDK 21 compiler/parser is required to scan " + srcRoot);
         }
-        return result;
-    }
-
-    private List<Path> collectJavaFiles(Path root) throws IOException {
-        List<Path> files = new ArrayList<>();
-        Files.walkFileTree(root, new SimpleFileVisitor<Path>() {
-            @Override
-            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-                if (file.toString().endsWith(".java")) {
-                    files.add(file);
-                }
-                return FileVisitResult.CONTINUE;
-            }
-        });
-        Collections.sort(files);
-        return files;
-    }
-
-    private List<DeprecationEntry> scanFile(Path file) throws IOException {
-        String source = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
-        String packageName = extractPackageName(source);
-        String masked = maskCommentsAndStrings(source);
-        List<NestingEvent> nesting = buildNestingEvents(masked);
-
+        List<Path> files;
+        try (Stream<Path> paths = Files.walk(srcRoot)) {
+            files = paths.filter(p -> p.toString().endsWith(".java")).sorted().collect(Collectors.toList());
+        }
         List<DeprecationEntry> entries = new ArrayList<>();
-        Matcher commentMatcher = JAVADOC_COMMENT.matcher(source);
-        while (commentMatcher.find()) {
-            String comment = commentMatcher.group();
-            if (!comment.contains("@deprecated")) {
-                continue;
-            }
-            List<String> enclosingStack = enclosingClassAt(nesting, commentMatcher.start());
-            Declaration decl = parseDeclarationAfter(source, masked, commentMatcher.end());
-            if (decl == null || !decl.hasDeprecatedAnnotation) {
-                continue;
-            }
-
-            String rawParagraph = extractDeprecatedBody(comment);
-            String replacement = DeprecatedParagraphExtractor.extractReplacementText(rawParagraph);
-            String removeIn = extractRemoveInTag(comment);
-
-            try {
-                DeprecationEntry entry = buildEntry(packageName, enclosingStack, decl, decl.since, decl.forRemoval, removeIn, replacement);
-                entries.add(entry);
-            } catch (ReflectiveOperationException e) {
-                throw new IllegalStateException(
-                        "Failed to resolve reflected member for " + buildBinaryName(packageName, enclosingStack, null)
-                                + " (" + decl.kind + " " + decl.name + ") in " + file + ": " + e.getMessage(), e);
-            }
+        for (Path file : files) {
+            parseFile(compiler, file, entries);
         }
         return entries;
     }
 
-    // ---- source text helpers -------------------------------------------------------------
-
-    private static String extractPackageName(String source) {
-        Matcher m = PACKAGE_DECL.matcher(source);
-        return m.find() ? m.group(1) : "";
+    private void parseFile(JavaCompiler compiler, Path file, List<DeprecationEntry> entries) throws IOException {
+        DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
+        try (StandardJavaFileManager manager = compiler.getStandardFileManager(
+                diagnostics, null, StandardCharsets.UTF_8)) {
+            JavacTask task = (JavacTask) compiler.getTask(null, manager, diagnostics,
+                    Collections.singletonList("-proc:none"), null,
+                    manager.getJavaFileObjects(file.toFile()));
+            List<CompilationUnitTree> units = new ArrayList<>();
+            task.parse().forEach(units::add);
+            for (Diagnostic<? extends JavaFileObject> diagnostic : diagnostics.getDiagnostics()) {
+                if (diagnostic.getKind() == Diagnostic.Kind.ERROR) {
+                    throw new IllegalStateException("Malformed Java source " + file + ":"
+                            + diagnostic.getLineNumber() + ":" + diagnostic.getColumnNumber() + ": "
+                            + diagnostic.getMessage(java.util.Locale.ROOT));
+                }
+            }
+            DocTrees docs = DocTrees.instance(task);
+            for (CompilationUnitTree unit : units) {
+                Source source = new Source(file, unit, docs);
+                TreePath root = new TreePath(unit);
+                for (Tree declaration : unit.getTypeDecls()) {
+                    if (declaration instanceof ClassTree) {
+                        source.visitClass(new TreePath(root, declaration), null, entries);
+                    }
+                }
+            }
+        }
     }
 
-    /**
-     * Replaces every character inside a {@code //} line comment, a {@code /* *}{@code /} block
-     * comment (including javadoc), a string literal, or a char literal with a space, preserving
-     * newlines and overall length. This lets a subsequent brace-depth walk find real code braces
-     * without a javadoc {@code {@link}}'s braces being counted.
-     */
-    private static String maskCommentsAndStrings(String source) {
-        char[] chars = source.toCharArray();
-        char[] masked = chars.clone();
-        int n = chars.length;
-        int i = 0;
-        while (i < n) {
-            char c = chars[i];
-            if (c == '/' && i + 1 < n && chars[i + 1] == '/') {
-                int start = i;
-                while (i < n && chars[i] != '\n') {
-                    i++;
+    /** One compilation unit supplies imports; only named member declarations are traversed. */
+    private final class Source {
+        private final Path file;
+        private final CompilationUnitTree unit;
+        private final DocTrees docs;
+        private final String packageName;
+        private final Map<String, Set<String>> imports = new LinkedHashMap<>();
+        private final Map<String, Set<String>> staticImports = new LinkedHashMap<>();
+        private final List<String> onDemand = new ArrayList<>();
+        private final List<String> staticOnDemand = new ArrayList<>();
+        private final Map<Class<?>, CompiledDeprecationReader> compiledClasses = new HashMap<>();
+
+        /**
+         * A type import names a canonical type, so only declared member types are reachable through
+         * it (JLS 7.5.1, 7.5.2). A static import names a canonical type and any of its static members,
+         * so it also reaches member types the type inherits (JLS 7.5.3, 7.5.4). Only class loading
+         * is attempted.
+         */
+        Source(Path file, CompilationUnitTree unit, DocTrees docs) {
+            this.file = file;
+            this.unit = unit;
+            this.docs = docs;
+            this.packageName = unit.getPackageName() == null ? "" : unit.getPackageName().toString();
+            onDemand.add("java.lang");
+            for (ImportTree imp : unit.getImports()) {
+                String name = imp.getQualifiedIdentifier().toString();
+                if (name.endsWith(".*")) {
+                    (imp.isStatic() ? staticOnDemand : onDemand).add(name.substring(0, name.length() - 2));
+                } else {
+                    (imp.isStatic() ? staticImports : imports)
+                            .computeIfAbsent(name.substring(name.lastIndexOf('.') + 1), k -> new LinkedHashSet<>())
+                            .add(name);
                 }
-                blank(masked, start, i);
-            } else if (c == '/' && i + 1 < n && chars[i + 1] == '*') {
-                int start = i;
-                i += 2;
-                while (i + 1 < n && !(chars[i] == '*' && chars[i + 1] == '/')) {
-                    i++;
+            }
+        }
+
+        void visitClass(TreePath path, Owner parent, List<DeprecationEntry> entries) {
+            ClassTree tree = (ClassTree) path.getLeaf();
+            if (tree.getSimpleName().length() == 0) {
+                return;
+            }
+            String binary = parent == null ? qualify(tree.getSimpleName().toString())
+                    : parent.binary + "$" + tree.getSimpleName();
+            Owner owner = new Owner(binary, parent, tree.getTypeParameters());
+            Scope scope = owner.scope;
+            addEntry(path, tree.getModifiers().getAnnotations(), owner, scope, entries);
+            for (Tree member : tree.getMembers()) {
+                TreePath memberPath = new TreePath(path, member);
+                if (member instanceof ClassTree) {
+                    visitClass(memberPath, owner, entries);
+                } else if (member instanceof MethodTree) {
+                    MethodTree method = (MethodTree) member;
+                    addEntry(memberPath, method.getModifiers().getAnnotations(), owner,
+                            new Scope(scope, method.getTypeParameters(), owner), entries);
+                } else if (member instanceof VariableTree) {
+                    addEntry(memberPath, ((VariableTree) member).getModifiers().getAnnotations(), owner, scope, entries);
                 }
-                i = Math.min(i + 2, n);
-                blank(masked, start, i);
-            } else if (c == '"') {
-                int start = i;
-                i++;
-                while (i < n && chars[i] != '"') {
-                    if (chars[i] == '\\' && i + 1 < n) {
-                        i++;
+                // Method bodies, initializer expressions/blocks, local/anonymous classes and
+                // local variables are not API declarations and are deliberately not visited.
+            }
+        }
+
+        private void addEntry(TreePath path, List<? extends AnnotationTree> annotations, Owner owner,
+                Scope scope, List<DeprecationEntry> entries) {
+            Tree declaration = path.getLeaf();
+            String context = file + ":" + unit.getLineMap().getLineNumber(
+                    docs.getSourcePositions().getStartPosition(unit, declaration)) + " "
+                    + owner.binary + " " + declaration.getKind() + " " + declarationName(declaration);
+            try {
+                if (!annotatedDeprecated(annotations, owner, scope)) {
+                    return;
+                }
+                Class<?> compiledOwner = load(owner.binary);
+                CompiledDeprecationReader compiled = compiledClass(compiledOwner);
+                Mapped mapped;
+                if (declaration instanceof ClassTree) {
+                    mapped = new Mapped(RegistryKey.forClass(compiledOwner.getName()), DeprecationEntry.Kind.CLASS,
+                            compiled.forClass());
+                } else if (declaration instanceof VariableTree) {
+                    mapped = mapField((VariableTree) declaration, compiledOwner, compiled, owner, scope);
+                } else {
+                    mapped = mapExecutable((MethodTree) declaration, compiledOwner, compiled, owner, scope);
+                }
+                if (mapped.metadata == null) {
+                    throw new IllegalStateException("Compiled declaration lacks java.lang.Deprecated: " + mapped.key);
+                }
+                entries.add(entry(path, mapped));
+            } catch (ReflectiveOperationException | LinkageError | IOException | RuntimeException e) {
+                throw new IllegalStateException("Cannot map declaration " + context + ": " + e.getMessage(), e);
+            }
+        }
+
+        private boolean annotatedDeprecated(List<? extends AnnotationTree> annotations, Owner owner, Scope scope) {
+            boolean deprecated = false;
+            for (AnnotationTree annotation : annotations) {
+                Set<String> types = resolve(annotation.getAnnotationType(), owner, scope, new HashSet<>());
+                if (types.contains("java.lang.Deprecated")) {
+                    if (types.size() != 1) {
+                        throw new IllegalStateException("Ambiguous annotation identity: " + types);
                     }
-                    i++;
+                    deprecated = true;
                 }
-                i = Math.min(i + 1, n);
-                blank(masked, start, i);
-            } else if (c == '\'') {
-                int start = i;
-                i++;
-                while (i < n && chars[i] != '\'') {
-                    if (chars[i] == '\\' && i + 1 < n) {
-                        i++;
-                    }
-                    i++;
-                }
-                i = Math.min(i + 1, n);
-                blank(masked, start, i);
+            }
+            return deprecated;
+        }
+
+        private CompiledDeprecationReader compiledClass(Class<?> compiledOwner) throws IOException {
+            CompiledDeprecationReader compiled = compiledClasses.get(compiledOwner);
+            if (compiled == null) {
+                compiled = CompiledDeprecationReader.read(classLoader, compiledOwner);
+                compiledClasses.put(compiledOwner, compiled);
+            }
+            return compiled;
+        }
+
+        private Mapped mapField(VariableTree variable, Class<?> compiledOwner, CompiledDeprecationReader compiled,
+                Owner owner, Scope scope) {
+            Set<String> types = resolve(variable.getType(), owner, scope, new HashSet<>());
+            List<Field> candidates = Arrays.asList(compiledOwner.getDeclaredFields());
+            List<Field> matches = candidates.stream()
+                    .filter(f -> f.getName().contentEquals(variable.getName())
+                            && types.contains(typeName(f.getType())))
+                    .collect(Collectors.toList());
+            if (matches.size() != 1) {
+                throw new IllegalStateException((matches.isEmpty() ? "No reflected field matched " : "Ambiguous field match ")
+                        + variable.getName() + " " + types + "; candidates: " + candidates + "; matches: " + matches);
+            }
+            Field field = matches.get(0);
+            return new Mapped(RegistryKey.forField(compiledOwner.getName(), field.getName()),
+                    DeprecationEntry.Kind.FIELD, compiled.forField(field));
+        }
+
+        private Mapped mapExecutable(MethodTree method, Class<?> compiledOwner, CompiledDeprecationReader compiled,
+                Owner owner, Scope scope) {
+            boolean constructor = method.getReturnType() == null;
+            List<Set<String>> parameters = new ArrayList<>();
+            for (VariableTree parameter : method.getParameters()) {
+                parameters.add(resolve(parameter.getType(), owner, scope, new HashSet<>()));
+            }
+            List<Executable> candidates = new ArrayList<>();
+            if (constructor) {
+                candidates.addAll(Arrays.asList(compiledOwner.getDeclaredConstructors()));
             } else {
-                i++;
-            }
-        }
-        return new String(masked);
-    }
-
-    private static void blank(char[] masked, int from, int to) {
-        for (int i = from; i < to; i++) {
-            if (masked[i] != '\n') {
-                masked[i] = ' ';
-            }
-        }
-    }
-
-    private static final class NestingEvent {
-        final int offset;
-        final boolean push;
-        final String name;
-
-        NestingEvent(int offset, boolean push, String name) {
-            this.offset = offset;
-            this.push = push;
-            this.name = name;
-        }
-    }
-
-    /**
-     * Walks the masked (comment/string-free) source once, tracking brace depth and matching each
-     * {@code class}/{@code interface}/{@code enum} keyword to the {@code {} that opens its body,
-     * producing an ordered list of push/pop events used by {@link #enclosingClassAt}.
-     */
-    private static List<NestingEvent> buildNestingEvents(String masked) {
-        List<NestingEvent> events = new ArrayList<>();
-        List<Integer> depthStack = new ArrayList<>();
-        int depth = 0;
-        String pendingName = null;
-
-        Matcher classMatcher = CLASS_OPEN.matcher(masked);
-        int nextClassMatchStart = classMatcher.find() ? classMatcher.start() : -1;
-
-        for (int i = 0; i < masked.length(); i++) {
-            if (i == nextClassMatchStart) {
-                pendingName = classMatcher.group(1);
-                nextClassMatchStart = classMatcher.find() ? classMatcher.start() : -1;
-            }
-            char c = masked.charAt(i);
-            if (c == '{') {
-                depth++;
-                if (pendingName != null) {
-                    events.add(new NestingEvent(i, true, pendingName));
-                    depthStack.add(depth);
-                    pendingName = null;
-                }
-            } else if (c == '}') {
-                if (!depthStack.isEmpty() && depthStack.get(depthStack.size() - 1) == depth) {
-                    depthStack.remove(depthStack.size() - 1);
-                    events.add(new NestingEvent(i, false, null));
-                }
-                depth--;
-            }
-        }
-        return events;
-    }
-
-    /** Returns the stack of simple class names (outermost first) enclosing {@code offset}, empty for top level. */
-    private static List<String> enclosingClassAt(List<NestingEvent> events, int offset) {
-        List<String> stack = new ArrayList<>();
-        for (NestingEvent event : events) {
-            if (event.offset >= offset) {
-                break;
-            }
-            if (event.push) {
-                stack.add(event.name);
-            } else if (!stack.isEmpty()) {
-                stack.remove(stack.size() - 1);
-            }
-        }
-        return stack;
-    }
-
-    /**
-     * Builds a JVM binary class name from a package, an enclosing class stack (outermost first,
-     * possibly empty for top level), and an optional extra simple name to append (a class
-     * currently being declared) - {@code pkg.Outer$Inner} form, matching japicmp/javap
-     * convention exactly, with no stray separators for the top-level/no-extra-name cases.
-     */
-    private static String buildBinaryName(String packageName, List<String> classStack, String extraSimpleName) {
-        List<String> parts = new ArrayList<>(classStack);
-        if (extraSimpleName != null) {
-            parts.add(extraSimpleName);
-        }
-        String chain = String.join("$", parts);
-        if (packageName.isEmpty()) {
-            return chain;
-        }
-        return chain.isEmpty() ? packageName : packageName + "." + chain;
-    }
-
-    private enum Kind {
-        CLASS, METHOD, FIELD, CONSTRUCTOR
-    }
-
-    private static final class Declaration {
-        boolean hasDeprecatedAnnotation;
-        String since;
-        boolean forRemoval;
-        Kind kind;
-        String name;
-        String rawParams;
-    }
-
-    /**
-     * Parses the text immediately following a javadoc comment: any leading annotations (looking
-     * specifically for {@code @Deprecated} and its {@code since}/{@code forRemoval} arguments),
-     * then the declaration itself, classifying it as a class, field, method, or constructor.
-     */
-    /**
-     * Parses the annotation run and declaration signature that follow a javadoc comment.
-     * <p>
-     * Takes both the raw {@code source} and its offset-preserving {@code masked} twin (see
-     * {@link #maskCommentsAndStrings}). Every scan runs over {@code masked}, so a parenthesis or
-     * semicolon inside a string literal cannot be mistaken for structure; every substring is taken
-     * from {@code source}, so the text extracted is the real one. The two share an index space
-     * because masking blanks in place and never changes length.
-     */
-    private static Declaration parseDeclarationAfter(String source, String masked, int fromOffset) {
-        Declaration decl = new Declaration();
-        int afterAnnotations = consumeAnnotationRun(source, masked, fromOffset, decl);
-        if (afterAnnotations < 0) {
-            return null;
-        }
-        int declStart = skipWhitespace(masked, afterAnnotations);
-        int declEnd = findDeclarationEnd(masked, declStart);
-        if (declEnd < 0) {
-            return null;
-        }
-        classifyDeclaration(source.substring(declStart, declEnd), decl);
-        return decl.kind == null ? null : decl;
-    }
-
-    /**
-     * Consumes the run of annotations starting at {@code fromOffset}, recording {@code @Deprecated}
-     * and its arguments into {@code decl}, and returns the offset just past the run -- or
-     * {@code -1} if an annotation's parentheses never balance.
-     *
-     * @see #scanBalancedParens(String, int)
-     */
-    private static int consumeAnnotationRun(String source, String masked, int fromOffset, Declaration decl) {
-        int i = fromOffset;
-        int n = masked.length();
-        while (true) {
-            i = skipWhitespace(masked, i);
-            if (i >= n || masked.charAt(i) != '@') {
-                return i;
-            }
-            int annotationStart = i;
-            i++;
-            int nameStart = i;
-            while (i < n && (Character.isLetterOrDigit(masked.charAt(i)) || masked.charAt(i) == '.')) {
-                i++;
-            }
-            boolean isDeprecated = "Deprecated".equals(source.substring(nameStart, i));
-            int afterName = skipWhitespace(masked, i);
-            if (afterName < n && masked.charAt(afterName) == '(') {
-                int close = scanBalancedParens(masked, afterName);
-                if (close < 0) {
-                    // Unbalanced: refuse the declaration rather than report a truncated parse.
-                    return -1;
-                }
-                if (isDeprecated) {
-                    decl.hasDeprecatedAnnotation = true;
-                    readDeprecatedArgs(source.substring(afterName + 1, close - 1), decl);
-                }
-                i = close;
-            } else if (isDeprecated) {
-                decl.hasDeprecatedAnnotation = true;
-            }
-            if (annotationStart == i) {
-                // Defensive: no progress made, avoid an infinite loop on malformed input.
-                return i;
-            }
-        }
-    }
-
-    /** Reads {@code since} / {@code forRemoval} out of a {@code @Deprecated} argument list. */
-    private static void readDeprecatedArgs(String args, Declaration decl) {
-        Matcher sinceMatcher = SINCE_ARG.matcher(args);
-        if (sinceMatcher.find()) {
-            decl.since = sinceMatcher.group(1);
-        }
-        Matcher forRemovalMatcher = FOR_REMOVAL_ARG.matcher(args);
-        if (forRemovalMatcher.find()) {
-            decl.forRemoval = Boolean.parseBoolean(forRemovalMatcher.group(1));
-        }
-    }
-
-    /**
-     * Returns the index just past the {@code ')'} matching the {@code '('} at
-     * {@code openParenOffset}, or {@code -1} if they never balance or that offset is not an open
-     * parenthesis.
-     * <p>
-     * Package-private for direct testing: this is the scanner whose depth count an unmasked
-     * parenthesis inside a string literal would corrupt.
-     */
-    static int scanBalancedParens(String masked, int openParenOffset) {
-        int n = masked.length();
-        if (openParenOffset < 0 || openParenOffset >= n || masked.charAt(openParenOffset) != '(') {
-            return -1;
-        }
-        int depth = 0;
-        for (int j = openParenOffset; j < n; j++) {
-            char c = masked.charAt(j);
-            if (c == '(') {
-                depth++;
-            } else if (c == ')') {
-                depth--;
-                if (depth == 0) {
-                    return j + 1;
+                for (Method candidate : compiledOwner.getDeclaredMethods()) {
+                    if (candidate.getName().contentEquals(method.getName()) && !candidate.isBridge()
+                            && !candidate.isSynthetic()) {
+                        candidates.add(candidate);
+                    }
                 }
             }
+            Executable match = uniqueMatch(candidates, parameters, compiledOwner, constructor);
+            RegistryKey key = RegistryKey.forMember(compiledOwner.getName(), constructor
+                            ? compiledOwner.getSimpleName() : method.getName().toString(),
+                    Arrays.stream(match.getParameterTypes()).map(JavadocDeprecationScanner::typeName)
+                            .collect(Collectors.toList()));
+            return new Mapped(key, constructor ? DeprecationEntry.Kind.CONSTRUCTOR : DeprecationEntry.Kind.METHOD,
+                    compiled.forExecutable(match));
         }
-        return -1;
-    }
 
-    /**
-     * Returns the index of the {@code '{'} or {@code ';'} that ends a declaration signature --
-     * ignoring any inside parentheses, which belong to a parameter list -- or {@code -1} if the
-     * input ends first.
-     * <p>
-     * Package-private for direct testing, for the same reason as {@link #scanBalancedParens}.
-     */
-    static int findDeclarationEnd(String masked, int from) {
-        int n = masked.length();
-        int depth = 0;
-        for (int j = from; j < n; j++) {
-            char c = masked.charAt(j);
-            if (c == '(') {
-                depth++;
-            } else if (c == ')') {
-                depth--;
-            } else if (depth == 0 && (c == '{' || c == ';')) {
-                return j;
-            }
-        }
-        return -1;
-    }
-
-    private static int skipWhitespace(String source, int from) {
-        int i = from;
-        while (i < source.length() && Character.isWhitespace(source.charAt(i))) {
-            i++;
-        }
-        return i;
-    }
-
-    private static void classifyDeclaration(String declText, Declaration decl) {
-        Matcher classMatcher = CLASS_OPEN.matcher(declText);
-        if (classMatcher.find()) {
-            decl.kind = Kind.CLASS;
-            decl.name = classMatcher.group(1);
-            return;
-        }
-        int parenIndex = declText.indexOf('(');
-        if (parenIndex >= 0) {
-            // Method or constructor: the identifier immediately before the first '(' is the name.
-            int nameEnd = parenIndex;
-            int nameStart = nameEnd;
-            while (nameStart > 0 && (Character.isLetterOrDigit(declText.charAt(nameStart - 1))
-                    || declText.charAt(nameStart - 1) == '_')) {
-                nameStart--;
-            }
-            String name = declText.substring(nameStart, nameEnd).trim();
-            if (name.isEmpty()) {
-                return;
-            }
-            int closeIndex = matchingClose(declText, parenIndex);
-            if (closeIndex < 0) {
-                return;
-            }
-            decl.name = name;
-            decl.rawParams = declText.substring(parenIndex + 1, closeIndex);
-            decl.kind = Kind.METHOD; // corrected to CONSTRUCTOR by the caller once the enclosing simple name is known
-        } else {
-            // Field: the last identifier token before the (already-stripped) trailing ';' or '='.
-            String text = declText;
-            int eq = text.indexOf('=');
-            if (eq >= 0) {
-                text = text.substring(0, eq);
-            }
-            text = text.trim();
-            int lastSpace = text.lastIndexOf(' ');
-            String name = lastSpace >= 0 ? text.substring(lastSpace + 1).trim() : text.trim();
-            name = name.replaceAll("[^\\w]", "");
-            if (name.isEmpty()) {
-                return;
-            }
-            decl.kind = Kind.FIELD;
-            decl.name = name;
-        }
-    }
-
-    private static int matchingClose(String text, int openIndex) {
-        int depth = 0;
-        for (int i = openIndex; i < text.length(); i++) {
-            char c = text.charAt(i);
-            if (c == '(') {
-                depth++;
-            } else if (c == ')') {
-                depth--;
-                if (depth == 0) {
-                    return i;
+        private DeprecationEntry entry(TreePath path, Mapped mapped) {
+            String paragraph = "";
+            String removeIn = null;
+            DocCommentTree doc = docs.getDocCommentTree(path);
+            if (doc != null) {
+                for (DocTree tag : doc.getBlockTags()) {
+                    if (tag instanceof DeprecatedTree) {
+                        paragraph = joinDoc(((DeprecatedTree) tag).getBody());
+                    } else if (tag instanceof UnknownBlockTagTree
+                            && "removeIn".equals(((UnknownBlockTagTree) tag).getTagName())) {
+                        String text = joinDoc(((UnknownBlockTagTree) tag).getContent()).trim();
+                        removeIn = text.isEmpty() ? null : text.split("\\s+")[0];
+                    }
                 }
             }
-        }
-        return -1;
-    }
-
-    private static String extractDeprecatedBody(String comment) {
-        Matcher matcher = DEPRECATED_TAG_BODY.matcher(comment);
-        if (!matcher.find()) {
-            return "";
-        }
-        String raw = matcher.group(1);
-        return raw.replaceAll("\\r?\\n[ \\t]*\\*[ \\t]?", " ").trim();
-    }
-
-    private static String extractRemoveInTag(String comment) {
-        Matcher matcher = REMOVE_IN_TAG.matcher(comment);
-        return matcher.find() ? matcher.group(1) : null;
-    }
-
-    // ---- reflective FQN resolution ---------------------------------------------------------
-
-    private DeprecationEntry buildEntry(String packageName, List<String> enclosingStack, Declaration decl, String since,
-            boolean forRemoval, String removeIn, String replacement) throws ReflectiveOperationException {
-        DeprecationEntry.Status status = forRemoval ? DeprecationEntry.Status.ANNOUNCED : DeprecationEntry.Status.DEPRECATED;
-
-        if (decl.kind == Kind.CLASS) {
-            String classBinaryName = buildBinaryName(packageName, enclosingStack, decl.name);
-            // Build-time only: classBinaryName is reconstructed from the repository's own
-            // src/main/java tree that this scanner just parsed, and classLoader is the build's
-            // own. No value here originates outside the build. initialize=false additionally
-            // means no static initializer runs.
-            // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
-            Class<?> clazz = Class.forName(classBinaryName, false, classLoader);
-            return DeprecationEntry.builder()
-                    .key(RegistryKey.forClass(clazz.getName()))
-                    .kind(DeprecationEntry.Kind.CLASS)
-                    .since(since).forRemoval(forRemoval).removeIn(removeIn).replacement(replacement)
-                    .status(status).build();
+            boolean forRemoval = mapped.metadata.forRemoval;
+            return DeprecationEntry.builder().key(mapped.key).kind(mapped.kind).since(mapped.metadata.since)
+                    .forRemoval(forRemoval).removeIn(removeIn)
+                    .replacement(DeprecatedParagraphExtractor.extractReplacementText(paragraph))
+                    .status(forRemoval ? DeprecationEntry.Status.ANNOUNCED : DeprecationEntry.Status.DEPRECATED)
+                    .build();
         }
 
-        String enclosingBinaryName = buildBinaryName(packageName, enclosingStack, null);
-        // Build-time only, same provenance as the CLASS branch above: the enclosing name is
-        // built from this scanner's own parse of the repository's source tree.
-        // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
-        Class<?> owner = Class.forName(enclosingBinaryName, false, classLoader);
-        String simpleEnclosingName = enclosingStack.isEmpty() ? "" : enclosingStack.get(enclosingStack.size() - 1);
-
-        if (decl.kind == Kind.FIELD) {
-            Field field = owner.getDeclaredField(decl.name);
-            return DeprecationEntry.builder()
-                    .key(RegistryKey.forField(owner.getName(), field.getName()))
-                    .kind(DeprecationEntry.Kind.FIELD)
-                    .since(since).forRemoval(forRemoval).removeIn(removeIn).replacement(replacement)
-                    .status(status).build();
-        }
-
-        List<ParsedParam> parsedParams = parseParams(decl.rawParams);
-        boolean isConstructor = decl.name.equals(simpleEnclosingName);
-
-        if (isConstructor) {
-            Constructor<?> ctor = findMatching(owner.getDeclaredConstructors(), parsedParams);
-            List<String> fqParams = fullyQualifiedParamNames(ctor.getParameterTypes());
-            return DeprecationEntry.builder()
-                    .key(RegistryKey.forMember(owner.getName(), simpleEnclosingName, fqParams))
-                    .kind(DeprecationEntry.Kind.CONSTRUCTOR)
-                    .since(since).forRemoval(forRemoval).removeIn(removeIn).replacement(replacement)
-                    .status(status).build();
-        }
-
-        List<Method> candidates = new ArrayList<>();
-        for (Method m : owner.getDeclaredMethods()) {
-            if (m.getName().equals(decl.name)) {
-                candidates.add(m);
+        private Executable uniqueMatch(List<Executable> candidates, List<Set<String>> parameters,
+                Class<?> owner, boolean constructor) {
+            List<Executable> matches = new ArrayList<>();
+            int hidden = hiddenParameters(owner, constructor);
+            for (Executable candidate : candidates) {
+                if (parametersMatch(candidate.getParameterTypes(), parameters, hidden)) {
+                    matches.add(candidate);
+                }
             }
+            if (matches.size() != 1) {
+                throw new IllegalStateException((matches.isEmpty() ? "No reflected member matched " : "Ambiguous match ")
+                        + parameters + "; candidates: " + candidates + "; matches: " + matches);
+            }
+            return matches.get(0);
         }
-        Method method = findMatching(candidates.toArray(new Executable[0]), parsedParams);
-        List<String> fqParams = fullyQualifiedParamNames(method.getParameterTypes());
-        return DeprecationEntry.builder()
-                .key(RegistryKey.forMember(owner.getName(), method.getName(), fqParams))
-                .kind(DeprecationEntry.Kind.METHOD)
-                .since(since).forRemoval(forRemoval).removeIn(removeIn).replacement(replacement)
-                .status(status).build();
-    }
 
-    private static List<String> fullyQualifiedParamNames(Class<?>[] paramTypes) {
-        List<String> names = new ArrayList<>();
-        for (Class<?> type : paramTypes) {
-            names.add(typeName(type));
+        private Set<String> resolve(Tree tree, Owner owner, Scope scope, Set<Bound> resolving) {
+            if (tree instanceof AnnotatedTypeTree) {
+                return resolve(((AnnotatedTypeTree) tree).getUnderlyingType(), owner, scope, resolving);
+            }
+            if (tree instanceof ArrayTypeTree) {
+                return arrayOf(resolve(((ArrayTypeTree) tree).getType(), owner, scope, resolving));
+            }
+            if (tree instanceof ParameterizedTypeTree) {
+                return resolve(((ParameterizedTypeTree) tree).getType(), owner, scope, resolving);
+            }
+            String name = typeSpelling(tree);
+            if (tree.getKind() == Tree.Kind.PRIMITIVE_TYPE) {
+                return Collections.singleton(name);
+            }
+            Bound bound = scope == null ? null : scope.find(name);
+            return bound != null ? resolveBound(bound, name, resolving) : resolveName(name, owner);
         }
-        return names;
-    }
 
-    private static String typeName(Class<?> type) {
-        if (type.isArray()) {
-            return typeName(type.getComponentType()) + "[]";
+        private Set<String> resolveBound(Bound bound, String name, Set<Bound> resolving) {
+            if (!resolving.add(bound)) {
+                throw new IllegalStateException("Cyclic type-variable erasure: " + name);
+            }
+            Set<String> types = bound.tree == null ? Collections.singleton("java.lang.Object")
+                    : resolve(bound.tree, bound.scope.owner, bound.scope, resolving);
+            resolving.remove(bound);
+            return types;
         }
-        return type.getName();
-    }
 
-    private static final class ParsedParam {
-        final String simpleType;
-        final int arrayDepth;
-
-        ParsedParam(String simpleType, int arrayDepth) {
-            this.simpleType = simpleType;
-            this.arrayDepth = arrayDepth;
+        private Set<String> resolveName(String name, Owner owner) {
+            if (name.indexOf('.') >= 0) {
+                return resolveQualified(name, owner);
+            }
+            Set<String> lexical = resolveLexical(name, owner);
+            if (!lexical.isEmpty()) {
+                return lexical;
+            }
+            if (imports.containsKey(name) || staticImports.containsKey(name)) {
+                return resolveSingleImports(name);
+            }
+            Set<String> local = loadableNames(qualify(name));
+            return local.isEmpty() ? resolveOnDemand(name) : local;
         }
-    }
 
-    /**
-     * Parses a raw, comma-separated (at depth 0) parameter list as written in source into simple
-     * type names for reflective disambiguation - generics erased, array/varargs depth tracked
-     * separately, parameter identifiers discarded.
-     */
-    private static List<ParsedParam> parseParams(String rawParams) {
-        List<ParsedParam> result = new ArrayList<>();
-        if (rawParams == null || rawParams.trim().isEmpty()) {
+        private Set<String> resolveSingleImports(String name) {
+            Set<String> found = new LinkedHashSet<>();
+            for (String imported : imports.getOrDefault(name, Collections.emptySet())) {
+                found.addAll(loadableNames(imported));
+            }
+            for (String imported : staticImports.getOrDefault(name, Collections.emptySet())) {
+                found.addAll(memberTypesOf(imported.substring(0, imported.lastIndexOf('.')), name));
+            }
+            return found;
+        }
+
+        private Set<String> resolveOnDemand(String name) {
+            Set<String> found = new LinkedHashSet<>();
+            for (String prefix : onDemand) {
+                found.addAll(loadableNames(prefix + "." + name));
+            }
+            for (String prefix : staticOnDemand) {
+                found.addAll(memberTypesOf(prefix, name));
+            }
+            return found;
+        }
+
+        /**
+         * A qualified type name Q.Id names a member type of Q, declared or inherited (JLS 6.5.5.2,
+         * 8.5): the qualifier is resolved first, then {@link MemberTypeScope} looks up Id in each
+         * type it names, so a declared member type still hides an inherited one and two inherited
+         * ones stay ambiguous. A qualifier that is a package instead is covered by loading the
+         * whole name as spelled.
+         */
+        private Set<String> resolveQualified(String name, Owner owner) {
+            int dot = name.lastIndexOf('.');
+            String member = name.substring(dot + 1);
+            Set<String> result = loadableNames(name);
+            for (String qualifier : resolveName(name.substring(0, dot), owner)) {
+                result.addAll(memberTypes.find(qualifier, member));
+            }
             return result;
         }
-        for (String rawParam : splitTopLevel(rawParams)) {
-            String param = rawParam.trim();
-            if (param.isEmpty()) {
-                continue;
+
+        /** Member types named {@code name}, declared or inherited, of the canonically named type. */
+        private Set<String> memberTypesOf(String canonical, String name) {
+            Set<String> found = new LinkedHashSet<>();
+            for (String type : loadableNames(canonical)) {
+                found.addAll(memberTypes.find(type, name));
             }
-            param = param.replaceAll("^final\\s+", "");
-            param = param.replaceAll("@\\w+(\\([^)]*\\))?\\s+", ""); // strip parameter annotations
-            param = param.replace("...", "[]"); // varargs normalizes to an array type, same as japicmp/reflection see it
-            int lastTopLevelSpace = lastTopLevelSpace(param);
-            String typeText = lastTopLevelSpace >= 0 ? param.substring(0, lastTopLevelSpace).trim() : param.trim();
-            int arrayDepth = 0;
-            while (typeText.endsWith("[]")) {
-                arrayDepth++;
-                typeText = typeText.substring(0, typeText.length() - 2).trim();
+            return found;
+        }
+
+        /**
+         * The innermost enclosing owner that has the simple name as a member type, declared or
+         * inherited from a supertype (JLS 8.5, 6.4.1; see {@link MemberTypeScope}), or that is
+         * itself so named, wins.
+         */
+        private Set<String> resolveLexical(String name, Owner owner) {
+            for (Owner lexical = owner; lexical != null; lexical = lexical.parent) {
+                Set<String> found = memberTypes.find(lexical.binary, name);
+                if (found.isEmpty() && namesItself(lexical.binary, name, qualify(name))) {
+                    found = loadableNames(lexical.binary);
+                }
+                if (!found.isEmpty()) {
+                    return found;
+                }
             }
-            int genericStart = typeText.indexOf('<');
-            String simpleType = genericStart >= 0 ? typeText.substring(0, genericStart) : typeText;
-            simpleType = simpleType.trim();
-            int lastDot = simpleType.lastIndexOf('.');
-            if (lastDot >= 0) {
-                simpleType = simpleType.substring(lastDot + 1);
+            return Collections.emptySet();
+        }
+
+        private Set<String> loadableNames(String spelling) {
+            Set<String> names = new LinkedHashSet<>();
+            String binary = spelling;
+            while (true) {
+                try {
+                    names.add(load(binary).getName());
+                    return names;
+                } catch (ClassNotFoundException ignored) {
+                    // Only a missing candidate is expected. Linkage failures are never absence.
+                }
+                int dot = binary.lastIndexOf('.');
+                if (dot < 0) {
+                    return names;
+                }
+                binary = binary.substring(0, dot) + "$" + binary.substring(dot + 1);
             }
-            result.add(new ParsedParam(simpleType, arrayDepth));
+        }
+
+        private String qualify(String simple) {
+            return packageName.isEmpty() ? simple : packageName + "." + simple;
+        }
+    }
+
+    private Class<?> load(String binaryName) throws ClassNotFoundException {
+        // Build-only names come from parsed repository declarations/imports, never invocation.
+        // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
+        return Class.forName(binaryName, false, classLoader);
+    }
+
+    /** Whether the owner's own simple name, or its top-level qualified name, is the spelled name. */
+    private static boolean namesItself(String binary, String name, String qualified) {
+        return binary.substring(binary.lastIndexOf('$') + 1).equals(name) || binary.equals(qualified);
+    }
+
+    private static int hiddenParameters(Class<?> owner, boolean constructor) {
+        if (!constructor) {
+            return 0;
+        }
+        if (owner.isEnum()) {
+            return 2;
+        }
+        return owner.isMemberClass() && !Modifier.isStatic(owner.getModifiers()) ? 1 : 0;
+    }
+
+    private static boolean parametersMatch(Class<?>[] types, List<Set<String>> parameters, int hidden) {
+        if (types.length != parameters.size() + hidden) {
+            return false;
+        }
+        for (int i = 0; i < parameters.size(); i++) {
+            if (!parameters.get(i).contains(typeName(types[i + hidden]))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static Set<String> arrayOf(Set<String> components) {
+        Set<String> result = new LinkedHashSet<>();
+        for (String type : components) {
+            result.add(type + "[]");
         }
         return result;
     }
 
-    private static List<String> splitTopLevel(String text) {
-        List<String> parts = new ArrayList<>();
-        int depth = 0;
-        int start = 0;
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-            if (c == '<' || c == '(') {
-                depth++;
-            } else if (c == '>' || c == ')') {
-                depth--;
-            } else if (c == ',' && depth == 0) {
-                parts.add(text.substring(start, i));
-                start = i + 1;
-            }
+    private static String typeSpelling(Tree tree) {
+        if (tree instanceof MemberSelectTree) {
+            MemberSelectTree member = (MemberSelectTree) tree;
+            return typeSpelling(member.getExpression()) + "." + member.getIdentifier();
         }
-        parts.add(text.substring(start));
-        return parts;
+        if (tree instanceof ParameterizedTypeTree) {
+            return typeSpelling(((ParameterizedTypeTree) tree).getType());
+        }
+        return tree.toString();
     }
 
-    private static int lastTopLevelSpace(String text) {
-        int depth = 0;
-        int lastSpace = -1;
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-            if (c == '<') {
-                depth++;
-            } else if (c == '>') {
-                depth--;
-            } else if (c == ' ' && depth == 0) {
-                lastSpace = i;
-            }
+    private static String declarationName(Tree tree) {
+        if (tree instanceof ClassTree) {
+            return ((ClassTree) tree).getSimpleName().toString();
         }
-        return lastSpace;
+        if (tree instanceof MethodTree) {
+            MethodTree method = (MethodTree) tree;
+            return method.getName() + method.getParameters().toString();
+        }
+        return ((VariableTree) tree).getName().toString();
     }
 
-    @SuppressWarnings("unchecked")
-    private static <T extends Executable> T findMatching(Executable[] candidates, List<ParsedParam> parsedParams) {
-        List<Executable> matches = new ArrayList<>();
-        for (Executable candidate : candidates) {
-            Class<?>[] paramTypes = candidate.getParameterTypes();
-            if (paramTypes.length != parsedParams.size()) {
-                continue;
-            }
-            boolean allMatch = true;
-            for (int i = 0; i < paramTypes.length; i++) {
-                if (!simpleTypeMatches(paramTypes[i], parsedParams.get(i))) {
-                    allMatch = false;
-                    break;
-                }
-            }
-            if (allMatch) {
-                matches.add(candidate);
-            }
-        }
-        if (matches.size() == 1) {
-            return (T) matches.get(0);
-        }
-        if (matches.isEmpty()) {
-            throw new IllegalStateException("No reflected member matched parsed parameters " + describe(parsedParams)
-                    + " among " + candidates.length + " candidate(s) named the same");
-        }
-        throw new IllegalStateException("Ambiguous match (" + matches.size() + " candidates) for parsed parameters "
-                + describe(parsedParams));
+    private static String joinDoc(List<? extends DocTree> trees) {
+        return trees.stream().map(Object::toString).collect(Collectors.joining()).replace('\n', ' ').replace('\r', ' ');
     }
 
-    private static boolean simpleTypeMatches(Class<?> reflected, ParsedParam parsed) {
-        Class<?> base = reflected;
-        int depth = 0;
-        while (base.isArray()) {
-            base = base.getComponentType();
-            depth++;
-        }
-        if (depth != parsed.arrayDepth) {
-            return false;
-        }
-        return base.getSimpleName().equals(parsed.simpleType);
+    private static String typeName(Class<?> type) {
+        return type.isArray() ? typeName(type.getComponentType()) + "[]" : type.getName();
     }
 
-    private static String describe(List<ParsedParam> params) {
-        List<String> parts = new ArrayList<>();
-        for (ParsedParam p : params) {
-            StringBuilder sb = new StringBuilder(p.simpleType);
-            for (int i = 0; i < p.arrayDepth; i++) {
-                sb.append("[]");
-            }
-            parts.add(sb.toString());
+    /** One source declaration matched to its compiled counterpart. */
+    private static final class Mapped {
+        final RegistryKey key;
+        final DeprecationEntry.Kind kind;
+        final CompiledDeprecationReader.Metadata metadata;
+
+        Mapped(RegistryKey key, DeprecationEntry.Kind kind, CompiledDeprecationReader.Metadata metadata) {
+            this.key = key;
+            this.kind = kind;
+            this.metadata = metadata;
         }
-        return Arrays.toString(parts.toArray());
+    }
+
+    private static final class Owner {
+        final String binary;
+        final Owner parent;
+        final Scope scope;
+
+        Owner(String binary, Owner parent, List<? extends TypeParameterTree> parameters) {
+            this.binary = binary;
+            this.parent = parent;
+            this.scope = new Scope(parent == null ? null : parent.scope, parameters, this);
+        }
+    }
+
+    /** Each bound keeps its declaring lexical scope, so method shadowing cannot rewrite it. */
+    private static final class Bound {
+        final Tree tree;
+        final Scope scope;
+
+        Bound(Tree tree, Scope scope) {
+            this.tree = tree;
+            this.scope = scope;
+        }
+    }
+
+    private static final class Scope {
+        final Scope parent;
+        final Owner owner;
+        final Map<String, Bound> bounds = new LinkedHashMap<>();
+
+        Scope(Scope parent, List<? extends TypeParameterTree> parameters, Owner owner) {
+            this.parent = parent;
+            this.owner = owner;
+            for (TypeParameterTree parameter : parameters) {
+                bounds.put(parameter.getName().toString(), new Bound(
+                        parameter.getBounds().isEmpty() ? null : parameter.getBounds().get(0), this));
+            }
+        }
+
+        Bound find(String name) {
+            Bound bound = bounds.get(name);
+            return bound != null ? bound : parent == null ? null : parent.find(name);
+        }
     }
 }

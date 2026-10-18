@@ -46,6 +46,11 @@ jobs:
       # script or the allowlist is validated by the same mechanism it governs, not narrowed out.
       run: .github/scripts/check-cjk-scope.sh
       
+    - name: Verification instrument self-tests
+      run: |
+        bash .github/scripts/check-cjk-scope.sh --self-test
+        bash .github/scripts/test-buildtool-lifecycle.sh --self-test
+
     - name: 📊 Generate JaCoCo Coverage Report
       run: mvn -B jacoco:report
       

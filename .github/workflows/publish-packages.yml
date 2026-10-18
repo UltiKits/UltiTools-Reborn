@@ -60,9 +60,9 @@ jobs:
         VERSION: ${{ needs.validate.outputs.version }}
       run: mvn versions:set -DnewVersion="${VERSION}" -DgenerateBackupPoms=false
 
-    - name: 🔨 Build package
-      # GitHub Packages does not require signing, so the release profile is not activated.
-      run: mvn -B clean package -Dmaven.test.skip=true
+    - name: 🔨 Verify and build package
+      # Verify without executing tests; GitHub Packages does not need the signing profile.
+      run: mvn -B clean verify -DskipTests
 
     - name: 📎 Attach JAR to the release
       # A fallback, not the primary path. The publish entry point .github/scripts/release.sh
@@ -247,4 +247,4 @@ jobs:
       # -P release: GPG signing lives only in this profile, since Maven Central alone requires
       # signed artifacts. Omitting it would not silently ship an unsigned artifact -- Central's
       # own validation rejects it outright.
-      run: mvn -B deploy -P release -Dmaven.test.skip=true -Dgpg.passphrase="${MAVEN_GPG_PASSPHRASE}"
+      run: mvn -B deploy -P release -DskipTests -Dgpg.passphrase="${MAVEN_GPG_PASSPHRASE}"
