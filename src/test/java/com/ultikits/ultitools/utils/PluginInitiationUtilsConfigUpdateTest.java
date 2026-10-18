@@ -14,6 +14,9 @@ import static org.mockito.Mockito.verify;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.BiConsumer;
@@ -29,14 +32,20 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.mockito.invocation.Invocation;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.manager.ConfigManager;
@@ -305,6 +314,231 @@ class PluginInitiationUtilsConfigUpdateTest {
                     .isEqualTo(expected.getConfigPath());
             assertThat(refusal.get("requestId").getAsString()).as("refusal echoes requestId").isEqualTo(requestId);
         }
+    }
+
+    // ========== fileName-shape consistency, safe keys and the echo (D-04, T-20.2-10/12) ==========
+
+    /** No manager, config writer or publish was reached. */
+    private void assertNothingRouted() {
+        assertThat(invocationsOf(mockServerProperties, "handleServerProperties")).as("server_properties get").isZero();
+        assertThat(invocationsOf(mockServerProperties, "applySetAll")).as("applySetAll").isZero();
+        assertThat(invocationsOf(mockConfigManager, "loadFromJson")).as("config writer").isZero();
+        assertThat(invocationsOf(ultiToolsMock, "getEventBus")).as("PanelMessageEvent publish").isZero();
+    }
+
+    /** Exactly one capability_denied and one DENIED verdict, both naming {@code capability}. */
+    private void assertRefusedUnder(Capability capability) {
+        List<RemoteActionLog.Entry> verdicts = recordedVerdicts();
+        assertThat(verdicts).hasSize(1);
+        assertThat(verdicts.get(0).getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
+        assertThat(verdicts.get(0).getCapability()).isEqualTo(capability.name());
+        List<JsonObject> denials = sentOfType("capability_denied");
+        assertThat(denials).hasSize(1);
+        assertThat(denials.get(0).getAsJsonObject("data").get("capability").getAsString())
+                .isEqualTo(capability.name());
+    }
+
+    /** A JsonObject carrying {@code fileName} as an arbitrary element, plus optional content and a requestId. */
+    private static JsonObject dataWithFileName(JsonElement fileName, String configData) {
+        JsonObject data = new JsonObject();
+        data.add("fileName", fileName);
+        if (configData != null) {
+            data.addProperty("configData", configData);
+        }
+        data.addProperty("requestId", "req-shape");
+        return data;
+    }
+
+    private static JsonArray arrayOf(String... values) {
+        JsonArray array = new JsonArray();
+        for (String value : values) {
+            array.add(value);
+        }
+        return array;
+    }
+
+    /** fileName shapes readString cannot read: an object, and an array whose size is not one. */
+    static Stream<Arguments> unreadableFileNames() {
+        JsonObject object = new JsonObject();
+        object.addProperty("name", "server_properties");
+        List<Arguments> rows = new ArrayList<>();
+        for (String content : new String[] {null, SERVER_PROPERTIES_CONTENT}) {
+            rows.add(Arguments.of("object", object, content));
+            rows.add(Arguments.of("two-element array", arrayOf("server_properties", "server_properties"), content));
+        }
+        return rows.stream();
+    }
+
+    @ParameterizedTest(name = "content={0}")
+    @ValueSource(booleans = {false, true})
+    @DisplayName("fileName [\"server_properties\"] is classified and routed as the server-properties target")
+    void singleElementArrayFileNameIsTheServerPropertiesTarget(boolean withContent) {
+        setSwitches(false, true);
+        lenient().when(mockServerProperties.applySetAll(any(JsonObject.class)))
+                .thenReturn(new ServerPropertiesManager.SetAllResult(singletonList("motd"), emptyList(),
+                        emptyList(), emptyList(), emptyList(), emptyList()));
+
+        PluginInitiationUtils.handleInboundMessage(updateConfigMessage(
+                dataWithFileName(arrayOf("server_properties"), withContent ? SERVER_PROPERTIES_CONTENT : null)));
+
+        // readString unwraps a single-element array, so the handler routes it to the manager;
+        // the gate must therefore have classified it SERVER_PROPERTIES (file-write is off).
+        assertThat(serverPropertiesGets()).isEqualTo(withContent ? 0L : 1L);
+        assertThat(invocationsOf(mockServerProperties, "applySetAll")).isEqualTo(withContent ? 1L : 0L);
+        assertThat(invocationsOf(mockConfigManager, "loadFromJson")).isZero();
+        assertThat(sentOfType("capability_denied")).isEmpty();
+        List<RemoteActionLog.Entry> verdicts = recordedVerdicts();
+        assertThat(verdicts).hasSize(1);
+        assertThat(verdicts.get(0).getVerdict()).isEqualTo(RemoteActionLog.Verdict.ALLOWED);
+        assertThat(verdicts.get(0).getCapability()).isEqualTo(Capability.SERVER_PROPERTIES.name());
+    }
+
+    @ParameterizedTest(name = "{0}, content={2}")
+    @MethodSource("unreadableFileNames")
+    @DisplayName("An unreadable fileName is classified FILE_WRITE and refused with file-write off")
+    void unreadableFileNameIsRefusedUnderFileWrite(String shape, JsonElement fileName,
+                                                   String content) {
+        setSwitches(false, true);
+
+        PluginInitiationUtils.handleInboundMessage(updateConfigMessage(dataWithFileName(fileName, content)));
+
+        assertRefusedUnder(Capability.FILE_WRITE);
+        assertNothingRouted();
+    }
+
+    /**
+     * With file-write on the handler runs and its own readString raises on the same value; the
+     * existing exception path (caught and logged by handleInboundMessage, no gate verdict, no
+     * publish) is unchanged by this plan. With server-properties off a SERVER_PROPERTIES
+     * classification would have been refused, so the absence of any refusal pins FILE_WRITE.
+     */
+    @ParameterizedTest(name = "{0}, content={2}, server-properties off")
+    @MethodSource("unreadableFileNames")
+    @DisplayName("An unreadable fileName never reaches ServerPropertiesManager with file-write on")
+    void unreadableFileNameNeverReachesServerProperties(String shape, JsonElement fileName,
+                                                        String content) {
+        setSwitches(true, false);
+
+        PluginInitiationUtils.handleInboundMessage(updateConfigMessage(dataWithFileName(fileName, content)));
+
+        assertThat(sentOfType("capability_denied")).as("classified FILE_WRITE, not SERVER_PROPERTIES").isEmpty();
+        assertThat(recordedVerdicts()).as("handler exception path records no gate verdict").isEmpty();
+        assertNothingRouted();
+    }
+
+    @ParameterizedTest(name = "{0}, content={2}, server-properties on")
+    @MethodSource("unreadableFileNames")
+    @DisplayName("An unreadable fileName never reaches ServerPropertiesManager with both switches on")
+    void unreadableFileNameNeverReachesServerPropertiesWithBothOn(String shape,
+                                                                  JsonElement fileName,
+                                                                  String content) {
+        setSwitches(true, true);
+
+        PluginInitiationUtils.handleInboundMessage(updateConfigMessage(dataWithFileName(fileName, content)));
+
+        assertThat(sentOfType("capability_denied")).isEmpty();
+        assertThat(recordedVerdicts()).isEmpty();
+        assertNothingRouted();
+    }
+
+    static Stream<Arguments> absentData() {
+        return Stream.of(
+                Arguments.of("absent", null),
+                Arguments.of("JSON null", JsonNull.INSTANCE),
+                Arguments.of("string primitive", new JsonPrimitive("server_properties")));
+    }
+
+    @ParameterizedTest(name = "data {0}")
+    @MethodSource("absentData")
+    @DisplayName("update_config without a data object is classified FILE_WRITE")
+    void missingDataIsClassifiedFileWrite(String shape, JsonElement data) {
+        setSwitches(false, true);
+        JsonObject message = new JsonObject();
+        message.addProperty("type", "update_config");
+        if (data != null) {
+            message.add("data", data);
+        }
+
+        PluginInitiationUtils.handleInboundMessage(message);
+
+        assertRefusedUnder(Capability.FILE_WRITE);
+        assertNothingRouted();
+    }
+
+    private static final String PROPERTIES_HEADER = "#Minecraft server properties\n#synthetic fixture\n";
+    private static final String MOTD_LINE = "motd=A Minecraft Server\n";
+    private static final String RCON_LINE = "rcon.password=synthetic-secret\n";
+    private static final String TRAILER = "max-players=20\n";
+
+    private Path realServerProperties(Path root) throws IOException {
+        Path file = root.resolve("server.properties");
+        Files.write(file, (PROPERTIES_HEADER + MOTD_LINE + RCON_LINE + TRAILER)
+                .getBytes(StandardCharsets.ISO_8859_1));
+        serverPropertiesManager = new ServerPropertiesManager(root.toFile());
+        return file;
+    }
+
+    @Test
+    @DisplayName("A safe-key write through the gate changes only that key's line")
+    void safeKeyWriteChangesOnlyItsLine(@TempDir Path root)
+            throws IOException {
+        setSwitches(false, true);
+        Path file = realServerProperties(root);
+
+        PluginInitiationUtils.handleInboundMessage(updateConfigMessage(
+                panelMessage("server_properties", SERVER_PROPERTIES_CONTENT, "req-safe")));
+
+        byte[] expected = (PROPERTIES_HEADER + "motd=synthetic\n" + RCON_LINE + TRAILER)
+                .getBytes(StandardCharsets.ISO_8859_1);
+        assertThat(Files.readAllBytes(file)).isEqualTo(expected);
+        List<JsonObject> responses = sentOfType("config_update_response");
+        assertThat(responses).hasSize(1);
+        JsonObject payload = responses.get(0).getAsJsonObject("data");
+        assertThat(payload.get("requestId").getAsString()).isEqualTo("req-safe");
+        assertThat(payload.get("status").getAsString()).isEqualTo("success");
+    }
+
+    @Test
+    @DisplayName("A non-whitelisted key leaves server.properties byte-identical and answers an error naming it")
+    void nonWhitelistedKeyLeavesFileByteIdentical(@TempDir Path root)
+            throws IOException {
+        setSwitches(false, true);
+        Path file = realServerProperties(root);
+        byte[] before = Files.readAllBytes(file);
+
+        PluginInitiationUtils.handleInboundMessage(updateConfigMessage(
+                panelMessage("server_properties", "{\"rcon.password\":\"synthetic\"}", "req-unsafe")));
+
+        assertThat(Files.readAllBytes(file)).isEqualTo(before);
+        List<JsonObject> responses = sentOfType("config_update_response");
+        assertThat(responses).hasSize(1);
+        JsonObject payload = responses.get(0).getAsJsonObject("data");
+        assertThat(payload.get("status").getAsString()).isEqualTo("error");
+        assertThat(payload.get("error").getAsString()).contains("rcon.password");
+    }
+
+    @ParameterizedTest(name = "file-write={0}")
+    @ValueSource(booleans = {false, true})
+    @DisplayName("A content-less named-file update_config stays under FILE_WRITE as an echo")
+    void contentLessNamedFileEchoStaysUnderFileWrite(boolean fileWrite) {
+        setSwitches(fileWrite, true);
+
+        PluginInitiationUtils.handleInboundMessage(updateConfigMessage(panelMessage(NAMED_FILE, null, "req-echo")));
+
+        if (!fileWrite) {
+            assertRefusedUnder(Capability.FILE_WRITE);
+            assertNothingRouted();
+            return;
+        }
+        List<RemoteActionLog.Entry> verdicts = recordedVerdicts();
+        assertThat(verdicts).hasSize(1);
+        assertThat(verdicts.get(0).getVerdict()).isEqualTo(RemoteActionLog.Verdict.ALLOWED);
+        assertThat(verdicts.get(0).getCapability()).isEqualTo(Capability.FILE_WRITE.name());
+        assertThat(sentOfType("capability_denied")).isEmpty();
+        assertThat(invocationsOf(mockServerProperties, "handleServerProperties")).isZero();
+        assertThat(invocationsOf(mockConfigManager, "loadFromJson")).isZero();
+        assertThat(sentOfType("config_update_response")).isEmpty();
+        assertThat(loggedAt(Level.FINE)).anySatisfy(line -> assertThat(line).contains("update_config"));
     }
 
     @Nested
