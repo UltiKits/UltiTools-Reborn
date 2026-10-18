@@ -53,6 +53,9 @@ public class JsonStore implements DataStore {
      */
     private final Map<String, JsonTransactionManager> transactionManagers = new ConcurrentHashMap<>();
 
+    /** The table write locks of every operator this store hands out. */
+    private final JsonLockTable lockTable = new JsonLockTable();
+
     /**
      * Initialize the flush scheduler. Called lazily when first JsonStore is created.
      * This avoids static initializer issues in test environments.
@@ -101,6 +104,16 @@ public class JsonStore implements DataStore {
      */
     int getDataOperatorCount() {
         return dataOperatorMap.size();
+    }
+
+    /**
+     * Test seam: sets the default upper bound of one table-lock wait for every operator of this
+     * store (5 seconds unless set).
+     *
+     * @param millis the bound in milliseconds
+     */
+    void setLockWaitBoundMillis(long millis) {
+        lockTable.setDefaultWaitMillis(millis);
     }
 
     /**
