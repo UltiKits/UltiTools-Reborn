@@ -34,9 +34,7 @@ public class ContainerElement extends Element {
     public void update(@NotNull Widget newWidget) {
         super.update(newWidget);
         Container container = (Container) getWidget();
-        List<Element> reconciled = updateChildren(childElements, container.getChildren());
-        childElements.clear();
-        childElements.addAll(reconciled);
+        updateChildren(childElements, container.getChildren());
     }
 
     @Override

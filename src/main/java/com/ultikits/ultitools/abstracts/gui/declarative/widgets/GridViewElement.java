@@ -66,9 +66,7 @@ public class GridViewElement extends Element {
     public void update(@NotNull Widget newWidget) {
         super.update(newWidget);
         GridView<?> gridView = (GridView<?>) getWidget();
-        List<Element> reconciled = updateChildren(childElements, gridView.getChildren());
-        childElements.clear();
-        childElements.addAll(reconciled);
+        updateChildren(childElements, gridView.getChildren());
     }
 
     @Override
