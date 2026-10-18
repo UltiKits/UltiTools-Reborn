@@ -208,7 +208,8 @@ worked before/after examples, and measurement evidence for every item below are 
   editable root and a dangling or looping link can no longer reach an unauthorized file, a path that cannot be
   located safely is refused, and a `list` marks an alias to an outside file `OUTSIDE_ROOTS` (#672).
 - A panel `delete` of a symbolic link removes only the link, never its target, whether the link points to a file,
-  to a directory (with `recursive` absent, `false` or `true`) or to nothing (#672).
+  to a directory (with `recursive` absent, `false` or `true`) or to nothing, and a recursive `delete` of a directory
+  never follows a link inside the deleted tree: the link is removed and its target is untouched (#672).
 - A symbolic link inside an editable root that points to a protected file (a credential file, the remote action
   log's directory) is refused like that file, and a `list` marks it `PROTECTED_CREDENTIAL` (#672).
 - Every refused remote file request is one `DENIED` entry in the remote action log, including a refusal reached

@@ -1948,15 +1948,23 @@ This section governs the third kind.
   that points to a protected file (a credential file, the remote action log's directory) is refused like that file, and a
   `list` marks it `PROTECTED_CREDENTIAL`; a `delete` of a terminal symbolic link - to a file, to a directory with
   `recursive` absent, `false` or `true`, or to nothing - removes only the link and leaves its target and everything under
-  it alone (a link to a directory deleted with `recursive: true` used to empty the directory it pointed to first). Every
+  it alone (a link to a directory deleted with `recursive: true` used to empty the directory it pointed to first), and a
+  recursive `delete` of a real directory never follows a symbolic link inside the deleted tree: that link is removed as a
+  link and its target is untouched (a link inside the tree to an outside directory or to the action log's directory used
+  to have its target emptied, and one to the credential directory used to refuse the whole delete). Every
   refusal is one `DENIED` entry in the remote action log; a refusal reached while the path was being resolved on disk was
   recorded `ALLOWED` before. A permitted request that then fails for an ordinary reason (a missing file, a path of the
   wrong type, a write without content) is still one `ALLOWED` entry and a failure reply, and a `list` still records one
   entry for the directory, never one per row. A panel that stays inside its roots sees no difference; one that reached a
   file through a `..` after a link is now refused, and the operator who wants that content reachable adds its real
-  directory to `ultipanel.files.editable-roots`.
+  directory to `ultipanel.files.editable-roots`. Known limitations: a separate local process that swaps a path component
+  for a link between the check and the use can still redirect that one request (the panel itself cannot create links);
+  a hard link to a credential file that the operator places inside an editable root under another name cannot be told
+  apart from an ordinary file by path, so do not hard-link credential files into editable roots; and on a
+  case-insensitive macOS filesystem a case variant of the protected `plugins/UltiTools/security` directory name is not
+  recognised by the unconditional deny layer.
 
-  中文补充：**远程文件请求使用的就是被授权的那个对象**（自 6.3.0 起，#672）。远程文件 API（`read`、`write`、`list`、`delete`）原来判断的是路径的一种形式，实际使用的却是另一种：检查时先把路径中每个 `名称/..` 在文本上消去，I/O 却用原样的路径，所以符号链接后面的 `..` 可能到达检查从未看过的可编辑根之外的文件，向悬空链接写入还会创建链接指向的目标。现在每个请求只在文件系统上解析一次，这一个结果既是被判断的对象，也是被读取、写入、列出或删除的对象。服主和面板作者会看到：真实目标在所有可编辑根之外的请求，以可配置的 `ultipanel.files.editable-roots` 拒绝，`list` 会把这样的条目标为 `accessible: false`、`reason: OUTSIDE_ROOTS`（指向根外文件的别名原来被列为可访问）；无法被安全定位的路径一律拒绝且无法通过配置放行——路径中尚不存在的部分里的 `.` 或 `..`、悬空或循环的符号链接、无法搜索的目录，以及不指向任何普通条目的 `delete`（`/`、`.`、`dir/.`、`dir/..`，这些原来会清掉它们所折叠到的目录的内容）；根内指向受保护文件（凭据文件、远程操作日志目录）的符号链接，与该文件本身一样被拒绝，`list` 将其标为 `PROTECTED_CREDENTIAL`；对末端符号链接的 `delete`——无论指向文件、指向目录（`recursive` 缺省、`false` 或 `true`）还是什么都不指向——只删除链接本身，目标及其下的一切不动（带 `recursive: true` 删除指向目录的链接，原来会先清空链接所指的目录）。每次拒绝都在远程操作日志里记为一条 `DENIED`；此前在磁盘上解析路径时才发生的拒绝被记为 `ALLOWED`。获准之后因普通原因失败的请求（文件不存在、类型不符、写入不带内容）仍是一条 `ALLOWED` 加一条失败回复，`list` 仍只为目录记一条，不会每行一条。只在根内活动的面板看不到差别；通过链接后面的 `..` 到达文件的面板现在会被拒绝，想让那些内容可达的服主，请把真实目录加入 `ultipanel.files.editable-roots`。
+  中文补充：**远程文件请求使用的就是被授权的那个对象**（自 6.3.0 起，#672）。远程文件 API（`read`、`write`、`list`、`delete`）原来判断的是路径的一种形式，实际使用的却是另一种：检查时先把路径中每个 `名称/..` 在文本上消去，I/O 却用原样的路径，所以符号链接后面的 `..` 可能到达检查从未看过的可编辑根之外的文件，向悬空链接写入还会创建链接指向的目标。现在每个请求只在文件系统上解析一次，这一个结果既是被判断的对象，也是被读取、写入、列出或删除的对象。服主和面板作者会看到：真实目标在所有可编辑根之外的请求，以可配置的 `ultipanel.files.editable-roots` 拒绝，`list` 会把这样的条目标为 `accessible: false`、`reason: OUTSIDE_ROOTS`（指向根外文件的别名原来被列为可访问）；无法被安全定位的路径一律拒绝且无法通过配置放行——路径中尚不存在的部分里的 `.` 或 `..`、悬空或循环的符号链接、无法搜索的目录，以及不指向任何普通条目的 `delete`（`/`、`.`、`dir/.`、`dir/..`，这些原来会清掉它们所折叠到的目录的内容）；根内指向受保护文件（凭据文件、远程操作日志目录）的符号链接，与该文件本身一样被拒绝，`list` 将其标为 `PROTECTED_CREDENTIAL`；对末端符号链接的 `delete`——无论指向文件、指向目录（`recursive` 缺省、`false` 或 `true`）还是什么都不指向——只删除链接本身，目标及其下的一切不动（带 `recursive: true` 删除指向目录的链接，原来会先清空链接所指的目录）；对真实目录的递归 `delete` 也绝不跟随被删目录树内部的符号链接：该链接作为链接被删除，其目标不动（树内指向根外目录或操作日志目录的链接，原来会让其目标被清空；指向凭据目录的链接，原来会使整个删除被拒绝）。每次拒绝都在远程操作日志里记为一条 `DENIED`；此前在磁盘上解析路径时才发生的拒绝被记为 `ALLOWED`。获准之后因普通原因失败的请求（文件不存在、类型不符、写入不带内容）仍是一条 `ALLOWED` 加一条失败回复，`list` 仍只为目录记一条，不会每行一条。只在根内活动的面板看不到差别；通过链接后面的 `..` 到达文件的面板现在会被拒绝，想让那些内容可达的服主，请把真实目录加入 `ultipanel.files.editable-roots`。已知限制：另一个本地进程若在检查与使用之间把路径中的某一段换成链接，仍可改变这一次请求的去向（面板本身无法创建链接）；服主以其他名称放进可编辑根的、指向凭据文件的硬链接，按路径无法与普通文件区分，所以不要把凭据文件硬链接进可编辑根；在不区分大小写的 macOS 文件系统上，受保护的 `plugins/UltiTools/security` 目录名的大小写变体不会被无条件拒绝层识别。
 - **`update_config` is gated by the target it routes to** ([#672](https://github.com/UltiKits/UltiTools-Reborn/issues/672),
   as of v6.3.0). The message was gated by `ultipanel.capabilities.file-write` whatever it carried, although a `fileName` of
   `server_properties` is handed to the server-properties editor (a read without content, a write with it). A message for
