@@ -30,6 +30,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * contrast, throws {@link IllegalStateException} when called off the main thread -- it runs
  * pending work synchronously rather than marshalling it.
  *
+ * <p><strong>Per-frame task budget:</strong> one frame runs only the tasks that were already
+ * queued when it started. A task queued while the frame is running -- for example the follow-up
+ * rebuild a failing build replays from its {@code finally} -- runs on a later frame, which
+ * {@link #scheduleFrame} schedules on the Bukkit scheduler (never inline inside the running
+ * frame). This bounds the main-thread time one frame can take: a widget whose
+ * {@code State.initState} requests a rebuild and then throws is retried once per frame while its
+ * page is open, instead of keeping the server thread inside a single frame forever. No queued
+ * task is dropped; it only waits for the next frame.
+ *
  * <p><strong>Frame scheduling:</strong></p>
  * <pre>
  * Timeline:
@@ -58,6 +67,13 @@ public class GuiScheduler {
     private final ConcurrentLinkedQueue<Runnable> pendingTasks = new ConcurrentLinkedQueue<>();
 
     private long lastFrameTime = 0;
+
+    /**
+     * True while {@link #executeFrame()} is draining on the main thread. A frame requested during
+     * that drain is always handed to the Bukkit scheduler rather than run inline, so a slow frame
+     * (one that outlasts the frame interval) cannot start a nested frame from inside itself.
+     */
+    private volatile boolean frameRunning = false;
 
     /**
      * Creates a GuiScheduler using the default plugin instance.
@@ -148,7 +164,8 @@ public class GuiScheduler {
      * Schedules a frame task.
      * <p>
      * This method implements the frame-coalescing mechanism: multiple calls within the same
-     * frame window trigger only one actual execution.
+     * frame window trigger only one actual execution. A call made while a frame is running
+     * queues its task for a later frame (see the class javadoc's per-frame task budget).
      *
      * @param frameTask the frame task
      */
@@ -160,7 +177,7 @@ public class GuiScheduler {
             long timeSinceLastFrame = currentTime - lastFrameTime;
             long delay = Math.max(0, frameIntervalMs - timeSinceLastFrame);
 
-            if (delay == 0 && isOnMainThread()) {
+            if (delay == 0 && !frameRunning && isOnMainThread()) {
                 // Can run immediately
                 executeFrame();
             } else {
@@ -172,14 +189,35 @@ public class GuiScheduler {
     }
 
     /**
-     * Runs every pending frame task.
+     * Runs the frame tasks that were pending when this frame started.
+     * <p>
+     * The budget is the queue size read before the first task runs. A task queued during the
+     * drain stays queued for a later frame: {@link #isScheduled} is cleared before the drain, so
+     * the first {@link #scheduleFrame} call made during it schedules that later frame, and
+     * {@link #frameRunning} makes sure it is scheduled on the Bukkit scheduler rather than run
+     * inline from inside this one.
      */
     private void executeFrame() {
         isScheduled.set(false);
         lastFrameTime = System.currentTimeMillis();
+        frameRunning = true;
+        try {
+            drainFrameBudget(pendingTasks.size());
+        } finally {
+            frameRunning = false;
+        }
+    }
 
+    /**
+     * Runs at most {@code budget} queued tasks, catching and reporting each task's failure.
+     *
+     * @param budget the number of tasks this frame may run
+     */
+    private void drainFrameBudget(int budget) {
+        int remaining = budget;
         Runnable task;
-        while ((task = pendingTasks.poll()) != null) {
+        while (remaining > 0 && (task = pendingTasks.poll()) != null) {
+            remaining--;
             try {
                 if (isOnMainThread()) {
                     task.run();
@@ -221,8 +259,8 @@ public class GuiScheduler {
 
     /**
      * The console-visible half of a GUI frame task's failure -- a warning naming the task plus
-     * a full stack trace. Shared by every catch clause in {@link #executeFrame()} so the two log
-     * lines cannot drift between the exception types that also do additional reporting
+     * a full stack trace. Shared by every catch clause in {@link #drainFrameBudget(int)} so the
+     * two log lines cannot drift between the exception types that also do additional reporting
      * ({@link RenderDepthExceededException}) and those that do not.
      *
      * @param e the failure to log
