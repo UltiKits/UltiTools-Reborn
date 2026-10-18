@@ -237,6 +237,92 @@ class JavadocDeprecationScannerTest {
         }
     }
 
+    // Member types inherited from supertypes are in scope in a class body (JLS 8.5, 6.4.1). Every
+    // fixture below is compiled by javac first, so the compiled parameter type is javac's own
+    // resolution: a scanner that resolves the simple name differently finds no reflected match.
+
+    @Test
+    void memberTypeInheritedFromSuperclassResolves(@TempDir Path root) throws Exception {
+        assertThat(scanFixture(root,
+                "Parent", "package probe; public class Parent { public static class Token {} }",
+                "Child", "package probe; public class Child extends Parent {"
+                        + " @Deprecated public void oldApi(Token value) {} }"))
+                .containsExactly("probe.Child#oldApi(probe.Parent$Token)");
+    }
+
+    @Test
+    void memberTypeInheritedFromSuperinterfaceResolves(@TempDir Path root) throws Exception {
+        assertThat(scanFixture(root,
+                "Contract", "package probe; public interface Contract { class Token {} }",
+                "Impl", "package probe; public class Impl implements Contract {"
+                        + " @Deprecated public Token field; @Deprecated public void oldApi(Token value) {} }",
+                "Sub", "package probe; public interface Sub extends Contract {"
+                        + " @Deprecated void viaInterface(Token[] values); }"))
+                .containsExactlyInAnyOrder("probe.Impl#field", "probe.Impl#oldApi(probe.Contract$Token)",
+                        "probe.Sub#viaInterface(probe.Contract$Token[])");
+    }
+
+    @Test
+    void memberTypeInheritedFromGrandparentResolves(@TempDir Path root) throws Exception {
+        assertThat(scanFixture(root,
+                "Marker", "package probe; public interface Marker { class Label {} }",
+                "Grand", "package probe; public class Grand implements Marker { public static class Token {} }",
+                "Parent", "package probe; public class Parent extends Grand {}",
+                "Child", "package probe; public class Child extends Parent {"
+                        + " @Deprecated public void oldApi(Token value, Label label) {}"
+                        + " public static class Nested { @Deprecated public void nested(Token value) {} } }"))
+                .containsExactlyInAnyOrder("probe.Child#oldApi(probe.Grand$Token,probe.Marker$Label)",
+                        "probe.Child$Nested#nested(probe.Grand$Token)");
+    }
+
+    @Test
+    void innermostScopeWinsAndDeclaredMemberTypesHideInheritedOnes(@TempDir Path root) throws Exception {
+        // JLS 8.5: a declared member type hides a same-named inherited one; private member types are
+        // not inherited. JLS 6.4.1: a type in scope in an inner class body (declared or inherited)
+        // shadows same-named types of enclosing classes, single-type imports and the package.
+        assertThat(scanFixture(root,
+                "Parent", "package probe; public class Parent { public static class Token {}"
+                        + " public static class Date {} private static class Hidden {} }",
+                "Hidden", "package probe; public class Hidden {}",
+                "Outer", "package probe; import java.util.Date; public class Outer { public static class Token {}"
+                        + " public static class Child extends Parent {"
+                        + " @Deprecated public void inheritedBeatsEnclosing(Token value) {}"
+                        + " @Deprecated public void inheritedBeatsImport(Date value) {}"
+                        + " @Deprecated public void privateIsNotInherited(Hidden value) {} }"
+                        + " public static class Hider extends Parent { public static class Token {}"
+                        + " @Deprecated public void declaredHidesInherited(Token value) {} } }",
+                "Deep", "package probe; public class Deep extends Parent { public static class Mid {"
+                        + " public static class Token {} public static class Inner {"
+                        + " @Deprecated public void closerDeclaredBeatsFartherInherited(Token value) {} } } }"))
+                .containsExactlyInAnyOrder("probe.Outer$Child#inheritedBeatsEnclosing(probe.Parent$Token)",
+                        "probe.Outer$Child#inheritedBeatsImport(probe.Parent$Date)",
+                        "probe.Outer$Child#privateIsNotInherited(probe.Hidden)",
+                        "probe.Outer$Hider#declaredHidesInherited(probe.Outer$Hider$Token)",
+                        "probe.Deep$Mid$Inner#closerDeclaredBeatsFartherInherited(probe.Deep$Mid$Token)");
+    }
+
+    @Test
+    void ambiguousInheritedMemberTypeFailsClosed(@TempDir Path root) throws Exception {
+        Path left = write(root.resolve("source/probe/Left.java"),
+                "package probe; public interface Left { class Token {} }");
+        Path right = write(root.resolve("source/probe/Right.java"),
+                "package probe; public interface Right { class Token {} }");
+        Path both = write(root.resolve("source/probe/Both.java"),
+                "package probe; public class Both implements Left, Right {"
+                        + " @Deprecated public void take(Left.Token value) {}"
+                        + " @Deprecated public void take(Right.Token value) {} }");
+        Path classes = compile(root, left, right, both);
+        // Deliberately inconsistent source/bytecode: javac rejects the ambiguous simple name (JLS 8.5).
+        write(both, "package probe; public class Both implements Left, Right {"
+                + " @Deprecated public void take(Token value) {} }");
+        try (URLClassLoader loader = loader(classes)) {
+            assertThatThrownBy(() -> new JavadocDeprecationScanner(loader).scan(both.getParent()))
+                    .isInstanceOf(IllegalStateException.class).hasMessageContaining("Both.java:1")
+                    .hasMessageContaining("Ambiguous match").hasMessageContaining("probe.Left$Token")
+                    .hasMessageContaining("probe.Right$Token");
+        }
+    }
+
     @Test
     void sourceAndBytecodeMustAgreeOnRealDeprecatedAnnotation(@TempDir Path root) throws Exception {
         Path source = write(root.resolve("source/probe/NotDeprecated.java"),
@@ -368,6 +454,24 @@ class JavadocDeprecationScannerTest {
                             DeprecationEntry.Status.ANNOUNCED),
                     org.assertj.core.groups.Tuple.tuple("probe.ConstantSubject#parenthesised()", "6.2.6", true,
                             DeprecationEntry.Status.ANNOUNCED));
+        }
+    }
+
+    /** Writes {@code probe} sources given as name/content pairs, compiles them, then scans them. */
+    private static List<String> scanFixture(Path root, String... namesAndSources) throws Exception {
+        Path[] sources = new Path[namesAndSources.length / 2];
+        for (int i = 0; i < sources.length; i++) {
+            sources[i] = write(root.resolve("source/probe/" + namesAndSources[2 * i] + ".java"),
+                    namesAndSources[2 * i + 1]);
+        }
+        Path classes = compile(root, sources);
+        try (URLClassLoader loader = loader(classes)) {
+            List<DeprecationEntry> entries = new ArrayList<>();
+            org.assertj.core.api.Assertions.assertThatCode(() -> entries.addAll(
+                    new JavadocDeprecationScanner(loader).scan(sources[0].getParent())))
+                    .as("simple type names must resolve the way javac resolved them")
+                    .doesNotThrowAnyException();
+            return entries.stream().map(e -> e.getKey().toString()).collect(Collectors.toList());
         }
     }
 

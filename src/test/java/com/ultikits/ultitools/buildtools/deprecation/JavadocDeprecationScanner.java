@@ -61,6 +61,7 @@ import java.util.stream.Stream;
 public final class JavadocDeprecationScanner {
     private final ClassLoader classLoader;
     private final Supplier<JavaCompiler> compilerSupplier;
+    private final MemberTypeScope memberTypes = new MemberTypeScope(this::load);
 
     public JavadocDeprecationScanner(ClassLoader classLoader) {
         this(classLoader, ToolProvider::getSystemJavaCompiler);
@@ -369,15 +370,17 @@ public final class JavadocDeprecationScanner {
             return result;
         }
 
-        /** The innermost enclosing owner that is, or declares, the simple name wins. */
+        /**
+         * The innermost enclosing owner that has the simple name as a member type, declared or
+         * inherited from a supertype (JLS 8.5, 6.4.1; see {@link MemberTypeScope}), or that is
+         * itself so named, wins.
+         */
         private Set<String> resolveLexical(String name, Owner owner) {
             for (Owner lexical = owner; lexical != null; lexical = lexical.parent) {
-                Set<String> found = new LinkedHashSet<>();
-                if (lexical.binary.substring(lexical.binary.lastIndexOf('$') + 1)
-                        .equals(name) || lexical.binary.equals(qualify(name))) {
-                    found.addAll(loadableNames(lexical.binary));
+                Set<String> found = memberTypes.find(lexical.binary, name);
+                if (found.isEmpty() && namesItself(lexical.binary, name, qualify(name))) {
+                    found = loadableNames(lexical.binary);
                 }
-                found.addAll(loadableNames(lexical.binary + "$" + name));
                 if (!found.isEmpty()) {
                     return found;
                 }
@@ -412,6 +415,11 @@ public final class JavadocDeprecationScanner {
         // Build-only names come from parsed repository declarations/imports, never invocation.
         // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
         return Class.forName(binaryName, false, classLoader);
+    }
+
+    /** Whether the owner's own simple name, or its top-level qualified name, is the spelled name. */
+    private static boolean namesItself(String binary, String name, String qualified) {
+        return binary.substring(binary.lastIndexOf('$') + 1).equals(name) || binary.equals(qualified);
     }
 
     private static int hiddenParameters(Class<?> owner, boolean constructor) {
