@@ -2,12 +2,14 @@ package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -16,6 +18,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.AbstractSet;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -45,6 +49,7 @@ import com.google.gson.JsonParseException;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.TokenEntity;
 import com.ultikits.ultitools.exceptions.DataAccessException;
+import org.assertj.core.api.SoftAssertions;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -81,6 +86,16 @@ class CredentialStoreTest {
     private static final long HANG_BOUND_MILLIS = 20_000L;
 
     private static final Gson GSON = new Gson();
+
+    /** Case cc22e454: the synthetic identity held by the readable pre-6.3.0 copy. */
+    private static final String SYNTHETIC_LEGACY_UUID = "synthetic-legacy-uuid";
+
+    /** Case cc22e454: the synthetic cloud token held by the readable pre-6.3.0 copy. */
+    private static final String SYNTHETIC_LEGACY_TOKEN = "synthetic-legacy-access-token";
+
+    /** Case cc22e454: a valid pre-6.3.0 credential document built from synthetic values only. */
+    private static final String SYNTHETIC_LEGACY_DOCUMENT = "{\"uuid\":\"" + SYNTHETIC_LEGACY_UUID
+            + "\",\"cloud_token\":{\"access_token\":\"" + SYNTHETIC_LEGACY_TOKEN + "\"}}";
 
     @TempDir
     Path tempDir;
@@ -741,6 +756,331 @@ class CredentialStoreTest {
 
         assertThat(CommonUtils.getUltiToolsUUID()).isEqualTo("current-server-identity");
         assertThat(Files.readAllBytes(oldFile)).isEqualTo(oldBefore);
+    }
+
+    // ---- Case cc22e4540f90d76038ed5531da6b9ea66a34dc8d6c389f9bedbcabafaa54ce00 (D-06): an existing
+    // current file is validated before the readable pre-6.3.0 copy is removed. A current file that
+    // cannot be read as a credential document keeps both files, and no entry point may then write
+    // over it or start a new identity. Synthetic credential documents only. ----
+
+    /** The unreadable current-file contents: the existing torn-file set plus two incompatible scalars. */
+    static Stream<Arguments> unreadableCurrentContents() {
+        return Stream.concat(unreadableContents(), Stream.of(
+                Arguments.of("JSON string scalar", "\"text\""),
+                Arguments.of("JSON number scalar", "42")));
+    }
+
+    /**
+     * Case cc22e454's dual-file fixture: a readable synthetic pre-6.3.0 copy at
+     * {@code old-location/data.json}, a current file at {@code new-location/credentials.json}, and both
+     * store locations pointed at them through the existing test overrides (reset by {@code tearDown}).
+     * A separate class so these helpers stay out of the outer class's complexity total.
+     */
+    private static final class DualFileFixture {
+
+        private final Path legacy;
+        private final Path current;
+        private final byte[] legacyBefore;
+
+        DualFileFixture(Path root) throws IOException {
+            legacy = root.resolve("old-location").resolve("data.json");
+            current = root.resolve("new-location").resolve("credentials.json");
+            Files.createDirectories(legacy.getParent());
+            Files.createDirectories(current.getParent());
+            legacyBefore = SYNTHETIC_LEGACY_DOCUMENT.getBytes(StandardCharsets.UTF_8);
+            Files.write(legacy, legacyBefore);
+            CredentialStore.setOldLocationForTesting(legacy);
+            CredentialStore.setTargetPathForTesting(current);
+        }
+
+        byte[] placeCurrent(String content) throws IOException {
+            byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+            Files.write(current, bytes);
+            return bytes;
+        }
+
+        /** A regular file's bytes, or {@code null} when it no longer exists as one. */
+        static byte[] contentOf(Path file) throws IOException {
+            return Files.isRegularFile(file) ? Files.readAllBytes(file) : null;
+        }
+
+        /** A directory's entry names, or {@code null} when it no longer exists as one. */
+        static List<String> entriesOf(Path directory) throws IOException {
+            return Files.isDirectory(directory) ? namesIn(directory) : null;
+        }
+
+        void softlyKeepsLegacyCopy(SoftAssertions softly, String step) throws IOException {
+            softly.assertThat(contentOf(legacy))
+                    .as("%s: the readable pre-6.3.0 copy must survive byte-for-byte", step)
+                    .isEqualTo(legacyBefore);
+            softly.assertThat(namesIn(legacy.getParent()))
+                    .as("%s: nothing else may appear beside the pre-6.3.0 copy", step)
+                    .containsExactly("data.json");
+        }
+
+        void softlyKeepsBothFiles(SoftAssertions softly, String step, byte[] currentBefore) throws IOException {
+            softlyKeepsLegacyCopy(softly, step);
+            softly.assertThat(contentOf(current))
+                    .as("%s: the current file must keep its bytes (no UUID or token written into it)", step)
+                    .isEqualTo(currentBefore);
+            softly.assertThat(namesIn(current.getParent()))
+                    .as("%s: nothing else may appear beside the current file", step)
+                    .containsExactly("credentials.json");
+        }
+
+        static Map<String, Object> writtenDocument() {
+            Map<String, Object> document = new LinkedHashMap<>();
+            document.put("uuid", "synthetic-written-uuid");
+            return document;
+        }
+
+        static Map<String, Object> putUpdatedUuid(Map<String, Object> existing) {
+            existing.put("uuid", "synthetic-updated-uuid");
+            return existing;
+        }
+
+        static boolean canOpenForReading(Path file) {
+            try (InputStream in = Files.newInputStream(file)) {
+                return in != null;
+            } catch (IOException e) {
+                return false;
+            }
+        }
+
+        void restorePermissions(Set<PosixFilePermission> original) throws IOException {
+            if (Files.exists(current)) {
+                Files.setPosixFilePermissions(current, original);
+            }
+        }
+
+        /** An anonymous logger that keeps every record it receives, as anUnreadableFileIsReportedOnceAsSevere does. */
+        static Logger recordingLogger(List<LogRecord> records) {
+            Logger logger = Logger.getAnonymousLogger();
+            logger.setUseParentHandlers(false);
+            logger.addHandler(new Handler() {
+                @Override
+                public void publish(LogRecord logRecord) {
+                    records.add(logRecord);
+                }
+
+                @Override
+                public void flush() {
+                    // nothing buffered
+                }
+
+                @Override
+                public void close() {
+                    // nothing to release
+                }
+            });
+            return logger;
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("unreadableCurrentContents")
+    @DisplayName("an unreadable current file beside a valid pre-6.3.0 copy keeps both files byte-for-byte (case cc22e454, D-06)")
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // asserts through SoftAssertions
+    void unreadableCurrentFileKeepsValidLegacyCopy(String kind, String content) throws IOException {
+        DualFileFixture files = new DualFileFixture(tempDir);
+        byte[] currentBefore = files.placeCurrent(content);
+        SoftAssertions softly = new SoftAssertions();
+
+        CredentialStore.migrate();
+
+        files.softlyKeepsBothFiles(softly, kind + " current file, after migrate()", currentBefore);
+        softly.assertAll();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("unreadableCurrentContents")
+    @DisplayName("an unreadable current file beside a valid pre-6.3.0 copy blocks every entry point and every writer (case cc22e454, D-06)")
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // asserts through SoftAssertions
+    void unreadableCurrentFileBlocksEveryEntryPoint(String kind, String content) throws IOException {
+        DualFileFixture files = new DualFileFixture(tempDir);
+        byte[] currentBefore = files.placeCurrent(content);
+        TokenStore tokenStore = new TokenStore();
+        SoftAssertions softly = new SoftAssertions();
+
+        CredentialStore.ReadResult read = CredentialStore.read();
+        files.softlyKeepsBothFiles(softly, kind + ", after read()", currentBefore);
+        softly.assertThat(read.isParseFailure()).as("%s: read() reports a parse failure", kind).isTrue();
+
+        Throwable write = catchThrowable(() -> CredentialStore.write(DualFileFixture.writtenDocument()));
+        files.softlyKeepsBothFiles(softly, kind + ", after write()", currentBefore);
+        softly.assertThat(write).as("%s: write() refuses", kind).isInstanceOf(DataAccessException.class);
+
+        Throwable update = catchThrowable(() -> CredentialStore.update(DualFileFixture::putUpdatedUuid));
+        files.softlyKeepsBothFiles(softly, kind + ", after update()", currentBefore);
+        softly.assertThat(update).as("%s: update() refuses", kind).isInstanceOf(DataAccessException.class);
+
+        Throwable uuid = catchThrowable(CommonUtils::getUltiToolsUUID);
+        files.softlyKeepsBothFiles(softly, kind + ", after getUltiToolsUUID()", currentBefore);
+        softly.assertThat(uuid).as("%s: getUltiToolsUUID() fails instead of starting a new identity", kind)
+                .isInstanceOf(IOException.class);
+
+        Throwable save = catchThrowable(() -> tokenStore.save(syntheticToken()));
+        files.softlyKeepsBothFiles(softly, kind + ", after TokenStore.save()", currentBefore);
+        softly.assertThat(save).as("%s: TokenStore.save() refuses", kind).isInstanceOf(DataAccessException.class);
+
+        Throwable clear = catchThrowable(() -> tokenStore.clearIfMatches(syntheticToken()));
+        files.softlyKeepsBothFiles(softly, kind + ", after TokenStore.clearIfMatches()", currentBefore);
+        softly.assertThat(clear).as("%s: TokenStore.clearIfMatches() refuses", kind)
+                .isInstanceOf(DataAccessException.class);
+        softly.assertAll();
+    }
+
+    @Test
+    @DisplayName("a directory at the current path keeps the pre-6.3.0 copy and the directory through read, write and update (case cc22e454, D-06)")
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // asserts through SoftAssertions
+    void currentPathIsADirectoryKeepsLegacyCopy() throws IOException {
+        DualFileFixture files = new DualFileFixture(tempDir);
+        Files.createDirectories(files.current);
+        Path inside = files.current.resolve("operator-file.txt");
+        byte[] insideBefore = "synthetic operator content".getBytes(StandardCharsets.UTF_8);
+        Files.write(inside, insideBefore);
+        SoftAssertions softly = new SoftAssertions();
+
+        AtomicReference<CredentialStore.ReadResult> read = new AtomicReference<>();
+        Throwable readFailure = catchThrowable(() -> read.set(CredentialStore.read()));
+        files.softlyKeepsLegacyCopy(softly, "directory, after read()");
+        // Observed outcome (RESEARCH section 3 expected it): Gson reports the directory's read error
+        // as a syntax error, so read() returns a parse failure rather than throwing.
+        softly.assertThat(readFailure).as("directory: read() does not throw").isNull();
+        softly.assertThat(read.get()).as("directory: read() result").isNotNull()
+                .satisfies(result -> assertThat(result.isParseFailure()).as("a parse failure").isTrue());
+
+        Throwable write = catchThrowable(() -> CredentialStore.write(DualFileFixture.writtenDocument()));
+        files.softlyKeepsLegacyCopy(softly, "directory, after write()");
+        softly.assertThat(write).as("directory: write() refuses").isInstanceOf(DataAccessException.class);
+
+        Throwable update = catchThrowable(() -> CredentialStore.update(DualFileFixture::putUpdatedUuid));
+        files.softlyKeepsLegacyCopy(softly, "directory, after update()");
+        softly.assertThat(update).as("directory: update() refuses").isInstanceOf(DataAccessException.class);
+
+        softly.assertThat(DualFileFixture.entriesOf(files.current))
+                .as("the directory at the current path survives with nothing added inside it")
+                .containsExactly("operator-file.txt");
+        softly.assertThat(DualFileFixture.contentOf(inside)).as("and its contents keep their bytes")
+                .isEqualTo(insideBefore);
+        softly.assertThat(namesIn(files.current.getParent())).as("nothing appears beside it")
+                .containsExactly("credentials.json");
+        softly.assertAll();
+    }
+
+    @Test
+    @DisplayName("a current file without read permission keeps the pre-6.3.0 copy; read, write and update fail (case cc22e454, D-06)")
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // asserts through SoftAssertions
+    void permissionDeniedCurrentFileKeepsLegacyCopy() throws IOException {
+        DualFileFixture files = new DualFileFixture(tempDir);
+        byte[] currentBefore = files.placeCurrent("{\"uuid\":\"synthetic-current-uuid\"}");
+        assumeTrue(files.current.getFileSystem().supportedFileAttributeViews().contains("unix"),
+                "the permission row needs a POSIX file system with unix attributes; BLOCKED, not passed");
+        Object uid = Files.getAttribute(files.current, "unix:uid");
+        String step = "permission denied (uid " + uid + "), after ";
+        Set<PosixFilePermission> original = Files.getPosixFilePermissions(files.current);
+        SoftAssertions softly = new SoftAssertions();
+        Files.setPosixFilePermissions(files.current, PosixFilePermissions.fromString("---------"));
+        try {
+            assumeTrue(!DualFileFixture.canOpenForReading(files.current), "uid " + uid + " can still open a file "
+                    + "without read permission, so the permission row cannot run here; recorded BLOCKED, never passed");
+
+            Throwable read = catchThrowable(CredentialStore::read);
+            files.softlyKeepsLegacyCopy(softly, step + "read()");
+            softly.assertThat(read).as("read() fails observably").isInstanceOf(DataAccessException.class);
+
+            Throwable write = catchThrowable(() -> CredentialStore.write(DualFileFixture.writtenDocument()));
+            files.softlyKeepsLegacyCopy(softly, step + "write()");
+            softly.assertThat(write).as("write() refuses").isInstanceOf(DataAccessException.class);
+
+            Throwable update = catchThrowable(() -> CredentialStore.update(DualFileFixture::putUpdatedUuid));
+            files.softlyKeepsLegacyCopy(softly, step + "update()");
+            softly.assertThat(update).as("update() refuses").isInstanceOf(DataAccessException.class);
+        } finally {
+            files.restorePermissions(original);
+        }
+        softly.assertThat(DualFileFixture.contentOf(files.current)).as("the unreadable current file keeps its bytes")
+                .isEqualTo(currentBefore);
+        softly.assertThat(namesIn(files.current.getParent())).as("nothing appears beside it")
+                .containsExactly("credentials.json");
+        softly.assertAll();
+    }
+
+    /** Current files that read as credential documents, with the document read() then returns. */
+    static Stream<Arguments> readableCurrentContents() {
+        Map<String, Object> differentDocument = new LinkedHashMap<>();
+        differentDocument.put("uuid", "synthetic-current-uuid");
+        return Stream.of(
+                Arguments.of("a valid document different from the pre-6.3.0 one",
+                        "{\"uuid\":\"synthetic-current-uuid\"}", differentDocument),
+                Arguments.of("the empty document {}", "{}", new LinkedHashMap<String, Object>()),
+                // Characterization, not a new rule: Gson's map adapter reads a JSON array as a list of
+                // key/value pairs, so [] is the empty document under the existing reader contract.
+                Arguments.of("a JSON array [] (characterized: parsed as the empty document)", "[]",
+                        new LinkedHashMap<String, Object>()));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("readableCurrentContents")
+    @DisplayName("a current file that reads as a credential document wins: it keeps its bytes and the pre-6.3.0 copy is removed (case cc22e454, D-06)")
+    void readableCurrentFileWinsAndLegacyCopyIsRemoved(String kind, String content, Map<String, Object> document)
+            throws IOException {
+        DualFileFixture files = new DualFileFixture(tempDir);
+        byte[] currentBefore = files.placeCurrent(content);
+
+        CredentialStore.ReadResult result = CredentialStore.read();
+
+        assertThat(Files.exists(files.legacy)).as("%s: the pre-6.3.0 copy is removed after validation", kind)
+                .isFalse();
+        assertThat(Files.readAllBytes(files.current))
+                .as("%s: the current file keeps its bytes, never overwritten with the old content", kind)
+                .isEqualTo(currentBefore);
+        assertThat(namesIn(files.current.getParent())).containsExactly("credentials.json");
+        assertThat(result.isParsed()).as("%s: read() returns the current document", kind).isTrue();
+        assertThat(result.data()).isEqualTo(document);
+    }
+
+    @Test
+    @DisplayName("a kept-both conflict is logged as one WARNING naming both paths, never credential content (case cc22e454, D-06)")
+    void keptBothConflictIsWarnedOncePerEpisodeWithoutCredentialContent() throws IOException {
+        DualFileFixture files = new DualFileFixture(tempDir);
+        files.placeCurrent("{\"uuid\":\"synthetic-current-uuid\",\"cloud_token\":{\"access_token\":\"synthetic-current-tok");
+        List<LogRecord> records = new ArrayList<>();
+        UltiTools plugin = mock(UltiTools.class);
+        when(plugin.getLogger()).thenReturn(DualFileFixture.recordingLogger(records));
+        try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class)) {
+            ultiTools.when(UltiTools::getInstance).thenReturn(plugin);
+
+            assertThat(CredentialStore.read().isParseFailure()).isTrue();
+            assertThat(CredentialStore.read().isParseFailure()).isTrue();
+        }
+
+        assertThat(records.stream().filter(r -> Level.WARNING.equals(r.getLevel())).collect(Collectors.toList()))
+                .as("two reads during one conflict log exactly one WARNING")
+                .hasSize(1)
+                .allSatisfy(r -> assertThat(r.getMessage())
+                        .contains(files.legacy.toString(), files.current.toString(), "both files have been kept"));
+        assertThat(records).as("no log line carries credential content")
+                .noneSatisfy(r -> assertThat(r.getMessage()).containsAnyOf(SYNTHETIC_LEGACY_UUID,
+                        SYNTHETIC_LEGACY_TOKEN, "synthetic-current-uuid", "synthetic-current-tok"));
+        assertThat(Files.exists(files.legacy)).as("and both files are still there").isTrue();
+    }
+
+    @Test
+    @DisplayName("once the unreadable current file is fixed, the next read completes the cleanup and returns the current document (case cc22e454, D-06)")
+    void fixingTheCurrentFileLetsTheNextReadCompleteTheCleanup() throws IOException {
+        DualFileFixture files = new DualFileFixture(tempDir);
+        files.placeCurrent("");
+        assertThat(CredentialStore.read().isParseFailure()).isTrue();
+        assertThat(Files.exists(files.legacy)).as("the pre-6.3.0 copy waits while the conflict lasts").isTrue();
+
+        byte[] fixed = files.placeCurrent("{\"uuid\":\"synthetic-restored-uuid\"}");
+        CredentialStore.ReadResult result = CredentialStore.read();
+
+        assertThat(result.isParsed()).isTrue();
+        assertThat(result.data()).containsOnlyKeys("uuid").containsEntry("uuid", "synthetic-restored-uuid");
+        assertThat(Files.exists(files.legacy)).as("the next access removes the pre-6.3.0 copy").isFalse();
+        assertThat(Files.readAllBytes(files.current)).as("the fixed current file keeps its bytes").isEqualTo(fixed);
     }
 
     @Test

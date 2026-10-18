@@ -4,6 +4,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -11,6 +12,7 @@ import java.util.logging.Level;
 
 import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
+import org.bukkit.configuration.ConfigurationSection;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -64,8 +66,8 @@ public class CommandExecutionManager {
 
     /**
      * Blocklist of dangerous commands that should not be executed remotely. This is the shipped
-     * default, used only when {@code ultipanel.commands.blocklist} is absent from config.yml —
-     * see {@link #loadConfiguration()}.
+     * default, kept when {@code ultipanel.commands.blocklist} is absent from config.yml or when
+     * its present value is rejected as not a list of strings — see {@link #loadConfiguration()}.
      */
     private Set<String> blockedCommands = new HashSet<>(Arrays.asList(
         "op", "deop", "stop", "restart", "reload", "ban-ip",
@@ -88,6 +90,23 @@ public class CommandExecutionManager {
      * make D-03's honest "block nothing" escape value silently impossible (T-06-12). The shipped
      * ten-command default applies only when the key is absent; an explicit empty list is honored
      * as the operator deliberately granting every command.
+     * <p>
+     * A present value is validated as a whole before anything is installed: it must be a list
+     * whose every element is a string. The raw value is read, not Bukkit's converting
+     * {@code getStringList}, because that getter turns a non-list into an empty list, drops
+     * mapping, nested-list and null elements, and stringifies numbers and booleans — so its output
+     * cannot show what the operator wrote, and installing it would silently replace the policy
+     * with an empty or partial one. Any other shape (a scalar, a map, or a list with any
+     * non-string element) rejects the whole value: one warning naming the key and the rejected
+     * shape (the value's type, or the first offending element's position and type) is logged,
+     * never the value itself, and the current in-memory blocklist is kept — the shipped default on
+     * a newly constructed manager, the previous valid list on a repeated call. A valid list is
+     * trimmed and lower-cased with {@link Locale#ROOT} into one new set, installed through a single
+     * {@link #setBlockedCommands(Set)} call.
+     * <p>
+     * This method never writes config.yml or the loaded configuration: it neither saves nor repairs
+     * an invalid value, so the operator's file and the in-memory section keep exactly what the
+     * operator wrote.
      */
     public final void loadConfiguration() {
         try {
@@ -99,12 +118,17 @@ public class CommandExecutionManager {
                 // Absent key — keep the shipped ten-command default this field was constructed with.
                 return;
             }
-            List<String> configured = instance.getConfig().getStringList(BLOCKLIST_CONFIG_KEY);
+            Object raw = instance.getConfig().get(BLOCKLIST_CONFIG_KEY);
+            String rejection = describeInvalidBlocklist(raw);
+            if (rejection != null) {
+                instance.getLogger().log(Level.WARNING,
+                        "Ignoring " + BLOCKLIST_CONFIG_KEY + " in config.yml: " + rejection
+                                + "; keeping the current blocklist");
+                return;
+            }
             Set<String> normalized = new HashSet<>();
-            for (String entry : configured) {
-                if (entry != null) {
-                    normalized.add(entry.trim().toLowerCase(Locale.ROOT));
-                }
+            for (Object entry : (List<?>) raw) {
+                normalized.add(((String) entry).trim().toLowerCase(Locale.ROOT));
             }
             setBlockedCommands(normalized);
         } catch (Exception e) {
@@ -115,6 +139,52 @@ public class CommandExecutionManager {
                                 + e.getMessage());
             }
         }
+    }
+
+    /**
+     * Describes why a raw blocklist value is not a list of strings, naming only its shape.
+     *
+     * @param raw the raw value at {@code ultipanel.commands.blocklist}
+     * @return {@code null} for a list whose every element is a string; otherwise the value's type,
+     *         or the first non-string element's 1-based position and type — never the value itself
+     */
+    private static String describeInvalidBlocklist(Object raw) {
+        if (!(raw instanceof List)) {
+            return "the value is " + describeShape(raw) + ", expected a list of strings";
+        }
+        List<?> elements = (List<?>) raw;
+        for (int i = 0; i < elements.size(); i++) {
+            Object element = elements.get(i);
+            if (!(element instanceof String)) {
+                return "element " + (i + 1) + " is " + describeShape(element) + ", expected a string";
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Names a raw configuration value's type for a diagnostic, without its content.
+     */
+    private static String describeShape(Object value) {
+        if (value == null) {
+            return "null";
+        }
+        if (value instanceof String) {
+            return "a string";
+        }
+        if (value instanceof Map || value instanceof ConfigurationSection) {
+            return "a map";
+        }
+        if (value instanceof List) {
+            return "a list";
+        }
+        if (value instanceof Number) {
+            return "a number";
+        }
+        if (value instanceof Boolean) {
+            return "a boolean";
+        }
+        return "a value of type " + value.getClass().getSimpleName();
     }
 
     /**

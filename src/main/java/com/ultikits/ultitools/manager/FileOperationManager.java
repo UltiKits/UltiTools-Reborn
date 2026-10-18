@@ -7,18 +7,22 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
-import java.nio.file.NoSuchFileException;
+import java.nio.file.InvalidPathException;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
 import java.nio.file.Paths;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
 import java.util.logging.Level;
 
 import com.google.gson.Gson;
@@ -44,6 +48,20 @@ import org.jetbrains.annotations.ApiStatus;
  * operator-configured editable-root set (D-15) that answers "where" once the deny layer has
  * already answered "not this, ever". See {@link #isPathAllowed(String)} for the ordering
  * rationale.
+ *
+ * <p>Those two layers are the lexical first step only. Every operation then takes its final
+ * decision and its I/O operand from one resolver, {@link #resolveTarget(String, ResolveMode)},
+ * which resolves the request against the real filesystem and checks real containment, so the
+ * object that is authorized is the object that read, write, list and delete actually reach.
+ *
+ * <p>Two rules hold on every path of this class. <b>Links are never followed when an entry is
+ * removed or descended into</b>: one predicate, {@link #isRealDirectory(Path, Path)}, decides
+ * "real directory or link" for the delete's terminal entry, every entry of a recursive delete,
+ * and the list marking, so a symbolic link or a Windows junction is removed as the entry itself
+ * whether it is the target or inside the deleted tree. <b>Protected locations are judged by real
+ * path</b> ({@link #deniedAtRealPath(Path, List)}), never by the name of the editable root a
+ * request happened to match, so neither an alias root nor the order of the roots moves a
+ * protected object out from under the deny layer.
  */
 @ApiStatus.Internal
 public class FileOperationManager {
@@ -115,6 +133,15 @@ public class FileOperationManager {
      * without reconstructing the manager.
      */
     private List<File> editableRoots;
+
+    /**
+     * The real-path lookup behind {@link #isRealDirectory(Path, Path)}: the filesystem's
+     * {@link Path#toRealPath}, or {@code null} when a path cannot be resolved. Not {@code final}
+     * only so a test can model an entry the JDK reports as a directory although its real path is
+     * elsewhere (a Windows junction), which cannot be created on Linux.
+     */
+    @SuppressWarnings("PMD.ImmutableField") // replaced by reflection in a test; see the javadoc
+    private Function<Path, Path> realPathResolver = FileOperationManager::realPathOrNull;
 
     // All field declarations precede all methods below this point (PMD
     // FieldDeclarationsShouldBeAtStartOfClass) — buildDenyGlobMatchers() used to sit between
@@ -267,7 +294,27 @@ public class FileOperationManager {
      *         editable-root check
      */
     public AccessDecision deniedUnconditionally(String normalizedPath) {
-        String fileName = basenameOf(normalizedPath);
+        AccessDecision byName = deniedByName(basenameOf(normalizedPath));
+        if (byName != null) {
+            return byName;
+        }
+        if (isUnderSecurityDirectory(normalizedPath)) {
+            return deniedAsActionLogDirectory();
+        }
+        return null;
+    }
+
+    /**
+     * The name rules of the unconditional deny layer: protected server files, protected
+     * extensions, credential basenames and credential glob patterns. Shared by the lexical check
+     * on the request ({@link #deniedUnconditionally(String)}) and the real-path check on the
+     * object a request reaches ({@link #deniedAtRealPath(Path, List)}), so both apply one rule
+     * set.
+     *
+     * @param fileName the entry's own name (the last path element)
+     * @return a denied, non-configurable decision, or {@code null} if no name rule matches
+     */
+    private static AccessDecision deniedByName(String fileName) {
         String fileNameLower = fileName.toLowerCase(Locale.ROOT);
 
         if (BLOCKED_FILES.contains(fileNameLower)) {
@@ -284,12 +331,93 @@ public class FileOperationManager {
         if (matchesDenyGlob(fileNameLower)) {
             return AccessDecision.deniedNonConfigurable("'" + fileName + "' matches a protected credential pattern");
         }
-        if (isUnderSecurityDirectory(normalizedPath)) {
-            return AccessDecision.deniedNonConfigurable(
-                    "path is inside the remote action log's own directory");
-        }
-
         return null;
+    }
+
+    private static AccessDecision deniedAsActionLogDirectory() {
+        return AccessDecision.deniedNonConfigurable("path is inside the remote action log's own directory");
+    }
+
+    /**
+     * The unconditional deny layer judged on <b>real</b> paths: the name rules of
+     * {@link #deniedByName} on the entry's own real name, and containment in a protected
+     * location's real path ({@link #protectedRealLocations()}). Nothing here depends on which
+     * editable root matched the request or on the order of the configured roots, so an alias
+     * root (for example {@code plugins/shadow} linking to {@code plugins/UltiTools}) cannot move a
+     * protected object out from under the rule by renaming the path it is reached through.
+     *
+     * @param realEntry          the real location of the entry: its real path when it is
+     *                           followed, or its parent's real path plus its own name when it is
+     *                           not (a delete's terminal entry, a child listed from a real
+     *                           directory)
+     * @param protectedLocations the result of {@link #protectedRealLocations()}
+     * @return a denied, non-configurable decision, or {@code null} if no rule refuses the entry
+     */
+    private static AccessDecision deniedAtRealPath(Path realEntry, List<Path> protectedLocations) {
+        Path name = realEntry.getFileName();
+        if (name != null) {
+            AccessDecision byName = deniedByName(name.toString());
+            if (byName != null) {
+                return byName;
+            }
+        }
+        for (Path location : protectedLocations) {
+            if (realEntry.startsWith(location)) {
+                return deniedAsActionLogDirectory();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The real locations of the protected directory {@code plugins/UltiTools/security} under
+     * {@link #serverRoot}: the location of the directory entry itself (its parent's real path
+     * plus {@code security}) and, when that entry exists and resolves elsewhere, its real target
+     * too. A part of the path that does not exist yet is appended by name to the deepest existing
+     * ancestor's real path, so the rule holds before the action log has been created.
+     *
+     * @return one or two absolute real paths; empty only if the server root itself cannot be
+     *         resolved, in which case no request can be resolved either
+     */
+    private List<Path> protectedRealLocations() {
+        List<Path> locations = new ArrayList<>();
+        Path security = serverRoot.toPath().toAbsolutePath().normalize().resolve(SECURITY_DIR_RELATIVE);
+        Path parentLocation = realLocationOf(security.getParent());
+        if (parentLocation == null) {
+            return locations;
+        }
+        Path entryLocation = parentLocation.resolve(security.getFileName().toString());
+        locations.add(entryLocation);
+        Path target = realPathOrNull(entryLocation);
+        if (target != null && !target.equals(entryLocation)) {
+            locations.add(target);
+        }
+        return locations;
+    }
+
+    /**
+     * {@code path}'s real path when it exists; otherwise the real path of its deepest existing
+     * ancestor followed by the remaining names. {@code null} only if no ancestor resolves.
+     */
+    private static Path realLocationOf(Path path) {
+        Deque<String> missing = new ArrayDeque<>();
+        Path existing = path;
+        Path real = realPathOrNull(existing);
+        while (real == null && existing != null) {
+            Path name = existing.getFileName();
+            if (name != null) {
+                missing.push(name.toString());
+            }
+            existing = existing.getParent();
+            real = existing == null ? null : realPathOrNull(existing);
+        }
+        if (real == null) {
+            return null;
+        }
+        for (String name : missing) {
+            real = real.resolve(name);
+        }
+        return real;
     }
 
     /**
@@ -334,8 +462,9 @@ public class FileOperationManager {
 
     /**
      * Lexical containment check against {@link #editableRoots} — no filesystem access, safe to
-     * call before any real file exists. {@link #getSecureFile(String)} performs the real,
-     * symlink-aware containment check once a file handle is actually needed.
+     * call before any real file exists. This is only the resolver's first step;
+     * {@link #resolveTarget(String, ResolveMode)} performs the real, symlink-aware resolution and
+     * containment check that decides the object every operation actually reaches.
      */
     private boolean isWithinEditableRoots(String normalizedPath) {
         if (editableRoots.isEmpty()) {
@@ -457,14 +586,15 @@ public class FileOperationManager {
      *         or failed for an unrelated reason (file not found, not a regular file, ...)
      */
     private AccessDecision handleReadOperation(String path, JsonObject operationData, String operationId) {
-        AccessDecision readDecision = isPathAllowed(path);
+        ResolvedTarget target = resolveTarget(path, ResolveMode.FOLLOW);
+        AccessDecision readDecision = target.getDecision();
         try {
             if (!readDecision.isAllowed()) {
                 sendFileOperationResult(operationId, "read", path, false, readDecision.getMessage(), null);
                 return readDecision;
             }
 
-            File file = getSecureFile(path);
+            File file = target.getOperand();
             if (!file.exists()) {
                 sendFileOperationResult(operationId, "read", path, false, "File not found", null);
                 return readDecision;
@@ -511,14 +641,15 @@ public class FileOperationManager {
      * @return the {@link AccessDecision} that gated this write
      */
     private AccessDecision handleWriteOperation(String path, JsonObject operationData, String operationId) {
-        AccessDecision writeDecision = isPathAllowed(path);
+        ResolvedTarget target = resolveTarget(path, ResolveMode.FOLLOW);
+        AccessDecision writeDecision = target.getDecision();
         try {
             if (!writeDecision.isAllowed()) {
                 sendFileOperationResult(operationId, "write", path, false, writeDecision.getMessage(), null);
                 return writeDecision;
             }
 
-            File file = getSecureFile(path);
+            File file = target.getOperand();
             String content = operationData.has("content") && !operationData.get("content").isJsonNull()
                 ? operationData.get("content").getAsString() : null;
             boolean append = operationData.has("append") && !operationData.get("append").isJsonNull()
@@ -529,7 +660,8 @@ public class FileOperationManager {
                 return writeDecision;
             }
 
-            // Ensure the parent directory exists
+            // Ensure the parent directory exists. The operand is the real existing prefix plus
+            // ordinary missing names only, so this never creates anything outside the root.
             File parentDir = file.getParentFile();
             if (parentDir != null && !parentDir.exists()) {
                 parentDir.mkdirs();
@@ -567,14 +699,15 @@ public class FileOperationManager {
     // family uniform is the deliberate choice, not an oversight.
     @SuppressWarnings("PMD.UnusedFormalParameter")
     private AccessDecision handleListOperation(String path, JsonObject operationData, String operationId) {
-        AccessDecision listDecision = isPathAllowed(path);
+        ResolvedTarget target = resolveTarget(path, ResolveMode.FOLLOW);
+        AccessDecision listDecision = target.getDecision();
         try {
             if (!listDecision.isAllowed()) {
                 sendFileOperationResult(operationId, "list", path, false, listDecision.getMessage(), null);
                 return listDecision;
             }
 
-            File dir = getSecureFile(path);
+            File dir = target.getOperand();
             if (!dir.exists()) {
                 sendFileOperationResult(operationId, "list", path, false, "Directory not found", null);
                 return listDecision;
@@ -591,9 +724,10 @@ public class FileOperationManager {
                 return listDecision;
             }
 
+            Path dirReal = realPathResolver.apply(dir.toPath());
             JsonArray fileList = new JsonArray();
             for (File file : files) {
-                fileList.add(buildListEntry(path, file));
+                fileList.add(buildListEntry(path, dirReal, file));
             }
 
             JsonObject resultData = new JsonObject();
@@ -615,19 +749,30 @@ public class FileOperationManager {
      * child entry. Extracted from {@link #handleListOperation(String, JsonObject, String)} to keep
      * that method's cyclomatic/NPath complexity within the project's PMD threshold — this is the
      * per-entry decision-and-marking step, the cohesive seam in that loop.
+     * <p>
+     * A child that is not a real directory is marked refused exactly when a read or list of that
+     * child would be refused: its decision comes from {@link #resolveTarget(String, ResolveMode)}
+     * in follow mode, so an in-root alias whose real target lies outside every editable root, or
+     * inside a protected location, is marked too, not only a child whose name the lexical layer
+     * rejects. Only a real directory ({@link #isRealDirectory(Path, Path)}) keeps the
+     * never-refused rule; a symbolic link or junction to a directory is judged by its target like
+     * any other alias.
      *
      * @param basePath the directory path being listed (the parent of {@code file})
+     * @param dirReal  the listed directory's real path, or {@code null} if it cannot be resolved
      * @param file     one child entry returned by {@code dir.listFiles()}
      * @return the JSON row for this entry, either full metadata or a withheld-metadata marker
      */
-    private JsonObject buildListEntry(String basePath, File file) {
+    private JsonObject buildListEntry(String basePath, Path dirReal, File file) {
         // D-18: a refused child is MARKED, not filtered out — the panel used to render
         // "this file does not exist" for a file that exists and is protected.
         String childPath = (basePath == null || basePath.isEmpty() || basePath.equals("/"))
             ? file.getName()
             : basePath + "/" + file.getName();
-        AccessDecision childDecision = isPathAllowed(childPath);
-        boolean refused = !file.isDirectory() && !childDecision.isAllowed();
+        AccessDecision childDecision = isRealDirectory(dirReal, file.toPath())
+            ? AccessDecision.allowed()
+            : resolveTarget(childPath, ResolveMode.FOLLOW).getDecision();
+        boolean refused = !childDecision.isAllowed();
 
         JsonObject fileInfo = new JsonObject();
         fileInfo.addProperty("name", file.getName());
@@ -649,57 +794,46 @@ public class FileOperationManager {
 
     /**
      * Handles a file delete operation.
+     * <p>
+     * The target is resolved in entry mode ({@link ResolveMode#ENTRY}): the parent is followed,
+     * the terminal entry itself is not. The terminal entry is classified by the same predicate
+     * the walk uses for every entry inside the tree, {@link #isRealDirectory(Path, Path)}: only a
+     * real directory keeps the recursive-flag and protected-descendant gates in front of
+     * {@link #deleteDirectory}. Anything else that is a directory or a link without being a real
+     * directory - a symbolic link to a file, to a directory or to nothing, a Windows junction,
+     * another reparse point - is removed as the entry itself and its target is never touched
+     * (JDK {@link Files#delete(Path)} semantics; for a link to a directory this is the
+     * maintainer's recorded link-only decision). A regular file is deleted as before.
      *
      * @return the {@link AccessDecision} that gated this delete
      */
     private AccessDecision handleDeleteOperation(String path, JsonObject operationData, String operationId) {
-        AccessDecision deleteDecision = isPathAllowed(path);
+        ResolvedTarget target = resolveTarget(path, ResolveMode.ENTRY);
+        AccessDecision deleteDecision = target.getDecision();
         try {
             if (!deleteDecision.isAllowed()) {
                 sendFileOperationResult(operationId, "delete", path, false, deleteDecision.getMessage(), null);
                 return deleteDecision;
             }
 
-            File file = getSecureFile(path);
-            if (!file.exists()) {
+            File entry = target.getOperand();
+            if (!Files.exists(entry.toPath(), LinkOption.NOFOLLOW_LINKS)) {
                 sendFileOperationResult(operationId, "delete", path, false, "File not found", null);
                 return deleteDecision;
             }
 
-            if (file.isDirectory()) {
-                // D-20: a recursive delete requires the caller to say so — the shape guard, not
-                // the walk. deleteDirectory() itself stays unchanged; this gate runs in front of
-                // it, after the path decision and the existence check, before any deletion.
-                AccessDecision recursiveDecision = requireRecursiveFlag(operationData);
-                if (!recursiveDecision.isAllowed()) {
-                    sendFileOperationResult(operationId, "delete", path, false,
-                        recursiveDecision.getMessage(), null);
-                    return recursiveDecision;
-                }
-
-                // Closes the ancestor gap a phase-06 security audit found: the path decision
-                // above (isPathAllowed -> deniedUnconditionally) only ever ran against the
-                // requested path itself, never against what is underneath it. A recursive delete
-                // of an ancestor of a protected path (e.g. plugins/UltiTools, an ancestor of
-                // plugins/UltiTools/security and of plugins/UltiTools/data.json) reached
-                // deleteDirectory() with no policy consulted for any descendant at all. Runs
-                // after the recursive-flag shape guard and strictly before deleteDirectory() is
-                // called — nothing is removed if this refuses.
-                AccessDecision ancestorDecision = deniedAsAncestorOfProtectedPath(normalize(path), file);
-                if (!ancestorDecision.isAllowed()) {
-                    sendFileOperationResult(operationId, "delete", path, false,
-                        ancestorDecision.getMessage(), null);
-                    return ancestorDecision;
-                }
+            Path entryPath = entry.toPath();
+            boolean realDirectory = isRealDirectory(realPathResolver.apply(entryPath.getParent()), entryPath);
+            AccessDecision directoryDecision = realDirectory
+                ? directoryDeleteGate(entryPath, operationData, target.getMappedPath())
+                : AccessDecision.allowed();
+            if (!directoryDecision.isAllowed()) {
+                sendFileOperationResult(operationId, "delete", path, false,
+                    directoryDecision.getMessage(), null);
+                return directoryDecision;
             }
 
-            boolean deleted = false;
-            if (file.isDirectory()) {
-                // Recursively delete the directory (use with caution)
-                deleted = deleteDirectory(file);
-            } else {
-                deleted = file.delete();
-            }
+            boolean deleted = deleteEntry(entry, realDirectory);
 
             if (deleted) {
                 sendFileOperationResult(operationId, "delete", path, true, "File deleted successfully", null);
@@ -713,6 +847,57 @@ public class FileOperationManager {
                 "Error deleting file: " + e.getMessage(), null);
             return deleteDecision;
         }
+    }
+
+    /**
+     * The gates a <b>real</b> directory entry passes before {@link #deleteDirectory} may run:
+     * D-20's recursive-flag shape guard first, then the protected-descendant walk. Only called
+     * for an entry {@link #isRealDirectory(Path, Path)} accepts; a link, a junction and a regular
+     * file never reach it, because removing them removes only the entry, so there is no subtree
+     * to guard.
+     * <p>
+     * The ancestor walk closes the gap a phase-06 security audit found: the path decision only
+     * ever ran against the requested entry itself, never against what is underneath it, so a
+     * recursive delete of an ancestor of a protected path (e.g. {@code plugins/UltiTools}, an
+     * ancestor of {@code plugins/UltiTools/security} and of {@code plugins/UltiTools/data.json})
+     * reached {@link #deleteDirectory} with no policy consulted for any descendant at all.
+     *
+     * @param entryReal     the real directory entry (its real path, as {@link #isRealDirectory}
+     *                      established)
+     * @param operationData the inbound request's data object (carries {@code recursive})
+     * @param mappedPath    the entry's server-root-relative path, as mapped by the resolver; used
+     *                      only to name the refused descendant in the reply
+     * @return {@link AccessDecision#allowed()}, or the first gate's non-configurable refusal
+     */
+    private AccessDecision directoryDeleteGate(Path entryReal, JsonObject operationData, String mappedPath) {
+        AccessDecision recursiveDecision = requireRecursiveFlag(operationData);
+        if (!recursiveDecision.isAllowed()) {
+            return recursiveDecision;
+        }
+        return deniedAsAncestorOfProtectedPath(mappedPath, entryReal, protectedRealLocations());
+    }
+
+    /**
+     * Removes one resolved delete entry. A real directory is emptied by {@link #deleteDirectory};
+     * any other directory or link entry - a symbolic link, a Windows junction, another reparse
+     * point - is removed as the entry itself with {@link Files#delete(Path)}, which never follows
+     * it (D-02); a regular file is deleted as a single file.
+     *
+     * @param entry         the resolved, not-followed delete operand
+     * @param realDirectory whether {@link #isRealDirectory(Path, Path)} accepted {@code entry}
+     * @return whether the entry was removed
+     * @throws IOException if removing a link entry fails
+     */
+    private boolean deleteEntry(File entry, boolean realDirectory) throws IOException {
+        if (realDirectory) {
+            return deleteDirectory(entry);
+        }
+        Path entryPath = entry.toPath();
+        if (Files.isSymbolicLink(entryPath) || Files.isDirectory(entryPath, LinkOption.NOFOLLOW_LINKS)) {
+            Files.delete(entryPath);
+            return true;
+        }
+        return entry.delete();
     }
 
     /**
@@ -749,9 +934,8 @@ public class FileOperationManager {
      * Refuses a recursive directory delete whose target is an ancestor of any path
      * {@link #deniedUnconditionally} would refuse on its own. Runs after {@link
      * #requireRecursiveFlag} and strictly before {@link #deleteDirectory}; nothing is deleted
-     * when this refuses. {@link #deleteDirectory} itself is unchanged — the walk it performs
-     * stays a naked recursive delete, and this method is the gate that decides whether it may
-     * run at all, not a per-descendant check woven into it.
+     * when this refuses. This method is the gate that decides whether {@link #deleteDirectory}
+     * may run at all, not a per-descendant check woven into it.
      * <p>
      * <b>Why this walks the real directory instead of comparing paths lexically.</b> One of
      * {@link #deniedUnconditionally}'s rules — the security-directory check — is answerable from
@@ -770,38 +954,55 @@ public class FileOperationManager {
      * directory added later is covered automatically; nobody has to remember to extend a second
      * list.
      * <p>
-     * <b>What this does not cover.</b> A symlink inside the tree whose target resolves to a
-     * protected location the link's own relative path would not itself trigger — {@code
-     * File#listFiles()} enumerates the directory's own entries, and following such a link across
-     * a policy boundary is the same lexical-vs-real-path asymmetry already tracked and
-     * deliberately not fixed this phase; this walk does not attempt to close it.
+     * <b>Which path it judges.</b> Every descendant is judged at its real location - the real
+     * path of the directory it was listed from plus its own name - by
+     * {@link #deniedAtRealPath(Path, List)}, never by a root-relative name. Which editable root
+     * matched the request, and the order of the configured roots, therefore cannot hide a
+     * protected descendant: with roots {@code [plugins/shadow, plugins]} and
+     * {@code plugins/shadow} linking to {@code plugins/UltiTools}, a recursive delete of
+     * {@code plugins/UltiTools} still meets the real action-log directory and is refused.
+     * {@code displayPath} only names the refused descendant in the reply.
+     * <p>
+     * <b>Links inside the tree are never followed.</b> This walk, {@link #deleteDirectory}, the
+     * delete's terminal entry and the list marking share one rule,
+     * {@link #isRealDirectory(Path, Path)}: only a real subdirectory is descended into. A
+     * symbolic link (or, on Windows, a junction) found inside the tree is checked at its own
+     * location like any other entry and is then removed as a link by {@link #deleteDirectory};
+     * its target and the target's contents are never reached, so a link to an outside
+     * directory, to the action-log directory or to the credential directory neither refuses the
+     * delete nor empties its target.
      *
-     * @param normalizedPath the normalized path of {@code dir} (forward-slash separated, no
-     *                        leading slash), used to build each descendant's relative path
-     * @param dir             the real directory {@link #handleDeleteOperation} is about to
-     *                        recursively delete
+     * @param displayPath        the mapped server-root-relative path of {@code dirReal}
+     *                           (forward-slash separated, no leading slash), used only to name a
+     *                           refused descendant in the reply
+     * @param dirReal            the real path of the directory {@link #handleDeleteOperation} is
+     *                           about to recursively delete, or of a real subdirectory of it
+     * @param protectedLocations the result of {@link #protectedRealLocations()}
      * @return {@link AccessDecision#allowed()} if no descendant (at any depth) is unconditionally
      *         denied; otherwise a denied, non-configurable decision naming the first protected
      *         descendant found — non-configurable because every rule {@link
      *         #deniedUnconditionally} enforces is itself non-configurable
      */
-    private AccessDecision deniedAsAncestorOfProtectedPath(String normalizedPath, File dir) {
-        File[] children = dir.listFiles();
+    private AccessDecision deniedAsAncestorOfProtectedPath(String displayPath, Path dirReal,
+                                                           List<Path> protectedLocations) {
+        File[] children = dirReal.toFile().listFiles();
+        // An unreadable directory is not walked here; deleteDirectory cannot list it either, so
+        // allowing the gate removes nothing under it and its own removal reports the failure.
         if (children == null) {
             return AccessDecision.allowed();
         }
         for (File child : children) {
-            String childPath = normalizedPath.isEmpty()
+            Path childLocation = dirReal.resolve(child.getName());
+            String childPath = displayPath.isEmpty()
                     ? child.getName()
-                    : normalizedPath + "/" + child.getName();
-            AccessDecision childDenial = deniedUnconditionally(childPath);
-            if (childDenial != null) {
+                    : displayPath + "/" + child.getName();
+            if (deniedAtRealPath(childLocation, protectedLocations) != null) {
                 return AccessDecision.deniedNonConfigurable(
-                        "recursive delete of '" + normalizedPath + "' would remove '" + childPath
+                        "recursive delete of '" + displayPath + "' would remove '" + childPath
                                 + "', which is unconditionally protected");
             }
-            if (child.isDirectory()) {
-                AccessDecision nested = deniedAsAncestorOfProtectedPath(childPath, child);
+            if (isRealDirectory(dirReal, childLocation)) {
+                AccessDecision nested = deniedAsAncestorOfProtectedPath(childPath, childLocation, protectedLocations);
                 if (!nested.isAllowed()) {
                     return nested;
                 }
@@ -811,117 +1012,302 @@ public class FileOperationManager {
     }
 
     /**
-     * Recursively deletes a directory.
+     * Recursively deletes a real directory without following any link inside it.
+     * <p>
+     * Only a child for which {@link #isRealDirectory(Path, Path)} holds is descended into. Every
+     * other child — a regular file, a symbolic link to a file or to a directory, a dangling
+     * link, or a Windows junction — is removed as a single entry with
+     * {@link Files#deleteIfExists(Path)}, which never follows a link, so a link's target and the
+     * target's contents stay untouched. If {@code dir}'s real path cannot be determined nothing
+     * under it is removed, so its own removal fails and the delete reports the failure. Before
+     * this rule, {@code File#isDirectory()} followed a descendant link to a directory and the
+     * walk emptied the link's target, wherever it was.
+     *
+     * @param dir the real directory to delete (never a link; {@link #isRealDirectory}
+     *            establishes that for the terminal entry and for every descendant)
+     * @return whether {@code dir} itself was removed
      */
     private boolean deleteDirectory(File dir) {
+        Path dirReal = realPathResolver.apply(dir.toPath());
         File[] files = dir.listFiles();
-        if (files != null) {
+        if (files != null && dirReal != null) {
             for (File file : files) {
-                if (file.isDirectory()) {
-                    deleteDirectory(file);
+                Path childLocation = dirReal.resolve(file.getName());
+                if (isRealDirectory(dirReal, childLocation)) {
+                    deleteDirectory(childLocation.toFile());
                 } else {
-                    file.delete();
+                    deleteSingleEntry(childLocation);
                 }
             }
         }
         return dir.delete();
     }
+
+    /**
+     * The one "real directory or link" predicate of the remote file API, through this manager's
+     * real-path lookup. Used for the delete's terminal entry, every entry of the
+     * protected-descendant walk and of {@link #deleteDirectory}, and the list marking.
+     *
+     * @see #isRealDirectory(Path, Path, Function)
+     */
+    private boolean isRealDirectory(Path parentReal, Path entry) {
+        return isRealDirectory(parentReal, entry, realPathResolver);
+    }
+
+    /**
+     * Whether {@code entry} is a real directory: it is a directory when links are not followed,
+     * <b>and</b> its own real path is exactly {@code parentReal} plus its name. Anything else is a
+     * link, whatever the operating system calls it: a symbolic link fails the first test; a
+     * Windows junction or another directory reparse point, which the JDK reports as a directory,
+     * fails the second, because its real path is its target's. An entry, or a parent, whose real
+     * path cannot be determined is not a real directory. A link is never descended into and,
+     * deleted, is removed as the entry itself - whether it is the delete target or inside the
+     * deleted tree.
+     *
+     * @param parentReal the real path of the directory {@code entry} lives in, or {@code null}
+     * @param entry      the entry, not followed: its parent's real path plus its own name
+     * @param realPath   the real-path lookup; returns {@code null} when a path cannot be resolved
+     * @return {@code true} only for a real, non-link directory
+     */
+    static boolean isRealDirectory(Path parentReal, Path entry, Function<Path, Path> realPath) {
+        if (parentReal == null || entry == null || !Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS)) {
+            return false;
+        }
+        Path name = entry.getFileName();
+        if (name == null) {
+            return false;
+        }
+        Path entryReal = realPath.apply(entry);
+        return entryReal != null && entryReal.equals(parentReal.resolve(name.toString()));
+    }
+
+    /** The real path of {@code path}, or {@code null} if it cannot be determined. */
+    private static Path realPathOrNull(Path path) {
+        try {
+            return path.toRealPath();
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Removes one non-directory entry (or link) of a tree being deleted, as the entry itself.
+     * The walk does not act on the result, exactly as it never acted on a per-file failure: the
+     * enclosing directory then stays non-empty and its own removal reports the failure.
+     *
+     * @return whether the entry is gone
+     */
+    private static boolean deleteSingleEntry(Path entry) {
+        try {
+            Files.deleteIfExists(entry);
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
+    }
     
     /**
-     * Resolves a requested path to a real {@link File} handle, refusing anything that does not
-     * canonically resolve inside one of the configured {@link #editableRoots} (D-21).
+     * The one resolver every remote file operation takes its decision and its I/O operand from
+     * (D-21, issue #672). The path that is authorized is the path that is used: no handler builds
+     * a {@link File} from the raw request string.
      * <p>
-     * The pre-6.3.0 defect here was never the canonicalization order — {@code getCanonicalPath()}
-     * already ran before the check, and already resolved symlinks. The live bug was
-     * {@code String.startsWith} with no separator boundary: {@code "/srv/mc-evil/x"} literally
-     * starts with the characters {@code "/srv/mc"}. This rewrite compares by {@link Path} name
-     * element via {@link Path#startsWith(Path)} instead, mirroring the Zip-Slip guard already
-     * correct for the opposite direction in {@code UltiToolsPlugin.saveResources()} — it appends
-     * {@code File.separator} to its own canonical base before comparing — the same defect class,
-     * already fixed once in this repository.
-     * <p>
-     * A requested path that does not exist yet (a create/write target) resolves its nearest
-     * <em>existing</em> ancestor via {@link #resolveNearestReal(Path)} rather than throwing, so a
-     * legitimate create into an existing directory is not refused as a traversal attempt — but an
-     * ancestor that itself resolves outside every root is still refused (T-06-21).
+     * Steps, each of which can produce the final decision:
+     * <ol>
+     *   <li><b>Lexical layer</b> — {@link #isPathAllowed(String)} exactly as before (unconditional
+     *       deny layer first, then the lexical editable-root check).</li>
+     *   <li><b>Resolution without lexical collapse</b> — the request's components are walked from
+     *       the real server root; every existing prefix is resolved by the filesystem
+     *       ({@link Path#toRealPath}), so a {@code ..} after a symbolic link means what the
+     *       operating system means, not what {@link Path#normalize()} would guess. At the first
+     *       component that does not exist, following stops: that component must not exist even
+     *       as a link, and it and every later component must be an ordinary name (not {@code .}
+     *       or {@code ..}). A dangling or looping link, a component whose existence cannot be
+     *       determined, or a resolution failure is an unsafe shape and is refused
+     *       non-configurably — an operator can widen the roots but cannot make an ambiguous path
+     *       safe.</li>
+     *   <li><b>Real containment</b> — the operand must lie inside the real path of a configured
+     *       editable root, compared by {@link Path#startsWith(Path)} name element (a sibling
+     *       {@code <root>-evil} is not inside {@code <root>}); otherwise the refusal is
+     *       configurable through {@code ultipanel.files.editable-roots}. A configured root that
+     *       does not resolve is skipped with a warning (T-06-23).</li>
+     *   <li><b>Actual-target deny</b> — the unconditional deny layer runs again on the operand's
+     *       real path ({@link #deniedAtRealPath(Path, List)}), so a credential file or the
+     *       action-log directory reached through an in-root alias (a link, a linked parent
+     *       directory, or an editable root that is itself an alias of another root's
+     *       subdirectory) is refused with the same non-configurable decision a direct request
+     *       for it gets (D-08), whichever root matched and in whatever order the roots are
+     *       configured.</li>
+     * </ol>
+     * In {@link ResolveMode#FOLLOW} the operand is the resolved real object, or the real existing
+     * prefix plus the ordinary missing names of a new write target. In {@link ResolveMode#ENTRY}
+     * (delete) the parent is resolved as in follow mode, the terminal name must be an ordinary
+     * name, and the operand is the parent's real path plus that name, not followed.
      *
      * @param path the requested path, forward- or back-slash separated, with or without a
      *             leading slash
-     * @return a {@link File} handle for the (not-yet-canonicalized) requested location — callers
-     *         operate on this handle, not on the resolved candidate used only for the check
-     * @throws SecurityException if the path is empty, unresolvable, or resolves outside every
-     *                            configured editable root
+     * @param mode whether the terminal component is followed
+     * @return the final decision, and when allowed the operand and its mapped path
      */
-    private File getSecureFile(String path) throws SecurityException {
-        if (path == null || path.trim().isEmpty()) {
-            throw new SecurityException("Path cannot be empty");
+    ResolvedTarget resolveTarget(String path, ResolveMode mode) {
+        AccessDecision lexical = isPathAllowed(path);
+        if (!lexical.isAllowed()) {
+            return ResolvedTarget.denied(lexical);
         }
-
         String normalized = normalize(path);
-        File requestedFile = new File(serverRoot, normalized);
-        // Lexically collapse ".." before any filesystem access — the security-relevant
-        // containment check below still requires a REAL (symlink-resolved) path, but a
-        // traversal segment must not survive into the not-yet-existing-ancestor walk either.
-        Path requestedPath = requestedFile.toPath().normalize();
-
-        Path resolvedCandidate;
+        Path operand;
         try {
-            resolvedCandidate = resolveNearestReal(requestedPath);
+            List<String> names = componentsOf(normalized);
+            operand = mode == ResolveMode.ENTRY ? resolveEntry(names) : resolveFollowing(names);
+        } catch (UnsafePathException e) {
+            return ResolvedTarget.denied(AccessDecision.deniedNonConfigurable(
+                    "'" + normalized + "' " + e.getMessage()));
+        }
+        return containedTarget(normalized, operand);
+    }
+
+    /**
+     * Splits a normalized request into its name components. java.nio parsing collapses doubled
+     * and trailing separators, so {@code root//sub/} and {@code root/sub} name the same object;
+     * {@code .} and {@code ..} are kept as components for the walk to resolve.
+     */
+    private static List<String> componentsOf(String normalized) throws UnsafePathException {
+        List<String> names = new ArrayList<>();
+        if (normalized.isEmpty()) {
+            return names;
+        }
+        Path parsed;
+        try {
+            parsed = Paths.get(normalized);
+        } catch (InvalidPathException e) {
+            throw new UnsafePathException("is not a valid path");
+        }
+        for (Path name : parsed) {
+            names.add(name.toString());
+        }
+        return names;
+    }
+
+    /**
+     * Follow-mode walk (step 2): every existing component is resolved by the filesystem; the
+     * first missing component starts the missing suffix. Below a real non-directory nothing can
+     * exist, so the rest is treated as missing too and a read or list of it fails ordinarily.
+     */
+    private Path resolveFollowing(List<String> names) throws UnsafePathException {
+        Path current = realPathOf(serverRoot.toPath());
+        for (int i = 0; i < names.size(); i++) {
+            Path next = current.resolve(names.get(i));
+            if (!Files.isDirectory(current) || Files.notExists(next, LinkOption.NOFOLLOW_LINKS)) {
+                return appendMissingSuffix(current, names.subList(i, names.size()));
+            }
+            if (!Files.exists(next)) {
+                throw new UnsafePathException("contains a dangling or looping symbolic link, or a component "
+                        + "whose existence cannot be determined");
+            }
+            current = realPathOf(next);
+        }
+        return current;
+    }
+
+    /**
+     * Entry-mode resolution (delete): the parent is followed, the terminal entry is not. The
+     * terminal name must be an ordinary name, so {@code sub/..}, {@code .} or an empty path never
+     * names some other directory to remove.
+     */
+    private Path resolveEntry(List<String> names) throws UnsafePathException {
+        if (names.isEmpty()) {
+            throw new UnsafePathException("names no entry that can be deleted");
+        }
+        String terminal = names.get(names.size() - 1);
+        requireOrdinaryName(terminal);
+        return resolveFollowing(names.subList(0, names.size() - 1)).resolve(terminal);
+    }
+
+    private static Path appendMissingSuffix(Path existing, List<String> missing) throws UnsafePathException {
+        Path result = existing;
+        for (String name : missing) {
+            requireOrdinaryName(name);
+            result = result.resolve(name);
+        }
+        return result;
+    }
+
+    private static void requireOrdinaryName(String name) throws UnsafePathException {
+        if (name.isEmpty() || ".".equals(name) || "..".equals(name)) {
+            throw new UnsafePathException("uses '" + name + "' where only an ordinary file or directory name "
+                    + "can be located safely");
+        }
+    }
+
+    private static Path realPathOf(Path path) throws UnsafePathException {
+        try {
+            return path.toRealPath();
         } catch (IOException e) {
-            throw new SecurityException("Unable to resolve path: " + path);
+            throw new UnsafePathException("could not be resolved");
         }
-
-        if (!isContainedInAnyRealRoot(resolvedCandidate)) {
-            throw new SecurityException("Path is outside the editable roots: " + path);
-        }
-
-        return requestedFile;
     }
 
     /**
-     * Resolves {@code candidatePath} to its real (symlink-resolved) form. If the path itself does
-     * not exist yet, walks up to the nearest existing ancestor, resolves that ancestor for real,
-     * and re-appends the unresolved trailing segments — Claude's Discretion hazard #1 in
-     * 06-RESEARCH.md: a not-yet-existing create/write target must not be refused outright.
-     *
-     * @throws IOException if no ancestor of {@code candidatePath} exists (should not happen once
-     *                      {@code serverRoot} itself exists) or the real path cannot be resolved
+     * Step 3: real containment. Returns the target with its mapped path (after step 4), or the
+     * configurable outside-the-roots refusal.
      */
-    private static Path resolveNearestReal(Path candidatePath) throws IOException {
-        if (Files.exists(candidatePath)) {
-            return candidatePath.toRealPath();
-        }
-        Path parent = candidatePath.getParent();
-        if (parent == null) {
-            throw new NoSuchFileException(candidatePath.toString());
-        }
-        Path realParent = resolveNearestReal(parent);
-        Path fileName = candidatePath.getFileName();
-        return fileName == null ? realParent : realParent.resolve(fileName).normalize();
-    }
-
-    /**
-     * Checks {@code resolvedCandidate} against every configured editable root's real path.
-     * <p>
-     * A configured root that does not itself resolve (T-06-23: an operator typo) is skipped with
-     * a loud warning rather than silently narrowing the set to nothing — the remaining configured
-     * roots still apply.
-     */
-    private boolean isContainedInAnyRealRoot(Path resolvedCandidate) {
+    private ResolvedTarget containedTarget(String normalized, Path operand) {
         for (File root : editableRoots) {
-            Path realRoot;
-            try {
-                realRoot = root.toPath().toRealPath();
-            } catch (IOException e) {
-                logWarning("Configured editable root does not exist and was skipped: " + root.getPath()
-                        + " (check " + EDITABLE_ROOTS_CONFIG_KEY + " in plugins/UltiTools/config.yml)");
-                continue;
-            }
-            if (resolvedCandidate.startsWith(realRoot)) {
-                return true;
+            Path realRoot = realRootOf(root);
+            if (realRoot != null && operand.startsWith(realRoot)) {
+                return unlessProtected(operand.toFile(), mappedPath(root, realRoot, operand));
             }
         }
-        return false;
+        return ResolvedTarget.denied(AccessDecision.deniedConfigurable(
+                "'" + normalized + "' resolves outside the editable roots", EDITABLE_ROOTS_CONFIG_KEY));
+    }
+
+    /**
+     * Step 4 (D-08): the unconditional deny layer applied to where the operand really is, by
+     * real path ({@link #deniedAtRealPath(Path, List)}), not by the mapped path: the mapped path
+     * depends on which root matched first, so an alias root would otherwise rename a protected
+     * object out from under the rule. In entry mode the operand is the entry itself (its
+     * parent's real path plus its name), so deleting an alias link is judged on the link, not on
+     * what it points to.
+     */
+    private ResolvedTarget unlessProtected(File operand, String mappedPath) {
+        AccessDecision deny = deniedAtRealPath(operand.toPath(), protectedRealLocations());
+        return deny != null ? ResolvedTarget.denied(deny) : ResolvedTarget.allowed(operand, mappedPath);
+    }
+
+    /**
+     * A configured root's real path, or {@code null} — with a loud warning rather than silently
+     * narrowing the set to nothing — when it does not resolve (T-06-23: an operator typo).
+     */
+    private static Path realRootOf(File root) {
+        try {
+            return root.toPath().toRealPath();
+        } catch (IOException e) {
+            logWarning("Configured editable root does not exist and was skipped: " + root.getPath()
+                    + " (check " + EDITABLE_ROOTS_CONFIG_KEY + " in plugins/UltiTools/config.yml)");
+            return null;
+        }
+    }
+
+    /**
+     * The operand's server-root-relative path expressed through the configured root it belongs
+     * to: the root's configured location relative to {@link #serverRoot}, followed by the
+     * operand's location inside the root's real path. It depends on which root matched first,
+     * so it only names things in replies; no allow or deny decision is taken on it (those use
+     * real paths, see {@link #unlessProtected} and {@link #deniedAsAncestorOfProtectedPath}).
+     */
+    private String mappedPath(File root, Path realRoot, Path operand) {
+        Path base = serverRoot.toPath().toAbsolutePath().normalize();
+        String prefix = base.relativize(root.toPath().toAbsolutePath().normalize()).toString();
+        String inside = realRoot.relativize(operand).toString();
+        String joined;
+        if (prefix.isEmpty()) {
+            joined = inside;
+        } else if (inside.isEmpty()) {
+            joined = prefix;
+        } else {
+            joined = prefix + "/" + inside;
+        }
+        return joined.replace(File.separatorChar, '/');
     }
     
     /**
@@ -958,6 +1344,65 @@ public class FileOperationManager {
             
         } catch (Exception e) {
             PanelConnectionLog.log(Level.WARNING, FrameworkText.format("发送文件操作结果失败: %s", e.getMessage()));
+        }
+    }
+
+    /**
+     * How {@link #resolveTarget(String, ResolveMode)} treats the request's terminal component.
+     */
+    enum ResolveMode {
+        /** Read, write, list and list-child marking: every existing component is followed. */
+        FOLLOW,
+        /** Delete: the parent is followed; the terminal entry itself is never followed (D-02). */
+        ENTRY
+    }
+
+    /**
+     * The result of {@link #resolveTarget(String, ResolveMode)}: the final decision and, when it
+     * is allowed, the operand the handler performs I/O on and that operand's mapped
+     * server-root-relative path.
+     */
+    static final class ResolvedTarget {
+        private final AccessDecision decision;
+        private final File operand;
+        private final String mappedPath;
+
+        private ResolvedTarget(AccessDecision decision, File operand, String mappedPath) {
+            this.decision = decision;
+            this.operand = operand;
+            this.mappedPath = mappedPath;
+        }
+
+        static ResolvedTarget denied(AccessDecision decision) {
+            return new ResolvedTarget(decision, null, null);
+        }
+
+        static ResolvedTarget allowed(File operand, String mappedPath) {
+            return new ResolvedTarget(AccessDecision.allowed(), operand, mappedPath);
+        }
+
+        /** @return the final decision for the request */
+        AccessDecision getDecision() {
+            return decision;
+        }
+
+        /** @return the I/O operand, or {@code null} when the decision is a refusal */
+        File getOperand() {
+            return operand;
+        }
+
+        /** @return the operand's mapped server-root-relative path, or {@code null} when refused */
+        String getMappedPath() {
+            return mappedPath;
+        }
+    }
+
+    /** A request shape that cannot be located safely; always becomes a non-configurable refusal. */
+    private static final class UnsafePathException extends Exception {
+        private static final long serialVersionUID = 1L;
+
+        UnsafePathException(String message) {
+            super(message);
         }
     }
 }

@@ -488,10 +488,12 @@ public class PluginInitiationUtils {
      * is mandatory (compile-time) and a {@code null} value fails immediately and loudly
      * (class-load-time) — but the {@code null}-rejection half is not literally a compile error.
      * <p>
-     * {@link #of(Capability, VerdictRecorder, BiConsumer)} covers the 23 entries whose capability is
+     * {@link #of(Capability, VerdictRecorder, BiConsumer)} covers every entry whose capability is
      * fixed by the message {@code type} alone; {@link #resolved(Function, VerdictRecorder,
-     * BiConsumer)} covers {@code file_operation}, the one entry whose capability depends on the
-     * message's {@code operation} field rather than its {@code type}.
+     * BiConsumer)} covers the entries whose capability depends on the message's own {@code data}:
+     * {@code file_operation} (its {@code operation} field), {@code upload_config} (the
+     * acknowledgement shape versus a write request) and {@code update_config} (whether
+     * {@code fileName} names the {@code server_properties} target).
      */
     static final class InboundHandlerEntry {
         private final Capability capability;
@@ -530,9 +532,9 @@ public class PluginInitiationUtils {
         }
 
         /**
-         * An entry whose capability depends on the inbound message's own {@code data} — the
-         * {@code file_operation} case, whose true capability depends on the {@code operation} field
-         * (D-10's resolver case, D-09).
+         * An entry whose capability depends on the inbound message's own {@code data} — for
+         * example {@code file_operation}, whose true capability depends on the {@code operation}
+         * field (D-10's resolver case, D-09); see this class's own javadoc for every such entry.
          *
          * @param resolver        a function from the message's {@code data} to the
          *                        {@link Capability} it requires
@@ -699,7 +701,15 @@ public class PluginInitiationUtils {
         handlers.put("upload_config", InboundHandlerEntry.resolved(
                 PluginInitiationUtils::resolveUploadConfigCapability, VerdictRecorder.GATE,
                 (message, data) -> handleConfigUpload(data)));
-        handlers.put("update_config", InboundHandlerEntry.of(Capability.FILE_WRITE, VerdictRecorder.GATE,
+        // update_config's capability follows its target: a fileName that names the
+        // server_properties target (a get without content, a write with content) is routed to
+        // ServerPropertiesManager and is governed by SERVER_PROPERTIES alone; every other target
+        // (a named config file, the whole config, the content-less echo) is governed by
+        // FILE_WRITE alone. A fixed FILE_WRITE here let the file-write switch open
+        // server.properties and kept the server-properties switch from governing it (case
+        // 180e5fe3). The resolver and both handler branches share one predicate.
+        handlers.put("update_config", InboundHandlerEntry.resolved(
+                PluginInitiationUtils::resolveUpdateConfigCapability, VerdictRecorder.GATE,
                 (message, data) -> handleConfigUpdate(data)));
         handlers.put("server_properties",
                 InboundHandlerEntry.of(Capability.SERVER_PROPERTIES, VerdictRecorder.GATE, (message, data) -> {
@@ -762,6 +772,54 @@ public class PluginInitiationUtils {
             return Capability.NONE;
         }
         return Capability.FILE_WRITE;
+    }
+
+    /**
+     * Resolves {@code update_config}'s required capability from the target the handler will
+     * actually route to (D-04, case 180e5fe3): {@link Capability#SERVER_PROPERTIES} when
+     * {@code fileName} names the {@code server_properties} target, which {@link #handleConfigUpdate}
+     * sends to {@link ServerPropertiesManager} as a get (no content) or {@link #applyConfigUpdate}
+     * as a write (with content); {@link Capability#FILE_WRITE} for every other target.
+     * <p>
+     * Reads {@code fileName} with the same {@link #readString} and tests it with the same
+     * {@link #isServerPropertiesTarget} the two handler branches use, so no payload shape can be
+     * classified one way and routed the other -- in particular a single-element array
+     * {@code ["server_properties"]}, which {@code readString} unwraps, is classified as the
+     * server-properties target it is routed to. A value {@code readString} cannot read (a JSON
+     * object raises {@link UnsupportedOperationException}; an array whose size is not one raises
+     * {@link IllegalStateException}) classifies as {@link Capability#FILE_WRITE}: the handler
+     * cannot read it either, so such a message never reaches any manager. Absent {@code data}
+     * likewise classifies as {@link Capability#FILE_WRITE}; the handler returns at once for it.
+     *
+     * @param data the message's {@code data} object, possibly {@code null}
+     * @return {@link Capability#SERVER_PROPERTIES} for the server-properties target,
+     *         {@link Capability#FILE_WRITE} otherwise
+     */
+    private static Capability resolveUpdateConfigCapability(JsonObject data) {
+        if (data == null) {
+            return Capability.FILE_WRITE;
+        }
+        String fileName;
+        try {
+            fileName = readString(data, "fileName");
+        } catch (UnsupportedOperationException | IllegalStateException unreadable) {
+            // The handler's own readString raises the same exception, so it routes nowhere.
+            return Capability.FILE_WRITE;
+        }
+        return isServerPropertiesTarget(fileName) ? Capability.SERVER_PROPERTIES : Capability.FILE_WRITE;
+    }
+
+    /**
+     * Whether an {@code update_config} {@code fileName} names the {@code server_properties} target
+     * rather than a config file. The single test shared by {@link #resolveUpdateConfigCapability},
+     * the get branch of {@link #handleConfigUpdate} and the write branch of
+     * {@link #applyConfigUpdate} (D-04), so classification and routing cannot drift apart.
+     *
+     * @param fileName the {@code fileName} as read by {@link #readString}, possibly {@code null}
+     * @return {@code true} if the message targets {@code server.properties}
+     */
+    private static boolean isServerPropertiesTarget(String fileName) {
+        return SERVER_PROPERTIES_FILE.equals(fileName);
     }
 
     /**
@@ -1343,7 +1401,7 @@ public class PluginInitiationUtils {
         String configContent = readConfigContent(data);
 
         // server_properties's "get" request: no content is still a legitimate request, not an echo.
-        if (SERVER_PROPERTIES_FILE.equals(fileName) && configContent == null) {
+        if (isServerPropertiesTarget(fileName) && configContent == null) {
             ServerPropertiesManager spm = UltiTools.getInstance().getServerPropertiesManager();
             if (spm != null) {
                 JsonObject spData = new JsonObject();
@@ -1425,7 +1483,7 @@ public class PluginInitiationUtils {
      * {@link com.ultikits.ultitools.manager.ConfigManager#toJson()}.
      */
     private static void applyConfigUpdate(String fileName, String configContent) throws IOException {
-        if (SERVER_PROPERTIES_FILE.equals(fileName)) {
+        if (isServerPropertiesTarget(fileName)) {
             ServerPropertiesManager spm = UltiTools.getInstance().getServerPropertiesManager();
             if (spm == null) {
                 throw new IOException("ServerPropertiesManager is not available");
