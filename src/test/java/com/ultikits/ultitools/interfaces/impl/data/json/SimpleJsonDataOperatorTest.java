@@ -8,11 +8,16 @@ import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.io.FileWriter;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.logging.Logger;
 
@@ -29,6 +34,7 @@ import org.junit.jupiter.api.io.TempDir;
 import com.ultikits.ultitools.abstracts.data.AuditableDataEntity;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.abstracts.data.DataEntityTest;
+import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.entities.Comparison;
 import com.ultikits.ultitools.entities.WhereCondition;
@@ -1049,6 +1055,135 @@ class SimpleJsonDataOperatorTest {
                     .as("a rollback only discards staged writes; that is not a load")
                     .isEqualTo(0);
             assertThat(hookOperator.getAll()).hasSize(1);
+        }
+    }
+
+    /** An entity with mutable List and Map columns, for {@link CallerMutableFieldIsolationTests}. */
+    @Table("mutable_rows")
+    public static class MutableRow extends BaseDataEntity<String> {
+        @Column("name")
+        private String name;
+        @Column("tags")
+        private List<String> tags;
+        @Column("attrs")
+        private Map<String, String> attrs;
+
+        public MutableRow() {
+        }
+
+        MutableRow(String id, String name, String tag, String attrValue) {
+            setId(id);
+            this.name = name;
+            this.tags = new ArrayList<>(Collections.singletonList(tag));
+            this.attrs = new LinkedHashMap<>(Collections.singletonMap("key", attrValue));
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public List<String> getTags() {
+            return tags;
+        }
+
+        public Map<String, String> getAttrs() {
+            return attrs;
+        }
+    }
+
+    /**
+     * C11: after {@code updateIf} or {@code update(T)} returns, the caller still holds its entity,
+     * whose List and Map fields it may go on changing. No object reachable from the caller's
+     * entity may be reachable from the stored entry (committed or staged), or the caller's later
+     * change would silently rewrite stored data and reach disk at the next flush.
+     */
+    @Nested
+    @DisplayName("Caller-owned mutable fields never alias stored or staged values (C11)")
+    class CallerMutableFieldIsolationTests {
+
+        private SimpleJsonDataOperator<MutableRow> rows;
+        private File rowsDir;
+
+        @BeforeEach
+        void setUpRows() {
+            rowsDir = new File(storeDir, "mutable-rows");
+            rowsDir.mkdirs();
+            rows = new SimpleJsonDataOperator<>(rowsDir.getAbsolutePath(), MutableRow.class);
+            rows.insert(new MutableRow("row-1", "before", "stored", "stored"));
+        }
+
+        private void mutate(MutableRow caller) {
+            caller.getTags().add("leaked");
+            caller.getAttrs().put("leaked", "leaked");
+        }
+
+        private void assertStoredValueHasNoCallerChange(String when) {
+            MutableRow stored = rows.getById("row-1");
+            assertThat(stored.getTags()).as(when + ": stored List").containsExactly("caller");
+            assertThat(stored.getAttrs()).as(when + ": stored Map").containsOnlyKeys("key");
+        }
+
+        private void assertFlushedBytesHaveNoCallerChange() throws Exception {
+            rows.flush();
+            String flushed = new String(Files.readAllBytes(new File(rowsDir, "row-1.json").toPath()),
+                    StandardCharsets.UTF_8);
+            assertThat(flushed).as("flushed file").contains("caller").doesNotContain("leaked");
+        }
+
+        @Test
+        @DisplayName("outside a transaction: a change to the caller's List or Map after updateIf reaches neither getById nor the flushed file")
+        void updateIfOutsideATransactionStoresADetachedCopy() throws Exception {
+            MutableRow caller = new MutableRow("row-1", "after", "caller", "caller");
+
+            assertThat(rows.updateIf(caller, WhereCondition.builder().column("name").value("before").build())).isTrue();
+            mutate(caller);
+
+            assertStoredValueHasNoCallerChange("after updateIf");
+            assertFlushedBytesHaveNoCallerChange();
+        }
+
+        @Test
+        @DisplayName("outside a transaction: a change to the caller's List or Map after update(T) reaches neither getById nor the flushed file")
+        void updateOutsideATransactionStoresADetachedCopy() throws Exception {
+            MutableRow caller = new MutableRow("row-1", "after", "caller", "caller");
+
+            rows.update(caller);
+            mutate(caller);
+
+            assertStoredValueHasNoCallerChange("after update(T)");
+            assertFlushedBytesHaveNoCallerChange();
+        }
+
+        @Test
+        @DisplayName("inside a transaction: a change to the caller's List or Map after a staged updateIf reaches neither the staged nor the committed value")
+        void stagedUpdateIfStoresADetachedCopy() throws Exception {
+            MutableRow caller = new MutableRow("row-1", "after", "caller", "caller");
+
+            rows.transaction(() -> {
+                assertThat(rows.updateIf(caller, WhereCondition.builder().column("name").value("before").build())).isTrue();
+                mutate(caller);
+                assertStoredValueHasNoCallerChange("staged, after updateIf");
+                return null;
+            });
+
+            assertStoredValueHasNoCallerChange("committed, after updateIf");
+            assertFlushedBytesHaveNoCallerChange();
+        }
+
+        @Test
+        @DisplayName("inside a transaction: a change to the caller's List or Map after a staged update(T) reaches neither the staged nor the committed value")
+        void stagedUpdateStoresADetachedCopy() throws Exception {
+            MutableRow caller = new MutableRow("row-1", "after", "caller", "caller");
+
+            rows.transaction(() -> {
+                rows.update(caller);
+                mutate(caller);
+                assertStoredValueHasNoCallerChange("staged, after update(T)");
+                return null;
+            });
+
+            assertStoredValueHasNoCallerChange("committed, after update(T)");
+            assertFlushedBytesHaveNoCallerChange();
         }
     }
 }
