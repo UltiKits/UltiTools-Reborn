@@ -2301,7 +2301,10 @@ public abstract class AbstractConfigEntity {
      * @param touchedFieldsOut  populated, in application order, with every field this call applied
      * @param previousValuesOut populated in the same order with each field's pre-call value
      * @throws ConfigurationException with {@link com.ultikits.ultitools.exceptions.ErrorCode#CONFIG_VALIDATION_FAILED}
-     *                                 if the post-update field state violates a constraint
+     *                                 if the post-update field state violates a constraint. A refusal of panel paths
+     *                                 names each path through the display rule of {@link #describeKey} - never a key
+     *                                 below a secret-shaped one, never a value - because the message is logged and
+     *                                 returned to the panel (#673, case 54)
      */
     @SuppressWarnings("PMD.NPathComplexity") // Resolve every panel owner and validate every candidate before publishing any field.
     private Map<Field, List<List<String>>> applyAndValidate(JsonObject jsonObject, List<Field> touchedFieldsOut, List<Object> previousValuesOut) {
@@ -2328,16 +2331,18 @@ public abstract class AbstractConfigEntity {
                     owner = field;
                 }
             }
-            if (owner == null) { refused.add("'" + path + "': no declared entry"); continue; }
+            if (owner == null) { refused.add(describeUndeclared(path) + ": no declared entry"); continue; }
             if (path.equals(fieldPath(owner))) {
                 proposed.put(owner, raw); leaves.remove(owner); whole.add(owner); continue;
             }
             Object source = document == null ? null : document.get(keysIn(document, owner));
             RawEntry lastRead = acknowledgedRaw.get(owner);
             List<List<String>> matches = new ArrayList<>();
-            matchMapPaths(source, path.substring(fieldPath(owner).length() + 1), new ArrayList<>(), matches);
+            String rest = path.substring(fieldPath(owner).length() + 1);
+            matchMapPaths(source, rest, new ArrayList<>(), matches);
             if (matches.size() != 1) {
-                refused.add("'" + path + "': " + (matches.isEmpty() ? "not found" : "ambiguous " + matches));
+                refused.add(describeKey(owner, dottedKeys(rest)) + ": "
+                        + (matches.isEmpty() ? "not found" : "ambiguous " + describeReadings(owner, matches)));
                 continue;
             }
             List<String> match = matches.get(0);
@@ -2351,7 +2356,10 @@ public abstract class AbstractConfigEntity {
                 // The unit is built from the whole value as last read, and that value becomes a precondition checked on
                 // the file at write time (route change, R3-01): an edit made on disk since is refused, never rebuilt over.
                 boolean readHolds = lastRead != null && lastRead.present && (unit.isEmpty() || mapContains(lastRead.value, unit));
-                if (!readHolds) { refused.add("'" + path + "': the file changed since it was read; reload first"); continue; }
+                if (!readHolds) {
+                    refused.add(describeKey(owner, match) + ": the file changed since it was read; reload first");
+                    continue;
+                }
                 Object readUnit = unit.isEmpty() ? lastRead.value : mapLeaf(lastRead.value, unit);
                 compositeReads.computeIfAbsent(owner, ignored -> new LinkedHashMap<>())
                         .putIfAbsent(unit, new RawEntry(true, readUnit));
@@ -2365,8 +2373,8 @@ public abstract class AbstractConfigEntity {
                     continue;
                 }
                 Object tree = proposed.containsKey(owner) ? proposed.get(owner) : plainValue(owner);
-                if (!(tree instanceof Map)) { refused.add("'" + path + "': not a map entry"); continue; }
-                if (!parentInMemory(tree, unit)) { refused.add("'" + path + "': not found in memory"); continue; }
+                if (!(tree instanceof Map)) { refused.add(describeKey(owner, match) + ": not a map entry"); continue; }
+                if (!parentInMemory(tree, unit)) { refused.add(describeKey(owner, match) + ": not found in memory"); continue; }
                 List<List<String>> touched = leaves.get(owner);
                 Object shown = whole.contains(owner) || touched != null && touched.contains(unit) ? mapLeaf(tree, unit)
                         : readUnit;
@@ -2378,9 +2386,9 @@ public abstract class AbstractConfigEntity {
                 continue;
             }
             Object tree = proposed.containsKey(owner) ? proposed.get(owner) : plainValue(owner);
-            if (!(tree instanceof Map)) { refused.add("'" + path + "': not a map entry"); continue; }
+            if (!(tree instanceof Map)) { refused.add(describeKey(owner, match) + ": not a map entry"); continue; }
             // A group the module removed in memory (unsaved) is not there to edit: refused, never a runtime error (R4-I3).
-            if (!parentInMemory(tree, match)) { refused.add("'" + path + "': not found in memory"); continue; }
+            if (!parentInMemory(tree, match)) { refused.add(describeKey(owner, match) + ": not found in memory"); continue; }
             replaceMapLeaf(tree, match, raw);
             proposed.put(owner, tree);
             if (!whole.contains(owner)) { leaves.computeIfAbsent(owner, ignored -> new ArrayList<>()).add(match); }
@@ -2406,14 +2414,14 @@ public abstract class AbstractConfigEntity {
                         configFilePath, keys(field), field.getAnnotation(ConfigEntry.class));
                 if (!result.failures().isEmpty()) {
                     for (ConversionFailure failure : result.failures()) {
-                        refused.add("'" + String.join(".", failure.path()) + "': invalid panel value for "
+                        refused.add(describeFailure(field, failure.path()) + ": invalid panel value for "
                                 + typeName(failure.declaredType()));
                     }
                 } else {
                     converted.put(field, result.value());
                 }
             } catch (ConversionException failure) {
-                refused.add("'" + String.join(".", failure.path()) + "': invalid panel value for "
+                refused.add(describeFailure(field, failure.path()) + ": invalid panel value for "
                         + typeName(failure.declaredType()));
             }
         }
@@ -2426,6 +2434,39 @@ public abstract class AbstractConfigEntity {
         validateFields();
         validateBindingRanges(touchedFieldsOut);
         return leaves;
+    }
+
+    /**
+     * How a refusal names a panel path no declared setting owns: the rule of {@link #displayKeys} over its dotted
+     * segments, so everything below the first secret-shaped segment is redacted (#673).
+     */
+    private String describeUndeclared(String path) {
+        return "'" + String.join(".", displayKeys(false, dottedKeys(path))) + "'";
+    }
+
+    /**
+     * The dotted segments of a panel path whose real keys are not known, for display only: a whole key holding a dot is
+     * split, which can only redact more, never less (no secret-shaped word contains a dot).
+     */
+    private static List<String> dottedKeys(String path) { return Arrays.asList(path.split("\\.", -1)); }
+
+    /** Every reading of an ambiguous panel path, as the real keys of {@code owner}'s map displayed by {@link #displayKeys}. */
+    private List<List<String>> describeReadings(Field owner, List<List<String>> readings) {
+        List<List<String>> shown = new ArrayList<>(readings.size());
+        for (List<String> reading : readings) { shown.add(displayKeys(secretSetting(owner), reading)); }
+        return shown;
+    }
+
+    /**
+     * How a refusal names the path of a conversion failure of {@code field}: through {@link #describeKey} with the keys
+     * below the setting's declared keys; a path that does not start with them is displayed whole by the same rule.
+     */
+    private String describeFailure(Field field, List<String> path) {
+        List<String> declared = keys(field);
+        if (path.size() >= declared.size() && path.subList(0, declared.size()).equals(declared)) {
+            return describeKey(field, path.subList(declared.size(), path.size()));
+        }
+        return "'" + String.join(".", displayKeys(secretSetting(field), path)) + "'";
     }
 
     /** Whether the map holding the last key of {@code path} exists in {@code tree} (the module's value in memory). */
