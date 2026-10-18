@@ -647,8 +647,14 @@ all changed files through the write gate, and only then replaces them. Each file
 exactly the bytes it was staged against, checked again immediately before its move: a file an operator saved in between
 refuses the whole batch with `ConfigWriteRefusedException` naming that file, the operator's save is kept, and the files
 already replaced are restored to exactly the bytes they were verified against. Entity baselines and raw acknowledgments advance
-after every commit succeeds. An in-process staging/replacement refusal restores attempted targets
-and the complete prior entity state, removes staged temporaries, and rethrows the original error.
+after every commit succeeds. An in-process staging/replacement failure restores the complete prior entity state, removes
+staged temporaries, and rethrows the original error; on disk, the rollback acts only on bytes the batch itself still owns
+([#673](https://github.com/UltiKits/UltiTools-Reborn/issues/673)). A file the batch did not replace - never reached, or its
+replacement failed with an ordinary error, which leaves it holding its previous bytes - is never written or deleted by the
+rollback, so an operator save made while the batch was failing is kept. A file the batch replaced is put back only while
+it still holds exactly the batch's bytes; one the operator saved after the replacement is kept, and one WARNING names it.
+A file whose own put-back failed is left as the SEVERE describes, with its framework backup: the rollback does not write
+it again, and its configuration refuses every write until the operator compares the two and reloads.
 Recovery errors are attached as suppressed exceptions; persistently unavailable storage can prevent
 restoration and is not falsely reported as a successful rollback. Semantic no-ops write nothing.
 This is not a crash-safe multi-file transaction: a JVM crash between moves remains deferred to #545.
@@ -815,7 +821,7 @@ separate crash-safe multi-file transaction limit.
 - 6.3.0 新增 `saveOperatorMapEntry(EntryPresence, String, String...)`（增量 API，#623）：映射条目的写入可附带存在性条件，`MUST_BE_ABSENT` 用于新建条目的命令（如 `/autoreply add`），`MUST_BE_PRESENT` 用于修改已有条目的命令（如 `/autoreply setkeyword`），模块不必再用自己的解析器另读一次文件。条件在写入闸门据以校验的同一次读取上判断，闸门在替换文件前还会再核对一次这些字节：服主自加载以来手动添加或删除的条目都能看到，此后保存的改动则让闸门以“文件已被改动”拒绝写入。“存在”指该条目的完整键路径在文件中存在（框架读取该设置的位置：嵌套键或扁平的带点键，#612，再接映射键，每个都是完整键）；值为 `null` 的条目算存在；上级键缺失、为 `null`、为空映射 `{}` 或不是映射时算不存在，缺失、空白或只有注释的文件不含任何条目。条件不成立时不写入（字节和修改时间不变），框架只记 FINE 级日志，并抛出新的 `com.ultikits.ultitools.config.ConfigEntryPresenceException`（`ConfigWriteRefusedException` 的子类）：`getRequired()` 给出不成立的条件，`getReason()` 给出条目的键路径，从不含值。条件为 `null` 时抛 `IllegalArgumentException`。两个重载都是 6.3.0 新增的。第一个参数直接写字面量 `null` 的调用（`saveOperatorMapEntry(null, "path", "key")`）因两个重载都匹配而无法编译；请把 `null` 强制转换为所需的类型（此时会抛 `IllegalArgumentException`）。
 - `getConfig()` 在 6.2.5 确实可用，不能冒称符合两个同版删除例外；维护者通过 6.3.0 一次性 carve-out 删除它。改用 `isPresentInFile` 查询上次成功加载时的存在性（路径按声明设置路径的方式读取（#612）：按点拆成嵌套键、作为一个扁平带点键或两者混合，文件以任一形式持有该键即算存在，因此含点的完整映射键也能查到），修改声明字段后 `save()`。两个官方调用方 UltiEssentials 与 UltiRemoteBag 已在其适配 6.3.0 的版本中改用 `isPresentInFile`；第三方用量未知。
 - 六个旧解析器相关声明在 6.3.0 首次带 `forRemoval`，公告 6.4.0 删除。显式非默认 parser 暂时保留冻结的旧行为；默认 parser 改走注册表。迁移示例见上方，转换器必须满足两条互逆等式，不能单向加值或悄悄丢字段。
-- 注册批次验证完成才开始独立写文件；面板批次先验证并经写入闸门暂存全部文件，在进程内失败时回滚，持久存储故障可能阻止恢复；每个文件替换前再核对一次字节，期间被服主保存的文件整批拒绝（`ConfigWriteRefusedException` 注明文件）、服主的保存保留，已替换的文件恢复为核对时的原字节。面板唯一映射路径走整字段类型转换，歧义和未知变更拒绝整个请求；无关内存/磁盘兄弟项保留。
+- 注册批次验证完成才开始独立写文件；面板批次先验证并经写入闸门暂存全部文件，在进程内失败时回滚，持久存储故障可能阻止恢复；每个文件替换前再核对一次字节，期间被服主保存的文件整批拒绝（`ConfigWriteRefusedException` 注明文件）、服主的保存保留，已替换的文件恢复为核对时的原字节。回滚只处理本批次仍拥有的字节（#673）：本批次没有替换的文件（未执行到，或替换以普通错误失败、文件仍是原字节）回滚时绝不写入或删除，批次失败期间服主的保存保留；已替换的文件仅当仍是本批次写入的字节时才放回，之后被服主保存的保留并警告一次；放回本身失败的文件按 SEVERE 所述连同框架备份保留，回滚不再写它，该配置拒绝一切写入，直到服主比对两者并重载。面板唯一映射路径走整字段类型转换，歧义和未知变更拒绝整个请求；无关内存/磁盘兄弟项保留。
 - 重载三方合并，内存独有改动保留且仍脏，磁盘独有采用，冲突磁盘胜。重载重建模块语言之后、模块自己的重载钩子之前，框架经写入闸门、按重新读取的文件，只把它能认出的自己的注释行改成新语言，不写任何值、键或其它注释行（#594）。仅磁盘该映射未变时保证内存顺序保留，不写文件。初始化、重载和注册表在服务器主线程执行；异步面板回调整体排队，不能阻塞等待。此规则不改变任何公开签名；`reloadSelf()` 自 6.3.0 起为 `final` 是另一项改动所致。
 - 框架自己的 `plugins/UltiTools/config.yml` 启动时补入缺少的面板键（能力开关、`ultipanel.commands.blocklist`、`ultipanel.files.editable-roots`、操作日志轮转键）同样经过写入闸门，只插入（#605）。补键迁移是 6.3.0 新增的（6.2.x 只在 `config.yml` 不存在时写入它）；它在本周期较早的 6.3.0 快照中的第一个版本会整份重写文件：十六进制数变成十进制、锚点被展开、`o.O` 这样的含点键被拆成嵌套映射、显式 `null` 被替换。现在其余每个字节保持不变（已在每个已发布的 6.2.x `config.yml` 上实测）；闸门无法逐字节写回的文件（手工对齐、锚点）保持原样，警告一次列出这些键，由 jar 自带 `config.yml` 中的默认值（现在也列出命令黑名单和可编辑根目录）生效。若文件以扁平含点键（如 `ultipanel.capabilities.logs: false`）或含点的节键保存其中某个设置，而插入的嵌套节会在服务器读取时取代它，同样不写入：警告一次，指出文件和该设置（不含任何值），缺少的键使用 jar 默认值。较早版本实测：6.0.9 和 6.1.x 的 `config.yml` 同样只插入；6.0.9 之前各个 6.0.x 版本（6.0.0 至 6.0.8）的 `config.yml` 含 `trustIp: [ ]`（方括号内侧有空格），每次启动都被拒绝并警告一次、指出第 14 行，缺少的键使用 jar 默认值，不写入任何内容——只有从 6.0.8 或更早版本直接升级才会遇到；改成 `trustIp: []` 或手工补上这些键即可消除警告。
 - UltiTools 只在 `plugins/bStats/config.yml` 不存在、或已含 `serverUuid` 时启动 bStats（#606）。该文件由所有使用 bStats 的插件共用；此前无法解析的文件被当作空文件，bStats 的默认值会写在它上面。现在无法读取、无法解析或缺少 `serverUuid` 的文件逐字节保持不变，记一行日志说明，本次运行 UltiTools 不发送统计。在 Paper 上，服务器自带的统计代码会在任何插件加载之前读取该文件，并用新的默认值重写无法解析或缺少 `serverUuid` 的文件（在 Paper 1.21.11 上实测），因此这类文件是被服务器本身替换的，而不是被 UltiTools 替换的，UltiTools 只会看到有效的文件。
