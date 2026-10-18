@@ -24,6 +24,7 @@ import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Server;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -32,6 +33,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
+import com.ultikits.ultitools.abstracts.data.DataEntityTest;
 import com.ultikits.ultitools.annotations.Propagation;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.annotations.Transactional;
@@ -477,6 +479,245 @@ class JsonTransactionTest {
         void updateAllEmpty() throws Exception {
             operator.updateAll(new ArrayList<>());
             assertThat(operator.getAll()).hasSize(3);
+        }
+    }
+
+    // ===== Batch atomicity on the staging engine =====
+
+    /**
+     * An entity whose onCreate/onUpdate throws a chosen failure for one chosen id, so a batch can
+     * fail part-way.
+     */
+    public static class FailingHookData extends TestData {
+        static volatile String failOnCreateId;
+        static volatile String failOnUpdateId;
+        static volatile Throwable failure;
+
+        public FailingHookData() {}
+
+        public FailingHookData(String id, String name, int value) {
+            super(id, name, value);
+        }
+
+        static void reset() {
+            failOnCreateId = null;
+            failOnUpdateId = null;
+            failure = null;
+        }
+
+        private void failIf(String failingId) {
+            if (failingId != null && failingId.equals(getId())) {
+                if (failure instanceof Error) {
+                    throw (Error) failure;
+                }
+                throw (RuntimeException) failure;
+            }
+        }
+
+        @Override
+        public void onCreate() {
+            failIf(failOnCreateId);
+        }
+
+        @Override
+        public void onUpdate() {
+            failIf(failOnUpdateId);
+        }
+    }
+
+    @Nested
+    @DisplayName("insertAll()/updateAll() are atomic engine transactions")
+    class BatchAtomicityTests {
+
+        private SimpleJsonDataOperator<FailingHookData> batchOperator;
+
+        @BeforeEach
+        void setUpBatchOperator() throws Exception {
+            File dir = Files.createDirectory(tempDir.resolve("batch-" + System.nanoTime())).toFile();
+            batchOperator = new SimpleJsonDataOperator<>(dir.getAbsolutePath(), FailingHookData.class);
+            FailingHookData.reset();
+        }
+
+        @AfterEach
+        void resetFailure() {
+            FailingHookData.reset();
+        }
+
+        private List<FailingHookData> three(String prefix) {
+            return Arrays.asList(new FailingHookData(prefix + "1", "one", 1),
+                    new FailingHookData(prefix + "2", "two", 2),
+                    new FailingHookData(prefix + "3", "three", 3));
+        }
+
+        @Test
+        @DisplayName("insertAll whose third onCreate throws a RuntimeException stores none and rethrows that instance")
+        void insertAllRuntimeExceptionStoresNone() {
+            IllegalStateException boom = new IllegalStateException("third insert fails");
+            FailingHookData.failOnCreateId = "i3";
+            FailingHookData.failure = boom;
+
+            assertThatThrownBy(() -> batchOperator.insertAll(three("i"))).isSameAs(boom);
+
+            assertThat(batchOperator.getAll()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("insertAll whose third onCreate throws an Error stores none and rethrows that instance")
+        void insertAllErrorStoresNone() {
+            AssertionError boom = new AssertionError("third insert fails with an Error");
+            FailingHookData.failOnCreateId = "e3";
+            FailingHookData.failure = boom;
+
+            assertThatThrownBy(() -> batchOperator.insertAll(three("e"))).isSameAs(boom);
+
+            assertThat(batchOperator.getAll()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("updateAll whose third onUpdate throws a RuntimeException changes none and rethrows that instance")
+        void updateAllRuntimeExceptionChangesNone() {
+            batchOperator.insertAll(three("u"));
+            List<FailingHookData> updates = Arrays.asList(new FailingHookData("u1", "changed", 10),
+                    new FailingHookData("u2", "changed", 20), new FailingHookData("u3", "changed", 30));
+            IllegalStateException boom = new IllegalStateException("third update fails");
+            FailingHookData.failOnUpdateId = "u3";
+            FailingHookData.failure = boom;
+
+            assertThatThrownBy(() -> batchOperator.updateAll(updates)).isSameAs(boom);
+
+            assertThat(batchOperator.getById("u1").getName()).isEqualTo("one");
+            assertThat(batchOperator.getById("u2").getName()).isEqualTo("two");
+            assertThat(batchOperator.getById("u3").getName()).isEqualTo("three");
+        }
+
+        @Test
+        @DisplayName("updateAll whose third onUpdate throws an Error changes none and rethrows that instance")
+        void updateAllErrorChangesNone() {
+            batchOperator.insertAll(three("v"));
+            List<FailingHookData> updates = Arrays.asList(new FailingHookData("v1", "changed", 10),
+                    new FailingHookData("v2", "changed", 20), new FailingHookData("v3", "changed", 30));
+            AssertionError boom = new AssertionError("third update fails with an Error");
+            FailingHookData.failOnUpdateId = "v3";
+            FailingHookData.failure = boom;
+
+            assertThatThrownBy(() -> batchOperator.updateAll(updates)).isSameAs(boom);
+
+            assertThat(batchOperator.getById("v1").getName()).isEqualTo("one");
+            assertThat(batchOperator.getById("v3").getName()).isEqualTo("three");
+        }
+
+        @Test
+        @DisplayName("A batch inside an active transaction joins it, and the outer rollback undoes the batch")
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
+        void batchJoinsTheActiveTransaction() throws Exception {
+            batchOperator.insert(new FailingHookData("kept", "kept", 0));
+
+            assertThatThrownBy(() -> batchOperator.transaction(() -> {
+                batchOperator.insertAll(three("j"));
+                batchOperator.updateAll(Arrays.asList(new FailingHookData("kept", "changed", 1)));
+                assertThat(batchOperator.transactionManager().getTransactionDepth())
+                        .as("the batches joined the outer transaction").isEqualTo(1);
+                assertThat(batchOperator.getAll()).as("the batches' writes, seen inside").hasSize(4);
+                throw new RuntimeException("outer rollback");
+            })).hasMessage("outer rollback");
+
+            assertThat(batchOperator.getAll()).hasSize(1);
+            assertThat(batchOperator.getById("kept").getName()).isEqualTo("kept");
+        }
+    }
+
+    // ===== Hook timing on the staging engine =====
+
+    @Nested
+    @DisplayName("Entity hooks fire at the call inside a transaction, never again at commit")
+    class HookTimingTests {
+
+        private SimpleJsonDataOperator<DataEntityTest.CountingAuditableEntity> hookOperator;
+
+        @BeforeEach
+        void setUpHookOperator() throws Exception {
+            File dir = Files.createDirectory(tempDir.resolve("hooks-" + System.nanoTime())).toFile();
+            hookOperator = new SimpleJsonDataOperator<>(dir.getAbsolutePath(),
+                    DataEntityTest.CountingAuditableEntity.class);
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+        }
+
+        @AfterEach
+        void resetCounters() {
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+        }
+
+        private DataEntityTest.CountingAuditableEntity entity(String label) {
+            DataEntityTest.CountingAuditableEntity entity = new DataEntityTest.CountingAuditableEntity();
+            entity.setLabel(label);
+            return entity;
+        }
+
+        private void assertCounts(int create, int update, int delete) {
+            assertThat(DataEntityTest.CountingAuditableEntity.onCreateCount()).as("onCreate").isEqualTo(create);
+            assertThat(DataEntityTest.CountingAuditableEntity.onUpdateCount()).as("onUpdate").isEqualTo(update);
+            assertThat(DataEntityTest.CountingAuditableEntity.onDeleteCount()).as("onDelete").isEqualTo(delete);
+        }
+
+        @Test
+        @DisplayName("onCreate, onUpdate and onDelete fire once each at the call; commit fires none of them again")
+        void hooksFireAtTheCallAndNotAtCommit() throws Exception {
+            DataEntityTest.CountingAuditableEntity kept = entity("kept");
+            DataEntityTest.CountingAuditableEntity removed = entity("removed");
+
+            hookOperator.transaction(() -> {
+                hookOperator.insert(kept);
+                hookOperator.insert(removed);
+                assertCounts(2, 0, 0);
+                kept.setLabel("kept-updated");
+                hookOperator.update(kept);
+                assertCounts(2, 1, 0);
+                hookOperator.delById(removed.getId());
+                assertCounts(2, 1, 1);
+                return null;
+            });
+
+            assertCounts(2, 1, 1);
+            assertThat(hookOperator.getById(kept.getId()).getLabel()).isEqualTo("kept-updated");
+            assertThat(hookOperator.getById(removed.getId())).isNull();
+        }
+
+        @Test
+        @DisplayName("After a rollback the counters show the call-time firing only")
+        @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
+        void rollbackShowsCallTimeFiringOnly() {
+            DataEntityTest.CountingAuditableEntity committed = entity("committed");
+            hookOperator.insert(committed);
+            DataEntityTest.CountingAuditableEntity.resetCounters();
+
+            assertThatThrownBy(() -> hookOperator.transaction(() -> {
+                hookOperator.insert(entity("staged"));
+                committed.setLabel("staged-update");
+                hookOperator.update(committed);
+                hookOperator.delById(committed.getId());
+                throw new RuntimeException("roll back");
+            })).hasMessage("roll back");
+
+            assertCounts(1, 1, 1);
+            assertThat(hookOperator.getById(committed.getId()).getLabel()).isEqualTo("committed");
+        }
+
+        @Test
+        @DisplayName("onLoad fires on staged entities a read inside the transaction returns")
+        void onLoadFiresOnStagedEntities() throws Exception {
+            hookOperator.transaction(() -> {
+                DataEntityTest.CountingAuditableEntity first = entity("first");
+                hookOperator.insert(first);
+                hookOperator.insert(entity("second"));
+                assertThat(DataEntityTest.CountingAuditableEntity.onLoadCount()).isZero();
+
+                assertThat(hookOperator.getById(first.getId())).isNotNull();
+                assertThat(DataEntityTest.CountingAuditableEntity.onLoadCount()).isEqualTo(1);
+
+                assertThat(hookOperator.getAll()).hasSize(2);
+                assertThat(DataEntityTest.CountingAuditableEntity.onLoadCount()).isEqualTo(3);
+                return null;
+            });
         }
     }
 
