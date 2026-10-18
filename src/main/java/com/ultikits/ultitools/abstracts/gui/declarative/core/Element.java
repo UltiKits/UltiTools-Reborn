@@ -421,6 +421,7 @@ public abstract class Element {
      *                      in their current order; rewritten in place on every exit
      * @param newWidgets    the new child Widgets, in their desired order
      */
+    @SuppressWarnings("PMD.CompareObjectsWithEquals") // The very in-flight old child, not an equal one.
     protected void updateChildren(@NotNull List<Element> ownedChildren, @NotNull List<Widget> newWidgets) {
         List<Element> previous = new ArrayList<>(ownedChildren);
         List<Element> produced = new ArrayList<>(newWidgets.size());
@@ -476,6 +477,7 @@ public abstract class Element {
         }
     }
 
+    @SuppressWarnings("PMD.CompareObjectsWithEquals") // Ownership is by identity: the very element, not an equal one.
     private static boolean containsIdentity(@NotNull List<Element> elements, @NotNull Element target) {
         for (Element element : elements) {
             if (element == target) {

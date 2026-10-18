@@ -488,6 +488,7 @@ class ReconciliationFailureOwnershipTest {
         return element;
     }
 
+    @SuppressWarnings("PMD.CompareObjectsWithEquals") // Ownership is by identity: the very element, not an equal one.
     private static boolean containsIdentity(List<Element> elements, Element target) {
         for (Element element : elements) {
             if (element == target) {
@@ -501,6 +502,7 @@ class ReconciliationFailureOwnershipTest {
      * Describes each element as {@code origin:id:mounted}, where origin is {@code oldN} for the
      * element at index N of {@code before} (identity) and {@code new} otherwise.
      */
+    @SuppressWarnings("PMD.CompareObjectsWithEquals") // Origin is by identity: the very old element, not an equal one.
     private static String describe(List<Element> elements, List<Element> before) {
         List<String> parts = new ArrayList<>();
         for (Element element : elements) {

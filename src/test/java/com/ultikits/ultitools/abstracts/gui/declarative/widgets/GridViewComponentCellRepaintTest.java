@@ -317,7 +317,7 @@ public class GridViewComponentCellRepaintTest {
         List<String> overrideWarnings() {
             List<String> out = new ArrayList<>();
             for (LogRecord record : records) {
-                if (record.getLevel() != Level.WARNING) {
+                if (!Level.WARNING.equals(record.getLevel())) {
                     continue;
                 }
                 Matcher matcher = OVERRIDE_WARNING.matcher(record.getMessage());

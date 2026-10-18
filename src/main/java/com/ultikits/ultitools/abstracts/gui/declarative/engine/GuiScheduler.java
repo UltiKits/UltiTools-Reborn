@@ -73,7 +73,7 @@ public class GuiScheduler {
      * that drain is always handed to the Bukkit scheduler rather than run inline, so a slow frame
      * (one that outlasts the frame interval) cannot start a nested frame from inside itself.
      */
-    private volatile boolean frameRunning = false;
+    private volatile boolean frameRunning;
 
     /**
      * Creates a GuiScheduler using the default plugin instance.
