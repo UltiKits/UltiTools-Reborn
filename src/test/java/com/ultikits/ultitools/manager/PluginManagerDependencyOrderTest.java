@@ -213,6 +213,59 @@ class PluginManagerDependencyOrderTest {
     }
 
     @Test
+    @DisplayName("a pure missing dependency logs exactly the three baseline lines and no Not "
+            + "loaded line")
+    void pureMissingDependencyConsoleOutputIsUnchanged() throws Exception {
+        List<Class<? extends UltiToolsPlugin>> input = new ArrayList<>();
+        input.add(OrderModuleWithMissingDep.class);
+        input.add(OrderPluginA.class);
+
+        List<Class<? extends UltiToolsPlugin>> result = invokeSort(input);
+
+        assertThat(result).containsExactly(OrderPluginA.class);
+        assertThat(severeMessagesInOrder()).containsExactly(
+            "[UltiTools-API] A required plugin dependency is missing.",
+            "[UltiTools-API] Plugin 'OrderModuleWithMissingDep' requires dependency "
+                + "'OrderMissingModule' which is not available",
+            "[UltiTools-API] The declaring module and its dependents are excluded from this "
+                + "load; every other module still loads. Set "
+                + "-Dultitools.useLegacyPluginLoading=true to restore the old unsorted load "
+                + "order instead (not recommended: modules may fail to initialize in an "
+                + "unpredictable order).");
+    }
+
+    @Test
+    @DisplayName("a missing dependency plus an independent cycle logs the missing dependency, "
+            + "each loop and every module not loaded")
+    void missingDependencyAndIndependentCycleAreBothLogged() throws Exception {
+        List<Class<? extends UltiToolsPlugin>> input = new ArrayList<>();
+        input.add(OrderModuleWithMissingDep.class);
+        input.add(OrderCircularA.class);
+        input.add(OrderCircularB.class);
+        input.add(OrderPluginA.class);
+
+        List<Class<? extends UltiToolsPlugin>> result = invokeSort(input);
+
+        assertThat(result).containsExactly(OrderPluginA.class);
+        assertThat(severeMessagesInOrder()).containsExactly(
+            "[UltiTools-API] A required plugin dependency is missing.",
+            "[UltiTools-API] Plugin 'OrderModuleWithMissingDep' requires dependency "
+                + "'OrderMissingModule' which is not available. Circular dependency detected "
+                + "among plugins: [OrderCircularA, OrderCircularB]",
+            "[UltiTools-API] Circular dependency detected among plugins.",
+            "[UltiTools-API]   Loop: OrderCircularA -> OrderCircularB -> OrderCircularA",
+            "[UltiTools-API]   Please have the author of 'OrderCircularA' fix the circular "
+                + "dependency.",
+            "[UltiTools-API] The declaring module, its dependents, the cycle members and every "
+                + "module ordered after them are excluded from this load; every other module "
+                + "still loads. Set -Dultitools.useLegacyPluginLoading=true to restore the old "
+                + "unsorted load order instead (not recommended: modules may fail to initialize "
+                + "in an unpredictable order).",
+            "[UltiTools-API] Not loaded: OrderCircularA, OrderCircularB, "
+                + "OrderModuleWithMissingDep.");
+    }
+
+    @Test
     @DisplayName("legacy 属性开启时返回原始列表且不咨询解析器")
     void legacyPropertyEnabledReturnsInputUnchangedWithoutConsultingResolver() throws Exception {
         System.setProperty("ultitools.useLegacyPluginLoading", "true");

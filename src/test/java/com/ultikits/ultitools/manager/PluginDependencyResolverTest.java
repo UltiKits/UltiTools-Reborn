@@ -580,6 +580,43 @@ class PluginDependencyResolverTest {
         }
 
         @Test
+        @DisplayName("a missing dependency plus an independent cycle form a complete partition "
+                + "and the message names both")
+        void missingDependencyAndIndependentCycleFormACompletePartition() {
+            List<Class<? extends UltiToolsPlugin>> plugins = Arrays.asList(
+                PluginWithMissingDep.class, CircularA.class, CircularB.class,
+                PluginDependsOnCircularA.class, PluginC.class
+            );
+
+            MissingDependencyException ex = assertThrows(MissingDependencyException.class,
+                () -> resolver.resolve(plugins));
+
+            Set<String> prefixNames = new HashSet<>();
+            for (Class<? extends UltiToolsPlugin> pluginClass : ex.getSortedPrefix()) {
+                prefixNames.add(pluginClass.getSimpleName());
+            }
+            Set<String> refused = ex.getRefusedPlugins();
+            Set<String> overlap = new HashSet<>(prefixNames);
+            overlap.retainAll(refused);
+            Set<String> union = new HashSet<>(prefixNames);
+            union.addAll(refused);
+
+            assertTrue(overlap.isEmpty(), "prefix and refused set must be disjoint: " + overlap);
+            assertEquals(
+                new HashSet<>(Arrays.asList("PluginWithMissingDep", "CircularA", "CircularB",
+                    "PluginDependsOnCircularA", "PluginC")),
+                union,
+                "every input module must be either in the sorted prefix or refused");
+            assertEquals(
+                new HashSet<>(Arrays.asList("PluginWithMissingDep", "CircularA", "CircularB",
+                    "PluginDependsOnCircularA")),
+                refused);
+            assertTrue(ex.getMessage().contains("MissingPlugin"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("CircularA"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("CircularB"), ex.getMessage());
+        }
+
+        @Test
         @DisplayName("no cycle and no missing dependency: neither exception is constructed")
         void noFailureMeansUnchangedBehaviour() throws Exception {
             List<Class<? extends UltiToolsPlugin>> plugins = Arrays.asList(
