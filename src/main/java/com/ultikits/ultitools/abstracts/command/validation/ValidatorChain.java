@@ -200,6 +200,13 @@ public final class ValidatorChain {
      * Validates the context through all validators, collecting all failures.
      * Does not stop at the first failure.
      *
+     * <p>A returned result, valid or not, calls no refusal hook: the caller owns refusal for it.
+     * A runtime exception thrown from a validator's {@link CommandValidator#shouldValidate} or
+     * {@link CommandValidator#validate} is handled as in {@link #validate}: every validator that
+     * already passed receives {@link CommandValidator#onRefused} once, in chain order, and then the
+     * original exception propagates unchanged, with any exception a refusal hook threw attached to
+     * it as suppressed (case 49).
+     *
      * @param context the command context to validate
      * @return the result containing all validation results
      */
@@ -211,11 +218,18 @@ public final class ValidatorChain {
         List<CommandValidator> passedValidators = new ArrayList<>();
 
         for (CommandValidator validator : validators) {
-            if (!isApplicable(validator, context)) {
-                continue;
+            CommandValidator.ValidationResult result;
+            try {
+                if (!isApplicable(validator, context)) {
+                    continue;
+                }
+                result = validator.validate(context);
+            } catch (RuntimeException e) {
+                // Same boundary as validate(): a validator that took something (a lock) must hear
+                // of the refusal before the exception leaves the chain (case 49).
+                notifyRefused(context, passedValidators, e);
+                throw e;
             }
-
-            CommandValidator.ValidationResult result = validator.validate(context);
             results.add(result);
 
             if (!result.isValid()) {
