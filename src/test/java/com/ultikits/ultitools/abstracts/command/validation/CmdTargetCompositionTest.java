@@ -33,6 +33,7 @@ class CmdTargetCompositionTest {
     private static class NoClassLevelAnnotationFixture {
         @CmdTarget(CmdTargetType.PLAYER)
         public void restrictedToPlayer() {
+            // fixture mapping: body intentionally empty
         }
     }
 
@@ -40,6 +41,7 @@ class CmdTargetCompositionTest {
     private static class WideningFixture {
         @CmdTarget(CmdTargetType.BOTH)
         public void widensToBoth() {
+            // fixture mapping: body intentionally empty
         }
     }
 
@@ -47,6 +49,7 @@ class CmdTargetCompositionTest {
     private static class LateralFixture {
         @CmdTarget(CmdTargetType.CONSOLE)
         public void switchesToConsole() {
+            // fixture mapping: body intentionally empty
         }
     }
 
@@ -54,10 +57,12 @@ class CmdTargetCompositionTest {
     private static class TwoOffendingMethodsFixture {
         @CmdTarget(CmdTargetType.BOTH)
         public void widensToBoth() {
+            // fixture mapping: body intentionally empty
         }
 
         @CmdTarget(CmdTargetType.CONSOLE)
         public void switchesToConsole() {
+            // fixture mapping: body intentionally empty
         }
     }
 
@@ -65,6 +70,7 @@ class CmdTargetCompositionTest {
     private static class LegalFixture {
         @CmdTarget(CmdTargetType.CONSOLE)
         public void identical() {
+            // fixture mapping: body intentionally empty
         }
     }
 
@@ -78,15 +84,18 @@ class CmdTargetCompositionTest {
         @CmdMapping(format = "all")
         @CmdTarget(CmdTargetType.BOTH)
         public void all() {
+            // fixture mapping: body intentionally empty
         }
 
         @CmdMapping(format = "players")
         @CmdTarget(CmdTargetType.PLAYER)
         public void playersOnly() {
+            // fixture mapping: body intentionally empty
         }
 
         @CmdTarget(CmdTargetType.BOTH)
         public void helperWithTarget() {
+            // fixture mapping: body intentionally empty
         }
     }
 
@@ -105,10 +114,12 @@ class CmdTargetCompositionTest {
         @Override
         @CmdMapping(format = "all")
         public void all() {
+            // fixture mapping: body intentionally empty
         }
 
         @Override
         public void playersOnly() {
+            // fixture mapping: body intentionally empty
         }
     }
 
@@ -117,10 +128,12 @@ class CmdTargetCompositionTest {
     private static class ShadowingConsoleInheritor extends BothMappingBase {
         @CmdMapping(format = "all")
         public void own() {
+            // fixture mapping: body intentionally empty
         }
 
         @CmdMapping(format = "players")
         public void own2() {
+            // fixture mapping: body intentionally empty
         }
     }
 
@@ -188,6 +201,7 @@ class CmdTargetCompositionTest {
 
         private class SilentMethodFixture {
             public void silent() {
+                // fixture mapping: body intentionally empty
             }
         }
     }

@@ -53,14 +53,20 @@ class LiteralCompletionPrefixTest {
     public static class BranchExecutor extends BaseCommandExecutor {
 
         @CmdMapping(format = "alpha enable")
-        public void alphaEnable(@CmdSender CommandSender sender) { }
+        public void alphaEnable(@CmdSender CommandSender sender) {
+            // fixture mapping: body intentionally empty
+        }
 
         @ExceptionCatch
         @CmdMapping(format = "beta disable")
-        public void betaDisable(@CmdSender CommandSender sender) { }
+        public void betaDisable(@CmdSender CommandSender sender) {
+            // fixture mapping: body intentionally empty
+        }
 
         @Override
-        protected void handleHelp(CommandSender sender) { }
+        protected void handleHelp(CommandSender sender) {
+            // fixture help: body intentionally empty
+        }
     }
 
     /**
@@ -70,16 +76,24 @@ class LiteralCompletionPrefixTest {
     public static class DuplicateExecutor extends BaseCommandExecutor {
 
         @CmdMapping(format = "alpha enable")
-        public void alphaEnable(@CmdSender CommandSender sender) { }
+        public void alphaEnable(@CmdSender CommandSender sender) {
+            // fixture mapping: body intentionally empty
+        }
 
         @CmdMapping(format = "alpha enable <target>")
-        public void alphaEnableTarget(@CmdSender CommandSender sender, @CmdParam("target") String target) { }
+        public void alphaEnableTarget(@CmdSender CommandSender sender, @CmdParam("target") String target) {
+            // fixture mapping: body intentionally empty
+        }
 
         @CmdMapping(format = "alpha disable")
-        public void alphaDisable(@CmdSender CommandSender sender) { }
+        public void alphaDisable(@CmdSender CommandSender sender) {
+            // fixture mapping: body intentionally empty
+        }
 
         @Override
-        protected void handleHelp(CommandSender sender) { }
+        protected void handleHelp(CommandSender sender) {
+            // fixture help: body intentionally empty
+        }
     }
 
     /**
@@ -88,16 +102,24 @@ class LiteralCompletionPrefixTest {
     public static class VisibilityExecutor extends BaseCommandExecutor {
 
         @CmdMapping(format = "alpha enable")
-        public void alphaEnable(@CmdSender CommandSender sender) { }
+        public void alphaEnable(@CmdSender CommandSender sender) {
+            // fixture mapping: body intentionally empty
+        }
 
         @CmdMapping(format = "alpha secret", permission = "fixture.secret")
-        public void alphaSecret(@CmdSender CommandSender sender) { }
+        public void alphaSecret(@CmdSender CommandSender sender) {
+            // fixture mapping: body intentionally empty
+        }
 
         @CmdMapping(format = "alpha admin", requireOp = true)
-        public void alphaAdmin(@CmdSender CommandSender sender) { }
+        public void alphaAdmin(@CmdSender CommandSender sender) {
+            // fixture mapping: body intentionally empty
+        }
 
         @Override
-        protected void handleHelp(CommandSender sender) { }
+        protected void handleHelp(CommandSender sender) {
+            // fixture help: body intentionally empty
+        }
     }
 
     @BeforeEach
