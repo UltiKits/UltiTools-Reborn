@@ -18,8 +18,10 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
@@ -656,6 +658,158 @@ class PluginDependencyResolverTest {
 
             assertEquals(3, result.size());
             assertTrue(result.containsAll(plugins));
+        }
+    }
+
+    /**
+     * Exhaustive property over every non-empty subset of a fixed pool of annotation-only
+     * fixtures (#676 cases 31 and 32). The expected refused set comes from an oracle written
+     * from the contract, not from resolver internals: refusal for a missing hard dependency
+     * follows declared {@code depends} edges only, then every survivor a plain topological sort
+     * over all declared ordering edges cannot place is refused as well.
+     */
+    @Nested
+    @DisplayName("Mixed-Graph Partition Property Tests")
+    class MixedGraphPartitionPropertyTests {
+
+        private final List<Class<? extends UltiToolsPlugin>> pool = Arrays.asList(
+            PluginA.class, PluginB.class, PluginC.class, PluginDependsOnA.class,
+            PluginSoftDependsOnA.class, PluginLoadBeforeC.class, PluginWithMissingDep.class,
+            PluginDependsOnMissingDepPlugin.class, PluginWithMissingDepLoadBeforeB.class,
+            PluginSoftDependsOnMissingDepPlugin.class, CircularA.class, CircularB.class
+        );
+
+        @Test
+        @DisplayName("every subset of the fixture pool yields a complete, ordered partition")
+        void everySubsetOfTheFixturePoolYieldsACompleteOrderedPartition() throws Exception {
+            int subsets = 0;
+            for (int mask = 1; mask < (1 << pool.size()); mask++) {
+                List<Class<? extends UltiToolsPlugin>> subset = new ArrayList<>();
+                for (int i = 0; i < pool.size(); i++) {
+                    if ((mask & (1 << i)) != 0) {
+                        subset.add(pool.get(i));
+                    }
+                }
+                checkSubset(subset);
+                subsets++;
+            }
+            assertEquals(4095, subsets);
+        }
+
+        private void checkSubset(List<Class<? extends UltiToolsPlugin>> subset) throws Exception {
+            Set<String> names = new HashSet<>();
+            for (Class<? extends UltiToolsPlugin> pluginClass : subset) {
+                names.add(pluginClass.getSimpleName());
+            }
+
+            // Oracle edges from the annotations: hard (dependency -> dependent, present targets
+            // only) and ordering (first must load before second, every present edge kind).
+            Map<String, Set<String>> hardEdges = new HashMap<>();
+            List<String[]> orderEdges = new ArrayList<>();
+            Set<String> missingDeclarers = new HashSet<>();
+            for (Class<? extends UltiToolsPlugin> pluginClass : subset) {
+                String name = pluginClass.getSimpleName();
+                PluginDependency dep = pluginClass.getAnnotation(PluginDependency.class);
+                if (dep == null) {
+                    continue;
+                }
+                for (String target : dep.depends()) {
+                    if (names.contains(target)) {
+                        hardEdges.computeIfAbsent(target, k -> new HashSet<>()).add(name);
+                        orderEdges.add(new String[]{target, name});
+                    } else {
+                        missingDeclarers.add(name);
+                    }
+                }
+                for (String target : dep.softDepends()) {
+                    if (names.contains(target)) {
+                        orderEdges.add(new String[]{target, name});
+                    }
+                }
+                for (String target : dep.loadBefore()) {
+                    if (names.contains(target)) {
+                        orderEdges.add(new String[]{name, target});
+                    }
+                }
+            }
+
+            Set<String> expectedRefused = new HashSet<>(missingDeclarers);
+            List<String> work = new ArrayList<>(missingDeclarers);
+            while (!work.isEmpty()) {
+                String current = work.remove(work.size() - 1);
+                for (String dependent : hardEdges.getOrDefault(current, Collections.emptySet())) {
+                    if (expectedRefused.add(dependent)) {
+                        work.add(dependent);
+                    }
+                }
+            }
+            Set<String> survivors = new HashSet<>(names);
+            survivors.removeAll(expectedRefused);
+            Set<String> placed = new HashSet<>();
+            boolean progress = true;
+            while (progress) {
+                progress = false;
+                for (String candidate : survivors) {
+                    if (placed.contains(candidate)) {
+                        continue;
+                    }
+                    boolean ready = true;
+                    for (String[] edge : orderEdges) {
+                        if (edge[1].equals(candidate) && survivors.contains(edge[0])
+                                && !placed.contains(edge[0])) {
+                            ready = false;
+                            break;
+                        }
+                    }
+                    if (ready) {
+                        placed.add(candidate);
+                        progress = true;
+                    }
+                }
+            }
+            Set<String> unplaced = new HashSet<>(survivors);
+            unplaced.removeAll(placed);
+            expectedRefused.addAll(unplaced);
+
+            List<Class<? extends UltiToolsPlugin>> prefix;
+            Set<String> refused;
+            try {
+                prefix = resolver.resolve(subset);
+                refused = Collections.emptySet();
+            } catch (MissingDependencyException ex) {
+                assertFalse(missingDeclarers.isEmpty(), "missing thrown without one: " + names);
+                assertEquals(unplaced.isEmpty(), ex.getCyclePaths().isEmpty(),
+                    "cycle paths must be present exactly when a cycle blocks survivors: " + names);
+                prefix = ex.getSortedPrefix();
+                refused = ex.getRefusedPlugins();
+            } catch (CircularDependencyException ex) {
+                assertTrue(missingDeclarers.isEmpty(), "cycle thrown over a missing one: " + names);
+                prefix = ex.getSortedPrefix();
+                refused = ex.getRefusedPlugins();
+            }
+
+            List<String> prefixNames = new ArrayList<>();
+            for (Class<? extends UltiToolsPlugin> pluginClass : prefix) {
+                prefixNames.add(pluginClass.getSimpleName());
+            }
+            Set<String> overlap = new HashSet<>(prefixNames);
+            overlap.retainAll(refused);
+            Set<String> union = new HashSet<>(prefixNames);
+            union.addAll(refused);
+
+            assertEquals(prefixNames.size(), new HashSet<>(prefixNames).size(),
+                "prefix lists a module twice: " + prefixNames);
+            assertTrue(overlap.isEmpty(), "prefix and refused overlap " + overlap + " for " + names);
+            assertEquals(names, union, "partition does not cover the subset " + names);
+            assertEquals(expectedRefused, new HashSet<>(refused), "refused set for " + names);
+            for (String[] edge : orderEdges) {
+                int before = prefixNames.indexOf(edge[0]);
+                int after = prefixNames.indexOf(edge[1]);
+                if (before >= 0 && after >= 0) {
+                    assertTrue(before < after, edge[0] + " must load before " + edge[1]
+                        + " in " + prefixNames);
+                }
+            }
         }
     }
 
