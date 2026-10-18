@@ -480,17 +480,16 @@ public class SimpleContainer {
             return (T) bean;
         }
 
-        // Collect every assignable candidate in this container and order by @Service(priority)
-        // descending, reusing getOrderedBeansOfType -- which had zero production callers before
-        // this change (D-11) -- instead of writing a third ordering implementation. It already
-        // dedups a definition-backed singleton that has already been instantiated, it
-        // identity-dedups a singleton registered under two names (e.g. DependenceManagers'
-        // TeleportService/NotificationService/EmailService, each aliased under a short name plus
-        // the interface FQN -- regression fixed after PR #352's real-machine UAT), and it reads
-        // priority off each candidate's actual resolved instance class, so a proxied bean's
-        // priority is read correctly: ProxyFactory copies the target's annotations onto the
-        // generated subclass, and getServicePriority relies on that.
-        List<T> candidates = getOrderedBeansOfType(type);
+        // Decide the winner on descriptors first, and construct only the winner (C58, P-09).
+        // Every assignable candidate in this container is described without being built: an
+        // existing singleton instance by its own class, and a definition whose name has no
+        // singleton instance yet by its definition's bean class. Building every candidate
+        // before choosing (the previous getOrderedBeansOfType call) constructed losers for
+        // nothing, and a losing candidate whose constructor needed the requested type re-entered
+        // its own creation until the stack overflowed. Spring does the same:
+        // DefaultListableBeanFactory.findAutowireCandidates records a not-yet-created candidate's
+        // type and instantiates only the one it selects.
+        List<ByTypeCandidate> candidates = describeCandidates(type);
 
         if (candidates.isEmpty()) {
             // Total miss in this container -- only now is the parent consulted, so a child that
@@ -504,19 +503,86 @@ public class SimpleContainer {
 
         if (candidates.size() > 1) {
             // Only the top two matter: a tie further down the list, among beans that already
-            // lose to the top candidate, is not ambiguous.
-            T first = candidates.get(0);
-            T second = candidates.get(1);
-            if (getServicePriority(first.getClass()) == getServicePriority(second.getClass())) {
-                throw ContainerException.ambiguousBeanType(type, first.getClass(), second.getClass());
+            // lose to the top candidate, is not ambiguous. Nothing has been constructed yet.
+            ByTypeCandidate first = candidates.get(0);
+            ByTypeCandidate second = candidates.get(1);
+            if (first.priority == second.priority) {
+                throw ContainerException.ambiguousBeanType(type, first.candidateClass, second.candidateClass);
             }
         }
 
         // Adjudicate before caching: this is reached only once exactly one winner is
         // determined -- either there was a single candidate, or priority broke the tie (D-12).
-        bean = candidates.get(0);
+        // A winning definition is created through getBean(String), so its thread-safe creation
+        // and its 07-23 fast path (a deterministically unresolvable bean rethrows its original
+        // error) apply unchanged; a losing one is never touched.
+        ByTypeCandidate winner = candidates.get(0);
+        bean = winner.instance != null ? winner.instance : getBean(winner.name);
         resolvedTypeCache.put(type, bean);
         return (T) bean;
+    }
+
+    /**
+     * Describes, without constructing anything, every candidate in this container (not the
+     * parent) that {@link #getBean(Class)} adjudicates for {@code type}, ordered by
+     * {@code @Service(priority)} descending (C58, P-09).
+     * <ul>
+     *   <li>Each singleton instance assignable to {@code type}, once by reference identity -- an
+     *       object bound under two names (e.g. DependenceManagers' TeleportService,
+     *       NotificationService and EmailService, each aliased under a short name plus the
+     *       interface FQN; regression fixed after PR #352's real-machine UAT) is one candidate,
+     *       while two distinct objects stay two even if {@code equals()}. Its priority is read
+     *       off its own class, so a proxied bean's priority is read correctly: ProxyFactory
+     *       copies the target's annotations onto the generated subclass.</li>
+     *   <li>Each bean definition assignable to {@code type} whose name has no singleton
+     *       instance yet, with the priority of its definition's bean class. Deterministically
+     *       unresolvable definitions are deliberately <em>not</em> filtered out (07-23): for a
+     *       sole poisoned implementor, filtering would turn its original error into a null
+     *       resolution and an uncaught failure for a different bean.</li>
+     * </ul>
+     * The sort is stable, so candidates of equal priority keep the order above.
+     *
+     * @param type the requested type
+     * @return the ordered candidates; empty when this container has none
+     */
+    private List<ByTypeCandidate> describeCandidates(Class<?> type) {
+        List<ByTypeCandidate> candidates = new ArrayList<>();
+        Map<Object, Boolean> seenByIdentity = new IdentityHashMap<>();
+        for (Map.Entry<String, Object> entry : singletonObjects.entrySet()) {
+            Object instance = entry.getValue();
+            if (type.isInstance(instance) && seenByIdentity.put(instance, Boolean.TRUE) == null) {
+                Class<?> instanceClass = instance.getClass();
+                candidates.add(new ByTypeCandidate(entry.getKey(), instance, instanceClass,
+                        getServicePriority(instanceClass)));
+            }
+        }
+        for (Map.Entry<String, BeanDefinition> entry : beanDefinitions.entrySet()) {
+            Class<?> beanClass = entry.getValue().getBeanClass();
+            if (type.isAssignableFrom(beanClass) && !singletonObjects.containsKey(entry.getKey())) {
+                candidates.add(new ByTypeCandidate(entry.getKey(), null, beanClass,
+                        getServicePriority(beanClass)));
+            }
+        }
+        candidates.sort((a, b) -> Integer.compare(b.priority, a.priority)); // descending
+        return candidates;
+    }
+
+    /**
+     * One by-type candidate as {@link #describeCandidates(Class)} sees it: a name, the existing
+     * instance if there is one, and the class its priority is read from.
+     */
+    private static final class ByTypeCandidate {
+        private final String name;
+        private final Object instance;
+        private final Class<?> candidateClass;
+        private final int priority;
+
+        private ByTypeCandidate(String name, Object instance, Class<?> candidateClass, int priority) {
+            this.name = name;
+            this.instance = instance;
+            this.candidateClass = candidateClass;
+            this.priority = priority;
+        }
     }
 
     /**
@@ -1255,14 +1321,16 @@ public class SimpleContainer {
     // getBeanNamesForType is what PluginManager.validateCommandExecutorContracts and its two
     // identically-shaped siblings enumerate before an ordinary per-name getBean() lookup, where
     // excluding a poisoned name only removes redundant, already-doomed work. Filtering here would
-    // be different in kind, not degree: this method backs getOrderedBeansOfType, getBean(Class)'s
-    // ambiguous-candidate path, and getHighestPriorityBean -- for an interface-typed
-    // @Autowired(required = true) dependency whose SOLE implementor is poisoned, filtering the
-    // poisoned candidate OUT of this result turns getBean(Class)'s candidates.isEmpty() branch
-    // into a null return, which AutowireFactory.autowireBean then converts into an uncaught
-    // ContainerException for a DIFFERENT bean -- reintroducing the exact regression getBean(String)'s
-    // fast-path above exists to prevent. Left throwing exactly as it does today, this method still
-    // benefits from that same fast-path (faster, deduplicated) without needing its own filter.
+    // be different in kind, not degree: this method returns instances by contract and backs
+    // getOrderedBeansOfType and getHighestPriorityBean, so a caller whose SOLE candidate is
+    // poisoned must see that bean's original error, not a silently empty result. getBean(Class)
+    // no longer uses this method (C58, P-09): it adjudicates on descriptors first and constructs
+    // only the winner (see describeCandidates), and it keeps the same rule for the same reason --
+    // a poisoned definition stays a candidate, so a poisoned winner rethrows its original error
+    // through getBean(String)'s fast-path instead of becoming a null return that
+    // AutowireFactory.autowireBean would convert into an uncaught ContainerException for a
+    // DIFFERENT bean. Left throwing exactly as it does today, this method still benefits from
+    // that same fast-path (faster, deduplicated) without needing its own filter.
     @SuppressWarnings("unchecked")
     public <T> Map<String, T> getBeansOfType(Class<T> type) {
         Map<String, T> result = new HashMap<>();
