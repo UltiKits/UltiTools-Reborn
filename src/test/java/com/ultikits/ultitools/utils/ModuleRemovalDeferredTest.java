@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -26,6 +27,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockbukkit.mockbukkit.MockBukkit;
+
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.ListenerManager;
@@ -76,7 +82,50 @@ class ModuleRemovalDeferredTest {
     @AfterEach
     void tearDown() throws IOException {
         Files.setPosixFilePermissions(modules.toPath(), PosixFilePermissions.fromString("rwx------"));
+        // A JAR a test made unreadable is given its permissions back, so the TempDir can be removed.
+        for (File file : modules.listFiles()) {
+            Files.setPosixFilePermissions(file.toPath(), PosixFilePermissions.fromString("rw-------"));
+        }
         MockBukkitHelper.safeUnmock();
+    }
+
+    /**
+     * Takes read permission away from a module JAR, the way a transient read failure looks at a
+     * start: its size and modification time still match the record, only its content cannot be read.
+     */
+    private void unreadable(File file) throws IOException {
+        long size = file.length();
+        long lastModified = file.lastModified();
+        Files.setPosixFilePermissions(file.toPath(), PosixFilePermissions.fromString("-w-------"));
+        assertThat(file.length()).isEqualTo(size);
+        assertThat(file.lastModified()).isEqualTo(lastModified);
+        Assumptions.assumeFalse(Files.isReadable(file.toPath()), "running as a user that ignores permissions");
+    }
+
+    private void readable(File file) throws IOException {
+        Files.setPosixFilePermissions(file.toPath(), PosixFilePermissions.fromString("rw-------"));
+    }
+
+    /** The single removal record in the transactions folder. */
+    private File onlyRecord() throws IOException {
+        File folder = ModuleFileTransactions.transactionsFolder(dataFolder);
+        List<String> tree = treeOf(folder);
+        assertThat(tree).hasSize(1).allMatch(p -> p.startsWith("remove-") && p.endsWith(".json"));
+        return new File(folder, tree.get(0));
+    }
+
+    private static JsonObject jsonOf(File record) throws IOException {
+        return JsonParser.parseString(new String(Files.readAllBytes(record.toPath()), StandardCharsets.UTF_8))
+                .getAsJsonObject();
+    }
+
+    private static JsonObject removalNamed(JsonObject record, String name) {
+        for (JsonElement removal : record.getAsJsonArray("removals")) {
+            if (name.equals(removal.getAsJsonObject().get("name").getAsString())) {
+                return removal.getAsJsonObject();
+            }
+        }
+        throw new AssertionError("no removal entry named " + name + " in " + record);
     }
 
     private void readOnlyModulesFolder() throws IOException {
@@ -155,5 +204,62 @@ class ModuleRemovalDeferredTest {
         assertThat(start.pendingReports().get(0).getKey()).isEqualTo(ModuleFileTransactions.Keys.REMOVAL_SKIPPED);
         assertThat(namesIn(modules)).containsExactly("removal-fixture-1.0.jar");
         assertThat(treeOf(ModuleFileTransactions.transactionsFolder(dataFolder))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("ultitools.boot.deferred-removal.unreadable: a recorded JAR that cannot be read at a start stays recorded, and a later start deletes it")
+    void unreadableRecordedJar_staysRecordedAndIsDeletedByALaterStart() throws IOException {
+        uninstallThatCannotDelete();
+        writableModulesFolder();
+        File record = onlyRecord();
+        byte[] recordBefore = Files.readAllBytes(record.toPath());
+        unreadable(jar);
+
+        ModuleFileTransactions failingStart = new ModuleFileTransactions(dataFolder);
+        failingStart.applyBeforeLoad();
+
+        // The uninstall the operator asked for is still recorded, exactly as it was written.
+        assertThat(jar).exists();
+        assertThat(treeOf(ModuleFileTransactions.transactionsFolder(dataFolder))).containsExactly(record.getName());
+        assertThat(Files.readAllBytes(record.toPath())).isEqualTo(recordBefore);
+        List<ModuleFileTransactions.Report> reports = failingStart.pendingReports();
+        assertThat(reports).hasSize(1);
+        assertThat(reports.get(0).getLevel()).isEqualTo(Level.SEVERE);
+        assertThat(reports.get(0).getKey()).isNotEqualTo(ModuleFileTransactions.Keys.REMOVAL_SKIPPED);
+        assertThat(Arrays.asList(reports.get(0).getArgs())).contains(jar.getAbsolutePath());
+
+        readable(jar);
+        ModuleFileTransactions laterStart = new ModuleFileTransactions(dataFolder);
+        laterStart.applyBeforeLoad();
+
+        assertThat(jar).doesNotExist();
+        assertThat(treeOf(ModuleFileTransactions.transactionsFolder(dataFolder))).isEmpty();
+        assertThat(laterStart.pendingReports()).hasSize(1);
+        assertThat(laterStart.pendingReports().get(0).getLevel()).isEqualTo(Level.INFO);
+        assertThat(laterStart.pendingReports().get(0).getKey()).isEqualTo(ModuleFileTransactions.Keys.REMOVED);
+    }
+
+    @Test
+    @DisplayName("of two recorded JARs, the readable one is deleted and the unreadable one stays recorded with its original fields")
+    void oneUnreadableOfTwoRecordedJars_staysRecordedWithItsOriginalFields() throws IOException {
+        File other = moduleJar(new File(modules, "removal-fixture-extra-1.0.jar"), "RemovalFixtureExtra", "1.0",
+                "removal-fixture-extra");
+        new ModuleFileTransactions(dataFolder).recordDeferredRemoval(MODULE, Arrays.asList(jar, other));
+        JsonObject recordedBefore = jsonOf(onlyRecord());
+        JsonObject otherBefore = removalNamed(recordedBefore, other.getName());
+        unreadable(other);
+
+        ModuleFileTransactions start = new ModuleFileTransactions(dataFolder);
+        start.applyBeforeLoad();
+
+        assertThat(jar).doesNotExist();
+        assertThat(other).exists();
+        JsonObject recordedAfter = jsonOf(onlyRecord());
+        assertThat(recordedAfter.keySet()).isEqualTo(recordedBefore.keySet());
+        JsonArray removals = recordedAfter.getAsJsonArray("removals");
+        assertThat(removals).hasSize(1);
+        JsonObject otherAfter = removals.get(0).getAsJsonObject();
+        assertThat(otherAfter.keySet()).isEqualTo(otherBefore.keySet());
+        assertThat(otherAfter).isEqualTo(otherBefore);
     }
 }
