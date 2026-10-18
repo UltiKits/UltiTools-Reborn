@@ -293,17 +293,27 @@ public final class MergedAnnotationResolver {
 
     /**
      * Compute the merged attribute view of {@code found} (the located instance of
-     * {@code annotationType}), applying any {@code @AliasFor} override declared by an annotation
-     * on the path from the scanned class down to {@code found} -- including {@code found} itself,
-     * for a within-annotation mutual alias.
+     * {@code annotationType}) by walking the selected path top-down (decision P-10): from the
+     * annotation declared on the class, through every intermediate meta-annotation, down to
+     * {@code found}. Each level's candidate values are computed by
+     * {@link #collectOverrideCandidates} from the levels above it, so a value set on an outer
+     * annotation travels through every intermediate {@code @AliasFor} to the final target (C46):
+     * an attribute aliasing {@code @UltiToolsModule.scanBasePackages} reaches
+     * {@code @ComponentScan.basePackages}, because {@code scanBasePackages} itself aliases it.
+     * <p>
+     * Every candidate records the annotation instance that declared it and that instance's
+     * distance from the class. For each attribute of {@code found}, all candidates must agree;
+     * a disagreement is refused with a {@link ContainerException}.
      */
     private static <A extends Annotation> A merge(Annotation found, Class<A> annotationType,
             List<Annotation> ancestors) {
-        Map<String, List<Candidate>> candidatesByAttribute = new LinkedHashMap<>();
-        for (Annotation ancestor : ancestors) {
-            collectOverrideCandidates(ancestor, annotationType, candidatesByAttribute);
+        List<Annotation> path = new ArrayList<>(ancestors);
+        path.add(found);
+        List<Map<String, List<Candidate>>> levels = new ArrayList<>(path.size());
+        for (int level = 0; level < path.size(); level++) {
+            levels.add(collectOverrideCandidates(path, level, levels));
         }
-        collectOverrideCandidates(found, annotationType, candidatesByAttribute);
+        Map<String, List<Candidate>> candidatesByAttribute = levels.get(levels.size() - 1);
 
         A typed = annotationType.cast(found);
         if (candidatesByAttribute.isEmpty()) {
@@ -332,59 +342,86 @@ public final class MergedAnnotationResolver {
     }
 
     /**
-     * Collect every attribute-value override {@code dInstance} contributes towards
-     * {@code target}'s merged view: for each of {@code dInstance}'s own attribute methods
-     * carrying {@code @AliasFor}, if the alias points at {@code target} (explicitly, or via the
-     * {@code Annotation.class} default meaning "within this same annotation") and the method's
-     * value on {@code dInstance} differs from that method's own declared default, it is a
-     * candidate override for the aliased attribute name on {@code target}.
-     * <p>
-     * When {@code dInstance} IS an instance of {@code target} itself, any attribute that
-     * participates in a within-annotation mutual alias also contributes its OWN declared value
-     * as a second candidate for its own attribute name -- otherwise a conflicting pair
-     * ({@code foo=x} aliased to {@code bar}, {@code bar=y} aliased to {@code foo}) would only
-     * ever compare "the other side's value" against itself, and the conflict between {@code x}
-     * and {@code y} would never surface as more than one candidate for the same attribute.
+     * Collect the candidate values for every attribute of the annotation at {@code path[level]},
+     * given the already-computed candidates of every level above it ({@code outerLevels}, indexed
+     * by distance from the class):
+     * <ol>
+     * <li><b>Forwarded.</b> For each outer level, each attribute declaring
+     * {@code @AliasFor(annotation = <this level's type>)} forwards all of its own candidates to
+     * the aliased attribute here. A forwarded candidate keeps the instance that originally
+     * declared it -- an intermediate annotation only relays it.</li>
+     * <li><b>Own.</b> Each of this annotation's attributes that declares {@code @AliasFor} and
+     * whose value differs from its declared default is a candidate for itself, declared by this
+     * instance. (Attributes taking part in no alias never need a candidate: the merged view falls
+     * back to the found instance for them.)</li>
+     * <li><b>Mirrored.</b> Two attributes of this annotation that alias each other (a
+     * within-annotation mutual alias) share one candidate list, so {@code foo=x} with
+     * {@code bar=y} surfaces as two different values for the same attribute.</li>
+     * </ol>
      */
-    private static <A extends Annotation> void collectOverrideCandidates(Annotation dInstance, Class<A> target,
-            Map<String, List<Candidate>> out) {
-        Class<? extends Annotation> dType = dInstance.annotationType();
-        Set<String> withinSelfParticipants = new HashSet<>();
+    private static Map<String, List<Candidate>> collectOverrideCandidates(List<Annotation> path, int level,
+            List<Map<String, List<Candidate>>> outerLevels) {
+        Annotation instance = path.get(level);
+        Class<? extends Annotation> type = instance.annotationType();
+        Map<String, List<Candidate>> out = new LinkedHashMap<>();
 
-        for (Method method : dType.getDeclaredMethods()) {
+        for (int outer = 0; outer < level; outer++) {
+            Map<String, List<Candidate>> outerCandidates = outerLevels.get(outer);
+            for (Method method : path.get(outer).annotationType().getDeclaredMethods()) {
+                AliasFor aliasFor = method.getAnnotation(AliasFor.class);
+                List<Candidate> forwarded = outerCandidates.get(method.getName());
+                if (aliasFor == null || forwarded == null || !type.equals(aliasFor.annotation())) {
+                    continue;
+                }
+                addAllDistinct(out.computeIfAbsent(resolveAttributeName(aliasFor, method), key -> new ArrayList<>()),
+                        forwarded);
+            }
+        }
+
+        List<String[]> mirrors = new ArrayList<>();
+        for (Method method : type.getDeclaredMethods()) {
             AliasFor aliasFor = method.getAnnotation(AliasFor.class);
             if (aliasFor == null) {
                 continue;
             }
+            addCandidateIfNonDefault(out, method, instance, level);
             Class<? extends Annotation> aliasTargetType =
-                    aliasFor.annotation() == Annotation.class ? dType : aliasFor.annotation();
-            if (!aliasTargetType.equals(target)) {
-                continue;
-            }
-            String targetAttribute = resolveAttributeName(aliasFor, method);
-            addCandidateIfNonDefault(out, targetAttribute, method, dInstance, dType);
-            if (dType.equals(target)) {
-                withinSelfParticipants.add(targetAttribute);
-                withinSelfParticipants.add(method.getName());
+                    aliasFor.annotation() == Annotation.class ? type : aliasFor.annotation();
+            if (aliasTargetType.equals(type)) {
+                mirrors.add(new String[] {method.getName(), resolveAttributeName(aliasFor, method)});
             }
         }
 
-        if (dType.equals(target) && !withinSelfParticipants.isEmpty()) {
-            for (Method method : dType.getDeclaredMethods()) {
-                if (withinSelfParticipants.contains(method.getName())) {
-                    addCandidateIfNonDefault(out, method.getName(), method, dInstance, dType);
-                }
+        for (String[] mirror : mirrors) {
+            List<Candidate> shared = new ArrayList<>();
+            addAllDistinct(shared, out.get(mirror[0]));
+            addAllDistinct(shared, out.get(mirror[1]));
+            if (!shared.isEmpty()) {
+                out.put(mirror[0], shared);
+                out.put(mirror[1], new ArrayList<>(shared));
+            }
+        }
+        return out;
+    }
+
+    private static void addAllDistinct(List<Candidate> target, List<Candidate> source) {
+        if (source == null) {
+            return;
+        }
+        for (Candidate candidate : source) {
+            if (!target.contains(candidate)) {
+                target.add(candidate);
             }
         }
     }
 
-    private static void addCandidateIfNonDefault(Map<String, List<Candidate>> out, String attributeName,
-            Method sourceMethod, Annotation sourceInstance, Class<? extends Annotation> sourceType) {
+    private static void addCandidateIfNonDefault(Map<String, List<Candidate>> out, Method sourceMethod,
+            Annotation sourceInstance, int distance) {
         Object value = invokeAttribute(sourceMethod, sourceInstance);
         Object defaultValue = sourceMethod.getDefaultValue();
         if (!Objects.deepEquals(value, defaultValue)) {
-            out.computeIfAbsent(attributeName, key -> new ArrayList<>())
-                    .add(new Candidate(value, sourceType, sourceMethod.getName()));
+            out.computeIfAbsent(sourceMethod.getName(), key -> new ArrayList<>())
+                    .add(new Candidate(value, sourceInstance, distance, sourceMethod.getName()));
         }
     }
 
@@ -447,15 +484,22 @@ public final class MergedAnnotationResolver {
                 new Class<?>[] {annotationType}, handler);
     }
 
-    /** One candidate value for a target attribute, plus where it came from (for conflict messages). */
+    /**
+     * One candidate value for an attribute, with the annotation instance that declared it, that
+     * instance's distance from the class (0 = declared on the class), and the declaring attribute's
+     * name (for conflict messages). A value forwarded through intermediate aliases keeps its
+     * original declaring instance, distance and attribute name.
+     */
     private static final class Candidate {
         private final Object value;
-        private final Class<? extends Annotation> sourceType;
+        private final Annotation origin;
+        private final int distance;
         private final String sourceMethodName;
 
-        private Candidate(Object value, Class<? extends Annotation> sourceType, String sourceMethodName) {
+        private Candidate(Object value, Annotation origin, int distance, String sourceMethodName) {
             this.value = value;
-            this.sourceType = sourceType;
+            this.origin = origin;
+            this.distance = distance;
             this.sourceMethodName = sourceMethodName;
         }
     }
