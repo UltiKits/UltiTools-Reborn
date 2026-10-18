@@ -2206,9 +2206,10 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         // provenance must be persisted regardless too -- recordAll is itself a no-op for an empty
         // map, so this costs nothing on the ordinary all-succeeded path.
         Map<String, String> hashesToRecord = new LinkedHashMap<>();
-        try (JarFile jarFile = new JarFile(
-                jar.getPath().startsWith("/") ? jar.getPath() : jar.getPath().substring(1)
-        )) {
+        // #676 case 26 sibling: the JAR is opened through the shared resolver, which decodes the
+        // URL's percent escapes, so a module installed under a path with a space or a non-ASCII
+        // character still extracts its bundled resources.
+        try (JarFile jarFile = new JarFile(CodeSourceLocations.toFile(jar))) {
             Enumeration<JarEntry> entries = jarFile.entries();
             while (entries.hasMoreElements()) {
                 JarEntry jarEntry = entries.nextElement();
