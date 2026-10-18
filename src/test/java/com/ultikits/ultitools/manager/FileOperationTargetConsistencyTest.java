@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -23,6 +24,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -870,6 +872,256 @@ class FileOperationTargetConsistencyTest {
         pointManagerAt(tmp, plugins);
     }
 
+    // ------------------------------------------------------------------------------------------
+    // Codex review run 2, finding 1: a link is never followed, whether it is the delete target
+    // itself or inside the deleted tree. Every "real directory or link" decision uses one shared
+    // predicate: an entry is a real directory only if it is a directory when links are not
+    // followed AND its real path equals its parent's real path plus its own name. A Windows
+    // junction passes the first test and fails the second; junctions cannot be created on Linux,
+    // so the junction case is proven through the predicate with an injected real-path lookup.
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("control: a recursive delete of a terminal link to an outside directory removes only the link")
+    void recursiveDeleteOfTerminalLinkToOutsideDirectoryRemovesOnlyTheLink() throws Exception {
+        Map<String, String> before = snapshot(outside);
+
+        Outcome outcome = send(recursiveDelete("root/esc"));
+
+        assertThat(Files.exists(root.resolve("esc"), LinkOption.NOFOLLOW_LINKS))
+                .as("the terminal link entry is removed").isFalse();
+        assertThat(snapshot(outside)).as("the outside directory is byte-identical").isEqualTo(before);
+        assertThat(outcome.success()).isTrue();
+        assertAllowedEntry(outcome, "delete", "root/esc");
+    }
+
+    @Test
+    @DisplayName("the shared real-directory predicate refuses an entry whose real path is not its parent's real path plus its name")
+    void sharedPredicateRefusesEntryWhoseRealPathIsNotParentPlusName() throws Exception {
+        Method predicate = sharedRealDirectoryPredicate();
+        assertThat(predicate)
+                .as("FileOperationManager has one shared 'real directory or link' predicate "
+                        + "isRealDirectory(Path parentReal, Path entry, Function<Path, Path> realPath)")
+                .isNotNull();
+        Path rootReal = root.toRealPath();
+        Path sub = root.resolve("sub");
+        Function<Path, Path> filesystem = FileOperationTargetConsistencyTest::realPathOrNull;
+        Path junctionTarget = outside.resolve("deep").toRealPath();
+        Function<Path, Path> junction = p -> p.equals(sub) ? junctionTarget : realPathOrNull(p);
+        assertThat(Files.isDirectory(sub, LinkOption.NOFOLLOW_LINKS))
+                .as("precondition: root/sub is a directory when links are not followed").isTrue();
+
+        assertThat(invokePredicate(predicate, rootReal, sub, filesystem))
+                .as("control: a real subdirectory is a real directory").isTrue();
+        assertThat(invokePredicate(predicate, rootReal, sub, junction))
+                .as("a directory entry whose real path is elsewhere (a junction) is a link, not a real directory")
+                .isFalse();
+        assertThat(invokePredicate(predicate, rootReal, root.resolve("link"), filesystem))
+                .as("a symbolic link to a directory is not a real directory").isFalse();
+        Path throughLinkedParent = root.resolve("esc").resolve("deep");
+        assertThat(Files.isDirectory(throughLinkedParent, LinkOption.NOFOLLOW_LINKS))
+                .as("precondition: root/esc/deep is a directory when its own name is not followed").isTrue();
+        assertThat(invokePredicate(predicate, rootReal.resolve("esc"), throughLinkedParent, filesystem))
+                .as("an entry reached through a linked parent is not a real child of that parent path")
+                .isFalse();
+    }
+
+    @Test
+    @DisplayName("a recursive delete whose terminal entry is a junction-like directory never recurses into it")
+    void recursiveDeleteOfJunctionLikeTerminalEntryNeverRecurses() throws Exception {
+        Path victim = buildRecursiveDeleteVictim();
+        Path junctionTarget = Files.createDirectories(outside.resolve("odir")).toRealPath();
+        Map<String, String> victimBefore = snapshot(victim);
+        Map<String, String> outsideBefore = snapshot(outside);
+        assertThat(installRealPathLookup(p -> p.equals(victim) ? junctionTarget : realPathOrNull(p)))
+                .as("FileOperationManager's shared predicate takes its real paths from one replaceable "
+                        + "lookup (field realPathResolver), so a junction can be modelled on Linux")
+                .isTrue();
+
+        Outcome outcome = send(recursiveDelete("plugins/victim"));
+
+        assertThat(snapshot(victim))
+                .as("an entry whose real path is elsewhere is removed as an entry only, never emptied")
+                .isEqualTo(victimBefore);
+        assertThat(snapshot(outside)).as("the outside directory is byte-identical").isEqualTo(outsideBefore);
+        assertAllowedEntry(outcome, "delete", "plugins/victim");
+    }
+
+    @Test
+    @DisplayName("a listed link to an outside directory is marked OUTSIDE_ROOTS without metadata")
+    void listedLinkToOutsideDirectoryIsMarkedOutsideRoots() throws Exception {
+        Outcome outcome = send(request("list", "root"));
+
+        for (String alias : new String[] {"link", "esc"}) {
+            JsonObject entry = outcome.listedEntry(alias);
+            assertThat(entry.get("accessible").getAsBoolean()).as(alias).isFalse();
+            assertThat(entry.get("reason").getAsString()).as(alias).isEqualTo("OUTSIDE_ROOTS");
+            assertThat(entry.has("size")).as(alias).isFalse();
+            assertThat(entry.has("lastModified")).as(alias).isFalse();
+        }
+        assertThat(outcome.listedEntry("sub").get("accessible").getAsBoolean())
+                .as("control: a real subdirectory keeps the never-refused rule").isTrue();
+        assertThat(outcome.success()).isTrue();
+        assertAllowedEntry(outcome, "list", "root");
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Codex review run 2, finding 2: protected locations are judged by real path, independent of
+    // which editable root matched or the order of the roots. Fixture: server root = the temporary
+    // directory; editable roots, in this order, = [plugins/shadow, plugins], where
+    // plugins/shadow -> plugins/UltiTools; plugins/UltiTools/security holds action.log.0 and
+    // action.log.1 with sentinel bytes.
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("overlapping alias root: a recursive delete of plugins/UltiTools is refused and the action log is byte-identical")
+    void overlappingAliasRootRecursiveDeleteOfUltiToolsIsRefused() throws Exception {
+        Path security = buildShadowRootFixture();
+        Map<String, String> before = snapshot(security);
+
+        Outcome outcome = send(recursiveDelete("plugins/UltiTools"));
+
+        assertThat(security).as("the action-log directory survives").isDirectory();
+        assertThat(snapshot(security)).as("the action-log directory is byte-identical").isEqualTo(before);
+        assertThat(outcome.success()).isFalse();
+        assertDeniedEntry(outcome, "delete", "plugins/UltiTools");
+        assertNonConfigurable(outcome);
+    }
+
+    @Test
+    @DisplayName("overlapping alias root: a recursive delete of plugins/shadow/security is refused and the action log is byte-identical")
+    void overlappingAliasRootRecursiveDeleteOfSecurityIsRefused() throws Exception {
+        Path security = buildShadowRootFixture();
+        Map<String, String> before = snapshot(security);
+
+        Outcome outcome = send(recursiveDelete("plugins/shadow/security"));
+
+        assertThat(security).as("the action-log directory survives").isDirectory();
+        assertThat(snapshot(security)).as("the action-log directory is byte-identical").isEqualTo(before);
+        assertThat(outcome.success()).isFalse();
+        assertDeniedEntry(outcome, "delete", "plugins/shadow/security");
+        assertNonConfigurable(outcome);
+    }
+
+    @Test
+    @DisplayName("overlapping alias root: deleting the plugins/shadow link removes only the link and the action log is byte-identical")
+    void overlappingAliasRootDeleteOfShadowLinkRemovesOnlyTheLink() throws Exception {
+        Path security = buildShadowRootFixture();
+        Map<String, String> before = snapshot(security);
+
+        Outcome outcome = send(recursiveDelete("plugins/shadow"));
+
+        assertThat(Files.exists(tmp.resolve("plugins").resolve("shadow"), LinkOption.NOFOLLOW_LINKS))
+                .as("the link entry is removed (link-only deletion)").isFalse();
+        assertThat(security).as("the action-log directory survives").isDirectory();
+        assertThat(snapshot(security)).as("the action-log directory is byte-identical").isEqualTo(before);
+        assertThat(outcome.success()).isTrue();
+        assertAllowedEntry(outcome, "delete", "plugins/shadow");
+    }
+
+    @Test
+    @DisplayName("overlapping alias root: reading plugins/shadow/security/action.log.0 is refused")
+    void overlappingAliasRootReadOfActionLogIsRefused() throws Exception {
+        buildShadowRootFixture();
+        String path = "plugins/shadow/security/action.log.0";
+
+        Outcome outcome = send(request("read", path));
+
+        assertThat(outcome.allMessagesJson()).doesNotContain(ACTION_LOG_SENTINEL);
+        assertThat(outcome.success()).isFalse();
+        assertDeniedEntry(outcome, "read", path);
+        assertNonConfigurable(outcome);
+    }
+
+    @Test
+    @DisplayName("overlapping alias root: writing plugins/shadow/security/action.log.0 is refused and the log is byte-identical")
+    void overlappingAliasRootWriteOfActionLogIsRefused() throws Exception {
+        Path security = buildShadowRootFixture();
+        Map<String, String> before = snapshot(security);
+        String path = "plugins/shadow/security/action.log.0";
+        JsonObject data = request("write", path);
+        data.addProperty("content", "OVERWRITTEN");
+
+        Outcome outcome = send(data);
+
+        assertThat(security).as("the action-log directory survives").isDirectory();
+        assertThat(snapshot(security)).as("the action-log directory is byte-identical").isEqualTo(before);
+        assertThat(outcome.success()).isFalse();
+        assertDeniedEntry(outcome, "write", path);
+        assertNonConfigurable(outcome);
+    }
+
+    @Test
+    @DisplayName("overlapping alias root: listing plugins/shadow/security is refused")
+    void overlappingAliasRootListOfSecurityIsRefused() throws Exception {
+        buildShadowRootFixture();
+        String path = "plugins/shadow/security";
+
+        Outcome outcome = send(request("list", path));
+
+        assertThat(outcome.listedNames()).doesNotContain("action.log.0", "action.log.1");
+        assertThat(outcome.success()).isFalse();
+        assertDeniedEntry(outcome, "list", path);
+        assertNonConfigurable(outcome);
+    }
+
+    /**
+     * Builds plugins/UltiTools/security (action.log.0, action.log.1) and plugins/shadow ->
+     * plugins/UltiTools, and points the manager at the roots [plugins/shadow, plugins] in that
+     * order: the alias root is matched first.
+     */
+    private Path buildShadowRootFixture() throws Exception {
+        Path plugins = Files.createDirectories(tmp.resolve("plugins"));
+        Path ultiTools = Files.createDirectories(plugins.resolve("UltiTools"));
+        Path security = Files.createDirectories(ultiTools.resolve("security"));
+        Files.write(security.resolve("action.log.0"), ACTION_LOG_SENTINEL.getBytes(StandardCharsets.UTF_8));
+        Files.write(security.resolve("action.log.1"), (ACTION_LOG_SENTINEL + "-1").getBytes(StandardCharsets.UTF_8));
+        Files.write(ultiTools.resolve("config.yml"), "key: value".getBytes(StandardCharsets.UTF_8));
+        link(plugins.resolve("shadow"), ultiTools);
+        pointManagerAtRoots(tmp, plugins.resolve("shadow"), plugins);
+        return security;
+    }
+
+    /** The shared predicate, or {@code null} when the production class does not have it. */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // the predicate is package-private and looked up by name
+    private static Method sharedRealDirectoryPredicate() {
+        try {
+            Method method = FileOperationManager.class.getDeclaredMethod(
+                    "isRealDirectory", Path.class, Path.class, Function.class);
+            method.setAccessible(true);
+            return method;
+        } catch (NoSuchMethodException e) {
+            return null;
+        }
+    }
+
+    private static boolean invokePredicate(Method predicate, Path parentReal, Path entry,
+                                           Function<Path, Path> realPath) throws Exception {
+        return (Boolean) predicate.invoke(null, parentReal, entry, realPath);
+    }
+
+    /** Replaces the manager's real-path lookup; {@code false} when the production class has none. */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // the fixture models a junction on Linux
+    private boolean installRealPathLookup(Function<Path, Path> lookup) throws IllegalAccessException {
+        Field field;
+        try {
+            field = FileOperationManager.class.getDeclaredField("realPathResolver");
+        } catch (NoSuchFieldException e) {
+            return false;
+        }
+        field.setAccessible(true);
+        field.set(manager, lookup);
+        return true;
+    }
+
+    private static Path realPathOrNull(Path path) {
+        try {
+            return path.toRealPath();
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
     private void resetCollaborators() {
         org.mockito.Mockito.reset(actionLog, webSocket);
         when(webSocket.isConnected()).thenReturn(true);
@@ -913,6 +1165,18 @@ class FileOperationTargetConsistencyTest {
         Field editableRootsField = FileOperationManager.class.getDeclaredField("editableRoots");
         editableRootsField.setAccessible(true);
         editableRootsField.set(manager, Collections.singletonList(editableRoot.toFile()));
+    }
+
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // the fixture points the manager at a temp tree
+    private void pointManagerAtRoots(Path serverRoot, Path... editableRoots) throws Exception {
+        pointManagerAt(serverRoot, editableRoots[0]);
+        List<java.io.File> roots = new ArrayList<>();
+        for (Path editableRoot : editableRoots) {
+            roots.add(editableRoot.toFile());
+        }
+        Field editableRootsField = FileOperationManager.class.getDeclaredField("editableRoots");
+        editableRootsField.setAccessible(true);
+        editableRootsField.set(manager, Collections.unmodifiableList(roots));
     }
 
     private static JsonObject request(String operation, String path) {
