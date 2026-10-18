@@ -49,6 +49,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.aop.ProxyFactory;
+import com.ultikits.ultitools.commands.tabcomplete.TabCompletionManager;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.DataStore;
@@ -72,6 +73,13 @@ class PluginManagerFirstAssemblyTest {
     private static final String AOP_MODULE = FIXTURE_ROOT + "aop.AopReadyFixtureModule";
     private static final String CONFIG_MODULE = FIXTURE_ROOT + "config.ConfigReadyFixtureModule";
     private static final String FACTORY_MODULE = FIXTURE_ROOT + "factory.FactoryOrderFixtureModule";
+    private static final String CONTEXT_ENTRY_MODULE = FIXTURE_ROOT + "contextentry.ContextEntryFixtureModule";
+    private static final String REFUSED_CONTEXT_ENTRY_MODULE =
+            FIXTURE_ROOT + "contextentryrefused.RefusedContextEntryFixtureModule";
+    private static final String CONTEXT_ENTRY_KEY =
+            com.ultikits.testfixtures.firstassembly.contextentry.ContextEntryFixtureModule.COMPLETER_KEY;
+    private static final String REFUSED_CONTEXT_ENTRY_KEY =
+            com.ultikits.testfixtures.firstassembly.contextentryrefused.RefusedContextEntryFixtureModule.COMPLETER_KEY;
 
     /** The two module-registration entry points. */
     enum EntryPoint { REGISTER_CLASS, REGISTER_INSTANCE }
@@ -132,6 +140,8 @@ class PluginManagerFirstAssemblyTest {
 
     @AfterEach
     void tearDown() {
+        TabCompletionManager.getInstance().unregister(CONTEXT_ENTRY_KEY);
+        TabCompletionManager.getInstance().unregister(REFUSED_CONTEXT_ENTRY_KEY);
         Bukkit.getLogger().removeHandler(warningCapture);
         if (ultiToolsStatic != null) {
             ultiToolsStatic.close();
@@ -507,6 +517,103 @@ class PluginManagerFirstAssemblyTest {
             assertThat(product).as("the @Bean product").isNotNull();
             assertThat(call(product, "getService")).as("the product's injected service")
                     .isSameAs(container.getBean(Class.forName(FACTORY_MODULE + "$FactoryService", true, loader)));
+        }
+    }
+
+    // ===== Task 3: @ContextEntry assembly runs inside the module's registration scope =====
+
+    @Nested
+    @DisplayName("a completer registered by a @ContextEntry bean belongs to the module instance (C62)")
+    class ContextEntryScopeTests {
+
+        private final TabCompletionManager completions = TabCompletionManager.getInstance();
+
+        @Test
+        @DisplayName("C62 register(Class): the @ContextEntry completer is recorded against the module's instance and name")
+        void c62_contextEntryCompleterOwnedByModule_throughRegisterClass() throws Exception {
+            assertCompleterOwnedByModule(EntryPoint.REGISTER_CLASS);
+        }
+
+        @Test
+        @DisplayName("C62 register(UltiToolsPlugin): the @ContextEntry completer is recorded against the module's instance and name")
+        void c62_contextEntryCompleterOwnedByModule_throughRegisterInstance() throws Exception {
+            assertCompleterOwnedByModule(EntryPoint.REGISTER_INSTANCE);
+        }
+
+        @Test
+        @DisplayName("C62 register(Class): a module refused after assembly takes its @ContextEntry completer with it")
+        void c62_refusedModuleReleasesContextEntryCompleter_throughRegisterClass() throws Exception {
+            assertRefusalReleasesCompleter(EntryPoint.REGISTER_CLASS);
+        }
+
+        @Test
+        @DisplayName("C62 register(UltiToolsPlugin): a module refused after assembly takes its @ContextEntry completer with it")
+        void c62_refusedModuleReleasesContextEntryCompleter_throughRegisterInstance() throws Exception {
+            assertRefusalReleasesCompleter(EntryPoint.REGISTER_INSTANCE);
+        }
+
+        @Test
+        @DisplayName("C62 register(Class): unloading the module removes its @ContextEntry completer")
+        void c62_unloadReleasesContextEntryCompleter_throughRegisterClass() throws Exception {
+            assertUnloadReleasesCompleter(EntryPoint.REGISTER_CLASS);
+        }
+
+        @Test
+        @DisplayName("C62 register(UltiToolsPlugin): unloading the module removes its @ContextEntry completer")
+        void c62_unloadReleasesContextEntryCompleter_throughRegisterInstance() throws Exception {
+            assertUnloadReleasesCompleter(EntryPoint.REGISTER_INSTANCE);
+        }
+
+        private Loaded loadContextEntryModule(EntryPoint entryPoint) throws Exception {
+            FixtureJarClassLoader loader = loaderFor(CONTEXT_ENTRY_MODULE, "ContextEntryFixtureModule",
+                    fixture(CONTEXT_ENTRY_MODULE), fixture(CONTEXT_ENTRY_MODULE + "$EntryBean"));
+            Loaded loaded = load(entryPoint, loader, CONTEXT_ENTRY_MODULE);
+            assertLoaded(loaded, entryPoint);
+            assertThat(completions.getCompleter(CONTEXT_ENTRY_KEY))
+                    .as("the @ContextEntry bean's @PostConstruct registered its completer").isNotNull();
+            return loaded;
+        }
+
+        private void assertCompleterOwnedByModule(EntryPoint entryPoint) throws Exception {
+            Loaded loaded = loadContextEntryModule(entryPoint);
+
+            // Read ownership through the registry's own API: releasing the instance's registrations
+            // takes the completer only if it was recorded against that instance; the returned action
+            // puts it back unchanged.
+            Runnable giveBack = completions.releaseForSupersede(loaded.plugin);
+            assertThat(completions.getCompleter(CONTEXT_ENTRY_KEY))
+                    .as("the completer must be recorded against the module instance that loaded it")
+                    .isNull();
+            giveBack.run();
+            assertThat(completions.getCompleter(CONTEXT_ENTRY_KEY)).as("given back").isNotNull();
+            assertThat(completions.unregisterByOwner(loaded.plugin.getPluginName()))
+                    .as("the completer must be recorded against the module's name").isEqualTo(1);
+        }
+
+        private void assertRefusalReleasesCompleter(EntryPoint entryPoint) throws Exception {
+            FixtureJarClassLoader loader = loaderFor(REFUSED_CONTEXT_ENTRY_MODULE, "RefusedContextEntryFixtureModule",
+                    fixture(REFUSED_CONTEXT_ENTRY_MODULE), fixture(REFUSED_CONTEXT_ENTRY_MODULE + "$EntryBean"));
+            Loaded loaded = load(entryPoint, loader, REFUSED_CONTEXT_ENTRY_MODULE);
+
+            assertThat(loaded.registered).as("registerSelf() returns false, so the module is refused").isFalse();
+            Object registrations = Class.forName(REFUSED_CONTEXT_ENTRY_MODULE + "$EntryBean", true, loader)
+                    .getField("REGISTRATIONS").get(null);
+            assertThat(registrations.toString())
+                    .as("the @ContextEntry bean registered its completer while the module was assembled")
+                    .isEqualTo("1");
+            assertThat(completions.getCompleter(REFUSED_CONTEXT_ENTRY_KEY))
+                    .as("the refused module's @ContextEntry completer must be released with it")
+                    .isNull();
+        }
+
+        private void assertUnloadReleasesCompleter(EntryPoint entryPoint) throws Exception {
+            Loaded loaded = loadContextEntryModule(entryPoint);
+
+            loaded.manager.unregister(loaded.plugin);
+
+            assertThat(completions.getCompleter(CONTEXT_ENTRY_KEY))
+                    .as("unloading the module must remove its @ContextEntry completer")
+                    .isNull();
         }
     }
 }
