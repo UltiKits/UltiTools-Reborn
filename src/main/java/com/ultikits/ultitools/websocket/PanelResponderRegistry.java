@@ -2,9 +2,11 @@ package com.ultikits.ultitools.websocket;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -103,6 +105,18 @@ public class PanelResponderRegistry {
      */
     private final ThreadPoolExecutor workers;
 
+    /** How many admitted requests may wait for a free worker; named in a refusal. */
+    private final int queueCapacity;
+
+    /**
+     * Every admitted request whose outcome has not settled yet; {@link #shutdown()} settles them.
+     * An invocation leaves this set through the completion hook registered at admission.
+     */
+    private final Set<Invocation> admitted = ConcurrentHashMap.newKeySet();
+
+    /** Set first thing in {@link #shutdown()}; a request admitted afterwards fails at once. */
+    private volatile boolean shutDown;
+
     /**
      * Creates a registry with the shipped deadline ({@link #RESPONDER_TIMEOUT_MILLIS}) and worker
      * bounds ({@link #RESPONDER_WORKER_THREADS}, {@link #RESPONDER_QUEUE_CAPACITY}).
@@ -120,6 +134,7 @@ public class PanelResponderRegistry {
      */
     PanelResponderRegistry(long deadlineMillis, int workerThreads, int queueCapacity) {
         this.deadlineMillis = deadlineMillis;
+        this.queueCapacity = queueCapacity;
         this.workers = createWorkers(workerThreads, queueCapacity);
     }
 
@@ -411,8 +426,25 @@ public class PanelResponderRegistry {
         }
 
         Invocation invocation = new Invocation(messageType, entry, data, outcome);
-        invocation.deadline = timeoutScheduler.schedule(invocation::expire, deadlineMillis, TimeUnit.MILLISECONDS);
-        workers.execute(invocation);
+        admitted.add(invocation);
+        // Any settlement, including a caller's cancel, frees the queue slot and the deadline.
+        outcome.whenComplete((value, failure) -> invocation.release());
+        if (shutDown) {
+            invocation.settle(null, invocation.shutDownFailure());
+            return outcome;
+        }
+        try {
+            invocation.deadline = timeoutScheduler.schedule(invocation::expire, deadlineMillis, TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException timerStopped) {
+            invocation.settle(null, invocation.shutDownFailure());
+            return outcome;
+        }
+        try {
+            workers.execute(invocation);
+        } catch (RejectedExecutionException refused) {
+            // Not chained: the executor's message names internal objects and would reach the panel.
+            invocation.settle(null, workers.isShutdown() ? invocation.shutDownFailure() : invocation.refusal());
+        }
         return outcome;
     }
 
@@ -469,9 +501,14 @@ public class PanelResponderRegistry {
      * worth draining.
      */
     public void shutdown() {
+        shutDown = true;
         timeoutScheduler.shutdownNow();
+        workers.getQueue().clear();
         // shutdown(), never shutdownNow(): a running module call is not interrupted.
         workers.shutdown();
+        for (Invocation invocation : admitted) {
+            invocation.settle(null, invocation.shutDownFailure());
+        }
     }
 
     /**
@@ -515,16 +552,8 @@ public class PanelResponderRegistry {
             if (outcome.isDone()) {
                 return;
             }
-            CompletableFuture<JsonObject> responderFuture;
-            try {
-                responderFuture = entry.responder.apply(data);
-            } catch (RuntimeException e) {
-                settle(null, e);
-                return;
-            }
+            CompletableFuture<JsonObject> responderFuture = callResponder();
             if (responderFuture == null) {
-                settle(null, new IllegalStateException("Responder for '" + messageType
-                        + "' (owned by module '" + entry.ownerModule + "') returned null"));
                 return;
             }
             responderFuture.whenComplete((value, throwable) -> {
@@ -537,6 +566,53 @@ public class PanelResponderRegistry {
                     settle(value, null);
                 }
             });
+        }
+
+        /**
+         * Calls the responder at the framework's boundary to module code: whatever the call throws
+         * becomes this request's outcome instead of being lost in the worker. Returns {@code null}
+         * when the outcome is already settled here.
+         */
+        // PMD.AvoidCatchingGenericException: this is the boundary to module code; any exception,
+        // including a checked one thrown sneakily, must become the request's outcome.
+        @SuppressWarnings("PMD.AvoidCatchingGenericException")
+        private CompletableFuture<JsonObject> callResponder() {
+            CompletableFuture<JsonObject> responderFuture;
+            try {
+                responderFuture = entry.responder.apply(data);
+            } catch (Exception | LinkageError e) {
+                settle(null, e);
+                return null;
+            } catch (Error e) {
+                settle(null, e);
+                throw e;
+            }
+            if (responderFuture == null) {
+                settle(null, new IllegalStateException("Responder for '" + messageType
+                        + "' (owned by module '" + entry.ownerModule + "') returned null"));
+            }
+            return responderFuture;
+        }
+
+        /** The completion hook: frees the queue slot and the deadline, and stops tracking. */
+        private void release() {
+            workers.remove(this);
+            ScheduledFuture<?> task = deadline;
+            if (task != null) {
+                task.cancel(false);
+            }
+            admitted.remove(this);
+        }
+
+        private RejectedExecutionException refusal() {
+            return new RejectedExecutionException("Panel responder for '" + messageType + "' (owned by module '"
+                    + entry.ownerModule + "') was refused: " + workers.getMaximumPoolSize()
+                    + " responder calls are running and " + queueCapacity + " requests are waiting.");
+        }
+
+        private RejectedExecutionException shutDownFailure() {
+            return new RejectedExecutionException("The panel responder registry shut down before the responder for '"
+                    + messageType + "' (owned by module '" + entry.ownerModule + "') completed.");
         }
 
         /** The deadline action: take a not-yet-started invocation back, then fail the outcome. */
