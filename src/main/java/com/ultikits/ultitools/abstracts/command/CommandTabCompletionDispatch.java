@@ -167,6 +167,11 @@ public final class CommandTabCompletionDispatch {
      * {@code alpha} is offered only the literals of the {@code alpha ...} mappings they may see.
      * Until 6.3.0 the literal branch instead rescanned every visible mapping at this position,
      * ignoring the typed branch, and repeated that list once per matching candidate (case 61).
+     * <p>
+     * Each literal is offered once: several candidates can share the literal at this position
+     * ({@code alpha enable} and {@code alpha enable <target>}), so a literal is added only when
+     * the result does not already hold it, in candidate order. Parameter-slot suggestions are a
+     * different source and are appended exactly as their completer returns them.
      */
     private static List<String> suggestSubsequentToken(BiMap<String, Method> mappings, Player player,
                                                          Command command, String[] args,
@@ -180,7 +185,7 @@ public final class CommandTabCompletionDispatch {
             if (isParameterToken(arg)) {
                 completions.addAll(suggestParameterSlot(player, command, args, targetIndex, method, arg,
                         executorInstance));
-            } else {
+            } else if (!completions.contains(arg)) {
                 completions.add(arg);
             }
         }
