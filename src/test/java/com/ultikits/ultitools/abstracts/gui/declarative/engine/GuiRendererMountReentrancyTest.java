@@ -15,6 +15,8 @@ import mc.obliviate.inventory.Gui;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryCloseEvent;
+import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.Plugin;
@@ -29,6 +31,7 @@ import org.mockbukkit.mockbukkit.ServerMock;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -249,6 +252,116 @@ class GuiRendererMountReentrancyTest {
                         + ", createState=" + probe.createCount("root"),
                 "the root State must complete its first build before any didUpdateWidget; full "
                         + "lifecycle: " + lifecycle);
+    }
+
+    // ------------------------------------------------------------------
+    // Task 3: later-frame re-entrance, failed frame, close and reopen
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("A child added by a later frame that calls setState in initState does not re-enter the build")
+    void laterFrameNewChildSetStateInInitStateDoesNotReenter() {
+        TestGui gui = newGui(1);
+        // Zero interval: every request outside a build runs inline, as in later frame work
+        // that has lasted at least one interval. The one-shot counter bounds the pre-fix
+        // recursion to a single nested build.
+        GuiRenderer renderer = newRenderer(gui, 0L);
+        Probe probe = new Probe();
+        AtomicBoolean withLateChild = new AtomicBoolean(false);
+        AtomicInteger oneShot = new AtomicInteger();
+        Supplier<Widget> supplier = () -> {
+            Container.Builder builder = Container.builder()
+                    .child(TextButton.builder().text("leaf").slot(0).build());
+            if (withLateChild.get()) {
+                builder.child(new ProbeWidget(probe, () -> new OneShotRequestState("late", oneShot)));
+            }
+            return builder.build();
+        };
+
+        renderer.initialize(supplier, rootContext(1));
+        withLateChild.set(true);
+        renderer.scheduleBuild();
+
+        ProbeState first = probe.statesOf("late").get(0);
+        Element owner = first.owner;
+        assertNotNull(owner, "the late child must observe its owning Container from build(context)");
+        String afterFrame = "createState=" + probe.createCount("late")
+                + ", containerChildren=" + owner.getChildren().size()
+                + ", ownsFirstState=" + owner.getChildren().contains(first.element);
+        renderer.dispose();
+
+        assertEquals("createState=1, containerChildren=2, ownsFirstState=true; disposeCounts=[1]",
+                afterFrame + "; disposeCounts=" + probe.disposeCounts("late"),
+                "a request raised by a child mounted during later frame work must not re-enter "
+                        + "reconciliation of a parent whose child list is not yet committed; every "
+                        + "created State must be owned and disposed exactly once at close");
+    }
+
+    @Test
+    @DisplayName("A frame that throws does not stop later frames from rendering")
+    void failedFrameDoesNotWedgeRenderer() {
+        TestGui gui = newGui(1);
+        GuiRenderer renderer = newRenderer(gui, 0L);
+        AtomicInteger frames = new AtomicInteger();
+        // No State is created in the failing frame, so it raises no rebuild request.
+        Supplier<Widget> supplier = () -> {
+            int frame = frames.incrementAndGet();
+            if (frame == 2) {
+                throw new IllegalStateException("frame 2 fails on purpose");
+            }
+            return TextButton.builder().text("frame" + frame).slot(0).build();
+        };
+
+        renderer.initialize(supplier, rootContext(1));
+        renderer.scheduleBuild(); // frame 2 throws; GuiScheduler.executeFrame logs it
+        renderer.scheduleBuild(); // frame 3 must build normally
+
+        assertEquals("frames=3, slot0=frame3",
+                "frames=" + frames.get() + ", slot0=" + displayNameAt(gui, 0),
+                "a frame that throws must leave the renderer able to run later frames");
+    }
+
+    @Test
+    @DisplayName("Closing and reopening a DeclarativeGui page starts clean each time and builds nothing after close")
+    void closeAndReopenDeclarativeGuiStartsCleanEachTime() {
+        Probe probe = new Probe();
+        AtomicInteger builds = new AtomicInteger();
+        ReopenPage page = new ReopenPage(player, probe, builds);
+
+        page.setInventory(Bukkit.createInventory(page, 9));
+        page.onOpen(mock(InventoryOpenEvent.class));
+        drain();
+        int createdFirstOpen = probe.createCount("page-child");
+        String slotFirstOpen = displayNameAt(page, 0);
+        page.onClose(mock(InventoryCloseEvent.class));
+        int buildsAtFirstClose = builds.get();
+        drain();
+        int buildsAfterFirstClose = builds.get() - buildsAtFirstClose;
+
+        page.setInventory(Bukkit.createInventory(page, 9));
+        page.onOpen(mock(InventoryOpenEvent.class));
+        drain();
+        int createdSecondOpen = probe.createCount("page-child") - createdFirstOpen;
+        String slotSecondOpen = displayNameAt(page, 0);
+        page.onClose(mock(InventoryCloseEvent.class));
+        int buildsAtSecondClose = builds.get();
+        drain();
+        int buildsAfterSecondClose = builds.get() - buildsAtSecondClose;
+
+        int disposed = 0;
+        for (int count : probe.disposeCounts("page-child")) {
+            disposed += count;
+        }
+        assertEquals("open1[createState=1, slot0=ready, buildsAfterClose=0] "
+                        + "open2[createState=1, slot0=ready, buildsAfterClose=0] "
+                        + "disposed=2 of created=2",
+                "open1[createState=" + createdFirstOpen + ", slot0=" + slotFirstOpen
+                        + ", buildsAfterClose=" + buildsAfterFirstClose + "] "
+                        + "open2[createState=" + createdSecondOpen + ", slot0=" + slotSecondOpen
+                        + ", buildsAfterClose=" + buildsAfterSecondClose + "] "
+                        + "disposed=" + disposed + " of created=" + probe.createCount("page-child"),
+                "each open must create exactly one State for the child, close must dispose every "
+                        + "created State, and no build may run after close");
     }
 
     // ------------------------------------------------------------------
@@ -653,6 +766,52 @@ class GuiRendererMountReentrancyTest {
 
         int listenerCount() {
             return listeners.size();
+        }
+    }
+
+    /** Calls setState in initState only for the first State this counter ever sees. */
+    private static final class OneShotRequestState extends ProbeState {
+        private final AtomicInteger oneShot;
+        private boolean requested;
+
+        OneShotRequestState(String id, AtomicInteger oneShot) {
+            super(id);
+            this.oneShot = oneShot;
+        }
+
+        @Override
+        protected void onInit() {
+            if (oneShot.getAndIncrement() == 0) {
+                setState(() -> requested = true);
+            }
+        }
+
+        @Override
+        protected Widget render() {
+            return TextButton.builder().text(requested ? "late-requested" : "late").slot(1).build();
+        }
+    }
+
+    /**
+     * A DeclarativeGui page (production default scheduler) whose Container child calls setState
+     * in initState. Counts its own build calls.
+     */
+    private static final class ReopenPage extends DeclarativeGui {
+        private final Probe probe;
+        private final AtomicInteger builds;
+
+        ReopenPage(Player player, Probe probe, AtomicInteger builds) {
+            super(player, "mount-reentrancy-reopen-page", "Test", 1);
+            this.probe = probe;
+            this.builds = builds;
+        }
+
+        @Override
+        public Widget build(BuildContext context) {
+            builds.incrementAndGet();
+            return Container.builder()
+                    .child(new ProbeWidget(probe, () -> new ReadyLabelState("page-child")))
+                    .build();
         }
     }
 }
