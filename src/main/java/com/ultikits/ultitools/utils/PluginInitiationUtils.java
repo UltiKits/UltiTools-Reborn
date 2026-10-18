@@ -945,9 +945,18 @@ public class PluginInitiationUtils {
 
     /**
      * Dispatches {@code type} to its registered responder and, once the registry's returned future
-     * settles, sends exactly one reply through the same client accessor the other outbound helpers
-     * use — {@code panelWS.sendMessage(...)}, matching {@code sendCapabilityRefusal}'s and
-     * {@code FileOperationManager#sendFileOperationResult}'s existing pattern (WIRE-16, D-27).
+     * settles, sends at most one reply through the session's WebSocket client that was current when
+     * the request was admitted (WIRE-16, D-27; UltiTools-Reborn#677).
+     * <p>
+     * The current {@link CloudSession} and its WebSocket client are captured here, when the request
+     * is admitted. The result is sent only to that client of that session, and only while UltiTools
+     * accepts panel work ({@link #isAcceptingPanelMessages()}), the admitted session is still
+     * current (no logout replaced it), the session's client is still the admitted client (no
+     * reconnect replaced it) and that client is still connected. Otherwise the reply is dropped
+     * with one FINE line naming the type and the panel's own timeout applies; a reply is not
+     * redirected to the client of a newer session or connection. The check and the send run on whichever thread settles the outcome, or at once on
+     * the dispatching thread when {@link PanelResponderRegistry#dispatch} returns an outcome that is
+     * already settled (an unknown type, a refusal, or a registry that has shut down).
      * <p>
      * No Bukkit main-thread hop here, deliberately: unlike {@link PanelMessageEvent}'s publish
      * (which must run on the main thread because a subscriber may touch Bukkit API), sending a
@@ -962,6 +971,9 @@ public class PluginInitiationUtils {
      * request carried no {@code requestId}, the reply is logged rather than sent: the panel has no
      * way to correlate an uncorrelated reply, matching {@link #sendCapabilityRefusal}'s same
      * reasoning for {@code commandId}/{@code operationId}.
+     * <p>
+     * The reply is built from a copy of the responder's result; the object the responder returned
+     * is never changed, so a responder may return the same cached object for every request.
      *
      * @param type     the message type, already confirmed to have a registered responder
      * @param data     the message's {@code data} object, possibly {@code null}
@@ -969,13 +981,32 @@ public class PluginInitiationUtils {
      */
     private static void dispatchToResponder(String type, JsonObject data, PanelResponderRegistry registry) {
         String requestId = data != null ? readString(data, "requestId") : null;
+        CloudSession admittedSession = CloudSession.current();
+        UltiPanelWebSocketClient admittedClient = admittedSession.getWebSocketClient();
         registry.dispatch(type, data, requestId).whenComplete((result, throwable) -> {
             if (requestId == null || requestId.isEmpty()) {
                 PanelConnectionLog.log(Level.FINE,
                     String.format("Responder reply for type '%s' not sent — request carried no requestId", type));
                 return;
             }
-            JsonObject payload = throwable != null ? new JsonObject() : result;
+            if (!isAcceptingPanelMessages()) {
+                logDroppedWhileDisabling("responder reply for type '" + type + "'");
+                return;
+            }
+            if (admittedClient == null) {
+                PanelConnectionLog.log(Level.FINE,
+                    "Responder reply for type '" + type + "' not sent — no WebSocket client connected");
+                return;
+            }
+            if (!isAdmittedConnectionLive(admittedSession, admittedClient)) {
+                PanelConnectionLog.log(Level.FINE, "Responder reply for type '" + type
+                    + "' not sent: the panel connection admitted for the request has closed or been replaced");
+                return;
+            }
+            // Each reply is built from its own copy: a responder may return one cached object for
+            // every call, and replies run concurrently, so writing requestId into that object would
+            // let one reply carry another request's id and would change the responder's object.
+            JsonObject payload = throwable != null || result == null ? new JsonObject() : result.deepCopy();
             payload.addProperty("requestId", requestId);
             if (throwable != null) {
                 payload.addProperty("error", rootCauseMessage(throwable));
@@ -984,14 +1015,30 @@ public class PluginInitiationUtils {
             JsonObject response = new JsonObject();
             response.addProperty("type", type);
             response.add("data", payload);
-            if (currentWebSocketClient() != null) {
-                response.addProperty("serverId", currentWebSocketClient().getServerId());
-                currentWebSocketClient().sendMessage(response);
-            } else {
-                PanelConnectionLog.log(Level.FINE,
-                    "Responder reply for type '" + type + "' not sent — no WebSocket client connected");
-            }
+            response.addProperty("serverId", admittedClient.getServerId());
+            admittedClient.sendMessage(response);
         });
+    }
+
+    /**
+     * Whether the client captured when a responder request was admitted can still carry its reply:
+     * the admitted session is still current, its client is still the admitted client, and that client
+     * is still connected.
+     *
+     * @param admittedSession the session that was current when the request was admitted
+     * @param admittedClient  that session's client at admission, not {@code null}
+     * @return {@code true} when the reply may be sent through {@code admittedClient}
+     */
+    // PMD.CompareObjectsWithEquals: deliberate reference-identity check. "The same connection" is
+    // the same client object; a reconnect installs a new client instance on the session, and the
+    // client does not override equals(), so equals() would say the same thing while suggesting
+    // value equality.
+    @SuppressWarnings("PMD.CompareObjectsWithEquals")
+    private static boolean isAdmittedConnectionLive(CloudSession admittedSession,
+                                                    UltiPanelWebSocketClient admittedClient) {
+        return admittedSession.isCurrent()
+            && admittedSession.getWebSocketClient() == admittedClient
+            && admittedClient.isConnected();
     }
 
     /**
@@ -1047,11 +1094,15 @@ public class PluginInitiationUtils {
             if (eventBus == null) {
                 return;
             }
+            // Built here, on the dispatching thread, not inside the main-thread task: the event's
+            // constructor copies data and the envelope now, so the event carries the request as
+            // received whatever any other thread does to those objects before the task runs.
+            PanelMessageEvent event = new PanelMessageEvent(type, data, message);
             scheduleUnlessDisabling("PanelMessageEvent " + type, () -> Bukkit.getScheduler().runTask(instance, () -> {
                 // Two long reads and a comparison on the fast path — no allocation, no logging,
                 // until the slow branch below is actually taken.
                 long startNanos = System.nanoTime();
-                eventBus.publish(new PanelMessageEvent(type, data, message));
+                eventBus.publish(event);
                 long elapsedMillis = (System.nanoTime() - startNanos) / 1_000_000L;
                 if (elapsedMillis > SLOW_PANEL_EVENT_HANDLER_THRESHOLD_MILLIS) {
                     // Times the whole publish, not an individual handler: EventBus.publish

@@ -16,7 +16,9 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -42,6 +44,7 @@ import com.ultikits.ultitools.manager.CommandExecutionManager;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.utils.TestHelper;
+import com.ultikits.ultitools.websocket.PanelResponderRegistry;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
 
 /**
@@ -357,6 +360,42 @@ class PanelMessageEventDispatchTest {
             invokeHandleInboundMessage(notificationMessage("hi"));
 
             assertThatCode(() -> server.getScheduler().performOneTick()).doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("a module responder changing its request data does not change the published event")
+        void responderChangingItsDataDoesNotChangeThePublishedEvent() throws Exception {
+            PanelResponderRegistry registry = new PanelResponderRegistry();
+            CountDownLatch changed = new CountDownLatch(1);
+            registry.registerResponder("module_owned_echo", data -> {
+                data.remove("k");
+                data.addProperty("added", "by-responder");
+                changed.countDown();
+                return CompletableFuture.completedFuture(data);
+            }, "module-a");
+            lenient().when(UltiTools.getInstance().getPanelResponderRegistry()).thenReturn(registry);
+            try {
+                JsonObject data = new JsonObject();
+                data.addProperty("k", "v");
+                data.addProperty("requestId", "req-1");
+                JsonObject message = new JsonObject();
+                message.addProperty("type", "module_owned_echo");
+                message.add("data", data);
+                JsonObject asReceived = message.deepCopy();
+
+                invokeHandleInboundMessage(message);
+                // The responder has finished changing its data before the event's main-thread task runs.
+                assertThat(changed.await(5, TimeUnit.SECONDS)).as("the responder ran").isTrue();
+                server.getScheduler().performOneTick();
+
+                assertThat(received).hasSize(1);
+                assertThat(received.get(0).getData())
+                        .as("the event's data is the request as received").isEqualTo(asReceived.getAsJsonObject("data"));
+                assertThat(received.get(0).getRawMessage())
+                        .as("the event's envelope is the request as received").isEqualTo(asReceived);
+            } finally {
+                registry.shutdown();
+            }
         }
     }
 

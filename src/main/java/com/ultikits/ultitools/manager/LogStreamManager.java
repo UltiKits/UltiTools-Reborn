@@ -238,15 +238,18 @@ public class LogStreamManager implements Listener {
     }
     
     /**
-     * Sends the initialization-complete logs.
+     * Sends the initialization-complete logs. Both lines are direct entries at {@code "info"} and
+     * obey the panel's levels like every other direct entry ({@link #isDirectLevelEnabled}).
      */
     private void sendInitializationLogs() {
-        // Send the server-startup information
-        logTransmitter.info(FrameworkText.text("UltiTools 日志传输系统已启动"), "plugin:UltiTools");
+        if (isDirectLevelEnabled("info")) {
+            // Send the server-startup information
+            logTransmitter.info(FrameworkText.text("UltiTools 日志传输系统已启动"), "plugin:UltiTools");
 
-        // Send the current online-player-count information
-        int onlineCount = Bukkit.getOnlinePlayers().size();
-        logTransmitter.info(FrameworkText.format("当前在线玩家数量: %d", onlineCount), "server");
+            // Send the current online-player-count information
+            int onlineCount = Bukkit.getOnlinePlayers().size();
+            logTransmitter.info(FrameworkText.format("当前在线玩家数量: %d", onlineCount), "server");
+        }
 
         // Send the system configuration information
         if (systemLogHandler != null) {
@@ -730,15 +733,44 @@ public class LogStreamManager implements Listener {
     /**
      * Sends a custom log message directly.
      * Used for logging plugin-specific events.
+     * <p>
+     * The panel's {@code levels} apply: the entry is sent only if its level is currently enabled
+     * in the {@link SystemLogHandler}'s level state (a null or blank level counts as
+     * {@code "info"}, matched case-insensitively; the level text sent is left as given). The
+     * panel's {@code excluded-loggers} do not apply, because a direct entry has no logger name.
      */
     public void sendCustomLog(String level, String message, String source) {
-        if (logTransmitter != null) {
+        if (logTransmitter != null && isDirectLevelEnabled(level)) {
             logTransmitter.sendLog(level, message, source, null);
         }
     }
 
     /**
-     * Sends a player-event log.
+     * Decides whether a log entry this class sends directly, rather than through
+     * {@link SystemLogHandler#publish}, may be sent at {@code level} (case 29b95cd4).
+     * <p>
+     * The handler stays the single level state: this reads its current enabled set on every call,
+     * so a panel {@code config} request governs direct entries and handler records alike. A null
+     * or blank level counts as {@code "info"}, as {@link UltiPanelLogTransmitter} records it; the
+     * comparison lower-cases with {@link Locale#ROOT} because the handler's set is lower case. With
+     * no handler wired yet there is no level state to apply and the entry is sent as before.
+     */
+    private boolean isDirectLevelEnabled(String level) {
+        SystemLogHandler handler = systemLogHandler;
+        if (handler == null) {
+            return true;
+        }
+        String normalized = level == null || level.trim().isEmpty()
+                ? "info" : level.toLowerCase(Locale.ROOT);
+        Set<String> enabled = handler.getEnabledLevels();
+        return enabled != null && enabled.contains(normalized);
+    }
+
+    /**
+     * Sends a player-event log at {@code "info"}.
+     * <p>
+     * The panel's {@code levels} apply, as for {@link #sendCustomLog}; the panel's
+     * {@code excluded-loggers} do not, because a direct entry has no logger name.
      */
     public void sendPlayerEventLog(String eventType, String playerName, String message) {
         sendCustomLog("info", 
@@ -747,7 +779,10 @@ public class LogStreamManager implements Listener {
     }
 
     /**
-     * Sends a plugin-action log.
+     * Sends a plugin-action log at {@code "info"}.
+     * <p>
+     * The panel's {@code levels} apply, as for {@link #sendCustomLog}; the panel's
+     * {@code excluded-loggers} do not, because a direct entry has no logger name.
      */
     public void sendPluginActionLog(String action, String details) {
         sendCustomLog("info",
