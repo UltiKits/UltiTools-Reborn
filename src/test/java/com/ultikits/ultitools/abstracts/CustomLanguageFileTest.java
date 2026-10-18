@@ -30,6 +30,7 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.mockito.Mockito;
 
 import com.google.gson.JsonParseException;
 
@@ -144,6 +145,20 @@ class CustomLanguageFileTest {
 
         assertThat(plugin.i18n("greeting")).isEqualTo("你好");
         assertThat(plugin.i18n("farewell")).isEqualTo("再见");
+    }
+
+    @Test
+    @DisplayName("#676 case 26 sibling: a module installed under a path with a space still extracts its bundled res/ files, without the extraction failure line")
+    void moduleUnderEscapedInstallPathExtractsItsBundledResources() throws Exception {
+        reinstallUnder("server install");
+        fixture.jarEntry("res/notes.txt", "bundled notes\n");
+
+        start();
+
+        assertThat(BootLanguageFixture.bytesOf(fixture.disk("res/notes.txt"))).isEqualTo(utf8("bundled notes\n"));
+        assertThat(Mockito.mockingDetails(fixture.logger()).getInvocations())
+                .noneMatch(call -> Arrays.stream(call.getArguments())
+                        .anyMatch(argument -> String.valueOf(argument).contains("Failed to save resources from jar")));
     }
 
     @Test
