@@ -19,7 +19,9 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
@@ -42,6 +44,7 @@ import org.mockito.ArgumentCaptor;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.ultikits.ultitools.utils.CredentialStore;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.utils.TestHelper;
@@ -754,6 +757,103 @@ class FileOperationTargetConsistencyTest {
         assertThat(readText(dataJson)).as("the credential file is untouched").isEqualTo(DATA_JSON_CONTENT);
         assertThat(outcome.success()).isTrue();
         assertAllowedEntry(outcome, "delete", "plugins/notes.txt");
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Review-1 finding (gate-1 security review of PR #686): a recursive delete never follows a
+    // symbolic link found inside the deleted tree. Fixture: server root = the temporary
+    // directory, single editable root = plugins; plugins/victim holds keep.txt and a real
+    // subdirectory inner/ holding inner.txt; each test places one link inside that tree. A link
+    // inside the tree is removed as a link; its target and the target's contents stay
+    // byte-identical; real subdirectories are still emptied and removed.
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("a recursive delete removes an in-tree link to an outside directory as a link only")
+    void recursiveDeleteDoesNotFollowInTreeLinkToOutsideDirectory() throws Exception {
+        Path victim = buildRecursiveDeleteVictim();
+        Path outsideDir = Files.createDirectories(outside.resolve("odir"));
+        Path nested = Files.createDirectories(outsideDir.resolve("nested"));
+        Files.write(outsideDir.resolve("sentinel.txt"), OUTSIDE_SECRET.getBytes(StandardCharsets.UTF_8));
+        Files.write(nested.resolve("deep.txt"), OUTSIDE_VICTIM.getBytes(StandardCharsets.UTF_8));
+        Map<String, String> before = snapshot(outsideDir);
+        link(victim.resolve("olink"), outsideDir);
+
+        Outcome outcome = send(recursiveDelete("plugins/victim"));
+
+        assertThat(Files.exists(victim, LinkOption.NOFOLLOW_LINKS))
+                .as("the requested tree, the link inside it included, is removed").isFalse();
+        assertThat(snapshot(outsideDir)).as("the outside directory is byte-identical").isEqualTo(before);
+        assertThat(outcome.success()).isTrue();
+        assertAllowedEntry(outcome, "delete", "plugins/victim");
+    }
+
+    @Test
+    @DisplayName("a recursive delete removes an in-tree link to the action-log directory as a link only")
+    void recursiveDeleteDoesNotFollowInTreeLinkToActionLogDirectory() throws Exception {
+        Path victim = buildRecursiveDeleteVictim();
+        Path security = Files.createDirectories(tmp.resolve("plugins").resolve("UltiTools").resolve("security"));
+        Files.write(security.resolve("action.log.0"), ACTION_LOG_SENTINEL.getBytes(StandardCharsets.UTF_8));
+        Files.write(security.resolve("action.log.1"), (ACTION_LOG_SENTINEL + "-1").getBytes(StandardCharsets.UTF_8));
+        Map<String, String> before = snapshot(security);
+        link(victim.resolve("inner").resolve("loglink"), security);
+
+        Outcome outcome = send(recursiveDelete("plugins/victim"));
+
+        assertThat(Files.exists(victim, LinkOption.NOFOLLOW_LINKS))
+                .as("the requested tree, the link inside it included, is removed").isFalse();
+        assertThat(snapshot(security)).as("the action-log directory is byte-identical").isEqualTo(before);
+        assertThat(outcome.success()).isTrue();
+        assertAllowedEntry(outcome, "delete", "plugins/victim");
+    }
+
+    @Test
+    @DisplayName("a recursive delete removes an in-tree link to the credential directory as a link only")
+    void recursiveDeleteDoesNotFollowInTreeLinkToCredentialDirectory() throws Exception {
+        Path victim = buildRecursiveDeleteVictim();
+        Path credentialDir = Files.createDirectories(tmp.resolve(".ultikits"));
+        Files.write(credentialDir.resolve(CredentialStore.CREDENTIAL_FILE_NAME),
+                DATA_JSON_CONTENT.getBytes(StandardCharsets.UTF_8));
+        Map<String, String> before = snapshot(credentialDir);
+        link(victim.resolve("credlink"), credentialDir);
+
+        Outcome outcome = send(recursiveDelete("plugins/victim"));
+
+        assertThat(Files.exists(victim, LinkOption.NOFOLLOW_LINKS))
+                .as("the requested tree, the link inside it included, is removed").isFalse();
+        assertThat(snapshot(credentialDir)).as("the credential directory is byte-identical").isEqualTo(before);
+        assertThat(outcome.allMessagesJson()).doesNotContain(TOKEN_SENTINEL);
+        assertThat(outcome.success()).isTrue();
+        assertAllowedEntry(outcome, "delete", "plugins/victim");
+    }
+
+    /** Builds plugins/victim (keep.txt, inner/inner.txt) and points the manager at root = plugins. */
+    private Path buildRecursiveDeleteVictim() throws Exception {
+        Path plugins = Files.createDirectories(tmp.resolve("plugins"));
+        Path victim = Files.createDirectories(plugins.resolve("victim"));
+        Path inner = Files.createDirectories(victim.resolve("inner"));
+        Files.write(victim.resolve("keep.txt"), "keep".getBytes(StandardCharsets.UTF_8));
+        Files.write(inner.resolve("inner.txt"), "inner".getBytes(StandardCharsets.UTF_8));
+        pointManagerAt(tmp, plugins);
+        return victim;
+    }
+
+    private static JsonObject recursiveDelete(String path) {
+        JsonObject data = request("delete", path);
+        data.addProperty("recursive", true);
+        return data;
+    }
+
+    /** Every entry under {@code dir} (links not followed): relative path to bytes, or a directory marker. */
+    private static Map<String, String> snapshot(Path dir) throws IOException {
+        Map<String, String> entries = new TreeMap<>();
+        try (Stream<Path> walk = Files.walk(dir)) {
+            for (Path p : walk.collect(Collectors.toList())) {
+                String key = dir.relativize(p).toString();
+                entries.put(key, Files.isDirectory(p, LinkOption.NOFOLLOW_LINKS) ? "<dir>" : readText(p));
+            }
+        }
+        return entries;
     }
 
     private void buildAliasFixture() throws Exception {
