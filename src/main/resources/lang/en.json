@@ -9,6 +9,7 @@
   "模块已卸载，但在 %s 中没有识别出属于它的 JAR 文件。": "The module was unloaded, but no JAR file in %s could be identified as its own.",
   "识别为该模块的 JAR 文件均已删除。": "The JAR files identified as this module's have been deleted.",
   "卸载失败！以下模块 JAR 文件无法删除，重启后模块会再次加载，请手动删除：%s": "Uninstall failed! These module JAR files could not be deleted and will load the module again after a restart; delete them by hand: %s",
+  "这次删除也未能记录到下次启动（%s），因此下次启动不会删除它们。": "The deletion could not be recorded for the next start either (%s), so the next start will not delete them.",
   "传送中...": "Teleporting...",
   "传送成功！": "Teleport Succeed!",
   "传送失败！": "Teleport Failed!",

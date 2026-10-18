@@ -329,6 +329,20 @@ class ModuleRemovalDeferredTest {
                 .isNotInstanceOf(PluginInstallUtils.RemovalDeferredException.class);
         assertThat(namedFiles(thrown)).containsExactly(jar.getAbsolutePath());
         assertThat(jar).exists();
+        // The record failure travels on its own carrier, with the original failure as its cause.
+        List<Throwable> carriers = new ArrayList<>();
+        for (Throwable suppressed : thrown.getSuppressed()) {
+            if (suppressed instanceof PluginInstallUtils.RemovalNotRecordedException) {
+                carriers.add(suppressed);
+            }
+        }
+        assertThat(carriers).hasSize(1);
+        assertThat(carriers.get(0)).isNotInstanceOf(FileSystemException.class);
+        assertThat(carriers.get(0).getCause()).isInstanceOf(java.nio.file.AccessDeniedException.class);
+        assertThat(((FileSystemException) carriers.get(0).getCause()).getFile())
+                .startsWith(ultikitsFolder().getAbsolutePath());
+        assertThat(((PluginInstallUtils.RemovalNotRecordedException) carriers.get(0)).getReason())
+                .startsWith("AccessDeniedException");
     }
 
     @Test
@@ -350,5 +364,14 @@ class ModuleRemovalDeferredTest {
         assertThat(deleteByHand).hasSize(1);
         assertThat(deleteByHand.get(0)).contains(jar.getAbsolutePath())
                 .doesNotContain(ultikitsFolder().getAbsolutePath());
+        // The record failure is said on a line of its own, with its reason and nothing to delete.
+        List<String> notRecorded = new ArrayList<>();
+        for (String message : messages) {
+            if (message.contains("这次删除也未能记录到下次启动")) {
+                notRecorded.add(message);
+            }
+        }
+        assertThat(notRecorded).hasSize(1);
+        assertThat(notRecorded.get(0)).contains("AccessDeniedException").doesNotContain("请手动删除");
     }
 }

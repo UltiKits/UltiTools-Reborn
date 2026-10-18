@@ -426,6 +426,12 @@ public class PluginInstallCommands extends BaseCommandExecutor {
     /**
      * Names every jar the uninstall could not delete. Each one loads the module again at the next
      * start, so an instruction that names only the first is one the operator cannot act on (#501).
+     *
+     * <p>When the deletion could not be recorded for the next start either, that is said on a line of
+     * its own, with its reason and no instruction to delete anything: the record failure travels as a
+     * {@link PluginInstallUtils.RemovalNotRecordedException}, not a {@code FileSystemException}, so
+     * the file it names -- a transaction record or temporary file under the server root's
+     * {@code .ultikits} folder -- is never listed among the module JARs to delete.
      */
     private static void sendUndeletedJars(CommandSender sender, FileSystemException failure) {
         List<String> files = new ArrayList<>();
@@ -437,11 +443,45 @@ public class PluginInstallCommands extends BaseCommandExecutor {
                 files.isEmpty()
                         ? modulesFolderPath()
                         : String.join(", ", files)));
+        PluginInstallUtils.RemovalNotRecordedException notRecorded = notRecordedIn(failure,
+                java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()));
+        if (notRecorded != null) {
+            sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
+                    "这次删除也未能记录到下次启动（%s），因此下次启动不会删除它们。"), notRecorded.getReason()));
+        }
+    }
+
+    /**
+     * The record failure a failure carries, wherever in its suppressed chain it sits; {@code null}
+     * when there is none. Remembers what it has walked, for the same reason
+     * {@link #collectUndetermined(Throwable, List, java.util.Set)} does.
+     *
+     * @param failure the failure to walk
+     * @param seen    the throwables already visited, by identity
+     * @return the carrier, or {@code null}
+     */
+    private static PluginInstallUtils.RemovalNotRecordedException notRecordedIn(Throwable failure,
+                                                                              java.util.Set<Throwable> seen) {
+        if (!seen.add(failure)) {
+            return null;
+        }
+        if (failure instanceof PluginInstallUtils.RemovalNotRecordedException) {
+            return (PluginInstallUtils.RemovalNotRecordedException) failure;
+        }
+        for (Throwable suppressed : failure.getSuppressed()) {
+            PluginInstallUtils.RemovalNotRecordedException found = notRecordedIn(suppressed, seen);
+            if (found != null) {
+                return found;
+            }
+        }
+        return null;
     }
 
     /**
      * Collects the file named by {@code failure} and by every {@code FileSystemException} attached
-     * to it, at any depth -- a file the operator is not told about is one they leave behind.
+     * to it, at any depth -- a file the operator is not told about is one they leave behind. A
+     * record failure is not one of them: it travels as a
+     * {@link PluginInstallUtils.RemovalNotRecordedException}, which this walk skips by type.
      *
      * @param failure the failure to walk
      * @param files   the names collected so far, in the order they were found
