@@ -545,4 +545,113 @@ class MergedAnnotationResolverTest {
             assertArrayEquals(new String[] {"super"}, inherited.value());
         }
     }
+
+    // ===== C46 fixtures: composed annotations whose attributes alias @UltiToolsModule's =====
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.TYPE)
+    @UltiToolsModule
+    @interface ComposedModule {
+        @AliasFor(annotation = UltiToolsModule.class, attribute = "scanBasePackages")
+        String[] packages() default {};
+
+        @AliasFor(annotation = UltiToolsModule.class, attribute = "cmdExecutor")
+        boolean commands() default true;
+    }
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.TYPE)
+    @ComposedModule
+    @interface OuterComposedModule {
+        @AliasFor(annotation = ComposedModule.class, attribute = "packages")
+        String[] outerPackages() default {};
+    }
+
+    @ComposedModule(packages = "x.y")
+    static class ComposedPackagesFixture {
+    }
+
+    @ComposedModule(commands = false)
+    static class ComposedCommandsOffFixture {
+    }
+
+    @OuterComposedModule(outerPackages = "deep.pkg")
+    static class TwoLevelPackagesFixture {
+    }
+
+    /**
+     * C46 (decision P-10 merge): a value set on a composed annotation travels through every
+     * intermediate {@code @AliasFor} to the annotation finally requested, at any depth -- an
+     * attribute aliasing {@code @UltiToolsModule.scanBasePackages} must reach
+     * {@code @ComponentScan.basePackages}, because {@code scanBasePackages} itself aliases it.
+     */
+    @Nested
+    @DisplayName("C46: alias values travel through intermediate annotations to the final target")
+    class AliasChainPropagationTests {
+
+        @Test
+        @DisplayName("A composed attribute aliasing scanBasePackages reaches @ComponentScan.basePackages")
+        void composedAliasReachesComponentScan() {
+            ComponentScan merged = MergedAnnotationResolver.find(ComposedPackagesFixture.class, ComponentScan.class);
+
+            assertNotNull(merged);
+            assertArrayEquals(new String[] {"x.y"}, merged.basePackages(),
+                    "the value must be forwarded through @UltiToolsModule.scanBasePackages, not dropped");
+        }
+
+        @Test
+        @DisplayName("Control: the same composed attribute reaches @UltiToolsModule.scanBasePackages")
+        void composedAliasReachesUltiToolsModule() {
+            UltiToolsModule merged = MergedAnnotationResolver.find(ComposedPackagesFixture.class, UltiToolsModule.class);
+
+            assertNotNull(merged);
+            assertArrayEquals(new String[] {"x.y"}, merged.scanBasePackages());
+        }
+
+        @Test
+        @DisplayName("A composed boolean aliasing cmdExecutor reaches @EnableAutoRegister.cmdExecutor")
+        void composedBooleanAliasReachesEnableAutoRegister() {
+            EnableAutoRegister merged =
+                    MergedAnnotationResolver.find(ComposedCommandsOffFixture.class, EnableAutoRegister.class);
+
+            assertNotNull(merged);
+            assertFalse(merged.cmdExecutor(),
+                    "commands = false must be forwarded through @UltiToolsModule.cmdExecutor");
+            assertTrue(merged.eventListener(), "the sibling switch stays at its default");
+        }
+
+        @Test
+        @DisplayName("A two-level composition reaches @ComponentScan.basePackages")
+        void twoLevelCompositionReachesComponentScan() {
+            ComponentScan merged = MergedAnnotationResolver.find(TwoLevelPackagesFixture.class, ComponentScan.class);
+
+            assertNotNull(merged);
+            assertArrayEquals(new String[] {"deep.pkg"}, merged.basePackages());
+        }
+
+        @Test
+        @DisplayName("A two-level composition reaches @UltiToolsModule.scanBasePackages")
+        void twoLevelCompositionReachesUltiToolsModule() {
+            UltiToolsModule merged = MergedAnnotationResolver.find(TwoLevelPackagesFixture.class, UltiToolsModule.class);
+
+            assertNotNull(merged);
+            assertArrayEquals(new String[] {"deep.pkg"}, merged.scanBasePackages());
+        }
+
+        @Test
+        @DisplayName("Control: a two-level composition reaches the inner composed annotation")
+        void twoLevelCompositionReachesInnerComposedAnnotation() {
+            ComposedModule merged = MergedAnnotationResolver.find(TwoLevelPackagesFixture.class, ComposedModule.class);
+
+            assertNotNull(merged);
+            assertArrayEquals(new String[] {"deep.pkg"}, merged.packages());
+        }
+
+        @Test
+        @DisplayName("Control: the composed fixture annotations pass structural validation")
+        void composedAnnotationsPassValidation() {
+            assertDoesNotThrow(() -> MergedAnnotationResolver.validateAliases(ComposedModule.class));
+            assertDoesNotThrow(() -> MergedAnnotationResolver.validateAliases(OuterComposedModule.class));
+        }
+    }
 }
