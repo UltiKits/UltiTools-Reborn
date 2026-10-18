@@ -317,6 +317,19 @@ class PluginManagerFirstAssemblyTest {
                 fixture(CONFIG_MODULE + "$ConfigNeedingService"), fixture(CONFIG_MODULE + "$ScopeObservingService"));
     }
 
+    /**
+     * Stubs the data store so {@code ConfigReadyFixtureModule}'s observing service can ask for an
+     * operator: the scoped overload answers {@code scoped}, the unscoped legacy overload
+     * {@code unscoped}. The fixture entity is not a {@code @Table} entity of the module, so the
+     * store's real ownership check would refuse it.
+     */
+    void stubOperatorStore(DataOperator<?> scoped, DataOperator<?> unscoped) {
+        DataStore dataStore = mock(DataStore.class, CALLS_REAL_METHODS);
+        doReturn(scoped).when(dataStore).getOperator(any(DataScope.class), any());
+        doReturn(unscoped).when(dataStore).getOperator(any(UltiToolsPlugin.class), any());
+        lenient().when(ultiTools.getDataStore()).thenReturn(dataStore);
+    }
+
     /** Returns the module's config entity, constructed from {@code loader}, from getAllConfigEntities. */
     AbstractConfigEntity supplyConfigEntity(FixtureJarClassLoader loader) throws Exception {
         AbstractConfigEntity config = (AbstractConfigEntity) Class.forName(CONFIG_MODULE + "$ReadyConfig", true, loader)
@@ -425,6 +438,7 @@ class PluginManagerFirstAssemblyTest {
         }
 
         private void assertConfigDependentServiceLoads(EntryPoint entryPoint) throws Exception {
+            stubOperatorStore(mock(DataOperator.class), mock(DataOperator.class));
             FixtureJarClassLoader loader = configLoader();
             AbstractConfigEntity config = supplyConfigEntity(loader);
             Loaded loaded = load(entryPoint, loader, CONFIG_MODULE);
@@ -437,11 +451,7 @@ class PluginManagerFirstAssemblyTest {
 
         private void assertPostConstructSeesScope(EntryPoint entryPoint) throws Exception {
             DataOperator<?> scoped = mock(DataOperator.class);
-            DataOperator<?> unscoped = mock(DataOperator.class);
-            DataStore dataStore = mock(DataStore.class, CALLS_REAL_METHODS);
-            doReturn(scoped).when(dataStore).getOperator(any(DataScope.class), any());
-            doReturn(unscoped).when(dataStore).getOperator(any(UltiToolsPlugin.class), any());
-            lenient().when(ultiTools.getDataStore()).thenReturn(dataStore);
+            stubOperatorStore(scoped, mock(DataOperator.class));
             FixtureJarClassLoader loader = configLoader();
             // The config entity comes from the parent container here, so this case does not
             // depend on when the module's own config entities are registered (that is the case
