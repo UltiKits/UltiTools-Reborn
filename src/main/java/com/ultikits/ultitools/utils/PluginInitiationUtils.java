@@ -945,17 +945,16 @@ public class PluginInitiationUtils {
 
     /**
      * Dispatches {@code type} to its registered responder and, once the registry's returned future
-     * settles, sends at most one reply through the client that received the request (WIRE-16,
-     * D-27; UltiTools-Reborn#677).
+     * settles, sends at most one reply through the session's WebSocket client that was current when
+     * the request was admitted (WIRE-16, D-27; UltiTools-Reborn#677).
      * <p>
      * The current {@link CloudSession} and its WebSocket client are captured here, when the request
      * is admitted. The result is sent only to that client of that session, and only while UltiTools
      * accepts panel work ({@link #isAcceptingPanelMessages()}), the admitted session is still
      * current (no logout replaced it), the session's client is still the admitted client (no
      * reconnect replaced it) and that client is still connected. Otherwise the reply is dropped
-     * with one FINE line naming the type and the panel's own timeout applies; a reply is never
-     * redirected to a newer session's or a newer connection's client, which never received the
-     * request. The check and the send run on whichever thread settles the outcome, or at once on
+     * with one FINE line naming the type and the panel's own timeout applies; a reply is not
+     * redirected to the client of a newer session or connection. The check and the send run on whichever thread settles the outcome, or at once on
      * the dispatching thread when {@link PanelResponderRegistry#dispatch} returns an outcome that is
      * already settled (an unknown type, a refusal, or a registry that has shut down).
      * <p>
@@ -998,7 +997,7 @@ public class PluginInitiationUtils {
             }
             if (!isAdmittedConnectionLive(admittedSession, admittedClient)) {
                 PanelConnectionLog.log(Level.FINE, "Responder reply for type '" + type
-                    + "' not sent: the panel connection that received the request has closed or been replaced");
+                    + "' not sent: the panel connection admitted for the request has closed or been replaced");
                 return;
             }
             JsonObject payload = throwable != null ? new JsonObject() : result;
@@ -1016,8 +1015,8 @@ public class PluginInitiationUtils {
     }
 
     /**
-     * Whether the connection that received a responder request can still carry its reply: the
-     * admitted session is still current, its client is still the admitted client, and that client
+     * Whether the client captured when a responder request was admitted can still carry its reply:
+     * the admitted session is still current, its client is still the admitted client, and that client
      * is still connected.
      *
      * @param admittedSession the session that was current when the request was admitted

@@ -67,7 +67,10 @@ import com.ultikits.ultitools.utils.PluginInitiationUtils;
  *       request and this registry's registration scope ({@link #beginRegistrationScope}) of that
  *       thread, and nothing else: no other {@link ThreadLocal}, no transaction and no
  *       audited-entity user is carried. The worker's own values are restored after every call, so
- *       nothing one module's call leaves behind reaches the next call.</li>
+ *       nothing one module's call leaves behind reaches the next call. Worker threads are created
+ *       lazily on the thread that admits a request (the panel connection's reader thread), so each
+ *       copies that thread's {@link InheritableThreadLocal} values once, at creation; the
+ *       framework declares none.</li>
  *   <li><b>Ownership.</b> The responder registered when the request was admitted handles it, even
  *       if the type is reassigned or the owning module unloads before the call runs; a module
  *       unloading while one of its requests is still waiting or running can therefore see that
@@ -155,6 +158,14 @@ public class PanelResponderRegistry {
     private volatile boolean shutDown;
 
     /**
+     * The module instance the framework is loading on this thread, if any (#506): set by
+     * {@link #beginRegistrationScope(UltiToolsPlugin)} while a module's container refreshes and its
+     * {@code registerSelf()} runs, and recorded on every responder registered meanwhile without an
+     * explicit owner instance.
+     */
+    private final ThreadLocal<UltiToolsPlugin> registrationScopeOwner = new ThreadLocal<>();
+
+    /**
      * Creates a registry with the shipped deadline ({@link #RESPONDER_TIMEOUT_MILLIS}) and worker
      * bounds ({@link #RESPONDER_WORKER_THREADS}, {@link #RESPONDER_QUEUE_CAPACITY}).
      */
@@ -174,14 +185,6 @@ public class PanelResponderRegistry {
         this.queueCapacity = queueCapacity;
         this.workers = createWorkers(workerThreads, queueCapacity);
     }
-
-    /**
-     * The module instance the framework is loading on this thread, if any (#506): set by
-     * {@link #beginRegistrationScope(UltiToolsPlugin)} while a module's container refreshes and its
-     * {@code registerSelf()} runs, and recorded on every responder registered meanwhile without an
-     * explicit owner instance.
-     */
-    private final ThreadLocal<UltiToolsPlugin> registrationScopeOwner = new ThreadLocal<>();
 
     private static ScheduledThreadPoolExecutor createTimeoutScheduler() {
         ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(1, r -> {
