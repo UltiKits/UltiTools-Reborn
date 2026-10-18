@@ -5,20 +5,28 @@ import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.namesIn;
 import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.treeOf;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 
+import org.bukkit.command.CommandSender;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,6 +41,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
+import com.ultikits.ultitools.commands.PluginInstallCommands;
 import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.ListenerManager;
 import com.ultikits.ultitools.manager.PluginManager;
@@ -82,6 +91,10 @@ class ModuleRemovalDeferredTest {
     @AfterEach
     void tearDown() throws IOException {
         Files.setPosixFilePermissions(modules.toPath(), PosixFilePermissions.fromString("rwx------"));
+        File ultikits = ultikitsFolder();
+        if (ultikits.exists()) {
+            Files.setPosixFilePermissions(ultikits.toPath(), PosixFilePermissions.fromString("rwx------"));
+        }
         // A JAR a test made unreadable is given its permissions back, so the TempDir can be removed.
         for (File file : modules.listFiles()) {
             Files.setPosixFilePermissions(file.toPath(), PosixFilePermissions.fromString("rw-------"));
@@ -104,6 +117,42 @@ class ModuleRemovalDeferredTest {
 
     private void readable(File file) throws IOException {
         Files.setPosixFilePermissions(file.toPath(), PosixFilePermissions.fromString("rw-------"));
+    }
+
+    /** {@code <server root>/.ultikits}, which holds the transaction records beside the credential store. */
+    private File ultikitsFolder() {
+        return ModuleFileTransactions.transactionsFolder(dataFolder).getParentFile();
+    }
+
+    /**
+     * Neither the JAR can be deleted (read-only modules folder) nor its deletion recorded (a
+     * {@code .ultikits} folder the transactions folder cannot be created in).
+     */
+    private void neitherDeletableNorRecordable() throws IOException {
+        File ultikits = ultikitsFolder();
+        Files.createDirectories(ultikits.toPath());
+        Files.setPosixFilePermissions(ultikits.toPath(), PosixFilePermissions.fromString("r-x------"));
+        Assumptions.assumeFalse(Files.isWritable(ultikits.toPath()), "running as a user that ignores permissions");
+        readOnlyModulesFolder();
+    }
+
+    /** Every file named by a FileSystemException in the failure's suppressed graph, cycle-safe. */
+    private static List<String> namedFiles(Throwable failure) {
+        List<String> files = new ArrayList<>();
+        collectNamedFiles(failure, files, Collections.newSetFromMap(new IdentityHashMap<>()));
+        return files;
+    }
+
+    private static void collectNamedFiles(Throwable failure, List<String> files, Set<Throwable> seen) {
+        if (!seen.add(failure)) {
+            return;
+        }
+        if (failure instanceof FileSystemException && ((FileSystemException) failure).getFile() != null) {
+            files.add(((FileSystemException) failure).getFile());
+        }
+        for (Throwable suppressed : failure.getSuppressed()) {
+            collectNamedFiles(suppressed, files, seen);
+        }
     }
 
     /** The single removal record in the transactions folder. */
@@ -267,5 +316,39 @@ class ModuleRemovalDeferredTest {
         assertThat(start.pendingReports()).extracting(ModuleFileTransactions.Report::getKey)
                 .containsExactlyInAnyOrder(ModuleFileTransactions.Keys.REMOVAL_UNREADABLE,
                         ModuleFileTransactions.Keys.REMOVED);
+    }
+
+    @Test
+    @DisplayName("ultitools.upm.uninstall.deferred-unrecorded: a JAR that can neither be deleted nor recorded is the only file the failure names")
+    void unrecordableDeletion_failureNamesOnlyTheModuleJar() throws IOException {
+        neitherDeletableNorRecordable();
+
+        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPluginReporting(MODULE));
+
+        assertThat(thrown).isInstanceOf(FileSystemException.class)
+                .isNotInstanceOf(PluginInstallUtils.RemovalDeferredException.class);
+        assertThat(namedFiles(thrown)).containsExactly(jar.getAbsolutePath());
+        assertThat(jar).exists();
+    }
+
+    @Test
+    @DisplayName("ultitools.upm.uninstall.deferred-unrecorded: the /upm uninstall reply asks to delete only the module JAR by hand")
+    void unrecordableDeletion_replyAsksToDeleteOnlyTheModuleJar() throws IOException {
+        neitherDeletableNorRecordable();
+        List<String> messages = new ArrayList<>();
+        CommandSender sender = mock(CommandSender.class);
+        doAnswer(invocation -> messages.add(invocation.getArgument(0))).when(sender).sendMessage(anyString());
+
+        new PluginInstallCommands().uninstallPlugin(sender, MODULE);
+
+        List<String> deleteByHand = new ArrayList<>();
+        for (String message : messages) {
+            if (message.contains("请手动删除")) {
+                deleteByHand.add(message);
+            }
+        }
+        assertThat(deleteByHand).hasSize(1);
+        assertThat(deleteByHand.get(0)).contains(jar.getAbsolutePath())
+                .doesNotContain(ultikitsFolder().getAbsolutePath());
     }
 }
