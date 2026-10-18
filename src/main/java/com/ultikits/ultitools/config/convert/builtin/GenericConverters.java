@@ -108,20 +108,30 @@ public final class GenericConverters implements ConfigConverter<Object> {
             }
             return values;
         }
-        if (value instanceof Map<?, ?>) {
-            Type keyType = ConversionTypes.argument(ctx.declaredType(), Map.class, 0);
-            Type valueType = ConversionTypes.argument(ctx.declaredType(), Map.class, 1);
-            Map<String, Object> values = new LinkedHashMap<>();
-            for (Map.Entry<?, ?> entry : ((Map<?, ?>) value).entrySet()) {
-                Context keyContext = ctx.child(String.valueOf(entry.getKey()), keyType);
-                Object key = keyContext.writeTyped(entry.getKey(), keyType);
-                String text = keyText(key, entry.getKey(), keyType, keyContext);
-                if (values.containsKey(text)) { throw ctx.child(text, keyType).failure("Map keys collide after conversion", null); }
-                values.put(text, ctx.child(text, valueType).writeTyped(entry.getValue(), valueType));
-            }
-            return values;
-        }
+        if (value instanceof Map<?, ?>) { return writeMap((Map<?, ?>) value, ctx); }
         throw ctx.failure("Value does not match the declared container shape", null);
+    }
+
+    /**
+     * Writes each entry under the file's own key text for its key when the file value at this location holds one (the
+     * first in file order), else under the key's verified text, and descends into the value under that text so nested
+     * maps bind too.
+     */
+    private static Map<String, Object> writeMap(Map<?, ?> value, Context ctx) throws ConversionException {
+        Type keyType = ConversionTypes.argument(ctx.declaredType(), Map.class, 0);
+        Type valueType = ConversionTypes.argument(ctx.declaredType(), Map.class, 1);
+        Map<String, Object> values = new LinkedHashMap<>();
+        Map<Object, List<String>> spellings = fileKeyIndex(ctx, keyType);
+        for (Map.Entry<?, ?> entry : value.entrySet()) {
+            Context keyContext = ctx.child(String.valueOf(entry.getKey()), keyType);
+            Object key = keyContext.writeTyped(entry.getKey(), keyType);
+            List<String> fileSpellings = key == null ? null : spellings.get(entry.getKey());
+            String text = fileSpellings == null
+                    ? keyText(key, entry.getKey(), keyType, keyContext) : fileSpellings.get(0);
+            if (values.containsKey(text)) { throw ctx.child(text, keyType).failure("Map keys collide after conversion", null); }
+            values.put(text, ctx.child(text, valueType).writeTyped(entry.getValue(), valueType));
+        }
+        return values;
     }
 
     @Override
@@ -178,6 +188,48 @@ public final class GenericConverters implements ConfigConverter<Object> {
             return values;
         }
         throw ctx.failure("Unsupported container", null);
+    }
+
+    /**
+     * Whether a map with this declared key type binds its keys to the file's key text: every key type other than
+     * {@code String} and {@code Object}, whose keys are already the text the file holds.
+     *
+     * @param keyType declared map key type
+     * @return whether the key is typed
+     */
+    @ApiStatus.Internal
+    public static boolean bindsKeyText(Type keyType) {
+        Class<?> raw = ConversionTypes.raw(keyType);
+        return raw != String.class && raw != Object.class;
+    }
+
+    /**
+     * Indexes the keys of the map the file holds at {@code ctx}'s location by the typed key each reads back to, through
+     * {@code keyType} and the same registry read path the loader uses. Each typed key maps to its file key texts in file
+     * order; a file key that does not read as the key type is skipped. Reading a key is a probe, so nothing is recorded
+     * in the conversion's failures. The one index behind both the map writer's binding (first spelling wins) and the
+     * file-key ambiguity scan (two or more spellings).
+     *
+     * @param ctx context whose file value is the map to index
+     * @param keyType declared map key type
+     * @return typed key to its file spellings in file order; empty when the key type is not typed or the file value at
+     *         this location is not a map
+     */
+    @ApiStatus.Internal
+    public static Map<Object, List<String>> fileKeyIndex(Context ctx, Type keyType) {
+        Map<Object, List<String>> index = new LinkedHashMap<>();
+        if (!bindsKeyText(keyType) || !(ctx.fileValue() instanceof Map<?, ?>)) { return index; }
+        for (Object fileKey : ((Map<?, ?>) ctx.fileValue()).keySet()) {
+            if (fileKey == null) { continue; }
+            String text = String.valueOf(fileKey);
+            ConverterRegistry.Probe read = ctx.child(text, keyType).probe(fileKey, keyType);
+            if (read.succeeded() && read.value() != null) {
+                List<String> spellings = index.get(read.value());
+                if (spellings == null) { spellings = new ArrayList<>(); index.put(read.value(), spellings); }
+                spellings.add(text);
+            }
+        }
+        return index;
     }
 
     /**
