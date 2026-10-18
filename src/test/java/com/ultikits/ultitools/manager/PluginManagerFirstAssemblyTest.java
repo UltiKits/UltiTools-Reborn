@@ -71,6 +71,7 @@ class PluginManagerFirstAssemblyTest {
     private static final String FIXTURE_ROOT = "com.ultikits.testfixtures.firstassembly.";
     private static final String AOP_MODULE = FIXTURE_ROOT + "aop.AopReadyFixtureModule";
     private static final String CONFIG_MODULE = FIXTURE_ROOT + "config.ConfigReadyFixtureModule";
+    private static final String FACTORY_MODULE = FIXTURE_ROOT + "factory.FactoryOrderFixtureModule";
 
     /** The two module-registration entry points. */
     enum EntryPoint { REGISTER_CLASS, REGISTER_INSTANCE }
@@ -472,6 +473,40 @@ class PluginManagerFirstAssemblyTest {
                     () -> assertThat(call(service, "getContextDuringPostConstruct"))
                             .as("getContext() during @PostConstruct")
                             .isSameAs(loaded.plugin.getContext()));
+        }
+    }
+
+    // ===== Task 2: every definition is discovered before configuration classes and @Bean products =====
+
+    @Nested
+    @DisplayName("a module whose JAR lists its configuration class before the service loads (C51)")
+    class FactoryProductDiscoveryTests {
+
+        @Test
+        @DisplayName("C51 register(Class): configuration class listed before the service it needs")
+        void c51_configurationListedBeforeServiceLoads_throughRegisterClass() throws Exception {
+            assertFactoryModuleLoads(EntryPoint.REGISTER_CLASS);
+        }
+
+        @Test
+        @DisplayName("C51 register(UltiToolsPlugin): configuration class listed before the service it needs")
+        void c51_configurationListedBeforeServiceLoads_throughRegisterInstance() throws Exception {
+            assertFactoryModuleLoads(EntryPoint.REGISTER_INSTANCE);
+        }
+
+        private void assertFactoryModuleLoads(EntryPoint entryPoint) throws Exception {
+            // JAR entry order: module, configuration class, product, then the service.
+            FixtureJarClassLoader loader = loaderFor(FACTORY_MODULE, "FactoryOrderFixtureModule",
+                    fixture(FACTORY_MODULE), fixture(FACTORY_MODULE + "$FactoryConfiguration"),
+                    fixture(FACTORY_MODULE + "$FactoryProduct"), fixture(FACTORY_MODULE + "$FactoryService"));
+            Loaded loaded = load(entryPoint, loader, FACTORY_MODULE);
+            assertLoaded(loaded, entryPoint);
+
+            SimpleContainer container = loaded.plugin.getContext();
+            Object product = container.getBean("factoryProduct");
+            assertThat(product).as("the @Bean product").isNotNull();
+            assertThat(call(product, "getService")).as("the product's injected service")
+                    .isSameAs(container.getBean(Class.forName(FACTORY_MODULE + "$FactoryService", true, loader)));
         }
     }
 }
