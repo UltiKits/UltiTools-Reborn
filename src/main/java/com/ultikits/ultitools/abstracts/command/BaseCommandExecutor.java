@@ -5,8 +5,10 @@ import java.lang.reflect.Parameter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
@@ -163,25 +165,35 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     }
 
     /**
-     * Releases {@link #cooldownValidator}/{@link #lockValidator} from {@link
-     * PlayerCacheManager} tracking and bulk-clears {@link UsageLockValidator}'s locks when this
-     * executor is torn down (module unload).
+     * Releases the self-registering validators this executor dispatched through from {@link
+     * PlayerCacheManager} tracking and bulk-clears every {@link UsageLockValidator}'s locks when
+     * this executor is torn down (module unload).
+     * <p>
+     * The validators released are those of the chain this executor dispatches through -- a chain
+     * passed to {@link #BaseCommandExecutor(ValidatorChain)} or returned by an overridden {@link
+     * #createDefaultValidatorChain()} -- together with {@link #cooldownValidator}/{@link
+     * #lockValidator}, taken as one identity set (case 48). Before, only the two fields were
+     * released; a custom chain that did not contain them left its own validators, which register
+     * themselves with {@link PlayerCacheManager} at their first dispatch, strongly held there after
+     * the module unloaded -- one more per module update, and a module's own validator subclass
+     * pinned its old class loader. Only {@link CooldownValidator} and {@link UsageLockValidator}
+     * (and their subclasses) register themselves, so only they are released.
      * <p>
      * Reached through the framework's EXISTING {@code @PreDestroy} container lifecycle --
      * {@code PluginManager.unregister(plugin)} already calls {@code plugin.getContext().close()},
      * which invokes every singleton bean's {@code @PreDestroy} methods -- rather than a second,
-     * purpose-built unload hook (GEN-08, D-03). {@link #cooldownValidator}/{@link #lockValidator}
-     * are registered with {@link PlayerCacheManager} SEPARATELY from this executor bean itself
-     * (their sweepable state lives on them, not on this class), so the pre-existing per-bean
-     * {@code playerCacheManager.unregisterBean(bean)} loop already in {@code
-     * PluginManager.unregister(...)} -- which only ever sees the beans a plugin's own container
-     * constructed -- never reaches them on its own; this hook is what does.
+     * purpose-built unload hook (GEN-08, D-03). These validators are registered with {@link
+     * PlayerCacheManager} SEPARATELY from this executor bean itself (their sweepable state lives
+     * on them, not on this class), so the pre-existing per-bean {@code
+     * playerCacheManager.unregisterBean(bean)} loop already in {@code PluginManager.unregister(...)}
+     * -- which only ever sees the beans a plugin's own container constructed -- never reaches them
+     * on its own; this hook is what does.
      * <p>
      * {@link UsageLockValidator#clearAllLocks()} has no per-player analogue and, unlike {@link
      * UsageLockValidator#clearPlayerLocks(java.util.UUID)}/{@link
      * CooldownValidator#clearCooldowns(java.util.UUID)}, no quit-path call site either (GEN-08)
-     * -- module unload is the correct point to bulk-release whatever this specific executor
-     * instance's locks still held at teardown.
+     * -- module unload is the correct point to bulk-release whatever locks a released lock
+     * validator still held at teardown.
      *
      * @since 6.3.0
      */
@@ -191,9 +203,22 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     @PreDestroy
     @SuppressWarnings("PMD.UnusedPrivateMethod")
     private void unregisterValidatorsFromPlayerCache() {
-        PlayerCacheManager.tryUnregister(cooldownValidator);
-        PlayerCacheManager.tryUnregister(lockValidator);
-        lockValidator.clearAllLocks();
+        // Identity, not equals: a module's own validator subclass may define equals, and two
+        // distinct instances must each be released.
+        Set<CommandValidator> candidates = Collections.newSetFromMap(new IdentityHashMap<>());
+        if (validatorChain != null) {
+            candidates.addAll(validatorChain.getValidators());
+        }
+        candidates.add(cooldownValidator);
+        candidates.add(lockValidator);
+        for (CommandValidator candidate : candidates) {
+            if (candidate instanceof CooldownValidator) {
+                PlayerCacheManager.tryUnregister(candidate);
+            } else if (candidate instanceof UsageLockValidator) {
+                PlayerCacheManager.tryUnregister(candidate);
+                ((UsageLockValidator) candidate).clearAllLocks();
+            }
+        }
     }
 
     /**
