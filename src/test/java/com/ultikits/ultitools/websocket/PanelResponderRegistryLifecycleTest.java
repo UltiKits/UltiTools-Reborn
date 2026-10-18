@@ -3,6 +3,7 @@ package com.ultikits.ultitools.websocket;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
+import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CancellationException;
@@ -11,6 +12,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -98,6 +100,53 @@ class PanelResponderRegistryLifecycleTest {
             calls.incrementAndGet();
             return CompletableFuture.completedFuture(result("counting"));
         };
+    }
+
+    /**
+     * A deadline timer whose first {@code shutdownNow()} signals {@code entered} and then waits for
+     * {@code proceed}. {@link PanelResponderRegistry#shutdown()} stops the timer right after it sets
+     * its shutdown flag and before it empties the worker queue, so this holds a shutdown inside the
+     * window in which it has begun but not yet settled what it admitted.
+     */
+    private static final class GatedTimer extends ScheduledThreadPoolExecutor {
+        private final CountDownLatch entered;
+        private final CountDownLatch proceed;
+        private final AtomicBoolean gateOpen = new AtomicBoolean(true);
+
+        private GatedTimer(CountDownLatch entered, CountDownLatch proceed) {
+            super(1, r -> {
+                Thread thread = new Thread(r, "test-gated-deadline-timer");
+                thread.setDaemon(true);
+                return thread;
+            });
+            setRemoveOnCancelPolicy(true);
+            this.entered = entered;
+            this.proceed = proceed;
+        }
+
+        @Override
+        public List<Runnable> shutdownNow() {
+            if (gateOpen.compareAndSet(true, false)) {
+                entered.countDown();
+                try {
+                    proceed.await(10, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            return super.shutdownNow();
+        }
+    }
+
+    /** Replaces the registry's deadline timer before any request is admitted, stopping the original. */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // reaches the private timer to hold shutdown() at a known point
+    private static void replaceDeadlineTimer(PanelResponderRegistry registry, ScheduledThreadPoolExecutor timer)
+            throws ReflectiveOperationException {
+        Field field = PanelResponderRegistry.class.getDeclaredField("timeoutScheduler");
+        field.setAccessible(true);
+        ScheduledThreadPoolExecutor original = (ScheduledThreadPoolExecutor) field.get(registry);
+        field.set(registry, timer);
+        original.shutdownNow();
     }
 
     /** Throws {@code throwable} through an unchecked type parameter, as module code compiled elsewhere can. */
@@ -272,6 +321,80 @@ class PanelResponderRegistryLifecycleTest {
                 .isInstanceOfSatisfying(RejectedExecutionException.class, e -> assertThat(e.getMessage())
                         .contains("shut down").contains("late").contains("module-a").doesNotContain("@"));
         assertThat(calls).hasValue(0);
+    }
+
+    // ---- RED for the PR #682 review round ----
+
+    @Test
+    @DisplayName("a queued request a worker takes after shutdown began fails with the shutdown failure and its responder never runs")
+    void queuedRequestTakenAfterShutdownBeganNeverRuns() throws Exception {
+        PanelResponderRegistry registry = registry(LONG_DEADLINE_MILLIS, 1, 4);
+        CountDownLatch shutdownBegan = latch();
+        CountDownLatch letShutdownContinue = latch();
+        replaceDeadlineTimer(registry, new GatedTimer(shutdownBegan, letShutdownContinue));
+        CountDownLatch started = latch();
+        CountDownLatch release = latch();
+        CountDownLatch returned = latch();
+        registry.registerResponder("running", blocking(started, release, returned, new AtomicBoolean(),
+                new AtomicReference<>()), "module-a");
+        AtomicInteger queuedCalls = new AtomicInteger();
+        CountDownLatch queuedReached = latch();
+        registry.registerResponder("waiting", data -> {
+            queuedCalls.incrementAndGet();
+            queuedReached.countDown();
+            return CompletableFuture.completedFuture(result("waiting"));
+        }, "module-b");
+
+        registry.dispatch("running", new JsonObject(), "req-1");
+        assertThat(started.await(5, TimeUnit.SECONDS)).as("the first call occupies the only worker").isTrue();
+        CompletableFuture<JsonObject> waiting = registry.dispatch("waiting", new JsonObject(), "req-2");
+        waiting.whenComplete((value, failure) -> queuedReached.countDown());
+        assertThat(registry.queuedInvocationCountForTesting()).as("the second request is queued").isEqualTo(1);
+
+        Thread stopping = new Thread(registry::shutdown, "test-registry-shutdown");
+        stopping.setDaemon(true);
+        stopping.start();
+        assertThat(shutdownBegan.await(5, TimeUnit.SECONDS))
+                .as("shutdown() has begun and is held before it empties the queue").isTrue();
+        // The running call returns, so the only worker takes the request still queued.
+        release.countDown();
+        assertThat(queuedReached.await(5, TimeUnit.SECONDS))
+                .as("the worker took the queued request: its responder ran or its outcome settled").isTrue();
+        int callsWhileShuttingDown = queuedCalls.get();
+        letShutdownContinue.countDown();
+        stopping.join(5000L);
+
+        assertThat(callsWhileShuttingDown)
+                .as("a request not yet started when shutdown began never reaches its responder").isZero();
+        assertThat(waiting).failsWithin(PROMPT)
+                .withThrowableOfType(ExecutionException.class)
+                .havingCause()
+                .isInstanceOfSatisfying(RejectedExecutionException.class, e -> assertThat(e.getMessage())
+                        .contains("shut down").contains("waiting").contains("module-b"));
+        assertThat(queuedCalls).hasValue(0);
+    }
+
+    @Test
+    @DisplayName("the responder works on its own copy of the request data, so its changes never reach the caller's object")
+    void responderChangesItsOwnCopyOfTheRequestData() {
+        PanelResponderRegistry registry = registry(LONG_DEADLINE_MILLIS, 1, 4);
+        AtomicReference<JsonObject> seen = new AtomicReference<>();
+        registry.registerResponder("mutates", data -> {
+            seen.set(data.deepCopy());
+            data.remove("k");
+            data.addProperty("added", "by-responder");
+            return CompletableFuture.completedFuture(data);
+        }, "module-a");
+        JsonObject request = new JsonObject();
+        request.addProperty("k", "v");
+        request.addProperty("requestId", "req-1");
+        JsonObject asReceived = request.deepCopy();
+
+        CompletableFuture<JsonObject> outcome = registry.dispatch("mutates", request, "req-1");
+
+        assertThat(outcome).succeedsWithin(BOUND).isNotSameAs(request);
+        assertThat(seen.get()).as("the responder saw the request as received").isEqualTo(asReceived);
+        assertThat(request).as("the caller's object is not changed by the responder").isEqualTo(asReceived);
     }
 
     // ---- Characterization controls (already pass after Task 1) ----
