@@ -94,6 +94,39 @@ class PluginManagerAutoRegisterAliasTest {
     abstract static class ConditionalCommandModuleFixture extends UltiToolsPlugin {
     }
 
+    // C45 fixtures (DirectDeclarationPrecedenceTests): a direct @ComponentScan or
+    // @EnableAutoRegister beside @UltiToolsModule, in both declaration orders.
+
+    @UltiToolsModule
+    @ComponentScan("other.pkg")
+    abstract static class ModuleThenDirectScanModuleFixture extends UltiToolsPlugin {
+    }
+
+    @UltiToolsModule
+    @EnableAutoRegister(cmdExecutor = false)
+    abstract static class ModuleThenDirectSwitchModuleFixture extends UltiToolsPlugin {
+    }
+
+    @UltiToolsModule(scanBasePackages = "a")
+    @ComponentScan("b")
+    abstract static class BothScanModuleFirstModuleFixture extends UltiToolsPlugin {
+    }
+
+    @ComponentScan("b")
+    @UltiToolsModule(scanBasePackages = "a")
+    abstract static class BothScanDirectFirstModuleFixture extends UltiToolsPlugin {
+    }
+
+    @UltiToolsModule(cmdExecutor = false)
+    @EnableAutoRegister
+    abstract static class BothSwitchModuleFirstModuleFixture extends UltiToolsPlugin {
+    }
+
+    @EnableAutoRegister
+    @UltiToolsModule(cmdExecutor = false)
+    abstract static class BothSwitchDirectFirstModuleFixture extends UltiToolsPlugin {
+    }
+
     @BeforeEach
     void setUp() {
         MockBukkitHelper.ensureCleanState();
@@ -167,6 +200,75 @@ class PluginManagerAutoRegisterAliasTest {
                 "a resolver that fails to merge the @AliasFor override would register both fixtures identically");
         Assertions.assertEquals(1L, defaultCount);
         Assertions.assertEquals(0L, disabledCount);
+    }
+
+    /**
+     * C45 through the real callers: which packages a module scans and which registrations it
+     * switches on no longer depend on whether {@code @UltiToolsModule} is declared before or
+     * after a direct {@code @ComponentScan}/{@code @EnableAutoRegister}. When both are declared,
+     * the direct one hides the meta-present one completely (question 4 of 20.4-DECISIONS.md,
+     * option A; Spring's {@code @ComponentScan} javadoc: locally declared annotations "always
+     * take precedence over and effectively hide" meta-present ones).
+     */
+    @Nested
+    @DisplayName("C45: a direct @ComponentScan/@EnableAutoRegister wins over @UltiToolsModule, in either order")
+    class DirectDeclarationPrecedenceTests {
+
+        @Test
+        @DisplayName("getPluginScanPackages: @UltiToolsModule then @ComponentScan(other.pkg) scans other.pkg")
+        void scanPackagesFollowDirectComponentScanDeclaredAfterModule() {
+            String[] packages = pluginManager.getPluginScanPackages(ModuleThenDirectScanModuleFixture.class);
+
+            assertThat(packages)
+                    .as("a direct @ComponentScan declared after @UltiToolsModule must contribute its packages")
+                    .contains("other.pkg");
+        }
+
+        @Test
+        @DisplayName("registerBukkit: @UltiToolsModule then @EnableAutoRegister(cmdExecutor = false) never registers commands")
+        void registerBukkitHonoursDirectSwitchDeclaredAfterModule() throws Exception {
+            UltiToolsPlugin plugin = mock(ModuleThenDirectSwitchModuleFixture.class);
+
+            invokeRegisterBukkit(plugin);
+
+            verify(mockCommandManager, never()).registerAll(plugin);
+        }
+
+        @Test
+        @DisplayName("getPluginScanPackages: both declared, @UltiToolsModule(a) first, scans exactly the direct b")
+        void bothDeclaredModuleFirstScansOnlyDirectPackages() {
+            String[] packages = pluginManager.getPluginScanPackages(BothScanModuleFirstModuleFixture.class);
+
+            assertThat(packages).containsExactly("b");
+        }
+
+        @Test
+        @DisplayName("getPluginScanPackages: both declared, direct @ComponentScan(b) first, scans exactly b")
+        void bothDeclaredDirectFirstScansOnlyDirectPackages() {
+            String[] packages = pluginManager.getPluginScanPackages(BothScanDirectFirstModuleFixture.class);
+
+            assertThat(packages).containsExactly("b");
+        }
+
+        @Test
+        @DisplayName("registerBukkit: both declared, @UltiToolsModule(cmdExecutor = false) first, the direct default registers commands")
+        void bothDeclaredModuleFirstRegistersCommands() throws Exception {
+            UltiToolsPlugin plugin = mock(BothSwitchModuleFirstModuleFixture.class);
+
+            invokeRegisterBukkit(plugin);
+
+            verify(mockCommandManager, times(1)).registerAll(plugin);
+        }
+
+        @Test
+        @DisplayName("registerBukkit: both declared, direct default @EnableAutoRegister first, registers commands")
+        void bothDeclaredDirectFirstRegistersCommands() throws Exception {
+            UltiToolsPlugin plugin = mock(BothSwitchDirectFirstModuleFixture.class);
+
+            invokeRegisterBukkit(plugin);
+
+            verify(mockCommandManager, times(1)).registerAll(plugin);
+        }
     }
 
     /**
