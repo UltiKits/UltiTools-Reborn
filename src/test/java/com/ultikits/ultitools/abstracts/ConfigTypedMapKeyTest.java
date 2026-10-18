@@ -24,6 +24,9 @@ import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
+import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.MemoryConfiguration;
+import org.bukkit.configuration.MemorySection;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -80,6 +83,17 @@ class ConfigTypedMapKeyTest {
             + "tokens:\n"
             + "  1: gamma-value\n"
             + "  '01': delta-value\n"
+            + "other: kept\n";
+
+    /**
+     * A legacy parser's map whose keys {@code 1} and {@code '01'} are two different keys to that parser, though the
+     * default {@code Integer} key converter would read both as 1.
+     */
+    private static final String PADDED = "# synthetic parser-owned key fixture\n"
+            + "padded:\n"
+            + "  1: one\n"
+            + "  '01': zero-one\n"
+            + "  2: two\n"
             + "other: kept\n";
 
     @TempDir
@@ -206,6 +220,50 @@ class ConfigTypedMapKeyTest {
         String other = "default";
 
         OtherOnlyConfig(String configFilePath) {
+            super(configFilePath);
+        }
+    }
+
+    /**
+     * A module's own legacy parser that keeps zero-padding meaningful: {@code 1} reads as 1 and {@code 01} as -1, and
+     * -1 is written back as {@code 01}.
+     */
+    // Deliberately exercises the deprecated legacy parser compatibility contract.
+    @SuppressWarnings("removal")
+    public static class PaddedKeyParser extends com.ultikits.ultitools.interfaces.impl.pasers.ConfigParser<Map<Integer, String>> {
+        @Override
+        public Map<Integer, String> parse(Object object) {
+            Map<Integer, String> result = new LinkedHashMap<>();
+            if (object instanceof ConfigurationSection) {
+                ConfigurationSection section = (ConfigurationSection) object;
+                for (String key : section.getKeys(false)) {
+                    int number = Integer.parseInt(key);
+                    result.put(key.startsWith("0") ? -number : number, section.getString(key));
+                }
+            }
+            return result;
+        }
+
+        @Override
+        public MemorySection serializeToMemorySection(Map<Integer, String> object) {
+            MemoryConfiguration section = new MemoryConfiguration();
+            for (Map.Entry<Integer, String> entry : object.entrySet()) {
+                int key = entry.getKey();
+                section.set(key < 0 ? "0" + -key : Integer.toString(key), entry.getValue());
+            }
+            return section;
+        }
+    }
+
+    @SuppressWarnings({"unused", "removal"}) // read reflectively; deliberately selects the legacy parser above
+    static class PaddedKeyConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "padded", parser = PaddedKeyParser.class)
+        Map<Integer, String> padded = new LinkedHashMap<>();
+
+        @ConfigEntry(path = "other")
+        String other = "default";
+
+        PaddedKeyConfig(String configFilePath) {
             super(configFilePath);
         }
     }
@@ -721,6 +779,52 @@ class ConfigTypedMapKeyTest {
         }
 
         assertThat(text()).isEqualTo("tags: !!set {a: null, b: null}\nother: changed\n");
+    }
+
+    @Test
+    @DisplayName("a legacy parser's map holding 1 and '01' as two keys saves an edit of one entry on its own line")
+    void parserOwnedKeysSave() throws IOException {
+        put(PADDED);
+        PaddedKeyConfig config = new PaddedKeyConfig(PATH);
+        assertThatCode(() -> config.init(plugin)).doesNotThrowAnyException();
+        Map<Integer, String> loaded = new LinkedHashMap<>();
+        loaded.put(1, "one"); loaded.put(-1, "zero-one"); loaded.put(2, "two");
+        assertThat(config.padded).containsExactlyEntriesOf(loaded);
+
+        config.padded.put(2, "changed");
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            config.save();
+            assertThat(warnings.messages()).as("no several-spellings warning").isEmpty();
+        }
+
+        assertThat(text()).isEqualTo(PADDED.replace("  2: two\n", "  2: changed\n"));
+    }
+
+    @Test
+    @DisplayName("operator writes of a legacy parser's map follow the parser's keys, never the default key converter")
+    void parserOwnedKeysOperatorWrites() throws IOException {
+        put(PADDED);
+        PaddedKeyConfig config = new PaddedKeyConfig(PATH);
+        assertThatCode(() -> config.init(plugin)).doesNotThrowAnyException();
+
+        config.padded.put(1, "uno");
+        assertThatCode(() -> config.saveOperatorMapEntry("padded", "1")).doesNotThrowAnyException();
+        String afterFirst = PADDED.replace("  1: one\n", "  1: uno\n");
+        assertThat(text()).isEqualTo(afterFirst);
+
+        config.padded.put(-1, "zero-uno");
+        assertThatCode(() -> config.saveOperatorMapEntry("padded", "01")).doesNotThrowAnyException();
+        String afterSecond = afterFirst.replace("  '01': zero-one\n", "  '01': zero-uno\n");
+        assertThat(text()).isEqualTo(afterSecond);
+
+        // To this parser '02' is -2, a key neither the module nor the file holds: the line '2' is not its spelling.
+        config.padded.remove(2);
+        try {
+            config.saveOperatorMapEntry("padded", "02");
+        } catch (ConfigWriteRefusedException refused) {
+            assertThat(refused).hasMessageNotContaining("several spellings");
+        }
+        assertThat(text()).as("the entry 2 the operator did not name").isEqualTo(afterSecond);
     }
 
     private SpelledKeyConfig initialized() {

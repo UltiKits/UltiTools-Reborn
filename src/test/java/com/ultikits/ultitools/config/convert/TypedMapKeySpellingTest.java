@@ -185,6 +185,28 @@ class TypedMapKeySpellingTest {
         assertThat(withFile).isEqualTo(plain("1", "a"));
     }
 
+    @Test
+    @DisplayName("a map whose file spells every key differently is bound in visits linear in its size (PR #687 Codex run 2)")
+    void nonCanonicalSpellingsBindInLinearVisits() throws Exception {
+        int size = 2_000;
+        Map<UUID, String> value = new LinkedHashMap<>();
+        CountingMap file = new CountingMap();
+        for (int index = 0; index < size; index++) {
+            UUID player = new UUID(0x1234_5678_9ABC_DEF0L, index);
+            value.put(player, "v" + index);
+            file.put(player.toString().toUpperCase(java.util.Locale.ROOT), "v" + index);
+        }
+        file.visits = 0;
+
+        ConversionResult<Object> bound = write(value, "uuids", file);
+        long visits = file.visits;
+
+        assertThat(visits).as("file entries visited to bind %d keys", size).isLessThanOrEqualTo(4L * size);
+        assertThat(bound.failures()).isEmpty();
+        assertThat(new java.util.ArrayList<Object>(((Map<?, ?>) bound.value()).keySet())).as("every key keeps the file's upper-case spelling")
+                .containsExactlyElementsOf(new java.util.ArrayList<Object>(file.keySet()));
+    }
+
     private ConversionResult<Object> write(Object value, String field, Object fileValue) throws Exception {
         return registry.toPlainResult(value, type(field), FILE, ROOT, null, fileValue);
     }
@@ -203,6 +225,31 @@ class TypedMapKeySpellingTest {
             map.put((String) keysAndValues[index], keysAndValues[index + 1]);
         }
         return map;
+    }
+
+    /** A file map that counts every entry or key its iteration views hand out; lookups by key are not counted. */
+    static final class CountingMap extends LinkedHashMap<String, Object> {
+        private static final long serialVersionUID = 1L;
+        long visits;
+
+        @Override
+        public java.util.Set<Map.Entry<String, Object>> entrySet() { return counted(super.entrySet()); }
+
+        @Override
+        public java.util.Set<String> keySet() { return counted(super.keySet()); }
+
+        private <E> java.util.Set<E> counted(java.util.Set<E> view) {
+            return new java.util.AbstractSet<E>() {
+                @Override public int size() { return view.size(); }
+                @Override public java.util.Iterator<E> iterator() {
+                    java.util.Iterator<E> inner = view.iterator();
+                    return new java.util.Iterator<E>() {
+                        @Override public boolean hasNext() { return inner.hasNext(); }
+                        @Override public E next() { visits++; return inner.next(); }
+                    };
+                }
+            };
+        }
     }
 
     static final class Point {
