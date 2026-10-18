@@ -60,6 +60,28 @@ class ConfigTypedMapKeyTest {
             + "  yes: enabled\n"
             + "tail: kept\n";
 
+    /** Keys the operator spelled differently from their canonical text: quoted, whole dotted and exponent forms. */
+    private static final String SPELLED = "# synthetic spelled-key fixture\n"
+            + "limits:\n"
+            + "  '01': one\n"
+            + "  2: two\n"
+            + "ranges:\n"
+            + "  1.0: whole\n"
+            + "big:\n"
+            + "  '007': seven\n"
+            + "  1.0e10: far\n"
+            + "tail: kept\n";
+
+    /** One typed key, 1, written twice: as {@code 1} and as {@code '01'}; a secret-shaped map holds the same. */
+    private static final String AMBIGUOUS = "# synthetic ambiguous-key fixture\n"
+            + "limits:\n"
+            + "  1: alpha-value\n"
+            + "  '01': beta-value\n"
+            + "tokens:\n"
+            + "  1: gamma-value\n"
+            + "  '01': delta-value\n"
+            + "other: kept\n";
+
     @TempDir
     Path tempDir;
 
@@ -109,18 +131,6 @@ class ConfigTypedMapKeyTest {
             super(configFilePath);
         }
     }
-
-    /** Keys the operator spelled differently from their canonical text: quoted, whole dotted and exponent forms. */
-    private static final String SPELLED = "# synthetic spelled-key fixture\n"
-            + "limits:\n"
-            + "  '01': one\n"
-            + "  2: two\n"
-            + "ranges:\n"
-            + "  1.0: whole\n"
-            + "big:\n"
-            + "  '007': seven\n"
-            + "  1.0e10: far\n"
-            + "tail: kept\n";
 
     @SuppressWarnings("unused") // read reflectively by the binder and by the assertions below
     @ConfigEntity(PATH)
@@ -172,16 +182,6 @@ class ConfigTypedMapKeyTest {
             super(configFilePath);
         }
     }
-
-    /** One typed key, 1, written twice: as {@code 1} and as {@code '01'}; a secret-shaped map holds the same. */
-    private static final String AMBIGUOUS = "# synthetic ambiguous-key fixture\n"
-            + "limits:\n"
-            + "  1: alpha-value\n"
-            + "  '01': beta-value\n"
-            + "tokens:\n"
-            + "  1: gamma-value\n"
-            + "  '01': delta-value\n"
-            + "other: kept\n";
 
     @SuppressWarnings("unused") // read reflectively by the binder and by the assertions below
     @ConfigEntity(PATH)

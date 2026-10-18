@@ -783,11 +783,11 @@ public abstract class AbstractConfigEntity {
     /** One key of {@link #spelledLeaf}: {@code above} holds the keys already resolved, outermost first. */
     private String spelledKey(Field field, List<String> above, String key, Type keyType, Object moduleLevel, Object fileLevel)
             throws ConfigWriteRefusedException {
-        List<String> at = new ArrayList<>(keys(field)); at.addAll(above); at.add(key);
-        Object typed = readKey(key, keyType, at);
+        List<String> location = new ArrayList<>(keys(field)); location.addAll(above); location.add(key);
+        Object typed = readKey(key, keyType, location);
         if (typed == null) { return key; }
-        List<String> matches = keysReadingBack(moduleLevel, typed, keyType, at);
-        if (matches.isEmpty()) { matches = keysReadingBack(fileLevel, typed, keyType, at); }
+        List<String> matches = keysReadingBack(moduleLevel, typed, keyType, location);
+        if (matches.isEmpty()) { matches = keysReadingBack(fileLevel, typed, keyType, location); }
         if (several(matches)) {
             List<String> leaf = new ArrayList<>(above); leaf.add(matches.get(0));
             throw refused(severalSpellingsReason(field, Collections.singletonList(leaf)));
@@ -796,12 +796,12 @@ public abstract class AbstractConfigEntity {
     }
 
     /** The keys of {@code level}, when it is a map, that read back through {@code keyType} to {@code typed}, in map order. */
-    private List<String> keysReadingBack(Object level, Object typed, Type keyType, List<String> at) {
+    private List<String> keysReadingBack(Object level, Object typed, Type keyType, List<String> location) {
         List<String> found = new ArrayList<>();
         if (!(level instanceof Map)) { return found; }
         for (Object candidate : ((Map<?, ?>) level).keySet()) {
             String text = String.valueOf(candidate);
-            if (typed.equals(readKey(text, keyType, at))) { found.add(text); }
+            if (typed.equals(readKey(text, keyType, location))) { found.add(text); }
         }
         return found;
     }
@@ -810,9 +810,9 @@ public abstract class AbstractConfigEntity {
      * {@code text} read as a map key of {@code keyType} on the loader's read path, or {@code null} when it does not
      * convert. A probe: nothing is logged or recorded.
      */
-    private Object readKey(String text, Type keyType, List<String> at) {
+    private Object readKey(String text, Type keyType, List<String> location) {
         try {
-            ConversionResult<Object> key = registry().fromPlainResult(text, keyType, configFilePath, at);
+            ConversionResult<Object> key = registry().fromPlainResult(text, keyType, configFilePath, location);
             return key.failures().isEmpty() ? key.value() : null;
         } catch (ConversionException | RuntimeException unusable) {
             return null;
@@ -840,11 +840,11 @@ public abstract class AbstractConfigEntity {
      * or never held still counts.
      */
     private List<List<String>> severalSpellings(ConfigDocument read, Field field) {
-        List<String> at = keysIn(read, field);
-        if (!read.contains(at)) { return Collections.emptyList(); }
+        List<String> location = keysIn(read, field);
+        if (!read.contains(location)) { return Collections.emptyList(); }
         List<List<String>> leaves = new ArrayList<>();
         int setting = keys(field).size();
-        for (List<String> path : registry().ambiguousFileKeys(declaredType(field), read.get(at), configFilePath, keys(field))) {
+        for (List<String> path : registry().ambiguousFileKeys(declaredType(field), read.get(location), configFilePath, keys(field))) {
             leaves.add(new ArrayList<>(path.subList(setting, path.size())));
         }
         return leaves;
