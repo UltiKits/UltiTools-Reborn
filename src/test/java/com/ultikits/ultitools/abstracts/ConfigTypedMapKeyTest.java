@@ -20,7 +20,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mockito;
 
+import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
+import com.ultikits.ultitools.manager.ConfigManager;
 
 /**
  * Case 52 (issue #673, "Typed scalar map keys bind back to the original document keys"): a module declaring a map keyed
@@ -95,11 +97,44 @@ class ConfigTypedMapKeyTest {
         }
     }
 
+    /** Keys the operator spelled differently from their canonical text: quoted, whole dotted and exponent forms. */
+    private static final String SPELLED = "# synthetic spelled-key fixture\n"
+            + "limits:\n"
+            + "  '01': one\n"
+            + "  2: two\n"
+            + "ranges:\n"
+            + "  1.0: whole\n"
+            + "big:\n"
+            + "  '007': seven\n"
+            + "  1.0e10: far\n"
+            + "tail: kept\n";
+
+    @SuppressWarnings("unused") // read reflectively by the binder and by the assertions below
+    @ConfigEntity(PATH)
+    static class SpelledKeyConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "limits")
+        Map<Integer, String> limits = new LinkedHashMap<>();
+
+        @ConfigEntry(path = "ranges")
+        Map<Integer, String> ranges = new LinkedHashMap<>();
+
+        @ConfigEntry(path = "big")
+        Map<Long, String> big = new LinkedHashMap<>();
+
+        @ConfigEntry(path = "tail")
+        String tail = "default";
+
+        SpelledKeyConfig(String configFilePath) {
+            super(configFilePath);
+        }
+    }
+
     @BeforeEach
     void setUp() {
         plugin = Mockito.mock(UltiToolsPlugin.class);
         lenient().when(plugin.getPluginName()).thenReturn("TypedKeyModule");
         lenient().when(plugin.getConfigFolder()).thenReturn(tempDir.toString());
+        lenient().when(plugin.getResourceFolderPath()).thenReturn(tempDir.toString());
         lenient().when(plugin.getConfigFile(anyString())).thenAnswer(
                 invocation -> new File(tempDir.toFile(), invocation.<String>getArgument(0)));
     }
@@ -176,6 +211,104 @@ class ConfigTypedMapKeyTest {
         assertThatCode(() -> reader.init(plugin)).doesNotThrowAnyException();
         assertThat(reader.ports).containsExactlyEntriesOf(Collections.singletonMap(25565, "main"));
         assertThat(reader.motd).isEqualTo("kept");
+    }
+
+    @Test
+    @DisplayName("updating key 1, spelled '01' in the file, changes only its value; the quoted key text stays")
+    void quotedKeyValueUpdateKeepsTheKey() throws IOException {
+        put(SPELLED);
+        SpelledKeyConfig config = initialized();
+
+        config.limits.put(1, "uno");
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            config.save();
+            assertThat(warnings.messages()).as("the update is written, nothing is reported unwritten").isEmpty();
+        }
+
+        assertThat(text()).isEqualTo(SPELLED.replace("  '01': one\n", "  '01': uno\n"));
+    }
+
+    @Test
+    @DisplayName("updating key 1, written as the whole dotted key 1.0, keeps that whole key")
+    void wholeDottedKeyValueUpdateKeepsTheKey() throws IOException {
+        put(SPELLED);
+        SpelledKeyConfig config = initialized();
+
+        config.ranges.put(1, "changed");
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            config.save();
+            assertThat(warnings.messages()).as("the update is written, nothing is reported unwritten").isEmpty();
+        }
+
+        assertThat(text()).isEqualTo(SPELLED.replace("  1.0: whole\n", "  1.0: changed\n"));
+    }
+
+    @Test
+    @DisplayName("Long keys spelled '007' and 1.0e10 keep their text when their values are updated")
+    void longKeysKeepTheirText() throws IOException {
+        put(SPELLED);
+        SpelledKeyConfig config = initialized();
+
+        config.big.put(7L, "sept");
+        config.big.put(10_000_000_000L, "loin");
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            config.save();
+            assertThat(warnings.messages()).as("the updates are written, nothing is reported unwritten").isEmpty();
+        }
+
+        assertThat(text()).isEqualTo(SPELLED.replace("  '007': seven\n", "  '007': sept\n")
+                .replace("  1.0e10: far\n", "  1.0e10: loin\n"));
+    }
+
+    @Test
+    @DisplayName("a panel leaf edit of limits.01 writes only that value, under the quoted key")
+    void panelLeafEditOfSpelledKey() throws IOException {
+        put(SPELLED);
+        SpelledKeyConfig config = new SpelledKeyConfig(PATH);
+        ConfigManager manager = new ConfigManager();
+        manager.register(plugin, config);
+
+        assertThatCode(() -> manager.loadFromJson(PATH, "{\"limits.01\":\"uno\"}")).as("panel edit of limits.01")
+                .doesNotThrowAnyException();
+
+        assertThat(config.limits).containsEntry(1, "uno").hasSize(2);
+        assertThat(text()).isEqualTo(SPELLED.replace("  '01': one\n", "  '01': uno\n"));
+    }
+
+    @Test
+    @DisplayName("control: an unchanged save of the spelled-key file writes nothing")
+    void unchangedSaveKeepsSpelledKeys() throws IOException {
+        long modified = put(SPELLED);
+        SpelledKeyConfig config = initialized();
+
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            config.save();
+            assertThat(warnings.messages()).as("no warning").isEmpty();
+        }
+
+        assertThat(text()).isEqualTo(SPELLED);
+        assertThat(file().lastModified()).as("modification time").isEqualTo(modified);
+    }
+
+    @Test
+    @DisplayName("control: editing neighbour key 2 leaves the '01' line byte-identical")
+    void neighbourEditKeepsQuotedKeyLine() throws IOException {
+        put(SPELLED);
+        SpelledKeyConfig config = initialized();
+
+        config.limits.put(2, "deux");
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            config.save();
+            assertThat(warnings.messages()).as("no warning").isEmpty();
+        }
+
+        assertThat(text()).isEqualTo(SPELLED.replace("  2: two\n", "  2: deux\n"));
+    }
+
+    private SpelledKeyConfig initialized() {
+        SpelledKeyConfig config = new SpelledKeyConfig(PATH);
+        assertThatCode(() -> config.init(plugin)).as("init of the spelled-key module").doesNotThrowAnyException();
+        return config;
     }
 
     private File file() {
