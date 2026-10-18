@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.annotation.ElementType;
@@ -15,6 +16,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.function.Predicate;
 
@@ -26,6 +28,11 @@ import com.ultikits.testfixtures.overrideslots.pkgx.PackagePrivateSlotBase;
 import com.ultikits.testfixtures.overrideslots.pkgx.SamePackageWideningMiddle;
 import com.ultikits.testfixtures.overrideslots.pkgy.CrossPackageWideningChild;
 import com.ultikits.testfixtures.overrideslots.pkgy.TransitiveWideningLeaf;
+import com.ultikits.ultitools.annotations.ExceptionCatch;
+import com.ultikits.ultitools.annotations.command.CmdCD;
+import com.ultikits.ultitools.annotations.command.CmdMapping;
+import com.ultikits.ultitools.aop.AopEligibility;
+import com.ultikits.ultitools.aop.ProxyFactory;
 
 /**
  * ReflectionUtil 测试类
@@ -1220,6 +1227,149 @@ class ReflectionUtilTest {
             assertFalse(ReflectionUtil.overrides(null, slot));
             assertFalse(ReflectionUtil.overrides(slot, null));
             assertFalse(ReflectionUtil.overrides(null, null));
+        }
+    }
+
+    // ========== Case 36 fixtures: resolveMethodOrClassAnnotation on a generated proxy ==========
+    // Declared at this outer level, not inside the @Nested class below: under -source 1.8 an inner
+    // class cannot declare static nested classes. Public so the proxy factory can subclass them.
+    // Each go() carries @ExceptionCatch, so the generated proxy overrides it and the proxy's
+    // override - not the base declaration - is what a command executor's dispatch table stores.
+
+    /** Base-only: the class-level cooldown lives only on the class that declares the mapping. */
+    @CmdCD(60)
+    public static class ProxiedBaseOnlyCooldownBase {
+        @ExceptionCatch
+        @CmdMapping(format = "go")
+        public void go() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
+    }
+
+    public static class ProxiedBaseOnlyCooldownInheritor extends ProxiedBaseOnlyCooldownBase {
+        // inherits go() and declares no annotation of its own
+    }
+
+    /** Method-level control: the mapping's own @CmdCD(7) wins over the base's class-level one. */
+    @CmdCD(60)
+    public static class ProxiedMethodLevelCooldownBase {
+        @CmdCD(7)
+        @ExceptionCatch
+        @CmdMapping(format = "go")
+        public void go() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
+    }
+
+    public static class ProxiedMethodLevelCooldownInheritor extends ProxiedMethodLevelCooldownBase {
+        // inherits go(), whose own @CmdCD(7) must still win on the proxy
+    }
+
+    /** Concrete-class control: the inheritor's own class-level @CmdCD(5) wins over the base's. */
+    @CmdCD(60)
+    public static class ProxiedConcreteClassCooldownBase {
+        @ExceptionCatch
+        @CmdMapping(format = "go")
+        public void go() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
+    }
+
+    @CmdCD(5)
+    public static class ProxiedConcreteClassCooldownInheritor extends ProxiedConcreteClassCooldownBase {
+        // inherits go(); its own class-level @CmdCD(5) is the concrete executor class's declaration
+    }
+
+    /** Override control: an override declared in the inheritor is not governed by the base's class level. */
+    @CmdCD(60)
+    public static class ProxiedOverriddenCooldownBase {
+        @ExceptionCatch
+        @CmdMapping(format = "go")
+        public void go() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
+    }
+
+    public static class ProxiedOverriddenCooldownInheritor extends ProxiedOverriddenCooldownBase {
+        @Override
+        @ExceptionCatch
+        @CmdMapping(format = "go")
+        public void go() {
+            // Intentionally empty: reflection fixture, never invoked for behaviour.
+        }
+    }
+
+    @Nested
+    @DisplayName("resolveMethodOrClassAnnotation on a generated proxy's override (case 36)")
+    class ProxiedDeclarationTests {
+
+        private <T> Class<? extends T> proxyClassOf(Class<T> type) {
+            return new ProxyFactory(Collections.emptyList())
+                    .createProxyClass(type, AopEligibility.findAopAnnotatedMethods(type));
+        }
+
+        /** The proxy's own override of go(); asserts it really is declared by the generated class. */
+        private Method proxyOverride(Class<?> proxyClass) throws NoSuchMethodException {
+            Method override = proxyClass.getDeclaredMethod("go");
+            assertTrue(ProxyFactory.isProxyClass(override.getDeclaringClass()),
+                    "precondition: go() must be overridden by the generated proxy, otherwise this "
+                            + "test does not reproduce case 36");
+            return override;
+        }
+
+        private Integer seconds(CmdCD cmdCD) {
+            return cmdCD == null ? null : cmdCD.value();
+        }
+
+        @Test
+        @DisplayName("a base-only class-level @CmdCD is found for the proxy's override, by both overloads")
+        void baseOnlyClassLevelAnnotationIsFoundOnTheProxy() throws Exception {
+            Class<?> proxyClass = proxyClassOf(ProxiedBaseOnlyCooldownInheritor.class);
+            Method override = proxyOverride(proxyClass);
+
+            assertEquals(Integer.valueOf(60),
+                    seconds(ReflectionUtil.resolveMethodOrClassAnnotation(override, proxyClass, CmdCD.class)),
+                    "3-argument overload");
+            assertEquals(Integer.valueOf(60),
+                    seconds(ReflectionUtil.resolveMethodOrClassAnnotation(override, CmdCD.class)),
+                    "2-argument overload");
+        }
+
+        @Test
+        @DisplayName("control: a method-level @CmdCD on the base mapping still wins on the proxy")
+        void methodLevelAnnotationStillWinsOnTheProxy() throws Exception {
+            Class<?> proxyClass = proxyClassOf(ProxiedMethodLevelCooldownInheritor.class);
+            Method override = proxyOverride(proxyClass);
+
+            assertEquals(Integer.valueOf(7),
+                    seconds(ReflectionUtil.resolveMethodOrClassAnnotation(override, proxyClass, CmdCD.class)));
+            assertEquals(Integer.valueOf(7),
+                    seconds(ReflectionUtil.resolveMethodOrClassAnnotation(override, CmdCD.class)));
+        }
+
+        @Test
+        @DisplayName("control: the concrete executor class's own class-level @CmdCD still wins on the proxy")
+        void concreteClassAnnotationStillWinsOnTheProxy() throws Exception {
+            Class<?> proxyClass = proxyClassOf(ProxiedConcreteClassCooldownInheritor.class);
+            Method override = proxyOverride(proxyClass);
+
+            assertEquals(Integer.valueOf(5),
+                    seconds(ReflectionUtil.resolveMethodOrClassAnnotation(override, proxyClass, CmdCD.class)));
+        }
+
+        @Test
+        @DisplayName("control: an override declared in the inheritor resolves the same, proxied or ordinary")
+        void overrideDeclaredInTheInheritorResolvesIdentically() throws Exception {
+            Class<?> proxyClass = proxyClassOf(ProxiedOverriddenCooldownInheritor.class);
+            Method override = proxyOverride(proxyClass);
+            Method ordinary = ProxiedOverriddenCooldownInheritor.class.getDeclaredMethod("go");
+
+            assertNull(ReflectionUtil.resolveMethodOrClassAnnotation(
+                    ordinary, ProxiedOverriddenCooldownInheritor.class, CmdCD.class), "ordinary, 3-argument");
+            assertNull(ReflectionUtil.resolveMethodOrClassAnnotation(ordinary, CmdCD.class), "ordinary, 2-argument");
+            assertNull(ReflectionUtil.resolveMethodOrClassAnnotation(override, proxyClass, CmdCD.class),
+                    "proxied, 3-argument");
+            assertNull(ReflectionUtil.resolveMethodOrClassAnnotation(override, CmdCD.class), "proxied, 2-argument");
         }
     }
 }
