@@ -2,14 +2,19 @@ package com.ultikits.ultitools.buildtools.deprecation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
@@ -19,6 +24,13 @@ class CjkScopeScriptTest {
     private static final String SCRIPT = ".github/scripts/check-cjk-scope.sh";
     private static final String SAMPLE = "src/main/java/Sample.java";
     private static final Path FIXTURE = Paths.get(".github/scripts/testdata/cjk-java-comments.java.txt");
+    private static final String FAULT_BIN = "fault-bin";
+    private static final String GATE_TMP = "gate-tmp";
+    private static final String SAMPLE_VIOLATION = SAMPLE + ":1:// 中文";
+    private static final String ONE_VIOLATION_SUMMARY = "SUMMARY: 1 CJK violation(s) across 1 file(s).";
+    private static final String ENUMERATION_ERROR =
+            "ERROR: git ls-files failed for scope 'src/main/java' (exit 128); the gate fails closed.";
+    private static final String SORT_ERROR = "ERROR: sorting the violation list failed (exit 2); the gate fails closed.";
 
     @TempDir
     Path temp;
@@ -199,6 +211,75 @@ class CjkScopeScriptTest {
         assertThat(gate("--unknown").exit).isEqualTo(64);
     }
 
+    @Test
+    void enumerationFailureDoesNotBecomeEmptySuccess() throws Exception {
+        prepare("// 中文\n");
+        Result control = isolatedGate(false);
+        assertThat(control.exit).as("control: " + control.output).isEqualTo(1);
+        assertThat(control.output).contains(SAMPLE_VIOLATION, ONE_VIOLATION_SUMMARY);
+        assertThat(temp.resolve(GATE_TMP)).isEmptyDirectory();
+
+        Path marker = installShim("git", "ls-files", 128, false);
+        Result fault = isolatedGate(true);
+        assertThat(marker).exists();
+        assertThat(fault.exit).as("fault: " + fault.output).isEqualTo(2);
+        assertThat(fault.output).contains(ENUMERATION_ERROR)
+                .doesNotContain("SUMMARY:")
+                .doesNotContain("matched zero tracked files");
+        assertThat(temp.resolve(GATE_TMP)).isEmptyDirectory();
+
+        Files.delete(marker);
+        Result reportOnly = isolatedGate(true, "--report-only");
+        assertThat(marker).exists();
+        assertThat(reportOnly.exit).as("fault --report-only: " + reportOnly.output).isEqualTo(2);
+        assertThat(reportOnly.output).contains(ENUMERATION_ERROR).doesNotContain("SUMMARY:");
+        assertThat(temp.resolve(GATE_TMP)).isEmptyDirectory();
+    }
+
+    @Test
+    void violationSortFailureDoesNotBecomeEmptySuccess() throws Exception {
+        prepare("// 中文\n");
+        Result control = isolatedGate(false);
+        assertThat(control.exit).as("control: " + control.output).isEqualTo(1);
+        assertThat(control.output).contains(SAMPLE_VIOLATION, ONE_VIOLATION_SUMMARY);
+        assertThat(temp.resolve(GATE_TMP)).isEmptyDirectory();
+
+        Path marker = installShim("sort", "-k2,2n", 2, true);
+        Path recordedInput = temp.resolve(FAULT_BIN).resolve("sort-input.txt");
+        Result fault = isolatedGate(true);
+        assertThat(marker).exists();
+        assertThat(new String(Files.readAllBytes(recordedInput), StandardCharsets.UTF_8)).contains(SAMPLE_VIOLATION);
+        assertThat(fault.exit).as("fault: " + fault.output).isEqualTo(2);
+        assertThat(fault.output).contains(SORT_ERROR).doesNotContain("SUMMARY:");
+        assertThat(temp.resolve(GATE_TMP)).isEmptyDirectory();
+
+        Files.delete(marker);
+        Result reportOnly = isolatedGate(true, "--report-only");
+        assertThat(marker).exists();
+        assertThat(reportOnly.exit).as("fault --report-only: " + reportOnly.output).isEqualTo(2);
+        assertThat(reportOnly.output).contains(SORT_ERROR).doesNotContain("SUMMARY:");
+        assertThat(temp.resolve(GATE_TMP)).isEmptyDirectory();
+    }
+
+    @Test
+    void selfTestEmptyScopeAssertionRejectsEnumerationFailure() throws Exception {
+        prepare("class Sample {}\n");
+        Result control = isolatedGate(false, "--self-test");
+        assertThat(control.exit).as("control: " + control.output).isZero();
+        assertThat(control.output).contains("PASS: assertion 3").doesNotContain("FAIL:");
+        assertThat(temp.resolve(GATE_TMP)).isEmptyDirectory();
+
+        Path marker = installShim("git", "ls-files", 128, false);
+        Result fault = isolatedGate(true, "--self-test");
+        assertThat(marker).exists();
+        assertThat(fault.exit).as("fault: " + fault.output).isNotZero();
+        String failLine = Arrays.stream(fault.output.split("\n"))
+                .filter(line -> line.startsWith("FAIL: assertion 3")).findFirst().orElse("");
+        assertThat(failLine).as("fault: " + fault.output).contains("run_scan exit 2");
+        assertThat(fault.output).contains("PASS: assertion 1");
+        assertThat(temp.resolve(GATE_TMP)).isEmptyDirectory();
+    }
+
     private String fixtureLine(String marker) throws IOException {
         return Files.readAllLines(FIXTURE, StandardCharsets.UTF_8).stream()
                 .filter(line -> line.contains(marker)).findFirst()
@@ -243,10 +324,66 @@ class CjkScopeScriptTest {
         return command(argv.toArray(new String[0]));
     }
 
+    /**
+     * Runs the gate with its TMPDIR pointed at a test-owned directory; when shimmed, the fault-bin
+     * directory is prepended to the child PATH only, so the injected fault never leaves the gate's
+     * own process tree.
+     */
+    private Result isolatedGate(boolean shimmed, String... args) throws Exception {
+        Path gateTmp = Files.createDirectories(temp.resolve(GATE_TMP));
+        Map<String, String> environment = new HashMap<>();
+        environment.put("TMPDIR", gateTmp.toString());
+        if (shimmed) {
+            environment.put("PATH", temp.resolve(FAULT_BIN) + File.pathSeparator + System.getenv("PATH"));
+        }
+        List<String> argv = new ArrayList<>(Arrays.asList("bash", SCRIPT));
+        argv.addAll(Arrays.asList(args));
+        return command(environment, argv.toArray(new String[0]));
+    }
+
+    /**
+     * Writes an executable shim named after TOOL into fault-bin. A call carrying SELECTOR as one of
+     * its arguments creates the marker (proof the faulted call was reached), optionally records its
+     * last operand, prints nothing and exits with STATUS; every other call runs the real tool,
+     * resolved to an absolute path beforehand, with unchanged arguments.
+     */
+    private Path installShim(String tool, String selector, int status, boolean recordInput) throws Exception {
+        Result resolved = command("bash", "-c", "command -v " + tool);
+        String real = resolved.output.trim();
+        assertThat(resolved.exit).as(resolved.output).isZero();
+        assertThat(real).startsWith("/");
+        Path bin = Files.createDirectories(temp.resolve(FAULT_BIN));
+        Path marker = bin.resolve(tool + ".reached");
+        java.util.function.UnaryOperator<String> quote = text -> "'" + text.replace("'", "'\\''") + "'";
+        StringBuilder shim = new StringBuilder("#!/usr/bin/env bash\n")
+                .append("for argument in \"$@\"; do\n")
+                .append("    if [ \"$argument\" = ").append(quote.apply(selector)).append(" ]; then\n")
+                .append("        : > ").append(quote.apply(marker.toString())).append('\n');
+        if (recordInput) {
+            shim.append("        last=\"${!#}\"\n")
+                    .append("        if [ -f \"$last\" ] && [ -r \"$last\" ]; then cp -- \"$last\" ")
+                    .append(quote.apply(bin.resolve(tool + "-input.txt").toString())).append("; fi\n");
+        }
+        shim.append("        exit ").append(status).append('\n')
+                .append("    fi\n")
+                .append("done\n")
+                .append("exec ").append(quote.apply(real)).append(" \"$@\"\n");
+        Path script = bin.resolve(tool);
+        Files.write(script, shim.toString().getBytes(StandardCharsets.UTF_8));
+        Files.setPosixFilePermissions(script, PosixFilePermissions.fromString("rwx------"));
+        return marker;
+    }
+
     private Result command(String... argv) throws Exception {
+        return command(Collections.<String, String>emptyMap(), argv);
+    }
+
+    private Result command(Map<String, String> environment, String... argv) throws Exception {
         Path output = Files.createTempFile(temp, "process-", ".log");
-        Process process = new ProcessBuilder(argv).directory(temp.toFile())
-                .redirectErrorStream(true).redirectOutput(output.toFile()).start();
+        ProcessBuilder builder = new ProcessBuilder(argv).directory(temp.toFile())
+                .redirectErrorStream(true).redirectOutput(output.toFile());
+        builder.environment().putAll(environment);
+        Process process = builder.start();
         if (!process.waitFor(30, TimeUnit.SECONDS)) {
             process.destroyForcibly();
             throw new AssertionError("Timed out: " + Arrays.toString(argv));
