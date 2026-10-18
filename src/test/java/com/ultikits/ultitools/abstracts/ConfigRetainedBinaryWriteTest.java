@@ -15,12 +15,17 @@ import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import com.ultikits.ultitools.config.OperatorFiles;
 
@@ -29,13 +34,19 @@ import com.ultikits.ultitools.config.OperatorFiles;
  * values compare by content"). The document layer reads a binary as a {@code byte[]} and hands out defensive copies,
  * so the write gate's self-check compares two different arrays holding the same bytes; it must compare them by
  * content, or every gated write to such a file is refused. Every test leaves the binary line byte-identical.
+ * <p>
+ * The rows that expect a write use a quoted or block-literal binary, which the document renders byte for byte. An
+ * unquoted {@code !!binary} scalar and a block-form {@code !!set} are re-rendered in another style ({@code !!binary 'YWI='},
+ * {@code a:}), so a write next to them is refused by the layout check and the file is left byte-identical: a documented
+ * limitation (maintainer decision 2026-10-18), pinned here so it stays a fail-closed refusal.
  */
 @DisplayName("A retained !!binary value does not block a write of another key")
 class ConfigRetainedBinaryWriteTest {
 
     private static final String WRITER_LOGGER = "com.ultikits.ultitools.config.document.OperatorFileWriter";
-    private static final String BLOB_LINE = "blob: !!binary YWI=\n";
+    private static final String BLOB_LINE = "blob: !!binary 'YWI='\n";
     private static final String KIT = "# header\n" + BLOB_LINE + "motd: old\n";
+    private static final String LAYOUT_REFUSAL = "the file's layout outside the keys this write owns would change";
 
     @TempDir
     Path directory;
@@ -96,6 +107,53 @@ class ConfigRetainedBinaryWriteTest {
         assertThat(warnings).as("refusal reasons").extracting(LogRecord::getMessage).isEmpty();
         assertThat(result).isEqualTo(OperatorFiles.WriteResult.UNCHANGED);
         assertThat(text()).isEqualTo(KIT);
+        assertThat(file.toFile().lastModified()).isEqualTo(modified);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"blob: !!binary \"YWI=\"\n", "blob: !!binary |\n  YWI=\n", "blob: !!binary |-\n  YWI=\n"})
+    @DisplayName("a double-quoted or block-literal binary does not block a neighbour write either")
+    void otherRenderableBinarySpellingsDoNotBlockANeighbourWrite(String blob) throws Exception {
+        put("# header\n" + blob + "motd: old\n");
+        OperatorFiles.Snapshot snapshot = OperatorFiles.read(file.toFile());
+
+        OperatorFiles.WriteResult result = OperatorFiles.write(snapshot, values(Collections.singletonList("motd"), "new"));
+
+        assertThat(warnings).as("refusal reasons").extracting(LogRecord::getMessage).isEmpty();
+        assertThat(result).isEqualTo(OperatorFiles.WriteResult.WRITTEN);
+        assertThat(text()).isEqualTo("# header\n" + blob + "motd: new\n");
+    }
+
+    static Stream<Arguments> unrenderableSpellings() {
+        return Stream.of(
+                Arguments.of("unquoted binary", "blob: !!binary YWI=\n", LAYOUT_REFUSAL + " (line 2)"),
+                Arguments.of("nested unquoted binary", "outer:\n  blob: !!binary YWI=\n", LAYOUT_REFUSAL + " (line 3)"),
+                Arguments.of("block-form set", "blob: !!set\n  ? a\nother: x\n", LAYOUT_REFUSAL),
+                // The parser ends the set's last null value at the start of the next line, so a write of the key that
+                // directly follows a block-form set is refused by the shared-line check instead.
+                Arguments.of("block-form set right above the written key", "blob: !!set\n  ? a\n",
+                        "a key this write owns shares line 4 with a key it does not own"));
+    }
+
+    /**
+     * Documented limitation (maintainer decision 2026-10-18): the document re-renders an unquoted {@code !!binary}
+     * scalar as {@code !!binary 'YWI='} and a block-form {@code !!set} entry {@code ? a} as {@code a:}, so a neighbour
+     * write is refused by the gate's layout checks - never by the value comparison - and the file keeps every byte.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("unrenderableSpellings")
+    @DisplayName("an unquoted binary or a block-form set refuses a neighbour write for its layout and keeps the file")
+    void unrenderableSpellingRefusesANeighbourWriteForItsLayout(String spelling, String blob, String reason)
+            throws Exception {
+        String original = "# header\n" + blob + "motd: old\n";
+        long modified = put(original);
+        OperatorFiles.Snapshot snapshot = OperatorFiles.read(file.toFile());
+
+        OperatorFiles.WriteResult result = OperatorFiles.write(snapshot, values(Collections.singletonList("motd"), "new"));
+
+        assertThat(result).isEqualTo(OperatorFiles.WriteResult.REFUSED);
+        assertThat(warnings).extracting(LogRecord::getMessage).singleElement().asString().contains(reason);
+        assertThat(text()).isEqualTo(original);
         assertThat(file.toFile().lastModified()).isEqualTo(modified);
     }
 
