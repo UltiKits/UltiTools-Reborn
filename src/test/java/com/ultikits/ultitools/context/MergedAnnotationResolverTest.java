@@ -654,4 +654,119 @@ class MergedAnnotationResolverTest {
             assertDoesNotThrow(() -> MergedAnnotationResolver.validateAliases(OuterComposedModule.class));
         }
     }
+
+    // ===== C47 fixtures: an outer override over an inner declared meta value =====
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.TYPE)
+    @UltiToolsModule(scanBasePackages = "defaults")
+    @interface DefaultsScanModule {
+        @AliasFor(annotation = ComponentScan.class, attribute = "basePackages")
+        String[] packages() default {};
+    }
+
+    @DefaultsScanModule(packages = "other")
+    static class OuterOverrideFixture {
+    }
+
+    @DefaultsScanModule
+    static class InnerDefaultFixture {
+    }
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.TYPE)
+    @UltiToolsModule(scanBasePackages = "defaults")
+    @interface DefaultsViaModule {
+        @AliasFor(annotation = UltiToolsModule.class, attribute = "scanBasePackages")
+        String[] packages() default {};
+    }
+
+    @DefaultsViaModule(packages = "other")
+    static class OuterOverrideViaModuleFixture {
+    }
+
+    // One instance reaching ComponentScan.basePackages by two routes: directly, and through
+    // UltiToolsModule.scanBasePackages.
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.TYPE)
+    @UltiToolsModule
+    @interface TwoRoutesModule {
+        @AliasFor(annotation = ComponentScan.class, attribute = "basePackages")
+        String[] direct() default {};
+
+        @AliasFor(annotation = UltiToolsModule.class, attribute = "scanBasePackages")
+        String[] viaModule() default {};
+    }
+
+    @TwoRoutesModule(direct = "p", viaModule = "q")
+    static class SelfContradictionFixture {
+    }
+
+    @TwoRoutesModule(direct = "p", viaModule = "p")
+    static class SelfAgreementFixture {
+    }
+
+    /**
+     * C47 (decision P-10 merge): a value set on an outer annotation overrides the value an inner
+     * meta-annotation declares -- values from different annotation instances never conflict, the
+     * one nearest the class wins (Spring {@code @AliasFor}: the lower level, closer to the
+     * annotated element, wins). Only one annotation instance supplying two different values for
+     * the same final attribute is refused.
+     */
+    @Nested
+    @DisplayName("C47: an outer override beats an inner declared value; one instance contradicting itself is refused")
+    class CrossLevelOverrideTests {
+
+        @Test
+        @DisplayName("An outer attribute aliasing ComponentScan.basePackages overrides the inner @UltiToolsModule(scanBasePackages)")
+        void outerOverrideBeatsInnerDeclaredValue() {
+            ComponentScan merged = MergedAnnotationResolver.find(OuterOverrideFixture.class, ComponentScan.class);
+
+            assertNotNull(merged);
+            assertArrayEquals(new String[] {"other"}, merged.basePackages(),
+                    "values from two different annotation instances are not a conflict; the outer one wins");
+        }
+
+        @Test
+        @DisplayName("Control: with the outer attribute left at its default, the inner declared value applies")
+        void innerDeclaredValueAppliesWhenOuterLeftAtDefault() {
+            ComponentScan merged = MergedAnnotationResolver.find(InnerDefaultFixture.class, ComponentScan.class);
+
+            assertNotNull(merged);
+            assertArrayEquals(new String[] {"defaults"}, merged.basePackages());
+        }
+
+        @Test
+        @DisplayName("An outer attribute aliasing scanBasePackages overrides the inner declared scanBasePackages, at both levels")
+        void outerOverrideThroughIntermediateBeatsInnerDeclaredValue() {
+            UltiToolsModule module = MergedAnnotationResolver.find(OuterOverrideViaModuleFixture.class, UltiToolsModule.class);
+            ComponentScan scan = MergedAnnotationResolver.find(OuterOverrideViaModuleFixture.class, ComponentScan.class);
+
+            assertNotNull(module);
+            assertArrayEquals(new String[] {"other"}, module.scanBasePackages());
+            assertNotNull(scan);
+            assertArrayEquals(new String[] {"other"}, scan.basePackages());
+        }
+
+        @Test
+        @DisplayName("One instance sending two different values to ComponentScan.basePackages is refused, naming that annotation")
+        void oneInstanceContradictingItselfIsRefused() {
+            ContainerException thrown = assertThrows(ContainerException.class,
+                    () -> MergedAnnotationResolver.find(SelfContradictionFixture.class, ComponentScan.class));
+
+            assertTrue(thrown.getMessage().contains(TwoRoutesModule.class.getName()), thrown.getMessage());
+            assertTrue(thrown.getMessage().contains("basePackages"), thrown.getMessage());
+            assertTrue(thrown.getMessage().contains("direct"), thrown.getMessage());
+            assertTrue(thrown.getMessage().contains("viaModule"), thrown.getMessage());
+        }
+
+        @Test
+        @DisplayName("Control: one instance sending the same value by both routes is accepted")
+        void oneInstanceAgreeingWithItselfIsAccepted() {
+            ComponentScan merged = MergedAnnotationResolver.find(SelfAgreementFixture.class, ComponentScan.class);
+
+            assertNotNull(merged);
+            assertArrayEquals(new String[] {"p"}, merged.basePackages());
+        }
+    }
 }
