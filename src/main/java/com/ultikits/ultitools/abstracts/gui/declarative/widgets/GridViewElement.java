@@ -66,9 +66,7 @@ public class GridViewElement extends Element {
     public void update(@NotNull Widget newWidget) {
         super.update(newWidget);
         GridView<?> gridView = (GridView<?>) getWidget();
-        List<Element> reconciled = updateChildren(childElements, gridView.getChildren());
-        childElements.clear();
-        childElements.addAll(reconciled);
+        updateChildren(childElements, gridView.getChildren());
     }
 
     @Override
@@ -79,13 +77,42 @@ public class GridViewElement extends Element {
         // RenderDepthExceededException here rather than overflowing the JVM stack mid-frame.
         RenderDepthGuard.check("GridViewElement.performRebuild", RenderDepthGuard.depthOf(this));
 
+        // Rebuild each child's COMPLETE dirty subtree first, then write parent data. A component
+        // cell (a StatelessWidget/StatefulWidget wrapper, at any nesting depth) only updates its
+        // leaf and marks it dirty when the cell itself rebuilds; the leaf's own rebuild resets
+        // its RenderNode slot from the widget. If positions were written before that leaf
+        // rebuild, GuiRenderer's later pre-order visit would rebuild the leaf and overwrite the
+        // computed slot, so on every frame after the first the cells would collapse onto the
+        // widget's default slot and click handlers would be keyed by the wrong slot. Walking the
+        // whole subtree here leaves every descendant clean before applyGridPositions() runs, so
+        // nothing later in this frame can overwrite what it writes.
         for (Element child : childElements) {
-            if (child.isDirty()) {
-                child.performRebuild();
-            }
+            rebuildSubtree(child);
         }
         applyGridPositions();
         clearDirty();
+    }
+
+    /**
+     * Rebuilds {@code element}'s complete dirty subtree in {@code GuiRenderer.rebuildElement}'s
+     * order: rebuild the node if it is dirty, then descend into its children as they are after
+     * that rebuild.
+     * <p>
+     * Guarded by {@link RenderDepthGuard} at every visited node, under the same guard name as
+     * {@link #performRebuild()}: a module-authored cell subtree deep enough raises
+     * {@code RenderDepthExceededException} here rather than overflowing the JVM stack mid-frame.
+     *
+     * @param element the root of the subtree to rebuild
+     */
+    private static void rebuildSubtree(@NotNull Element element) {
+        RenderDepthGuard.check("GridViewElement.performRebuild", RenderDepthGuard.depthOf(element));
+
+        if (element.isDirty()) {
+            element.performRebuild();
+        }
+        for (Element child : element.getChildren()) {
+            rebuildSubtree(child);
+        }
     }
 
     @Override
@@ -104,22 +131,25 @@ public class GridViewElement extends Element {
     }
 
     private void mountChildren() {
+        // First mount shares reconciliation's creation path (starting from the still-empty
+        // list): a child whose mount throws is cleaned up immediately, and every child mounted
+        // before it stays owned, so the parent's own cleanup can release it.
         GridView<?> gridView = (GridView<?>) getWidget();
-        for (Widget childWidget : gridView.getChildren()) {
-            Element childElement = childWidget.createElement();
-            childElement.mount(this);
-            childElements.add(childElement);
-        }
+        updateChildren(childElements, gridView.getChildren());
     }
 
     /**
      * Writes each child's GridView-computed slot onto the RenderNode(s) its subtree produced.
      * <p>
      * This is parent data, D-11's mechanism: the child never knows its own position, the
-     * GridView writes it after the child has (re)built and before {@code GuiRenderer}'s
-     * collection walk snapshots the tree -- 05-11's {@code collectRenderNodesRecursive} copies
-     * via {@code RenderNode.copy()}, so a write after that point would be invisible in the
-     * collected snapshot.
+     * GridView writes it after the child's complete subtree has (re)built and before
+     * {@code GuiRenderer}'s collection walk snapshots the tree -- 05-11's
+     * {@code collectRenderNodesRecursive} copies via {@code RenderNode.copy()}, so a write after
+     * that point would be invisible in the collected snapshot. On every frame after the first,
+     * {@link #performRebuild()} rebuilds every dirty descendant of each child (not only the
+     * direct children) before calling this, so no later leaf rebuild in the same frame can reset
+     * a leaf's slot from its widget and overwrite the value written here. On the first frame,
+     * {@link #mount} calls this after each child's own mount-time build.
      * <p>
      * A child whose Element is not itself a leaf (a nested {@link Container}, for example) has
      * no {@link RenderNode} of its own; {@link #collectRenderNodeLeaves} walks its descendants
