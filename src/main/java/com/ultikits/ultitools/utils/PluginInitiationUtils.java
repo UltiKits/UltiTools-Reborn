@@ -969,10 +969,16 @@ public class PluginInitiationUtils {
      */
     private static void dispatchToResponder(String type, JsonObject data, PanelResponderRegistry registry) {
         String requestId = data != null ? readString(data, "requestId") : null;
+        CloudSession admittedSession = CloudSession.current();
+        UltiPanelWebSocketClient admittedClient = admittedSession.getWebSocketClient();
         registry.dispatch(type, data, requestId).whenComplete((result, throwable) -> {
             if (requestId == null || requestId.isEmpty()) {
                 PanelConnectionLog.log(Level.FINE,
                     String.format("Responder reply for type '%s' not sent — request carried no requestId", type));
+                return;
+            }
+            if (!isAcceptingPanelMessages()) {
+                logDroppedWhileDisabling("responder reply for type '" + type + "'");
                 return;
             }
             JsonObject payload = throwable != null ? new JsonObject() : result;
@@ -984,9 +990,9 @@ public class PluginInitiationUtils {
             JsonObject response = new JsonObject();
             response.addProperty("type", type);
             response.add("data", payload);
-            if (currentWebSocketClient() != null) {
-                response.addProperty("serverId", currentWebSocketClient().getServerId());
-                currentWebSocketClient().sendMessage(response);
+            if (admittedClient != null) {
+                response.addProperty("serverId", admittedClient.getServerId());
+                admittedClient.sendMessage(response);
             } else {
                 PanelConnectionLog.log(Level.FINE,
                     "Responder reply for type '" + type + "' not sent — no WebSocket client connected");
