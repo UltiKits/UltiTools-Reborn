@@ -218,6 +218,14 @@ class PluginManagerUnloadHookCheckedFailureTest {
         return tracked == null ? new ArrayList<>() : new ArrayList<>(tracked);
     }
 
+    /** The modules {@code manager}'s private per-module map still has a key for. */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // test seam: the per-module maps are private by design
+    private static List<Object> modulesTrackedBy(Object manager, String mapField) throws Exception {
+        Field field = manager.getClass().getDeclaredField(mapField);
+        field.setAccessible(true);
+        return new ArrayList<>(((Map<?, ?>) field.get(manager)).keySet());
+    }
+
     @SuppressWarnings("unchecked")
     private static <T extends Throwable> void sneakyThrow(Throwable failure) throws T {
         throw (T) failure;
@@ -337,5 +345,32 @@ class PluginManagerUnloadHookCheckedFailureTest {
         assertThat(responders.hasResponder(RESPONDER_TYPE)).as("the module's panel responder is released").isFalse();
         verify(loaded.context).close();
         assertThat(pluginManager.getPluginList()).as("the module is delisted").doesNotContain(module);
+    }
+
+    @Test
+    @DisplayName("an unload drops the module from both managers' per-module lists, whether or not its hook threw")
+    void unloadReleasesTheManagersPerModuleEntries() throws Exception {
+        LoadedModule failing = loadModule(new IOException("hook could not flush its state"));
+        assertThat(modulesTrackedBy(listenerManager, "listenerListMap")).contains(failing.module);
+        assertThat(modulesTrackedBy(commandManager, "commandListMap")).contains(failing.module);
+
+        assertThat(catchThrowable(() -> pluginManager.unregister(failing.module))).isInstanceOf(IOException.class);
+
+        assertThat(modulesTrackedBy(listenerManager, "listenerListMap"))
+                .as("ListenerManager no longer references a module whose unload hook threw").doesNotContain(failing.module);
+        assertThat(modulesTrackedBy(commandManager, "commandListMap"))
+                .as("CommandManager no longer references a module whose unload hook threw").doesNotContain(failing.module);
+
+        LoadedModule normal = loadModule(null);
+        assertThat(modulesTrackedBy(listenerManager, "listenerListMap")).contains(normal.module);
+        assertThat(modulesTrackedBy(commandManager, "commandListMap")).contains(normal.module);
+
+        pluginManager.unregister(normal.module);
+
+        assertThat(modulesTrackedBy(listenerManager, "listenerListMap"))
+                .as("ListenerManager no longer references a normally unloaded module").doesNotContain(normal.module);
+        assertThat(modulesTrackedBy(commandManager, "commandListMap"))
+                .as("CommandManager no longer references a normally unloaded module").doesNotContain(normal.module);
+        assertThat(realCommandMap.getCommand(COMMAND_LABEL)).as("and its command is gone too").isNull();
     }
 }
