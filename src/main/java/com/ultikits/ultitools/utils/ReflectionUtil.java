@@ -13,6 +13,8 @@ import java.util.Map;
 
 import javax.annotation.Nullable;
 
+import com.ultikits.ultitools.aop.ProxyFactory;
+
 /**
  * Reflection utility class.
  * <p>
@@ -307,35 +309,24 @@ public final class ReflectionUtil {
     }
 
     /**
-     * Resolves {@code annotationType} for {@code method}, preferring a declaration on the
-     * method itself and falling back to one on the method's declaring class -- most-derived
-     * wins, the same precedence {@code SenderTypeValidator} already applies for
-     * {@code @CmdTarget} inside this same validator chain, and the precedent Spring's
-     * {@code @Transactional} and Spring Security's {@code @PreAuthorize} both document for a
-     * class-vs-method annotation conflict.
-     * <p>
-     * Only the method's OWN declaring class is consulted (via
-     * {@code method.getDeclaringClass().getAnnotation(...)}) -- not the class's own ancestors,
-     * since neither {@code @CmdCD} nor {@code @UsageLimit} is {@code @Inherited}. This matches
-     * {@link #getAllMethods(Class)}'s own hierarchy walk: a method inherited from a superclass
-     * without being overridden is returned with that superclass already as its
-     * {@code getDeclaringClass()}, so a class-level annotation on that superclass is still found
-     * without any extra ancestor walk here.
+     * Resolves {@code annotationType} for {@code method} without a concrete executor class: the
+     * method's own declaration, then the class-level declaration on the class that declared the
+     * mapping in source. Most-derived wins, the same precedence {@code SenderTypeValidator}
+     * applies for {@code @CmdTarget}, and the precedent Spring's {@code @Transactional} and Spring
+     * Security's {@code @PreAuthorize} both document for a class-versus-method conflict.
      * <p>
      * Convenience delegate to {@link #resolveMethodOrClassAnnotation(Method, Class, Class)} with
-     * {@code executorClass} as {@code null} -- kept for callers (and existing tests) that only
-     * ever had a {@code Method} to resolve against, not the dispatching executor's concrete
-     * class. Prefer the 3-argument overload when the concrete executor class is known: it also
-     * checks that class's own declaration, closing WR-02 (05-REVIEW.md) -- a class-level
-     * annotation declared on a concrete executor SUBCLASS, inherited by an unoverridden {@code
-     * @CmdMapping} method whose {@code getDeclaringClass()} is an ancestor, is invisible to this
-     * 2-argument form.
+     * {@code executorClass} as {@code null}; that overload's javadoc is the single statement of
+     * the rule, including how a {@code ProxyFactory}-generated override is mapped back to the
+     * declaration its author wrote (case 36). Prefer the 3-argument overload whenever the
+     * dispatching executor's concrete class is known: only it sees a class-level annotation
+     * declared on a concrete subclass that inherits the mapping unoverridden (WR-02).
      *
      * @param method         the matched command mapping method
      * @param annotationType the annotation type to resolve
      * @param <A>            the annotation type
-     * @return the method-level annotation if present, otherwise the declaring class's
-     *         annotation, or {@code null} if neither declares it
+     * @return the method-level annotation if present, otherwise the class-level annotation of
+     *         the class that declared the mapping in source, or {@code null} if neither declares it
      * @since 6.3.0
      */
     public static <A extends Annotation> A resolveMethodOrClassAnnotation(Method method, Class<A> annotationType) {
@@ -343,38 +334,45 @@ public final class ReflectionUtil {
     }
 
     /**
-     * WR-02 (05-REVIEW.md): resolves {@code annotationType} in THREE steps, most-derived-first:
-     * (1) {@code method}'s own declaration, (2) {@code executorClass}'s own class-level
-     * declaration -- the CONCRETE, most-derived executor class actually loaded, the SAME class
-     * {@code PluginManager}'s load-time gate inspects via {@code executor.getClass()} -- (3)
-     * {@code method.getDeclaringClass()}'s class-level declaration, for a shared abstract base
-     * that declares BOTH the mapping method and the annotation together.
+     * Resolves {@code annotationType} for a command mapping in three steps, most-derived first:
+     * <ol>
+     *   <li>{@code method}'s own declaration;</li>
+     *   <li>{@code executorClass}'s own class-level declaration -- the concrete executor class
+     *       actually dispatching, the same class {@code PluginManager}'s load-time gate inspects
+     *       through {@code executor.getClass()} (WR-02);</li>
+     *   <li>the class-level declaration of the class that declared the mapping in source.</li>
+     * </ol>
+     * Neither {@code @CmdCD} nor {@code @UsageLimit} is {@code @Inherited}, so no step walks a
+     * class's ancestors. Step 2 is what lets a class-level annotation on a concrete subclass
+     * govern a mapping it inherits unoverridden; step 3 is what lets a shared abstract base that
+     * declares both the mapping and the annotation govern every inheritor.
      * <p>
-     * Step (2) is what {@link #resolveMethodOrClassAnnotation(Method, Class)} (the 2-arg
-     * overload) cannot do: for an inherited, unoverridden {@code @CmdMapping} method, {@code
-     * method.getDeclaringClass()} is whatever ANCESTOR first declared it -- never the concrete
-     * subclass, since neither {@code @CmdCD} nor {@code @UsageLimit} is {@code @Inherited}. A
-     * class-level annotation declared ONLY on such a subclass previously passed {@code
-     * PluginManager}'s load-time gate (which correctly checks {@code executor.getClass()}) but
-     * was never found by {@code CooldownValidator}/{@code UsageLockValidator} at runtime -- the
-     * gate's "fine to load" was a false assurance. Step (3) is kept as a further fallback so a
-     * shared abstract base that declares both the mapping and the annotation together -- the
-     * pre-WR-02 working case -- is unaffected.
+     * <b>Generated proxies (case 36).</b> When {@code method} is an override generated by
+     * {@code ProxyFactory} (its declaring class is a proxy, by
+     * {@code ProxyFactory.isProxyClass}), step 3 does not read the generated class: it reads the
+     * class that declared the overridden method in source -- the most derived non-proxy
+     * declaration that the override overrides, by {@link #overrides(Method, Method)}. The proxy
+     * copies only the proxied class's own type annotations and the intercepted methods' own
+     * annotations, so reading the generated class here would lose a base class's class-level
+     * annotation for exactly the mappings that carry an AOP annotation. Steps 1 and 2 are
+     * unchanged on a proxy (the copied method annotations and the copied type annotations of the
+     * proxied class), so the precedence is the same for proxied and ordinary executors, for
+     * inherited and for overridden mappings alike. An override declared in the concrete class is
+     * governed by that class, not by its base, with or without a proxy.
      * <p>
-     * {@code executorClass} is checked as a DIRECT declaration only (no ancestor walk of its
-     * own): if the concrete class itself does not carry the annotation, step (3) already covers
-     * the "declared on an ancestor of the mapping method" case, and there is no third distinct
-     * class to consult for the same annotation type.
+     * <b>Consumers.</b> {@code CooldownValidator} (whether a mapping is bound, its seconds, and
+     * the unresolved-binding failure), {@code UsageLockValidator} (the lock scope) and
+     * {@code PluginManager}'s config-binding resolution at module load all call this method, so
+     * load-time resolution and dispatch-time enforcement share this one answer.
      *
-     * @param method         the matched command mapping method
+     * @param method         the matched command mapping method; may be a {@code ProxyFactory}
+     *                       override
      * @param executorClass  the concrete {@code BaseCommandExecutor} class dispatching this
-     *                       command -- the SAME class {@code PluginManager}'s load-time gate
-     *                       inspects -- or {@code null} to fall back to the pre-WR-02,
-     *                       declaring-class-only resolution
+     *                       command -- the same class {@code PluginManager}'s load-time gate
+     *                       inspects -- or {@code null} to skip step 2
      * @param annotationType the annotation type to resolve
      * @param <A>            the annotation type
-     * @return the resolved annotation, or {@code null} if none of method, {@code executorClass},
-     *         or the method's declaring class carries one
+     * @return the resolved annotation, or {@code null} if none of the three steps finds one
      * @since 6.3.0
      */
     public static <A extends Annotation> A resolveMethodOrClassAnnotation(Method method, @Nullable Class<?> executorClass,
@@ -389,7 +387,43 @@ public final class ReflectionUtil {
                 return onExecutorClass;
             }
         }
-        return method.getDeclaringClass().getAnnotation(annotationType);
+        return sourceDeclarationOf(method).getDeclaringClass().getAnnotation(annotationType);
+    }
+
+    /**
+     * The declaration a module author wrote for {@code method}: for an override generated by
+     * {@code ProxyFactory}, the most derived non-proxy declaration in the proxy's superclass
+     * chain that the override overrides; otherwise {@code method} itself.
+     * <p>
+     * Proxy identity is read from {@code ProxyFactory.isProxyClass}, its one source. Bridge and
+     * synthetic methods are skipped, as in {@link #getAllMethods(Class)}. Nothing is cached: a
+     * static map keyed by {@code Method} or {@code Class} would pin module class loaders after the
+     * module unloads, and the walk only runs for a method declared by a proxy.
+     *
+     * @param method the method to map back, never null
+     * @return the author's declaration, or {@code method} when it is not a proxy override or no
+     *         declaration it overrides is found
+     */
+    private static Method sourceDeclarationOf(Method method) {
+        Class<?> declaringClass = method.getDeclaringClass();
+        if (!ProxyFactory.isProxyClass(declaringClass)) {
+            return method;
+        }
+        for (Class<?> current = declaringClass.getSuperclass(); current != null && current != Object.class;
+             current = current.getSuperclass()) {
+            if (ProxyFactory.isProxyClass(current)) {
+                continue;
+            }
+            for (Method candidate : current.getDeclaredMethods()) {
+                if (!candidate.isBridge() && !candidate.isSynthetic()
+                        && candidate.getName().equals(method.getName())
+                        && Arrays.equals(candidate.getParameterTypes(), method.getParameterTypes())
+                        && overrides(method, candidate)) {
+                    return candidate;
+                }
+            }
+        }
+        return method;
     }
 
     // ==================== Method operations ====================
