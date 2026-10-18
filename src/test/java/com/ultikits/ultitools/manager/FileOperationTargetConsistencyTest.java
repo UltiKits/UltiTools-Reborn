@@ -216,9 +216,7 @@ class FileOperationTargetConsistencyTest {
     })
     void realPathRefusalIsAuditedAsDenied(String operation, String path) throws Exception {
         JsonObject data = request(operation, path);
-        if ("write".equals(operation)) {
-            data.addProperty("content", "PAYLOAD");
-        }
+        data.addProperty("content", "PAYLOAD"); // read, list and delete ignore it
 
         Outcome outcome = send(data);
 
@@ -428,6 +426,211 @@ class FileOperationTargetConsistencyTest {
     }
 
     // ------------------------------------------------------------------------------------------
+    // Controls whose behaviour does not change (regression pins; identical before and after).
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("control: reading an ordinary in-root file returns its bytes")
+    void readOrdinaryInRootFileReturnsItsBytes() throws Exception {
+        Outcome outcome = send(request("read", "root/secret.txt"));
+
+        assertThat(outcome.success()).isTrue();
+        assertThat(outcome.lastData().get("content").getAsString()).isEqualTo(DECOY_SECRET);
+        assertAllowedEntry(outcome, "read", "root/secret.txt");
+    }
+
+    @Test
+    @DisplayName("control: reading an in-root link to an in-root file returns the target's bytes")
+    void readInRootLinkToInRootFileReturnsTargetBytes() throws Exception {
+        link(root.resolve("inlink"), root.resolve("secret.txt"));
+
+        Outcome outcome = send(request("read", "root/inlink"));
+
+        assertThat(outcome.success()).isTrue();
+        assertThat(outcome.lastData().get("content").getAsString()).isEqualTo(DECOY_SECRET);
+        assertAllowedEntry(outcome, "read", "root/inlink");
+    }
+
+    @Test
+    @DisplayName("control: root/sub/../file.txt without links reads root/file.txt")
+    void readParentSegmentWithoutLinksReadsInRootFile() throws Exception {
+        Files.write(root.resolve("file.txt"), "plain-file".getBytes(StandardCharsets.UTF_8));
+
+        Outcome outcome = send(request("read", "root/sub/../file.txt"));
+
+        assertThat(outcome.success()).isTrue();
+        assertThat(outcome.lastData().get("content").getAsString()).isEqualTo("plain-file");
+        assertAllowedEntry(outcome, "read", "root/sub/../file.txt");
+    }
+
+    @ParameterizedTest(name = "[{index}] {0}")
+    @DisplayName("control: a doubled separator reads the same object as the plain form")
+    @ValueSource(strings = {"root/sub/file.txt", "root//sub/file.txt"})
+    void readWithDoubledSeparatorReachesSameObject(String path) throws Exception {
+        Files.write(root.resolve("sub").resolve("file.txt"), "sub-file".getBytes(StandardCharsets.UTF_8));
+
+        Outcome outcome = send(request("read", path));
+
+        assertThat(outcome.success()).isTrue();
+        assertThat(outcome.lastData().get("content").getAsString()).isEqualTo("sub-file");
+        assertAllowedEntry(outcome, "read", path);
+    }
+
+    @ParameterizedTest(name = "[{index}] {0}")
+    @DisplayName("control: a trailing separator lists the same directory as the plain form")
+    @ValueSource(strings = {"root/sub", "root/sub/"})
+    void listWithTrailingSeparatorReachesSameObject(String path) throws Exception {
+        Files.write(root.resolve("sub").resolve("file.txt"), "sub-file".getBytes(StandardCharsets.UTF_8));
+
+        Outcome outcome = send(request("list", path));
+
+        assertThat(outcome.success()).isTrue();
+        assertThat(outcome.listedNames()).containsExactly("file.txt");
+        assertAllowedEntry(outcome, "list", path);
+    }
+
+    @Test
+    @DisplayName("control: writing a new file into an existing in-root directory creates it there")
+    void writeNewFileIntoExistingDirectory() throws Exception {
+        JsonObject data = request("write", "root/sub/new.txt");
+        data.addProperty("content", "PAYLOAD");
+
+        Outcome outcome = send(data);
+
+        assertThat(outcome.success()).isTrue();
+        assertThat(readText(root.resolve("sub").resolve("new.txt"))).isEqualTo("PAYLOAD");
+        assertThat(filesNamed("new.txt")).hasSize(1);
+        assertAllowedEntry(outcome, "write", "root/sub/new.txt");
+    }
+
+    @Test
+    @DisplayName("control: writing root/new/deeper/x.txt creates both directories inside the root")
+    void writeCreatesMissingDirectoriesInsideRoot() throws Exception {
+        JsonObject data = request("write", "root/new/deeper/x.txt");
+        data.addProperty("content", "PAYLOAD");
+
+        Outcome outcome = send(data);
+
+        assertThat(outcome.success()).isTrue();
+        assertThat(readText(root.resolve("new").resolve("deeper").resolve("x.txt"))).isEqualTo("PAYLOAD");
+        assertThat(filesNamed("x.txt")).hasSize(1);
+        assertAllowedEntry(outcome, "write", "root/new/deeper/x.txt");
+    }
+
+    @Test
+    @DisplayName("control: listing an in-root link to an in-root directory lists that directory")
+    void listInRootLinkToInRootDirectoryListsTarget() throws Exception {
+        Files.write(root.resolve("sub").resolve("file.txt"), "sub-file".getBytes(StandardCharsets.UTF_8));
+        link(root.resolve("dirlink"), root.resolve("sub"));
+
+        Outcome outcome = send(request("list", "root/dirlink"));
+
+        assertThat(outcome.success()).isTrue();
+        assertThat(outcome.listedNames()).containsExactly("file.txt");
+        assertAllowedEntry(outcome, "list", "root/dirlink");
+    }
+
+    @Test
+    @DisplayName("control: listing root/sub/.. lists the root")
+    void listParentSegmentWithoutLinksListsRoot() throws Exception {
+        Outcome outcome = send(request("list", "root/sub/.."));
+
+        assertThat(outcome.success()).isTrue();
+        assertThat(outcome.listedNames()).contains("secret.txt", "victim.txt", "sub", "link", "esc", "dangling");
+        assertAllowedEntry(outcome, "list", "root/sub/..");
+    }
+
+    @Test
+    @DisplayName("negative control: a sibling prefix directory (root-evil) is refused configurably")
+    void siblingPrefixDirectoryIsRefusedConfigurably() throws Exception {
+        Path evil = Files.createDirectories(tmp.resolve("root-evil"));
+        Files.write(evil.resolve("x"), OUTSIDE_SECRET.getBytes(StandardCharsets.UTF_8));
+
+        Outcome outcome = send(request("read", "root-evil/x"));
+
+        assertThat(outcome.allMessagesJson()).doesNotContain(OUTSIDE_SECRET);
+        assertThat(outcome.success()).isFalse();
+        assertDeniedEntry(outcome, "read", "root-evil/x");
+        assertThat(outcome.entry.getReason()).contains(ROOTS_KEY);
+    }
+
+    /**
+     * Ordinary failures after an allowed decision keep the allowed decision (D-03): the audit
+     * records policy, not I/O success. The last row pins a path that continues below a regular
+     * file: nothing can exist there, so it fails like a missing file rather than as a refusal.
+     */
+    @ParameterizedTest(name = "[{index}] {0} {1}")
+    @DisplayName("control: an ordinary failure after an allowed decision is audited ALLOWED")
+    @CsvSource({
+        "read, root/missing.txt",
+        "read, root/sub",
+        "write, root/sub/no-content.txt",
+        "list, root/secret.txt",
+        "delete, root/missing.txt",
+        "read, root/secret.txt/x"
+    })
+    void ordinaryFailureIsAuditedAllowed(String operation, String path) throws Exception {
+        Outcome outcome = send(request(operation, path));
+
+        assertThat(outcome.success()).isFalse();
+        assertThat(root.resolve("sub").resolve("no-content.txt")).doesNotExist();
+        assertAllowedEntry(outcome, operation, path);
+    }
+
+    @Test
+    @DisplayName("control: deleting an in-root link to an in-root file removes only the link")
+    void deletingInRootLinkToInRootFileRemovesOnlyTheLink() throws Exception {
+        Path inLink = root.resolve("inlink");
+        link(inLink, root.resolve("secret.txt"));
+
+        Outcome outcome = send(request("delete", "root/inlink"));
+
+        assertThat(Files.exists(inLink, LinkOption.NOFOLLOW_LINKS)).as("the link entry is removed").isFalse();
+        assertThat(readText(root.resolve("secret.txt"))).as("the target is untouched").isEqualTo(DECOY_SECRET);
+        assertThat(outcome.success()).isTrue();
+        assertAllowedEntry(outcome, "delete", "root/inlink");
+    }
+
+    @Test
+    @DisplayName("control: deleting a link named data.json is refused and leaves link and target")
+    void deletingLinkNamedDataJsonIsRefused() throws Exception {
+        Path credentialLink = root.resolve("data.json");
+        link(credentialLink, root.resolve("secret.txt"));
+
+        Outcome outcome = send(request("delete", "root/data.json"));
+
+        assertThat(Files.isSymbolicLink(credentialLink)).as("the link is left in place").isTrue();
+        assertThat(readText(root.resolve("secret.txt"))).isEqualTo(DECOY_SECRET);
+        assertThat(outcome.success()).isFalse();
+        assertDeniedEntry(outcome, "delete", "root/data.json");
+        assertNonConfigurable(outcome);
+    }
+
+    @Test
+    @DisplayName("control: list marking of a protected file and subdirectories is unchanged")
+    void listMarkingOfProtectedFileIsUnchanged() throws Exception {
+        Path marks = Files.createDirectories(root.resolve("marks"));
+        Files.write(marks.resolve("plain.txt"), "plain".getBytes(StandardCharsets.UTF_8));
+        Files.write(marks.resolve("data.json"), "{}".getBytes(StandardCharsets.UTF_8));
+        Files.createDirectories(marks.resolve("childdir"));
+
+        Outcome outcome = send(request("list", "root/marks"));
+
+        JsonObject plain = outcome.listedEntry("plain.txt");
+        assertThat(plain.get("accessible").getAsBoolean()).isTrue();
+        assertThat(plain.has("size")).isTrue();
+        assertThat(plain.has("lastModified")).isTrue();
+        JsonObject credential = outcome.listedEntry("data.json");
+        assertThat(credential.get("accessible").getAsBoolean()).isFalse();
+        assertThat(credential.get("reason").getAsString()).isEqualTo("PROTECTED_CREDENTIAL");
+        assertThat(credential.has("size")).isFalse();
+        assertThat(credential.has("lastModified")).isFalse();
+        assertThat(outcome.listedEntry("childdir").get("accessible").getAsBoolean()).isTrue();
+        assertThat(outcome.success()).isTrue();
+        assertAllowedEntry(outcome, "list", "root/marks");
+    }
+
+    // ------------------------------------------------------------------------------------------
     // Fixture and request helpers.
     // ------------------------------------------------------------------------------------------
 
@@ -551,7 +754,11 @@ class FileOperationTargetConsistencyTest {
         }
 
         String lastMessage() {
-            return responses.get(responses.size() - 1).get("message").getAsString();
+            return lastData().get("message").getAsString();
+        }
+
+        JsonObject lastData() {
+            return responses.get(responses.size() - 1);
         }
 
         String allMessagesJson() {
