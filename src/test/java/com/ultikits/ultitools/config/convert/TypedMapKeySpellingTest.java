@@ -159,7 +159,7 @@ class TypedMapKeySpellingTest {
     void customKeyThatDoesNotReadBackIsRefused() {
         ConverterRegistry custom = new ConverterRegistry(ConverterRegistry.framework());
         custom.register(Point.class, new ConfigConverter<Point>() {
-            @Override public Object toPlain(Point value, ConversionContext ctx) { return value.id; }
+            @Override public Object toPlain(Point value, ConversionContext ctx) { return value.number; }
             @Override public Point fromPlain(Object plain, ConversionContext ctx) { return new Point(-1); }
         }, true);
         Map<Point, String> value = Collections.singletonMap(new Point(7), "a");
@@ -206,11 +206,11 @@ class TypedMapKeySpellingTest {
     }
 
     static final class Point {
-        private final int id;
-        Point(int id) { this.id = id; }
-        @Override public boolean equals(Object other) { return other instanceof Point && ((Point) other).id == id; }
-        @Override public int hashCode() { return Objects.hash(id); }
-        @Override public String toString() { return "Point(" + id + ")"; }
+        private final int number;
+        Point(int number) { this.number = number; }
+        @Override public boolean equals(Object other) { return other instanceof Point && ((Point) other).number == number; }
+        @Override public int hashCode() { return Objects.hash(number); }
+        @Override public String toString() { return "Point(" + number + ")"; }
     }
 
     // Deliberately exercises the deprecated legacy parser compatibility contract.
