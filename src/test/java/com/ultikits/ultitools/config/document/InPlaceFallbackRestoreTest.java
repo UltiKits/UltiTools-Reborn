@@ -59,6 +59,7 @@ class InPlaceFallbackRestoreTest {
     private static final String ORIGINAL_VALUE = "original-motd-4b1e";
     private static final String NEW_VALUE = "new-motd-9d2a";
     private static final String TEXT = "# Gate settings\nmotd: " + ORIGINAL_VALUE + "\nlimit: 5\n";
+    private static final String OPERATOR_TEXT = "# Gate settings\nmotd: operator-motd-7c3f\nlimit: 5\n# saved by hand\n";
 
     @TempDir
     Path tempDir;
@@ -633,8 +634,6 @@ class InPlaceFallbackRestoreTest {
         assertThat(only.motd).isEqualTo(ORIGINAL_VALUE);
         assertThat(only.isFileModifiedSinceSnapshot()).isTrue();
     }
-
-    private static final String OPERATOR_TEXT = "# Gate settings\nmotd: operator-motd-7c3f\nlimit: 5\n# saved by hand\n";
 
     // -------------------------------------------------------------------------------------------------- helpers
 
