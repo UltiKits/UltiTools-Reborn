@@ -1,7 +1,9 @@
 package com.ultikits.ultitools.interfaces.impl.data.json;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
@@ -24,10 +26,21 @@ import com.ultikits.ultitools.exceptions.ErrorCode;
  * that table and waits until the table is free or the caller's deadline has passed; past the
  * deadline it fails with a {@link DataAccessException} naming the lock-wait timeout. The caller
  * chooses the deadline: the default bound (5 seconds, question 7 option A of the Phase 20.4
- * decisions) from the time of the request.
+ * decisions) from the time of the request, or the transaction's own timeout deadline if that comes
+ * sooner.
+ * <p>
+ * <b>Deadlocks.</b> Before it registers, a requester follows the wait-for chain from the table's
+ * owner (the owner, the table that owner waits for, that table's owner, and so on). A chain that
+ * leads back to the requester means its wait would close a cycle: the request fails at once with a
+ * {@link DataAccessException} naming the deadlock, without registering, and its caller's failure
+ * path rolls its transaction back, which releases its locks so the other side can go on. No global
+ * lock order is needed, which matters because module code touches tables in any order.
  * <p>
  * <b>One monitor.</b> Every owner, hold count and waiter registration is guarded by one lock and
- * changed only while holding it, and every wait is on that lock's one condition.
+ * changed only while holding it, and every wait is on that lock's one condition. The cycle check
+ * and the registration are one critical section, so of two requests that close a cycle at the same
+ * moment the second always sees the first one's registration and fails, while the first waits and
+ * then acquires.
  * <p>
  * <b>Lock order.</b> A table lock is always requested before, never while holding, either side of
  * the identity's visibility lock; the visibility write side is always the last lock a thread takes.
@@ -81,8 +94,9 @@ final class JsonLockTable {
      *
      * @param table         the table to lock
      * @param deadlineNanos the {@link System#nanoTime()} value past which the wait fails
-     * @throws DataAccessException if the deadline passes first (lock-wait timeout) or the thread
-     *                             is interrupted while waiting
+     * @throws DataAccessException if waiting would close a wait-for cycle (deadlock), if the
+     *                             deadline passes first (lock-wait timeout), or if the thread is
+     *                             interrupted while waiting
      */
     void acquire(SimpleJsonDataOperator<?> table, long deadlineNanos) {
         Thread caller = Thread.currentThread();
@@ -92,6 +106,7 @@ final class JsonLockTable {
             if (tryTake(table, caller)) {
                 return;
             }
+            failIfWaitingClosesACycle(table, caller);
             waitsFor.put(caller, table);
             try {
                 stepHook.onStep(STEP_WAITER_REGISTERED);
@@ -158,6 +173,29 @@ final class JsonLockTable {
             return true;
         }
         return false;
+    }
+
+    /**
+     * Follows the wait-for chain from {@code table}'s owner; reaching {@code caller} means its wait
+     * would close a cycle. Called holding the monitor, right before {@code caller} registers.
+     */
+    private void failIfWaitingClosesACycle(SimpleJsonDataOperator<?> table, Thread caller) {
+        Set<Thread> visited = new HashSet<>();
+        SimpleJsonDataOperator<?> next = table;
+        while (next != null) {
+            Hold hold = holds.get(next);
+            if (hold == null || !visited.add(hold.owner)) {
+                return;
+            }
+            if (hold.owner == caller) {
+                throw new DataAccessException(ErrorCode.TRANSACTION_FAILED,
+                        "JSON write failed with a deadlock: waiting for table '" + table.tableName()
+                                + "', locked by thread '" + holds.get(table).owner.getName()
+                                + "', would close a cycle of transactions waiting for each other. This request"
+                                + " fails at once; roll its transaction back and retry it.");
+            }
+            next = waitsFor.get(hold.owner);
+        }
     }
 
     /** Called holding the monitor. */

@@ -11,6 +11,8 @@ import java.util.function.BiConsumer;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
+import com.ultikits.ultitools.exceptions.DataAccessException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.manager.JsonTransactionManager;
 
 /**
@@ -31,6 +33,19 @@ import com.ultikits.ultitools.manager.JsonTransactionManager;
  * other writer -- another transaction or a plain write -- can change the table in between. It
  * records every hold it takes and releases exactly those, so a transaction that runs while another
  * one on the same thread is suspended never releases the suspended one's holds.
+ * <p>
+ * Settings, applied by {@link JsonTransactionManager} right after the transaction begins:
+ * <ul>
+ *   <li><b>Lock at first read</b> ({@code REPEATABLE_READ}, {@code SERIALIZABLE}): the first read of
+ *       a table also takes its write lock, so the table stays still for the rest of the transaction
+ *       and a read-modify-write cannot lose an update. The lock is requested before the read takes
+ *       the visibility read side, never while holding it.</li>
+ *   <li><b>Read-only</b>: every write fails with a {@link DataAccessException} before it locks or
+ *       stages anything.</li>
+ *   <li><b>Deadline</b> ({@code @Transactional(timeout)}): every operation checks it first and fails
+ *       once it has passed, and it bounds every lock wait (the sooner of it and the 5-second default
+ *       bound).</li>
+ * </ul>
  * <p>
  * Staged values are detached copies: no object the caller holds is reachable from an overlay.
  * An instance is confined to the thread whose {@link JsonTransactionManager} context holds it
@@ -66,6 +81,14 @@ public final class JsonTransaction {
     /** The table locks this transaction holds, in the order it took them, with the lock table of each. */
     private final Map<SimpleJsonDataOperator<?>, JsonLockTable> heldLocks = new LinkedHashMap<>();
 
+    /** Whether a first read of a table also takes its lock ({@code REPEATABLE_READ}, {@code SERIALIZABLE}). */
+    private boolean lockAtFirstRead;
+
+    private boolean readOnly;
+
+    /** The {@link System#nanoTime()} value at which the transaction's timeout passes, or {@code null}. */
+    private Long deadlineNanos;
+
     /**
      * Created by {@link JsonTransactionManager#begin()} for a new outermost transaction.
      *
@@ -92,20 +115,96 @@ public final class JsonTransaction {
     }
 
     /**
-     * Takes {@code operator}'s table write lock for the rest of this transaction, unless this
-     * transaction already holds it. Called before a write evaluates or stages anything, and never
-     * while holding either side of the visibility lock.
+     * Sets whether a table's first read also takes its write lock. Called by
+     * {@link JsonTransactionManager#setIsolationLevel(int)}; not part of the supported API.
      *
-     * @throws com.ultikits.ultitools.exceptions.DataAccessException if the lock wait passes its
-     *         bound; the caller's failure path then rolls this transaction back, which releases
-     *         every lock it holds
+     * @param lockAtFirstRead {@code true} for {@code REPEATABLE_READ} and {@code SERIALIZABLE}
      */
-    void lockForWrite(SimpleJsonDataOperator<?> operator) {
+    public void setLockAtFirstRead(boolean lockAtFirstRead) {
+        this.lockAtFirstRead = lockAtFirstRead;
+    }
+
+    /**
+     * Sets whether writes are rejected. Called by {@link JsonTransactionManager#setReadOnly(boolean)};
+     * not part of the supported API.
+     *
+     * @param readOnly {@code true} to reject every write of this transaction
+     */
+    public void setReadOnly(boolean readOnly) {
+        this.readOnly = readOnly;
+    }
+
+    /**
+     * Sets the deadline. Called by {@link JsonTransactionManager#setTimeout(int)}; not part of the
+     * supported API.
+     *
+     * @param deadlineNanos a {@link System#nanoTime()} value, or {@code null} for none
+     */
+    public void setDeadlineNanos(Long deadlineNanos) {
+        this.deadlineNanos = deadlineNanos;
+    }
+
+    /**
+     * The deadline, as a {@link System#nanoTime()} value, or {@code null} if none is set. Not part
+     * of the supported API.
+     *
+     * @return the deadline or {@code null}
+     */
+    public Long getDeadlineNanos() {
+        return deadlineNanos;
+    }
+
+    /**
+     * Called before a read of {@code operator} takes the visibility read side: checks the deadline
+     * and, at {@code REPEATABLE_READ} or {@code SERIALIZABLE}, takes the table's write lock.
+     *
+     * @throws DataAccessException if the deadline has passed, or the lock wait fails
+     */
+    void beforeRead(SimpleJsonDataOperator<?> operator) {
+        checkDeadline(operator);
+        if (lockAtFirstRead) {
+            lock(operator);
+        }
+    }
+
+    /**
+     * Called before a write evaluates or stages anything, never while holding either side of the
+     * visibility lock: rejects it in a read-only transaction, checks the deadline, and takes
+     * {@code operator}'s table write lock for the rest of this transaction unless it already holds
+     * it.
+     *
+     * @throws DataAccessException if the transaction is read-only, the deadline has passed, or the
+     *         lock wait fails (deadlock or lock-wait timeout); the caller's failure path then rolls
+     *         this transaction back, which releases every lock it holds
+     */
+    void beforeWrite(SimpleJsonDataOperator<?> operator) {
+        if (readOnly) {
+            throw new DataAccessException(ErrorCode.TRANSACTION_FAILED,
+                    "Write to JSON table '" + operator.tableName() + "' rejected: the transaction is read-only.");
+        }
+        checkDeadline(operator);
+        lock(operator);
+    }
+
+    private void checkDeadline(SimpleJsonDataOperator<?> operator) {
+        if (deadlineNanos != null && System.nanoTime() - deadlineNanos >= 0L) {
+            throw new DataAccessException(ErrorCode.TRANSACTION_FAILED,
+                    "JSON transaction timeout: the transaction's deadline passed before this operation on table '"
+                            + operator.tableName() + "' started.");
+        }
+    }
+
+    /** Takes {@code operator}'s table lock unless this transaction holds it, waiting at most until the sooner bound. */
+    private void lock(SimpleJsonDataOperator<?> operator) {
         if (heldLocks.containsKey(operator)) {
             return;
         }
         JsonLockTable table = operator.lockTable();
-        table.acquire(operator, table.defaultDeadlineNanos());
+        long deadline = table.defaultDeadlineNanos();
+        if (deadlineNanos != null && deadlineNanos - deadline < 0L) {
+            deadline = deadlineNanos;
+        }
+        table.acquire(operator, deadline);
         heldLocks.put(operator, table);
     }
 

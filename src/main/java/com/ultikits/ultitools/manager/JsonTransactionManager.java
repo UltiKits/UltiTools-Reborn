@@ -1,7 +1,9 @@
 package com.ultikits.ultitools.manager;
 
+import java.sql.Connection;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Supplier;
 import java.util.logging.Logger;
@@ -39,8 +41,15 @@ import com.ultikits.ultitools.interfaces.impl.data.json.JsonTransaction;
  *   <li><b>Table write locks.</b> A transaction's first write to a table (one operator) takes that
  *       table's write lock, and the transaction holds it until its depth-1 {@link #commit()}
  *       (after the apply) or {@link #rollback()}; a write outside a transaction holds it for the
- *       call. Another writer of the table waits for it, at most 5 seconds, then fails with a
- *       {@code DataAccessException}. Reads take no table lock.</li>
+ *       call. Another writer of the table waits for it, at most 5 seconds (less if its own
+ *       transaction's timeout ends sooner), then fails with a {@code DataAccessException}; a wait
+ *       that would close a cycle of transactions waiting for each other fails at once. At the
+ *       default isolation reads take no table lock.</li>
+ *   <li><b>Settings.</b> {@link #setIsolationLevel(int)}: {@code REPEATABLE_READ} and
+ *       {@code SERIALIZABLE} also lock a table at its first read; {@code DEFAULT},
+ *       {@code READ_UNCOMMITTED} and {@code READ_COMMITTED} lock at the first write (read
+ *       uncommitted is served at read committed). {@link #setReadOnly(boolean)} rejects every write.
+ *       {@link #setTimeout(int)} sets a deadline every operation and lock wait observes.</li>
  *   <li><b>Suspension.</b> {@link #suspend()} detaches the context, staged writes and table locks
  *       included, so a {@code REQUIRES_NEW} or {@code NOT_SUPPORTED} body runs independently of it;
  *       {@link #resume(Object)} restores it. Locks belong to the thread, so a body that writes a
@@ -271,23 +280,89 @@ public class JsonTransactionManager implements TransactionManager {
     /**
      * {@inheritDoc}
      * <p>
-     * The JSON backend has no statement or connection layer for a timeout to apply to -- there is
-     * nothing here that could time out. Rather than silently accept the value and do nothing (the
-     * shape {@link DataSourceTransactionManager#setTimeout(int)} itself uses, since JDBC has no
-     * portable timeout mechanism either, but at least genuinely has a connection the value could
-     * theoretically apply to), this refuses outright: {@code @Transactional(timeout=)} is refused
-     * rather than silently ignored on the JSON backend. {@code TransactionInterceptor} only calls
-     * this when a positive timeout is actually configured on the annotation, so a
-     * {@code @Transactional} method that never specifies one is unaffected.
+     * Maps the {@link Connection} constants {@code TransactionInterceptor} passes:
+     * {@code -1} ({@code Isolation.DEFAULT}), {@link Connection#TRANSACTION_READ_UNCOMMITTED} and
+     * {@link Connection#TRANSACTION_READ_COMMITTED} lock a table at the transaction's first write to
+     * it (read uncommitted is served at read committed, which the SQL standard allows);
+     * {@link Connection#TRANSACTION_REPEATABLE_READ} and {@link Connection#TRANSACTION_SERIALIZABLE}
+     * also lock it at the first read, which gives repeatable, phantom-free reads at table
+     * granularity. With no active transaction a valid value does nothing, as on
+     * {@link DataSourceTransactionManager}.
      *
-     * @throws UnsupportedOperationException always
+     * @throws IllegalArgumentException for any other value
+     */
+    @Override
+    public void setIsolationLevel(int level) {
+        boolean lockAtFirstRead;
+        switch (level) {
+            case -1:
+            case Connection.TRANSACTION_READ_UNCOMMITTED:
+            case Connection.TRANSACTION_READ_COMMITTED:
+                lockAtFirstRead = false;
+                break;
+            case Connection.TRANSACTION_REPEATABLE_READ:
+            case Connection.TRANSACTION_SERIALIZABLE:
+                lockAtFirstRead = true;
+                break;
+            default:
+                throw new IllegalArgumentException("Unknown transaction isolation level " + level
+                        + " for JsonTransactionManager (identity: " + identity + "); expected one of the "
+                        + "java.sql.Connection TRANSACTION_* constants or -1 for the default.");
+        }
+        Context ctx = contextHolder.get();
+        if (ctx != null) {
+            ctx.transaction.setLockAtFirstRead(lockAtFirstRead);
+        }
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * A read-only JSON transaction rejects every write with a
+     * {@code DataAccessException} before the write locks or stages anything; reads work as usual.
+     * With no active transaction this does nothing, as on {@link DataSourceTransactionManager}.
+     */
+    @Override
+    public void setReadOnly(boolean readOnly) {
+        Context ctx = contextHolder.get();
+        if (ctx != null) {
+            ctx.transaction.setReadOnly(readOnly);
+        }
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Records a deadline {@code seconds} from now on the active transaction, exactly as
+     * {@link DataSourceTransactionManager#setTimeout(int)} does. Every later operation of the
+     * transaction checks it first and fails with a {@code DataAccessException} once it has passed,
+     * and every lock wait ends at the sooner of it and the 5-second default bound; the caller's
+     * failure path (for {@code @Transactional}, {@code TransactionInterceptor}) then rolls the
+     * transaction back. A non-positive value is inert. With no active transaction this logs a
+     * warning and records nothing.
      */
     @Override
     public void setTimeout(int seconds) {
-        throw new UnsupportedOperationException(
-                "JsonTransactionManager (identity: " + identity + ") has no statement to time out -- "
-                        + "the JSON backend has no connection/statement layer for a timeout to apply to. "
-                        + "@Transactional(timeout=) is not supported on datasource.type: json.");
+        Context ctx = contextHolder.get();
+        if (ctx == null) {
+            LOGGER.warning("setTimeout called but no active JSON transaction for " + identity);
+            return;
+        }
+        if (seconds > 0) {
+            ctx.transaction.setDeadlineNanos(System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds));
+        }
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * The active transaction's deadline, carried along when the transaction is suspended and
+     * resumed; {@code null} with no active transaction or no positive timeout.
+     */
+    @Override
+    public Long getTimeoutDeadlineNanos() {
+        Context ctx = contextHolder.get();
+        return ctx == null ? null : ctx.transaction.getDeadlineNanos();
     }
 
     /**

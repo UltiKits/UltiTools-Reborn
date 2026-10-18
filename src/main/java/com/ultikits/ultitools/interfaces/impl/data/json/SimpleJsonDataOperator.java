@@ -190,21 +190,23 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
     }
 
     /**
-     * Runs one write while holding this table's write lock. Inside a transaction the lock is
-     * taken through the transaction, before {@code body} evaluates or stages anything, and held
-     * until the transaction ends; outside one it is held for the duration of the call. Every
-     * visibility-lock step {@code body} takes comes after the table lock, so no thread waits for a
-     * table lock while holding the visibility lock.
+     * Runs one write while holding this table's write lock. Inside a transaction the transaction
+     * first rejects the write if it is read-only or past its deadline, then takes the lock, before
+     * {@code body} evaluates or stages anything, and holds it until the transaction ends; outside
+     * one the lock is held for the duration of the call. Every visibility-lock step {@code body}
+     * takes comes after the table lock, so no thread waits for a table lock while holding the
+     * visibility lock.
      *
      * @param body the write, given the calling thread's transaction or {@code null} outside one
      * @param <R>  the write's result
      * @return what {@code body} returned
-     * @throws DataAccessException if the lock wait passes its bound (lock-wait timeout)
+     * @throws DataAccessException if the transaction is read-only or past its deadline, or the lock
+     *                             wait fails (deadlock or lock-wait timeout)
      */
     private <R> R write(Function<JsonTransaction, R> body) {
         JsonTransaction transaction = transactionManager().currentTransaction();
         if (transaction != null) {
-            transaction.lockForWrite(this);
+            transaction.beforeWrite(this);
             return body.apply(transaction);
         }
         JsonLockTable table = lockTable;
@@ -219,11 +221,16 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
     /**
      * Runs {@code read} with the calling thread's transaction (or {@code null} outside one) under
      * the visibility read side. {@code read} only collects references; conditions, detaching and
-     * hooks run after this returns.
+     * hooks run after this returns. Inside a transaction the transaction first checks its deadline
+     * and, at {@code REPEATABLE_READ} or {@code SERIALIZABLE}, takes this table's lock -- before
+     * the read side is taken, never while holding it.
      */
     private <R> R readVisible(Function<JsonTransaction, R> read) {
         JsonTransactionManager manager = transactionManager();
         JsonTransaction transaction = manager.currentTransaction();
+        if (transaction != null) {
+            transaction.beforeRead(this);
+        }
         return manager.readUnderVisibilityLock(() -> read.apply(transaction));
     }
 

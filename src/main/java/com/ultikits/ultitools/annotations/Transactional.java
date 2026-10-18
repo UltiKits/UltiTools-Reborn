@@ -53,6 +53,11 @@ import java.lang.annotation.Target;
  *       no override is possible); a package-private method is also ineligible when it is declared
  *       in a different package than the bean class</li>
  *   <li>The class must not be final (subclass proxy limitation)</li>
+ *   <li>On the JSON backend ({@code datasource.type: json}), table locks belong to the thread: a
+ *       {@link Propagation#REQUIRES_NEW} or {@link Propagation#NOT_SUPPORTED} method re-enters the
+ *       table locks its suspended caller holds instead of waiting for them, and if both write the
+ *       same key, the caller's later commit is the value that stays. (On the JDBC backends the
+ *       inner call would wait for its own caller's row lock until the lock-wait timeout.)</li>
  * </ul>
  *
  * @author wisdomme
@@ -80,6 +85,12 @@ public @interface Transactional {
      * <p>
      * Defaults to {@link Isolation#DEFAULT}, which uses the database's
      * default isolation level.
+     * <p>
+     * On the JSON backend, dirty writes and blind overwrites are prevented at every level by table
+     * write locks held from a transaction's first write to a table until it commits or rolls back;
+     * at the default level a read takes no lock, so a read-modify-write can lose an update: use
+     * {@code DataOperator#updateIf} or {@code isolation = REPEATABLE_READ} or {@code SERIALIZABLE},
+     * which lock the table at the first read.
      *
      * @return the isolation level
      */
@@ -108,10 +119,11 @@ public @interface Transactional {
      * Per backend:
      * <ul>
      *   <li>SQLite, MySQL (JDBC-backed): enforced exactly as described above.</li>
-     *   <li>JSON-backed: a positive value makes the transaction fail outright.
-     *       {@code JsonTransactionManager.setTimeout(int)} throws
-     *       {@link UnsupportedOperationException} unconditionally, since a snapshot-based
-     *       rollback has no query or connection to bound.</li>
+     *   <li>JSON-backed: the same deadline, {@code N} seconds after the transaction began. Every
+     *       data operation inside the transaction checks it before it starts and fails with a
+     *       {@code DataAccessException} once it has passed, and every wait for another
+     *       transaction's table lock ends at the deadline if that comes before the 5-second
+     *       lock-wait bound; the transaction is then rolled back.</li>
      * </ul>
      * A method that leaves this attribute at its default is unaffected on every backend, since
      * the interceptor never calls {@code setTimeout} for it.
@@ -125,6 +137,9 @@ public @interface Transactional {
      * <p>
      * A read-only transaction may allow database optimizations and is
      * useful for methods that only query data.
+     * <p>
+     * On the JSON backend every write inside a read-only transaction is rejected with a
+     * {@code DataAccessException} before anything is staged or locked.
      *
      * @return true if read-only
      */
