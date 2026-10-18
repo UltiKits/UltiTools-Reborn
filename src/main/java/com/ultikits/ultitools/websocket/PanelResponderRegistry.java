@@ -43,6 +43,43 @@ import com.ultikits.ultitools.utils.PluginInitiationUtils;
  * cross-repository protocol convention the panel would also have to honour, rather than an in-repo
  * check the framework can enforce alone.
  *
+ * <h2>Scheduling contract for responders</h2>
+ * <ul>
+ *   <li><b>Thread.</b> A responder is called on one of this registry's own worker threads — never
+ *       the server main thread, and never the thread reading the panel connection, so a slow call
+ *       does not hold up other panel messages or the connection's heartbeat. A responder that uses
+ *       Bukkit API schedules that part onto the main thread itself (for example with
+ *       {@code Bukkit.getScheduler().runTask}) and completes its future from there.</li>
+ *   <li><b>Deadline.</b> One deadline of {@link #RESPONDER_TIMEOUT_MILLIS} starts when the request
+ *       is admitted ({@link #dispatch} is called) and covers waiting for a worker, the call itself
+ *       and the returned future. When it passes, the request fails with a timeout error; a result
+ *       that arrives later is dropped and produces no second reply.</li>
+ *   <li><b>Bounds.</b> At most {@link #RESPONDER_WORKER_THREADS} calls run at once and at most
+ *       {@link #RESPONDER_QUEUE_CAPACITY} admitted requests wait for a worker; a request beyond that
+ *       is refused at once with an error reply naming its type and module.</li>
+ *   <li><b>Concurrency.</b> Responders may therefore run concurrently — up to
+ *       {@link #RESPONDER_WORKER_THREADS} at once, including several calls of the same responder —
+ *       and may finish out of request order, so a responder must be thread-safe.</li>
+ *   <li><b>No interruption.</b> A call that blocks past its deadline keeps its worker until it
+ *       returns; the framework never interrupts it, so uninterruptible database or disk I/O in
+ *       module code is never cut off midway.</li>
+ *   <li><b>Context.</b> The call sees the context class loader of the thread that admitted the
+ *       request and this registry's registration scope ({@link #beginRegistrationScope}) of that
+ *       thread, and nothing else: no other {@link ThreadLocal}, no transaction and no
+ *       audited-entity user is carried. The worker's own values are restored after every call, so
+ *       nothing one module's call leaves behind reaches the next call.</li>
+ *   <li><b>Ownership.</b> The responder registered when the request was admitted handles it, even
+ *       if the type is reassigned or the owning module unloads before the call runs; a module
+ *       unloading while one of its requests is still waiting or running can therefore see that
+ *       call.</li>
+ *   <li><b>Shutdown.</b> {@link #shutdown()} settles every admitted request with a failure, runs no
+ *       request still waiting and interrupts no running call.</li>
+ *   <li><b>Callbacks.</b> A callback attached to the future {@link #dispatch} returns (the
+ *       framework's reply is one) runs on whichever thread settles that future — a worker, the
+ *       deadline timer, a module's own thread or the thread calling {@link #shutdown()} — or at
+ *       once on the attaching thread when the future is already settled.</li>
+ * </ul>
+ *
  * @since 6.3.0
  */
 public class PanelResponderRegistry {
@@ -50,13 +87,14 @@ public class PanelResponderRegistry {
     private static final Logger LOGGER = Logger.getLogger(PanelResponderRegistry.class.getName());
 
     /**
-     * The bounded wall-clock time {@link #dispatch} gives a registered responder's future to
-     * complete before completing exceptionally on the caller's behalf (D-27). One timeout, applied
-     * in exactly one place — inside {@code dispatch} — so no responder and no caller implements its
-     * own. 3 seconds: long enough for a responder doing real database or disk work, short enough
-     * that a human operator watching the panel does not start to think it froze. Package-private
-     * (not private) so {@code PanelResponderRegistryTest} can bound its own wait without
-     * duplicating this value.
+     * The one deadline every admitted request gets (D-27), counted from admission — the moment
+     * {@link #dispatch} is called — and covering the wait for a worker, the responder's call and
+     * its returned future. One deadline, applied in exactly one place, so no responder and no
+     * caller implements its own. 3 seconds: long enough for a responder doing real database or disk
+     * work, short enough that a human operator watching the panel does not start to think it froze.
+     * A call still running when the deadline passes is not interrupted; its later result is
+     * dropped. Package-private (not private) so tests can bound their own waits without duplicating
+     * this value.
      */
     static final long RESPONDER_TIMEOUT_MILLIS = 3000L;
 
@@ -79,15 +117,14 @@ public class PanelResponderRegistry {
     private final Map<String, ResponderEntry> responders = new ConcurrentHashMap<>();
 
     /**
-     * Schedules {@link #RESPONDER_TIMEOUT_MILLIS}'s one-timeout-in-one-place enforcement. A
-     * dedicated single-thread pool, not a shared framework scheduler, so one slow responder cannot
-     * starve unrelated timeout tasks. {@code setRemoveOnCancelPolicy(true)} makes a cancelled task
-     * — the fast path, when the responder completes before the timeout fires — removed from the
-     * queue synchronously inside {@code cancel()}, rather than lingering in the queue until its
-     * scheduled time; without it a fast responder would still "leak" a queued task for
-     * {@link #RESPONDER_TIMEOUT_MILLIS}. There is no {@code CompletableFuture.orTimeout} on the
-     * Java 8 bytecode target this framework compiles to (that method is Java 9+), which is why the
-     * timeout is hand-scheduled here rather than chained.
+     * Holds only the deadline tasks: each admitted request's deadline is scheduled here the moment
+     * {@link #dispatch} admits it. A dedicated single-thread pool, separate from {@link #workers},
+     * so a responder call that blocks can never delay a deadline. {@code
+     * setRemoveOnCancelPolicy(true)} makes a cancelled deadline — the fast path, when the request
+     * settles before its deadline — leave the queue synchronously inside {@code cancel()}, rather
+     * than lingering until its scheduled time. There is no {@code CompletableFuture.orTimeout} on
+     * the Java 8 bytecode target this framework compiles to (that method is Java 9+), which is why
+     * the deadline is hand-scheduled here rather than chained.
      */
     private final ScheduledThreadPoolExecutor timeoutScheduler = createTimeoutScheduler();
 
@@ -182,6 +219,13 @@ public class PanelResponderRegistry {
      * {@code putIfAbsent}-shaped check so a collision — with the framework, with another module, or
      * with the same module registering twice — always throws rather than silently displacing an
      * existing registration.
+     * <p>
+     * {@code responder} is called on one of this registry's worker threads, never the server main
+     * thread, within one deadline of {@link #RESPONDER_TIMEOUT_MILLIS} from admission, and possibly
+     * concurrently with itself and other responders (up to {@link #RESPONDER_WORKER_THREADS} calls
+     * at once, finishing out of request order), so it must be thread-safe; Bukkit API work belongs
+     * on the main thread, scheduled by the responder itself. See the class documentation for the
+     * full scheduling contract.
      *
      * @param messageType the exact message type string this responder will serve, matched by
      *                    {@code String.equals} — no case folding, no Unicode normalization
@@ -211,6 +255,10 @@ public class PanelResponderRegistry {
      * #unregisterByOwnerInstance(UltiToolsPlugin)} releases exactly that instance's responders
      * whatever name they were filed under. Two copies of one module share a name; only the instance
      * tells a superseded copy's responders from its replacement's.
+     * <p>
+     * {@code responder} is called on one of this registry's worker threads under the same
+     * scheduling contract as {@link #registerResponder(String, Function, String)}: a deadline from
+     * admission, possibly concurrent calls finishing out of order, so it must be thread-safe.
      *
      * @param messageType   the exact message type string this responder will serve
      * @param responder     the responder function
@@ -389,22 +437,35 @@ public class PanelResponderRegistry {
     }
 
     /**
-     * Invokes {@code messageType}'s registered responder and returns a future that is already
-     * bounded by {@link #RESPONDER_TIMEOUT_MILLIS} — the single timeout-and-reply-shape point every
-     * failure mode routes through (D-27):
+     * Admits a request for {@code messageType}'s registered responder and returns its outcome at
+     * once, without waiting for the responder: admission captures the responder registered now
+     * (and its owner), the calling thread's context class loader and this registry's registration
+     * scope on the calling thread, starts the request's one deadline of {@link
+     * #RESPONDER_TIMEOUT_MILLIS}, and queues the call for a worker thread. The returned future
+     * settles exactly once — the single reply-shape point every outcome routes through (D-27):
      * <ul>
-     *   <li>the responder throws synchronously, before returning a future — caught and becomes a
-     *       failed future rather than escaping;</li>
-     *   <li>the responder returns {@code null} — treated as an explicit failure, not a
-     *       {@code NullPointerException};</li>
-     *   <li>the responder's future never completes — the scheduled timeout task completes this
-     *       method's returned future exceptionally with
-     *       {@link PluginModuleException#responderTimedOut(String, String, long)};</li>
-     *   <li>the responder's future completes exceptionally — that exception is relayed directly.</li>
+     *   <li>the responder's future completes with a value — that value;</li>
+     *   <li>the responder throws, including a checked exception thrown sneakily or a linkage error
+     *       from a closed module class loader — that throwable;</li>
+     *   <li>the responder returns {@code null}, or its future completes with {@code null} — an
+     *       explicit {@link IllegalStateException} naming the type and owning module;</li>
+     *   <li>the responder's future completes exceptionally — that exception, relayed;</li>
+     *   <li>the deadline passes while the request waits, runs or awaits its future — {@link
+     *       PluginModuleException#responderTimedOut(String, String, long)} naming the owner
+     *       admitted with the request; a request still waiting is taken out of the queue and never
+     *       runs, and a later result is dropped;</li>
+     *   <li>{@link #RESPONDER_WORKER_THREADS} calls are running and {@link
+     *       #RESPONDER_QUEUE_CAPACITY} requests are waiting — at once, a {@link
+     *       java.util.concurrent.RejectedExecutionException} naming the type, the owning module and
+     *       the bound;</li>
+     *   <li>the registry is shut down, before or after admission — a {@link
+     *       java.util.concurrent.RejectedExecutionException} stating so;</li>
+     *   <li>the caller cancels the returned future — cancelled; a request still waiting leaves the
+     *       queue and never runs.</li>
      * </ul>
-     * On the fast path (the responder's future is already complete, or completes before the
-     * timeout fires), the scheduled timeout task is cancelled inside the same
-     * {@code whenComplete} callback that resolves the returned future, so nothing is left pending.
+     * Every settlement frees the request's queue slot and deadline. This method never throws.
+     * Callbacks attached to the returned future run on whichever thread settles it, or at once on
+     * the attaching thread if it is already settled.
      *
      * @param messageType the message type to dispatch, expected to already have a registered
      *                     responder ({@link #hasResponder(String)})
@@ -413,7 +474,7 @@ public class PanelResponderRegistry {
      * @param requestId    the request's correlation id — not used by {@code dispatch} itself, but
      *                     accepted so the call site does not have to separately track it; reserved
      *                     for the caller assembling the outbound reply
-     * @return a future that always completes — successfully with the responder's result, or
+     * @return a future that always settles — successfully with the responder's result, or
      *         exceptionally with a failure describing what went wrong
      */
     public CompletableFuture<JsonObject> dispatch(String messageType, JsonObject data, String requestId) {
@@ -488,17 +549,20 @@ public class PanelResponderRegistry {
     }
 
     /**
-     * Shuts down {@link #timeoutScheduler} (WR-01, 06-REVIEW.md).
+     * Shuts this registry down (WR-01, 06-REVIEW.md): stops the deadline timer and the workers and
+     * settles every admitted request.
      * <p>
-     * {@link #timeoutScheduler} is a dedicated single-thread pool per instance — nothing else
-     * shares it and nothing else stops it, so without this call a plugin {@code /reload} (which
-     * constructs a fresh {@link PanelResponderRegistry} on every {@code onEnable} without ever
-     * disposing of the previous one) leaks one more daemon
-     * {@code UltiTools-PanelResponderRegistry-Timeout} thread per cycle for the life of the
-     * process. {@link ScheduledThreadPoolExecutor#shutdownNow()}, not the graceful
-     * {@code shutdown()}, because any timeout task still queued at this point belongs to a
-     * responder dispatch this instance is being torn down anyway — there is no in-flight work here
-     * worth draining.
+     * Both executors are owned by this instance — nothing else shares or stops them — so without
+     * this call a plugin {@code /reload} (which constructs a fresh {@link PanelResponderRegistry} on
+     * every {@code onEnable}) would leak their threads for the life of the process. The deadline
+     * timer is stopped with {@link ScheduledThreadPoolExecutor#shutdownNow()}: it holds only
+     * deadline tasks, and every request they belong to is settled here anyway. Requests still
+     * waiting for a worker are taken out of the queue and never run. The workers are stopped with
+     * the graceful {@link ThreadPoolExecutor#shutdown()}, never {@code shutdownNow()}: a running
+     * module call is not interrupted, it returns on its own daemon thread and its result is
+     * dropped. Every admitted request not yet settled fails with a {@link
+     * java.util.concurrent.RejectedExecutionException} stating that the registry shut down before
+     * its responder completed, and a request admitted afterwards fails the same way at once.
      */
     public void shutdown() {
         shutDown = true;
@@ -537,6 +601,10 @@ public class PanelResponderRegistry {
         private final ResponderEntry entry;
         private final JsonObject data;
         private final CompletableFuture<JsonObject> outcome;
+        /** The admitting thread's context class loader, installed for the call. */
+        private final ClassLoader admittingLoader;
+        /** This registry's registration scope on the admitting thread, possibly {@code null}. */
+        private final UltiToolsPlugin admittingScope;
         private volatile ScheduledFuture<?> deadline;
 
         private Invocation(String messageType, ResponderEntry entry, JsonObject data,
@@ -545,6 +613,8 @@ public class PanelResponderRegistry {
             this.entry = entry;
             this.data = data;
             this.outcome = outcome;
+            this.admittingLoader = Thread.currentThread().getContextClassLoader();
+            this.admittingScope = registrationScopeOwner.get();
         }
 
         @Override
@@ -578,6 +648,11 @@ public class PanelResponderRegistry {
         @SuppressWarnings("PMD.AvoidCatchingGenericException")
         private CompletableFuture<JsonObject> callResponder() {
             CompletableFuture<JsonObject> responderFuture;
+            Thread worker = Thread.currentThread();
+            ClassLoader savedLoader = worker.getContextClassLoader();
+            UltiToolsPlugin savedScope = registrationScopeOwner.get();
+            worker.setContextClassLoader(admittingLoader);
+            installScope(admittingScope);
             try {
                 responderFuture = entry.responder.apply(data);
             } catch (Exception | LinkageError e) {
@@ -586,12 +661,24 @@ public class PanelResponderRegistry {
             } catch (Error e) {
                 settle(null, e);
                 throw e;
+            } finally {
+                worker.setContextClassLoader(savedLoader);
+                installScope(savedScope);
             }
             if (responderFuture == null) {
                 settle(null, new IllegalStateException("Responder for '" + messageType
                         + "' (owned by module '" + entry.ownerModule + "') returned null"));
             }
             return responderFuture;
+        }
+
+        /** Sets this registry's registration scope on the current thread; {@code null} removes it. */
+        private void installScope(UltiToolsPlugin scope) {
+            if (scope != null) {
+                registrationScopeOwner.set(scope);
+            } else {
+                registrationScopeOwner.remove();
+            }
         }
 
         /** The completion hook: frees the queue slot and the deadline, and stops tracking. */
