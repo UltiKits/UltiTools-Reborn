@@ -9,6 +9,7 @@ import com.ultikits.ultitools.annotations.command.UsageLimit;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 import org.bukkit.ChatColor;
+import org.jetbrains.annotations.ApiStatus;
 
 import java.lang.reflect.Method;
 import java.util.Map;
@@ -31,6 +32,13 @@ import java.util.concurrent.ConcurrentHashMap;
  * never called twice, and never called for an invocation whose acquisition failed -- or, when the
  * dispatch is refused after this validator acquired the lock but before the method runs, in
  * {@link #onRefused(CommandContext)} (#568).
+ * <p>
+ * <b>Player-cache lifecycle (case 48, @since 6.3.0):</b> an instance registers itself with {@link
+ * PlayerCacheManager} at its first {@link #validate(CommandContext)}, so quits and the periodic
+ * sweep reach its per-player state. It is released when the last executor that has dispatched
+ * through it unloads -- {@code BaseCommandExecutor}'s teardown decides that and calls {@link
+ * #releasePlayerCacheRegistration()} -- and it registers again on its next use, so a chain reused
+ * after a release keeps being swept.
  *
  * @author wisdomme
  * @version 2.0.0
@@ -65,6 +73,10 @@ public class UsageLockValidator implements CommandValidator, PlayerCacheSaver {
      * CooldownValidator}'s identical field of the same name and rationale: a bare {@code new
      * UsageLockValidator()} must never attempt contact with a core plugin that may not exist
      * yet, and a failed attempt is retried on the next call rather than permanently abandoned.
+     * <p>
+     * Cleared by {@link #releasePlayerCacheRegistration()} when the last executor that has
+     * dispatched through this instance unloads, so a reused instance registers again on its next
+     * {@link #validate(CommandContext)} instead of staying unswept (case 48).
      */
     private volatile boolean playerCacheRegistered = false;
 
@@ -154,6 +166,24 @@ public class UsageLockValidator implements CommandValidator, PlayerCacheSaver {
         }
         PlayerCacheManager.tryRegister(this);
         playerCacheRegistered = true;
+    }
+
+    /**
+     * Stops {@link PlayerCacheManager} tracking of this instance and re-arms its lazy
+     * registration, so the next {@link #validate(CommandContext)} registers it again (case 48).
+     * <p>
+     * Called by {@code BaseCommandExecutor}'s unload teardown once no other loaded executor that
+     * has dispatched still uses this validator. Not intended for module code: releasing a
+     * validator that a loaded executor still uses stops the quit sweep from reaching it until its
+     * next dispatch; the locks it holds are left as they are ({@link #clearAllLocks()} is the
+     * teardown's separate step).
+     *
+     * @since 6.3.0
+     */
+    @ApiStatus.Internal
+    public final void releasePlayerCacheRegistration() {
+        PlayerCacheManager.tryUnregister(this);
+        playerCacheRegistered = false;
     }
 
     /**
