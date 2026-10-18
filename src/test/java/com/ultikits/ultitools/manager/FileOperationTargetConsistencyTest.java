@@ -358,6 +358,51 @@ class FileOperationTargetConsistencyTest {
     }
 
     // ------------------------------------------------------------------------------------------
+    // Directory-link deletion, DIRLINK_ANSWER=A (maintainer, 2026-10-18): "A panel delete of a
+    // symbolic link that points to a directory removes ONLY the link; the target directory and
+    // its contents are untouched (option A, link-only; options B and C are not chosen)."
+    // ------------------------------------------------------------------------------------------
+
+    @ParameterizedTest(name = "[{index}] delete root/{0} with recursive={1}")
+    @DisplayName("deleting a link to a directory removes only the link (DIRLINK_ANSWER=A)")
+    @CsvSource({
+        "dlink, absent",
+        "dlink, false",
+        "dlink, true",
+        "olink, absent",
+        "olink, false",
+        "olink, true"
+    })
+    void deletingDirectoryLinkRemovesOnlyTheLink(String linkName, String recursive) throws Exception {
+        Path realDir = Files.createDirectories(root.resolve("realdir"));
+        Path child = realDir.resolve("child.txt");
+        Files.write(child, "child".getBytes(StandardCharsets.UTF_8));
+        Path outsideDir = Files.createDirectories(outside.resolve("odir"));
+        Path sentinel = outsideDir.resolve("sentinel.txt");
+        Files.write(sentinel, "sentinel".getBytes(StandardCharsets.UTF_8));
+        link(root.resolve("dlink"), realDir);
+        link(root.resolve("olink"), outsideDir);
+        String path = "root/" + linkName;
+        JsonObject data = request("delete", path);
+        if (!"absent".equals(recursive)) {
+            data.addProperty("recursive", Boolean.parseBoolean(recursive));
+        }
+
+        Outcome outcome = send(data);
+
+        assertThat(Files.exists(root.resolve(linkName), LinkOption.NOFOLLOW_LINKS))
+                .as("the link entry is removed").isFalse();
+        assertThat(child).as("the in-root target's contents are untouched").exists();
+        assertThat(readText(child)).isEqualTo("child");
+        assertThat(sentinel).as("the outside target's contents are untouched").exists();
+        assertThat(readText(sentinel)).isEqualTo("sentinel");
+        assertThat(Files.isSymbolicLink(root.resolve("dlink".equals(linkName) ? "olink" : "dlink")))
+                .as("the other link is left alone").isTrue();
+        assertThat(outcome.success()).isTrue();
+        assertAllowedEntry(outcome, "delete", path);
+    }
+
+    // ------------------------------------------------------------------------------------------
     // Fixture and request helpers.
     // ------------------------------------------------------------------------------------------
 
