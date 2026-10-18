@@ -180,7 +180,9 @@ public class TransactionInterceptor implements MethodInterceptor {
     // PMD.AvoidCatchingThrowable: an Error raised by a setting must roll back the transaction
     // this invocation began too, and a rollback failure of any kind must not replace the settings
     // failure; both are rethrown or attached, never swallowed.
-    @SuppressWarnings("PMD.AvoidCatchingThrowable")
+    // PMD.CompareObjectsWithEquals: deliberate reference identity - addSuppressed rejects the very
+    // same instance (self-suppression), and that rejection would replace the settings failure.
+    @SuppressWarnings({"PMD.AvoidCatchingThrowable", "PMD.CompareObjectsWithEquals"})
     private void applySettings(Transactional tx, String methodName) {
         try {
             Isolation isolation = tx.isolation();
