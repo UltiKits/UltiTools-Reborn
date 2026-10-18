@@ -2,6 +2,7 @@ package com.ultikits.ultitools.abstracts.command;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
@@ -102,6 +103,39 @@ class UsageLockReleaseOnThrowTest {
         @Override
         public int getOrder() {
             return 400;
+        }
+    }
+
+    /**
+     * Throws from its applicability check ({@code shouldValidate}) while armed, recording the very
+     * instance it threw; the order is chosen per test (case 49).
+     */
+    static final class ThrowingApplicabilityValidator implements CommandValidator {
+        private final int order;
+        boolean armed = true;
+        RuntimeException lastThrown;
+
+        ThrowingApplicabilityValidator(int order) {
+            this.order = order;
+        }
+
+        @Override
+        public boolean shouldValidate(CommandContext context) {
+            if (armed) {
+                lastThrown = new IllegalStateException("applicability failed");
+                throw lastThrown;
+            }
+            return true;
+        }
+
+        @Override
+        public ValidationResult validate(CommandContext context) {
+            return ValidationResult.success();
+        }
+
+        @Override
+        public int getOrder() {
+            return order;
         }
     }
 
@@ -257,6 +291,62 @@ class UsageLockReleaseOnThrowTest {
 
         assertEquals(1, counting.refusals.get(), "each refusal hook runs exactly once");
         assertEquals(0, executor.bodies.get());
+    }
+
+    @Test
+    @DisplayName("case 49: a validator after the lock throws from shouldValidate: the lock is released")
+    void throwingApplicabilityCheckReleasesTheLock() throws NoSuchMethodException {
+        ThrowingApplicabilityValidator applicability = new ThrowingApplicabilityValidator(400);
+        UsageLockValidator lock = new UsageLockValidator();
+        GuardedExecutor executor = new GuardedExecutor(
+                ValidatorChain.builder().add(lock).add(applicability).build());
+
+        assertThrows(IllegalStateException.class,
+                () -> executor.onCommand(player, command, "guarded", new String[]{"go"}));
+
+        assertFalse(lock.isLocked(player.getUniqueId(), goKey()), "the server-wide lock must not stay held");
+        applicability.armed = false;
+        Player other = mock(Player.class);
+        when(other.getUniqueId()).thenReturn(UUID.randomUUID());
+        executor.onCommand(other, command, "guarded", new String[]{"go"});
+        assertEquals(1, executor.bodies.get(), "another player's call runs");
+    }
+
+    @Test
+    @DisplayName("case 49: the applicability exception leaves unchanged, with a failing refusal hook suppressed on it")
+    void throwingApplicabilityCheckKeepsTheOriginalException() throws NoSuchMethodException {
+        ThrowingApplicabilityValidator applicability = new ThrowingApplicabilityValidator(400);
+        UsageLockValidator lock = new UsageLockValidator();
+        GuardedExecutor executor = new GuardedExecutor(ValidatorChain.builder()
+                .add(new ThrowingHookValidator()).add(lock).add(applicability).build());
+
+        IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                () -> executor.onCommand(player, command, "guarded", new String[]{"go"}));
+
+        assertSame(applicability.lastThrown, thrown, "the original applicability exception propagates");
+        assertEquals(1, thrown.getSuppressed().length, "the failing refusal hook is suppressed on it");
+        assertEquals("hook failed", thrown.getSuppressed()[0].getMessage());
+        assertFalse(lock.isLocked(player.getUniqueId(), goKey()), "the lock validator's hook must still run");
+    }
+
+    @Test
+    @DisplayName("control: an applicability exception before the lock propagates and nothing is held")
+    void throwingApplicabilityCheckBeforeTheLockAcquiresNothing() throws NoSuchMethodException {
+        ThrowingApplicabilityValidator applicability = new ThrowingApplicabilityValidator(100);
+        UsageLockValidator lock = new UsageLockValidator();
+        GuardedExecutor executor = new GuardedExecutor(
+                ValidatorChain.builder().add(applicability).add(lock).build());
+
+        IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                () -> executor.onCommand(player, command, "guarded", new String[]{"go"}));
+
+        assertSame(applicability.lastThrown, thrown);
+        assertFalse(lock.isLocked(player.getUniqueId(), goKey()), "nothing was acquired");
+        applicability.armed = false;
+        Player other = mock(Player.class);
+        when(other.getUniqueId()).thenReturn(UUID.randomUUID());
+        executor.onCommand(other, command, "guarded", new String[]{"go"});
+        assertEquals(1, executor.bodies.get(), "the next call runs");
     }
 
     private static String widgetKey() {
