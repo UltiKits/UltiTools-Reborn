@@ -2061,6 +2061,17 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * {@link Level#FINE} only. A non-empty override naming a {@code configFilePath} the scan
      * never registered is real capability loss - #336's warning-only ask cannot tell these two
      * cases apart, so this refuses the module and names every missing entity instead of guessing.
+     * <p>
+     * A directory-backed entity is the exception to the path comparison. Auto-registration expands
+     * a {@code configFilePath} that names a directory under {@link #getResourceFolderPath()} (the
+     * same {@code isDirectory()} test {@code ConfigManager#register} applies) into one registration
+     * per file inside it, and registers nothing for an empty directory, so the unexpanded path is
+     * never a registered key. Such an override entity counts as found when its class is among the
+     * config classes package-scan auto-registration selected - the same
+     * {@link ConverterRegistry#prepareSelectedConfigs} selection over the same scan packages and
+     * class loader {@link #initConfig()} hands to {@code ConfigManager#registerAll}. An entity class
+     * the scan did not select is still refused. This method only reads registrations, the selected
+     * classes and whether a path is a directory; it never writes or creates a configuration file.
      *
      * @throws ConfigurationException if the override names a {@code configFilePath} auto-registration
      *                                 never registered
@@ -2070,19 +2081,29 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         if (override.isEmpty()) {
             return;
         }
-        Set<String> overridePaths = new LinkedHashSet<>();
-        for (AbstractConfigEntity entity : override) {
-            overridePaths.add(entity.getConfigFilePath());
-        }
-
         Map<String, AbstractConfigEntity> registered = UltiToolsPlugin.getConfigManager().getAllConfigEntities(this);
         Set<String> registeredPaths = registered != null ? registered.keySet() : Collections.<String>emptySet();
 
-        List<String> missing = new ArrayList<>();
-        for (String path : overridePaths) {
-            if (!registeredPaths.contains(path)) {
-                missing.add(path);
+        Set<String> overridePaths = new LinkedHashSet<>();
+        Set<String> missing = new LinkedHashSet<>();
+        // Computed only when a directory-backed override entity needs it.
+        Set<Class<?>> selectedByScan = null;
+        for (AbstractConfigEntity entity : override) {
+            String path = entity.getConfigFilePath();
+            overridePaths.add(path);
+            if (registeredPaths.contains(path)) {
+                continue;
             }
+            if (namesConfigDirectory(path)) {
+                if (selectedByScan == null) {
+                    selectedByScan = ConverterRegistry.prepareSelectedConfigs(this,
+                            DependencyUtils.getPluginPackages(this), UltiTools.getJavaPluginClassLoader());
+                }
+                if (selectedByScan.contains(entity.getClass())) {
+                    continue;
+                }
+            }
+            missing.add(path);
         }
 
         if (missing.isEmpty()) {
@@ -2098,6 +2119,16 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                     + "' but package-scan auto-registration never found it - the entity is lost");
         }
         throw ConfigurationException.validationFailed(getPluginName(), "getAllConfigs() override", violations);
+    }
+
+    /**
+     * @param configFilePath a {@code configFilePath} from a {@link #getAllConfigs()} override
+     * @return whether it names an existing directory under this module's resource folder, the
+     *         test {@code ConfigManager#register} uses to expand a directory-backed entity
+     */
+    private boolean namesConfigDirectory(String configFilePath) {
+        String folder = getResourceFolderPath();
+        return configFilePath != null && folder != null && new File(folder, configFilePath).isDirectory();
     }
 
     private InputStream getInputStream() throws IOException {
