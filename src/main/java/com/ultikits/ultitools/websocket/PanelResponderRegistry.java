@@ -76,7 +76,8 @@ import com.ultikits.ultitools.utils.PluginInitiationUtils;
  *       unloading while one of its requests is still waiting or running can therefore see that
  *       call.</li>
  *   <li><b>Shutdown.</b> {@link #shutdown()} settles every admitted request with a failure, runs no
- *       request still waiting and interrupts no running call.</li>
+ *       request that has not started when it begins (including one a worker takes from the queue
+ *       while it is in progress) and interrupts no running call.</li>
  *   <li><b>Callbacks.</b> A callback attached to the future {@link #dispatch} returns (the
  *       framework's reply is one) runs on whichever thread settles that future — a worker, the
  *       deadline timer, a module's own thread or the thread calling {@link #shutdown()} — or at
@@ -154,7 +155,10 @@ public class PanelResponderRegistry {
      */
     private final Set<Invocation> admitted = ConcurrentHashMap.newKeySet();
 
-    /** Set first thing in {@link #shutdown()}; a request admitted afterwards fails at once. */
+    /**
+     * Set first thing in {@link #shutdown()}; a request admitted afterwards fails at once, and a
+     * worker reading it at the start of a call settles that request instead of running it.
+     */
     private volatile boolean shutDown;
 
     /**
@@ -560,7 +564,9 @@ public class PanelResponderRegistry {
      * every {@code onEnable}) would leak their threads for the life of the process. The deadline
      * timer is stopped with {@link ScheduledThreadPoolExecutor#shutdownNow()}: it holds only
      * deadline tasks, and every request they belong to is settled here anyway. Requests still
-     * waiting for a worker are taken out of the queue and never run. The workers are stopped with
+     * waiting for a worker are taken out of the queue and never run; a request a worker takes
+     * after this method began, before the queue is emptied, is settled with the same failure by
+     * that worker instead of being run. The workers are stopped with
      * the graceful {@link ThreadPoolExecutor#shutdown()}, never {@code shutdownNow()}: a running
      * module call is not interrupted, it returns on its own daemon thread and its result is
      * dropped. Every admitted request not yet settled fails with a {@link
@@ -623,6 +629,15 @@ public class PanelResponderRegistry {
         @Override
         public void run() {
             if (outcome.isDone()) {
+                return;
+            }
+            // The start of a call. shutdown() writes its volatile flag before it does anything else,
+            // so a worker that reaches this read after shutdown began always sees it -- including a
+            // worker that took this request from the queue before shutdown emptied it -- and settles
+            // the request instead of running it. A call that passed this read before shutdown began
+            // has started; it runs to the end and its result is dropped.
+            if (shutDown) {
+                settle(null, shutDownFailure());
                 return;
             }
             CompletableFuture<JsonObject> responderFuture = callResponder();
