@@ -470,6 +470,7 @@ class ConfigStagedPanelWriteTest {
         assertThat(entity.isFileModifiedSinceSnapshot()).isTrue();
 
         warnings.clear();
+        clearLeakedUltiToolsInstance();
         java.util.logging.Logger logger = java.util.logging.Logger.getLogger("com.ultikits.ultitools");
         java.util.logging.Handler capture = warningCapture(warnings);
         logger.addHandler(capture);
@@ -490,6 +491,18 @@ class ConfigStagedPanelWriteTest {
         assertThat(new String(Files.readAllBytes(target), StandardCharsets.UTF_8)).as("only the value line changes")
                 .isEqualTo(expected).contains("other: saved by the operator while the batch was failing\n");
         assertNoTemporaries();
+    }
+
+    /**
+     * Clears a mocked {@code UltiTools} instance an earlier test class in the same fork left behind (as
+     * InPlaceFallbackRestoreTest does, gate-1 F1): with one, {@code save()} reports its unwritten keys through the mock's
+     * {@code getLogger()}, which is {@code null}, instead of the framework logger this test captures.
+     */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // the framework singleton is a private static field
+    private static void clearLeakedUltiToolsInstance() throws ReflectiveOperationException {
+        Field instance = com.ultikits.ultitools.UltiTools.class.getDeclaredField("ultiTools");
+        instance.setAccessible(true);
+        instance.set(null, null);
     }
 
     /** The original file text with only its other line saved by the operator. */
