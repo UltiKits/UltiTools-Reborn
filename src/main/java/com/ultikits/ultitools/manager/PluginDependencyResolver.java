@@ -230,9 +230,10 @@ public class PluginDependencyResolver {
         // node whose hard dependency does not exist as a node is unloadable; everything that
         // transitively DEPENDS on it (forward along depends edges only, #676) is unloadable with
         // it. A module that only softDepends on, is named by a loadBefore of, or lists in
-        // plugin.yml loadAfter a refused module is not refused for that: those edges order
-        // modules that are present and never refuse anything. The survivors are then still
-        // sorted on the full adjacency, so every ordering constraint among them holds.
+        // plugin.yml loadAfter a refused module is not refused for that: those edges only order
+        // modules that are present and never carry a missing-dependency refusal. The survivors
+        // are then still sorted on the full adjacency, so every ordering constraint among them
+        // holds (and a cycle among them is refused by the cycle rule, see below).
         Map<String, List<String>> missingDependenciesByNode =
             collectMissingHardDependencies(nodes, availablePlugins, aliasMap);
         if (!missingDependenciesByNode.isEmpty()) {
@@ -589,7 +590,8 @@ public class PluginDependencyResolver {
      * {@code depends} on A (resolved through {@code aliasMap}) and A is present. This is the only
      * graph a missing-dependency refusal propagates over (#676); {@code softDepends},
      * {@code loadBefore} and {@code plugin.yml} {@code loadAfter} only order modules that are
-     * present and never carry a refusal.
+     * present and never carry a missing-dependency refusal. (A cycle is refused by Kahn's
+     * partition over the full adjacency instead, which does follow every edge kind.)
      */
     private Map<String, Set<String>> buildHardAdjacencyList(
             Map<String, PluginNode> nodes, Map<String, String> aliasMap) {
