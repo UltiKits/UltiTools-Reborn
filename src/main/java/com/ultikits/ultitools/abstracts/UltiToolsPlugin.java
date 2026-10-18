@@ -13,8 +13,6 @@ import java.nio.charset.StandardCharsets;
 import java.io.OutputStream;
 import java.lang.reflect.Type;
 import java.net.JarURLConnection;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
@@ -70,6 +68,7 @@ import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.manager.ListenerManager;
 import com.ultikits.ultitools.manager.PluginManager;
+import com.ultikits.ultitools.utils.CodeSourceLocations;
 import com.ultikits.ultitools.utils.DependencyUtils;
 import com.ultikits.ultitools.utils.FileUtils;
 import com.ultikits.ultitools.utils.OfficialLanguageFiles;
@@ -1859,21 +1858,17 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * characters (spaces, non-ASCII, etc.) that {@link URL#getPath()} does not decode on its
      * own (13-REVIEW WR-03) -- passing an undecoded {@code %20...} path straight to {@link
      * File#File(String)} or {@link JarFile#JarFile(File)} finds nothing when the module is
-     * installed under a path containing a space or other URI-escaped character. Falls back to
-     * the previous raw-path substring logic -- matching {@link #getInputStream()}'s own
-     * try/catch({@link URISyntaxException}) shape for the same {@link CodeSource} location --
-     * for the rare case the location cannot be expressed as a {@link URI} at all.
+     * installed under a path containing a space or other URI-escaped character. Delegates to
+     * {@link CodeSourceLocations#toFile(URL)}, the resolver {@link Localized#scanLangResources(URL)}
+     * also uses, so language discovery and the dictionary reader cannot disagree about where the
+     * module's JAR is (#676 case 26); that resolver falls back to the previous raw-path rule when
+     * the location cannot be read as a {@code file:} URI.
      *
      * @param location the {@code CodeSource.getLocation()} URL, never {@code null}
      * @return the resolved location as a {@link File}
      */
     private static File resolveCodeSourceFile(URL location) {
-        try {
-            return new File(location.toURI());
-        } catch (URISyntaxException e) {
-            String rawPath = location.getPath();
-            return new File(rawPath.startsWith("/") ? rawPath : rawPath.substring(1));
-        }
+        return CodeSourceLocations.toFile(location);
     }
 
     /**
