@@ -614,6 +614,35 @@ class PluginDependencyResolverTest {
             assertTrue(ex.getMessage().contains("MissingPlugin"), ex.getMessage());
             assertTrue(ex.getMessage().contains("CircularA"), ex.getMessage());
             assertTrue(ex.getMessage().contains("CircularB"), ex.getMessage());
+
+            // The independent cycle is carried structurally, not only in the message.
+            assertEquals(1, ex.getCyclePaths().size(), ex.getCyclePaths().toString());
+            List<String> path = ex.getCyclePaths().get(0);
+            assertEquals(path.get(0), path.get(path.size() - 1));
+            assertEquals(new HashSet<>(Arrays.asList("CircularA", "CircularB")), new HashSet<>(path));
+        }
+
+        @Test
+        @DisplayName("a missing-dependency exception built without cycle paths reports an empty, "
+                + "non-null list")
+        void missingDependencyExceptionWithoutCyclePathsHasEmptyList() {
+            MissingDependencyException threeArgument = new MissingDependencyException(
+                "message", Collections.emptyList(), Collections.singleton("PluginWithMissingDep"));
+            MissingDependencyException oneArgument = new MissingDependencyException("message");
+
+            assertNotNull(threeArgument.getCyclePaths());
+            assertTrue(threeArgument.getCyclePaths().isEmpty());
+            assertNotNull(oneArgument.getCyclePaths());
+            assertTrue(oneArgument.getCyclePaths().isEmpty());
+        }
+
+        @Test
+        @DisplayName("a pure missing dependency carries no cycle paths")
+        void pureMissingDependencyCarriesNoCyclePaths() {
+            MissingDependencyException ex = assertThrows(MissingDependencyException.class,
+                () -> resolver.resolve(Arrays.asList(PluginWithMissingDep.class, PluginA.class)));
+
+            assertTrue(ex.getCyclePaths().isEmpty(), ex.getCyclePaths().toString());
         }
 
         @Test

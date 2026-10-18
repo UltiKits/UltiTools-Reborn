@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Supplier;
@@ -3546,10 +3547,15 @@ public class PluginManager {
      * Sort plugins by their dependencies using Kahn's algorithm (topological sort).
      * <p>
      * A dependency cycle or a missing hard dependency no longer degrades every module to
-     * filesystem order (SILENT-08/D-10): only the affected module(s) - the cycle/missing
-     * declaration plus everything transitively depending on it - are absent from the returned
-     * list; every unrelated module still loads. The pre-6.3.0 all-unsorted behaviour survives
-     * only as an explicit, cost-stating opt-in via {@code ultitools.useLegacyPluginLoading}.
+     * filesystem order (SILENT-08/D-10): only the refused modules are absent from the returned
+     * list; every other module still loads. A missing hard dependency refuses the declaring module
+     * and every module that transitively {@code depends} on it (#676), never a module that only
+     * softDepends on, is named by a loadBefore of, or lists in plugin.yml loadAfter a refused
+     * module. Anything the sort cannot place - a cycle plus every module ordered after it - is
+     * refused as a cycle. When both occur in one start, the console names the missing
+     * dependencies, each cycle as a Loop path and every module not loaded. The pre-6.3.0
+     * all-unsorted behaviour survives only as an explicit, cost-stating opt-in via
+     * {@code ultitools.useLegacyPluginLoading}.
      *
      * @param plugins list of plugin classes to sort
      * @return sorted list of plugin classes
@@ -3573,15 +3579,7 @@ public class PluginManager {
             Bukkit.getLogger().log(Level.INFO, "[UltiTools-API] Plugin load order resolved successfully.");
             return sorted;
         } catch (CircularDependencyException e) {
-            Bukkit.getLogger().log(Level.SEVERE,
-                "[UltiTools-API] Circular dependency detected among plugins.");
-            for (List<String> cyclePath : e.getCyclePaths()) {
-                Bukkit.getLogger().log(Level.SEVERE,
-                    "[UltiTools-API]   Loop: " + String.join(" -> ", cyclePath));
-                Bukkit.getLogger().log(Level.SEVERE,
-                    "[UltiTools-API]   Please have the author of '" + cyclePath.get(0)
-                        + "' fix the circular dependency.");
-            }
+            logCycleDiagnosis(e.getCyclePaths());
             Bukkit.getLogger().log(Level.SEVERE,
                 "[UltiTools-API] The cycle members and their dependents are excluded from this "
                     + "load; every other module still loads. Set "
@@ -3593,13 +3591,49 @@ public class PluginManager {
             Bukkit.getLogger().log(Level.SEVERE,
                 "[UltiTools-API] A required plugin dependency is missing.");
             Bukkit.getLogger().log(Level.SEVERE, "[UltiTools-API] " + e.getMessage());
+            if (e.getCyclePaths().isEmpty()) {
+                Bukkit.getLogger().log(Level.SEVERE,
+                    "[UltiTools-API] The declaring module and its dependents are excluded from this "
+                        + "load; every other module still loads. Set "
+                        + "-Dultitools.useLegacyPluginLoading=true to restore the old unsorted load "
+                        + "order instead (not recommended: modules may fail to initialize in an "
+                        + "unpredictable order).");
+                return new ArrayList<>(e.getSortedPrefix());
+            }
+            // #676: an independent cycle in the same start. The baseline exclusion sentence would
+            // be false here (the cycle members are excluded too), so name the cycles and every
+            // module that is not loaded instead.
+            logCycleDiagnosis(e.getCyclePaths());
             Bukkit.getLogger().log(Level.SEVERE,
-                "[UltiTools-API] The declaring module and its dependents are excluded from this "
-                    + "load; every other module still loads. Set "
-                    + "-Dultitools.useLegacyPluginLoading=true to restore the old unsorted load "
-                    + "order instead (not recommended: modules may fail to initialize in an "
-                    + "unpredictable order).");
+                "[UltiTools-API] The declaring module, its dependents, the cycle members and every "
+                    + "module ordered after them are excluded from this load; every other module "
+                    + "still loads. Set -Dultitools.useLegacyPluginLoading=true to restore the old "
+                    + "unsorted load order instead (not recommended: modules may fail to initialize "
+                    + "in an unpredictable order).");
+            Bukkit.getLogger().log(Level.SEVERE,
+                "[UltiTools-API] Not loaded: "
+                    + String.join(", ", new TreeSet<>(e.getRefusedPlugins())) + ".");
             return new ArrayList<>(e.getSortedPrefix());
+        }
+    }
+
+    /**
+     * Logs the cycle detection line, then one Loop line and one author-hint line per cycle path.
+     * Shared by the circular-dependency handler and the mixed missing-plus-cycle branch of the
+     * missing-dependency handler so both print the same lines in the same order. Module names
+     * are concatenated, never used as a format string.
+     *
+     * @param cyclePaths each cycle as a list of plugin names whose first and last entries match
+     */
+    private void logCycleDiagnosis(List<List<String>> cyclePaths) {
+        Bukkit.getLogger().log(Level.SEVERE,
+            "[UltiTools-API] Circular dependency detected among plugins.");
+        for (List<String> cyclePath : cyclePaths) {
+            Bukkit.getLogger().log(Level.SEVERE,
+                "[UltiTools-API]   Loop: " + String.join(" -> ", cyclePath));
+            Bukkit.getLogger().log(Level.SEVERE,
+                "[UltiTools-API]   Please have the author of '" + cyclePath.get(0)
+                    + "' fix the circular dependency.");
         }
     }
 

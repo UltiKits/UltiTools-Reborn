@@ -26,14 +26,22 @@ import org.jetbrains.annotations.ApiStatus;
  * <p>
  * A failed resolve no longer refuses everything (D-10): {@link #resolve(List)} throws
  * {@link CircularDependencyException} or {@link MissingDependencyException}, and both carry a
- * structured sortable prefix and a refused set alongside the message, so a caller can load the
- * unaffected modules instead of falling back to filesystem order.
+ * structured sortable prefix and a refused set alongside the message - disjoint, and together
+ * covering every input module - so a caller can load the unaffected modules instead of falling
+ * back to filesystem order.
  *
  * @author wisdomme
  * @since 6.2.0
  */
 @ApiStatus.Internal
 public class PluginDependencyResolver {
+
+    /**
+     * Shared start of the cycle sentence, used by the pure-cycle message and appended to a
+     * missing-dependency message when an independent cycle occurs in the same resolve.
+     */
+    private static final String CIRCULAR_DEPENDENCY_MESSAGE_PREFIX =
+        "Circular dependency detected among plugins: ";
 
     private final Logger logger;
 
@@ -171,13 +179,23 @@ public class PluginDependencyResolver {
 
     /**
      * Resolves plugin load order using Kahn's algorithm for topological sorting.
+     * <p>
+     * Ordering uses every edge kind ({@code depends}, present {@code softDepends},
+     * {@code loadBefore}, {@code plugin.yml} {@code loadAfter}). A failed resolve partitions the
+     * input: the sortable prefix and the refused set are disjoint and together contain every
+     * input module. Refusal for a missing hard dependency follows {@code depends} edges only;
+     * anything the sort cannot place (a cycle and every module ordered after it) is refused as a
+     * cycle. When both occur, {@link MissingDependencyException} is thrown and also carries the
+     * cycle paths.
      *
      * @param pluginClasses the list of plugin classes to sort
      * @return sorted list of plugin classes
-     * @throws CircularDependencyException if a dependency cycle is detected; the exception itself
-     *                                      carries the sortable prefix and the refused set
+     * @throws CircularDependencyException if a dependency cycle is detected and no hard dependency
+     *                                      is missing; the exception itself carries the sortable
+     *                                      prefix, the refused set and the cycle paths
      * @throws MissingDependencyException  if a required hard dependency is missing; the exception
-     *                                      itself carries the sortable prefix and the refused set
+     *                                      itself carries the sortable prefix, the refused set and
+     *                                      the paths of any independent cycle
      */
     public List<Class<? extends UltiToolsPlugin>> resolve(
             List<Class<? extends UltiToolsPlugin>> pluginClasses)
@@ -227,10 +245,24 @@ public class PluginDependencyResolver {
             Map<String, Integer> survivorInDegree = calculateInDegrees(survivorNames, survivorAdjacency);
             List<String> survivorSorted = kahnSort(survivorNames, survivorAdjacency, survivorInDegree);
 
+            // An independent cycle among the survivors (#676): every survivor the sort cannot
+            // place is refused by the same rule the pure-cycle path below uses, and its cycles
+            // are diagnosed, so the prefix and the refused set together cover every input.
+            String message = buildMissingDependencyMessage(missingDependenciesByNode);
+            List<List<String>> cyclePaths = Collections.emptyList();
+            if (survivorSorted.size() != survivorNames.size()) {
+                Set<String> cycleBlocked = new TreeSet<>(survivorNames);
+                cycleBlocked.removeAll(survivorSorted);
+                cyclePaths = findCyclePaths(cycleBlocked, survivorAdjacency);
+                refused.addAll(cycleBlocked);
+                message = message + ". " + CIRCULAR_DEPENDENCY_MESSAGE_PREFIX + cycleBlocked;
+            }
+
             throw new MissingDependencyException(
-                buildMissingDependencyMessage(missingDependenciesByNode),
+                message,
                 toClassList(survivorSorted, nodes),
-                refused
+                refused,
+                cyclePaths
             );
         }
 
@@ -247,7 +279,7 @@ public class PluginDependencyResolver {
             List<List<String>> cyclePaths = findCyclePaths(remaining, adjacencyList);
 
             throw new CircularDependencyException(
-                "Circular dependency detected among plugins: " + remaining,
+                CIRCULAR_DEPENDENCY_MESSAGE_PREFIX + remaining,
                 sortedPrefix,
                 remaining,
                 cyclePaths
@@ -643,8 +675,10 @@ public class PluginDependencyResolver {
      * Exception thrown when circular dependencies are detected.
      * <p>
      * Carries a structured partition alongside the message (D-10): {@link #getSortedPrefix()} is
-     * every module Kahn's sort could still place, {@link #getRefusedPlugins()} is the cycle plus
-     * everything transitively depending on it, and {@link #getCyclePaths()} names each detected
+     * every module Kahn's sort could still place, {@link #getRefusedPlugins()} is every module it
+     * could not place - the cycle members plus every module ordered after them over any edge kind
+     * ({@code depends}, present {@code softDepends}, {@code loadBefore}, {@code plugin.yml}
+     * {@code loadAfter}) - and {@link #getCyclePaths()} names each detected
      * cycle as an edge path (first and last element equal), e.g. {@code A -> B -> C -> A}. The
      * caller obtains all three from these accessors, never by parsing {@link #getMessage()}.
      */
@@ -662,8 +696,8 @@ public class PluginDependencyResolver {
          *
          * @param message        the human-readable detection message
          * @param sortedPrefix   every plugin class Kahn's sort could still place, in load order
-         * @param refusedPlugins the cycle members plus every plugin transitively depending on them,
-         *                       by plugin name
+         * @param refusedPlugins every plugin the sort could not place - the cycle members plus every
+         *                       plugin ordered after them - by plugin name
          * @param cyclePaths     each detected cycle as an ordered list of plugin names whose first
          *                       and last entries are the same node
          * @since 6.3.0
@@ -690,8 +724,8 @@ public class PluginDependencyResolver {
         }
 
         /**
-         * The cycle members plus every plugin transitively depending on them, by plugin name.
-         * Never null.
+         * Every plugin the sort could not place - the cycle members plus every plugin ordered
+         * after them over any edge kind - by plugin name. Never null.
          *
          * @return the refused plugin names
          * @since 6.3.0
@@ -715,42 +749,78 @@ public class PluginDependencyResolver {
     /**
      * Exception thrown when required dependencies are missing.
      * <p>
-     * Carries a structured partition alongside the message (D-10): {@link #getSortedPrefix()} is
-     * every module that does not depend, directly or transitively, on the missing dependency, and
-     * {@link #getRefusedPlugins()} is the declaring module(s) plus everything transitively
-     * depending on them. The caller obtains both from these accessors, never by parsing
-     * {@link #getMessage()}.
+     * Carries a structured partition alongside the message (D-10): {@link #getRefusedPlugins()} is
+     * the declaring module(s) plus everything that transitively {@code depends} on them (#676:
+     * {@code softDepends}, {@code loadBefore} and {@code plugin.yml} {@code loadAfter} never
+     * carry this refusal), plus - when an independent cycle occurs in the same resolve - every
+     * remaining module the sort cannot place, refused by the same rule as
+     * {@link CircularDependencyException}. {@link #getSortedPrefix()} is every other module, in
+     * load order; the two are disjoint and together cover every input module.
+     * {@link #getCyclePaths()} names each such cycle and is empty when there is none. The caller
+     * obtains all three from these accessors, never by parsing {@link #getMessage()}.
+     * <p>
+     * A missing dependency takes precedence: when both occur, this exception is thrown, not
+     * {@link CircularDependencyException}.
      */
     public static class MissingDependencyException extends Exception {
         private final List<Class<? extends UltiToolsPlugin>> sortedPrefix;
         private final Set<String> refusedPlugins;
+        private final List<List<String>> cyclePaths;
 
         public MissingDependencyException(String message) {
-            this(message, Collections.emptyList(), Collections.emptySet());
+            this(message, Collections.emptyList(), Collections.emptySet(), Collections.emptyList());
         }
 
         /**
-         * Constructs a missing-hard-dependency refusal carrying the structured partition.
+         * Constructs a missing-hard-dependency refusal carrying the structured partition and no
+         * cycle paths.
          *
          * @param message        the human-readable detection message, naming the declaring module(s)
          *                       and the dependency each wanted
          * @param sortedPrefix   every plugin class that survives, in load order
-         * @param refusedPlugins the declaring module(s) plus every plugin transitively depending on
-         *                       them, by plugin name
+         * @param refusedPlugins every refused plugin, by plugin name
          * @since 6.3.0
          */
         public MissingDependencyException(
                 String message,
                 List<Class<? extends UltiToolsPlugin>> sortedPrefix,
                 Set<String> refusedPlugins) {
-            super(message);
-            this.sortedPrefix = Collections.unmodifiableList(new ArrayList<>(sortedPrefix));
-            this.refusedPlugins = Collections.unmodifiableSet(new LinkedHashSet<>(refusedPlugins));
+            this(message, sortedPrefix, refusedPlugins, Collections.emptyList());
         }
 
         /**
-         * The plugin classes that survive - do not depend, directly or transitively, on a missing
-         * hard dependency - in load order. Never null.
+         * Constructs a missing-hard-dependency refusal that also carries the paths of independent
+         * cycles found among the modules the missing dependency did not refuse.
+         *
+         * @param message        the human-readable detection message, naming the declaring module(s),
+         *                       the dependency each wanted and, when cycles exist, the modules
+         *                       they block
+         * @param sortedPrefix   every plugin class that survives, in load order
+         * @param refusedPlugins every refused plugin, by plugin name: the depends closure of the
+         *                       declaring modules plus every module the sort could not place
+         * @param cyclePaths     each detected cycle as an ordered list of plugin names whose first
+         *                       and last entries are the same node; empty when there is none
+         * @since 6.3.0
+         */
+        public MissingDependencyException(
+                String message,
+                List<Class<? extends UltiToolsPlugin>> sortedPrefix,
+                Set<String> refusedPlugins,
+                List<List<String>> cyclePaths) {
+            super(message);
+            this.sortedPrefix = Collections.unmodifiableList(new ArrayList<>(sortedPrefix));
+            this.refusedPlugins = Collections.unmodifiableSet(new LinkedHashSet<>(refusedPlugins));
+            List<List<String>> copiedPaths = new ArrayList<>();
+            for (List<String> path : cyclePaths) {
+                copiedPaths.add(Collections.unmodifiableList(new ArrayList<>(path)));
+            }
+            this.cyclePaths = Collections.unmodifiableList(copiedPaths);
+        }
+
+        /**
+         * The plugin classes that survive, in load order: every module neither in the
+         * {@code depends} closure of a module with a missing hard dependency nor blocked by a
+         * cycle. Never null.
          *
          * @return the sortable prefix
          * @since 6.3.0
@@ -760,14 +830,26 @@ public class PluginDependencyResolver {
         }
 
         /**
-         * The declaring module(s) plus every plugin transitively depending on them, by plugin name.
-         * Never null.
+         * The declaring module(s), every plugin that transitively {@code depends} on them, and
+         * every module an independent cycle blocks, by plugin name. Never null.
          *
          * @return the refused plugin names
          * @since 6.3.0
          */
         public Set<String> getRefusedPlugins() {
             return refusedPlugins;
+        }
+
+        /**
+         * Each independent cycle found in the same resolve, as an ordered list of plugin names
+         * whose first and last entries are the same node, e.g. {@code [A, B, A]}. Never null;
+         * empty when the only failure is a missing dependency.
+         *
+         * @return the detected cycle paths
+         * @since 6.3.0
+         */
+        public List<List<String>> getCyclePaths() {
+            return cyclePaths;
         }
     }
 }
