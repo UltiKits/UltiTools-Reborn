@@ -724,10 +724,16 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
      * {@code id}, in one step -- staged in the calling thread's transaction, or put into the
      * committed entries under the visibility write side -- so a concurrent read never sees a
      * half-copied entry. Shared by {@link #update(BaseDataEntity)} and {@link #updateIf}.
+     * <p>
+     * {@link BeanCopyUtil} copies field references, so the merged copy still shares the caller's
+     * List, Map and other mutable field values; a detached copy of it is what gets stored, so no
+     * object reachable from the caller's entity is reachable from a committed or staged value
+     * (C11). A change the caller makes to its entity afterwards changes nothing stored.
      */
     private void replaceEntry(T stored, T source) {
-        T updated = detach(stored);
-        BeanCopyUtil.copyProperties(source, updated, "id");
+        T merged = detach(stored);
+        BeanCopyUtil.copyProperties(source, merged, "id");
+        T updated = detach(merged);
         store(updated.getId(), updated);
     }
 
