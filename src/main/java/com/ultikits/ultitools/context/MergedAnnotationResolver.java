@@ -302,8 +302,19 @@ public final class MergedAnnotationResolver {
      * {@code @ComponentScan.basePackages}, because {@code scanBasePackages} itself aliases it.
      * <p>
      * Every candidate records the annotation instance that declared it and that instance's
-     * distance from the class. For each attribute of {@code found}, all candidates must agree;
-     * a disagreement is refused with a {@link ContainerException}.
+     * distance from the class. For each attribute of {@code found} the rule is (C47):
+     * <ul>
+     * <li>if one annotation instance supplies two different values -- through a mutual alias, or
+     * through two routes that reach the same final attribute -- the declaration contradicts
+     * itself and is refused with a {@link ContainerException} naming that instance's annotation;</li>
+     * <li>otherwise the value declared by the instance nearest the class wins. Values from
+     * different instances never conflict: an outer override beats a value an inner
+     * meta-annotation declares.</li>
+     * </ul>
+     * This is Spring's {@code @AliasFor} contract: an explicit meta-annotation attribute override
+     * wins over the meta-annotation's own value, the lower level (closer to the annotated element)
+     * wins, and only an attribute and its alias declared with different values in one annotation
+     * is an error.
      */
     private static <A extends Annotation> A merge(Annotation found, Class<A> annotationType,
             List<Annotation> ancestors) {
@@ -322,23 +333,48 @@ public final class MergedAnnotationResolver {
 
         Map<String, Object> overrides = new LinkedHashMap<>();
         for (Map.Entry<String, List<Candidate>> entry : candidatesByAttribute.entrySet()) {
-            List<Candidate> candidates = entry.getValue();
-            Object agreedValue = candidates.get(0).value;
-            for (Candidate candidate : candidates) {
-                if (!Objects.deepEquals(candidate.value, agreedValue)) {
-                    String sourceAttributes = candidates.stream()
-                            .map(c -> c.sourceMethodName)
-                            .distinct()
-                            .reduce((a, b) -> a + "', '" + b)
-                            .orElse("");
-                    throw ContainerException.malformedAliasFor(annotationType, entry.getKey(),
-                            "conflicting @AliasFor values for target attribute '" + entry.getKey()
-                                    + "' from '" + sourceAttributes + "' on a single concrete instance");
-                }
+            Object value = resolveNearest(annotationType, entry.getKey(), entry.getValue());
+            if (value != null) { // never null for a non-empty list; an attribute is never overridden to null
+                overrides.put(entry.getKey(), value);
             }
-            overrides.put(entry.getKey(), agreedValue);
         }
         return createProxy(typed, annotationType, overrides);
+    }
+
+    /**
+     * Apply the per-instance conflict rule and nearest-wins rule (see {@link #merge}) to one
+     * attribute's candidates. Each level of the path is exactly one annotation instance, so the
+     * candidates' distance identifies their declaring instance.
+     */
+    private static Object resolveNearest(Class<? extends Annotation> annotationType, String attribute,
+            List<Candidate> candidates) {
+        Candidate nearest = null;
+        for (Candidate candidate : candidates) {
+            for (Candidate other : candidates) {
+                if (other.distance == candidate.distance && !Objects.deepEquals(other.value, candidate.value)) {
+                    throw selfContradiction(annotationType, attribute, candidate, candidates);
+                }
+            }
+            if (nearest == null || candidate.distance < nearest.distance) {
+                nearest = candidate;
+            }
+        }
+        return nearest == null ? null : nearest.value;
+    }
+
+    private static ContainerException selfContradiction(Class<? extends Annotation> annotationType,
+            String attribute, Candidate conflicting, List<Candidate> candidates) {
+        String sourceAttributes = candidates.stream()
+                .filter(c -> c.distance == conflicting.distance)
+                .map(c -> c.sourceMethodName)
+                .distinct()
+                .reduce((a, b) -> a + "', '" + b)
+                .orElse("");
+        return ContainerException.malformedAliasFor(conflicting.origin.annotationType(),
+                conflicting.sourceMethodName,
+                "conflicting @AliasFor values for target attribute '" + attribute + "' of "
+                        + annotationType.getName() + " from '" + sourceAttributes
+                        + "' on a single concrete instance");
     }
 
     /**
@@ -358,6 +394,11 @@ public final class MergedAnnotationResolver {
      * within-annotation mutual alias) share one candidate list, so {@code foo=x} with
      * {@code bar=y} surfaces as two different values for the same attribute.</li>
      * </ol>
+     * Candidates are only collected here, never reconciled: a list may hold values from several
+     * instances. {@link #merge} applies the rule once, at the found annotation -- two different
+     * values from one instance are refused, otherwise the instance nearest the class wins --
+     * which is Spring's {@code @AliasFor} contract (explicit meta-annotation overrides,
+     * transitive aliases, lower level wins, same-annotation contradiction is an error).
      */
     private static Map<String, List<Candidate>> collectOverrideCandidates(List<Annotation> path, int level,
             List<Map<String, List<Candidate>>> outerLevels) {
