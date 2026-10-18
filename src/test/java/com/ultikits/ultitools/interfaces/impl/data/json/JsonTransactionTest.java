@@ -18,6 +18,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 
@@ -32,11 +33,13 @@ import org.junit.jupiter.api.io.TempDir;
 
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Propagation;
+import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.annotations.Transactional;
 import com.ultikits.ultitools.aop.AopAdvisor;
 import com.ultikits.ultitools.aop.AopProxyResolver;
 import com.ultikits.ultitools.aop.TransactionInterceptor;
 import com.ultikits.ultitools.exceptions.UnexpectedRollbackException;
+import com.ultikits.ultitools.manager.DataScope;
 import com.ultikits.ultitools.manager.JsonTransactionManager;
 
 @DisplayName("JSON Data Operator - Transaction & Batch Tests")
@@ -83,6 +86,26 @@ class JsonTransactionTest {
         public void setValue(int value) { this.value = value; }
     }
 
+    /** {@link TestData} under a {@code @Table}, so a {@link JsonStore} can hand out its operator. */
+    @Table("tx_rows_a")
+    public static class RowA extends TestData {
+        public RowA() {}
+
+        public RowA(String id, String name, int value) {
+            super(id, name, value);
+        }
+    }
+
+    /** A second table of the same plugin. */
+    @Table("tx_rows_b")
+    public static class RowB extends TestData {
+        public RowB() {}
+
+        public RowB(String id, String name, int value) {
+            super(id, name, value);
+        }
+    }
+
     /**
      * Fixture for {@link RequiresNewAndNotSupportedIntegrationTests} (02-11): proves REQUIRES_NEW
      * and NOT_SUPPORTED genuinely suspend on the JSON backend, mirroring
@@ -91,21 +114,12 @@ class JsonTransactionTest {
      * on that JDBC fixture -- a {@code static} member class cannot live inside a non-static
      * {@code @Nested} class on this project's Java 8 target.
      * <p>
-     * Writes to two <em>different</em> operators deliberately -- {@code outerOperator} for the
-     * outer scope's own writes, {@code innerOperator} for the inner REQUIRES_NEW/NOT_SUPPORTED
-     * scope's writes. This is not an artifact of the test but a consequence of how
-     * {@link JsonTransactionManager} rolls back: it restores an operator's <em>entire</em> cache
-     * from a snapshot captured at that operator's first touch inside a given transaction context
-     * (see {@code SimpleJsonDataOperator#restoreCache}), so proving genuine independence between
-     * an outer scope and a REQUIRES_NEW/NOT_SUPPORTED inner scope requires them to touch different
-     * operators -- exactly the same distinction
-     * {@code PerPluginTransactionScopeTests#untouchedOperatorNotSnapshotted} already establishes
-     * for a concurrent external write. Two operators sharing one {@link JsonTransactionManager} is
-     * exactly how one plugin's several JSON-backed entities behave in production.
+     * The outer scope and the inner REQUIRES_NEW/NOT_SUPPORTED scope write the <em>same</em>
+     * operator: each transaction stages its writes apart, so the outer rollback discards only the
+     * outer scope's staged writes and the inner scope's committed write stays.
      */
     public static class JsonPropagationBean {
-        private final SimpleJsonDataOperator<TestData> outerOperator;
-        private final SimpleJsonDataOperator<TestData> innerOperator;
+        private final SimpleJsonDataOperator<RowA> operator;
         private final JsonTransactionManager txManager;
 
         /** Captured inside {@link #innerNotSupportedWriteSelf()}/{@link #notSupportedExternalWrite()}. */
@@ -115,10 +129,8 @@ class JsonTransactionTest {
          *  outer transaction -- proves the outer is intact at its original depth afterwards. */
         volatile int depthAfterNotSupportedReturnsSelf;
 
-        public JsonPropagationBean(SimpleJsonDataOperator<TestData> outerOperator,
-                SimpleJsonDataOperator<TestData> innerOperator, JsonTransactionManager txManager) {
-            this.outerOperator = outerOperator;
-            this.innerOperator = innerOperator;
+        public JsonPropagationBean(SimpleJsonDataOperator<RowA> operator, JsonTransactionManager txManager) {
+            this.operator = operator;
             this.txManager = txManager;
         }
 
@@ -129,7 +141,7 @@ class JsonTransactionTest {
         @Transactional
         @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
         public void outerRequiredThenSelfInvokesRequiresNewThenFails() {
-            outerOperator.insert(new TestData("outer", "Outer", 1));
+            operator.insert(new RowA("outer", "Outer", 1));
             innerRequiresNewSucceedsSelf();
             throw new RuntimeException(
                     "boom - outer rolls back after inner REQUIRES_NEW commit, self-invocation");
@@ -137,13 +149,13 @@ class JsonTransactionTest {
 
         @Transactional(propagation = Propagation.REQUIRES_NEW)
         public void innerRequiresNewSucceedsSelf() {
-            innerOperator.insert(new TestData("inner", "Inner", 99));
+            operator.insert(new RowA("inner", "Inner", 99));
         }
 
         /** Externally-called REQUIRES_NEW method that writes and commits independently. */
         @Transactional(propagation = Propagation.REQUIRES_NEW)
         public void requiresNewExternalSucceeds() {
-            innerOperator.insert(new TestData("external-inner", "ExternalInner", 100));
+            operator.insert(new RowA("external-inner", "ExternalInner", 100));
         }
 
         /**
@@ -152,7 +164,7 @@ class JsonTransactionTest {
          */
         @Transactional
         public void outerRequiredThenSelfInvokesNotSupportedThenFails() {
-            outerOperator.insert(new TestData("outer-nsw", "OuterNsw", 4));
+            operator.insert(new RowA("outer-nsw", "OuterNsw", 4));
             innerNotSupportedWriteSelf();
             depthAfterNotSupportedReturnsSelf = txManager.getTransactionDepth();
             throw new RuntimeException(
@@ -162,14 +174,39 @@ class JsonTransactionTest {
         @Transactional(propagation = Propagation.NOT_SUPPORTED)
         public void innerNotSupportedWriteSelf() {
             hasActiveTxInsideNotSupported = txManager.hasActiveTransaction();
-            innerOperator.insert(new TestData("not-supported", "NotSupported", 102));
+            operator.insert(new RowA("not-supported", "NotSupported", 102));
         }
 
         /** Externally-called NOT_SUPPORTED write. */
         @Transactional(propagation = Propagation.NOT_SUPPORTED)
         public void notSupportedExternalWrite() {
             hasActiveTxInsideNotSupported = txManager.hasActiveTransaction();
-            innerOperator.insert(new TestData("external-not-supported", "ExternalNotSupported", 103));
+            operator.insert(new RowA("external-not-supported", "ExternalNotSupported", 103));
+        }
+    }
+
+    /**
+     * One plugin's JSON storage, as a module gets it: a {@link JsonStore} over the temporary
+     * folder and one {@link DataScope} owning {@link RowA} and {@link RowB}. The operators and the
+     * manager come from that store for that scope, so they share one transaction manager.
+     */
+    private final class PluginStore {
+        private final JsonStore store;
+        private final DataScope scope;
+
+        PluginStore(String name) throws Exception {
+            File dataFolder = Files.createDirectories(tempDir.resolve(name + "-data")).toFile();
+            scope = JsonTransactionEngineTest.newDataScope(name, dataFolder, RowA.class, RowB.class);
+            store = new JsonStore(tempDir.resolve(name + "-store").toString());
+        }
+
+        @SuppressWarnings("unchecked")
+        <E extends BaseDataEntity<String>> SimpleJsonDataOperator<E> operator(Class<E> entity) {
+            return (SimpleJsonDataOperator<E>) store.getOperator(scope, entity);
+        }
+
+        JsonTransactionManager manager() {
+            return store.transactionManagerFor(scope);
         }
     }
 
@@ -221,7 +258,7 @@ class JsonTransactionTest {
     // ===== Transaction Rollback Tests =====
 
     @Nested
-    @DisplayName("Transaction Rollback (Snapshot)")
+    @DisplayName("Transaction Rollback (staged writes discarded)")
     class TransactionRollbackTests {
 
         @Test
@@ -323,33 +360,36 @@ class JsonTransactionTest {
         }
     }
 
-    // ===== Deep Copy Verification =====
+    // ===== Staged values: the committed value is never changed in place =====
 
     @Nested
-    @DisplayName("Snapshot Deep Copy")
-    class DeepCopyTests {
+    @DisplayName("Staged update: the committed value is never changed in place")
+    class StagedValueTests {
 
         @Test
-        @DisplayName("Rollback should restore entity state even after in-place mutation")
+        @DisplayName("A staged update is seen inside the transaction only; rollback leaves the committed value as it was")
         @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
-        void deepCopyPreventsSharedReferenceCorruption() {
-            // This tests that the snapshot is a deep copy, not a shallow copy.
-            // update(T) calls BeanCopyUtil.copyProperties which mutates entities in-place.
+        void stagedUpdateNeverReachesTheCommittedValue() {
             operator.insert(new TestData("1", "Original", 100));
+            ExecutorService reader = Executors.newSingleThreadExecutor();
+            try {
+                assertThatThrownBy(() -> {
+                    operator.transaction(() -> {
+                        operator.update(new TestData("1", "Mutated", 999));
 
-            assertThatThrownBy(() -> {
-                operator.transaction(() -> {
-                    // update() mutates the cached entity in-place via BeanCopyUtil
-                    operator.update(new TestData("1", "Mutated", 999));
+                        // This transaction reads its own staged update...
+                        assertThat(operator.getById("1").getName()).isEqualTo("Mutated");
+                        // ...while another thread still reads the committed value.
+                        assertThat(reader.submit(() -> operator.getById("1").getName()).get(10, TimeUnit.SECONDS))
+                                .isEqualTo("Original");
 
-                    // Verify the mutation happened
-                    assertThat(operator.getById("1").getName()).isEqualTo("Mutated");
+                        throw new RuntimeException("Rollback!");
+                    });
+                }).isInstanceOf(RuntimeException.class);
+            } finally {
+                reader.shutdown();
+            }
 
-                    throw new RuntimeException("Rollback!");
-                });
-            }).isInstanceOf(RuntimeException.class);
-
-            // Deep copy should have preserved the original values
             assertThat(operator.getById("1").getName()).isEqualTo("Original");
             assertThat(operator.getById("1").getValue()).isEqualTo(100);
         }
@@ -492,21 +532,17 @@ class JsonTransactionTest {
 
             ExecutorService executor = Executors.newFixedThreadPool(2);
 
-            // Thread 1: repeatedly read "stable" entity
-            // Allow brief null reads during rollback snapshot restore on slow CI
+            // Thread 1: repeatedly read "stable" entity. A rollback only discards staged writes and
+            // never touches committed entries, so no read may ever miss it.
             Future<Boolean> readerResult = executor.submit(() -> {
-                int nullCount = 0;
                 for (int i = 0; i < 50; i++) {
                     TestData data = operator.getById("stable");
-                    if (data == null) {
-                        nullCount++;
-                    } else if (!"Stable".equals(data.getName())) {
+                    if (data == null || !"Stable".equals(data.getName())) {
                         return false;
                     }
                     Thread.sleep(1);
                 }
-                // Tolerate a few transient nulls during rollback, but not all
-                return nullCount < 25;
+                return true;
             });
 
             // Thread 2: run failing transactions that should rollback
@@ -537,33 +573,32 @@ class JsonTransactionTest {
     // ===== Per-Plugin Transaction Scope (JsonTransactionManager, D-03) =====
 
     @Nested
-    @DisplayName("JsonTransactionManager - Per-Plugin Rollback Scope")
+    @DisplayName("JsonTransactionManager - one transaction across a plugin's operators")
     class PerPluginTransactionScopeTests {
 
-        private SimpleJsonDataOperator<TestData> operatorA;
-        private SimpleJsonDataOperator<TestData> operatorB;
+        private SimpleJsonDataOperator<RowA> operatorA;
+        private SimpleJsonDataOperator<RowB> operatorB;
         private JsonTransactionManager manager;
 
         @BeforeEach
         void setUpTwoOperators() throws Exception {
-            File dirA = Files.createDirectory(tempDir.resolve("operator-a")).toFile();
-            File dirB = Files.createDirectory(tempDir.resolve("operator-b")).toFile();
-            operatorA = new SimpleJsonDataOperator<>(dirA.getAbsolutePath(), TestData.class);
-            operatorB = new SimpleJsonDataOperator<>(dirB.getAbsolutePath(), TestData.class);
-            manager = new JsonTransactionManager("per-plugin-scope-test");
-            operatorA.bindTransactionManager(manager);
-            operatorB.bindTransactionManager(manager);
+            PluginStore plugin = new PluginStore("per-plugin-scope");
+            operatorA = plugin.operator(RowA.class);
+            operatorB = plugin.operator(RowB.class);
+            manager = plugin.manager();
         }
 
         @Test
-        @DisplayName("Rollback restores every operator of the plugin touched during the transaction")
-        void rollbackRestoresBothTouchedOperators() {
-            operatorA.insert(new TestData("pre-a", "PreA", 1));
-            operatorB.insert(new TestData("pre-b", "PreB", 2));
+        @DisplayName("Rollback discards the staged writes of every operator of the plugin")
+        void rollbackDiscardsStagedWritesOfBothOperators() {
+            operatorA.insert(new RowA("pre-a", "PreA", 1));
+            operatorB.insert(new RowB("pre-b", "PreB", 2));
 
             manager.begin();
-            operatorA.insert(new TestData("new-a", "NewA", 10));
-            operatorB.insert(new TestData("new-b", "NewB", 20));
+            operatorA.insert(new RowA("new-a", "NewA", 10));
+            operatorB.insert(new RowB("new-b", "NewB", 20));
+            assertThat(manager.currentTransaction().hasStagedWrites(operatorA)).isTrue();
+            assertThat(manager.currentTransaction().hasStagedWrites(operatorB)).isTrue();
             manager.rollback();
 
             assertThat(operatorA.getAll()).hasSize(1);
@@ -576,45 +611,46 @@ class JsonTransactionTest {
         }
 
         @Test
-        @DisplayName("An operator never written to during the transaction is not snapshotted -- "
-                + "a concurrent external write to it survives rollback")
-        void untouchedOperatorNotSnapshotted() throws Exception {
-            operatorA.insert(new TestData("pre-a", "PreA", 1));
+        @DisplayName("A concurrent plain write to an operator the transaction has not written survives rollback")
+        void concurrentWriteToAnUnwrittenOperatorSurvivesRollback() throws Exception {
+            operatorA.insert(new RowA("pre-a", "PreA", 1));
 
             manager.begin();
-            operatorA.insert(new TestData("new-a", "NewA", 10));
+            operatorA.insert(new RowA("new-a", "NewA", 10));
 
-            // A write to operatorB from a different thread never observes this thread's active
-            // transaction context (JsonTransactionManager's context is ThreadLocal, matching
-            // DataSourceTransactionManager's design), so it is never captured -- exactly the
-            // "operator never touched" case, made observable via a genuinely concurrent write.
+            // A write from a different thread never joins this thread's transaction (the context
+            // is ThreadLocal, matching DataSourceTransactionManager), so it is applied at once.
+            // It writes operatorB, which this transaction has not written.
             ExecutorService executor = Executors.newSingleThreadExecutor();
             try {
-                executor.submit(() -> operatorB.insert(new TestData("external", "External", 99))).get();
+                executor.submit(() -> operatorB.insert(new RowB("external", "External", 99))).get(10, TimeUnit.SECONDS);
             } finally {
                 executor.shutdown();
             }
+            assertThat(manager.currentTransaction().hasStagedWrites(operatorB)).isFalse();
 
             manager.rollback();
 
-            // operatorA was touched on this thread -- restored to its pre-transaction state.
+            // operatorA's staged insert is discarded; its committed entry is untouched.
             assertThat(operatorA.getById("new-a")).isNull();
             assertThat(operatorA.getById("pre-a")).isNotNull();
 
-            // operatorB was never touched inside the transaction -- the concurrent external write
-            // survives the rollback untouched.
+            // The other thread's committed write survives the rollback.
             assertThat(operatorB.getById("external")).isNotNull();
         }
 
         @Test
-        @DisplayName("commit() discards captured snapshots")
-        void commitDiscardsSnapshots() {
+        @DisplayName("commit() applies the staged writes and ends the transaction")
+        void commitAppliesStagedWrites() {
             manager.begin();
-            operatorA.insert(new TestData("a", "A", 1));
+            operatorA.insert(new RowA("a", "A", 1));
+            operatorB.insert(new RowB("b", "B", 2));
             manager.commit();
 
             assertThat(operatorA.getById("a")).isNotNull();
+            assertThat(operatorB.getById("b")).isNotNull();
             assertThat(manager.hasActiveTransaction()).isFalse();
+            assertThat(manager.currentTransaction()).isNull();
         }
 
         @Test
@@ -625,13 +661,13 @@ class JsonTransactionTest {
 
         @Test
         @DisplayName("Depth 2: inner rollback() then outer commit() throws UnexpectedRollbackException "
-                + "and restores every captured snapshot")
+                + "and discards every staged write")
         void nestedRollbackThenOuterCommitThrows() {
-            operatorA.insert(new TestData("pre-a", "PreA", 1));
+            operatorA.insert(new RowA("pre-a", "PreA", 1));
 
             manager.begin(); // depth 1
             manager.begin(); // depth 2
-            operatorA.insert(new TestData("new-a", "NewA", 10));
+            operatorA.insert(new RowA("new-a", "NewA", 10));
             manager.rollback(); // marks rollback-only, depth -> 1
 
             assertThat(manager.hasActiveTransaction()).isTrue();
@@ -667,18 +703,45 @@ class JsonTransactionTest {
      * Unit-level tests against {@link JsonTransactionManager#suspend()}/{@link
      * JsonTransactionManager#resume(Object)} directly, mirroring
      * {@code DataSourceTransactionManagerTest.SuspendResumeTests} (D-09) one-for-one on the JSON
-     * side. No operator is needed here -- these four properties live entirely on {@code
-     * contextHolder}/{@code suspendedStack}.
+     * side, plus the staged writes a suspended context carries.
      */
     @Nested
     @DisplayName("suspend()/resume() -- the mechanism REQUIRES_NEW/NOT_SUPPORTED need (02-11, D-09)")
     class SuspendResumeTests {
 
         private JsonTransactionManager manager;
+        private SimpleJsonDataOperator<RowA> rows;
 
         @BeforeEach
-        void setUpManager() {
-            manager = new JsonTransactionManager("suspend-resume-unit-test");
+        void setUpManager() throws Exception {
+            PluginStore plugin = new PluginStore("suspend-resume");
+            manager = plugin.manager();
+            rows = plugin.operator(RowA.class);
+        }
+
+        @Test
+        @DisplayName("A suspended context carries its staged writes: hidden from the independent "
+                + "transaction, visible again after resume, applied by the resumed commit")
+        void suspendedContextCarriesItsStagedWrites() {
+            manager.begin();
+            rows.insert(new RowA("outer", "Outer", 1));
+
+            Object suspended = manager.suspend();
+            assertThat(rows.getById("outer")).as("outside the suspended transaction").isNull();
+
+            manager.begin(); // independent inner transaction
+            assertThat(rows.getById("outer")).as("inside the independent transaction").isNull();
+            rows.insert(new RowA("inner", "Inner", 2));
+            manager.commit();
+            assertThat(rows.getById("inner")).as("the inner commit applied its own write").isNotNull();
+            assertThat(rows.getById("outer")).as("the inner commit did not apply the outer write").isNull();
+
+            manager.resume(suspended);
+            assertThat(rows.getById("outer")).as("the resumed transaction sees its staged write").isNotNull();
+            manager.commit();
+
+            assertThat(rows.getById("outer")).isNotNull();
+            assertThat(rows.getById("inner")).isNotNull();
         }
 
         @Test
@@ -778,20 +841,15 @@ class JsonTransactionTest {
     @DisplayName("REQUIRES_NEW/NOT_SUPPORTED genuinely suspend on the JSON backend (02-11, D-09)")
     class RequiresNewAndNotSupportedIntegrationTests {
 
-        private SimpleJsonDataOperator<TestData> outerOperator;
-        private SimpleJsonDataOperator<TestData> innerOperator;
+        private SimpleJsonDataOperator<RowA> rows;
         private JsonTransactionManager propagationManager;
         private AopProxyResolver resolver;
 
         @BeforeEach
         void setUpPropagationFixture() throws Exception {
-            File outerDir = Files.createDirectory(tempDir.resolve("propagation-outer-" + System.nanoTime())).toFile();
-            File innerDir = Files.createDirectory(tempDir.resolve("propagation-inner-" + System.nanoTime())).toFile();
-            outerOperator = new SimpleJsonDataOperator<>(outerDir.getAbsolutePath(), TestData.class);
-            innerOperator = new SimpleJsonDataOperator<>(innerDir.getAbsolutePath(), TestData.class);
-            propagationManager = new JsonTransactionManager("propagation-integration-test");
-            outerOperator.bindTransactionManager(propagationManager);
-            innerOperator.bindTransactionManager(propagationManager);
+            PluginStore plugin = new PluginStore("propagation-" + System.nanoTime());
+            rows = plugin.operator(RowA.class);
+            propagationManager = plugin.manager();
 
             TransactionInterceptor interceptor = new TransactionInterceptor(propagationManager);
             resolver = new AopProxyResolver();
@@ -801,9 +859,8 @@ class JsonTransactionTest {
         private JsonPropagationBean newProxiedBean() throws ReflectiveOperationException {
             Class<?> proxyClass = resolver.resolve(JsonPropagationBean.class);
             return (JsonPropagationBean) proxyClass
-                    .getDeclaredConstructor(SimpleJsonDataOperator.class, SimpleJsonDataOperator.class,
-                            JsonTransactionManager.class)
-                    .newInstance(outerOperator, innerOperator, propagationManager);
+                    .getDeclaredConstructor(SimpleJsonDataOperator.class, JsonTransactionManager.class)
+                    .newInstance(rows, propagationManager);
         }
 
         @Test
@@ -815,8 +872,8 @@ class JsonTransactionTest {
             assertThatThrownBy(bean::outerRequiredThenSelfInvokesRequiresNewThenFails)
                     .isInstanceOf(RuntimeException.class);
 
-            assertThat(outerOperator.getById("outer")).isNull();
-            assertThat(innerOperator.getById("inner")).isNotNull();
+            assertThat(rows.getById("outer")).isNull();
+            assertThat(rows.getById("inner")).isNotNull();
             assertThat(propagationManager.hasActiveTransaction()).isFalse();
         }
 
@@ -827,7 +884,7 @@ class JsonTransactionTest {
             JsonPropagationBean bean = newProxiedBean();
 
             propagationManager.begin(); // simulates a transaction already active from an external caller
-            outerOperator.insert(new TestData("outer-ext", "OuterExt", 1));
+            rows.insert(new RowA("outer-ext", "OuterExt", 1));
 
             bean.requiresNewExternalSucceeds(); // external call: outside JsonPropagationBean entirely
 
@@ -836,8 +893,8 @@ class JsonTransactionTest {
 
             propagationManager.rollback();
 
-            assertThat(outerOperator.getById("outer-ext")).isNull();
-            assertThat(innerOperator.getById("external-inner")).isNotNull();
+            assertThat(rows.getById("outer-ext")).isNull();
+            assertThat(rows.getById("external-inner")).isNotNull();
         }
 
         @Test
@@ -851,8 +908,8 @@ class JsonTransactionTest {
 
             assertThat(bean.hasActiveTxInsideNotSupported).isFalse();
             assertThat(bean.depthAfterNotSupportedReturnsSelf).isEqualTo(1);
-            assertThat(innerOperator.getById("not-supported")).isNotNull();
-            assertThat(outerOperator.getById("outer-nsw")).isNull();
+            assertThat(rows.getById("not-supported")).isNotNull();
+            assertThat(rows.getById("outer-nsw")).isNull();
         }
 
         @Test
@@ -862,7 +919,7 @@ class JsonTransactionTest {
             JsonPropagationBean bean = newProxiedBean();
 
             propagationManager.begin(); // depth 1, simulates an external caller's active transaction
-            outerOperator.insert(new TestData("outer-ext-nsw", "OuterExtNsw", 1));
+            rows.insert(new RowA("outer-ext-nsw", "OuterExtNsw", 1));
 
             bean.notSupportedExternalWrite(); // external call: outside JsonPropagationBean entirely
 
@@ -872,8 +929,8 @@ class JsonTransactionTest {
 
             propagationManager.rollback();
 
-            assertThat(outerOperator.getById("outer-ext-nsw")).isNull();
-            assertThat(innerOperator.getById("external-not-supported")).isNotNull();
+            assertThat(rows.getById("outer-ext-nsw")).isNull();
+            assertThat(rows.getById("external-not-supported")).isNotNull();
         }
     }
 }

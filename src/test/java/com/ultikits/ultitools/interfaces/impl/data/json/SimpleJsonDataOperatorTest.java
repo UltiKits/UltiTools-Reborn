@@ -3,11 +3,7 @@ package com.ultikits.ultitools.interfaces.impl.data.json;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.spy;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
@@ -39,7 +35,6 @@ import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.DataOperator.LikeType;
-import com.ultikits.ultitools.manager.JsonTransactionManager;
 
 class SimpleJsonDataOperatorTest {
 
@@ -663,20 +658,22 @@ class SimpleJsonDataOperatorTest {
         }
 
         @Test
-        @DisplayName("a refused del() must not capture a transaction snapshot as a side effect (CR-02, 02-13)")
-        void testRefusedDelShouldNotCaptureTransactionSnapshot() {
-            // Data inserted BEFORE begin(), so a snapshot capture triggered by this transaction's
-            // own first write would be observable via captureIfAbsent(...) being invoked -- del()
-            // is the only operation performed inside the transaction below, so if the refusal
-            // fires before beforeMutate() runs, captureIfAbsent(...) is never called at all.
+        @DisplayName("a refused del() inside a transaction stages nothing and writes nothing (CR-02, 02-13)")
+        void refusedDelInsideATransactionStagesAndWritesNothing() throws Exception {
+            // Data inserted before the transaction; del() with no condition is the only write
+            // attempted inside it, so any staged write or committed change would come from it.
             operator.insert(new TestData("1", "test", 10));
-            JsonTransactionManager manager = spy(new JsonTransactionManager("del-guard-test"));
-            operator.bindTransactionManager(manager);
-            manager.begin();
 
-            assertThatThrownBy(() -> operator.del()).isInstanceOf(DataAccessException.class);
+            operator.transaction(() -> {
+                assertThatThrownBy(() -> operator.del()).isInstanceOf(DataAccessException.class);
+                assertThat(operator.transactionManager().currentTransaction().hasStagedWrites(operator))
+                        .as("nothing staged by the refused delete").isFalse();
+                assertThat(operator.getById("1")).as("the entry, seen inside the transaction").isNotNull();
+                return null;
+            });
 
-            verify(manager, never()).captureIfAbsent(any(), any(), any());
+            assertThat(operator.getAll()).as("nothing written by the refused delete").hasSize(1);
+            assertThat(operator.getById("1")).isNotNull();
         }
     }
 
@@ -1035,9 +1032,9 @@ class SimpleJsonDataOperatorTest {
         }
 
         @Test
-        @DisplayName("a snapshot restore (rolled-back transaction) does not re-fire onLoad for restored entries")
+        @DisplayName("a rollback discards a staged insert without firing onLoad")
         @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
-        void snapshotRestoreDoesNotRefireOnLoad() {
+        void rollbackDiscardsStagedInsertWithoutOnLoad() {
             hookOperator.insert(newEntity("txn-1"));
             DataEntityTest.CountingAuditableEntity.resetCounters();
 
@@ -1046,10 +1043,10 @@ class SimpleJsonDataOperatorTest {
                 throw new RuntimeException("force rollback");
             })).isInstanceOf(RuntimeException.class);
 
-            // The snapshot restore itself (not the getAll() check below, which fires its own
-            // onLoad on the surviving entity) must not count as a load.
+            // Discarding the staged insert reads nothing back, so it is not a load; the getAll()
+            // check below fires its own onLoad on the surviving entity.
             assertThat(DataEntityTest.CountingAuditableEntity.onLoadCount())
-                    .as("restoreCache() repopulates the cache from a snapshot; that is not a load")
+                    .as("a rollback only discards staged writes; that is not a load")
                     .isEqualTo(0);
             assertThat(hookOperator.getAll()).hasSize(1);
         }

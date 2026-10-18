@@ -22,6 +22,7 @@ import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Server;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -104,6 +105,11 @@ class JsonTransactionEngineTest {
         context.refresh();
         bean = context.getBean(EngineBean.class);
         bean.rows = rows;
+    }
+
+    @AfterEach
+    void resetStepHook() {
+        JsonTransaction.resetStepHook();
     }
 
     // ===== C12 =====
@@ -282,6 +288,90 @@ class JsonTransactionEngineTest {
         assertThat(others.getById("other-new")).as("second table's insert after commit").isNotNull();
         assertThat(ids(rows.query().where("name").eq("fresh").list())).as("query().list() after commit")
                 .containsExactly("new");
+    }
+
+    // ===== Commit visible at one instant =====
+
+    @Test
+    @DisplayName("A two-table commit becomes visible at one instant: a reader of the first table, then the second, waits for the whole apply")
+    void commitBecomesVisibleAtOneInstant() throws Exception {
+        assertCommitVisibleAtOneInstant(false);
+    }
+
+    @Test
+    @DisplayName("A two-table commit becomes visible at one instant: a reader of the second table, then the first, waits for the whole apply")
+    void commitBecomesVisibleAtOneInstantReadingSecondTableFirst() throws Exception {
+        assertCommitVisibleAtOneInstant(true);
+    }
+
+    /**
+     * A transaction on thread T writes both tables; the step hook parks T inside its commit after
+     * the first table's part is applied. Reader R, started during the pause, must not return
+     * before T is released, and then sees both tables' changes in every read.
+     */
+    private void assertCommitVisibleAtOneInstant(boolean secondTableFirst) throws Exception {
+        CountDownLatch parked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        JsonTransaction.installStepHook(step -> {
+            if (JsonTransaction.STEP_APPLY_BETWEEN_OPERATORS.equals(step)) {
+                parked.countDown();
+                awaitQuietly(release);
+            }
+        });
+        AtomicReference<Throwable> writerFailure = new AtomicReference<>();
+        Thread writer = new Thread(() -> {
+            try {
+                bean.runInTransaction(() -> {
+                    rows.insert(new EngineRow("visible-row", "committed"));
+                    others.insert(new EngineOther("visible-other", "committed"));
+                });
+            } catch (Throwable t) {
+                writerFailure.set(t);
+            }
+        }, "visibility-writer");
+
+        CountDownLatch readerDone = new CountDownLatch(1);
+        AtomicReference<Throwable> readerFailure = new AtomicReference<>();
+        boolean[] seen = new boolean[4];
+        Thread reader = new Thread(() -> {
+            try {
+                if (secondTableFirst) {
+                    seen[1] = others.getById("visible-other") != null;
+                    seen[0] = rows.getById("visible-row") != null;
+                    seen[3] = !others.getAll(WhereCondition.empty()).isEmpty();
+                    seen[2] = !rows.getAll(WhereCondition.empty()).isEmpty();
+                } else {
+                    seen[0] = rows.getById("visible-row") != null;
+                    seen[1] = others.getById("visible-other") != null;
+                    seen[2] = !rows.getAll(WhereCondition.empty()).isEmpty();
+                    seen[3] = !others.getAll(WhereCondition.empty()).isEmpty();
+                }
+            } catch (Throwable t) {
+                readerFailure.set(t);
+            } finally {
+                readerDone.countDown();
+            }
+        }, "visibility-reader");
+
+        writer.start();
+        try {
+            assertThat(parked.await(HANDSHAKE_SECONDS, TimeUnit.SECONDS))
+                    .as("the commit paused after the first table's part").isTrue();
+            reader.start();
+            assertThat(readerDone.await(300, TimeUnit.MILLISECONDS))
+                    .as("a read must not return while only part of the commit is applied").isFalse();
+        } finally {
+            release.countDown();
+        }
+        assertThat(readerDone.await(HANDSHAKE_SECONDS, TimeUnit.SECONDS)).as("the reader finished").isTrue();
+        writer.join(TimeUnit.SECONDS.toMillis(HANDSHAKE_SECONDS));
+        reader.join(TimeUnit.SECONDS.toMillis(HANDSHAKE_SECONDS));
+
+        assertThat(writer.isAlive()).isFalse();
+        assertThat(writerFailure.get()).as("the transaction committed").isNull();
+        assertThat(readerFailure.get()).as("the reads raised nothing").isNull();
+        assertThat(seen).as("first table getById, second table getById, first table getAll, second table getAll")
+                .containsExactly(true, true, true, true);
     }
 
     // ===== Helpers =====

@@ -10,19 +10,19 @@ import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.time.LocalDateTime;
+import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -98,17 +98,14 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
     private final Map<String, String> columnToFieldName;
 
     /**
-     * The per-plugin {@link JsonTransactionManager} governing this operator, or {@code null} if
-     * this operator was never bound to one (e.g. constructed directly, as every pre-existing
-     * caller of the two-arg constructor still does -- see {@link #transaction(Callable)}, which
-     * is a separate, independent snapshot mechanism this field does not affect).
-     * <p>
-     * Set via {@link #bindTransactionManager(JsonTransactionManager)} by {@code JsonStore} (same
-     * package) right after this operator is constructed or retrieved from its cache (02-05, D-03).
-     * {@code volatile} because a write can happen on a different Bukkit worker thread than the one
-     * that bound the manager.
+     * The {@link JsonTransactionManager} every read and write of this operator goes through: the
+     * identity's manager, which {@code JsonStore} binds before any caller receives this operator,
+     * or, for an operator constructed directly, a standalone manager this operator creates on
+     * first use (see {@link #transactionManager()}). One atomic reference, so this operator's
+     * readers and committers always use the same manager, and therefore the same transaction
+     * contexts and the same visibility lock.
      */
-    private volatile JsonTransactionManager transactionManager;
+    private final AtomicReference<JsonTransactionManager> transactionManager = new AtomicReference<>();
 
     public SimpleJsonDataOperator(String storeLocation, Class<T> type) {
         this.storeLocation = storeLocation;
@@ -132,64 +129,132 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
      * Binds the {@link JsonTransactionManager} this operator participates in (02-05, D-03).
      * <p>
      * Package-private: called only by {@code JsonStore}, right after it constructs or retrieves
-     * this operator from its cache, with the manager it resolves for the same identity. Not part
-     * of this class's public API.
+     * this operator from its cache and before it hands the operator to any caller, with the
+     * manager it resolves for the same identity. Every operator of that identity then stages into
+     * the same transaction and publishes under the same visibility lock. Not part of this class's
+     * public API.
      *
      * @param transactionManager the manager governing the plugin (or external caller) this
      *                           operator belongs to
      */
     void bindTransactionManager(JsonTransactionManager transactionManager) {
-        this.transactionManager = transactionManager;
+        this.transactionManager.set(transactionManager);
     }
 
     /**
-     * Called as the first statement of every cache-mutating method ({@link #insert}, {@link #del},
-     * {@link #delById}, the two {@code update} overloads). A no-op unless a {@link
-     * #bindTransactionManager bound} {@link JsonTransactionManager} has an active transaction on
-     * this thread and has not already captured this operator this transaction (D-03: lazy
-     * snapshot on first touch, so an operator never written to during the transaction is neither
-     * snapshotted nor restored).
-     * <p>
-     * The actual deep-copy capture ({@link #snapshotCache()}) and restore ({@link
-     * #restoreCache(Map)}) stay entirely inside this class; {@link JsonTransactionManager} only
-     * ever holds the {@code Supplier}/{@code Consumer} lambdas below, never this operator's cache
-     * directly.
+     * The manager this operator uses: the bound one, or, for an operator constructed directly, a
+     * standalone manager created on first use (its diagnostic identity is the table directory).
+     * Both a reader and a committer reach it through the same atomic reference.
+     *
+     * @return this operator's transaction manager, never {@code null}
      */
-    private void beforeMutate() {
-        JsonTransactionManager manager = this.transactionManager;
-        if (manager != null) {
-            manager.captureIfAbsent(this, this::snapshotCache, snapshot -> restoreCache(uncheckedCast(snapshot)));
+    JsonTransactionManager transactionManager() {
+        JsonTransactionManager manager = transactionManager.get();
+        if (manager == null) {
+            transactionManager.compareAndSet(null, new JsonTransactionManager(storeLocation));
+            manager = transactionManager.get();
         }
-    }
-
-    @SuppressWarnings("unchecked")
-    private Map<Object, T> uncheckedCast(Object snapshot) {
-        return (Map<Object, T>) snapshot;
+        return manager;
     }
 
     /**
-     * Deep-copies this operator's current cache: serialize/deserialize to break references, so a
-     * rollback restores the values as they were even if a cached instance is replaced or changed
-     * later. Package-private hook shared by {@link #transaction(Callable)}
-     * (the pre-existing per-operator mechanism, unchanged) and {@link #beforeMutate()} (the new
-     * per-plugin {@link JsonTransactionManager} hook, 02-05) -- one copy of the deep-copy logic,
-     * two callers.
+     * Runs {@code read} with the calling thread's transaction (or {@code null} outside one) under
+     * the visibility read side. {@code read} only collects references; conditions, detaching and
+     * hooks run after this returns.
      */
-    synchronized Map<Object, T> snapshotCache() {
-        Map<Object, T> snapshot = new HashMap<>();
+    private <R> R readVisible(Function<JsonTransaction, R> read) {
+        JsonTransactionManager manager = transactionManager();
+        JsonTransaction transaction = manager.currentTransaction();
+        return manager.readUnderVisibilityLock(() -> read.apply(transaction));
+    }
+
+    /**
+     * The entry for {@code key} as {@code transaction} sees it: its staged write when it has one
+     * ({@code null} for a staged delete), otherwise the committed entry. Outside a transaction,
+     * the committed entry. Called under the visibility read side.
+     */
+    private T mergedGet(JsonTransaction transaction, Object key) {
+        JsonTransaction.Overlay<T> overlay = transaction == null ? null : transaction.overlay(this);
+        if (overlay != null) {
+            JsonTransaction.Staged<T> staged = overlay.get(key);
+            if (staged != null) {
+                return staged.value;
+            }
+        }
+        return cache.get(key);
+    }
+
+    /** {@link #mergedGet} by an entity id, trying its string form when the key type differs. */
+    private T mergedFind(JsonTransaction transaction, Object id) {
+        T stored = mergedGet(transaction, id);
+        return stored != null ? stored : mergedGet(transaction, id.toString());
+    }
+
+    /**
+     * Every entry {@code transaction} sees (every committed entry when it is {@code null}): the
+     * committed entries whose key has no staged write, then the staged puts. Called under the
+     * visibility read side; collects references only. Committed values are never changed in
+     * place, so the references stay valid after the lock is released.
+     */
+    private List<Map.Entry<Object, T>> mergedEntries(JsonTransaction transaction) {
+        JsonTransaction.Overlay<T> overlay = transaction == null ? null : transaction.overlay(this);
+        List<Map.Entry<Object, T>> entries = new ArrayList<>(cache.size());
         for (Map.Entry<Object, T> entry : cache.entrySet()) {
-            snapshot.put(entry.getKey(), detach(entry.getValue()));
+            if (overlay == null || !overlay.contains(entry.getKey())) {
+                entries.add(new AbstractMap.SimpleImmutableEntry<>(entry.getKey(), entry.getValue()));
+            }
         }
-        return snapshot;
+        if (overlay != null) {
+            overlay.forEach((key, value) -> {
+                if (value != null) {
+                    entries.add(new AbstractMap.SimpleImmutableEntry<>(key, value));
+                }
+            });
+        }
+        return entries;
+    }
+
+    /** The values the calling thread sees, collected under the visibility read side. */
+    private List<T> visibleValues() {
+        List<Map.Entry<Object, T>> entries = readVisible(this::mergedEntries);
+        List<T> values = new ArrayList<>(entries.size());
+        for (Map.Entry<Object, T> entry : entries) {
+            values.add(entry.getValue());
+        }
+        return values;
     }
 
     /**
-     * Restores this operator's cache from a snapshot previously captured by {@link
-     * #snapshotCache()}.
+     * Stores {@code detachedValue} under {@code key}: staged in the calling thread's transaction,
+     * or, outside one, put into the committed entries in one step under the visibility write
+     * side.
      */
-    synchronized void restoreCache(Map<Object, T> snapshot) {
-        cache.clear();
-        cache.putAll(snapshot);
+    private void store(Object key, T detachedValue) {
+        JsonTransactionManager manager = transactionManager();
+        JsonTransaction transaction = manager.currentTransaction();
+        if (transaction != null) {
+            transaction.overlayForWrite(this).put(key, detachedValue);
+            return;
+        }
+        manager.publishUnderVisibilityLock(() -> cache.put(key, detachedValue));
+    }
+
+    /**
+     * Applies one transaction's staged writes for this operator to the committed entries. Called
+     * only by {@link JsonTransaction#commit()}, which holds the visibility write side. Takes no
+     * operator monitor, so a commit holding the write side never waits for another call's
+     * monitor.
+     *
+     * @param overlay the staged writes; a {@code null} value is a staged delete
+     */
+    void applyStaged(JsonTransaction.Overlay<T> overlay) {
+        overlay.forEach((key, value) -> {
+            if (value == null) {
+                cache.remove(key);
+            } else {
+                cache.put(key, value);
+            }
+        });
     }
 
     /**
@@ -279,7 +344,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
     @Override
     public boolean exist(T object) {
         Object id = object == null ? null : object.getId();
-        return id != null && findStored(id) != null;
+        return id != null && readVisible(transaction -> mergedFind(transaction, id)) != null;
     }
 
     @Override
@@ -291,11 +356,11 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
 
     @Override
     public T getById(Object id) {
-        T cached = cache.get(id);
-        if (cached == null) {
+        T visible = readVisible(transaction -> mergedGet(transaction, id));
+        if (visible == null) {
             return null;
         }
-        T entity = detach(cached);
+        T entity = detach(visible);
         entity.onLoad();
         return entity;
     }
@@ -334,8 +399,9 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
             // Conditions were passed but all are empty (including the single empty condition
             // getAll() itself passes): return the full set. Nothing passed at all: keep the
             // historical behavior of returning an empty set -- page() and exist() both rely on it.
-            return whereConditions.length > 0 ? new ArrayList<>(cache.values()) : new ArrayList<>();
+            return whereConditions.length > 0 ? visibleValues() : new ArrayList<>();
         }
+        List<T> candidates = visibleValues();
         List<T> results = new ArrayList<>();
         Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
         boolean firstCondition = true;
@@ -347,7 +413,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
             }
             List<T> collection = new ArrayList<>();
             String valueJson = GSON.toJson(condition.getValue());
-            for (T each : cache.values()) {
+            for (T each : candidates) {
                 Map<String, Object> map = GSON.fromJson(GSON.toJson(each), mapType);
                 if (matches(map, condition, valueJson)) collection.add(each);
             }
@@ -370,7 +436,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
     public List<T> getLike(String column, String value, LikeType likeType) {
         List<T> res = new ArrayList<>();
         Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
-        for (T each : cache.values()) {
+        for (T each : visibleValues()) {
             Map<String, Object> map = GSON.fromJson(GSON.toJson(each), mapType);
             String byPath = JsonPathUtil.getStr(map, resolveColumn(column));
             if (byPath == null) {
@@ -427,7 +493,6 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
 
     @Override
     public synchronized void insert(T obj) {
-        beforeMutate();
         // The relational backend auto-fills a UUID when id is empty
         // (AbstractRelationalDataOperator.insert), so modules never set the id themselves --
         // across every Module combined, setId is called 0 times. The JSON side used to skip
@@ -444,7 +509,19 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         // itself, so a later change to obj does not reach the store without update() -- the
         // same as on the relational backends (#522).
         obj.onCreate();
-        cache.putIfAbsent(obj.getId(), detach(obj));
+        T stored = detach(obj);
+        Object key = obj.getId();
+        JsonTransactionManager manager = transactionManager();
+        JsonTransaction transaction = manager.currentTransaction();
+        if (transaction == null) {
+            manager.publishUnderVisibilityLock(() -> cache.putIfAbsent(key, stored));
+            return;
+        }
+        // Put-if-absent against what this transaction sees: a key it has staged a delete for is
+        // free again, so a delete followed by an insert of the same id stages the new entry.
+        if (readVisible(current -> mergedGet(current, key)) == null) {
+            transaction.overlayForWrite(this).put(key, stored);
+        }
     }
 
     /**
@@ -458,8 +535,11 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
      * A {@code null} or zero-length {@code whereConditions} is refused with a {@link
      * DataAccessException}, matching {@code AbstractRelationalDataOperator.del()}'s guard and the
      * contract {@link com.ultikits.ultitools.interfaces.DataOperator#del}'s interface javadoc
-     * promises (CR-02, 02-13). The refusal runs before {@link #beforeMutate()}, so a refused call
-     * does not capture a transaction snapshot as a side effect.
+     * promises (CR-02, 02-13). The refusal runs before anything is read or staged, so a refused
+     * call inside a transaction stages nothing.
+     * <p>
+     * Inside a transaction, every entry the transaction sees that matches is staged as a delete;
+     * outside one, the matches are removed in one step under the visibility write side.
      */
     @Override
     public synchronized void del(WhereCondition... whereConditions) {
@@ -467,7 +547,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         // "empty conditions = no filter = return everything" is a reasonable convention; carried
         // over to the delete side it becomes "delete the entire table", which is precisely the
         // silent-full-wipe defect class this milestone exists to remove -- refuse both shapes
-        // before beforeMutate() runs (a zero-length array previously made the loop body below
+        // before anything is read or staged (a zero-length array previously made the loop body below
         // never run, so the call returned normally having deleted nothing; a null array threw a
         // raw NullPointerException from the enhanced-for loop, not the DataAccessException the
         // interface promises).
@@ -477,8 +557,10 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
                             + "WhereCondition. Pass an explicit condition, or use a dedicated full-table "
                             + "operation if one genuinely exists.");
         }
-        beforeMutate();
-        Collection<Map.Entry<Object, T>> results = new ArrayList<>();
+        JsonTransactionManager manager = transactionManager();
+        JsonTransaction transaction = manager.currentTransaction();
+        List<Map.Entry<Object, T>> visible = readVisible(this::mergedEntries);
+        List<Map.Entry<Object, T>> results = new ArrayList<>();
         Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
         boolean firstCondition = true;
         for (WhereCondition condition : whereConditions) {
@@ -487,10 +569,9 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
                 // is a query-condition validation failure, same as getAll's identical check.
                 throw new DataAccessException(ErrorCode.DATA_QUERY_FAILED, "Query value is not serializable");
             }
-            Collection<Map.Entry<Object, T>> collection = new ArrayList<>();
-            Set<Map.Entry<Object, T>> values = cache.entrySet();
+            List<Map.Entry<Object, T>> collection = new ArrayList<>();
             String valueJson = GSON.toJson(condition.getValue());
-            for (Map.Entry<Object, T> next : values) {
+            for (Map.Entry<Object, T> next : visible) {
                 Map<String, Object> map = GSON.fromJson(GSON.toJson(next.getValue()), mapType);
                 if (matches(map, condition, valueJson)) collection.add(next);
             }
@@ -504,9 +585,22 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
                 results.removeIf(a -> !collection.contains(a));
             }
         }
-        for (Map.Entry<Object, T> each : results) {
-            cache.remove(each.getKey(), each.getValue());
+        if (results.isEmpty()) {
+            return;
         }
+        if (transaction != null) {
+            JsonTransaction.Overlay<T> overlay = transaction.overlayForWrite(this);
+            for (Map.Entry<Object, T> each : results) {
+                overlay.delete(each.getKey());
+            }
+            return;
+        }
+        manager.publishUnderVisibilityLock(() -> {
+            for (Map.Entry<Object, T> each : results) {
+                cache.remove(each.getKey(), each.getValue());
+            }
+            return null;
+        });
     }
 
     /**
@@ -531,25 +625,32 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
     @Override
     public synchronized int deleteByIdCounted(Object id) {
         requireId(id, "delete");
-        beforeMutate();
-        T entity = cache.get(id);
+        JsonTransactionManager manager = transactionManager();
+        JsonTransaction transaction = manager.currentTransaction();
+        T entity = readVisible(current -> mergedGet(current, id));
         if (entity != null) {
             entity.onDelete();
         }
-        return cache.remove(id) != null ? 1 : 0;
+        if (transaction == null) {
+            return manager.publishUnderVisibilityLock(() -> cache.remove(id) != null ? 1 : 0);
+        }
+        if (entity == null) {
+            return 0;
+        }
+        transaction.overlayForWrite(this).delete(id);
+        return 1;
     }
 
     @Override
     public synchronized void update(String column, Object value, Object id) {
         requireId(id, "update");
-        beforeMutate();
         if (!Serializable.class.isAssignableFrom(value.getClass())) {
             // GATE-05 group two (08-21): routed to the typed data-access hierarchy. Unlike the
             // two WhereCondition checks above, this validates the value being written by
             // update(column, value, id) -- a persistence failure, not a query-condition one.
             throw new DataAccessException(ErrorCode.DATA_PERSISTENCE_FAILED, "Query value is not serializable");
         }
-        T obj = cache.get(id);
+        T obj = readVisible(transaction -> mergedGet(transaction, id));
         if (obj == null) {
             warnNoEntry(id);
             return;
@@ -560,7 +661,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         // that Gson deserialization silently discards -- a silent lost write.
         JsonPathUtil.putByPath(map, resolveColumn(column), value);
         T newObj = GSON.fromJson(GSON.toJson(map), type);
-        cache.put(id, newObj);
+        store(id, newObj);
     }
 
     @Override
@@ -586,12 +687,12 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
     private int updateEntry(T obj) {
         Object id = obj.getId();
         requireId(id, "update");
-        T old = findStored(id);
-        // Copied onto a detached copy of the cached entry, which then replaces it in one put:
-        // reads run without this lock, so mutating the cached instance field by field could let
-        // a concurrent read serialise a half-updated entity. Callers always pass a detached
-        // instance since #522 (no read hands out the cached one), and BeanCopyUtil copies every
-        // primitive field since #520.
+        T old = readVisible(transaction -> mergedFind(transaction, id));
+        // Copied onto a detached copy of the visible entry, which then replaces it in one step:
+        // committed values are never changed in place, because readers collect references under
+        // the visibility read side and detach them after releasing it. Callers always pass a
+        // detached instance since #522 (no read hands out the stored one), and BeanCopyUtil copies
+        // every primitive field since #520.
         //
         // onUpdate() fires on the caller's obj before its fields are copied, exactly as
         // AbstractRelationalDataOperator.update(T) fires it before reading the fields it writes:
@@ -602,7 +703,6 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
             warnNoEntry(id);
             return 0;
         }
-        beforeMutate();
         replaceEntry(old, obj);
         return 1;
     }
@@ -619,30 +719,26 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
                 + "'; nothing was written.");
     }
 
-    /** The cached entry for {@code id}, trying its string form when the key type differs. */
-    private T findStored(Object id) {
-        T stored = cache.get(id);
-        return stored != null ? stored : cache.get(id.toString());
-    }
-
     /**
-     * Replaces {@code stored} in the cache with a copy carrying every field of {@code source}
-     * except {@code id}, in one {@code put}, so a concurrent read never sees a half-copied entry.
-     * Shared by {@link #update(BaseDataEntity)} and {@link #updateIf}.
+     * Replaces {@code stored} with a copy carrying every field of {@code source} except
+     * {@code id}, in one step -- staged in the calling thread's transaction, or put into the
+     * committed entries under the visibility write side -- so a concurrent read never sees a
+     * half-copied entry. Shared by {@link #update(BaseDataEntity)} and {@link #updateIf}.
      */
     private void replaceEntry(T stored, T source) {
         T updated = detach(stored);
         BeanCopyUtil.copyProperties(source, updated, "id");
-        cache.put(updated.getId(), updated);
+        store(updated.getId(), updated);
     }
 
     /**
      * {@inheritDoc}
      * <p>
-     * The stored entry is checked against {@code expected} with the same matching
-     * {@link #getAll(WhereCondition...)} uses, and replaced, while this operator's lock is held,
-     * so no other write through this operator can come between the check and the write. A JSON
-     * store belongs to one server; nothing here coordinates two servers.
+     * The entry the caller sees -- inside a transaction, the transaction's staged version of it --
+     * is checked against {@code expected} with the same matching {@link #getAll(WhereCondition...)}
+     * uses, and replaced, while this operator's lock is held, so no other plain write through this
+     * operator can come between the check and the write. A JSON store belongs to one server;
+     * nothing here coordinates two servers.
      * <p>
      * A {@code null} expected value under the default {@link Comparison#EQUAL} is satisfied by an
      * entry whose field is absent or JSON null, and by no present value (#640). This meaning belongs
@@ -654,7 +750,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         Object id = entity.getId();
         requireId(id, "update");
         List<WhereCondition> conditions = evaluableConditions(expected);
-        T stored = findStored(id);
+        T stored = readVisible(transaction -> mergedFind(transaction, id));
         entity.onUpdate();
         if (stored == null) {
             return false;
@@ -672,7 +768,6 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
                 return false;
             }
         }
-        beforeMutate();
         replaceEntry(stored, entity);
         return true;
     }
@@ -781,26 +876,38 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         }
     }
 
-    // ===== Transaction support (snapshot-based) =====
+    // ===== Transaction support (staged writes) =====
 
     /**
      * {@inheritDoc}
      * <p>
-     * Any {@link Throwable} the action throws -- an {@link Error} included (#634) -- restores the
-     * snapshot taken before the action and is rethrown as the same instance.
+     * Runs {@code action} in a transaction of this operator's {@link JsonTransactionManager}:
+     * begins one, or joins the one already active on this thread, runs the action, and commits.
+     * Writes the action makes through any operator of the same plugin are staged until the
+     * outermost commit, invisible to other threads until then, and applied together at that
+     * commit, so other threads see all of them at once. Any {@link Throwable} the action throws --
+     * an {@link Error} included (#634) -- rolls the transaction back, which discards the staged
+     * writes and never touches committed data, and is rethrown as the same instance; a rollback
+     * failure is attached to it as suppressed. Mirrors
+     * {@code AbstractRelationalDataOperator#transaction(Callable)}.
      */
-    // PMD.AvoidCatchingThrowable: an Error must restore the snapshot too (#634); it is rethrown
-    // unchanged, never swallowed.
+    // PMD.AvoidCatchingThrowable: an Error must roll the transaction back too (#634); it is
+    // rethrown unchanged, never swallowed.
     @SuppressWarnings("PMD.AvoidCatchingThrowable")
     @Override
     public synchronized <R> R transaction(Callable<R> action) throws Exception {
-        // Deep copy: serialize/deserialize to break references
-        Map<Object, T> snapshot = snapshotCache();
+        JsonTransactionManager manager = transactionManager();
+        manager.begin();
         try {
-            return action.call();
+            R result = action.call();
+            manager.commit();
+            return result;
         } catch (Throwable failure) {
-            // Rollback: restore cache from deep copy
-            restoreCache(snapshot);
+            try {
+                manager.rollback();
+            } catch (Throwable rollbackFailure) {
+                failure.addSuppressed(rollbackFailure);
+            }
             throw failure;
         }
     }
@@ -826,6 +933,12 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         }
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Atomic: runs as one transaction (joining the one active on this thread, if any), so a
+     * failure part-way stores none of the entities.
+     */
     @Override
     public synchronized void insertAll(List<T> entities) {
         transaction(() -> {
@@ -835,6 +948,12 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         });
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Atomic: runs as one transaction (joining the one active on this thread, if any), so a
+     * failure part-way changes none of the entries.
+     */
     @Override
     public synchronized void updateAll(List<T> entities) throws IllegalAccessException {
         // Checked before the batch starts, so a refused batch changes nothing.

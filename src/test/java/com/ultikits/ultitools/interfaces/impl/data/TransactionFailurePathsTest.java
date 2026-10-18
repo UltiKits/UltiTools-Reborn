@@ -22,6 +22,9 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.logging.Logger;
@@ -612,8 +615,8 @@ class TransactionFailurePathsTest {
     class ErrorOnJson {
 
         @Test
-        @DisplayName("restores the snapshot and rethrows the same Error, on both overloads")
-        void jsonRestoresTheSnapshot() {
+        @DisplayName("discards the staged writes, rethrows the same Error and leaves no transaction on the thread, on both overloads")
+        void jsonDiscardsTheStagedWrites() throws Exception {
             SimpleJsonDataOperator<Row> operator = new SimpleJsonDataOperator<>(
                     tempDir.resolve("json").toString(), Row.class);
             operator.insert(new Row("kept", "kept"));
@@ -633,6 +636,17 @@ class TransactionFailurePathsTest {
             assertThat(fromRunnable).isSameAs(error);
             assertThat(operator.getById("written")).as("entry written before the Error (Runnable)").isNull();
             assertThat(operator.getById("kept")).isNotNull();
+
+            // No transaction is left on this thread: a plain insert now is applied at once, so
+            // another thread reads it (a write inside a leftover transaction would stay staged).
+            operator.insert(new Row("after", "after"));
+            ExecutorService reader = Executors.newSingleThreadExecutor();
+            try {
+                assertThat(reader.submit(() -> operator.getById("after")).get(10, TimeUnit.SECONDS))
+                        .as("a plain insert after the Error is committed").isNotNull();
+            } finally {
+                reader.shutdown();
+            }
         }
     }
 
