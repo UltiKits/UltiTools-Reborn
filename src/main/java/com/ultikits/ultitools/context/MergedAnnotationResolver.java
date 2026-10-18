@@ -9,7 +9,9 @@ import java.lang.annotation.Annotation;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -18,8 +20,19 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * General merged-annotation resolution: a recursive walk of the whole annotation tree, with
- * explicit meta-annotation attribute override via {@link AliasFor}.
+ * General merged-annotation resolution: a search of the whole annotation tree, with explicit
+ * meta-annotation attribute override via {@link AliasFor}.
+ * <p>
+ * <b>Nearest selection (decision P-10).</b> The occurrence of the requested annotation nearest
+ * the class is the one resolved: a directly declared annotation (distance 0) wins over any
+ * meta-present one, then meta-annotations are searched breadth-first by distance with declaration
+ * order breaking ties, and a superclass is consulted only when the class's own annotation trees
+ * hold no occurrence. This follows Spring's {@code @ComponentScan} javadoc: "Locally declared
+ * {@code @ComponentScan} annotations always take precedence over and effectively hide
+ * {@code @ComponentScan} meta-annotations, which allows explicit local configuration to override
+ * configuration that is meta-present." A module that declares both {@code @UltiToolsModule} and a
+ * direct {@code @ComponentScan} (or {@code @EnableAutoRegister}) therefore gets the direct one,
+ * whatever order the two are written in (C45).
  * <p>
  * {@link com.ultikits.ultitools.utils.AnnotationUtils#findAnnotation} only walks one
  * meta-annotation level and never inspects {@link AliasFor} at all, which is why
@@ -56,7 +69,11 @@ public final class MergedAnnotationResolver {
      * Find an annotation on a class, or on any of its (meta-)annotations, or on its superclass
      * hierarchy -- generalizing {@code AnnotationUtils.findAnnotation} from one meta-annotation
      * level to the whole annotation tree, and merging in any {@code @AliasFor} override found
-     * along the way.
+     * along the path to the selected occurrence.
+     * <p>
+     * The occurrence nearest the class is selected (see the class javadoc): a directly declared
+     * {@code annotationType} hides every meta-present one, and the class's own annotations are
+     * exhausted before its superclass is searched.
      *
      * @param clazz          the class to search
      * @param annotationType the annotation type to find
@@ -164,7 +181,7 @@ public final class MergedAnnotationResolver {
     /**
      * Whether {@code target} is present, directly or transitively, on {@code declaring}'s own
      * meta-annotation graph -- Spring's "meta-present" requirement for an explicit
-     * {@code @AliasFor(annotation = ...)}. Cycle-guarded the same way {@link #search} is.
+     * {@code @AliasFor(annotation = ...)}. Cycle-guarded the same way {@link #findNearest} is.
      */
     private static boolean isMetaPresent(Class<? extends Annotation> declaring, Class<? extends Annotation> target) {
         return isMetaPresent(declaring, target, new HashSet<>());
@@ -187,47 +204,90 @@ public final class MergedAnnotationResolver {
         return false;
     }
 
+    /**
+     * Nearest selection over the class hierarchy (decision P-10): the class's own annotation
+     * trees are searched completely before its superclass is consulted. {@code visited} is shared
+     * across the whole {@link #find} call so each annotation type is entered at most once; a type
+     * already entered on a subclass cannot lead to the target on the superclass either, because
+     * its whole subtree was already searched.
+     */
     private static <A extends Annotation> A findOnClassHierarchy(Class<?> clazz, Class<A> annotationType,
             Set<Class<? extends Annotation>> visited) {
-        if (clazz == null) {
-            return null;
-        }
-        for (Annotation direct : clazz.getAnnotations()) {
-            A found = search(direct, annotationType, visited, new ArrayList<>());
-            if (found != null) {
-                return found;
+        for (Class<?> current = clazz; current != null; current = current.getSuperclass()) {
+            Occurrence occurrence = findNearest(current, annotationType, visited);
+            if (occurrence != null) {
+                return merge(occurrence.annotation, annotationType, occurrence.ancestors());
             }
         }
-        return findOnClassHierarchy(clazz.getSuperclass(), annotationType, visited);
+        return null;
     }
 
     /**
-     * Depth-first walk of one annotation's own meta-annotation tree. {@code visited} is shared
-     * across the whole {@link #find} call (not reset per branch) so a cyclic meta-annotation
-     * graph terminates instead of overflowing the stack (T-03-03) -- once an annotation type has
-     * been visited anywhere in this call, it is never walked into again.
+     * Breadth-first search of one class's annotation graph for the occurrence of
+     * {@code annotationType} nearest the class: its directly declared annotations are distance 0,
+     * their meta-annotations distance 1, and so on; at equal distance, declaration order breaks
+     * the tie. A directly declared target therefore always wins over a meta-present one, whatever
+     * order the annotations are written in -- Spring's rule that a locally declared annotation
+     * "always take[s] precedence over and effectively hide[s]" a meta-present one
+     * ({@code @ComponentScan} javadoc).
+     * <p>
+     * {@code visited} is shared across the whole {@link #find} call (not reset per branch) so a
+     * cyclic meta-annotation graph terminates (T-03-03): once an annotation type has been
+     * enqueued anywhere in this call, it is never enqueued again. Every annotation type the
+     * search enters is passed to {@link #validateAliases}, as the depth-first walk did.
+     *
+     * @return the nearest occurrence with its parent chain, or {@code null} if this class's own
+     *         annotation graph holds none
      */
-    private static <A extends Annotation> A search(Annotation current, Class<A> annotationType,
-            Set<Class<? extends Annotation>> visited, List<Annotation> ancestors) {
-        Class<? extends Annotation> currentType = current.annotationType();
-        if (isJavaLangAnnotation(currentType) || !visited.add(currentType)) {
-            return null;
+    private static Occurrence findNearest(Class<?> clazz, Class<? extends Annotation> annotationType,
+            Set<Class<? extends Annotation>> visited) {
+        Deque<Occurrence> queue = new ArrayDeque<>();
+        for (Annotation direct : clazz.getAnnotations()) {
+            enqueue(queue, direct, null, visited);
         }
-        validateAliases(currentType);
-        if (currentType.equals(annotationType)) {
-            return merge(current, annotationType, ancestors);
-        }
-        ancestors.add(current);
-        try {
-            for (Annotation meta : currentType.getAnnotations()) {
-                A found = search(meta, annotationType, visited, ancestors);
-                if (found != null) {
-                    return found;
-                }
+        while (!queue.isEmpty()) {
+            Occurrence occurrence = queue.removeFirst();
+            Class<? extends Annotation> type = occurrence.annotation.annotationType();
+            validateAliases(type);
+            if (type.equals(annotationType)) {
+                return occurrence;
             }
-            return null;
-        } finally {
-            ancestors.remove(ancestors.size() - 1);
+            for (Annotation meta : type.getAnnotations()) {
+                enqueue(queue, meta, occurrence, visited);
+            }
+        }
+        return null;
+    }
+
+    private static void enqueue(Deque<Occurrence> queue, Annotation annotation, Occurrence parent,
+            Set<Class<? extends Annotation>> visited) {
+        Class<? extends Annotation> type = annotation.annotationType();
+        if (isJavaLangAnnotation(type) || !visited.add(type)) {
+            return;
+        }
+        queue.addLast(new Occurrence(annotation, parent));
+    }
+
+    /** One annotation instance reached by {@link #findNearest}, linked to the one it was found on. */
+    private static final class Occurrence {
+        private final Annotation annotation;
+        private final Occurrence parent;
+
+        private Occurrence(Annotation annotation, Occurrence parent) {
+            this.annotation = annotation;
+            this.parent = parent;
+        }
+
+        /**
+         * The annotations on the path from the class down to (excluding) this occurrence,
+         * outermost (declared on the class) first.
+         */
+        private List<Annotation> ancestors() {
+            List<Annotation> path = new ArrayList<>();
+            for (Occurrence current = parent; current != null; current = current.parent) {
+                path.add(0, current.annotation);
+            }
+            return path;
         }
     }
 
