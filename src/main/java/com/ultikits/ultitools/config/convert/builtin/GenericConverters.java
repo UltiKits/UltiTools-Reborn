@@ -27,6 +27,7 @@ import org.jetbrains.annotations.ApiStatus;
 import com.ultikits.ultitools.config.convert.ConfigConverter;
 import com.ultikits.ultitools.config.convert.ConversionContext;
 import com.ultikits.ultitools.config.convert.ConversionException;
+import com.ultikits.ultitools.config.convert.ConverterRegistry;
 import com.ultikits.ultitools.config.convert.ConverterRegistry.Context;
 import com.ultikits.ultitools.config.document.PlainData;
 
@@ -114,8 +115,7 @@ public final class GenericConverters implements ConfigConverter<Object> {
             for (Map.Entry<?, ?> entry : ((Map<?, ?>) value).entrySet()) {
                 Context keyContext = ctx.child(String.valueOf(entry.getKey()), keyType);
                 Object key = keyContext.writeTyped(entry.getKey(), keyType);
-                if (!(key instanceof String)) { throw keyContext.failure("Map keys must convert to text", null); }
-                String text = (String) key;
+                String text = keyText(key, entry.getKey(), keyType, keyContext);
                 if (values.containsKey(text)) { throw ctx.child(text, keyType).failure("Map keys collide after conversion", null); }
                 values.put(text, ctx.child(text, valueType).writeTyped(entry.getValue(), valueType));
             }
@@ -178,6 +178,23 @@ public final class GenericConverters implements ConfigConverter<Object> {
             return values;
         }
         throw ctx.failure("Unsupported container", null);
+    }
+
+    /**
+     * The text a converted map key is written under. A key that converts to text keeps that text. A key that converts
+     * to another plain scalar ({@code Integer}, {@code Long}, {@code Boolean}, ...) is written as that scalar's text only
+     * when the text reads back, through the declared key type and the same registry path the loader uses, to a key
+     * equal to the entry's own; anything else is refused, so a key is never written under a text that loads as a
+     * different key. The read-back is a probe and records nothing in the conversion's failures.
+     */
+    private static String keyText(Object plain, Object javaKey, Type keyType, Context keyContext) throws ConversionException {
+        if (plain instanceof String) { return (String) plain; }
+        if (plain != null && !(plain instanceof Map<?, ?>) && !(plain instanceof Collection<?>)) {
+            String text = String.valueOf(plain);
+            ConverterRegistry.Probe back = keyContext.probe(text, keyType);
+            if (back.succeeded() && javaKey.equals(back.value())) { return text; }
+        }
+        throw keyContext.failure("Map keys must convert to text", null);
     }
 
     private static void readElements(List<?> plain, Type element, Context ctx, Collection<Object> values) {

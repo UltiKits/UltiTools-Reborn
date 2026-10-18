@@ -497,6 +497,26 @@ public final class ConverterRegistry {
         }
     }
 
+    /**
+     * Outcome of {@link Context#probe}: whether the read succeeded without any failure, and the value it read. A probe
+     * never records a failure in the conversion that ran it.
+     */
+    @ApiStatus.Internal
+    public static final class Probe {
+        private static final Probe FAILED = new Probe(false, null);
+        private final boolean succeeded;
+        private final Object value;
+        private Probe(boolean succeeded, Object value) {
+            this.succeeded = succeeded;
+            this.value = value;
+        }
+        private static Probe read(Object value) { return new Probe(true, value); }
+        /** @return whether the plain value read as the declared type without any failure */
+        public boolean succeeded() { return succeeded; }
+        /** @return the value read; {@code null} when the probe failed */
+        public Object value() { return value; }
+    }
+
     @ApiStatus.Internal
     public static final class Context implements ConversionContext {
         private final ConverterRegistry registry;
@@ -562,6 +582,26 @@ public final class ConverterRegistry {
             List<String> childPath = new ArrayList<>(path);
             childPath.add(segment);
             return new Context(registry, file, childPath, declared, failures);
+        }
+        /**
+         * Reads {@code plain} as {@code declared} through the same registry path the loader uses, at this context's
+         * location, without recording anything in this conversion's failure list: a refusal, or any nested omission,
+         * goes to a throw-away list and makes the probe fail. Used to check that a map key's text reads back to the
+         * key it was written from, and to index the keys a file holds.
+         *
+         * @param plain document value to read
+         * @param declared type to read it as
+         * @return the read value, or a failed probe; never throws a conversion failure
+         */
+        @ApiStatus.Internal
+        public Probe probe(Object plain, Type declared) {
+            List<ConversionFailure> discarded = new ArrayList<>();
+            try {
+                Object value = registry.read(plain, new Context(registry, file, path, declared, discarded));
+                return discarded.isEmpty() ? Probe.read(value) : Probe.FAILED;
+            } catch (ConversionException | RuntimeException refused) {
+                return Probe.FAILED;
+            }
         }
         /**
          * @param raw refused input
