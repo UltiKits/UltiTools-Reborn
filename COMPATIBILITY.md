@@ -2252,6 +2252,16 @@ its meaning.
   line, is refused with a reason naming the lines (no value); `set_all` lists it under `failed` and, as an added
   field, gives its reason under `failureReasons` (key to reason); the server log names each refused key once.
   The server itself still re-writes the whole file when it next starts (measured on Paper 1.21.11).
+- **Known limitation of panel responder scheduling** (#677). Panel responders are new in 6.3.0: a module's
+  responder runs on one of `PanelResponderRegistry`'s worker threads (at most 4 calls at once, at most 64 requests
+  waiting) under one 3-second deadline counted from the request's arrival. If the thread admitting a request stalls
+  for longer than that deadline between starting it and queueing the request, while all 4 workers are blocked, the
+  request, already answered with its timeout error, is queued afterwards and holds one of the 64 waiting slots until a
+  worker frees, so a later request can be refused as if the queue were full. No wrong reply is sent.
+
+  中文补充：面板 responder 调度的已知限制（#677）。若接收请求的线程恰好在启动该请求的 3 秒时限与把请求放入队列之间停顿超过
+  3 秒，且 4 个工作线程同时阻塞，这个已按超时答复的请求仍会在之后入队，并占用 64 个等待位置中的一个，直到有工作线程空出；
+  其间后来的请求可能被当作队列已满而拒绝。不会发出错误的回复。
 
 ### Framework text follows `language`; the class-load audit is quiet on a clean start (6.3.0) that need no migration period
 

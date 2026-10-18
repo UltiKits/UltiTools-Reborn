@@ -57,7 +57,6 @@ class PanelResponderIsolationTracerTest {
     private Thread primaryThread;
     private EventBus eventBus;
     private PanelResponderRegistry registry;
-    private UltiPanelWebSocketClient panelWs;
     private UltiPanelWebSocketClient previousPanelWs;
     private CountDownLatch aStarted;
     private CountDownLatch aRelease;
@@ -85,7 +84,7 @@ class PanelResponderIsolationTracerTest {
         eventBus = new EventBus();
         eventBus.subscribe(PanelMessageEvent.class, event -> {
             published.add(event);
-            publishedOnPrimary.add(server.isPrimaryThread() && Thread.currentThread() == primaryThread);
+            publishedOnPrimary.add(server.isPrimaryThread() && isTheSetUpThread(Thread.currentThread()));
         });
 
         registry = new PanelResponderRegistry();
@@ -110,7 +109,7 @@ class PanelResponderIsolationTracerTest {
             lenient().when(ultiTools.getPanelResponderRegistry()).thenReturn(registry);
         });
 
-        panelWs = mock(UltiPanelWebSocketClient.class);
+        UltiPanelWebSocketClient panelWs = mock(UltiPanelWebSocketClient.class);
         lenient().when(panelWs.isConnected()).thenReturn(true);
         lenient().when(panelWs.getServerId()).thenReturn("isolation-tracer-server");
         doAnswer(invocation -> {
@@ -132,6 +131,13 @@ class PanelResponderIsolationTracerTest {
         instanceField.set(null, null);
         MockBukkitHelper.safeUnmock();
         CloudSession.resetForTesting();
+    }
+
+    /** Whether {@code thread} is the very thread that ran {@link #setUp}, the server's primary thread. */
+    // PMD.CompareObjectsWithEquals: thread identity is the point; Thread does not override equals().
+    @SuppressWarnings("PMD.CompareObjectsWithEquals")
+    private boolean isTheSetUpThread(Thread thread) {
+        return thread == primaryThread;
     }
 
     private static void awaitQuietly(CountDownLatch latch) {

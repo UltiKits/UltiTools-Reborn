@@ -56,7 +56,11 @@ import com.ultikits.ultitools.utils.PluginInitiationUtils;
  *       that arrives later is dropped and produces no second reply.</li>
  *   <li><b>Bounds.</b> At most {@link #RESPONDER_WORKER_THREADS} calls run at once and at most
  *       {@link #RESPONDER_QUEUE_CAPACITY} admitted requests wait for a worker; a request beyond that
- *       is refused at once with an error reply naming its type and module.</li>
+ *       is refused at once with an error reply naming its type and module. Known limitation: if
+ *       the admitting thread stalls for longer than the deadline between starting a request's
+ *       deadline and queueing the request, while every worker is blocked, the already-expired
+ *       request is queued afterwards and holds one queue slot until a worker frees, so a later
+ *       request can be refused as if the queue were full; no wrong reply is sent.</li>
  *   <li><b>Concurrency.</b> Responders may therefore run concurrently — up to
  *       {@link #RESPONDER_WORKER_THREADS} at once, including several calls of the same responder —
  *       and may finish out of request order, so a responder must be thread-safe.</li>
@@ -729,6 +733,8 @@ public class PanelResponderRegistry {
         }
 
         /** The deadline action: take a not-yet-started invocation back, then fail the outcome. */
+        // PMD.UnusedPrivateMethod: false positive; dispatch() schedules it as invocation::expire.
+        @SuppressWarnings("PMD.UnusedPrivateMethod")
         private void expire() {
             workers.remove(this);
             settle(null, PluginModuleException.responderTimedOut(messageType, entry.ownerModule, deadlineMillis));
