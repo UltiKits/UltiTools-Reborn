@@ -971,6 +971,9 @@ public class PluginInitiationUtils {
      * request carried no {@code requestId}, the reply is logged rather than sent: the panel has no
      * way to correlate an uncorrelated reply, matching {@link #sendCapabilityRefusal}'s same
      * reasoning for {@code commandId}/{@code operationId}.
+     * <p>
+     * The reply is built from a copy of the responder's result; the object the responder returned
+     * is never changed, so a responder may return the same cached object for every request.
      *
      * @param type     the message type, already confirmed to have a registered responder
      * @param data     the message's {@code data} object, possibly {@code null}
@@ -1000,7 +1003,10 @@ public class PluginInitiationUtils {
                     + "' not sent: the panel connection admitted for the request has closed or been replaced");
                 return;
             }
-            JsonObject payload = throwable != null ? new JsonObject() : result;
+            // Each reply is built from its own copy: a responder may return one cached object for
+            // every call, and replies run concurrently, so writing requestId into that object would
+            // let one reply carry another request's id and would change the responder's object.
+            JsonObject payload = throwable != null || result == null ? new JsonObject() : result.deepCopy();
             payload.addProperty("requestId", requestId);
             if (throwable != null) {
                 payload.addProperty("error", rootCauseMessage(throwable));
