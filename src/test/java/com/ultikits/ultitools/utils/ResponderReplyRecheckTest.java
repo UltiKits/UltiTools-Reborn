@@ -138,10 +138,6 @@ class ResponderReplyRecheckTest {
         return client;
     }
 
-    private static JsonObject request() {
-        return request(REQUEST_ID);
-    }
-
     private static JsonObject request(String requestId) {
         JsonObject data = new JsonObject();
         data.addProperty("requestId", requestId);
