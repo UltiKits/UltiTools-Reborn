@@ -139,19 +139,10 @@ public class TransactionInterceptor implements MethodInterceptor {
 
         transactionManager.begin();
 
-        // Apply transaction settings
-        Isolation isolation = tx.isolation();
-        if (isolation != Isolation.DEFAULT) {
-            transactionManager.setIsolationLevel(isolation.getLevel());
-        }
-
-        if (tx.readOnly()) {
-            transactionManager.setReadOnly(true);
-        }
-
-        if (tx.timeout() > 0) {
-            transactionManager.setTimeout(tx.timeout());
-        }
+        // Settings run after begin(), because a JDBC setting needs the connection begin() opened,
+        // and inside the cleanup scope of the transaction begin() started: a failing setting must
+        // not strand it on this thread.
+        applySettings(tx, methodName);
 
         try {
             Object result = invocation.proceed();
@@ -167,6 +158,54 @@ public class TransactionInterceptor implements MethodInterceptor {
                 transactionManager.commit();
             }
             throw e;
+        }
+    }
+
+    /**
+     * Applies the isolation, read-only and timeout settings of {@code tx} to the transaction this
+     * invocation has just begun.
+     * <p>
+     * When applying a setting fails, the transaction this invocation began is rolled back once,
+     * so its connection is released and no active context is left on the thread for the next
+     * call to join; any failure of that rollback is attached to the settings failure with
+     * {@link Throwable#addSuppressed(Throwable)}, and the settings failure itself is rethrown
+     * unchanged. The method body never runs. A {@code REQUIRES_NEW} caller still resumes the
+     * suspended outer transaction in its own {@code finally}. This mirrors Spring's
+     * {@code DataSourceTransactionManager.doBegin}, which applies these settings inside its
+     * {@code try} and releases the connection before rethrowing.
+     *
+     * @param tx         the transaction attributes of the invoked method
+     * @param methodName the qualified method name, for logging
+     */
+    // PMD.AvoidCatchingThrowable: an Error raised by a setting must roll back the transaction
+    // this invocation began too, and a rollback failure of any kind must not replace the settings
+    // failure; both are rethrown or attached, never swallowed.
+    @SuppressWarnings("PMD.AvoidCatchingThrowable")
+    private void applySettings(Transactional tx, String methodName) {
+        try {
+            Isolation isolation = tx.isolation();
+            if (isolation != Isolation.DEFAULT) {
+                transactionManager.setIsolationLevel(isolation.getLevel());
+            }
+
+            if (tx.readOnly()) {
+                transactionManager.setReadOnly(true);
+            }
+
+            if (tx.timeout() > 0) {
+                transactionManager.setTimeout(tx.timeout());
+            }
+        } catch (Throwable settingsFailure) {
+            LOGGER.log(Level.FINE, "Rolling back transaction for: " + methodName
+                    + " because a transaction setting failed: " + settingsFailure.getMessage());
+            try {
+                transactionManager.rollback();
+            } catch (Throwable rollbackFailure) {
+                if (rollbackFailure != settingsFailure) {
+                    settingsFailure.addSuppressed(rollbackFailure);
+                }
+            }
+            throw settingsFailure;
         }
     }
 
