@@ -4,9 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -16,6 +18,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
@@ -252,7 +255,7 @@ class PanelResponderRegistryTest {
 
         @Test
         @DisplayName("同步抛出的 responder：产出同样形状的失败回复")
-        void synchronouslyThrowingResponderProducesFailure() {
+        void synchronouslyThrowingResponderProducesFailure() throws Exception {
             PanelResponderRegistry registry = new PanelResponderRegistry();
             RuntimeException boom = new RuntimeException("boom — deliberately thrown by a test responder");
             registry.registerResponder("throws", data -> {
@@ -260,6 +263,7 @@ class PanelResponderRegistryTest {
             }, "module-a");
 
             CompletableFuture<JsonObject> outcome = registry.dispatch("throws", new JsonObject(), "req-1");
+            awaitSettled(outcome);
 
             assertThat(outcome).isCompletedExceptionally();
             assertThatThrownBy(outcome::join).hasCause(boom);
@@ -267,11 +271,12 @@ class PanelResponderRegistryTest {
 
         @Test
         @DisplayName("返回 null 的 responder：产出明确的失败而不是空指针")
-        void nullReturningResponderProducesExplicitFailure() {
+        void nullReturningResponderProducesExplicitFailure() throws Exception {
             PanelResponderRegistry registry = new PanelResponderRegistry();
             registry.registerResponder("returns-null", data -> null, "module-a");
 
             CompletableFuture<JsonObject> outcome = registry.dispatch("returns-null", new JsonObject(), "req-1");
+            awaitSettled(outcome);
 
             assertThat(outcome).isCompletedExceptionally();
         }
@@ -288,6 +293,15 @@ class PanelResponderRegistryTest {
             assertThat(registry.pendingTimeoutTaskCountForTesting())
                     .as("已完成的 responder 应当在 whenComplete 中同步取消其超时任务")
                     .isZero();
+        }
+
+        /**
+         * Waits, bounded, until {@code outcome} settles either way: the responder now runs on a
+         * registry worker, so the outcome is not settled yet when {@code dispatch} returns. A
+         * missed settlement surfaces as a {@code TimeoutException}.
+         */
+        private void awaitSettled(CompletableFuture<JsonObject> outcome) throws Exception {
+            outcome.handle((value, failure) -> null).get(5, TimeUnit.SECONDS);
         }
     }
 
@@ -320,6 +334,8 @@ class PanelResponderRegistryTest {
                 lenient().when(ultiTools.getPanelResponderRegistry()).thenReturn(registry);
             });
             mockPanelWs = mock(UltiPanelWebSocketClient.class);
+            // The fixture represents a live panel connection.
+            lenient().when(mockPanelWs.isConnected()).thenReturn(true);
             lenient().when(mockPanelWs.getServerId()).thenReturn("test-server-uuid");
             previousPanelWs = setPanelWs(mockPanelWs);
         }
@@ -356,7 +372,7 @@ class PanelResponderRegistryTest {
             invokeHandleInboundMessage(message);
 
             ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-            verify(mockPanelWs, times(1)).sendMessage(captor.capture());
+            verify(mockPanelWs, timeout(2000).times(1)).sendMessage(captor.capture());
             JsonObject sent = captor.getValue();
             assertThat(sent.get("type").getAsString()).isEqualTo("my_module_stats");
             JsonObject sentData = sent.getAsJsonObject("data");
@@ -395,7 +411,7 @@ class PanelResponderRegistryTest {
             invokeHandleInboundMessage(message);
 
             ArgumentCaptor<JsonObject> captor = ArgumentCaptor.forClass(JsonObject.class);
-            verify(mockPanelWs, times(1)).sendMessage(captor.capture());
+            verify(mockPanelWs, timeout(2000).times(1)).sendMessage(captor.capture());
             JsonObject sentData = captor.getValue().getAsJsonObject("data");
             assertThat(sentData.get("requestId").getAsString()).isEqualTo("req-err");
             assertThat(sentData.has("error")).isTrue();
@@ -404,8 +420,11 @@ class PanelResponderRegistryTest {
         @Test
         @DisplayName("请求没有携带 requestId 时不发送任何回复，只记录日志")
         void noRequestIdMeansNoReplyIsSent() throws Exception {
-            registry.registerResponder("my_module_stats",
-                    data -> CompletableFuture.completedFuture(new JsonObject()), "module-a");
+            CountDownLatch responded = new CountDownLatch(1);
+            registry.registerResponder("my_module_stats", data -> {
+                responded.countDown();
+                return CompletableFuture.completedFuture(new JsonObject());
+            }, "module-a");
 
             JsonObject message = new JsonObject();
             message.addProperty("type", "my_module_stats");
@@ -413,7 +432,8 @@ class PanelResponderRegistryTest {
 
             invokeHandleInboundMessage(message);
 
-            verify(mockPanelWs, never()).sendMessage(any());
+            assertThat(responded.await(5, TimeUnit.SECONDS)).as("the responder ran").isTrue();
+            verify(mockPanelWs, after(500).never()).sendMessage(any());
         }
     }
 

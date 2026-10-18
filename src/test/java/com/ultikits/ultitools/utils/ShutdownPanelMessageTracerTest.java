@@ -17,6 +17,8 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
@@ -73,6 +75,7 @@ class ShutdownPanelMessageTracerTest {
     private final List<String> disabledScheduling = new CopyOnWriteArrayList<>();
     private final List<String> enabledScheduling = new CopyOnWriteArrayList<>();
     private final List<String> respondedTypes = new CopyOnWriteArrayList<>();
+    private final CountDownLatch responded = new CountDownLatch(1);
 
     @BeforeEach
     void setUp() {
@@ -104,6 +107,7 @@ class ShutdownPanelMessageTracerTest {
         responders = new PanelResponderRegistry();
         responders.registerResponder(MODULE_TYPE, data -> {
             respondedTypes.add(MODULE_TYPE);
+            responded.countDown();
             return CompletableFuture.completedFuture(new JsonObject());
         }, "FixtureModule");
 
@@ -272,21 +276,23 @@ class ShutdownPanelMessageTracerTest {
 
         @Test
         @DisplayName("a module-claimed responder type while disabling is dropped before its responder runs")
-        void moduleResponderTypeIsDropped() {
+        void moduleResponderTypeIsDropped() throws Exception {
             disabling();
 
             PluginInitiationUtils.handleInboundMessage(message(MODULE_TYPE));
 
+            assertThat(responded.await(300, TimeUnit.MILLISECONDS)).as("the responder did not run").isFalse();
             assertDroppedQuietly(MODULE_TYPE);
             assertThat(respondedTypes).isEmpty();
         }
 
         @Test
         @DisplayName("control: a module-claimed responder type while enabled reaches its responder")
-        void moduleResponderTypeWhileEnabledIsServed() {
+        void moduleResponderTypeWhileEnabledIsServed() throws Exception {
             PluginInitiationUtils.handleInboundMessage(message(MODULE_TYPE));
             server.getScheduler().performOneTick();
 
+            assertThat(responded.await(5, TimeUnit.SECONDS)).as("the responder ran").isTrue();
             assertThat(respondedTypes).containsExactly(MODULE_TYPE);
             assertThat(published).hasSize(1);
         }

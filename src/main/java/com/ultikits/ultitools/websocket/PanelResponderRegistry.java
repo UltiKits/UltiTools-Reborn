@@ -2,12 +2,15 @@ package com.ultikits.ultitools.websocket;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.logging.Logger;
 
@@ -55,6 +58,15 @@ public class PanelResponderRegistry {
      */
     static final long RESPONDER_TIMEOUT_MILLIS = 3000L;
 
+    /** How many responder calls run at once, each on its own registry-owned worker thread. */
+    static final int RESPONDER_WORKER_THREADS = 4;
+
+    /** How many admitted requests may wait for a free worker before a request is refused. */
+    static final int RESPONDER_QUEUE_CAPACITY = 64;
+
+    /** How long an idle worker thread is kept before it ends, so an idle registry holds no worker. */
+    private static final long WORKER_KEEP_ALIVE_SECONDS = 30L;
+
     /**
      * Pairs a responder function with the module name (and, when recorded, the module instance)
      * that registered it. Never exposed outside this class — {@link #hasResponder(String)},
@@ -78,6 +90,40 @@ public class PanelResponderRegistry {
     private final ScheduledThreadPoolExecutor timeoutScheduler = createTimeoutScheduler();
 
     /**
+     * The deadline, in milliseconds, every admitted request gets; {@link #RESPONDER_TIMEOUT_MILLIS}
+     * outside tests.
+     */
+    private final long deadlineMillis;
+
+    /**
+     * Runs responder calls, separate from {@link #timeoutScheduler} so a blocked call can never
+     * delay a deadline. Bounded threads, a bounded queue and an abort policy; invocations are handed
+     * over with {@code execute}, never {@code submit}, so a deadline can take a not-yet-started
+     * invocation back out of the queue with {@link ThreadPoolExecutor#remove(Runnable)}.
+     */
+    private final ThreadPoolExecutor workers;
+
+    /**
+     * Creates a registry with the shipped deadline ({@link #RESPONDER_TIMEOUT_MILLIS}) and worker
+     * bounds ({@link #RESPONDER_WORKER_THREADS}, {@link #RESPONDER_QUEUE_CAPACITY}).
+     */
+    public PanelResponderRegistry() {
+        this(RESPONDER_TIMEOUT_MILLIS, RESPONDER_WORKER_THREADS, RESPONDER_QUEUE_CAPACITY);
+    }
+
+    /**
+     * Test seam: a registry with its own deadline and worker bounds.
+     *
+     * @param deadlineMillis the deadline every admitted request gets, in milliseconds
+     * @param workerThreads  how many responder calls run at once
+     * @param queueCapacity  how many admitted requests may wait for a free worker
+     */
+    PanelResponderRegistry(long deadlineMillis, int workerThreads, int queueCapacity) {
+        this.deadlineMillis = deadlineMillis;
+        this.workers = createWorkers(workerThreads, queueCapacity);
+    }
+
+    /**
      * The module instance the framework is loading on this thread, if any (#506): set by
      * {@link #beginRegistrationScope(UltiToolsPlugin)} while a module's container refreshes and its
      * {@code registerSelf()} runs, and recorded on every responder registered meanwhile without an
@@ -92,6 +138,22 @@ public class PanelResponderRegistry {
             return thread;
         });
         executor.setRemoveOnCancelPolicy(true);
+        return executor;
+    }
+
+    private static ThreadPoolExecutor createWorkers(int workerThreads, int queueCapacity) {
+        AtomicInteger sequence = new AtomicInteger();
+        // The framework's own loader, not the dispatching thread's: an idle worker must never pin a
+        // module's class loader across a reload.
+        ClassLoader frameworkLoader = PanelResponderRegistry.class.getClassLoader();
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(workerThreads, workerThreads,
+                WORKER_KEEP_ALIVE_SECONDS, TimeUnit.SECONDS, new ArrayBlockingQueue<>(queueCapacity), r -> {
+                    Thread thread = new Thread(r, "UltiTools-PanelResponderRegistry-Worker-" + sequence.incrementAndGet());
+                    thread.setDaemon(true);
+                    thread.setContextClassLoader(frameworkLoader);
+                    return thread;
+                }, new ThreadPoolExecutor.AbortPolicy());
+        executor.allowCoreThreadTimeOut(true);
         return executor;
     }
 
@@ -348,40 +410,9 @@ public class PanelResponderRegistry {
             return outcome;
         }
 
-        CompletableFuture<JsonObject> responderFuture;
-        try {
-            responderFuture = entry.responder.apply(data);
-        } catch (RuntimeException e) {
-            outcome.completeExceptionally(e);
-            return outcome;
-        }
-        if (responderFuture == null) {
-            outcome.completeExceptionally(new IllegalStateException("Responder for '" + messageType
-                    + "' (owned by module '" + entry.ownerModule + "') returned null"));
-            return outcome;
-        }
-
-        ScheduledFuture<?> timeoutTask = timeoutScheduler.schedule(
-                () -> outcome.completeExceptionally(
-                        PluginModuleException.responderTimedOut(messageType, entry.ownerModule,
-                                RESPONDER_TIMEOUT_MILLIS)),
-                RESPONDER_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
-
-        responderFuture.whenComplete((value, throwable) -> {
-            // Cancelling here — win or lose the race against the scheduled task above — is what
-            // guarantees the fast path leaves nothing pending: if the timeout already fired,
-            // outcome is already complete and these calls are harmless no-ops (CompletableFuture's
-            // second completion attempt is silently ignored).
-            timeoutTask.cancel(false);
-            if (throwable != null) {
-                outcome.completeExceptionally(throwable);
-            } else if (value == null) {
-                outcome.completeExceptionally(new IllegalStateException("Responder for '" + messageType
-                        + "' (owned by module '" + entry.ownerModule + "') completed with null"));
-            } else {
-                outcome.complete(value);
-            }
-        });
+        Invocation invocation = new Invocation(messageType, entry, data, outcome);
+        invocation.deadline = timeoutScheduler.schedule(invocation::expire, deadlineMillis, TimeUnit.MILLISECONDS);
+        workers.execute(invocation);
         return outcome;
     }
 
@@ -407,6 +438,24 @@ public class PanelResponderRegistry {
     }
 
     /**
+     * Test-only accessor for whether {@link #workers} has been shut down.
+     *
+     * @return {@code true} if the worker executor has been shut down
+     */
+    boolean isWorkerPoolShutdownForTesting() {
+        return workers.isShutdown();
+    }
+
+    /**
+     * Test-only accessor for how many admitted invocations are waiting for a free worker.
+     *
+     * @return the number of queued, not-yet-started invocations
+     */
+    int queuedInvocationCountForTesting() {
+        return workers.getQueue().size();
+    }
+
+    /**
      * Shuts down {@link #timeoutScheduler} (WR-01, 06-REVIEW.md).
      * <p>
      * {@link #timeoutScheduler} is a dedicated single-thread pool per instance — nothing else
@@ -421,6 +470,8 @@ public class PanelResponderRegistry {
      */
     public void shutdown() {
         timeoutScheduler.shutdownNow();
+        // shutdown(), never shutdownNow(): a running module call is not interrupted.
+        workers.shutdown();
     }
 
     /**
@@ -437,6 +488,78 @@ public class PanelResponderRegistry {
             this.responder = responder;
             this.ownerModule = ownerModule;
             this.ownerInstance = ownerInstance;
+        }
+    }
+
+    /**
+     * One admitted request: the responder entry captured at admission, its deadline and its
+     * outcome. Runs on a worker; every settlement goes through {@link #settle}.
+     */
+    private final class Invocation implements Runnable {
+        private final String messageType;
+        private final ResponderEntry entry;
+        private final JsonObject data;
+        private final CompletableFuture<JsonObject> outcome;
+        private volatile ScheduledFuture<?> deadline;
+
+        private Invocation(String messageType, ResponderEntry entry, JsonObject data,
+                CompletableFuture<JsonObject> outcome) {
+            this.messageType = messageType;
+            this.entry = entry;
+            this.data = data;
+            this.outcome = outcome;
+        }
+
+        @Override
+        public void run() {
+            if (outcome.isDone()) {
+                return;
+            }
+            CompletableFuture<JsonObject> responderFuture;
+            try {
+                responderFuture = entry.responder.apply(data);
+            } catch (RuntimeException e) {
+                settle(null, e);
+                return;
+            }
+            if (responderFuture == null) {
+                settle(null, new IllegalStateException("Responder for '" + messageType
+                        + "' (owned by module '" + entry.ownerModule + "') returned null"));
+                return;
+            }
+            responderFuture.whenComplete((value, throwable) -> {
+                if (throwable != null) {
+                    settle(null, throwable);
+                } else if (value == null) {
+                    settle(null, new IllegalStateException("Responder for '" + messageType
+                            + "' (owned by module '" + entry.ownerModule + "') completed with null"));
+                } else {
+                    settle(value, null);
+                }
+            });
+        }
+
+        /** The deadline action: take a not-yet-started invocation back, then fail the outcome. */
+        private void expire() {
+            workers.remove(this);
+            settle(null, PluginModuleException.responderTimedOut(messageType, entry.ownerModule, deadlineMillis));
+        }
+
+        /**
+         * The one settle path. Cancels the deadline before completing the outcome: a
+         * {@link CompletableFuture} runs later-registered dependents first, so a caller waiting on
+         * the outcome must find the deadline already gone. A second settlement is a no-op.
+         */
+        private void settle(JsonObject value, Throwable failure) {
+            ScheduledFuture<?> task = deadline;
+            if (task != null) {
+                task.cancel(false);
+            }
+            if (failure != null) {
+                outcome.completeExceptionally(failure);
+            } else {
+                outcome.complete(value);
+            }
         }
     }
 }
