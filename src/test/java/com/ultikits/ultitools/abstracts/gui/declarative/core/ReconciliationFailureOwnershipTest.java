@@ -1,15 +1,20 @@
 package com.ultikits.ultitools.abstracts.gui.declarative.core;
 
+import com.ultikits.ultitools.abstracts.gui.declarative.engine.DeclarativeGui;
 import com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiRenderer;
 import com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiScheduler;
 import com.ultikits.ultitools.abstracts.gui.declarative.widgets.Container;
+import com.ultikits.ultitools.abstracts.gui.declarative.widgets.GridView;
 import com.ultikits.ultitools.abstracts.gui.declarative.widgets.TextButton;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
+import com.ultikits.ultitools.utils.TestHelper;
 
 import mc.obliviate.inventory.Gui;
 
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
+import org.bukkit.event.inventory.InventoryCloseEvent;
+import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.Plugin;
@@ -30,9 +35,12 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Handler;
 import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * A reconciliation that throws part-way through must leave every mounted child owned by its
@@ -271,6 +279,132 @@ class ReconciliationFailureOwnershipTest {
     }
 
     // ------------------------------------------------------------------
+    // Task 3: GridView, keyed, recovery and DeclarativeGui close paths
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("Inside a GridView, the replacement stays owned, the recovery frame reuses it, close disposes once")
+    void gridViewReplacementBeforeFailingSiblingIsOwnedAndDisposedOnceOnClose() {
+        Lifecycle life = new Lifecycle();
+        AtomicInteger frame = new AtomicInteger(1);
+        TestGui gui = newGui();
+        GuiRenderer renderer = newRenderer(gui);
+        renderer.initialize(() -> GridView.builder()
+                .startSlot(0)
+                .columns(9)
+                .children(atDefaultSlots(shapeFor(frame.get(), life)))
+                .build(), rootContext());
+
+        frame.set(2);
+        renderer.scheduleBuild();
+        int failingFrameErrors = frameErrors.count();
+        frame.set(3);
+        renderer.scheduleBuild();
+        int recoveryFrameErrors = frameErrors.count() - failingFrameErrors;
+        String slots = displayNameAt(gui, 0) + "|" + displayNameAt(gui, 1) + "|" + displayNameAt(gui, 2);
+        renderer.dispose();
+
+        assertEquals("frameErrors[failing=1, recovery=0] slots=a2|b|c disposed{a=[1], a2=[1], b=[1], c=[1]}",
+                "frameErrors[failing=" + failingFrameErrors + ", recovery=" + recoveryFrameErrors + "] slots="
+                        + slots + " disposed" + life.disposeCounts("a", "a2", "b", "c"),
+                "inside a GridView the replacement a2 made before b's failure must stay owned: the "
+                        + "recovery frame reuses it (no second State), slots 0-2 show a2, b, c, and "
+                        + "close disposes every State exactly once");
+    }
+
+    @Test
+    @DisplayName("With keyed siblings, a failed reconciliation keeps the replacement, the failing sibling and unclaimed children")
+    void keyedReplacementBeforeFailingSiblingRetainsUnclaimedChildren() {
+        Lifecycle life = new Lifecycle();
+        AtomicInteger frame = new AtomicInteger(1);
+        GuiRenderer renderer = newRenderer(newGui());
+        renderer.initialize(() -> {
+            List<Widget> children = frame.get() == 1
+                    ? Arrays.<Widget>asList(
+                            new TypeX(new Spec(life, "a").key("k1").slot(0)),
+                            new TypeY(new Spec(life, "b").key("k2").slot(1)),
+                            new TypeX(new Spec(life, "c").key("k3").slot(2)))
+                    : Arrays.<Widget>asList(
+                            new TypeZ(new Spec(life, "c2").key("k3").slot(2)),
+                            new TypeY(new Spec(life, "b").key("k2").slot(1).failUpdate()),
+                            new TypeX(new Spec(life, "a").key("k1").slot(0)));
+            return Container.builder().children(children).build();
+        }, rootContext());
+        Element owner = life.statesOf("b").get(0).element.getParent();
+        List<Element> before = new ArrayList<>(owner.getChildren());
+
+        frame.set(2);
+        renderer.scheduleBuild();
+        String afterFrame = "frameErrors=" + frameErrors.count()
+                + " children=" + describe(owner.getChildren(), before);
+        renderer.dispose();
+
+        assertEquals("frameErrors=1 children=[new:c2:mounted, old0:a:mounted, old1:b:mounted] "
+                        + "disposed{a=[1], b=[1], c=[1], c2=[1]}",
+                afterFrame + " disposed" + life.disposeCounts("a", "b", "c", "c2"),
+                "when keyed k3 is replaced and then k2's update throws, the Container must own the "
+                        + "replacement, then the unclaimed k1 and the failing k2 in their previous order; "
+                        + "close disposes old c, its replacement, b and a once each");
+    }
+
+    @Test
+    @DisplayName("The frame after a failed reconciliation reuses every owned child without re-creating State")
+    void frameAfterFailureReusesOwnedChildrenWithoutRecreatingState() {
+        Lifecycle life = new Lifecycle();
+        AtomicInteger frame = new AtomicInteger(1);
+        TestGui gui = newGui();
+        GuiRenderer renderer = newRenderer(gui);
+        renderer.initialize(() -> Container.builder().children(shapeFor(frame.get(), life)).build(), rootContext());
+
+        frame.set(2);
+        renderer.scheduleBuild();
+        int failingFrameErrors = frameErrors.count();
+        frame.set(3);
+        renderer.scheduleBuild();
+        int recoveryFrameErrors = frameErrors.count() - failingFrameErrors;
+        String observed = "frameErrors[failing=" + failingFrameErrors + ", recovery=" + recoveryFrameErrors
+                + "] created[a2=" + life.createCount("a2") + ", b=" + life.createCount("b")
+                + ", c=" + life.createCount("c") + "] slots="
+                + displayNameAt(gui, 0) + "|" + displayNameAt(gui, 1) + "|" + displayNameAt(gui, 2);
+        renderer.dispose();
+
+        assertEquals("frameErrors[failing=1, recovery=0] created[a2=1, b=1, c=1] slots=a2|b|c", observed,
+                "after b's failure clears, the next frame must complete, reuse a2, b and c with their "
+                        + "existing States, and show them at slots 0, 1, 2");
+    }
+
+    @Test
+    @DisplayName("Closing a DeclarativeGui after a failed frame disposes every created State exactly once")
+    void closingDeclarativeGuiAfterFailedFrameDisposesEveryStateExactlyOnce() {
+        Logger pageLogger = Logger.getLogger(ReconciliationFailureOwnershipTest.class.getName());
+        FrameErrorCounter pageErrors = new FrameErrorCounter();
+        pageLogger.addHandler(pageErrors);
+        try {
+            TestHelper.mockUltiToolsInstance(ultiTools -> when(ultiTools.getLogger()).thenReturn(pageLogger));
+            Lifecycle life = new Lifecycle();
+            ValueSource source = new ValueSource();
+            OwnershipPage page = new OwnershipPage(player, life, source);
+            page.setInventory(Bukkit.createInventory(page, 9));
+
+            page.onOpen(mock(InventoryOpenEvent.class));
+            drain();
+            page.switchToFailingShape();
+            drain();
+            int failedFrames = pageErrors.count();
+            page.onClose(mock(InventoryCloseEvent.class));
+
+            assertEquals("frameErrors=1 disposed{a=[1], a2=[1], b=[1], c=[1]} listeners=0",
+                    "frameErrors=" + failedFrames + " disposed" + life.disposeCounts("a", "a2", "b", "c")
+                            + " listeners=" + source.listenerCount(),
+                    "closing a DeclarativeGui page after its reconciliation threw must dispose every "
+                            + "created State exactly once, including the replacement a2, and leave no "
+                            + "subscription behind");
+        } finally {
+            pageLogger.removeHandler(pageErrors);
+        }
+    }
+
+    // ------------------------------------------------------------------
     // shapes
     // ------------------------------------------------------------------
 
@@ -295,6 +429,19 @@ class ReconciliationFailureOwnershipTest {
                 new TypeX(new Spec(life, "c").slot(2).subscribe(source)));
     }
 
+    /** Frame 1: the reported shape; frame 2: the failing shape; any later frame: recovered. */
+    private static List<Widget> shapeFor(int frame, Lifecycle life) {
+        return frame == 1 ? reportedShape(life, null) : failingShape(life, null, frame > 2);
+    }
+
+    /** The same widgets with every leaf at its default slot, for GridView cells. */
+    private static List<Widget> atDefaultSlots(List<Widget> widgets) {
+        for (Widget widget : widgets) {
+            ((LifecycleWidget) widget).spec.slot(0);
+        }
+        return widgets;
+    }
+
     /** Frame 1's a, b, c unchanged, plus a new d (W) that subscribes and then throws in initState. */
     private static List<Widget> appendFailingD(Lifecycle life, ValueSource source) {
         List<Widget> children = new ArrayList<>(reportedShape(life, null));
@@ -313,6 +460,10 @@ class ReconciliationFailureOwnershipTest {
     // ------------------------------------------------------------------
     // helpers
     // ------------------------------------------------------------------
+
+    private void drain() {
+        server.getScheduler().performTicks(25);
+    }
 
     private BuildContext rootContext() {
         return BuildContext.root(player, "reconciliation-ownership-gui", 1);
@@ -376,6 +527,35 @@ class ReconciliationFailureOwnershipTest {
         }
         ItemMeta meta = stack.getItemMeta();
         return meta == null ? "?" : meta.getDisplayName();
+    }
+
+    /**
+     * A DeclarativeGui page (production default scheduler) showing the reported shape, with
+     * every State subscribed to one value source; {@link #switchToFailingShape()} requests the
+     * failing frame.
+     */
+    private static final class OwnershipPage extends DeclarativeGui {
+        private final Lifecycle life;
+        private final ValueSource source;
+        private boolean failing;
+
+        OwnershipPage(Player player, Lifecycle life, ValueSource source) {
+            super(player, "reconciliation-ownership-page", "Test", 1);
+            this.life = life;
+            this.source = source;
+        }
+
+        void switchToFailingShape() {
+            failing = true;
+            markNeedsBuild();
+        }
+
+        @Override
+        public Widget build(BuildContext context) {
+            return Container.builder()
+                    .children(failing ? failingShape(life, source, false) : reportedShape(life, source))
+                    .build();
+        }
     }
 
     /** Minimal concrete {@link Gui}; {@code Gui} is abstract only to force subclassing. */
@@ -594,6 +774,8 @@ class ReconciliationFailureOwnershipTest {
         private final Object listener = new Object();
         private ValueSource subscribedTo;
         private int disposeCount;
+        /** This State's own Element, observed from build(context). */
+        private Element element;
 
         LifecycleState(Lifecycle life, String id) {
             this.id = id;
@@ -621,6 +803,7 @@ class ReconciliationFailureOwnershipTest {
 
         @Override
         public Widget build(BuildContext context) {
+            element = context.getParentElement();
             return TextButton.builder().text(id).slot(getWidget().spec.slot).build();
         }
 
