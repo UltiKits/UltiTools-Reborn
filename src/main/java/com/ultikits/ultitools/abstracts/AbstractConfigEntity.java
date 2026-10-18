@@ -472,7 +472,8 @@ public abstract class AbstractConfigEntity {
             ConversionResult<Object> converted = registry().fromPlainResult(PlainData.copy(probe), declaredType(field),
                     configFilePath, keys(field), entry);
             if (!converted.failures().isEmpty()) { return false; }
-            Object plain = registry().toPlainResult(converted.value(), declaredType(field), configFilePath, keys(field), entry).value();
+            Object plain = registry().toPlainResult(converted.value(), declaredType(field), configFilePath, keys(field), entry,
+                    probe).value();
             return PlainData.plainEquals(PlainData.copy(plain), base);
         } catch (ConversionException | RuntimeException unusable) {
             return false;
@@ -1060,11 +1061,26 @@ public abstract class AbstractConfigEntity {
 
     private Object plainValue(Field field) { return plainValue(field, false); }
 
+    /**
+     * The plain value of {@code field} as the module holds it, spelled like the file this entity last read or wrote: the
+     * raw acknowledgement is passed as the file value, so a typed map key the file spells {@code '01'}, {@code 1.0} or
+     * in upper case keeps that text (#673, case 52). Every save, operator write, panel edit, unsaved-entry check and
+     * reload's in-memory side therefore names the operator's own key, which is the document's key identity.
+     */
     private Object plainValue(Field field, boolean writing) {
+        RawEntry read = acknowledgedRaw.get(field);
+        return plainValue(field, writing, read == null || !read.present ? null : read.value);
+    }
+
+    /**
+     * @param fileValue the plain value the file holds at the setting, whose typed map keys name the text each key is
+     *                  written under; {@code null} for canonical key text (a setting the file does not hold)
+     */
+    private Object plainValue(Field field, boolean writing, Object fileValue) {
         field.setAccessible(true);
         try {
             ConversionResult<Object> result = registry().toPlainResult(ReflectionUtil.getFieldValue(this, field),
-                    declaredType(field), configFilePath, keys(field), field.getAnnotation(ConfigEntry.class));
+                    declaredType(field), configFilePath, keys(field), field.getAnnotation(ConfigEntry.class), fileValue);
             if (writing && !result.failures().isEmpty()) {
                 List<String> locations = new ArrayList<>();
                 for (ConversionFailure failure : result.failures()) {
@@ -1093,7 +1109,8 @@ public abstract class AbstractConfigEntity {
 
     private void captureDefaults() {
         if (!defaultsCaptured) {
-            declaredDefaults.putAll(currentPlain(configEntryFields()));
+            // Canonical key text: the defaults belong to no file.
+            for (Field field : configEntryFields()) { declaredDefaults.put(field, plainValue(field, false, null)); }
             for (Field field : configEntryFields()) {
                 Object javaDefault = ReflectionUtil.getFieldValue(this, field);
                 declaredDefaultLengths.put(field, isEmptyContainer(javaDefault) ? 0 : getValueLength(javaDefault));
@@ -1640,7 +1657,8 @@ public abstract class AbstractConfigEntity {
                 }
             }
             useDeclaredDefaultIfEmpty(field, raw);
-            Object theirs = plainValue(field);
+            // Spelled like the file just read: the raw acknowledgement is refreshed only at the end of this load.
+            Object theirs = plainValue(field, false, raw);
             baseline.put(field, theirs);
             if (!initialize && savedSnapshot != null && savedSnapshot.containsKey(field)) {
                 Object merged = mergeReload(savedSnapshot.get(field), mine.get(field), theirs, declaredType(field),
@@ -1659,7 +1677,8 @@ public abstract class AbstractConfigEntity {
         Map<Field, Object> inserted = new LinkedHashMap<>();
         if (initialize) {
             for (Field field : missing) {
-                Object value = plainValue(field, true);
+                // The file does not hold the setting: its keys are inserted in their canonical text.
+                Object value = plainValue(field, true, null);
                 inserted.put(field, value); baseline.put(field, value);
             }
         }
