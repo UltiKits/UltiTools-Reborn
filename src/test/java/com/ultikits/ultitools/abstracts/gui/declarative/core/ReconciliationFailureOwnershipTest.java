@@ -125,6 +125,152 @@ class ReconciliationFailureOwnershipTest {
     }
 
     // ------------------------------------------------------------------
+    // Task 2: children whose own mount fails are released immediately
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("A new child whose initState throws is disposed immediately and never owned")
+    void newChildWhoseMountFailsIsDisposedImmediatelyAndNotOwned() {
+        Lifecycle life = new Lifecycle();
+        ValueSource source = new ValueSource();
+        AtomicInteger frame = new AtomicInteger(1);
+        GuiRenderer renderer = newRenderer(newGui());
+        renderer.initialize(() -> Container.builder()
+                .children(frame.get() == 1 ? reportedShape(life, null) : appendFailingD(life, source))
+                .build(), rootContext());
+
+        frame.set(2);
+        renderer.scheduleBuild();
+        String afterFrame = "frameErrors=" + frameErrors.count()
+                + " d=" + life.disposeCounts("d") + " listeners=" + source.listenerCount();
+        renderer.dispose();
+        String afterClose = life.disposeCounts("a", "b", "c", "d");
+
+        Lifecycle directLife = new Lifecycle();
+        ValueSource directSource = new ValueSource();
+        Element root = mountDirect(Container.builder().children(reportedShape(directLife, null)).build());
+        List<Element> before = new ArrayList<>(root.getChildren());
+        assertThrows(IllegalStateException.class,
+                () -> root.update(Container.builder().children(appendFailingD(directLife, directSource)).build()));
+        String direct = "children=" + describe(root.getChildren(), before)
+                + " d=" + directLife.disposeCounts("d") + " listeners=" + directSource.listenerCount();
+
+        assertEquals("frame[frameErrors=1 d={d=[1]} listeners=0] "
+                        + "close{a=[1], b=[1], c=[1], d=[1]} "
+                        + "direct[children=[old0:a:mounted, old1:b:mounted, old2:c:mounted] d={d=[1]} listeners=0]",
+                "frame[" + afterFrame + "] close" + afterClose + " direct[" + direct + "]",
+                "a child created in a failing frame whose initState subscribed and then threw must be "
+                        + "disposed right away (its listener removed), never listed by the parent, and "
+                        + "not disposed a second time at close");
+    }
+
+    @Test
+    @DisplayName("A new Container whose grandchild fails to mount releases its whole subtree")
+    void newContainerSubtreeWithFailingGrandchildIsFullyCleanedUp() {
+        Lifecycle life = new Lifecycle();
+        ValueSource source = new ValueSource();
+        AtomicInteger frame = new AtomicInteger(1);
+        GuiRenderer renderer = newRenderer(newGui());
+        renderer.initialize(() -> {
+            List<Widget> children = new ArrayList<>(reportedShape(life, null));
+            if (frame.get() == 2) {
+                children.add(Container.builder()
+                        .child(new TypeX(new Spec(life, "g1").slot(3).subscribe(source)))
+                        .child(new TypeW(new Spec(life, "g2").slot(4).subscribe(source).failInit()))
+                        .build());
+            }
+            return Container.builder().children(children).build();
+        }, rootContext());
+
+        frame.set(2);
+        renderer.scheduleBuild();
+        String afterFrame = "frameErrors=" + frameErrors.count()
+                + " " + life.disposeCounts("g1", "g2") + " listeners=" + source.listenerCount();
+        renderer.dispose();
+
+        assertEquals("frame[frameErrors=1 {g1=[1], g2=[1]} listeners=0] close{a=[1], b=[1], c=[1], g1=[1], g2=[1]}",
+                "frame[" + afterFrame + "] close" + life.disposeCounts("a", "b", "c", "g1", "g2"),
+                "when a newly created Container's second child throws from initState, both of its "
+                        + "children must be disposed immediately and release their subscriptions; "
+                        + "close disposes every other State once");
+    }
+
+    @Test
+    @DisplayName("A replacement whose own mount fails leaves no orphan and no unmounted listed child")
+    void replacementWhoseMountFailsLeavesNoOrphan() {
+        Lifecycle life = new Lifecycle();
+        AtomicInteger frame = new AtomicInteger(1);
+        GuiRenderer renderer = newRenderer(newGui());
+        renderer.initialize(() -> Container.builder()
+                .children(frame.get() == 1 ? reportedShape(life, null) : failingReplacementShape(life))
+                .build(), rootContext());
+
+        frame.set(2);
+        renderer.scheduleBuild();
+        String afterFrame = "frameErrors=" + frameErrors.count() + " " + life.disposeCounts("a", "a2");
+        renderer.dispose();
+        String afterClose = life.disposeCounts("a", "a2", "b", "c");
+
+        Lifecycle directLife = new Lifecycle();
+        Element root = mountDirect(Container.builder().children(reportedShape(directLife, null)).build());
+        List<Element> before = new ArrayList<>(root.getChildren());
+        assertThrows(IllegalStateException.class,
+                () -> root.update(Container.builder().children(failingReplacementShape(directLife)).build()));
+
+        assertEquals("frame[frameErrors=1 {a=[1], a2=[1]}] close{a=[1], a2=[1], b=[1], c=[1]} "
+                        + "direct[children=[old1:b:mounted, old2:c:mounted] {a=[1], a2=[1]}]",
+                "frame[" + afterFrame + "] close" + afterClose
+                        + " direct[children=" + describe(root.getChildren(), before)
+                        + " " + directLife.disposeCounts("a", "a2") + "]",
+                "when a's replacement throws from initState, old a is disposed at replacement, the "
+                        + "failed replacement is disposed immediately, and the parent lists exactly the "
+                        + "original b and c");
+    }
+
+    @Test
+    @DisplayName("A component's new child whose mount fails is disposed once immediately")
+    void componentChildMountFailureDisposesFailedChildOnce() {
+        Lifecycle life = new Lifecycle();
+        AtomicInteger frame = new AtomicInteger(1);
+        GuiRenderer renderer = newRenderer(newGui());
+        renderer.initialize(() -> Container.builder()
+                .child(new SwitchingComponent(life, frame.get()))
+                .build(), rootContext());
+
+        frame.set(2);
+        renderer.scheduleBuild();
+        String afterFrame = "frameErrors=" + frameErrors.count() + " " + life.disposeCounts("x", "y");
+        renderer.dispose();
+
+        assertEquals("frame[frameErrors=1 {x=[1], y=[1]}] close{x=[1], y=[1]}",
+                "frame[" + afterFrame + "] close" + life.disposeCounts("x", "y"),
+                "when a StatelessWidget's built child changes type and the new child's initState "
+                        + "throws, the old child is disposed once and the failed child is disposed once "
+                        + "immediately");
+    }
+
+    @Test
+    @DisplayName("A cleanup failure is attached to the original mount failure as suppressed")
+    void cleanupFailureIsAttachedAsSuppressed() {
+        Lifecycle life = new Lifecycle();
+        Element root = mountDirect(Container.builder().children(reportedShape(life, null)).build());
+        List<Widget> next = new ArrayList<>(reportedShape(life, null));
+        next.add(new TypeW(new Spec(life, "e").slot(3).failInit().failDispose()));
+
+        IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                () -> root.update(Container.builder().children(next).build()));
+        List<String> suppressed = new ArrayList<>();
+        for (Throwable each : thrown.getSuppressed()) {
+            suppressed.add(each.getMessage());
+        }
+
+        assertEquals("primary=init failed suppressed=[dispose failed]",
+                "primary=" + thrown.getMessage() + " suppressed=" + suppressed,
+                "the original initState failure must propagate unchanged, with the failing dispose "
+                        + "of the cleanup attached to it as a suppressed exception");
+    }
+
+    // ------------------------------------------------------------------
     // shapes
     // ------------------------------------------------------------------
 
@@ -147,6 +293,21 @@ class ReconciliationFailureOwnershipTest {
                 new TypeZ(new Spec(life, "a2").slot(0).subscribe(source)),
                 new TypeY(recovered ? b : b.failUpdate()),
                 new TypeX(new Spec(life, "c").slot(2).subscribe(source)));
+    }
+
+    /** Frame 1's a, b, c unchanged, plus a new d (W) that subscribes and then throws in initState. */
+    private static List<Widget> appendFailingD(Lifecycle life, ValueSource source) {
+        List<Widget> children = new ArrayList<>(reportedShape(life, null));
+        children.add(new TypeW(new Spec(life, "d").slot(3).subscribe(source).failInit()));
+        return children;
+    }
+
+    /** a replaced by a2 (Z) whose initState throws; b and c unchanged. */
+    private static List<Widget> failingReplacementShape(Lifecycle life) {
+        return Arrays.asList(
+                new TypeZ(new Spec(life, "a2").slot(0).failInit()),
+                new TypeY(new Spec(life, "b").slot(1)),
+                new TypeX(new Spec(life, "c").slot(2)));
     }
 
     // ------------------------------------------------------------------
@@ -399,6 +560,27 @@ class ReconciliationFailureOwnershipTest {
     private static final class TypeW extends LifecycleWidget {
         TypeW(Spec spec) {
             super(spec);
+        }
+    }
+
+    /**
+     * A StatelessWidget whose single built child is x (type X) on frame 1 and y (type Z, whose
+     * initState throws) on every later frame.
+     */
+    private static final class SwitchingComponent extends StatelessWidget {
+        private final Lifecycle life;
+        private final int frame;
+
+        SwitchingComponent(Lifecycle life, int frame) {
+            this.life = life;
+            this.frame = frame;
+        }
+
+        @Override
+        public Widget build(BuildContext context) {
+            return frame == 1
+                    ? new TypeX(new Spec(life, "x").slot(0))
+                    : new TypeZ(new Spec(life, "y").slot(0).failInit());
         }
     }
 
