@@ -1,14 +1,17 @@
 package com.ultikits.ultitools.interfaces.impl.data.json;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Connection;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -24,6 +27,7 @@ import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Server;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -36,10 +40,13 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Column;
 import com.ultikits.ultitools.annotations.Table;
+import com.ultikits.ultitools.annotations.Transactional;
+import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.entities.WhereCondition;
 import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.manager.DataScope;
 import com.ultikits.ultitools.manager.JsonTransactionManager;
+import com.ultikits.ultitools.manager.PluginManager;
 
 /**
  * Table write locks of the JSON transaction engine (questions 6 and 7 of the Phase 20.4
@@ -47,7 +54,11 @@ import com.ultikits.ultitools.manager.JsonTransactionManager;
  * <p>
  * A transaction's first write to a table locks that table against every other writer until the
  * transaction commits or rolls back; a plain write takes the same lock for the duration of the
- * call. Readers at the default isolation never wait for a lock. A lock wait is bounded.
+ * call. Readers at the default isolation never wait for a lock. A lock wait is bounded; a request
+ * that would close a wait-for cycle fails at once with a deadlock. {@code REPEATABLE_READ} and
+ * {@code SERIALIZABLE} lock a table at the first read, outside the visibility lock. A read-only
+ * transaction rejects writes before staging, and {@code @Transactional(timeout)} sets a deadline
+ * every operation and lock wait observes.
  * <p>
  * Determinism: every interleaving is forced by {@link CountDownLatch} handshakes with bounded
  * awaits ({@value #HANDSHAKE_SECONDS} s). A thread that holds a table never waits unboundedly for
@@ -78,6 +89,7 @@ class JsonTransactionLockingTest {
     Path tempDir;
 
     private JsonStore store;
+    private DataScope scope;
     private SimpleJsonDataOperator<LockRow> rows;
     private SimpleJsonDataOperator<LockOther> others;
     private JsonTransactionManager manager;
@@ -95,7 +107,7 @@ class JsonTransactionLockingTest {
     @BeforeEach
     void openStore() throws Exception {
         File dataFolder = Files.createDirectory(tempDir.resolve("plugin-data")).toFile();
-        DataScope scope = newDataScope("json-locking-test", dataFolder, LockRow.class, LockOther.class);
+        scope = newDataScope("json-locking-test", dataFolder, LockRow.class, LockOther.class);
         try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class)) {
             UltiTools mockUltiTools = mock(UltiTools.class);
             store = new JsonStore(tempDir.resolve("store").toString());
@@ -105,6 +117,11 @@ class JsonTransactionLockingTest {
             others = (SimpleJsonDataOperator<LockOther>) store.getOperator(scope, LockOther.class);
         }
         manager = rows.transactionManager();
+    }
+
+    @AfterEach
+    void resetStepHooks() {
+        JsonLockTable.resetStepHook();
     }
 
     // ===== Writers take turns =====
@@ -446,6 +463,288 @@ class JsonTransactionLockingTest {
         assertThat(rows.getById("x").getName()).isEqualTo("other");
     }
 
+    // ===== Deadlock detection =====
+
+    @Test
+    @DisplayName("A request that would close a wait-for cycle fails at once with a deadlock; the other transaction commits")
+    void deadlockFailsTheRequesterAtOnce() throws Exception {
+        store.setLockWaitBoundMillis(3000);
+        CountDownLatch t2Wrote = new CountDownLatch(1);
+        CountDownLatch t1Waiting = new CountDownLatch(1);
+        JsonLockTable.installStepHook(waiterRegisteredBy("deadlock-t1", t1Waiting));
+        Outcome o1 = new Outcome();
+        Outcome o2 = new Outcome();
+
+        Worker t1 = Worker.start("deadlock-t1", () -> o1.run(() -> inTransaction(() -> {
+            rows.insert(new LockRow("p1", "t1"));
+            awaitHandshake(t2Wrote, "T2 never wrote Q");
+            o1.requested();
+            others.insert(new LockOther("q1", "t1"));
+        })));
+        Worker t2 = Worker.start("deadlock-t2", () -> o2.run(() -> inTransaction(() -> {
+            others.insert(new LockOther("q2", "t2"));
+            t2Wrote.countDown();
+            awaitHandshake(t1Waiting, "T1 never registered as waiting for Q");
+            o2.requested();
+            rows.insert(new LockRow("p2", "t2"));
+        })));
+        t1.finish();
+        t2.finish();
+
+        assertExactlyOneDeadlockLoser(o1, o2, "p1", "q1", "p2", "q2");
+    }
+
+    @Test
+    @DisplayName("Two requests that close a cycle at the same moment: in every one of 20 rounds exactly one fails at once")
+    void simultaneousCycleClosersExactlyOneFails() throws Exception {
+        store.setLockWaitBoundMillis(3000);
+        for (int round = 0; round < 20; round++) {
+            String p1 = "p1-" + round;
+            String q1 = "q1-" + round;
+            String p2 = "p2-" + round;
+            String q2 = "q2-" + round;
+            CountDownLatch holding = new CountDownLatch(2);
+            CountDownLatch start = new CountDownLatch(1);
+            Outcome o1 = new Outcome();
+            Outcome o2 = new Outcome();
+
+            Worker t1 = Worker.start("closer-t1-" + round, () -> o1.run(() -> inTransaction(() -> {
+                rows.insert(new LockRow(p1, "t1"));
+                holding.countDown();
+                awaitHandshake(start, "the round never started");
+                o1.requested();
+                others.insert(new LockOther(q1, "t1"));
+            })));
+            Worker t2 = Worker.start("closer-t2-" + round, () -> o2.run(() -> inTransaction(() -> {
+                others.insert(new LockOther(q2, "t2"));
+                holding.countDown();
+                awaitHandshake(start, "the round never started");
+                o2.requested();
+                rows.insert(new LockRow(p2, "t2"));
+            })));
+            assertThat(holding.await(HANDSHAKE_SECONDS, TimeUnit.SECONDS)).as("round " + round + ": both hold").isTrue();
+            start.countDown();
+            t1.finish();
+            t2.finish();
+
+            assertExactlyOneDeadlockLoser(o1, o2, p1, q1, p2, q2);
+        }
+    }
+
+    // ===== Isolation levels =====
+
+    @Test
+    @DisplayName("REPEATABLE_READ locks the table at the first read, so a read-modify-write keeps both updates")
+    void repeatableReadPreventsTheLostUpdate() throws Exception {
+        assertStricterIsolationPreventsTheLostUpdate(Connection.TRANSACTION_REPEATABLE_READ);
+    }
+
+    @Test
+    @DisplayName("SERIALIZABLE locks the table at the first read, so a read-modify-write keeps both updates")
+    void serializablePreventsTheLostUpdate() throws Exception {
+        assertStricterIsolationPreventsTheLostUpdate(Connection.TRANSACTION_SERIALIZABLE);
+    }
+
+    @Test
+    @DisplayName("At READ_COMMITTED a transaction's read leaves another thread's write of the same table free to proceed")
+    void readCommittedReadDoesNotBlockAWriter() throws Exception {
+        rows.insert(new LockRow("x", "0"));
+        CountDownLatch read = new CountDownLatch(1);
+        CountDownLatch writerDone = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+
+        Worker reader = Worker.start("rc-reader", () -> inTransaction(Connection.TRANSACTION_READ_COMMITTED, () -> {
+            rows.getById("x");
+            read.countDown();
+            awaitHandshake(release, "the test never released the reader");
+        }));
+        Worker writer = Worker.start("rc-writer", () -> {
+            awaitHandshake(read, "the reader never read");
+            update(rows, new LockRow("x", "written"));
+            writerDone.countDown();
+        });
+
+        boolean writeReturned = writerDone.await(HANDOVER_WINDOW_SECONDS, TimeUnit.SECONDS);
+        release.countDown();
+        reader.finish();
+        writer.finish();
+
+        assertThat(writeReturned).as("the write did not wait for the READ_COMMITTED reader").isTrue();
+        assertThat(rows.getById("x").getName()).isEqualTo("written");
+    }
+
+    @Test
+    @DisplayName("A REPEATABLE_READ first read waits for the table lock outside the visibility lock: other reads, "
+            + "a plain write and the holder's commit go on")
+    void repeatableReadFirstReadWaitsOutsideTheVisibilityLock() throws Exception {
+        store.setLockWaitBoundMillis(3000);
+        rows.insert(new LockRow("x", "old"));
+        others.insert(new LockOther("q", "q0"));
+        CountDownLatch tWrote = new CountDownLatch(1);
+        CountDownLatch tRelease = new CountDownLatch(1);
+        CountDownLatch tCommitted = new CountDownLatch(1);
+        CountDownLatch rWaitingOrReturned = new CountDownLatch(1);
+        CountDownLatch rDone = new CountDownLatch(1);
+        AtomicReference<String> rRead = new AtomicReference<>();
+        JsonLockTable.installStepHook(waiterRegisteredBy("rr-reader", rWaitingOrReturned));
+
+        Worker holder = Worker.start("rr-holder", () -> {
+            inTransaction(() -> {
+                update(rows, new LockRow("x", "new"));
+                tWrote.countDown();
+                awaitHandshake(tRelease, "the test never released the holder");
+            });
+            tCommitted.countDown();
+        });
+        Worker reader = Worker.start("rr-reader", () -> {
+            try {
+                awaitHandshake(tWrote, "the holder never wrote");
+                inTransaction(Connection.TRANSACTION_REPEATABLE_READ, () -> rRead.set(rows.getById("x").getName()));
+            } finally {
+                rDone.countDown();
+                rWaitingOrReturned.countDown();
+            }
+        });
+
+        assertThat(rWaitingOrReturned.await(HANDSHAKE_SECONDS, TimeUnit.SECONDS))
+                .as("the REPEATABLE_READ reader registered as waiting or returned").isTrue();
+        assertThat(rDone.getCount()).as("the REPEATABLE_READ reader waits for the holder's table lock").isEqualTo(1L);
+
+        CountDownLatch rowById = new CountDownLatch(1);
+        CountDownLatch rowAll = new CountDownLatch(1);
+        CountDownLatch otherById = new CountDownLatch(1);
+        CountDownLatch otherAll = new CountDownLatch(1);
+        CountDownLatch otherWrite = new CountDownLatch(1);
+        Worker third = Worker.start("rr-third", () -> {
+            rows.getById("x");
+            rowById.countDown();
+            rows.getAll();
+            rowAll.countDown();
+            others.getById("q");
+            otherById.countDown();
+            others.getAll();
+            otherAll.countDown();
+            others.update(new LockOther("q", "q1"));
+            otherWrite.countDown();
+        });
+        assertThat(rowById.await(HANDOVER_WINDOW_SECONDS, TimeUnit.SECONDS)).as("getById on P").isTrue();
+        assertThat(rowAll.await(HANDOVER_WINDOW_SECONDS, TimeUnit.SECONDS)).as("getAll on P").isTrue();
+        assertThat(otherById.await(HANDOVER_WINDOW_SECONDS, TimeUnit.SECONDS)).as("getById on Q").isTrue();
+        assertThat(otherAll.await(HANDOVER_WINDOW_SECONDS, TimeUnit.SECONDS)).as("getAll on Q").isTrue();
+        assertThat(otherWrite.await(HANDOVER_WINDOW_SECONDS, TimeUnit.SECONDS)).as("plain write to Q").isTrue();
+
+        tRelease.countDown();
+        assertThat(tCommitted.await(HANDOVER_WINDOW_SECONDS, TimeUnit.SECONDS)).as("the holder's commit").isTrue();
+        assertThat(rDone.await(HANDSHAKE_SECONDS, TimeUnit.SECONDS)).as("the reader returned").isTrue();
+        holder.finish();
+        reader.finish();
+        third.finish();
+        assertThat(rRead.get()).as("the reader sees the holder's committed value").isEqualTo("new");
+        assertThat(others.getById("q").getLabel()).isEqualTo("q1");
+    }
+
+    // ===== Read-only =====
+
+    @Test
+    @DisplayName("A read-only transaction rejects every write before staging; reads work and no table is locked")
+    void readOnlyRejectsWrites() throws Exception {
+        rows.insert(new LockRow("x", "0"));
+        rows.insert(new LockRow("keep", "keep"));
+        CountDownLatch otherDone = new CountDownLatch(1);
+        boolean otherWriteProceeded;
+
+        manager.begin();
+        try {
+            setReadOnly(true);
+            assertThatThrownBy(() -> rows.insert(new LockRow("n", "new")))
+                    .as("insert").isInstanceOf(DataAccessException.class).hasMessageContaining("read-only");
+            assertThatThrownBy(() -> rows.update(new LockRow("x", "1")))
+                    .as("update").isInstanceOf(DataAccessException.class).hasMessageContaining("read-only");
+            assertThatThrownBy(() -> rows.updateIf(new LockRow("x", "1"), nameIs("0")))
+                    .as("updateIf").isInstanceOf(DataAccessException.class).hasMessageContaining("read-only");
+            assertThatThrownBy(() -> rows.delById("x"))
+                    .as("delById").isInstanceOf(DataAccessException.class).hasMessageContaining("read-only");
+            assertThatThrownBy(() -> rows.del(nameIs("keep")))
+                    .as("del").isInstanceOf(DataAccessException.class).hasMessageContaining("read-only");
+
+            assertThat(rows.getById("x").getName()).as("reads work").isEqualTo("0");
+            assertThat(names(rows.getAll())).containsExactlyInAnyOrder("0", "keep");
+            assertThat(manager.currentTransaction().hasStagedWrites(rows)).as("nothing staged").isFalse();
+
+            Worker other = Worker.start("ro-other", () -> {
+                update(rows, new LockRow("x", "other"));
+                otherDone.countDown();
+            });
+            otherWriteProceeded = otherDone.await(HANDSHAKE_SECONDS, TimeUnit.SECONDS);
+            other.finish();
+            manager.commit();
+        } finally {
+            rollbackIfStillActive();
+        }
+
+        assertThat(otherWriteProceeded).as("a rejected write took no table lock").isTrue();
+        assertThat(rows.getById("x").getName()).isEqualTo("other");
+        assertThat(rows.getById("n")).isNull();
+        assertThat(rows.getById("keep")).isNotNull();
+    }
+
+    // ===== Timeout =====
+
+    @Test
+    @DisplayName("@Transactional(timeout = 1) on JSON: an operation after the deadline and a lock wait crossing it "
+            + "fail and roll back; nothing is left on the thread")
+    void timeoutDeadline() throws Exception {
+        TimedBean bean = timedBean();
+
+        // An operation started after the deadline.
+        long before = System.nanoTime();
+        assertThatThrownBy(() -> bean.writeWaitForTimeThenWrite("t-first", "t-second"))
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining("timeout");
+        assertThat(bean.deadlineSeen.get()).as("getTimeoutDeadlineNanos reports the deadline").isNotNull();
+        assertThat(TimeUnit.NANOSECONDS.toMillis(bean.deadlineSeen.get() - before))
+                .as("deadline about one second after begin").isBetween(500L, 1500L);
+        assertThat(rows.getById("t-first")).as("the earlier write is rolled back").isNull();
+        assertThat(rows.getById("t-second")).isNull();
+        assertThat(manager.hasActiveTransaction()).as("no context left on the thread").isFalse();
+        assertThat(manager.getTimeoutDeadlineNanos()).isNull();
+
+        // A lock wait that crosses the deadline (the default bound, 5 s, is longer).
+        CountDownLatch holderWrote = new CountDownLatch(1);
+        CountDownLatch holderRelease = new CountDownLatch(1);
+        Worker holder = Worker.start("timeout-holder", () -> inTransaction(() -> {
+            others.insert(new LockOther("held", "holder"));
+            holderWrote.countDown();
+            awaitHandshake(holderRelease, "the test never released the holder");
+        }));
+        awaitHandshake(holderWrote, "the holder never wrote");
+        long start = System.nanoTime();
+        AtomicReference<RuntimeException> waitFailure = new AtomicReference<>();
+        try {
+            bean.writeRowThenOther("t-row", "t-other");
+        } catch (DataAccessException e) {
+            waitFailure.set(e);
+        }
+        long waitedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+        holderRelease.countDown();
+        holder.finish();
+
+        assertThat(waitFailure.get()).as("the lock wait crossing the deadline fails")
+                .isInstanceOf(DataAccessException.class).hasMessageContaining("lock-wait timeout");
+        assertThat(waitedMillis).as("bounded by the transaction's deadline, not the 5 s default").isBetween(500L, 3000L);
+        assertThat(rows.getById("t-row")).as("the transaction is rolled back").isNull();
+        assertThat(manager.hasActiveTransaction()).as("no context left on the thread").isFalse();
+
+        CountDownLatch afterDone = new CountDownLatch(1);
+        Worker after = Worker.start("timeout-after", () -> {
+            rows.insert(new LockRow("after", "after"));
+            others.insert(new LockOther("after", "after"));
+            afterDone.countDown();
+        });
+        assertThat(afterDone.await(HANDSHAKE_SECONDS, TimeUnit.SECONDS)).as("no table lock is left behind").isTrue();
+        after.finish();
+    }
+
     // ===== Helpers =====
 
     /**
@@ -464,6 +763,179 @@ class JsonTransactionLockingTest {
             if (!committed) {
                 rollbackIfStillActive();
             }
+        }
+    }
+
+    /**
+     * Runs {@code body} in a transaction at {@code isolationLevel} (a {@link Connection} constant),
+     * set right after begin, as {@code TransactionInterceptor} sets it.
+     */
+    private void inTransaction(int isolationLevel, Runnable body) {
+        boolean committed = false;
+        manager.begin();
+        try {
+            setIsolationLevel(isolationLevel);
+            body.run();
+            manager.commit();
+            committed = true;
+        } finally {
+            if (!committed) {
+                rollbackIfStillActive();
+            }
+        }
+    }
+
+    /** {@code TransactionManager#setIsolationLevel} is deprecated on the base interface (JDBC-flavoured name). */
+    @SuppressWarnings({"deprecation", "removal"})
+    private void setIsolationLevel(int level) {
+        manager.setIsolationLevel(level);
+    }
+
+    /** {@code TransactionManager#setReadOnly} is deprecated on the base interface (JDBC-flavoured name). */
+    @SuppressWarnings({"deprecation", "removal"})
+    private void setReadOnly(boolean readOnly) {
+        manager.setReadOnly(readOnly);
+    }
+
+    /**
+     * X = 0; A reads X at {@code level} (locking the table), B then reads X and waits for A; A gives
+     * B's read a one-second handover window, writes its read + 1 and commits; B, released by A's
+     * commit, reads 1 and writes 2.
+     */
+    private void assertStricterIsolationPreventsTheLostUpdate(int level) throws InterruptedException {
+        rows.insert(new LockRow("x", "0"));
+        CountDownLatch aRead = new CountDownLatch(1);
+        CountDownLatch bReadReturned = new CountDownLatch(1);
+        AtomicReference<Integer> bRead = new AtomicReference<>();
+
+        Worker a = Worker.start("strict-a", () -> inTransaction(level, () -> {
+            int read = Integer.parseInt(rows.getById("x").getName());
+            aRead.countDown();
+            awaitHandover(bReadReturned);
+            update(rows, new LockRow("x", String.valueOf(read + 1)));
+        }));
+        Worker b = Worker.start("strict-b", () -> {
+            awaitHandshake(aRead, "thread A never read");
+            inTransaction(level, () -> {
+                int read = Integer.parseInt(rows.getById("x").getName());
+                bRead.set(read);
+                bReadReturned.countDown();
+                update(rows, new LockRow("x", String.valueOf(read + 1)));
+            });
+        });
+        a.finish();
+        b.finish();
+
+        assertThat(bRead.get()).as("B's first read waited for A's commit").isEqualTo(1);
+        assertThat(rows.getById("x").getName()).as("both increments are kept").isEqualTo("2");
+    }
+
+    /**
+     * Exactly one of the two transactions failed with a deadlock less than one second after its
+     * request and was rolled back; the other committed.
+     */
+    private void assertExactlyOneDeadlockLoser(Outcome o1, Outcome o2, String p1, String q1, String p2, String q2) {
+        List<Outcome> losers = new ArrayList<>();
+        for (Outcome outcome : Arrays.asList(o1, o2)) {
+            if (outcome.failure.get() != null) {
+                losers.add(outcome);
+            }
+        }
+        assertThat(losers).as("exactly one transaction fails").hasSize(1);
+        Outcome loser = losers.get(0);
+        assertThat(loser.failure.get()).hasMessageContaining("deadlock");
+        assertThat(TimeUnit.NANOSECONDS.toMillis(loser.failedAfterNanos.get()))
+                .as("the deadlock is raised at once, not after the lock-wait bound").isLessThan(1000L);
+        boolean t1Lost = loser == o1;
+        assertThat(rows.getById(p1) != null).as(p1).isEqualTo(!t1Lost);
+        assertThat(others.getById(q1) != null).as(q1).isEqualTo(!t1Lost);
+        assertThat(rows.getById(p2) != null).as(p2).isEqualTo(t1Lost);
+        assertThat(others.getById(q2) != null).as(q2).isEqualTo(t1Lost);
+    }
+
+    /** A step hook that counts down {@code latch} when the named thread registers as a lock waiter. */
+    private static JsonTransaction.StepHook waiterRegisteredBy(String threadName, CountDownLatch latch) {
+        return step -> {
+            if (JsonLockTable.STEP_WAITER_REGISTERED.equals(step) && threadName.equals(Thread.currentThread().getName())) {
+                latch.countDown();
+            }
+        };
+    }
+
+    /**
+     * A {@link TimedBean} from a JSON-backed container: {@code PluginManager.wireAop} binds the
+     * {@code @Transactional} advisor to the manager this test's store keeps for its scope.
+     */
+    private TimedBean timedBean() throws ReflectiveOperationException {
+        SimpleContainer context = new SimpleContainer();
+        try (MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class)) {
+            UltiTools mockUltiTools = mock(UltiTools.class);
+            when(mockUltiTools.getDataStore()).thenReturn(store);
+            ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
+            invokeWireAop(context, scope);
+        }
+        context.registerBean(TimedBean.class);
+        context.refresh();
+        TimedBean bean = context.getBean(TimedBean.class);
+        bean.rows = rows;
+        bean.others = others;
+        bean.manager = manager;
+        return bean;
+    }
+
+    /** {@code PluginManager.wireAop} is package-private in another package; reflection reaches the production method. */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+    private static void invokeWireAop(SimpleContainer context, DataScope scope) throws ReflectiveOperationException {
+        Method wireAop = PluginManager.class.getDeclaredMethod("wireAop", SimpleContainer.class, DataScope.class);
+        wireAop.setAccessible(true);
+        wireAop.invoke(null, context, scope);
+    }
+
+    /** What one deadlock-test transaction did: when it made its contested request, and how it failed. */
+    private static final class Outcome {
+        final AtomicLong requestedAt = new AtomicLong();
+        final AtomicReference<DataAccessException> failure = new AtomicReference<>();
+        final AtomicLong failedAfterNanos = new AtomicLong();
+
+        void requested() {
+            requestedAt.set(System.nanoTime());
+        }
+
+        void run(Runnable body) {
+            try {
+                body.run();
+            } catch (DataAccessException e) {
+                failedAfterNanos.set(System.nanoTime() - requestedAt.get());
+                failure.set(e);
+            }
+        }
+    }
+
+    /** The container bean of {@link #timeoutDeadline()}; its operators are set after the container hands it out. */
+    public static class TimedBean {
+        volatile SimpleJsonDataOperator<LockRow> rows;
+        volatile SimpleJsonDataOperator<LockOther> others;
+        volatile JsonTransactionManager manager;
+        final AtomicReference<Long> deadlineSeen = new AtomicReference<>();
+
+        /** Writes, lets the one-second deadline pass by waiting for time on a latch nobody counts down, writes again. */
+        @Transactional(timeout = 1)
+        public void writeWaitForTimeThenWrite(String first, String second) {
+            rows.insert(new LockRow(first, "before the deadline"));
+            deadlineSeen.set(manager.getTimeoutDeadlineNanos());
+            try {
+                new CountDownLatch(1).await(1500, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            rows.insert(new LockRow(second, "after the deadline"));
+        }
+
+        /** Writes a row, then writes a table another transaction holds. */
+        @Transactional(timeout = 1)
+        public void writeRowThenOther(String rowId, String otherId) {
+            rows.insert(new LockRow(rowId, "row"));
+            others.insert(new LockOther(otherId, "other"));
         }
     }
 

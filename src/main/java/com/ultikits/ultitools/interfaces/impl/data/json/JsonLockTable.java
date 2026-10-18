@@ -40,6 +40,18 @@ final class JsonLockTable {
     /** The default upper bound of one lock wait, in milliseconds (question 7, option A). */
     static final long DEFAULT_LOCK_WAIT_MILLIS = 5000L;
 
+    /** Fired under the monitor right after a waiter has registered, before it starts waiting. */
+    static final String STEP_WAITER_REGISTERED = "lock.waiterRegistered";
+
+    private static final JsonTransaction.StepHook NO_STEP_HOOK = step -> { };
+
+    /**
+     * Test seam: called with {@link #STEP_WAITER_REGISTERED}. A no-op in production; a test
+     * installs a callback that only counts down a latch (it must never block, since it runs
+     * holding the monitor) and resets it afterwards.
+     */
+    private static volatile JsonTransaction.StepHook stepHook = NO_STEP_HOOK;
+
     private final ReentrantLock monitor = new ReentrantLock();
 
     /** Signalled whenever a table becomes free. */
@@ -82,6 +94,7 @@ final class JsonLockTable {
             }
             waitsFor.put(caller, table);
             try {
+                stepHook.onStep(STEP_WAITER_REGISTERED);
                 while (!tryTake(table, caller)) {
                     long remaining = deadlineNanos - System.nanoTime();
                     if (remaining <= 0L) {
@@ -123,6 +136,14 @@ final class JsonLockTable {
         } finally {
             monitor.unlock();
         }
+    }
+
+    static void installStepHook(JsonTransaction.StepHook hook) {
+        stepHook = hook == null ? NO_STEP_HOOK : hook;
+    }
+
+    static void resetStepHook() {
+        stepHook = NO_STEP_HOOK;
     }
 
     /** Takes {@code table} if it is free or owned by {@code caller}. Called holding the monitor. */

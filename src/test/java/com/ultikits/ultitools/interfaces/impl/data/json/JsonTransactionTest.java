@@ -922,19 +922,35 @@ class JsonTransactionTest {
         }
 
         @Test
-        @DisplayName("setTimeout gives an explicit answer, not a silent no-op")
+        @DisplayName("setTimeout records a deadline inside a transaction and, as on JDBC, does nothing outside one")
         void setTimeoutIsNotASilentNoOp() {
-            assertThatThrownBy(() -> manager.setTimeout(30))
-                    .isInstanceOf(UnsupportedOperationException.class);
+            assertThatCode(() -> manager.setTimeout(30)).doesNotThrowAnyException();
+            assertThat(manager.getTimeoutDeadlineNanos()).as("no transaction, no deadline").isNull();
+
+            manager.begin();
+            try {
+                manager.setTimeout(30);
+                assertThat(manager.getTimeoutDeadlineNanos()).as("deadline of the active transaction").isNotNull();
+            } finally {
+                manager.rollback();
+            }
         }
 
         @Test
-        @DisplayName("JsonTransactionManager implements TransactionManager only -- "
-                + "the JDBC-only methods are refused, not silently no-op")
+        @DisplayName("JsonTransactionManager refuses getConnection; it accepts every isolation level the JSON "
+                + "engine serves, refuses an unknown one, and accepts read-only")
         void doesNotImplementJdbcMethods() {
             assertThatThrownBy(manager::getConnection).isInstanceOf(UnsupportedOperationException.class);
-            assertThatThrownBy(() -> manager.setIsolationLevel(1)).isInstanceOf(UnsupportedOperationException.class);
-            assertThatThrownBy(() -> manager.setReadOnly(true)).isInstanceOf(UnsupportedOperationException.class);
+            for (int level : new int[] {-1, java.sql.Connection.TRANSACTION_READ_UNCOMMITTED,
+                    java.sql.Connection.TRANSACTION_READ_COMMITTED, java.sql.Connection.TRANSACTION_REPEATABLE_READ,
+                    java.sql.Connection.TRANSACTION_SERIALIZABLE}) {
+                assertThatCode(() -> manager.setIsolationLevel(level)).as("isolation level " + level)
+                        .doesNotThrowAnyException();
+            }
+            assertThatThrownBy(() -> manager.setIsolationLevel(java.sql.Connection.TRANSACTION_NONE))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> manager.setIsolationLevel(3)).isInstanceOf(IllegalArgumentException.class);
+            assertThatCode(() -> manager.setReadOnly(true)).doesNotThrowAnyException();
         }
     }
 
