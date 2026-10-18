@@ -27,8 +27,6 @@ import javax.tools.JavaFileObject;
 import javax.tools.StandardJavaFileManager;
 import javax.tools.ToolProvider;
 import java.io.IOException;
-import java.lang.reflect.AnnotatedElement;
-import java.lang.reflect.Constructor;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -39,6 +37,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -53,6 +52,10 @@ import java.util.stream.Stream;
  * Build-only declaration discovery. The full JDK owns Java syntax; documentation is optional.
  * Only {@link JavacTask#parse()} and DocTrees are used, with processing disabled. Reflection
  * inspects already compiled declarations without initialization, invocation or field reads.
+ * Deprecated presence and its {@code since}/{@code forRemoval} values come from the class file
+ * ({@link CompiledDeprecationReader}), never from reflective annotation access, which would
+ * resolve co-located annotation values and so initialize enum types they name. Reading the
+ * compiled constants also accepts any javac compile-time constant expression without evaluating it.
  * Neither this tool nor its compiler API dependencies belong in the runtime plugin artifact.
  */
 public final class JavadocDeprecationScanner {
@@ -121,6 +124,7 @@ public final class JavadocDeprecationScanner {
         private final String packageName;
         private final Map<String, Set<String>> imports = new LinkedHashMap<>();
         private final List<String> onDemand = new ArrayList<>();
+        private final Map<Class<?>, CompiledDeprecationReader> compiledClasses = new HashMap<>();
 
         Source(Path file, CompilationUnitTree unit, DocTrees docs) {
             this.file = file;
@@ -173,116 +177,117 @@ public final class JavadocDeprecationScanner {
                     docs.getSourcePositions().getStartPosition(unit, declaration)) + " "
                     + owner.binary + " " + declaration.getKind() + " " + declarationName(declaration);
             try {
-                boolean deprecated = false;
-                for (AnnotationTree annotation : annotations) {
-                    Set<String> types = resolve(annotation.getAnnotationType(), owner, scope, new HashSet<>());
-                    if (types.contains("java.lang.Deprecated")) {
-                        if (types.size() != 1) {
-                            throw new IllegalStateException("Ambiguous annotation identity: " + types);
-                        }
-                        deprecated = true;
-                    }
-                }
-                if (!deprecated) {
+                if (!annotatedDeprecated(annotations, owner, scope)) {
                     return;
                 }
                 Class<?> compiledOwner = load(owner.binary);
-                RegistryKey key;
-                DeprecationEntry.Kind kind;
-                AnnotatedElement reflected;
+                CompiledDeprecationReader compiled = compiledClass(compiledOwner);
+                Mapped mapped;
                 if (declaration instanceof ClassTree) {
-                    key = RegistryKey.forClass(compiledOwner.getName());
-                    kind = DeprecationEntry.Kind.CLASS;
-                    reflected = compiledOwner;
+                    mapped = new Mapped(RegistryKey.forClass(compiledOwner.getName()), DeprecationEntry.Kind.CLASS,
+                            compiled.forClass());
                 } else if (declaration instanceof VariableTree) {
-                    VariableTree variable = (VariableTree) declaration;
-                    Set<String> types = resolve(variable.getType(), owner, scope, new HashSet<>());
-                    List<Field> candidates = Arrays.asList(compiledOwner.getDeclaredFields());
-                    List<Field> matches = candidates.stream()
-                            .filter(f -> f.getName().contentEquals(variable.getName())
-                                    && types.contains(typeName(f.getType())))
-                            .collect(Collectors.toList());
-                    if (matches.size() != 1) {
-                        throw new IllegalStateException((matches.isEmpty() ? "No reflected field matched " : "Ambiguous field match ")
-                                + variable.getName() + " " + types + "; candidates: " + candidates + "; matches: " + matches);
-                    }
-                    Field field = matches.get(0);
-                    key = RegistryKey.forField(compiledOwner.getName(), field.getName());
-                    kind = DeprecationEntry.Kind.FIELD;
-                    reflected = field;
+                    mapped = mapField((VariableTree) declaration, compiledOwner, compiled, owner, scope);
                 } else {
-                    MethodTree method = (MethodTree) declaration;
-                    boolean constructor = method.getReturnType() == null;
-                    List<Set<String>> parameters = new ArrayList<>();
-                    for (VariableTree parameter : method.getParameters()) {
-                        parameters.add(resolve(parameter.getType(), owner, scope, new HashSet<>()));
-                    }
-                    List<Executable> candidates = new ArrayList<>();
-                    if (constructor) {
-                        candidates.addAll(Arrays.asList(compiledOwner.getDeclaredConstructors()));
-                    } else {
-                        for (Method candidate : compiledOwner.getDeclaredMethods()) {
-                            if (candidate.getName().contentEquals(method.getName()) && !candidate.isBridge()
-                                    && !candidate.isSynthetic()) {
-                                candidates.add(candidate);
-                            }
-                        }
-                    }
-                    Executable match = uniqueMatch(candidates, parameters, compiledOwner, constructor);
-                    key = RegistryKey.forMember(compiledOwner.getName(), constructor
-                                    ? compiledOwner.getSimpleName() : method.getName().toString(),
-                            Arrays.stream(match.getParameterTypes()).map(JavadocDeprecationScanner::typeName)
-                                    .collect(Collectors.toList()));
-                    kind = constructor ? DeprecationEntry.Kind.CONSTRUCTOR : DeprecationEntry.Kind.METHOD;
-                    reflected = match;
+                    mapped = mapExecutable((MethodTree) declaration, compiledOwner, compiled, owner, scope);
                 }
-                if (!reflected.isAnnotationPresent(Deprecated.class)) {
-                    throw new IllegalStateException("Compiled declaration lacks java.lang.Deprecated: " + key);
+                if (mapped.metadata == null) {
+                    throw new IllegalStateException("Compiled declaration lacks java.lang.Deprecated: " + mapped.key);
                 }
-                String since = null;
-                boolean forRemoval = false;
-                for (AnnotationTree annotation : annotations) {
-                    if (!resolve(annotation.getAnnotationType(), owner, scope, new HashSet<>())
-                            .contains("java.lang.Deprecated")) {
-                        continue;
-                    }
-                    for (com.sun.source.tree.ExpressionTree argument : annotation.getArguments()) {
-                        if (!(argument instanceof com.sun.source.tree.AssignmentTree)) {
-                            throw new IllegalStateException("Unsupported Deprecated argument: " + argument);
-                        }
-                        com.sun.source.tree.AssignmentTree assignment = (com.sun.source.tree.AssignmentTree) argument;
-                        if (!(assignment.getExpression() instanceof com.sun.source.tree.LiteralTree)) {
-                            throw new IllegalStateException("Deprecated metadata must be literal: " + argument);
-                        }
-                        Object value = ((com.sun.source.tree.LiteralTree) assignment.getExpression()).getValue();
-                        if (assignment.getVariable().toString().equals("since")) {
-                            since = (String) value;
-                        } else if (assignment.getVariable().toString().equals("forRemoval")) {
-                            forRemoval = (Boolean) value;
-                        }
-                    }
-                }
-                String paragraph = "";
-                String removeIn = null;
-                DocCommentTree doc = docs.getDocCommentTree(path);
-                if (doc != null) {
-                    for (DocTree tag : doc.getBlockTags()) {
-                        if (tag instanceof DeprecatedTree) {
-                            paragraph = joinDoc(((DeprecatedTree) tag).getBody());
-                        } else if (tag instanceof UnknownBlockTagTree
-                                && ((UnknownBlockTagTree) tag).getTagName().equals("removeIn")) {
-                            String text = joinDoc(((UnknownBlockTagTree) tag).getContent()).trim();
-                            removeIn = text.isEmpty() ? null : text.split("\\s+")[0];
-                        }
-                    }
-                }
-                entries.add(DeprecationEntry.builder().key(key).kind(kind).since(since).forRemoval(forRemoval)
-                        .removeIn(removeIn).replacement(DeprecatedParagraphExtractor.extractReplacementText(paragraph))
-                        .status(forRemoval ? DeprecationEntry.Status.ANNOUNCED : DeprecationEntry.Status.DEPRECATED)
-                        .build());
-            } catch (ReflectiveOperationException | LinkageError | RuntimeException e) {
+                entries.add(entry(path, mapped));
+            } catch (ReflectiveOperationException | LinkageError | IOException | RuntimeException e) {
                 throw new IllegalStateException("Cannot map declaration " + context + ": " + e.getMessage(), e);
             }
+        }
+
+        private boolean annotatedDeprecated(List<? extends AnnotationTree> annotations, Owner owner, Scope scope) {
+            boolean deprecated = false;
+            for (AnnotationTree annotation : annotations) {
+                Set<String> types = resolve(annotation.getAnnotationType(), owner, scope, new HashSet<>());
+                if (types.contains("java.lang.Deprecated")) {
+                    if (types.size() != 1) {
+                        throw new IllegalStateException("Ambiguous annotation identity: " + types);
+                    }
+                    deprecated = true;
+                }
+            }
+            return deprecated;
+        }
+
+        private CompiledDeprecationReader compiledClass(Class<?> compiledOwner) throws IOException {
+            CompiledDeprecationReader compiled = compiledClasses.get(compiledOwner);
+            if (compiled == null) {
+                compiled = CompiledDeprecationReader.read(classLoader, compiledOwner);
+                compiledClasses.put(compiledOwner, compiled);
+            }
+            return compiled;
+        }
+
+        private Mapped mapField(VariableTree variable, Class<?> compiledOwner, CompiledDeprecationReader compiled,
+                Owner owner, Scope scope) {
+            Set<String> types = resolve(variable.getType(), owner, scope, new HashSet<>());
+            List<Field> candidates = Arrays.asList(compiledOwner.getDeclaredFields());
+            List<Field> matches = candidates.stream()
+                    .filter(f -> f.getName().contentEquals(variable.getName())
+                            && types.contains(typeName(f.getType())))
+                    .collect(Collectors.toList());
+            if (matches.size() != 1) {
+                throw new IllegalStateException((matches.isEmpty() ? "No reflected field matched " : "Ambiguous field match ")
+                        + variable.getName() + " " + types + "; candidates: " + candidates + "; matches: " + matches);
+            }
+            Field field = matches.get(0);
+            return new Mapped(RegistryKey.forField(compiledOwner.getName(), field.getName()),
+                    DeprecationEntry.Kind.FIELD, compiled.forField(field));
+        }
+
+        private Mapped mapExecutable(MethodTree method, Class<?> compiledOwner, CompiledDeprecationReader compiled,
+                Owner owner, Scope scope) {
+            boolean constructor = method.getReturnType() == null;
+            List<Set<String>> parameters = new ArrayList<>();
+            for (VariableTree parameter : method.getParameters()) {
+                parameters.add(resolve(parameter.getType(), owner, scope, new HashSet<>()));
+            }
+            List<Executable> candidates = new ArrayList<>();
+            if (constructor) {
+                candidates.addAll(Arrays.asList(compiledOwner.getDeclaredConstructors()));
+            } else {
+                for (Method candidate : compiledOwner.getDeclaredMethods()) {
+                    if (candidate.getName().contentEquals(method.getName()) && !candidate.isBridge()
+                            && !candidate.isSynthetic()) {
+                        candidates.add(candidate);
+                    }
+                }
+            }
+            Executable match = uniqueMatch(candidates, parameters, compiledOwner, constructor);
+            RegistryKey key = RegistryKey.forMember(compiledOwner.getName(), constructor
+                            ? compiledOwner.getSimpleName() : method.getName().toString(),
+                    Arrays.stream(match.getParameterTypes()).map(JavadocDeprecationScanner::typeName)
+                            .collect(Collectors.toList()));
+            return new Mapped(key, constructor ? DeprecationEntry.Kind.CONSTRUCTOR : DeprecationEntry.Kind.METHOD,
+                    compiled.forExecutable(match));
+        }
+
+        private DeprecationEntry entry(TreePath path, Mapped mapped) {
+            String paragraph = "";
+            String removeIn = null;
+            DocCommentTree doc = docs.getDocCommentTree(path);
+            if (doc != null) {
+                for (DocTree tag : doc.getBlockTags()) {
+                    if (tag instanceof DeprecatedTree) {
+                        paragraph = joinDoc(((DeprecatedTree) tag).getBody());
+                    } else if (tag instanceof UnknownBlockTagTree
+                            && ((UnknownBlockTagTree) tag).getTagName().equals("removeIn")) {
+                        String text = joinDoc(((UnknownBlockTagTree) tag).getContent()).trim();
+                        removeIn = text.isEmpty() ? null : text.split("\\s+")[0];
+                    }
+                }
+            }
+            boolean forRemoval = mapped.metadata.forRemoval;
+            return DeprecationEntry.builder().key(mapped.key).kind(mapped.kind).since(mapped.metadata.since)
+                    .forRemoval(forRemoval).removeIn(removeIn)
+                    .replacement(DeprecatedParagraphExtractor.extractReplacementText(paragraph))
+                    .status(forRemoval ? DeprecationEntry.Status.ANNOUNCED : DeprecationEntry.Status.DEPRECATED)
+                    .build();
         }
 
         private Executable uniqueMatch(List<Executable> candidates, List<Set<String>> parameters,
@@ -439,6 +444,19 @@ public final class JavadocDeprecationScanner {
 
     private static String typeName(Class<?> type) {
         return type.isArray() ? typeName(type.getComponentType()) + "[]" : type.getName();
+    }
+
+    /** One source declaration matched to its compiled counterpart. */
+    private static final class Mapped {
+        final RegistryKey key;
+        final DeprecationEntry.Kind kind;
+        final CompiledDeprecationReader.Metadata metadata;
+
+        Mapped(RegistryKey key, DeprecationEntry.Kind kind, CompiledDeprecationReader.Metadata metadata) {
+            this.key = key;
+            this.kind = kind;
+            this.metadata = metadata;
+        }
     }
 
     private static final class Owner {

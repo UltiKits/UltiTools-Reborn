@@ -311,6 +311,66 @@ class JavadocDeprecationScannerTest {
         assertThat(output.resolve("probe/SafetySubject.class")).exists();
     }
 
+    @Test
+    void scanningNeverResolvesOtherAnnotationValuesOfDeprecatedDeclarations(@TempDir Path root) throws Exception {
+        Path markers = Files.createDirectories(root.resolve("markers"));
+        String marker = markers.toString().replace("\\", "\\\\").replace("\"", "\\\"");
+        Path subject = write(root.resolve("source/probe/EnumValueSubject.java"),
+                "package probe; import java.lang.annotation.Retention; import java.lang.annotation.RetentionPolicy;"
+                        + " @Deprecated @EnumValueSubject.Mark(EnumValueSubject.Mode.VALUE) public class EnumValueSubject {"
+                        + " @Retention(RetentionPolicy.RUNTIME) public @interface Mark { Mode value(); }"
+                        + " public enum Mode { VALUE; static { try { java.nio.file.Files.write(java.nio.file.Paths.get(\""
+                        + marker + "\", \"enum\"), new byte[]{1}); } catch (java.io.IOException e) {"
+                        + " throw new java.io.UncheckedIOException(e); } } }"
+                        + " @Deprecated @Mark(Mode.VALUE) public String field;"
+                        + " @Deprecated @Mark(Mode.VALUE) public EnumValueSubject() {}"
+                        + " @Deprecated @Mark(Mode.VALUE) public void flagged() {} }");
+        Path classes = compile(root, subject);
+        try (URLClassLoader scanLoader = loader(classes)) {
+            assertThat(new JavadocDeprecationScanner(scanLoader).scan(subject.getParent()))
+                    .extracting(e -> e.getKey().toString()).containsExactly("probe.EnumValueSubject",
+                            "probe.EnumValueSubject#field", "probe.EnumValueSubject#EnumValueSubject()",
+                            "probe.EnumValueSubject#flagged()");
+        }
+        try (Stream<Path> files = Files.list(markers)) {
+            assertThat(files.collect(Collectors.toList()))
+                    .as("scanning must not initialize an enum named by a co-located annotation value").isEmpty();
+        }
+        // Firing control on a fresh loader: reflective annotation reads DO run the enum initializer,
+        // so the empty marker directory above is evidence, not an inert sentinel.
+        try (URLClassLoader control = loader(classes)) {
+            assertThat(Class.forName("probe.EnumValueSubject", false, control).getDeclaredMethod("flagged")
+                    .getAnnotations()).hasSize(2);
+        }
+        assertThat(markers.resolve("enum")).exists();
+    }
+
+    @Test
+    void compileTimeConstantMetadataIsAccepted(@TempDir Path root) throws Exception {
+        Path subject = write(root.resolve("source/probe/ConstantSubject.java"),
+                "package probe; public class ConstantSubject { static final String VERSION = \"6.2.4\";"
+                        + " @Deprecated(since = VERSION) public void constantSince() {}"
+                        + " @Deprecated(since = Versions.NEXT, forRemoval = (true)) public void qualifiedConstant() {}"
+                        + " @Deprecated(since = (\"6.2\" + \".6\"), forRemoval = (!false)) public void parenthesised() {} }"
+                        + " class Versions { static final String NEXT = \"6.2.5\"; }");
+        Path classes = compile(root, subject);
+        try (URLClassLoader loader = loader(classes)) {
+            List<DeprecationEntry> entries = new ArrayList<>();
+            org.assertj.core.api.Assertions.assertThatCode(() -> entries.addAll(
+                    new JavadocDeprecationScanner(loader).scan(subject.getParent())))
+                    .as("javac-accepted constant expressions must not fail registry generation")
+                    .doesNotThrowAnyException();
+            assertThat(entries).extracting(e -> e.getKey().toString(), DeprecationEntry::getSince,
+                    DeprecationEntry::isForRemoval, DeprecationEntry::getStatus).containsExactly(
+                    org.assertj.core.groups.Tuple.tuple("probe.ConstantSubject#constantSince()", "6.2.4", false,
+                            DeprecationEntry.Status.DEPRECATED),
+                    org.assertj.core.groups.Tuple.tuple("probe.ConstantSubject#qualifiedConstant()", "6.2.5", true,
+                            DeprecationEntry.Status.ANNOUNCED),
+                    org.assertj.core.groups.Tuple.tuple("probe.ConstantSubject#parenthesised()", "6.2.6", true,
+                            DeprecationEntry.Status.ANNOUNCED));
+        }
+    }
+
     private static Path write(Path file, String content) throws IOException {
         Files.createDirectories(file.getParent());
         return Files.write(file, content.getBytes(StandardCharsets.UTF_8));
