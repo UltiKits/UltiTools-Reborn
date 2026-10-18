@@ -931,6 +931,12 @@ class FileOperationTargetConsistencyTest {
     void recursiveDeleteOfJunctionLikeTerminalEntryNeverRecurses() throws Exception {
         Path victim = buildRecursiveDeleteVictim();
         Path junctionTarget = Files.createDirectories(outside.resolve("odir")).toRealPath();
+        // A real junction lists its target's children; give the target its own files, with bytes that
+        // differ from the victim's copies, so that recursing "through" the junction would be visible.
+        Files.write(junctionTarget.resolve("keep.txt"), OUTSIDE_SECRET.getBytes(StandardCharsets.UTF_8));
+        Path targetInner = Files.createDirectories(junctionTarget.resolve("inner"));
+        Files.write(targetInner.resolve("inner.txt"), OUTSIDE_VICTIM.getBytes(StandardCharsets.UTF_8));
+        Map<String, String> targetBefore = snapshot(junctionTarget);
         Map<String, String> victimBefore = snapshot(victim);
         Map<String, String> outsideBefore = snapshot(outside);
         assertThat(installRealPathLookup(p -> p.equals(victim) ? junctionTarget : realPathOrNull(p)))
@@ -944,6 +950,8 @@ class FileOperationTargetConsistencyTest {
                 .as("an entry whose real path is elsewhere is removed as an entry only, never emptied")
                 .isEqualTo(victimBefore);
         assertThat(snapshot(outside)).as("the outside directory is byte-identical").isEqualTo(outsideBefore);
+        assertThat(snapshot(junctionTarget))
+                .as("the junction target's own files survive byte-identical").isEqualTo(targetBefore);
         assertAllowedEntry(outcome, "delete", "plugins/victim");
     }
 
