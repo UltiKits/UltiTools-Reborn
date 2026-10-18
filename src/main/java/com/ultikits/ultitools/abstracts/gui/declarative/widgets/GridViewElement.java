@@ -131,12 +131,11 @@ public class GridViewElement extends Element {
     }
 
     private void mountChildren() {
+        // First mount shares reconciliation's creation path (starting from the still-empty
+        // list): a child whose mount throws is cleaned up immediately, and every child mounted
+        // before it stays owned, so the parent's own cleanup can release it.
         GridView<?> gridView = (GridView<?>) getWidget();
-        for (Widget childWidget : gridView.getChildren()) {
-            Element childElement = childWidget.createElement();
-            childElement.mount(this);
-            childElements.add(childElement);
-        }
+        updateChildren(childElements, gridView.getChildren());
     }
 
     /**

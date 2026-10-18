@@ -71,7 +71,7 @@ public abstract class Element {
      * the first {@code performRebuild()}, etc.) -- this base method is therefore the single
      * choke point through which the ENTIRE mounting recursion passes, one call per Element,
      * regardless of subtype: {@code ContainerElement}/{@code GridViewElement.mountChildren()}
-     * calling {@code childElement.mount(this)} for each child, and the
+     * mounting each child through {@code updateChildren()} and {@code updateChild()}, and the
      * {@code mount()->performRebuild()->updateChild()->mount()} cascade
      * {@code StatelessElement}/{@code StatefulElement} drive when composing a child Widget for
      * the first time. Checking the depth HERE, rather than separately in every subclass's own
@@ -323,9 +323,7 @@ public abstract class Element {
 
         // If there is no old Element, create a new one.
         if (oldChild == null) {
-            Element newChild = newWidget.createElement();
-            newChild.mount(this);
-            return newChild;
+            return createAndMountChild(newWidget);
         }
 
         // If the Widget type matches, reuse the Element.
@@ -334,10 +332,42 @@ public abstract class Element {
             return oldChild;
         }
 
-        // Type differs, so it must be replaced.
+        // Type differs, so it must be replaced. The old child is unmounted before the new one is
+        // created, so its dispose always runs before the replacement's initState.
         oldChild.unmount();
+        return createAndMountChild(newWidget);
+    }
+
+    /**
+     * Creates the Element for {@code newWidget} and mounts it under this Element -- the single
+     * creation path for every child, whether it is new, a replacement, or part of a layout
+     * element's first mount.
+     * <p>
+     * A child becomes owned by its parent only when this method returns normally. If
+     * {@code mount} throws (for example a {@code State.initState} that subscribed to something
+     * and then failed, or a failing descendant of a newly created layout element), the new
+     * Element is unmounted here immediately, so whatever it or its descendants acquired is
+     * released and nothing is left mounted without an owner. The original exception then
+     * propagates unchanged; if the cleanup itself throws, that failure is attached to it with
+     * {@link Throwable#addSuppressed(Throwable)} rather than replacing it.
+     *
+     * @param newWidget the Widget to create and mount a child for
+     * @return the mounted child Element
+     */
+    @SuppressWarnings("PMD.AvoidCatchingGenericException") // deliberate cleanup barrier -- rethrows the primary unchanged
+    @NotNull
+    private Element createAndMountChild(@NotNull Widget newWidget) {
         Element newChild = newWidget.createElement();
-        newChild.mount(this);
+        try {
+            newChild.mount(this);
+        } catch (RuntimeException | Error primary) {
+            try {
+                newChild.unmount();
+            } catch (RuntimeException | Error cleanupFailure) {
+                primary.addSuppressed(cleanupFailure);
+            }
+            throw primary;
+        }
         return newChild;
     }
 
