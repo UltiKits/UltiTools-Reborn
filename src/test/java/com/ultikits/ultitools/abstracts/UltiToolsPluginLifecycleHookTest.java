@@ -462,6 +462,46 @@ class UltiToolsPluginLifecycleHookTest {
     }
 
     @Test
+    @DisplayName("hook throws an undeclared checked exception AND command cleanup throws -- the hook's own "
+            + "exception propagates with the command-cleanup failure suppressed on it, and listener cleanup still ran")
+    void undeclaredCheckedHookFailurePropagatesWithLaterCleanupFailureSuppressed() {
+        UltiToolsPlugin plugin = mock(FixturePlugin.class);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        IOException hookFailure = new IOException("hook could not flush its state");
+        RuntimeException commandFailure = new RuntimeException("command cleanup failed");
+        doAnswer(invocation -> {
+            sneakyThrow(hookFailure);
+            return null;
+        }).when(plugin).onUnregister();
+        doThrow(commandFailure).when(mockCommandManager).unregisterAll(plugin);
+
+        Throwable thrown = catchThrowable(plugin::unregisterSelf);
+
+        assertThat(thrown).isSameAs(hookFailure);
+        assertThat(thrown.getSuppressed()).containsExactly(commandFailure);
+        verify(mockListenerManager, times(1)).unregisterAll(plugin);
+    }
+
+    @Test
+    @DisplayName("hook succeeds but command cleanup throws an undeclared checked exception -- listener cleanup "
+            + "still runs and that same exception propagates")
+    void undeclaredCheckedCleanupFailureAfterSuccessfulHookPropagatesUnchanged() {
+        UltiToolsPlugin plugin = mock(FixturePlugin.class);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        Exception commandFailure = new Exception("command cleanup failed with a checked exception");
+        doAnswer(invocation -> {
+            sneakyThrow(commandFailure);
+            return null;
+        }).when(mockCommandManager).unregisterAll(plugin);
+
+        Throwable thrown = catchThrowable(plugin::unregisterSelf);
+
+        verify(mockListenerManager, times(1)).unregisterAll(plugin);
+        assertThat(thrown).isSameAs(commandFailure);
+        assertThat(thrown.getSuppressed()).isEmpty();
+    }
+
+    @Test
     @DisplayName("when nothing throws, both command and listener cleanup run and unregisterSelf() completes normally")
     // The assertion here IS verify(...) -- Mockito's invocation count check, which PMD does
     // not recognise as an assert (documented pattern, see this repository's CLAUDE.md
