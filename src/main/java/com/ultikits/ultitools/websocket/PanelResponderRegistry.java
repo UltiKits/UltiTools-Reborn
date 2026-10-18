@@ -71,6 +71,9 @@ import com.ultikits.ultitools.utils.PluginInitiationUtils;
  *       lazily on the thread that admits a request (the panel connection's reader thread), so each
  *       copies that thread's {@link InheritableThreadLocal} values once, at creation; the
  *       framework declares none.</li>
+ *   <li><b>Data.</b> The responder receives its own copy of the request's {@code data}, taken when
+ *       the request is admitted; it may change that copy freely, and its changes reach neither the
+ *       caller's object nor the {@code PanelMessageEvent} published for the request.</li>
  *   <li><b>Ownership.</b> The responder registered when the request was admitted handles it, even
  *       if the type is reassigned or the owning module unloads before the call runs; a module
  *       unloading while one of its requests is still waiting or running can therefore see that
@@ -446,9 +449,9 @@ public class PanelResponderRegistry {
     /**
      * Admits a request for {@code messageType}'s registered responder and returns its outcome at
      * once, without waiting for the responder: admission captures the responder registered now
-     * (and its owner), the calling thread's context class loader and this registry's registration
-     * scope on the calling thread, starts the request's one deadline of {@link
-     * #RESPONDER_TIMEOUT_MILLIS}, and queues the call for a worker thread. The returned future
+     * (and its owner), a copy of {@code data}, the calling thread's context class loader and this
+     * registry's registration scope on the calling thread, starts the request's one deadline of
+     * {@link #RESPONDER_TIMEOUT_MILLIS}, and queues the call for a worker thread. The returned future
      * settles exactly once — the single reply-shape point every outcome routes through (D-27):
      * <ul>
      *   <li>the responder's future completes with a value — that value;</li>
@@ -476,8 +479,9 @@ public class PanelResponderRegistry {
      *
      * @param messageType the message type to dispatch, expected to already have a registered
      *                     responder ({@link #hasResponder(String)})
-     * @param data         the inbound message's {@code data} object, passed straight to the
-     *                     responder
+     * @param data         the inbound message's {@code data} object, possibly {@code null}; the
+     *                     responder receives a copy taken when this method is called, so its
+     *                     changes never reach {@code data}
      * @param requestId    the request's correlation id — not used by {@code dispatch} itself, but
      *                     accepted so the call site does not have to separately track it; reserved
      *                     for the caller assembling the outbound reply
@@ -493,7 +497,11 @@ public class PanelResponderRegistry {
             return outcome;
         }
 
-        Invocation invocation = new Invocation(messageType, entry, data, outcome);
+        // A copy taken now, on the admitting thread: the responder runs on a worker and may change
+        // its data freely, while the caller keeps reading its own object (for example to publish a
+        // PanelMessageEvent of the request as received).
+        JsonObject requestData = data == null ? null : data.deepCopy();
+        Invocation invocation = new Invocation(messageType, entry, requestData, outcome);
         admitted.add(invocation);
         // Any settlement, including a caller's cancel, frees the queue slot and the deadline.
         outcome.whenComplete((value, failure) -> invocation.release());

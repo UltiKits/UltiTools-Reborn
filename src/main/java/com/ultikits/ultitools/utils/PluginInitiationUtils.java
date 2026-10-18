@@ -1088,11 +1088,15 @@ public class PluginInitiationUtils {
             if (eventBus == null) {
                 return;
             }
+            // Built here, on the dispatching thread, not inside the main-thread task: the event's
+            // constructor copies data and the envelope now, so the event carries the request as
+            // received whatever any other thread does to those objects before the task runs.
+            PanelMessageEvent event = new PanelMessageEvent(type, data, message);
             scheduleUnlessDisabling("PanelMessageEvent " + type, () -> Bukkit.getScheduler().runTask(instance, () -> {
                 // Two long reads and a comparison on the fast path — no allocation, no logging,
                 // until the slow branch below is actually taken.
                 long startNanos = System.nanoTime();
-                eventBus.publish(new PanelMessageEvent(type, data, message));
+                eventBus.publish(event);
                 long elapsedMillis = (System.nanoTime() - startNanos) / 1_000_000L;
                 if (elapsedMillis > SLOW_PANEL_EVENT_HANDLER_THRESHOLD_MILLIS) {
                     // Times the whole publish, not an individual handler: EventBus.publish
