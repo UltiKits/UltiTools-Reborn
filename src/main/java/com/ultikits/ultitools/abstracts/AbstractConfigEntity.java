@@ -47,6 +47,7 @@ import com.ultikits.ultitools.config.convert.ConversionResult;
 import com.ultikits.ultitools.config.convert.ConversionFailure;
 import com.ultikits.ultitools.config.convert.ConversionException;
 import com.ultikits.ultitools.config.convert.builtin.ConversionTypes;
+import com.ultikits.ultitools.config.convert.builtin.GenericConverters;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.annotations.config.NotEmpty;
 import com.ultikits.ultitools.annotations.config.Pattern;
@@ -736,11 +737,94 @@ public abstract class AbstractConfigEntity {
                 throw new IllegalArgumentException("The map keys " + leaf + " of '" + entryPath + "' in " + configFilePath
                         + " reach inside an entry that is not a map; name the entry itself");
             }
+            Object mine = plainValue(field, true);
+            leaf = spelledLeaf(field, leaf, mine);
             List<String> path = new ArrayList<>(keys(field)); path.addAll(leaf);
-            ModuleChange change = new ModuleChange(field, leaf, path, plainValue(field, true), acknowledgedRaw.get(field));
+            ModuleChange change = new ModuleChange(field, leaf, path, mine, acknowledgedRaw.get(field));
             change.presence = required;
             writeOperatorChanges(Collections.singletonList(change));
         }
+    }
+
+    /**
+     * The keys of an operator's map-entry write, spelled as the module's map and the file spell them (#673, case 52). At
+     * a map level declared with a non-text key type ({@code Integer}, {@code Long}, {@code Boolean}, ...), a key the
+     * module's plain map there does not hold as given is read through that key type and replaced by the one key of the
+     * module's map that reads back to the same key, else by the one such key of the value last read from the file, so
+     * {@code "1"} reaches the entry the file spells {@code '01'}. Text that does not convert, or that no key reads back
+     * to, is kept as given; levels keyed by {@code String} or {@code Object} are not changed.
+     *
+     * @throws ConfigWriteRefusedException if several keys at one level read back to the same key; nothing is written
+     */
+    private List<String> spelledLeaf(Field field, List<String> leaf, Object mine) throws ConfigWriteRefusedException {
+        RawEntry read = acknowledgedRaw.get(field);
+        Object moduleLevel = mine;
+        Object fileLevel = read == null || !read.present ? null : read.value;
+        Type type = declaredType(field);
+        List<String> spelled = new ArrayList<>(leaf.size());
+        for (String key : leaf) {
+            String text = key;
+            Type keyType = ConversionTypes.argument(type, Map.class, 0);
+            boolean held = moduleLevel instanceof Map && ((Map<?, ?>) moduleLevel).containsKey(key);
+            if (!held && GenericConverters.bindsKeyText(keyType)) {
+                text = spelledKey(field, spelled, key, keyType, moduleLevel, fileLevel);
+            }
+            spelled.add(text);
+            moduleLevel = moduleLevel instanceof Map ? ((Map<?, ?>) moduleLevel).get(text) : null;
+            fileLevel = fileLevel instanceof Map ? ((Map<?, ?>) fileLevel).get(text) : null;
+            type = mapValueType(type);
+        }
+        return spelled;
+    }
+
+    /** One key of {@link #spelledLeaf}: {@code above} holds the keys already resolved, outermost first. */
+    private String spelledKey(Field field, List<String> above, String key, Type keyType, Object moduleLevel, Object fileLevel)
+            throws ConfigWriteRefusedException {
+        List<String> at = new ArrayList<>(keys(field)); at.addAll(above); at.add(key);
+        Object typed = readKey(key, keyType, at);
+        if (typed == null) { return key; }
+        List<String> matches = keysReadingBack(moduleLevel, typed, keyType, at);
+        if (matches.isEmpty()) { matches = keysReadingBack(fileLevel, typed, keyType, at); }
+        if (several(matches)) {
+            List<String> leaf = new ArrayList<>(above); leaf.add(matches.get(0));
+            throw refused(severalSpellingsReason(field, leaf));
+        }
+        return matches.isEmpty() ? key : matches.get(0);
+    }
+
+    /** The keys of {@code level}, when it is a map, that read back through {@code keyType} to {@code typed}, in map order. */
+    private List<String> keysReadingBack(Object level, Object typed, Type keyType, List<String> at) {
+        List<String> found = new ArrayList<>();
+        if (!(level instanceof Map)) { return found; }
+        for (Object candidate : ((Map<?, ?>) level).keySet()) {
+            String text = String.valueOf(candidate);
+            if (typed.equals(readKey(text, keyType, at))) { found.add(text); }
+        }
+        return found;
+    }
+
+    /**
+     * {@code text} read as a map key of {@code keyType} on the loader's read path, or {@code null} when it does not
+     * convert. A probe: nothing is logged or recorded.
+     */
+    private Object readKey(String text, Type keyType, List<String> at) {
+        try {
+            ConversionResult<Object> key = registry().fromPlainResult(text, keyType, configFilePath, at);
+            return key.failures().isEmpty() ? key.value() : null;
+        } catch (ConversionException | RuntimeException unusable) {
+            return null;
+        }
+    }
+
+    private static boolean several(List<?> values) { return values.size() > 1; }
+
+    /**
+     * The refusal text for a typed map key the file writes in several spellings, such as {@code 1:} and {@code '01':}
+     * (#673, case 52): the setting and the key through {@link #describeKey}, never a value.
+     */
+    private String severalSpellingsReason(Field field, List<String> leaf) {
+        return "setting " + describeKey(field, Collections.<String>emptyList()) + " holds the map key "
+                + describeKey(field, leaf) + " in several spellings; delete all but one of them, then reload";
     }
 
     private void requireOperatorWriteThread(String operation) {
