@@ -98,6 +98,35 @@ class GuiSchedulerFrameBudgetTest {
     }
 
     @Test
+    @DisplayName("With a zero frame interval, a frame requested during a drain never runs on the same stack")
+    void taskQueuedDuringDrainRunsOnLaterFrameWithZeroInterval() {
+        GuiScheduler scheduler = new GuiScheduler(mockPlugin, 0L);
+        AtomicInteger runs = new AtomicInteger();
+        AtomicBoolean capHit = new AtomicBoolean();
+        Runnable[] self = new Runnable[1];
+        self[0] = () -> {
+            if (runs.incrementAndGet() >= CAP) {
+                capHit.set(true);
+                return;
+            }
+            scheduler.scheduleFrame(self[0]);
+        };
+
+        scheduler.scheduleFrame(self[0]);
+        int afterSchedule = runs.get();
+        server.getScheduler().performOneTick();
+        int afterTick1 = runs.get();
+        server.getScheduler().performOneTick();
+        int afterTick2 = runs.get();
+
+        assertEquals("afterSchedule=1, afterTick1=2, afterTick2=3, capHit=false",
+                "afterSchedule=" + afterSchedule + ", afterTick1=" + afterTick1
+                        + ", afterTick2=" + afterTick2 + ", capHit=" + capHit.get(),
+                "with no frame interval to defer on, only the frameRunning check keeps a frame "
+                        + "requested during a drain off the current stack");
+    }
+
+    @Test
     @DisplayName("A widget whose initState calls setState and throws is retried once per frame, not in a tight loop")
     void throwingInitStateWithSetStateDoesNotLoopInsideOneFrame() {
         TestGui gui = new TestGui(player, "frame-budget-gui", "Test", 1);

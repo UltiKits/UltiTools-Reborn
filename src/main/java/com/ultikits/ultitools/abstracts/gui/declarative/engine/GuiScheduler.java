@@ -301,6 +301,9 @@ public class GuiScheduler {
     /**
      * Runs every pending task immediately (blocking until complete).
      * <p>
+     * It drains the whole queue, ignores the per-frame task budget, and is intended for tests
+     * only.
+     * <p>
      * <b>Note:</b> this method may only be called on the main thread.
      * <p>
      * <b>Gate-2 Codex finding, PR #478 round 3:</b> a {@link RenderDepthExceededException} from a
