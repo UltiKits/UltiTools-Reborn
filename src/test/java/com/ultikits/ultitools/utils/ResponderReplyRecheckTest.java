@@ -229,6 +229,23 @@ class ResponderReplyRecheckTest {
     }
 
     @Test
+    @DisplayName("a result completing while logout is invalidating the session, client still installed, is not sent")
+    void replyCompletingWhileTheAdmittedSessionIsInvalidatedIsNotSent() throws Exception {
+        CompletableFuture<JsonObject> future = admit();
+
+        // invalidate() sets the flag first and clears the client last; this holds the moment
+        // between the two, where only the session-currency clause can stop the reply.
+        CloudSession.current().markInvalidatedForTesting();
+        future.complete(result());
+        awaitCompletionOutcome(CONNECTION_DROP);
+
+        assertThat(sentOnClient1).as("no reply on the invalidated session's still-installed client").isEmpty();
+        assertThat(sentOnClient2).as("no reply on any other client").isEmpty();
+        assertThat(replyDropLines(CONNECTION_DROP)).as("one reply-drop FINE line naming the type").hasSize(1);
+        assertThat(linesAtOrAbove(Level.WARNING)).as("WARNING or SEVERE lines").isEmpty();
+    }
+
+    @Test
     @DisplayName("a result completing after the connection was replaced in the same session is not sent")
     void replyCompletingAfterTheConnectionWasReplacedIsNotSent() throws Exception {
         CompletableFuture<JsonObject> future = admit();
