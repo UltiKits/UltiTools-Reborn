@@ -796,9 +796,8 @@ public class FileOperationManager {
      * Refuses a recursive directory delete whose target is an ancestor of any path
      * {@link #deniedUnconditionally} would refuse on its own. Runs after {@link
      * #requireRecursiveFlag} and strictly before {@link #deleteDirectory}; nothing is deleted
-     * when this refuses. {@link #deleteDirectory} itself is unchanged — the walk it performs
-     * stays a naked recursive delete, and this method is the gate that decides whether it may
-     * run at all, not a per-descendant check woven into it.
+     * when this refuses. This method is the gate that decides whether {@link #deleteDirectory}
+     * may run at all, not a per-descendant check woven into it.
      * <p>
      * <b>Why this walks the real directory instead of comparing paths lexically.</b> One of
      * {@link #deniedUnconditionally}'s rules — the security-directory check — is answerable from
@@ -822,11 +821,13 @@ public class FileOperationManager {
      * belongs to — not the raw request string, so a request that reaches a directory through an
      * in-root alias of its parent is checked against where the directory really is.
      * <p>
-     * <b>What this does not cover.</b> A symlink <em>inside</em> the tree whose target resolves
-     * to a protected location the link's own relative path would not itself trigger —
-     * {@code File#listFiles()} enumerates the directory's own entries, and {@link
-     * #deleteDirectory} follows a descendant link to a directory. That descendant-link
-     * limitation is documented and deferred; this walk does not attempt to close it.
+     * <b>Links inside the tree are never followed.</b> This walk and {@link #deleteDirectory}
+     * share one rule, {@link #isRealSubdirectory}: only a real subdirectory is descended into. A
+     * symbolic link (or, on Windows, a junction) found inside the tree is checked by its own
+     * path like any other entry and is then removed as a link by {@link #deleteDirectory}; its
+     * target and the target's contents are never reached, so a link to an outside directory,
+     * to the action-log directory or to the credential directory neither refuses the delete
+     * nor empties its target.
      *
      * @param normalizedPath the mapped server-root-relative path of {@code dir} (forward-slash
      *                        separated, no leading slash), used to build each descendant's path
@@ -838,8 +839,11 @@ public class FileOperationManager {
      *         #deniedUnconditionally} enforces is itself non-configurable
      */
     private AccessDecision deniedAsAncestorOfProtectedPath(String normalizedPath, File dir) {
+        Path dirReal = realPathOrNull(dir.toPath());
         File[] children = dir.listFiles();
-        if (children == null) {
+        // An unresolvable directory is not walked here and is not emptied by deleteDirectory
+        // either (same realPathOrNull guard there), so allowing the gate removes nothing under it.
+        if (children == null || dirReal == null) {
             return AccessDecision.allowed();
         }
         for (File child : children) {
@@ -852,7 +856,7 @@ public class FileOperationManager {
                         "recursive delete of '" + normalizedPath + "' would remove '" + childPath
                                 + "', which is unconditionally protected");
             }
-            if (child.isDirectory()) {
+            if (isRealSubdirectory(dirReal, child)) {
                 AccessDecision nested = deniedAsAncestorOfProtectedPath(childPath, child);
                 if (!nested.isAllowed()) {
                     return nested;
@@ -863,20 +867,79 @@ public class FileOperationManager {
     }
 
     /**
-     * Recursively deletes a directory.
+     * Recursively deletes a real directory without following any link inside it.
+     * <p>
+     * Only a child for which {@link #isRealSubdirectory} holds is descended into. Every other
+     * child — a regular file, a symbolic link to a file or to a directory, a dangling link, or a
+     * Windows junction — is removed as a single entry with {@link Files#deleteIfExists(Path)},
+     * which never follows a link, so a link's target and the target's contents stay untouched.
+     * If {@code dir}'s real path cannot be determined nothing under it is removed, so its own
+     * removal fails and the delete reports the failure. Before this rule,
+     * {@code File#isDirectory()} followed a descendant link to a directory and the walk emptied
+     * the link's target, wherever it was.
+     *
+     * @param dir the real directory to delete (never a link; {@link #directoryDeleteGate} and
+     *            {@link #isRealSubdirectory} establish that)
+     * @return whether {@code dir} itself was removed
      */
     private boolean deleteDirectory(File dir) {
+        Path dirReal = realPathOrNull(dir.toPath());
         File[] files = dir.listFiles();
-        if (files != null) {
+        if (files != null && dirReal != null) {
             for (File file : files) {
-                if (file.isDirectory()) {
+                if (isRealSubdirectory(dirReal, file)) {
                     deleteDirectory(file);
                 } else {
-                    file.delete();
+                    deleteSingleEntry(file.toPath());
                 }
             }
         }
         return dir.delete();
+    }
+
+    /**
+     * Whether {@code child} is a real subdirectory of the directory whose real path is
+     * {@code parentReal}: it is a directory when links are not followed, and its own real path
+     * is exactly {@code parentReal} plus its name. A symbolic link fails the first test; a
+     * Windows junction, which the JDK reports as a directory, fails the second, because its real
+     * path is its target's. Anything whose real path cannot be determined is not descended into.
+     *
+     * @param parentReal the real path of the directory {@code child} was listed from
+     * @param child      one entry listed from that directory
+     * @return {@code true} only for a real, non-link subdirectory
+     */
+    private static boolean isRealSubdirectory(Path parentReal, File child) {
+        Path childPath = child.toPath();
+        if (!Files.isDirectory(childPath, LinkOption.NOFOLLOW_LINKS)) {
+            return false;
+        }
+        Path childReal = realPathOrNull(childPath);
+        return childReal != null && childReal.equals(parentReal.resolve(child.getName()));
+    }
+
+    /** The real path of {@code path}, or {@code null} if it cannot be determined. */
+    private static Path realPathOrNull(Path path) {
+        try {
+            return path.toRealPath();
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Removes one non-directory entry (or link) of a tree being deleted, as the entry itself.
+     * The walk does not act on the result, exactly as it never acted on a per-file failure: the
+     * enclosing directory then stays non-empty and its own removal reports the failure.
+     *
+     * @return whether the entry is gone
+     */
+    private static boolean deleteSingleEntry(Path entry) {
+        try {
+            Files.deleteIfExists(entry);
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
     }
     
     /**
