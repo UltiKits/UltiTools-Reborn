@@ -2,6 +2,7 @@ package com.ultikits.ultitools.config.document;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
@@ -25,6 +26,9 @@ import org.jetbrains.annotations.ApiStatus;
  * text untouched: integral numbers compare by numeric value whatever their box type ({@code Integer 1}
  * equals {@code Long 1}), doubles compare with {@link Double#equals(Object)} (so {@code 1.50} read from a
  * file equals {@code 1.5}), maps compare entry by entry regardless of order, and lists element by element.
+ * A value read from a file that lies outside plain data - a YAML {@code !!binary} read as a {@code byte[]} - compares by
+ * content, never by identity: {@link #copy(Object)} hands out a fresh copy of it on every read, so two copies of an
+ * unchanged value must compare equal, and a value whose bytes differ compares unequal.
  *
  * @since 6.3.0
  */
@@ -118,6 +122,9 @@ public final class PlainData {
                 }
             }
             return true;
+        }
+        if (a instanceof byte[] && b instanceof byte[]) {
+            return Arrays.equals((byte[]) a, (byte[]) b);
         }
         return a.equals(b);
     }
