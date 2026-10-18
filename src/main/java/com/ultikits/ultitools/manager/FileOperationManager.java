@@ -903,6 +903,10 @@ public class FileOperationManager {
      *       {@code <root>-evil} is not inside {@code <root>}); otherwise the refusal is
      *       configurable through {@code ultipanel.files.editable-roots}. A configured root that
      *       does not resolve is skipped with a warning (T-06-23).</li>
+     *   <li><b>Actual-target deny</b> — {@link #deniedUnconditionally(String)} runs again on the
+     *       operand's mapped path, so a credential file or the action-log directory reached
+     *       through an in-root alias (a link, or a linked parent directory) is refused with the
+     *       same non-configurable decision a direct request for it gets (D-08).</li>
      * </ol>
      * In {@link ResolveMode#FOLLOW} the operand is the resolved real object, or the real existing
      * prefix plus the ordinary missing names of a new write target. In {@link ResolveMode#ENTRY}
@@ -1013,18 +1017,28 @@ public class FileOperationManager {
     }
 
     /**
-     * Step 3: real containment. Returns the allowed target with its mapped path, or the
+     * Step 3: real containment. Returns the target with its mapped path (after step 4), or the
      * configurable outside-the-roots refusal.
      */
     private ResolvedTarget containedTarget(String normalized, Path operand) {
         for (File root : editableRoots) {
             Path realRoot = realRootOf(root);
             if (realRoot != null && operand.startsWith(realRoot)) {
-                return ResolvedTarget.allowed(operand.toFile(), mappedPath(root, realRoot, operand));
+                return unlessProtected(operand.toFile(), mappedPath(root, realRoot, operand));
             }
         }
         return ResolvedTarget.denied(AccessDecision.deniedConfigurable(
                 "'" + normalized + "' resolves outside the editable roots", EDITABLE_ROOTS_CONFIG_KEY));
+    }
+
+    /**
+     * Step 4 (D-08): the unconditional deny layer applied to where the operand really is. In
+     * entry mode the mapped path names the entry itself, so deleting an alias link is judged on
+     * the link, not on what it points to.
+     */
+    private ResolvedTarget unlessProtected(File operand, String mappedPath) {
+        AccessDecision deny = deniedUnconditionally(mappedPath);
+        return deny != null ? ResolvedTarget.denied(deny) : ResolvedTarget.allowed(operand, mappedPath);
     }
 
     /**
