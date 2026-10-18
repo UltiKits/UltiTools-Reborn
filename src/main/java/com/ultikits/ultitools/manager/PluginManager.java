@@ -3054,17 +3054,18 @@ public class PluginManager {
      *   <li>mint the {@link DataScope} and hand it to the plugin, then {@link #wireAop};</li>
      *   <li>open the load scopes and, inside them: config-entity beans, the component scan, the
      *       plugin's own singleton registration, the static instance field, the global
-     *       entity-ownership record, and {@code refresh()}; then close the load scopes;</li>
-     *   <li>{@code @ContextEntry} bean registration with {@code autowireBean};</li>
+     *       entity-ownership record, {@code refresh()}, and {@code @ContextEntry} bean
+     *       registration with {@code autowireBean}; then close the load scopes;</li>
      *   <li>the command-executor contract and config-binding validations.</li>
      * </ol>
      * Why this order: registering a config entity, the component scan, registering the plugin
      * singleton and {@code refresh()} can each create beans -- {@code registerSingleton} fully
      * assembles its argument (D-14), and autowiring creates whatever it injects. So the data scope,
-     * AOP, the config entities and the load scopes are in place before the first of them runs. A
-     * bean created before {@code wireAop} could never be proxied afterwards (C08); one created
-     * before the config entities or the data scope could not see them (C09); a registration made
-     * outside the load scopes would not be released with this module instance. The static
+     * AOP and the load scopes are in place before the first of them runs, and the config entities
+     * before the scan. A bean created before {@code wireAop} could never be proxied afterwards
+     * (C08); one created before the config entities or the data scope could not see them (C09); a
+     * registration made outside the load scopes, the {@code @ContextEntry} bean's included, would
+     * not be released with this module instance (C62). The static
      * instance field and the global entity-ownership record keep their place after the scan and
      * the plugin singleton and before {@code refresh()}, so the window in which a refused module
      * leaves them behind is not widened.
@@ -3118,10 +3119,10 @@ public class PluginManager {
 
         // T-05-24 / D-08: attribute any TabCompletionManager.register(...) call made while the
         // framework assembles this module -- from the @PostConstruct of a config entity, a
-        // configuration class, a @Bean product, the plugin itself or any bean refresh() creates --
-        // to this plugin, so unregister(UltiToolsPlugin) can sweep it on unload without pinning
-        // the module's ClassLoader. ClassLoader-derived ownership does not work here: every
-        // internal module shares ONE URLClassLoader (see init(ClassLoader) and
+        // configuration class, a @Bean product, the plugin itself, any bean refresh() creates or
+        // the @ContextEntry bean -- to this plugin, so unregister(UltiToolsPlugin) can sweep it on
+        // unload without pinning the module's ClassLoader. ClassLoader-derived ownership does not
+        // work here: every internal module shares ONE URLClassLoader (see init(ClassLoader) and
         // validateAdditionalEntity's identical D-19 finding above) -- an explicit scope is the
         // only mechanism that still separates two modules' completers.
         // #506: the instance as well as the name, so unloading a superseded copy of this module
@@ -3166,28 +3167,31 @@ public class PluginManager {
             registerEntityOwnership(scope);
 
             pluginContext.refresh();
+
+            // @ContextEntry handling (WIRE-06): read after refresh() -- registerSingleton
+            // already fully assembles its argument unconditionally (D-14), so there is nothing
+            // left for a second refresh() to do; the refresh() just above already
+            // pre-instantiated every non-lazy singleton definition this container knows about.
+            // Still inside the load scopes (C62): what the context entry's @PostConstruct
+            // registers is recorded against this module instance, so a refusal or an unload
+            // releases it.
+            if (pluginClass.isAnnotationPresent(ContextEntry.class)) {
+                ContextEntry contextEntry = pluginClass.getAnnotation(ContextEntry.class);
+                Class<?> clazz = contextEntry.value();
+                // Register the context entry class as a bean
+                try {
+                    Object contextBean = clazz.getDeclaredConstructor().newInstance();
+                    pluginContext.getBeanFactory().registerSingleton(clazz.getSimpleName(), contextBean);
+                } catch (Exception e) {
+                    Bukkit.getLogger().log(
+                            Level.WARNING,
+                            String.format("[UltiTools-API] Cannot create context entry for %s", clazz.getName())
+                    );
+                }
+                pluginContext.getAutowireCapableBeanFactory().autowireBean(plugin);
+            }
         } finally {
             endLoadScopes();
-        }
-
-        // @ContextEntry handling (WIRE-06): read after refresh() -- registerSingleton above
-        // already fully assembles its argument unconditionally (D-14), so there is nothing left
-        // for a second refresh() to do; the refresh() just above already pre-instantiated every
-        // non-lazy singleton definition this container knows about.
-        if (pluginClass.isAnnotationPresent(ContextEntry.class)) {
-            ContextEntry contextEntry = pluginClass.getAnnotation(ContextEntry.class);
-            Class<?> clazz = contextEntry.value();
-            // Register the context entry class as a bean
-            try {
-                Object contextBean = clazz.getDeclaredConstructor().newInstance();
-                pluginContext.getBeanFactory().registerSingleton(clazz.getSimpleName(), contextBean);
-            } catch (Exception e) {
-                Bukkit.getLogger().log(
-                        Level.WARNING,
-                        String.format("[UltiTools-API] Cannot create context entry for %s", clazz.getName())
-                );
-            }
-            pluginContext.getAutowireCapableBeanFactory().autowireBean(plugin);
         }
 
         // SILENT-11 half 2 (D-01, D-04): every CommandExecutor bean this container just fully
