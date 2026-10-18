@@ -78,6 +78,9 @@ class FileOperationTargetConsistencyTest {
     private static final String OUTSIDE_VICTIM = "OUTSIDE-VICTIM-SENTINEL-91c2";
     private static final String DECOY_SECRET = "in-root decoy secret";
     private static final String DECOY_VICTIM = "in-root decoy victim";
+    private static final String TOKEN_SENTINEL = "SYNTHETIC-TOKEN-SENTINEL-d08";
+    private static final String DATA_JSON_CONTENT = "{\"refresh_token\":\"" + TOKEN_SENTINEL + "\"}";
+    private static final String ACTION_LOG_SENTINEL = "ACTION-LOG-SENTINEL-d08";
 
     @TempDir
     Path tmp;
@@ -91,6 +94,8 @@ class FileOperationTargetConsistencyTest {
     private Path outside;
     private Path outsideSecret;
     private Path outsideVictim;
+    private Path dataJson;
+    private Path actionLogFile;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -628,6 +633,147 @@ class FileOperationTargetConsistencyTest {
         assertThat(outcome.listedEntry("childdir").get("accessible").getAsBoolean()).isTrue();
         assertThat(outcome.success()).isTrue();
         assertAllowedEntry(outcome, "list", "root/marks");
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // D-08 adjacent candidate (NOT one of the five frozen cases): an in-root alias whose real
+    // target is a protected file or lies in the action-log directory. Fixture: server root = the
+    // temporary directory, single editable root = plugins; plugins/UltiTools/data.json holds a
+    // synthetic token; plugins/UltiTools/security/action.log holds sentinel bytes;
+    // plugins/notes.txt -> data.json, plugins/view.log -> action.log,
+    // plugins/linkdir -> plugins/UltiTools.
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("D-08 adjacent candidate: an in-root alias to the credential file is refused")
+    void aliasToProtectedCredentialIsRefused() throws Exception {
+        buildAliasFixture();
+
+        Outcome read = send(request("read", "plugins/notes.txt"));
+
+        assertThat(read.allMessagesJson()).doesNotContain(TOKEN_SENTINEL);
+        assertThat(read.success()).isFalse();
+        assertDeniedEntry(read, "read", "plugins/notes.txt");
+        assertNonConfigurable(read);
+
+        resetCollaborators();
+        JsonObject write = request("write", "plugins/notes.txt");
+        write.addProperty("content", "OVERWRITTEN");
+        Outcome written = send(write);
+
+        assertThat(readText(dataJson)).as("the credential file is byte-identical").isEqualTo(DATA_JSON_CONTENT);
+        assertThat(written.success()).isFalse();
+        assertDeniedEntry(written, "write", "plugins/notes.txt");
+    }
+
+    @Test
+    @DisplayName("D-08 adjacent candidate: an in-root alias to the action log is refused")
+    void aliasToActionLogIsRefused() throws Exception {
+        buildAliasFixture();
+
+        Outcome read = send(request("read", "plugins/view.log"));
+
+        assertThat(read.allMessagesJson()).doesNotContain(ACTION_LOG_SENTINEL);
+        assertThat(read.success()).isFalse();
+        assertDeniedEntry(read, "read", "plugins/view.log");
+
+        resetCollaborators();
+        JsonObject write = request("write", "plugins/view.log");
+        write.addProperty("content", "OVERWRITTEN");
+        Outcome written = send(write);
+
+        assertThat(readText(actionLogFile)).as("the action log is byte-identical").isEqualTo(ACTION_LOG_SENTINEL);
+        assertThat(written.success()).isFalse();
+        assertDeniedEntry(written, "write", "plugins/view.log");
+    }
+
+    @Test
+    @DisplayName("D-08 adjacent candidate: an aliased parent path into the action-log directory is refused")
+    void aliasedParentPathIntoSecurityDirectoryIsRefused() throws Exception {
+        buildAliasFixture();
+        String path = "plugins/linkdir/security/action.log";
+
+        Outcome read = send(request("read", path));
+
+        assertThat(read.allMessagesJson()).doesNotContain(ACTION_LOG_SENTINEL);
+        assertThat(read.success()).isFalse();
+        assertDeniedEntry(read, "read", path);
+
+        resetCollaborators();
+        JsonObject write = request("write", path);
+        write.addProperty("content", "OVERWRITTEN");
+        Outcome written = send(write);
+
+        assertThat(readText(actionLogFile)).as("the action log is byte-identical").isEqualTo(ACTION_LOG_SENTINEL);
+        assertThat(written.success()).isFalse();
+        assertDeniedEntry(written, "write", path);
+    }
+
+    @Test
+    @DisplayName("D-08 adjacent candidate: listed aliases to protected targets are marked PROTECTED_CREDENTIAL")
+    void aliasChildIsMarkedProtectedInList() throws Exception {
+        buildAliasFixture();
+
+        Outcome outcome = send(request("list", "plugins"));
+
+        for (String alias : new String[] {"notes.txt", "view.log"}) {
+            JsonObject entry = outcome.listedEntry(alias);
+            assertThat(entry.get("accessible").getAsBoolean()).as(alias).isFalse();
+            assertThat(entry.get("reason").getAsString()).as(alias).isEqualTo("PROTECTED_CREDENTIAL");
+            assertThat(entry.has("size")).as(alias).isFalse();
+            assertThat(entry.has("lastModified")).as(alias).isFalse();
+        }
+        assertThat(outcome.success()).isTrue();
+        assertAllowedEntry(outcome, "list", "plugins");
+    }
+
+    @Test
+    @DisplayName("D-08 adjacent candidate: a recursive delete through an aliased parent of the action-log directory is refused")
+    void recursiveDeleteThroughAliasedParentOfSecurityDirectoryIsRefused() throws Exception {
+        buildAliasFixture();
+        JsonObject data = request("delete", "plugins/linkdir/security");
+        data.addProperty("recursive", true);
+
+        Outcome outcome = send(data);
+
+        assertThat(actionLogFile).as("the action log survives").exists();
+        assertThat(readText(actionLogFile)).isEqualTo(ACTION_LOG_SENTINEL);
+        assertThat(outcome.success()).isFalse();
+        assertDeniedEntry(outcome, "delete", "plugins/linkdir/security");
+    }
+
+    @Test
+    @DisplayName("D-08 adjacent candidate: deleting the alias link itself removes only the link")
+    void deletingAliasLinkRemovesOnlyTheLink() throws Exception {
+        buildAliasFixture();
+        Path notes = tmp.resolve("plugins").resolve("notes.txt");
+
+        Outcome outcome = send(request("delete", "plugins/notes.txt"));
+
+        assertThat(Files.exists(notes, LinkOption.NOFOLLOW_LINKS)).as("the alias link is removed").isFalse();
+        assertThat(readText(dataJson)).as("the credential file is untouched").isEqualTo(DATA_JSON_CONTENT);
+        assertThat(outcome.success()).isTrue();
+        assertAllowedEntry(outcome, "delete", "plugins/notes.txt");
+    }
+
+    private void buildAliasFixture() throws Exception {
+        Path plugins = Files.createDirectories(tmp.resolve("plugins"));
+        Path ultiTools = Files.createDirectories(plugins.resolve("UltiTools"));
+        Path security = Files.createDirectories(ultiTools.resolve("security"));
+        dataJson = ultiTools.resolve("data.json");
+        actionLogFile = security.resolve("action.log");
+        Files.write(dataJson, DATA_JSON_CONTENT.getBytes(StandardCharsets.UTF_8));
+        Files.write(actionLogFile, ACTION_LOG_SENTINEL.getBytes(StandardCharsets.UTF_8));
+        link(plugins.resolve("notes.txt"), dataJson);
+        link(plugins.resolve("view.log"), actionLogFile);
+        link(plugins.resolve("linkdir"), ultiTools);
+        pointManagerAt(tmp, plugins);
+    }
+
+    private void resetCollaborators() {
+        org.mockito.Mockito.reset(actionLog, webSocket);
+        when(webSocket.isConnected()).thenReturn(true);
+        when(webSocket.getServerId()).thenReturn("test-server");
     }
 
     // ------------------------------------------------------------------------------------------
