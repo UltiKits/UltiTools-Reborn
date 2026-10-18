@@ -607,8 +607,13 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
      * Deletes by id, fetching the entity first so {@code onDelete()} can fire on it -- unlike
      * {@link #del(WhereCondition...)}, which deletes by predicate without materializing entries
      * and therefore does not fire the hook. If no entry matches {@code id}, nothing fires. Reads
-     * the cache directly (not {@link #getById}) so this does not also fire {@code onLoad()} --
-     * deleting is not loading.
+     * the stored entry directly (not {@link #getById}) so this does not also fire
+     * {@code onLoad()} -- deleting is not loading.
+     * <p>
+     * {@code onDelete()} fires on a detached copy of the entry being deleted (inside a
+     * transaction, of the entry as that transaction sees it), so the hook sees every persisted
+     * field and nothing it changes on the entity reaches a committed value -- not even through a
+     * delete that is then rolled back.
      */
     @Override
     public synchronized void delById(Object id) {
@@ -629,7 +634,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         JsonTransaction transaction = manager.currentTransaction();
         T entity = readVisible(current -> mergedGet(current, id));
         if (entity != null) {
-            entity.onDelete();
+            detach(entity).onDelete();
         }
         if (transaction == null) {
             return manager.publishUnderVisibilityLock(() -> cache.remove(id) != null ? 1 : 0);
