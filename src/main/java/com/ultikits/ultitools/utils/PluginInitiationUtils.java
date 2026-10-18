@@ -945,9 +945,19 @@ public class PluginInitiationUtils {
 
     /**
      * Dispatches {@code type} to its registered responder and, once the registry's returned future
-     * settles, sends exactly one reply through the same client accessor the other outbound helpers
-     * use — {@code panelWS.sendMessage(...)}, matching {@code sendCapabilityRefusal}'s and
-     * {@code FileOperationManager#sendFileOperationResult}'s existing pattern (WIRE-16, D-27).
+     * settles, sends at most one reply through the client that received the request (WIRE-16,
+     * D-27; UltiTools-Reborn#677).
+     * <p>
+     * The current {@link CloudSession} and its WebSocket client are captured here, when the request
+     * is admitted. The result is sent only to that client of that session, and only while UltiTools
+     * accepts panel work ({@link #isAcceptingPanelMessages()}), the admitted session is still
+     * current (no logout replaced it), the session's client is still the admitted client (no
+     * reconnect replaced it) and that client is still connected. Otherwise the reply is dropped
+     * with one FINE line naming the type and the panel's own timeout applies; a reply is never
+     * redirected to a newer session's or a newer connection's client, which never received the
+     * request. The check and the send run on whichever thread settles the outcome, or at once on
+     * the dispatching thread when {@link PanelResponderRegistry#dispatch} returns an outcome that is
+     * already settled (an unknown type, a refusal, or a registry that has shut down).
      * <p>
      * No Bukkit main-thread hop here, deliberately: unlike {@link PanelMessageEvent}'s publish
      * (which must run on the main thread because a subscriber may touch Bukkit API), sending a
@@ -981,6 +991,16 @@ public class PluginInitiationUtils {
                 logDroppedWhileDisabling("responder reply for type '" + type + "'");
                 return;
             }
+            if (admittedClient == null) {
+                PanelConnectionLog.log(Level.FINE,
+                    "Responder reply for type '" + type + "' not sent — no WebSocket client connected");
+                return;
+            }
+            if (!isAdmittedConnectionLive(admittedSession, admittedClient)) {
+                PanelConnectionLog.log(Level.FINE, "Responder reply for type '" + type
+                    + "' not sent: the panel connection that received the request has closed or been replaced");
+                return;
+            }
             JsonObject payload = throwable != null ? new JsonObject() : result;
             payload.addProperty("requestId", requestId);
             if (throwable != null) {
@@ -990,14 +1010,30 @@ public class PluginInitiationUtils {
             JsonObject response = new JsonObject();
             response.addProperty("type", type);
             response.add("data", payload);
-            if (admittedClient != null) {
-                response.addProperty("serverId", admittedClient.getServerId());
-                admittedClient.sendMessage(response);
-            } else {
-                PanelConnectionLog.log(Level.FINE,
-                    "Responder reply for type '" + type + "' not sent — no WebSocket client connected");
-            }
+            response.addProperty("serverId", admittedClient.getServerId());
+            admittedClient.sendMessage(response);
         });
+    }
+
+    /**
+     * Whether the connection that received a responder request can still carry its reply: the
+     * admitted session is still current, its client is still the admitted client, and that client
+     * is still connected.
+     *
+     * @param admittedSession the session that was current when the request was admitted
+     * @param admittedClient  that session's client at admission, not {@code null}
+     * @return {@code true} when the reply may be sent through {@code admittedClient}
+     */
+    // PMD.CompareObjectsWithEquals: deliberate reference-identity check. "The same connection" is
+    // the same client object; a reconnect installs a new client instance on the session, and the
+    // client does not override equals(), so equals() would say the same thing while suggesting
+    // value equality.
+    @SuppressWarnings("PMD.CompareObjectsWithEquals")
+    private static boolean isAdmittedConnectionLive(CloudSession admittedSession,
+                                                    UltiPanelWebSocketClient admittedClient) {
+        return admittedSession.isCurrent()
+            && admittedSession.getWebSocketClient() == admittedClient
+            && admittedClient.isConnected();
     }
 
     /**

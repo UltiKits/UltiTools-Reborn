@@ -333,6 +333,10 @@ class PanelResponderRegistryTest {
                 lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);
                 lenient().when(ultiTools.getPanelResponderRegistry()).thenReturn(registry);
             });
+            // The fixture's client belongs to a current session: an earlier test class may leave an
+            // invalidated session installed (JVM-wide), and a reply is sent only on the admitted
+            // client of a still-current session (#677). enableCloud() replaces only an invalidated one.
+            PluginInitiationUtils.enableCloud();
             mockPanelWs = mock(UltiPanelWebSocketClient.class);
             // The fixture represents a live panel connection.
             lenient().when(mockPanelWs.isConnected()).thenReturn(true);
