@@ -2,6 +2,7 @@ package com.ultikits.ultitools.abstracts;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 
@@ -13,6 +14,9 @@ import java.nio.file.Path;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.SortedMap;
+import java.util.TreeMap;
+import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -22,6 +26,8 @@ import org.mockito.Mockito;
 
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
+import com.ultikits.ultitools.config.ConfigEntryPresenceException;
+import com.ultikits.ultitools.config.EntryPresence;
 import com.ultikits.ultitools.manager.ConfigManager;
 
 /**
@@ -125,6 +131,37 @@ class ConfigTypedMapKeyTest {
         String tail = "default";
 
         SpelledKeyConfig(String configFilePath) {
+            super(configFilePath);
+        }
+    }
+
+    /** A sorted map whose file order (3, 1, 2) differs from its Java order. */
+    @SuppressWarnings("unused") // read reflectively by the binder and by the assertions below
+    static class SortedKeyConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "order")
+        SortedMap<Integer, String> order = new TreeMap<>();
+
+        SortedKeyConfig(String configFilePath) {
+            super(configFilePath);
+        }
+    }
+
+    @SuppressWarnings("unused") // read reflectively by the binder and by the assertions below
+    static class BooleanKeyConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "flags")
+        Map<Boolean, String> flags = new LinkedHashMap<>();
+
+        BooleanKeyConfig(String configFilePath) {
+            super(configFilePath);
+        }
+    }
+
+    @SuppressWarnings("unused") // read reflectively by the binder and by the assertions below
+    static class UuidKeyConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "owners")
+        Map<UUID, String> owners = new LinkedHashMap<>();
+
+        UuidKeyConfig(String configFilePath) {
             super(configFilePath);
         }
     }
@@ -303,6 +340,164 @@ class ConfigTypedMapKeyTest {
         }
 
         assertThat(text()).isEqualTo(SPELLED.replace("  2: two\n", "  2: deux\n"));
+    }
+
+    @Test
+    @DisplayName("saveOperatorMapEntry naming key 1 by its canonical text reaches the entry the file spells '01'")
+    void operatorMapEntryByCanonicalText() throws IOException {
+        put(SPELLED);
+        SpelledKeyConfig config = initialized();
+
+        config.limits.put(1, "uno");
+        assertThatThrownBy(() -> config.saveOperatorMapEntry(EntryPresence.MUST_BE_ABSENT, "limits", "1"))
+                .as("the '01' entry is present").isInstanceOf(ConfigEntryPresenceException.class);
+        assertThat(text()).as("a refused create writes nothing").isEqualTo(SPELLED);
+
+        assertThatCode(() -> config.saveOperatorMapEntry(EntryPresence.MUST_BE_PRESENT, "limits", "1"))
+                .as("the '01' entry is present, so the change is written").doesNotThrowAnyException();
+        assertThat(text()).isEqualTo(SPELLED.replace("  '01': one\n", "  '01': uno\n"));
+
+        config.limits.put(1, "eins");
+        assertThatCode(() -> config.saveOperatorMapEntry("limits", "1")).doesNotThrowAnyException();
+        assertThat(text()).isEqualTo(SPELLED.replace("  '01': one\n", "  '01': eins\n"));
+    }
+
+    @Test
+    @DisplayName("after the module removes key 1, saveOperatorMapEntry(\"limits\", \"1\") removes exactly the '01' line")
+    void operatorMapEntryRemovalBySpelledKey() throws IOException {
+        put(SPELLED);
+        SpelledKeyConfig config = initialized();
+
+        config.limits.remove(1);
+        assertThatCode(() -> config.saveOperatorMapEntry("limits", "1")).doesNotThrowAnyException();
+
+        assertThat(text()).isEqualTo(SPELLED.replace("  '01': one\n", ""));
+    }
+
+    @Test
+    @DisplayName("save() after the module removes key 1 deletes only the '01' line")
+    void saveRemovalDeletesOnlyItsLine() throws IOException {
+        put(SPELLED);
+        SpelledKeyConfig config = initialized();
+
+        config.limits.remove(1);
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            config.save();
+            assertThat(warnings.messages()).as("no warning").isEmpty();
+        }
+
+        assertThat(text()).isEqualTo(SPELLED.replace("  '01': one\n", ""));
+    }
+
+    @Test
+    @DisplayName("saveOperatorChange(\"limits\") after changing key 2 keeps the '01' key and its spelling")
+    void wholeSettingOperatorWrite() throws IOException {
+        put(SPELLED);
+        SpelledKeyConfig config = initialized();
+
+        config.limits.put(2, "deux");
+        assertThatCode(() -> config.saveOperatorChange("limits")).doesNotThrowAnyException();
+
+        assertThat(text()).isEqualTo(SPELLED.replace("  2: two\n", "  2: deux\n"));
+    }
+
+    @Test
+    @DisplayName("an operator respelling '01' as 1 is adopted on reload without a conflict or a write")
+    void reloadAdoptsOperatorRespelling() throws IOException {
+        put(SPELLED);
+        SpelledKeyConfig config = initialized();
+        String respelled = SPELLED.replace("  '01': one\n", "  1: one\n");
+        long modified = put(respelled);
+
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            assertThatCode(config::reload).doesNotThrowAnyException();
+            assertThat(warnings.messages()).as("no reload conflict").isEmpty();
+        }
+        assertThat(text()).as("reload writes nothing").isEqualTo(respelled);
+        assertThat(file().lastModified()).as("modification time").isEqualTo(modified);
+        assertThat(config.limits).containsEntry(1, "one").containsEntry(2, "two").hasSize(2);
+
+        config.limits.put(1, "uno");
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            config.save();
+            assertThat(warnings.messages()).as("no warning").isEmpty();
+        }
+        assertThat(text()).isEqualTo(respelled.replace("  1: one\n", "  1: uno\n"));
+    }
+
+    @Test
+    @DisplayName("a sorted map keeps the file order 3, 1, 2 when key 1 is updated")
+    void sortedMapKeepsFileOrder() throws IOException {
+        String yaml = "order:\n  3: c\n  1: a\n  2: b\n";
+        put(yaml);
+        SortedKeyConfig config = new SortedKeyConfig(PATH);
+        assertThatCode(() -> config.init(plugin)).doesNotThrowAnyException();
+
+        config.order.put(1, "x");
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            config.save();
+            assertThat(warnings.messages()).as("no warning").isEmpty();
+        }
+
+        assertThat(text()).isEqualTo("order:\n  3: c\n  1: x\n  2: b\n");
+    }
+
+    @Test
+    @DisplayName("Boolean keys spelled yes and off keep their text when their values are updated")
+    void booleanSpellingsSurvive() throws IOException {
+        String yaml = "flags:\n  yes: enabled\n  off: disabled\n";
+        put(yaml);
+        BooleanKeyConfig config = new BooleanKeyConfig(PATH);
+        assertThatCode(() -> config.init(plugin)).doesNotThrowAnyException();
+
+        config.flags.put(true, "on-value");
+        config.flags.put(false, "off-value");
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            config.save();
+            assertThat(warnings.messages()).as("no warning").isEmpty();
+        }
+
+        assertThat(text()).isEqualTo("flags:\n  yes: on-value\n  off: off-value\n");
+    }
+
+    @Test
+    @DisplayName("server stop - the unsaved report and the release - leaves the spelled-key file byte-identical")
+    void serverStopWritesNothing() throws IOException {
+        put(SPELLED);
+        SpelledKeyConfig config = new SpelledKeyConfig(PATH);
+        ConfigManager manager = new ConfigManager();
+        manager.register(plugin, config);
+        config.limits.put(1, "uno");
+        config.save();
+        String saved = SPELLED.replace("  '01': one\n", "  '01': uno\n");
+        assertThat(text()).as("the save wrote the update under '01'").isEqualTo(saved);
+        assertThat(file().setLastModified(file().lastModified() - 10_000L)).isTrue();
+        long modified = file().lastModified();
+
+        assertThat(config.isModifiedSinceSnapshot()).as("nothing unsaved after the save").isFalse();
+        manager.reportUnsavedAtStop();
+        manager.unregisterAll(plugin);
+
+        assertThat(text()).isEqualTo(saved);
+        assertThat(file().lastModified()).as("modification time").isEqualTo(modified);
+    }
+
+    @Test
+    @DisplayName("a UUID key written in upper case keeps that spelling when its value is updated")
+    void uuidKeySpellingSurvives() throws IOException {
+        String key = "0A1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D";
+        String yaml = "owners:\n  " + key + ": synthetic-owner\n";
+        put(yaml);
+        UuidKeyConfig config = new UuidKeyConfig(PATH);
+        assertThatCode(() -> config.init(plugin)).doesNotThrowAnyException();
+
+        config.owners.put(UUID.fromString(key), "renamed-owner");
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            config.save();
+            assertThat(warnings.messages()).as("the update is written, nothing is reported unwritten").isEmpty();
+        }
+
+        assertThat(text()).isEqualTo("owners:\n  " + key + ": renamed-owner\n");
     }
 
     private SpelledKeyConfig initialized() {
