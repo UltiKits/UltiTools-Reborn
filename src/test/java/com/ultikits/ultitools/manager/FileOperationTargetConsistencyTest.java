@@ -14,9 +14,12 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
@@ -258,7 +261,7 @@ class FileOperationTargetConsistencyTest {
 
     @ParameterizedTest(name = "[{index}] {0}")
     @DisplayName("a write whose missing part contains '..' or '.' is refused non-configurably")
-    @ValueSource(strings = {"root/missing/../x.txt", "root/missing/./x.txt"})
+    @ValueSource(strings = {"root/missing/../x.txt", "root/missing/./x.txt", "root/secret.txt/../x.txt"})
     void writeAfterMissingComponentParentSegmentIsRefused(String path) throws Exception {
         JsonObject data = request("write", path);
         data.addProperty("content", "PAYLOAD");
@@ -270,6 +273,28 @@ class FileOperationTargetConsistencyTest {
         assertThat(outcome.success()).isFalse();
         assertDeniedEntry(outcome, "write", path);
         assertNonConfigurable(outcome);
+    }
+
+    @Test
+    @DisplayName("a component under an unsearchable directory is refused as undeterminable")
+    void unsearchableDirectoryComponentIsRefused() throws Exception {
+        Path locked = Files.createDirectories(root.resolve("locked"));
+        Files.write(locked.resolve("f.txt"), OUTSIDE_SECRET.getBytes(StandardCharsets.UTF_8));
+        Set<PosixFilePermission> original = Files.getPosixFilePermissions(locked);
+        try {
+            Files.setPosixFilePermissions(locked, EnumSet.noneOf(PosixFilePermission.class));
+            Assumptions.assumeFalse(Files.exists(locked.resolve("f.txt")),
+                    "this user can search a mode-000 directory (running as root?); the row is BLOCKED here");
+
+            Outcome outcome = send(request("read", "root/locked/f.txt"));
+
+            assertThat(outcome.allMessagesJson()).doesNotContain(OUTSIDE_SECRET);
+            assertThat(outcome.success()).isFalse();
+            assertDeniedEntry(outcome, "read", "root/locked/f.txt");
+            assertNonConfigurable(outcome);
+        } finally {
+            Files.setPosixFilePermissions(locked, original);
+        }
     }
 
     @Test
