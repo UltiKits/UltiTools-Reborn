@@ -107,6 +107,16 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
      */
     private final AtomicReference<JsonTransactionManager> transactionManager = new AtomicReference<>();
 
+    /**
+     * The table write locks this operator's writes take: {@code JsonStore}'s shared lock table,
+     * bound before any caller receives this operator, or, for an operator constructed directly,
+     * a lock table of its own.
+     */
+    private volatile JsonLockTable lockTable = new JsonLockTable();
+
+    /** Keeps two {@link #flush()} calls from writing the same files at the same time. */
+    private final Object flushMonitor = new Object();
+
     public SimpleJsonDataOperator(String storeLocation, Class<T> type) {
         this.storeLocation = storeLocation;
         this.type = type;
@@ -155,6 +165,55 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
             manager = transactionManager.get();
         }
         return manager;
+    }
+
+    /**
+     * Binds the lock table this operator's writes lock in. Package-private: called only by
+     * {@code JsonStore}, with its one shared lock table, before it hands this operator to any
+     * caller.
+     *
+     * @param lockTable the store's lock table
+     */
+    void bindLockTable(JsonLockTable lockTable) {
+        this.lockTable = lockTable;
+    }
+
+    /** The lock table this operator's writes lock in. */
+    JsonLockTable lockTable() {
+        return lockTable;
+    }
+
+    /** The name of this operator's table for messages: its {@code @Table} value, else the entity's simple name. */
+    String tableName() {
+        Table table = type.getAnnotation(Table.class);
+        return table != null ? table.value() : type.getSimpleName();
+    }
+
+    /**
+     * Runs one write while holding this table's write lock. Inside a transaction the lock is
+     * taken through the transaction, before {@code body} evaluates or stages anything, and held
+     * until the transaction ends; outside one it is held for the duration of the call. Every
+     * visibility-lock step {@code body} takes comes after the table lock, so no thread waits for a
+     * table lock while holding the visibility lock.
+     *
+     * @param body the write, given the calling thread's transaction or {@code null} outside one
+     * @param <R>  the write's result
+     * @return what {@code body} returned
+     * @throws DataAccessException if the lock wait passes its bound (lock-wait timeout)
+     */
+    private <R> R write(Function<JsonTransaction, R> body) {
+        JsonTransaction transaction = transactionManager().currentTransaction();
+        if (transaction != null) {
+            transaction.lockForWrite(this);
+            return body.apply(transaction);
+        }
+        JsonLockTable table = lockTable;
+        table.acquire(this, table.defaultDeadlineNanos());
+        try {
+            return body.apply(null);
+        } finally {
+            table.release(this);
+        }
     }
 
     /**
@@ -241,9 +300,9 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
 
     /**
      * Applies one transaction's staged writes for this operator to the committed entries. Called
-     * only by {@link JsonTransaction#commit()}, which holds the visibility write side. Takes no
-     * operator monitor, so a commit holding the write side never waits for another call's
-     * monitor.
+     * only by {@link JsonTransaction#commit()}, which holds this table's write lock and the
+     * visibility write side. Takes no lock of its own, so a commit holding the write side never
+     * waits for anything.
      *
      * @param overlay the staged writes; a {@code null} value is a staged delete
      */
@@ -492,7 +551,15 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
     }
 
     @Override
-    public synchronized void insert(T obj) {
+    public void insert(T obj) {
+        write(transaction -> {
+            insertLocked(transaction, obj);
+            return null;
+        });
+    }
+
+    /** {@link #insert}'s body, run holding this table's write lock. */
+    private void insertLocked(JsonTransaction transaction, T obj) {
         // The relational backend auto-fills a UUID when id is empty
         // (AbstractRelationalDataOperator.insert), so modules never set the id themselves --
         // across every Module combined, setId is called 0 times. The JSON side used to skip
@@ -511,10 +578,8 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         obj.onCreate();
         T stored = detach(obj);
         Object key = obj.getId();
-        JsonTransactionManager manager = transactionManager();
-        JsonTransaction transaction = manager.currentTransaction();
         if (transaction == null) {
-            manager.publishUnderVisibilityLock(() -> cache.putIfAbsent(key, stored));
+            transactionManager().publishUnderVisibilityLock(() -> cache.putIfAbsent(key, stored));
             return;
         }
         // Put-if-absent against what this transaction sees: a key it has staged a delete for is
@@ -539,10 +604,11 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
      * call inside a transaction stages nothing.
      * <p>
      * Inside a transaction, every entry the transaction sees that matches is staged as a delete;
-     * outside one, the matches are removed in one step under the visibility write side.
+     * outside one, the matches are removed in one step under the visibility write side. Either
+     * way the matches are found while holding this table's write lock.
      */
     @Override
-    public synchronized void del(WhereCondition... whereConditions) {
+    public void del(WhereCondition... whereConditions) {
         // Deliberately does NOT mirror getAll's empty-condition handling: on the query side,
         // "empty conditions = no filter = return everything" is a reasonable convention; carried
         // over to the delete side it becomes "delete the entire table", which is precisely the
@@ -557,8 +623,14 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
                             + "WhereCondition. Pass an explicit condition, or use a dedicated full-table "
                             + "operation if one genuinely exists.");
         }
-        JsonTransactionManager manager = transactionManager();
-        JsonTransaction transaction = manager.currentTransaction();
+        write(transaction -> {
+            delLocked(transaction, whereConditions);
+            return null;
+        });
+    }
+
+    /** {@link #del(WhereCondition...)}'s body after the refusal, run holding this table's write lock. */
+    private void delLocked(JsonTransaction transaction, WhereCondition... whereConditions) {
         List<Map.Entry<Object, T>> visible = readVisible(this::mergedEntries);
         List<Map.Entry<Object, T>> results = new ArrayList<>();
         Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
@@ -595,7 +667,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
             }
             return;
         }
-        manager.publishUnderVisibilityLock(() -> {
+        transactionManager().publishUnderVisibilityLock(() -> {
             for (Map.Entry<Object, T> each : results) {
                 cache.remove(each.getKey(), each.getValue());
             }
@@ -616,7 +688,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
      * delete that is then rolled back.
      */
     @Override
-    public synchronized void delById(Object id) {
+    public void delById(Object id) {
         deleteByIdCounted(id);
     }
 
@@ -628,26 +700,26 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
      * @return {@code 1} if an entry with this id was removed, {@code 0} if there was none
      */
     @Override
-    public synchronized int deleteByIdCounted(Object id) {
+    public int deleteByIdCounted(Object id) {
         requireId(id, "delete");
-        JsonTransactionManager manager = transactionManager();
-        JsonTransaction transaction = manager.currentTransaction();
-        T entity = readVisible(current -> mergedGet(current, id));
-        if (entity != null) {
-            detach(entity).onDelete();
-        }
-        if (transaction == null) {
-            return manager.publishUnderVisibilityLock(() -> cache.remove(id) != null ? 1 : 0);
-        }
-        if (entity == null) {
-            return 0;
-        }
-        transaction.overlayForWrite(this).delete(id);
-        return 1;
+        return write(transaction -> {
+            T entity = readVisible(current -> mergedGet(current, id));
+            if (entity != null) {
+                detach(entity).onDelete();
+            }
+            if (transaction == null) {
+                return transactionManager().publishUnderVisibilityLock(() -> cache.remove(id) != null ? 1 : 0);
+            }
+            if (entity == null) {
+                return 0;
+            }
+            transaction.overlayForWrite(this).delete(id);
+            return 1;
+        });
     }
 
     @Override
-    public synchronized void update(String column, Object value, Object id) {
+    public void update(String column, Object value, Object id) {
         requireId(id, "update");
         if (!Serializable.class.isAssignableFrom(value.getClass())) {
             // GATE-05 group two (08-21): routed to the typed data-access hierarchy. Unlike the
@@ -655,32 +727,35 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
             // update(column, value, id) -- a persistence failure, not a query-condition one.
             throw new DataAccessException(ErrorCode.DATA_PERSISTENCE_FAILED, "Query value is not serializable");
         }
-        T obj = readVisible(transaction -> mergedGet(transaction, id));
-        if (obj == null) {
-            warnNoEntry(id);
-            return;
-        }
-        Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
-        Map<String, Object> map = GSON.fromJson(GSON.toJson(obj), mapType);
-        // Without resolving the column name first, putByPath would write into a brand-new key
-        // that Gson deserialization silently discards -- a silent lost write.
-        JsonPathUtil.putByPath(map, resolveColumn(column), value);
-        T newObj = GSON.fromJson(GSON.toJson(map), type);
-        store(id, newObj);
+        write(transaction -> {
+            T obj = readVisible(current -> mergedGet(current, id));
+            if (obj == null) {
+                warnNoEntry(id);
+                return null;
+            }
+            Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
+            Map<String, Object> map = GSON.fromJson(GSON.toJson(obj), mapType);
+            // Without resolving the column name first, putByPath would write into a brand-new key
+            // that Gson deserialization silently discards -- a silent lost write.
+            JsonPathUtil.putByPath(map, resolveColumn(column), value);
+            T newObj = GSON.fromJson(GSON.toJson(map), type);
+            store(id, newObj);
+            return null;
+        });
     }
 
     @Override
-    public synchronized void update(T obj) {
+    public void update(T obj) {
         updateEntry(obj);
     }
 
     /**
      * {@inheritDoc}
      * <p>
-     * Returns the number of entries replaced, decided under this operator's lock.
+     * Returns the number of entries replaced, decided while holding this table's write lock.
      */
     @Override
-    public synchronized int updateCounted(T entity) {
+    public int updateCounted(T entity) {
         return updateEntry(entity);
     }
 
@@ -692,24 +767,27 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
     private int updateEntry(T obj) {
         Object id = obj.getId();
         requireId(id, "update");
-        T old = readVisible(transaction -> mergedFind(transaction, id));
-        // Copied onto a detached copy of the visible entry, which then replaces it in one step:
-        // committed values are never changed in place, because readers collect references under
-        // the visibility read side and detach them after releasing it. Callers always pass a
-        // detached instance since #522 (no read hands out the stored one), and BeanCopyUtil copies
-        // every primitive field since #520.
-        //
         // onUpdate() fires on the caller's obj before its fields are copied, exactly as
-        // AbstractRelationalDataOperator.update(T) fires it before reading the fields it writes:
-        // whatever the hook writes (e.g. AuditableDataEntity's updatedAt/updatedBy) is both what
-        // persists and what the caller's instance shows afterwards, on every backend.
+        // AbstractRelationalDataOperator.update(T) fires it before the statement that writes
+        // them: whatever the hook writes (e.g. AuditableDataEntity's updatedAt/updatedBy) is both
+        // what persists and what the caller's instance shows afterwards, on every backend. It
+        // runs before the table lock is requested, as the hook runs before the statement waits
+        // for a row lock there.
         obj.onUpdate();
-        if (old == null) {
-            warnNoEntry(id);
-            return 0;
-        }
-        replaceEntry(old, obj);
-        return 1;
+        return write(transaction -> {
+            T old = readVisible(current -> mergedFind(current, id));
+            // Copied onto a detached copy of the visible entry, which then replaces it in one
+            // step: committed values are never changed in place, because readers collect
+            // references under the visibility read side and detach them after releasing it.
+            // Callers always pass a detached instance since #522 (no read hands out the stored
+            // one), and BeanCopyUtil copies every primitive field since #520.
+            if (old == null) {
+                warnNoEntry(id);
+                return 0;
+            }
+            replaceEntry(old, obj);
+            return 1;
+        });
     }
 
     /**
@@ -718,9 +796,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
      * kept in -- as the relational backends name the table.
      */
     private void warnNoEntry(Object id) {
-        Table table = type.getAnnotation(Table.class);
-        String name = table != null ? table.value() : type.getSimpleName();
-        LOGGER.warning("Update of table '" + name + "' matched no entry with id '" + id
+        LOGGER.warning("Update of table '" + tableName() + "' matched no entry with id '" + id
                 + "'; nothing was written.");
     }
 
@@ -747,9 +823,12 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
      * <p>
      * The entry the caller sees -- inside a transaction, the transaction's staged version of it --
      * is checked against {@code expected} with the same matching {@link #getAll(WhereCondition...)}
-     * uses, and replaced, while this operator's lock is held, so no other plain write through this
-     * operator can come between the check and the write. A JSON store belongs to one server;
-     * nothing here coordinates two servers.
+     * uses, and replaced, while this table's write lock is held, so no other write -- a plain write
+     * or another transaction's -- can come between the check and the write. Inside a transaction
+     * the lock is held until the transaction ends, so a second transaction's {@code updateIf} on
+     * the same table is checked only after the first has committed or rolled back: of two calls
+     * expecting the same value, at most one succeeds. A JSON store belongs to one server; nothing
+     * here coordinates two servers.
      * <p>
      * A {@code null} expected value under the default {@link Comparison#EQUAL} is satisfied by an
      * entry whose field is absent or JSON null, and by no present value (#640). This meaning belongs
@@ -757,11 +836,16 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
      * are unchanged.
      */
     @Override
-    public synchronized boolean updateIf(T entity, WhereCondition... expected) {
+    public boolean updateIf(T entity, WhereCondition... expected) {
         Object id = entity.getId();
         requireId(id, "update");
         List<WhereCondition> conditions = evaluableConditions(expected);
-        T stored = readVisible(transaction -> mergedFind(transaction, id));
+        return write(transaction -> updateIfLocked(entity, id, conditions));
+    }
+
+    /** {@link #updateIf}'s check and write, run holding this table's write lock. */
+    private boolean updateIfLocked(T entity, Object id, List<WhereCondition> conditions) {
+        T stored = readVisible(current -> mergedFind(current, id));
         entity.onUpdate();
         if (stored == null) {
             return false;
@@ -844,22 +928,31 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
         return conditionCal(GSON.toJson(byPath), valueJson, condition);
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Writes every committed entry to its file. Takes no table lock, so a flush never waits for a
+     * transaction; committed values are never changed in place, so each file receives one whole
+     * committed value. Two flushes of this operator do not run at the same time.
+     */
     @Override
-    public synchronized void flush() {
-        cache.forEach((key, value) -> {
-            try {
-                File file = new File(storeLocation + File.separator + key + ".json");
-                FileUtils.touch(file);
-                try (Writer writer = Files.newBufferedWriter(file.toPath(), StandardCharsets.UTF_8)) {
-                    writer.write(GSON.toJson(value));
+    public void flush() {
+        synchronized (flushMonitor) {
+            cache.forEach((key, value) -> {
+                try {
+                    File file = new File(storeLocation + File.separator + key + ".json");
+                    FileUtils.touch(file);
+                    try (Writer writer = Files.newBufferedWriter(file.toPath(), StandardCharsets.UTF_8)) {
+                        writer.write(GSON.toJson(value));
+                    }
+                } catch (IOException e) {
+                    // GATE-05 group two (08-21): routed to the typed data-access hierarchy -- a
+                    // failed write to the JSON store is a persistence failure.
+                    throw new DataAccessException(ErrorCode.DATA_PERSISTENCE_FAILED,
+                            "Failed to flush data to disk for key: " + key, e);
                 }
-            } catch (IOException e) {
-                // GATE-05 group two (08-21): routed to the typed data-access hierarchy -- a
-                // failed write to the JSON store is a persistence failure.
-                throw new DataAccessException(ErrorCode.DATA_PERSISTENCE_FAILED,
-                        "Failed to flush data to disk for key: " + key, e);
-            }
-        });
+            });
+        }
     }
 
     @Override
@@ -906,7 +999,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
     // rethrown unchanged, never swallowed.
     @SuppressWarnings("PMD.AvoidCatchingThrowable")
     @Override
-    public synchronized <R> R transaction(Callable<R> action) throws Exception {
+    public <R> R transaction(Callable<R> action) throws Exception {
         JsonTransactionManager manager = transactionManager();
         manager.begin();
         try {
@@ -924,7 +1017,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
     }
 
     @Override
-    public synchronized void transaction(Runnable action) {
+    public void transaction(Runnable action) {
         try {
             transaction((Callable<Void>) () -> {
                 action.run();
@@ -951,7 +1044,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
      * failure part-way stores none of the entities.
      */
     @Override
-    public synchronized void insertAll(List<T> entities) {
+    public void insertAll(List<T> entities) {
         transaction(() -> {
             for (T entity : entities) {
                 insert(entity);
@@ -966,7 +1059,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
      * failure part-way changes none of the entries.
      */
     @Override
-    public synchronized void updateAll(List<T> entities) throws IllegalAccessException {
+    public void updateAll(List<T> entities) throws IllegalAccessException {
         // Checked before the batch starts, so a refused batch changes nothing.
         for (T entity : entities) {
             requireId(entity.getId(), "update");

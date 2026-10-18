@@ -53,7 +53,11 @@ public class JsonStore implements DataStore {
      */
     private final Map<String, JsonTransactionManager> transactionManagers = new ConcurrentHashMap<>();
 
-    /** The table write locks of every operator this store hands out. */
+    /**
+     * The table write locks of every operator this store hands out, across every identity: one
+     * lock table, so a thread waiting for one plugin's table while holding another's is visible to
+     * the same wait bookkeeping.
+     */
     private final JsonLockTable lockTable = new JsonLockTable();
 
     /**
@@ -179,6 +183,7 @@ public class JsonStore implements DataStore {
         Cached cached = dataOperatorMap.computeIfAbsent(new OperatorKey(identity, dataEntity),
                 key -> new SimpleJsonDataOperator<>(location, dataEntity));
         SimpleJsonDataOperator<T> operator = (SimpleJsonDataOperator<T>) cached;
+        operator.bindLockTable(lockTable);
         operator.bindTransactionManager(transactionManagerFor(identity));
         return operator;
     }
@@ -229,8 +234,8 @@ public class JsonStore implements DataStore {
      * so {@code @Transactional} is no longer refused on {@code datasource.type: json} (02-05,
      * D-03). Called by {@code PluginManager.wireAop}'s JSON branch, a different package -- public
      * for that reason, even though it is not part of the officially-extensible {@link DataStore}
-     * contract; the actual snapshot mechanics it drives stay package-private on {@link
-     * SimpleJsonDataOperator}, reached only from inside this class.
+     * contract; the staging and table locking it drives stay package-private in this package, on
+     * {@link SimpleJsonDataOperator}, {@link JsonTransaction} and this store's lock table.
      * <p>
      * Shares one instance with every {@link SimpleJsonDataOperator} {@link #getOperator} hands
      * out for the same identity, so a single {@code @Transactional} method's writes across

@@ -1,7 +1,10 @@
 package com.ultikits.ultitools.interfaces.impl.data.json;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.BiConsumer;
 
@@ -23,6 +26,12 @@ import com.ultikits.ultitools.manager.JsonTransactionManager;
  * {@link #rollback()} drops the overlays; it never touches committed entries, so it cannot undo a
  * write another caller made.
  * <p>
+ * Before its first write to a table the transaction takes that table's write lock
+ * ({@link JsonLockTable}) and holds it until it commits (after the apply) or rolls back, so no
+ * other writer -- another transaction or a plain write -- can change the table in between. It
+ * records every hold it takes and releases exactly those, so a transaction that runs while another
+ * one on the same thread is suspended never releases the suspended one's holds.
+ * <p>
  * Staged values are detached copies: no object the caller holds is reachable from an overlay.
  * An instance is confined to the thread whose {@link JsonTransactionManager} context holds it
  * (suspended contexts included), so it needs no synchronisation of its own.
@@ -38,7 +47,7 @@ public final class JsonTransaction {
     /** Fired inside the visibility write lock, after one operator's overlay is applied and before the next. */
     static final String STEP_APPLY_BETWEEN_OPERATORS = "commit.applyBetweenOperators";
 
-    /** Fired after the whole apply, once the visibility write lock is released. */
+    /** Fired after the whole apply, once the visibility write lock is released, before the table locks are. */
     static final String STEP_APPLIED = "commit.applied";
 
     private static final StepHook NO_STEP_HOOK = step -> { };
@@ -53,6 +62,9 @@ public final class JsonTransaction {
 
     /** One overlay per operator this transaction has written, in first-touch order. */
     private final Map<SimpleJsonDataOperator<?>, Overlay<?>> overlays = new LinkedHashMap<>();
+
+    /** The table locks this transaction holds, in the order it took them, with the lock table of each. */
+    private final Map<SimpleJsonDataOperator<?>, JsonLockTable> heldLocks = new LinkedHashMap<>();
 
     /**
      * Created by {@link JsonTransactionManager#begin()} for a new outermost transaction.
@@ -79,6 +91,24 @@ public final class JsonTransaction {
         return (Overlay<T>) overlays.computeIfAbsent(operator, key -> new Overlay<T>());
     }
 
+    /**
+     * Takes {@code operator}'s table write lock for the rest of this transaction, unless this
+     * transaction already holds it. Called before a write evaluates or stages anything, and never
+     * while holding either side of the visibility lock.
+     *
+     * @throws com.ultikits.ultitools.exceptions.DataAccessException if the lock wait passes its
+     *         bound; the caller's failure path then rolls this transaction back, which releases
+     *         every lock it holds
+     */
+    void lockForWrite(SimpleJsonDataOperator<?> operator) {
+        if (heldLocks.containsKey(operator)) {
+            return;
+        }
+        JsonLockTable table = operator.lockTable();
+        table.acquire(operator, table.defaultDeadlineNanos());
+        heldLocks.put(operator, table);
+    }
+
     /** Whether this transaction has staged any write for {@code operator}. */
     boolean hasStagedWrites(SimpleJsonDataOperator<?> operator) {
         Overlay<?> overlay = overlays.get(operator);
@@ -87,34 +117,69 @@ public final class JsonTransaction {
 
     /**
      * Applies every overlay to its operator's committed entries, under the identity's visibility
-     * write lock held once across all operators, then discards the overlays. A transaction that
-     * staged nothing takes no lock.
+     * write lock held once across all operators, then discards the overlays and releases the table
+     * locks this transaction holds, whether or not the apply succeeded. A transaction that staged
+     * nothing takes no visibility lock.
      */
     public void commit() {
-        if (overlays.isEmpty()) {
-            return;
-        }
         try {
-            manager.publishUnderVisibilityLock(() -> {
-                Iterator<Map.Entry<SimpleJsonDataOperator<?>, Overlay<?>>> iterator = overlays.entrySet().iterator();
-                while (iterator.hasNext()) {
-                    Map.Entry<SimpleJsonDataOperator<?>, Overlay<?>> entry = iterator.next();
-                    apply(entry.getKey(), entry.getValue());
-                    if (iterator.hasNext()) {
-                        stepHook.onStep(STEP_APPLY_BETWEEN_OPERATORS);
-                    }
-                }
-                return null;
-            });
-            stepHook.onStep(STEP_APPLIED);
+            applyOverlays();
         } finally {
             overlays.clear();
+            releaseLocks();
         }
     }
 
-    /** Discards every staged write. Committed entries are not touched. */
+    /** Discards every staged write and releases this transaction's table locks. Committed entries are not touched. */
     public void rollback() {
         overlays.clear();
+        releaseLocks();
+    }
+
+    private void applyOverlays() {
+        if (overlays.isEmpty()) {
+            return;
+        }
+        manager.publishUnderVisibilityLock(() -> {
+            Iterator<Map.Entry<SimpleJsonDataOperator<?>, Overlay<?>>> iterator = overlays.entrySet().iterator();
+            while (iterator.hasNext()) {
+                Map.Entry<SimpleJsonDataOperator<?>, Overlay<?>> entry = iterator.next();
+                apply(entry.getKey(), entry.getValue());
+                if (iterator.hasNext()) {
+                    stepHook.onStep(STEP_APPLY_BETWEEN_OPERATORS);
+                }
+            }
+            return null;
+        });
+        stepHook.onStep(STEP_APPLIED);
+    }
+
+    /**
+     * Releases every table lock this transaction took, most recent first. A release that fails
+     * does not stop the others; the first failure is rethrown afterwards with the rest suppressed.
+     */
+    private void releaseLocks() {
+        if (heldLocks.isEmpty()) {
+            return;
+        }
+        List<Map.Entry<SimpleJsonDataOperator<?>, JsonLockTable>> held = new ArrayList<>(heldLocks.entrySet());
+        heldLocks.clear();
+        Collections.reverse(held);
+        RuntimeException failure = null;
+        for (Map.Entry<SimpleJsonDataOperator<?>, JsonLockTable> each : held) {
+            try {
+                each.getValue().release(each.getKey());
+            } catch (RuntimeException e) {
+                if (failure == null) {
+                    failure = e;
+                } else {
+                    failure.addSuppressed(e);
+                }
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
     }
 
     @SuppressWarnings("unchecked")

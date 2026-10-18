@@ -36,9 +36,15 @@ import com.ultikits.ultitools.interfaces.impl.data.json.JsonTransaction;
  *       instead, mirroring {@link DataSourceTransactionManager}'s D-08 semantics, and the outer
  *       {@link #commit()} then discards the staged writes and throws
  *       {@link UnexpectedRollbackException}.</li>
- *   <li><b>Suspension.</b> {@link #suspend()} detaches the context, staged writes included, so a
- *       {@code REQUIRES_NEW} or {@code NOT_SUPPORTED} body runs independently of it;
- *       {@link #resume(Object)} restores it.</li>
+ *   <li><b>Table write locks.</b> A transaction's first write to a table (one operator) takes that
+ *       table's write lock, and the transaction holds it until its depth-1 {@link #commit()}
+ *       (after the apply) or {@link #rollback()}; a write outside a transaction holds it for the
+ *       call. Another writer of the table waits for it, at most 5 seconds, then fails with a
+ *       {@code DataAccessException}. Reads take no table lock.</li>
+ *   <li><b>Suspension.</b> {@link #suspend()} detaches the context, staged writes and table locks
+ *       included, so a {@code REQUIRES_NEW} or {@code NOT_SUPPORTED} body runs independently of it;
+ *       {@link #resume(Object)} restores it. Locks belong to the thread, so a body that writes a
+ *       table its suspended caller holds re-enters that lock instead of waiting for itself.</li>
  * </ul>
  *
  * @author wisdomme
@@ -114,8 +120,9 @@ public class JsonTransactionManager implements TransactionManager {
      * {@inheritDoc}
      * <p>
      * At depth 1, applies every operator's staged writes under the visibility write lock, held
-     * once across all operators, so other threads see the whole commit at one instant. The
-     * context is removed from this thread whether or not the apply succeeds.
+     * once across all operators, so other threads see the whole commit at one instant, then
+     * releases the transaction's table locks. The context is removed from this thread, and the
+     * locks released, whether or not the apply succeeds.
      */
     @Override
     public void commit() {
@@ -158,8 +165,8 @@ public class JsonTransactionManager implements TransactionManager {
     /**
      * {@inheritDoc}
      * <p>
-     * At depth 1, discards the staged writes; committed data is never touched. At a greater
-     * depth, marks the transaction rollback-only (D-08).
+     * At depth 1, discards the staged writes and releases the transaction's table locks; committed
+     * data is never touched. At a greater depth, marks the transaction rollback-only (D-08).
      */
     @Override
     public void rollback() {
