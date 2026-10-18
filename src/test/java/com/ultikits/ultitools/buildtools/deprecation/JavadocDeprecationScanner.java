@@ -124,9 +124,17 @@ public final class JavadocDeprecationScanner {
         private final DocTrees docs;
         private final String packageName;
         private final Map<String, Set<String>> imports = new LinkedHashMap<>();
+        private final Map<String, Set<String>> staticImports = new LinkedHashMap<>();
         private final List<String> onDemand = new ArrayList<>();
+        private final List<String> staticOnDemand = new ArrayList<>();
         private final Map<Class<?>, CompiledDeprecationReader> compiledClasses = new HashMap<>();
 
+        /**
+         * A type import names a canonical type, so only declared member types are reachable through
+         * it (JLS 7.5.1, 7.5.2). A static import names a canonical type and any of its static members,
+         * so it also reaches member types the type inherits (JLS 7.5.3, 7.5.4). Only class loading
+         * is attempted.
+         */
         Source(Path file, CompilationUnitTree unit, DocTrees docs) {
             this.file = file;
             this.unit = unit;
@@ -134,12 +142,12 @@ public final class JavadocDeprecationScanner {
             this.packageName = unit.getPackageName() == null ? "" : unit.getPackageName().toString();
             onDemand.add("java.lang");
             for (ImportTree imp : unit.getImports()) {
-                // Static imports can name member types too; only class loading is attempted.
                 String name = imp.getQualifiedIdentifier().toString();
                 if (name.endsWith(".*")) {
-                    onDemand.add(name.substring(0, name.length() - 2));
+                    (imp.isStatic() ? staticOnDemand : onDemand).add(name.substring(0, name.length() - 2));
                 } else {
-                    imports.computeIfAbsent(name.substring(name.lastIndexOf('.') + 1), k -> new LinkedHashSet<>())
+                    (imp.isStatic() ? staticImports : imports)
+                            .computeIfAbsent(name.substring(name.lastIndexOf('.') + 1), k -> new LinkedHashSet<>())
                             .add(name);
                 }
             }
@@ -336,38 +344,66 @@ public final class JavadocDeprecationScanner {
         }
 
         private Set<String> resolveName(String name, Owner owner) {
-            int dot = name.indexOf('.');
-            if (dot >= 0) {
-                return resolveQualified(name, dot, owner);
+            if (name.indexOf('.') >= 0) {
+                return resolveQualified(name, owner);
             }
             Set<String> lexical = resolveLexical(name, owner);
             if (!lexical.isEmpty()) {
                 return lexical;
             }
-            if (imports.containsKey(name)) {
-                Set<String> found = new LinkedHashSet<>();
-                for (String imported : imports.get(name)) {
-                    found.addAll(loadableNames(imported));
-                }
-                return found;
+            if (imports.containsKey(name) || staticImports.containsKey(name)) {
+                return resolveSingleImports(name);
             }
             Set<String> local = loadableNames(qualify(name));
-            if (!local.isEmpty()) {
-                return local;
-            }
+            return local.isEmpty() ? resolveOnDemand(name) : local;
+        }
+
+        private Set<String> resolveSingleImports(String name) {
             Set<String> found = new LinkedHashSet<>();
-            for (String prefix : onDemand) {
-                found.addAll(loadableNames(prefix + "." + name));
+            for (String imported : imports.getOrDefault(name, Collections.emptySet())) {
+                found.addAll(loadableNames(imported));
+            }
+            for (String imported : staticImports.getOrDefault(name, Collections.emptySet())) {
+                found.addAll(memberTypesOf(imported.substring(0, imported.lastIndexOf('.')), name));
             }
             return found;
         }
 
-        private Set<String> resolveQualified(String name, int dot, Owner owner) {
+        private Set<String> resolveOnDemand(String name) {
+            Set<String> found = new LinkedHashSet<>();
+            for (String prefix : onDemand) {
+                found.addAll(loadableNames(prefix + "." + name));
+            }
+            for (String prefix : staticOnDemand) {
+                found.addAll(memberTypesOf(prefix, name));
+            }
+            return found;
+        }
+
+        /**
+         * A qualified type name Q.Id names a member type of Q, declared or inherited (JLS 6.5.5.2,
+         * 8.5): the qualifier is resolved first, then {@link MemberTypeScope} looks up Id in each
+         * type it names, so a declared member type still hides an inherited one and two inherited
+         * ones stay ambiguous. A qualifier that is a package instead is covered by loading the
+         * whole name as spelled.
+         */
+        private Set<String> resolveQualified(String name, Owner owner) {
+            int dot = name.lastIndexOf('.');
+            String member = name.substring(dot + 1);
             Set<String> result = loadableNames(name);
-            for (String prefix : resolveName(name.substring(0, dot), owner)) {
-                result.addAll(loadableNames(prefix + "." + name.substring(dot + 1)));
+            for (String qualifier : resolveName(name.substring(0, dot), owner)) {
+                result.addAll(memberTypes.find(qualifier, member));
             }
             return result;
+        }
+
+        /** Member types named {@code name}, declared or inherited, of the canonically named type. */
+        private Set<String> memberTypesOf(String canonical, String name) {
+            Set<String> found = new LinkedHashSet<>();
+            for (String type : loadableNames(canonical)) {
+                found.addAll(memberTypes.find(type, name));
+            }
+            return found;
         }
 
         /**

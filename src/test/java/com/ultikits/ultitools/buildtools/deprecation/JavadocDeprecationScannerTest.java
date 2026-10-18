@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.buildtools.deprecation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.Test;
@@ -228,7 +229,7 @@ class JavadocDeprecationScannerTest {
         // The inner same-spelled class must not rewrite the outer type variable's erasure.
         try (URLClassLoader loader = loader(classes)) {
             List<DeprecationEntry> entries = new ArrayList<>();
-            org.assertj.core.api.Assertions.assertThatCode(() -> entries.addAll(
+            assertThatCode(() -> entries.addAll(
                     new JavadocDeprecationScanner(loader).scan(source.getParent())))
                     .as("bound names resolve in their declaring owner, not a nested consuming owner")
                     .doesNotThrowAnyException();
@@ -320,6 +321,91 @@ class JavadocDeprecationScannerTest {
                     .isInstanceOf(IllegalStateException.class).hasMessageContaining("Both.java:1")
                     .hasMessageContaining("Ambiguous match").hasMessageContaining("probe.Left$Token")
                     .hasMessageContaining("probe.Right$Token");
+        }
+    }
+
+    // A qualified type name Q.Id names a member type of Q, and Q's member types include the ones
+    // it inherits (JLS 6.5.5.2, 8.5). javac resolves Child.Token to Parent$Token; the scanner must
+    // not only try the declared spelling Child$Token.
+
+    @Test
+    void qualifiedNameResolvesMemberTypeInheritedFromSuperclass(@TempDir Path root) throws Exception {
+        assertThat(scanFixture(root,
+                "Parent", "package probe; public class Parent { public static class Token {"
+                        + " public static class Leaf {} } }",
+                "Child", "package probe; public class Child extends Parent {"
+                        + " @Deprecated public void oldApi(Child.Token value) {}"
+                        + " @Deprecated public void packageQualified(probe.Child.Token[] values) {}"
+                        + " @Deprecated public void throughInherited(Child.Token.Leaf leaf) {} }",
+                "Other", "package probe; public class Other {"
+                        + " @Deprecated public void viaSubclass(Child.Token value) {} }"))
+                .containsExactlyInAnyOrder("probe.Child#oldApi(probe.Parent$Token)",
+                        "probe.Child#packageQualified(probe.Parent$Token[])",
+                        "probe.Child#throughInherited(probe.Parent$Token$Leaf)",
+                        "probe.Other#viaSubclass(probe.Parent$Token)");
+    }
+
+    @Test
+    void qualifiedNameResolvesMemberTypeInheritedFromInterface(@TempDir Path root) throws Exception {
+        assertThat(scanFixture(root,
+                "Contract", "package probe; public interface Contract { class Token {} }",
+                "Impl", "package probe; public class Impl implements Contract {"
+                        + " @Deprecated public Impl.Token field; @Deprecated public void oldApi(Impl.Token value) {} }",
+                "Sub", "package probe; public interface Sub extends Contract {"
+                        + " @Deprecated void viaInterface(Sub.Token[] values); }"))
+                .containsExactlyInAnyOrder("probe.Impl#field", "probe.Impl#oldApi(probe.Contract$Token)",
+                        "probe.Sub#viaInterface(probe.Contract$Token[])");
+    }
+
+    @Test
+    void qualifiedDeclaredMemberTypeHidesInheritedOne(@TempDir Path root) throws Exception {
+        // Each pair of overloads differs only in which Token it takes. If the qualified Hider.Token
+        // also yielded the hidden Parent$Token, both overloads would match and the scan would fail.
+        assertThat(scanFixture(root,
+                "Parent", "package probe; public class Parent { public static class Token {} }",
+                "Hider", "package probe; public class Hider extends Parent { public static class Token {}"
+                        + " @Deprecated public void hides(Hider.Token value) {}"
+                        + " @Deprecated public void hides(Parent.Token value) {} }",
+                "Other", "package probe; public class Other {"
+                        + " @Deprecated public void viaHider(Hider.Token value) {}"
+                        + " @Deprecated public void viaHider(Parent.Token value) {} }"))
+                .containsExactlyInAnyOrder("probe.Hider#hides(probe.Hider$Token)",
+                        "probe.Hider#hides(probe.Parent$Token)", "probe.Other#viaHider(probe.Hider$Token)",
+                        "probe.Other#viaHider(probe.Parent$Token)");
+    }
+
+    @Test
+    void staticImportsResolveInheritedMemberTypes(@TempDir Path root) throws Exception {
+        // A static import names any static member of the type, inherited ones included (JLS 7.5.3,
+        // 7.5.4); javac compiles both forms below to Parent$Token.
+        assertThat(scanFixture(root,
+                "Parent", "package probe; public class Parent { public static class Token {} }",
+                "Child", "package probe; public class Child extends Parent {}",
+                "Single", "package probe; import static probe.Child.Token; public class Single {"
+                        + " @Deprecated public void viaStaticImport(Token value) {} }",
+                "OnDemand", "package probe; import static probe.Child.*; public class OnDemand {"
+                        + " @Deprecated public void viaStaticOnDemand(Token value) {} }"))
+                .containsExactlyInAnyOrder("probe.Single#viaStaticImport(probe.Parent$Token)",
+                        "probe.OnDemand#viaStaticOnDemand(probe.Parent$Token)");
+    }
+
+    @Test
+    void typeImportOnDemandDoesNotImportInheritedMemberTypes(@TempDir Path root) throws Exception {
+        Path parent = write(root.resolve("source/probe/Parent.java"),
+                "package probe; public class Parent { public static class Token {} }");
+        Path child = write(root.resolve("source/probe/Child.java"),
+                "package probe; public class Child extends Parent {}");
+        Path user = write(root.resolve("source/probe/user/User.java"),
+                "package probe.user; public class User { @Deprecated public void take(probe.Parent.Token value) {} }");
+        Path classes = compile(root, parent, child, user);
+        // Deliberately inconsistent source/bytecode: javac rejects this simple name, because a
+        // type-import-on-demand imports only the member types the named type declares (JLS 7.5.2).
+        write(user, "package probe.user; import probe.Child.*; public class User {"
+                + " @Deprecated public void take(Token value) {} }");
+        try (URLClassLoader loader = loader(classes)) {
+            assertThatThrownBy(() -> new JavadocDeprecationScanner(loader).scan(user.getParent()))
+                    .isInstanceOf(IllegalStateException.class).hasMessageContaining("User.java:1")
+                    .hasMessageContaining("No reflected member matched");
         }
     }
 
@@ -442,7 +528,7 @@ class JavadocDeprecationScannerTest {
         Path classes = compile(root, subject);
         try (URLClassLoader loader = loader(classes)) {
             List<DeprecationEntry> entries = new ArrayList<>();
-            org.assertj.core.api.Assertions.assertThatCode(() -> entries.addAll(
+            assertThatCode(() -> entries.addAll(
                     new JavadocDeprecationScanner(loader).scan(subject.getParent())))
                     .as("javac-accepted constant expressions must not fail registry generation")
                     .doesNotThrowAnyException();
@@ -467,9 +553,9 @@ class JavadocDeprecationScannerTest {
         Path classes = compile(root, sources);
         try (URLClassLoader loader = loader(classes)) {
             List<DeprecationEntry> entries = new ArrayList<>();
-            org.assertj.core.api.Assertions.assertThatCode(() -> entries.addAll(
+            assertThatCode(() -> entries.addAll(
                     new JavadocDeprecationScanner(loader).scan(sources[0].getParent())))
-                    .as("simple type names must resolve the way javac resolved them")
+                    .as("type names must resolve the way javac resolved them")
                     .doesNotThrowAnyException();
             return entries.stream().map(e -> e.getKey().toString()).collect(Collectors.toList());
         }
