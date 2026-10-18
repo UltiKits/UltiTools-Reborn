@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
 import java.util.List;
@@ -53,6 +54,7 @@ class ResponderReplyRecheckTest {
     private static final String SERVER_ID_1 = "recheck-server-1";
     private static final String SERVER_ID_2 = "recheck-server-2";
     private static final String DISABLING_DROP = "dropped: UltiTools is disabling";
+    private static final String CONNECTION_DROP = "has closed or been replaced";
     private static final long BOUND_SECONDS = 10L;
 
     private PanelResponderRegistry registry;
@@ -207,6 +209,76 @@ class ResponderReplyRecheckTest {
         assertThat(drops).as("one reply-drop FINE line naming the type").hasSize(1);
         assertThat(drops.get(0).getMessage()).contains("responder reply");
         assertThat(drops.get(0).getThrown()).isNull();
+        assertThat(linesAtOrAbove(Level.WARNING)).as("WARNING or SEVERE lines").isEmpty();
+    }
+
+    @Test
+    @DisplayName("a result completing after logout is sent neither to the old client nor to the new session's client")
+    void replyCompletingAfterLogoutIsNotSentToTheNewSession() throws Exception {
+        CompletableFuture<JsonObject> future = admit();
+
+        CloudSession.startNew();
+        PluginInitiationUtils.setWebSocketClientForTesting(client2);
+        future.complete(result());
+        awaitCompletionOutcome(CONNECTION_DROP);
+
+        assertThat(sentOnClient1).as("no reply on the logged-out session's client").isEmpty();
+        assertThat(sentOnClient2).as("no reply on the new session's client").isEmpty();
+        assertThat(replyDropLines(CONNECTION_DROP)).as("one reply-drop FINE line naming the type").hasSize(1);
+        assertThat(linesAtOrAbove(Level.WARNING)).as("WARNING or SEVERE lines").isEmpty();
+    }
+
+    @Test
+    @DisplayName("a result completing after the connection was replaced in the same session is not sent")
+    void replyCompletingAfterTheConnectionWasReplacedIsNotSent() throws Exception {
+        CompletableFuture<JsonObject> future = admit();
+
+        // As reinitWebSocket does: a new client on the still-current session.
+        PluginInitiationUtils.setWebSocketClientForTesting(client2);
+        future.complete(result());
+        awaitCompletionOutcome(CONNECTION_DROP);
+
+        assertThat(sentOnClient1).as("no reply on the replaced client").isEmpty();
+        assertThat(sentOnClient2).as("no reply on the replacing client, which never saw the request").isEmpty();
+        assertThat(replyDropLines(CONNECTION_DROP)).as("one reply-drop FINE line naming the type").hasSize(1);
+        assertThat(linesAtOrAbove(Level.WARNING)).as("WARNING or SEVERE lines").isEmpty();
+    }
+
+    @Test
+    @DisplayName("a result for an admitted connection that has closed is dropped without a WARNING")
+    void replyToAClosedAdmittedConnectionIsDroppedWithoutWarning() throws Exception {
+        CompletableFuture<JsonObject> future = admit();
+
+        when(client1.isConnected()).thenReturn(false);
+        future.complete(result());
+        awaitCompletionOutcome(CONNECTION_DROP);
+
+        assertThat(sentOnClient1).as("sendMessage never called on the closed admitted client").isEmpty();
+        assertThat(sentOnClient2).as("no reply on any other client").isEmpty();
+        List<LogRecord> drops = replyDropLines(CONNECTION_DROP);
+        assertThat(drops).as("one reply-drop FINE line naming the type").hasSize(1);
+        assertThat(drops.get(0).getThrown()).isNull();
+        assertThat(linesAtOrAbove(Level.WARNING)).as("WARNING or SEVERE lines").isEmpty();
+    }
+
+    @Test
+    @DisplayName("control: on the admitted live client of the current session the reply is sent exactly once")
+    void replyOnTheAdmittedLiveConnectionIsSentOnce() throws Exception {
+        CompletableFuture<JsonObject> future = admit();
+
+        future.complete(result());
+        awaitCompletionOutcome(CONNECTION_DROP);
+
+        assertThat(sentOnClient1).as("exactly one reply on the admitted client").hasSize(1);
+        JsonObject reply = sentOnClient1.get(0);
+        assertThat(reply.get("type").getAsString()).isEqualTo(TYPE);
+        assertThat(reply.get("serverId").getAsString()).isEqualTo(SERVER_ID_1);
+        JsonObject data = reply.getAsJsonObject("data");
+        assertThat(data.get("requestId").getAsString()).isEqualTo(REQUEST_ID);
+        assertThat(data.get("answer").getAsInt()).isEqualTo(42);
+        assertThat(sentOnClient2).as("no reply on any other client").isEmpty();
+        assertThat(replyDropLines(CONNECTION_DROP)).as("no reply-drop line").isEmpty();
+        assertThat(replyDropLines(DISABLING_DROP)).as("no disabling drop line").isEmpty();
         assertThat(linesAtOrAbove(Level.WARNING)).as("WARNING or SEVERE lines").isEmpty();
     }
 }
