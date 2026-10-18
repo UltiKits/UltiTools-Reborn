@@ -9,12 +9,18 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
+import java.util.stream.Stream;
 
+import org.assertj.core.api.SoftAssertions;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,9 +28,14 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
 
 import com.google.gson.JsonObject;
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.AccessDecision;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.utils.TestHelper;
@@ -1097,6 +1108,153 @@ class CommandExecutionManagerTest {
             // MUST restore: a leaked default locale corrupts every later test in the 5340-test
             // suite, not just this class.
             java.util.Locale.setDefault(originalLocale);
+        }
+    }
+
+    // --- Raw-YAML blocklist validation (case 84e60349, D-05). Top-level, not @Nested, for the
+    // same Surefire method-filter reason as the four tests above. ---
+
+    /**
+     * The valid list a reload row installs before it loads the invalid value, so the reload rows
+     * can tell "the previous valid list was kept" apart from "the shipped default came back".
+     */
+    private static final String VALID_PREVIOUS_BLOCKLIST = "[stop, deop]";
+
+    @TempDir
+    Path rawConfigDir;
+
+    private int rawConfigCounter;
+
+    /**
+     * Writes a synthetic config.yml whose {@code ultipanel.commands.blocklist} is the given raw
+     * YAML text ({@code null} writes a file without the key), loads it with
+     * {@link YamlConfiguration#loadConfiguration(java.io.File)} so mappings, nested lists, nulls,
+     * numbers and booleans reach the loader as the raw values YAML produced ({@code config.set}
+     * cannot express a present null element), and publishes it through a fresh
+     * {@link UltiTools} mock with this class's mocked logger.
+     */
+    private RawConfig publishRawConfig(String blocklistYaml) throws IOException {
+        rawConfigCounter++;
+        Path file = rawConfigDir.resolve("config-" + rawConfigCounter + ".yml");
+        String text = blocklistYaml == null
+                ? "ultipanel:\n  commands:\n    timeout: 30\n"
+                : "ultipanel:\n  commands:\n    blocklist: " + blocklistYaml + "\n";
+        Files.write(file, text.getBytes(StandardCharsets.UTF_8));
+        YamlConfiguration config = YamlConfiguration.loadConfiguration(file.toFile());
+        UltiTools ultiTools = TestHelper.mockUltiToolsInstance(mockUltiTools -> {
+            when(mockUltiTools.getConfig()).thenReturn(config);
+            when(mockUltiTools.getLogger()).thenReturn(mockLogger);
+        });
+        return new RawConfig(file, config, ultiTools);
+    }
+
+    /**
+     * Loads {@code blocklistYaml} through one of the two entries: a newly constructed manager, or
+     * a public {@code loadConfiguration()} call on a manager that already loaded
+     * {@link #VALID_PREVIOUS_BLOCKLIST}.
+     */
+    private CommandExecutionManager loadThroughEntry(String blocklistYaml, BlocklistEntry entry)
+            throws IOException {
+        if (entry == BlocklistEntry.CONSTRUCTION) {
+            publishRawConfig(blocklistYaml);
+            return new CommandExecutionManager();
+        }
+        publishRawConfig(VALID_PREVIOUS_BLOCKLIST);
+        CommandExecutionManager reloaded = new CommandExecutionManager();
+        assertThat(reloaded.isCommandAllowed("op").isAllowed())
+                .as("precondition: the valid previous list [stop, deop] was installed and allows op")
+                .isTrue();
+        publishRawConfig(blocklistYaml);
+        reloaded.loadConfiguration();
+        return reloaded;
+    }
+
+    private static void assertConfigurableRefusal(SoftAssertions softly, CommandExecutionManager loaded,
+            String command) {
+        AccessDecision decision = loaded.isCommandAllowed(command);
+        softly.assertThat(decision.isAllowed()).as("%s is refused", command).isFalse();
+        softly.assertThat(decision.isConfigurable()).as("%s refusal is the configurable blocklist decision", command)
+                .isTrue();
+        softly.assertThat(decision.getConfigKey()).as("%s refusal names the blocklist key", command)
+                .isEqualTo("ultipanel.commands.blocklist");
+    }
+
+    private static void assertAllowed(SoftAssertions softly, CommandExecutionManager loaded, String command) {
+        softly.assertThat(loaded.isCommandAllowed(command).isAllowed()).as("%s is allowed", command).isTrue();
+    }
+
+    static Stream<Arguments> invalidBlocklistRows() {
+        Stream.Builder<Arguments> rows = Stream.builder();
+        for (InvalidBlocklist shape : InvalidBlocklist.values()) {
+            for (BlocklistEntry entry : BlocklistEntry.values()) {
+                rows.add(Arguments.of(shape, entry));
+            }
+        }
+        return rows.build();
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidBlocklistRows")
+    @DisplayName("an invalid raw blocklist value is rejected as a whole and the current policy is kept")
+    void invalidRawBlocklistIsRejectedWholeAndCurrentPolicyKept(InvalidBlocklist shape, BlocklistEntry entry)
+            throws IOException {
+        CommandExecutionManager loaded = loadThroughEntry(shape.yaml, entry);
+
+        SoftAssertions softly = new SoftAssertions();
+        // stop is in both the shipped default and the previous valid list: refused in every row.
+        assertConfigurableRefusal(softly, loaded, "stop");
+        assertConfigurableRefusal(softly, loaded, "minecraft:stop");
+        // op is in the shipped default (construction) but not in the previous valid list (reload).
+        if (entry.keepsShippedDefault()) {
+            assertConfigurableRefusal(softly, loaded, "op");
+            assertConfigurableRefusal(softly, loaded, "bukkit:op");
+        } else {
+            assertAllowed(softly, loaded, "op");
+            assertAllowed(softly, loaded, "bukkit:op");
+        }
+        softly.assertAll();
+    }
+
+    /** The two ways a blocklist value reaches {@code loadConfiguration()}. */
+    enum BlocklistEntry {
+        /** A newly constructed manager; its current policy is the shipped ten-command default. */
+        CONSTRUCTION,
+        /** A repeated public call after {@link #VALID_PREVIOUS_BLOCKLIST} was installed. */
+        RELOAD;
+
+        boolean keepsShippedDefault() {
+            return this == CONSTRUCTION;
+        }
+    }
+
+    /** Raw YAML values for the key that are not a list of strings (case 84e60349). */
+    enum InvalidBlocklist {
+        SCALAR_STRING("op"),
+        EMPTY_STRING_SCALAR("''"),
+        LIST_OF_ONLY_A_MAPPING("[{name: op}]"),
+        OP_WITH_A_MAPPING("[op, {name: deop}]"),
+        OP_WITH_A_NESTED_LIST("[op, [deop]]"),
+        OP_WITH_A_NULL("[op, null]"),
+        OP_WITH_A_NUMBER("[op, 5]"),
+        OP_WITH_A_BOOLEAN("[op, true]");
+
+        final String yaml;
+
+        InvalidBlocklist(String yaml) {
+            this.yaml = yaml;
+        }
+    }
+
+    /** One published synthetic configuration: its file, the loaded section and the UltiTools mock. */
+    private static final class RawConfig {
+        final Path file;
+        final YamlConfiguration config;
+        final UltiTools ultiTools;
+
+        RawConfig(Path file, YamlConfiguration config, UltiTools ultiTools) {
+            this.file = file;
+            this.config = config;
+            this.ultiTools = ultiTools;
         }
     }
 
