@@ -62,6 +62,28 @@ class CommandExecutionManagerTest {
     private UltiPanelWebSocketClient mockWebSocketClient;
     private Logger mockLogger;
 
+    /**
+     * The valid list a reload row installs before it loads the invalid value, so the reload rows
+     * can tell "the previous valid list was kept" apart from "the shipped default came back".
+     */
+    private static final String VALID_PREVIOUS_BLOCKLIST = "[stop, deop]";
+
+    /** A string placed inside invalid values; no logged line may contain it. */
+    private static final String SENTINEL = "zq-sentinel-84e6";
+
+    private static final String BLOCKLIST_KEY = "ultipanel.commands.blocklist";
+
+    @TempDir
+    Path rawConfigDir;
+
+    private int rawConfigCounter;
+
+    /** Every synthetic configuration this test published, in order. */
+    private final List<RawConfig> publishedRawConfigs = new ArrayList<>();
+
+    /** The action log the published UltiTools mocks return. */
+    private final RemoteActionLog rawActionLog = mock(RemoteActionLog.class);
+
     @BeforeEach
     void setUp() {
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
@@ -1119,28 +1141,6 @@ class CommandExecutionManagerTest {
 
     // --- Raw-YAML blocklist validation (case 84e60349, D-05). Top-level, not @Nested, for the
     // same Surefire method-filter reason as the four tests above. ---
-
-    /**
-     * The valid list a reload row installs before it loads the invalid value, so the reload rows
-     * can tell "the previous valid list was kept" apart from "the shipped default came back".
-     */
-    private static final String VALID_PREVIOUS_BLOCKLIST = "[stop, deop]";
-
-    /** A string placed inside invalid values; no logged line may contain it. */
-    private static final String SENTINEL = "zq-sentinel-84e6";
-
-    private static final String BLOCKLIST_KEY = "ultipanel.commands.blocklist";
-
-    @TempDir
-    Path rawConfigDir;
-
-    private int rawConfigCounter;
-
-    /** Every synthetic configuration this test published, in order. */
-    private final List<RawConfig> publishedRawConfigs = new ArrayList<>();
-
-    /** The action log the published UltiTools mocks return. */
-    private final RemoteActionLog rawActionLog = mock(RemoteActionLog.class);
 
     /**
      * Writes a synthetic config.yml whose {@code ultipanel.commands.blocklist} is the given raw

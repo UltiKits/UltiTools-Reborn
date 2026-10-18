@@ -880,6 +880,7 @@ class CredentialStoreTest {
     @ParameterizedTest(name = "{0}")
     @MethodSource("unreadableCurrentContents")
     @DisplayName("an unreadable current file beside a valid pre-6.3.0 copy keeps both files byte-for-byte (case cc22e454, D-06)")
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // asserts through SoftAssertions
     void unreadableCurrentFileKeepsValidLegacyCopy(String kind, String content) throws IOException {
         DualFileFixture files = new DualFileFixture(tempDir);
         byte[] currentBefore = files.placeCurrent(content);
@@ -894,6 +895,7 @@ class CredentialStoreTest {
     @ParameterizedTest(name = "{0}")
     @MethodSource("unreadableCurrentContents")
     @DisplayName("an unreadable current file beside a valid pre-6.3.0 copy blocks every entry point and every writer (case cc22e454, D-06)")
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // asserts through SoftAssertions
     void unreadableCurrentFileBlocksEveryEntryPoint(String kind, String content) throws IOException {
         DualFileFixture files = new DualFileFixture(tempDir);
         byte[] currentBefore = files.placeCurrent(content);
@@ -930,6 +932,7 @@ class CredentialStoreTest {
 
     @Test
     @DisplayName("a directory at the current path keeps the pre-6.3.0 copy and the directory through read, write and update (case cc22e454, D-06)")
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // asserts through SoftAssertions
     void currentPathIsADirectoryKeepsLegacyCopy() throws IOException {
         DualFileFixture files = new DualFileFixture(tempDir);
         Files.createDirectories(files.current);
@@ -967,6 +970,7 @@ class CredentialStoreTest {
 
     @Test
     @DisplayName("a current file without read permission keeps the pre-6.3.0 copy; read, write and update fail (case cc22e454, D-06)")
+    @SuppressWarnings("PMD.JUnitTestsShouldIncludeAssert") // asserts through SoftAssertions
     void permissionDeniedCurrentFileKeepsLegacyCopy() throws IOException {
         DualFileFixture files = new DualFileFixture(tempDir);
         byte[] currentBefore = files.placeCurrent("{\"uuid\":\"synthetic-current-uuid\"}");

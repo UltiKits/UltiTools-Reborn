@@ -83,6 +83,16 @@ class PluginInitiationUtilsConfigUpdateTest {
     /** What getServerPropertiesManager() answers; a row may swap in a real manager (no re-stubbing, issue #250). */
     private ServerPropertiesManager serverPropertiesManager;
 
+    private static final String NAMED_FILE = "config/lang.yml";
+    private static final String NAMED_CONTENT = "{\"language\":\"zh\"}";
+    private static final String WHOLE_CONTENT = "{\"UltiTools\":{\"config/lang.yml\":{\"language\":\"zh\"}}}";
+    private static final String SERVER_PROPERTIES_CONTENT = "{\"motd\":\"synthetic\"}";
+
+    private static final String PROPERTIES_HEADER = "#Minecraft server properties\n#synthetic fixture\n";
+    private static final String MOTD_LINE = "motd=A Minecraft Server\n";
+    private static final String RCON_LINE = "rcon.password=synthetic-secret\n";
+    private static final String TRAILER = "max-players=20\n";
+
     @BeforeEach
     void setUp() throws Exception {
         mockLogger = mock(Logger.class);
@@ -162,11 +172,6 @@ class PluginInitiationUtilsConfigUpdateTest {
     }
 
     // ========== Inbound update_config capability (case 180e5fe3, D-04) ==========
-
-    private static final String NAMED_FILE = "config/lang.yml";
-    private static final String NAMED_CONTENT = "{\"language\":\"zh\"}";
-    private static final String WHOLE_CONTENT = "{\"UltiTools\":{\"config/lang.yml\":{\"language\":\"zh\"}}}";
-    private static final String SERVER_PROPERTIES_CONTENT = "{\"motd\":\"synthetic\"}";
 
     /** The four update_config target shapes the handler routes differently. */
     enum UpdateTarget {
@@ -498,11 +503,6 @@ class PluginInitiationUtilsConfigUpdateTest {
         assertRefusedUnder(Capability.FILE_WRITE);
         assertNothingRouted();
     }
-
-    private static final String PROPERTIES_HEADER = "#Minecraft server properties\n#synthetic fixture\n";
-    private static final String MOTD_LINE = "motd=A Minecraft Server\n";
-    private static final String RCON_LINE = "rcon.password=synthetic-secret\n";
-    private static final String TRAILER = "max-players=20\n";
 
     private Path realServerProperties(Path root) throws IOException {
         Path file = root.resolve("server.properties");
