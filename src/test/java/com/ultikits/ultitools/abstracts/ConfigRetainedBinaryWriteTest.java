@@ -88,7 +88,8 @@ class ConfigRetainedBinaryWriteTest {
     };
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws ReflectiveOperationException {
+        clearLeakedUltiToolsInstance();
         file = directory.resolve("kits").resolve("binary.yml");
         framework.addHandler(capture);
     }
@@ -258,6 +259,19 @@ class ConfigRetainedBinaryWriteTest {
 
         assertThat(result).isEqualTo(OperatorFiles.WriteResult.FILE_CHANGED);
         assertThat(text()).isEqualTo(edited);
+    }
+
+    /**
+     * Clears a mocked {@code UltiTools} instance an earlier test class in the same fork left behind, as
+     * {@code ConfigSensitiveDiagnosticRedactionTest} does: with one, the binder reports unwritten keys through the mock's
+     * {@code getLogger()} instead of the framework logger this test captures, so a warning assertion would depend on
+     * test order.
+     */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // the framework singleton is a private static field
+    private static void clearLeakedUltiToolsInstance() throws ReflectiveOperationException {
+        java.lang.reflect.Field instance = com.ultikits.ultitools.UltiTools.class.getDeclaredField("ultiTools");
+        instance.setAccessible(true);
+        instance.set(null, null);
     }
 
     private UltiToolsPlugin plugin() {

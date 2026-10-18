@@ -46,6 +46,7 @@ class ConfigStagedPanelWriteTest {
 
     @BeforeEach
     void setup() throws Exception {
+        clearLeakedUltiToolsInstance();
         UltiToolsPlugin plugin = Mockito.mock(UltiToolsPlugin.class);
         lenient().when(plugin.getPluginName()).thenReturn("PanelBatch");
         lenient().when(plugin.getResourceFolderPath()).thenReturn(directory.toString());

@@ -269,7 +269,8 @@ class ConfigTypedMapKeyTest {
     }
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws ReflectiveOperationException {
+        clearLeakedUltiToolsInstance();
         plugin = Mockito.mock(UltiToolsPlugin.class);
         lenient().when(plugin.getPluginName()).thenReturn("TypedKeyModule");
         lenient().when(plugin.getConfigFolder()).thenReturn(tempDir.toString());
@@ -825,6 +826,19 @@ class ConfigTypedMapKeyTest {
             assertThat(refused).hasMessageNotContaining("several spellings");
         }
         assertThat(text()).as("the entry 2 the operator did not name").isEqualTo(afterSecond);
+    }
+
+    /**
+     * Clears a mocked {@code UltiTools} instance an earlier test class in the same fork left behind, as
+     * {@code ConfigSensitiveDiagnosticRedactionTest} does: with one, the binder reports unwritten keys through the mock's
+     * {@code getLogger()} instead of the framework logger this test captures, so a warning assertion would depend on
+     * test order.
+     */
+    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // the framework singleton is a private static field
+    private static void clearLeakedUltiToolsInstance() throws ReflectiveOperationException {
+        java.lang.reflect.Field instance = com.ultikits.ultitools.UltiTools.class.getDeclaredField("ultiTools");
+        instance.setAccessible(true);
+        instance.set(null, null);
     }
 
     private SpelledKeyConfig initialized() {
