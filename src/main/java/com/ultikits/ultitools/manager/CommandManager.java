@@ -4,9 +4,12 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.logging.Level;
 
 import org.bukkit.Bukkit;
@@ -151,13 +154,19 @@ public class CommandManager {
 
     /**
      * Register all classes annotated with @CmdExecutor in the specified package. Dependencies will be injected automatically.
+     * <p>
+     * Beans are enumerated by name, so an executor bound under several names (a
+     * {@code @Bean(name = {primary, alias})} product) is reached once per name; it is registered
+     * with Bukkit once, on the first name (C50).
      *
      * @param plugin UltiTools Plugin instance
      */
     public void registerAll(UltiToolsPlugin plugin) {
+        Set<CommandExecutor> handled = Collections.newSetFromMap(new IdentityHashMap<>());
         for (String cmdBean : plugin.getContext().getBeanNamesForType(CommandExecutor.class)) {
             CommandExecutor commandExecutor = plugin.getContext().getBean(cmdBean, CommandExecutor.class);
             if (commandExecutor == null) continue;
+            if (!handled.add(commandExecutor)) continue; // same instance under another name (C50)
             CmdExecutor annotation = MergedAnnotationResolver.find(commandExecutor.getClass(), CmdExecutor.class);
             if (annotation == null || annotation.manualRegister()) continue;
             register(plugin, commandExecutor);
@@ -318,15 +327,19 @@ public class CommandManager {
     /**
      * Register all @CmdExecutor commands from an external plugin's IoC container.
      * Uses raw description (no i18n) since external plugins don't have UltiTools i18n.
+     * An executor bound under several names is registered once (C50), as in
+     * {@link #registerAll(UltiToolsPlugin)}.
      *
      * @param adapter the external plugin adapter
      * @since 6.2.2
      */
     public void registerAllExternal(ExternalPluginAdapter adapter) {
         if (adapter.getContext() == null) return;
+        Set<CommandExecutor> handled = Collections.newSetFromMap(new IdentityHashMap<>());
         for (String cmdBean : adapter.getContext().getBeanNamesForType(CommandExecutor.class)) {
             CommandExecutor executor = adapter.getContext().getBean(cmdBean, CommandExecutor.class);
             if (executor == null) continue;
+            if (!handled.add(executor)) continue; // same instance under another name (C50)
             CmdExecutor annotation = MergedAnnotationResolver.find(executor.getClass(), CmdExecutor.class);
             if (annotation == null || annotation.manualRegister()) continue;
             registerExternalCommand(adapter.getPluginName(), executor, annotation);
