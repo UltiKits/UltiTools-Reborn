@@ -1,6 +1,11 @@
 package com.ultikits.ultitools.abstracts;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.lenient;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -26,8 +31,15 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 
+import com.google.gson.JsonObject;
+import com.ultikits.ultitools.annotations.ConfigEntity;
+import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.config.OperatorFiles;
+import com.ultikits.ultitools.config.document.AtomicConfigWriter;
+import com.ultikits.ultitools.manager.ConfigManager;
 
 /**
  * A file that merely holds a retained YAML {@code !!binary} value must stay writable (issue #673, "Retained binary
@@ -43,7 +55,8 @@ import com.ultikits.ultitools.config.OperatorFiles;
 @DisplayName("A retained !!binary value does not block a write of another key")
 class ConfigRetainedBinaryWriteTest {
 
-    private static final String WRITER_LOGGER = "com.ultikits.ultitools.config.document.OperatorFileWriter";
+    private static final String ENTITY_FILE = "kit.yml";
+    private static final String ENTITY_TEXT = "# header\n" + "blob: !!binary 'YWI='\n" + "motd: old\ntitle: first\n";
     private static final String BLOB_LINE = "blob: !!binary 'YWI='\n";
     private static final String KIT = "# header\n" + BLOB_LINE + "motd: old\n";
     private static final String LAYOUT_REFUSAL = "the file's layout outside the keys this write owns would change";
@@ -52,6 +65,8 @@ class ConfigRetainedBinaryWriteTest {
     Path directory;
 
     private Path file;
+    /** Held so the logger, and the handler on it, cannot be collected while a test runs. */
+    private final Logger framework = Logger.getLogger("com.ultikits.ultitools");
     private final List<LogRecord> warnings = new ArrayList<>();
     private final Handler capture = new Handler() {
         @Override
@@ -75,12 +90,12 @@ class ConfigRetainedBinaryWriteTest {
     @BeforeEach
     void setUp() {
         file = directory.resolve("kits").resolve("binary.yml");
-        Logger.getLogger(WRITER_LOGGER).addHandler(capture);
+        framework.addHandler(capture);
     }
 
     @AfterEach
     void tearDown() {
-        Logger.getLogger(WRITER_LOGGER).removeHandler(capture);
+        framework.removeHandler(capture);
     }
 
     @Test
@@ -155,6 +170,125 @@ class ConfigRetainedBinaryWriteTest {
         assertThat(warnings).extracting(LogRecord::getMessage).singleElement().asString().contains(reason);
         assertThat(text()).isEqualTo(original);
         assertThat(file.toFile().lastModified()).isEqualTo(modified);
+    }
+
+    @Test
+    @DisplayName("entity save() of a changed field writes only its line; the binary line stays byte-identical")
+    void entitySaveWritesBesideARetainedBinary() throws Exception {
+        Kit kit = entity();
+        kit.motd = "new";
+
+        kit.save();
+
+        assertThat(warnings).as("refusal reasons").extracting(LogRecord::getMessage).isEmpty();
+        assertThat(entityText()).isEqualTo(ENTITY_TEXT.replace("motd: old", "motd: new"));
+        assertThat(kit.isModifiedSinceSnapshot()).as("the change is saved").isFalse();
+    }
+
+    @Test
+    @DisplayName("saveOperatorChange of a declared field writes only its line; the binary line stays byte-identical")
+    void operatorChangeWritesBesideARetainedBinary() throws Exception {
+        Kit kit = entity();
+        kit.title = "second";
+
+        assertThatCode(() -> kit.saveOperatorChange("title")).doesNotThrowAnyException();
+
+        assertThat(warnings).as("refusal reasons").extracting(LogRecord::getMessage).isEmpty();
+        assertThat(entityText()).isEqualTo(ENTITY_TEXT.replace("title: first", "title: second"));
+    }
+
+    @Test
+    @DisplayName("a panel batch writes only its key line beside a retained binary; the entity changes only after the write")
+    void panelBatchWritesBesideARetainedBinary() throws Exception {
+        Files.write(directory.resolve(ENTITY_FILE), ENTITY_TEXT.getBytes(StandardCharsets.UTF_8));
+        UltiToolsPlugin plugin = plugin();
+        Kit kit = new Kit(ENTITY_FILE);
+        ConfigManager manager = new ConfigManager();
+        manager.register(plugin, kit);
+        assertThat(kit.motd).isEqualTo("old");
+        JsonObject edit = new JsonObject();
+        edit.addProperty("motd", "panel");
+        JsonObject files = new JsonObject();
+        files.add(ENTITY_FILE, edit);
+        JsonObject payload = new JsonObject();
+        payload.add(plugin.getPluginName(), files);
+        List<String> atCommit = new ArrayList<>();
+
+        try (MockedStatic<AtomicConfigWriter> writer = Mockito.mockStatic(AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
+            writer.when(() -> AtomicConfigWriter.stage(any(Path.class), anyString())).thenAnswer(call -> {
+                AtomicConfigWriter.StagedWrite observed = Mockito.spy((AtomicConfigWriter.StagedWrite) call.callRealMethod());
+                Mockito.doAnswer(commit -> {
+                    atCommit.add(kit.motd);
+                    return commit.callRealMethod();
+                }).when(observed).commit();
+                return observed;
+            });
+            assertThatCode(() -> manager.loadFromJson(payload.toString())).doesNotThrowAnyException();
+        }
+
+        assertThat(warnings).as("refusal reasons").extracting(LogRecord::getMessage).isEmpty();
+        assertThat(entityText()).isEqualTo(ENTITY_TEXT.replace("motd: old", "motd: panel"));
+        assertThat(atCommit).as("entity value while the file is committed").containsExactly("old");
+        assertThat(kit.motd).isEqualTo("panel");
+    }
+
+    @Test
+    @DisplayName("control: a new byte[] value is still refused at the plain-data boundary, before the file is read again")
+    void newBinaryValueIsStillRefused() throws Exception {
+        put(KIT);
+        OperatorFiles.Snapshot snapshot = OperatorFiles.read(file.toFile());
+        Files.delete(file);
+
+        assertThatThrownBy(() -> OperatorFiles.write(snapshot, values(Collections.singletonList("motd"), new byte[] {1})))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("[motd]")
+                .hasMessageContaining("only plain data");
+        assertThat(file).as("the deleted file is not read or written again").doesNotExist();
+    }
+
+    @Test
+    @DisplayName("control: a binary the operator changed on disk after the read is kept and the write reports FILE_CHANGED")
+    void binaryChangedOnDiskAfterTheReadIsKept() throws Exception {
+        put(KIT);
+        OperatorFiles.Snapshot snapshot = OperatorFiles.read(file.toFile());
+        String edited = KIT.replace("'YWI='", "'Y2Q='");
+        Files.write(file, edited.getBytes(StandardCharsets.UTF_8));
+
+        OperatorFiles.WriteResult result = OperatorFiles.write(snapshot, values(Collections.singletonList("motd"), "new"));
+
+        assertThat(result).isEqualTo(OperatorFiles.WriteResult.FILE_CHANGED);
+        assertThat(text()).isEqualTo(edited);
+    }
+
+    private UltiToolsPlugin plugin() {
+        UltiToolsPlugin plugin = Mockito.mock(UltiToolsPlugin.class);
+        lenient().when(plugin.getPluginName()).thenReturn("BinaryKit");
+        lenient().when(plugin.getResourceFolderPath()).thenReturn(directory.toString());
+        ConfigFileStubs.stubConfigFolder(plugin, directory.toFile());
+        return plugin;
+    }
+
+    private Kit entity() throws Exception {
+        Files.write(directory.resolve(ENTITY_FILE), ENTITY_TEXT.getBytes(StandardCharsets.UTF_8));
+        Kit kit = new Kit(ENTITY_FILE);
+        kit.init(plugin());
+        assertThat(kit.motd).isEqualTo("old");
+        return kit;
+    }
+
+    private String entityText() throws Exception {
+        return new String(Files.readAllBytes(directory.resolve(ENTITY_FILE)), StandardCharsets.UTF_8);
+    }
+
+    /** Two declared settings; the binary is an operator key the entity does not declare. */
+    @ConfigEntity(ENTITY_FILE)
+    public static class Kit extends AbstractConfigEntity {
+        @ConfigEntry(path = "motd") String motd = "default";
+        @ConfigEntry(path = "title") String title = "default";
+
+        public Kit(String path) {
+            super(path);
+        }
     }
 
     private static Map<List<String>, Object> values(List<String> path, Object value) {
