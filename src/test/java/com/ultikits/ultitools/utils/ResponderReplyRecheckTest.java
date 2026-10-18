@@ -13,8 +13,10 @@ import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 import java.util.logging.Handler;
 import java.util.logging.Level;
@@ -30,6 +32,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.websocket.PanelResponderRegistry;
 import com.ultikits.ultitools.websocket.UltiPanelWebSocketClient;
@@ -136,8 +139,12 @@ class ResponderReplyRecheckTest {
     }
 
     private static JsonObject request() {
+        return request(REQUEST_ID);
+    }
+
+    private static JsonObject request(String requestId) {
         JsonObject data = new JsonObject();
-        data.addProperty("requestId", REQUEST_ID);
+        data.addProperty("requestId", requestId);
         JsonObject message = new JsonObject();
         message.addProperty("type", TYPE);
         message.add("data", data);
@@ -156,7 +163,11 @@ class ResponderReplyRecheckTest {
      * naming the type while admitting, which are not reply-drop lines and must not be counted.
      */
     private CompletableFuture<JsonObject> admit() throws InterruptedException {
-        PluginInitiationUtils.handleInboundMessage(request());
+        return admit(REQUEST_ID);
+    }
+
+    private CompletableFuture<JsonObject> admit(String requestId) throws InterruptedException {
+        PluginInitiationUtils.handleInboundMessage(request(requestId));
         CompletableFuture<JsonObject> future = handedOut.poll(BOUND_SECONDS, TimeUnit.SECONDS);
         assertThat(future).as("the responder was called and handed out its future").isNotNull();
         records.clear();
@@ -296,6 +307,62 @@ class ResponderReplyRecheckTest {
         assertThat(sentOnClient2).as("no reply on any other client").isEmpty();
         assertThat(replyDropLines(CONNECTION_DROP)).as("no reply-drop line").isEmpty();
         assertThat(replyDropLines(DISABLING_DROP)).as("no disabling drop line").isEmpty();
+        assertThat(linesAtOrAbove(Level.WARNING)).as("WARNING or SEVERE lines").isEmpty();
+    }
+
+    @Test
+    @DisplayName("two in-flight requests answered from one shared cached result each reply with their own requestId; the cached object is untouched")
+    void repliesFromOneSharedCachedResultKeepTheirOwnRequestIds() throws Exception {
+        String firstId = "req-shared-1";
+        String secondId = "req-shared-2";
+        List<String> wireFrames = new CopyOnWriteArrayList<>();
+        CountDownLatch firstSendEntered = new CountDownLatch(1);
+        CountDownLatch secondSendEntered = new CountDownLatch(1);
+        AtomicInteger sendCalls = new AtomicInteger();
+        UltiPanelWebSocketClient client = mock(UltiPanelWebSocketClient.class);
+        lenient().when(client.isConnected()).thenReturn(true);
+        lenient().when(client.getServerId()).thenReturn(SERVER_ID_1);
+        doAnswer(invocation -> {
+            JsonObject frame = invocation.getArgument(0);
+            if (sendCalls.incrementAndGet() == 1) {
+                // A slow socket write: the first reply is serialized only after the second reply has
+                // been built and handed to the client, the interleaving two workers can produce.
+                firstSendEntered.countDown();
+                secondSendEntered.await(BOUND_SECONDS, TimeUnit.SECONDS);
+            } else {
+                secondSendEntered.countDown();
+            }
+            wireFrames.add(frame.toString());
+            return null;
+        }).when(client).sendMessage(any(JsonObject.class));
+        PluginInitiationUtils.setWebSocketClientForTesting(client);
+
+        CompletableFuture<JsonObject> first = admit(firstId);
+        CompletableFuture<JsonObject> second = admit(secondId);
+        JsonObject cached = result();
+        JsonObject cachedAsBuilt = cached.deepCopy();
+
+        // Each future completes on its own thread, so each reply is built on its own thread.
+        Thread firstCompleter = new Thread(() -> first.complete(cached), "shared-result-completer-1");
+        firstCompleter.start();
+        assertThat(firstSendEntered.await(BOUND_SECONDS, TimeUnit.SECONDS))
+                .as("the first reply reached the client").isTrue();
+        Thread secondCompleter = new Thread(() -> second.complete(cached), "shared-result-completer-2");
+        secondCompleter.start();
+        firstCompleter.join(TimeUnit.SECONDS.toMillis(BOUND_SECONDS));
+        secondCompleter.join(TimeUnit.SECONDS.toMillis(BOUND_SECONDS));
+
+        assertThat(wireFrames).as("two replies written").hasSize(2);
+        List<String> repliedIds = wireFrames.stream()
+                .map(frame -> JsonParser.parseString(frame).getAsJsonObject()
+                        .getAsJsonObject("data").get("requestId").getAsString())
+                .collect(Collectors.toList());
+        assertThat(repliedIds).as("each reply carries its own request's requestId")
+                .containsExactlyInAnyOrder(firstId, secondId);
+        wireFrames.forEach(frame -> assertThat(JsonParser.parseString(frame).getAsJsonObject()
+                .getAsJsonObject("data").get("answer").getAsInt()).isEqualTo(42));
+        assertThat(cached).as("the responder's cached result is never changed by a reply")
+                .isEqualTo(cachedAsBuilt);
         assertThat(linesAtOrAbove(Level.WARNING)).as("WARNING or SEVERE lines").isEmpty();
     }
 }
