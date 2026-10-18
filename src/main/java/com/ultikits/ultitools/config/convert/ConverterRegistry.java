@@ -606,6 +606,12 @@ public final class ConverterRegistry {
          * map key can be written under the file's own key text; reads never use it.
          */
         private final Object fileValue;
+        /**
+         * The entries of the file map at this location by their key text, first in map order; built once, on the first
+         * lookup that misses an exact key, so binding every key of a map visits its file entries once, not once per key
+         * (PR #687 local Codex run 2).
+         */
+        private Map<String, Object> fileEntriesByText;
         private Context(ConverterRegistry registry, String file, List<String> path, Type type,
                         List<ConversionFailure> failures, Object fileValue) {
             this.registry = registry;
@@ -667,7 +673,7 @@ public final class ConverterRegistry {
         public Context child(String segment, Type declared) {
             List<String> childPath = new ArrayList<>(path);
             childPath.add(segment);
-            return new Context(registry, file, childPath, declared, failures, fileEntry(fileValue, segment));
+            return new Context(registry, file, childPath, declared, failures, fileEntry(segment));
         }
         /**
          * @return the plain value the file holds at this context's location, or {@code null} when unknown; a probe and
@@ -709,14 +715,16 @@ public final class ConverterRegistry {
             return new ConversionException(reason, file, path, type, cause);
         }
 
-        private static Object fileEntry(Object fileValue, String segment) {
+        /**
+         * The file's value under {@code segment}: the entry whose key is exactly that text, else the first entry in map
+         * order whose key reads as that text, through the index built once per map.
+         */
+        private Object fileEntry(String segment) {
             if (fileValue instanceof Map<?, ?>) {
                 Map<?, ?> entries = (Map<?, ?>) fileValue;
                 if (entries instanceof HashMap<?, ?> && entries.containsKey(segment)) { return entries.get(segment); }
-                for (Map.Entry<?, ?> entry : entries.entrySet()) {
-                    if (segment.equals(String.valueOf(entry.getKey()))) { return entry.getValue(); }
-                }
-                return null;
+                if (fileEntriesByText == null) { fileEntriesByText = entriesByText(entries); }
+                return fileEntriesByText.get(segment);
             }
             if (fileValue instanceof List<?> && segment.matches("\\d{1,9}")) {
                 List<?> elements = (List<?>) fileValue;
@@ -724,6 +732,16 @@ public final class ConverterRegistry {
                 return index < elements.size() ? elements.get(index) : null;
             }
             return null;
+        }
+
+        /** {@code entries} by key text ({@code String.valueOf}), keeping the first entry in map order for each text. */
+        private static Map<String, Object> entriesByText(Map<?, ?> entries) {
+            Map<String, Object> byText = new HashMap<>();
+            for (Map.Entry<?, ?> entry : entries.entrySet()) {
+                String text = String.valueOf(entry.getKey());
+                if (!byText.containsKey(text)) { byText.put(text, entry.getValue()); }
+            }
+            return byText;
         }
     }
 }
