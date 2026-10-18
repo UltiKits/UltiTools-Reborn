@@ -2,6 +2,7 @@ package com.ultikits.ultitools.config.document;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
@@ -25,6 +26,12 @@ import org.jetbrains.annotations.ApiStatus;
  * text untouched: integral numbers compare by numeric value whatever their box type ({@code Integer 1}
  * equals {@code Long 1}), doubles compare with {@link Double#equals(Object)} (so {@code 1.50} read from a
  * file equals {@code 1.5}), maps compare entry by entry regardless of order, and lists element by element.
+ * A value read from a file that lies outside plain data - a YAML {@code !!binary} read as a {@code byte[]}, a
+ * {@code !!pairs} or {@code !!omap} pair read as an {@code Object[]}, a {@code !!set} read as a {@link Set} - compares
+ * by content, never by identity: {@link #copy(Object)} hands out a fresh copy of each of them on every read, so two
+ * copies of an unchanged value must compare equal. Binaries compare byte by byte, arrays element by element, and two
+ * sets are equal when they have the same size and every member of each has an equal member in the other; a value
+ * whose content differs compares unequal.
  *
  * @since 6.3.0
  */
@@ -119,7 +126,51 @@ public final class PlainData {
             }
             return true;
         }
+        if (a instanceof byte[] && b instanceof byte[]) {
+            return Arrays.equals((byte[]) a, (byte[]) b);
+        }
+        if (a instanceof Object[] && b instanceof Object[]) {
+            return arrayEquals((Object[]) a, (Object[]) b);
+        }
+        if (a instanceof Set && b instanceof Set) {
+            Set<?> left = (Set<?>) a;
+            Set<?> right = (Set<?>) b;
+            return left.size() == right.size() && everyMemberMatched(left, right) && everyMemberMatched(right, left);
+        }
         return a.equals(b);
+    }
+
+    private static boolean arrayEquals(Object[] left, Object[] right) {
+        if (left.length != right.length) {
+            return false;
+        }
+        for (int i = 0; i < left.length; i++) {
+            if (!plainEquals(left[i], right[i])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Whether every member of {@code members} has a {@link #plainEquals}-equal member in {@code candidates}. A set read
+     * from a file may hold a binary or another value whose own {@code equals} is identity, so membership is matched by
+     * value rather than by {@link Set#contains(Object)}.
+     */
+    private static boolean everyMemberMatched(Set<?> members, Set<?> candidates) {
+        for (Object member : members) {
+            boolean matched = false;
+            for (Object candidate : candidates) {
+                if (plainEquals(member, candidate)) {
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

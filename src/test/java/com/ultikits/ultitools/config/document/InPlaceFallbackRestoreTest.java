@@ -59,6 +59,7 @@ class InPlaceFallbackRestoreTest {
     private static final String ORIGINAL_VALUE = "original-motd-4b1e";
     private static final String NEW_VALUE = "new-motd-9d2a";
     private static final String TEXT = "# Gate settings\nmotd: " + ORIGINAL_VALUE + "\nlimit: 5\n";
+    private static final String OPERATOR_TEXT = "# Gate settings\nmotd: operator-motd-7c3f\nlimit: 5\n# saved by hand\n";
 
     @TempDir
     Path tempDir;
@@ -106,9 +107,16 @@ class InPlaceFallbackRestoreTest {
         }
     }
 
+    /** A step a test runs at a hook of {@link Faults}, given the configuration file the hook concerns. */
+    interface FileAction {
+        void run(Path file) throws IOException;
+    }
+
     /**
      * Refuses the atomic move onto a configuration file (so the backed in-place fallback runs) and fails chosen steps of
-     * the in-place writes to the target, counted by target open.
+     * the in-place writes to the target, counted by target open. Two optional hooks let a test act as the operator at an
+     * exact moment: right after the framework backup of a target is deleted (the target was just put back), and when a
+     * chosen target open is failed (a put-back is failing); both are off unless set, and count how often they ran.
      */
     static final class Faults implements AtomicConfigWriter.FileOperations {
         private int targetOpens;
@@ -118,6 +126,23 @@ class InPlaceFallbackRestoreTest {
         int failWriteAtOpen;
         final java.util.Set<Integer> forceFailures = new java.util.HashSet<>();
         final java.util.Set<Integer> openFailures = new java.util.HashSet<>();
+        /** Runs once, on the target, after the first framework backup deletion. */
+        FileAction afterBackupDeleted;
+        int backupDeletedActions;
+        /** Runs on the target when an open is failed, before the failure is thrown. */
+        FileAction onFailedOpen;
+        int failedOpenActions;
+
+        @Override
+        public void delete(Path file) throws IOException {
+            Files.deleteIfExists(file);
+            String name = file.getFileName().toString();
+            if (afterBackupDeleted != null && backupDeletedActions == 0
+                    && name.matches(".*\\.ultitools-backup-[0-9a-f]{16}")) {
+                backupDeletedActions++;
+                afterBackupDeleted.run(file.resolveSibling(name.substring(0, name.indexOf(".ultitools-backup-"))));
+            }
+        }
 
         @Override
         public void move(Path source, Path destination, CopyOption... options) throws IOException {
@@ -131,6 +156,10 @@ class InPlaceFallbackRestoreTest {
         public FileChannel openTarget(Path file) throws IOException {
             targetOpens++;
             if (targetOpens == failOpenAt || openFailures.contains(targetOpens)) {
+                if (onFailedOpen != null) {
+                    failedOpenActions++;
+                    onFailedOpen.run(file);
+                }
                 throw new IOException("injected open failure");
             }
             target = FileChannel.open(file, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING);
@@ -482,7 +511,140 @@ class InPlaceFallbackRestoreTest {
         assertThat(only.isFileModifiedSinceSnapshot()).isTrue();
     }
 
+    // ------------------------------------- #673 case 13: the batch rollback acts only on bytes the write still owns
+
+    @Test
+    @DisplayName("#673: a file put back after its failed in-place write is not rewritten: the operator's later save is kept")
+    void putBackThenOperatorSaveSurvivesBatchRollback() throws Exception {
+        write("a.yml", TEXT);
+        write("b.yml", TEXT);
+        ConfigManager manager = new ConfigManager();
+        Gate first = new Gate("a.yml");
+        Gate second = new Gate("b.yml");
+        manager.register(plugin, first);
+        manager.register(plugin, second);
+        JsonObject edit = new JsonObject();
+        edit.addProperty("motd", NEW_VALUE);
+        JsonObject files = new JsonObject();
+        files.add("a.yml", edit);
+        files.add("b.yml", edit);
+        JsonObject root = new JsonObject();
+        root.add("RestoreModule", files);
+        injectFaults();
+        // Open 1: the first committed file is replaced. Open 2: the second fails its force and open 3 puts it back; once
+        // its backup is deleted the operator saves that file, before the batch rolls back.
+        faults.failForceAtOpen = 2;
+        Path[] saved = new Path[1];
+        faults.afterBackupDeleted = file -> {
+            saved[0] = file;
+            Files.write(file, OPERATOR_TEXT.getBytes(StandardCharsets.UTF_8));
+        };
+
+        Throwable thrown = catchThrowable(() -> manager.loadFromJson(root.toString()));
+
+        assertThat(thrown).as("the batch reports the force failure").isInstanceOf(IOException.class)
+                .hasMessage("injected force failure");
+        assertThat(faults.backupDeletedActions).as("the backup-deletion hook was reached").isEqualTo(1);
+        String savedName = saved[0].getFileName().toString();
+        String otherName = savedName.equals("a.yml") ? "b.yml" : "a.yml";
+        assertThat(read(savedName)).as("the operator's save after the put-back is kept").isEqualTo(OPERATOR_TEXT);
+        assertThat(read(otherName)).as("the published file is put back").isEqualTo(TEXT);
+        assertThat(first.motd).isEqualTo(ORIGINAL_VALUE);
+        assertThat(second.motd).isEqualTo(ORIGINAL_VALUE);
+        assertThat(messages()).as("nothing reports the kept file as not restored")
+                .noneMatch(message -> message.contains(savedName) && message.contains("not restored"));
+        assertNoTemporaries();
+    }
+
+    @Test
+    @DisplayName("#673: a failed put-back in a panel batch is left for manual recovery, protected until a reload")
+    void failedPutBackIsLeftForManualRecovery() throws Exception {
+        write("a.yml", TEXT);
+        ConfigManager manager = new ConfigManager();
+        Gate only = new Gate("a.yml");
+        manager.register(plugin, only);
+        JsonObject edit = new JsonObject();
+        edit.addProperty("motd", NEW_VALUE);
+        JsonObject files = new JsonObject();
+        files.add("a.yml", edit);
+        JsonObject root = new JsonObject();
+        root.add("RestoreModule", files);
+        logged.clear();
+        injectFaults();
+        faults.failForceAtOpen = 1;
+        faults.failOpenAt = 2;
+
+        assertThat(catchThrowable(() -> manager.loadFromJson(root.toString())))
+                .isInstanceOf(AtomicConfigWriter.RestoreFailedException.class);
+        stopFaults();
+
+        String residue = TEXT.replace(ORIGINAL_VALUE, NEW_VALUE);
+        assertThat(read("a.yml")).as("exactly what the failed write left; the rollback writes nothing").isEqualTo(residue);
+        List<Path> backups = backups();
+        assertThat(backups).as("the backup is kept for the operator").hasSize(1);
+        assertThat(read(backups.get(0).getFileName().toString())).isEqualTo(TEXT);
+        List<LogRecord> severe = severe();
+        assertThat(severe).hasSize(1);
+        assertThat(severe.get(0).getMessage()).contains(tempDir.resolve("a.yml").toAbsolutePath().toString())
+                .contains(backups.get(0).toString()).doesNotContain(ORIGINAL_VALUE).doesNotContain(NEW_VALUE);
+        assertThat(only.motd).isEqualTo(ORIGINAL_VALUE);
+        assertThat(only.isFileModifiedSinceSnapshot()).isTrue();
+
+        only.limit = 9;
+        Throwable later = catchThrowable(() -> only.saveOperatorChange("limit"));
+        assertThat(later).isInstanceOf(ConfigWriteRefusedException.class);
+        assertThat(((ConfigWriteRefusedException) later).getReason()).contains("changed since it was read");
+        only.save();
+        assertThat(read("a.yml")).as("neither an operator write nor a save writes over it").isEqualTo(residue);
+
+        only.reload();
+        assertThat(only.isFileModifiedSinceSnapshot()).as("a reload reads the file again").isFalse();
+        assertThat(backups).allMatch(Files::exists);
+    }
+
+    @Test
+    @DisplayName("#673: an operator save made while the put-back fails is kept by the batch rollback")
+    void failedPutBackThenOperatorSaveIsKept() throws Exception {
+        write("a.yml", TEXT);
+        ConfigManager manager = new ConfigManager();
+        Gate only = new Gate("a.yml");
+        manager.register(plugin, only);
+        JsonObject edit = new JsonObject();
+        edit.addProperty("motd", NEW_VALUE);
+        JsonObject files = new JsonObject();
+        files.add("a.yml", edit);
+        JsonObject root = new JsonObject();
+        root.add("RestoreModule", files);
+        logged.clear();
+        injectFaults();
+        faults.failForceAtOpen = 1;
+        faults.failOpenAt = 2;
+        faults.onFailedOpen = file -> Files.write(file, OPERATOR_TEXT.getBytes(StandardCharsets.UTF_8));
+
+        assertThat(catchThrowable(() -> manager.loadFromJson(root.toString())))
+                .isInstanceOf(AtomicConfigWriter.RestoreFailedException.class);
+        stopFaults();
+
+        assertThat(faults.failedOpenActions).as("the failed-open hook was reached").isEqualTo(1);
+        assertThat(read("a.yml")).as("the operator's save is kept").isEqualTo(OPERATOR_TEXT);
+        List<Path> backups = backups();
+        assertThat(backups).hasSize(1);
+        assertThat(read(backups.get(0).getFileName().toString())).isEqualTo(TEXT);
+        assertThat(severe()).hasSize(1);
+        assertThat(only.motd).isEqualTo(ORIGINAL_VALUE);
+        assertThat(only.isFileModifiedSinceSnapshot()).isTrue();
+    }
+
     // -------------------------------------------------------------------------------------------------- helpers
+
+    /** The directory holds only configuration files and framework backups: no temporary is left. */
+    private void assertNoTemporaries() throws IOException {
+        try (Stream<Path> paths = Files.list(tempDir)) {
+            assertThat(paths.map(path -> path.getFileName().toString())
+                    .filter(name -> !name.matches("[a-z]+\\.yml") && !name.matches(".*\\.ultitools-backup-[0-9a-f]{16}"))
+                    .collect(Collectors.toList())).isEmpty();
+        }
+    }
 
     private Gate loaded(String name) throws IOException {
         write(name, TEXT);

@@ -47,6 +47,7 @@ import com.ultikits.ultitools.config.convert.ConversionResult;
 import com.ultikits.ultitools.config.convert.ConversionFailure;
 import com.ultikits.ultitools.config.convert.ConversionException;
 import com.ultikits.ultitools.config.convert.builtin.ConversionTypes;
+import com.ultikits.ultitools.config.convert.builtin.GenericConverters;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.annotations.config.NotEmpty;
 import com.ultikits.ultitools.annotations.config.Pattern;
@@ -364,6 +365,9 @@ public abstract class AbstractConfigEntity {
                 savedSnapshot.put(field, mine);
                 continue;
             }
+            // A typed map key the file now holds in several spellings cannot be mapped to one entry: no change of the
+            // setting is written, whatever the module's value holds (#673, case 52).
+            if (reportedSeveralSpellings(read, field, leaves)) { continue; }
             // The setting is written where the file holds it (a flat dotted key stays flat); one now written twice is not
             // the value the module started from and is not written (#612).
             boolean twice = heldTwice(read, field);
@@ -472,7 +476,8 @@ public abstract class AbstractConfigEntity {
             ConversionResult<Object> converted = registry().fromPlainResult(PlainData.copy(probe), declaredType(field),
                     configFilePath, keys(field), entry);
             if (!converted.failures().isEmpty()) { return false; }
-            Object plain = registry().toPlainResult(converted.value(), declaredType(field), configFilePath, keys(field), entry).value();
+            Object plain = registry().toPlainResult(converted.value(), declaredType(field), configFilePath, keys(field), entry,
+                    probe).value();
             return PlainData.plainEquals(PlainData.copy(plain), base);
         } catch (ConversionException | RuntimeException unusable) {
             return false;
@@ -535,13 +540,42 @@ public abstract class AbstractConfigEntity {
     /** The key a warning names for a change: the setting's path, then the map keys, any key below a secret-shaped one redacted. */
     private String describeKey(Field field, List<String> leaf) {
         StringBuilder text = new StringBuilder(fieldPath(field));
-        boolean secret = isSecretShapedFieldName(field.getName());
-        for (String key : keys(field)) { secret |= isSecretShapedFieldName(key); }
-        for (String key : leaf) {
-            text.append('.').append(secret ? "<redacted>" : key);
+        for (String key : displayKeys(secretSetting(field), leaf)) { text.append('.').append(key); }
+        return "'" + text + "'";
+    }
+
+    /**
+     * The one display rule for map keys in every configuration diagnostic bound for the server log or the panel (#673,
+     * case 54): once the setting or a key above is secret-shaped, every deeper key shows as {@code <redacted>}; the
+     * secret-shaped key itself is shown, so the operator still sees which setting to fix. Only the displayed text is
+     * redacted - whether a value is secret is decided from the real keys ({@link #secretPath}), never from this text.
+     *
+     * @param secretAbove whether a key above {@code keys} - the field name or a declared path segment - is secret-shaped
+     * @param keys        the real keys, outermost first
+     * @return the keys to display, in the same order
+     */
+    private List<String> displayKeys(boolean secretAbove, List<String> keys) {
+        List<String> shown = new ArrayList<>(keys.size());
+        boolean secret = secretAbove;
+        for (String key : keys) {
+            shown.add(secret ? "<redacted>" : key);
             secret |= isSecretShapedFieldName(key);
         }
-        return "'" + text + "'";
+        return shown;
+    }
+
+    /** Whether a setting is secret-shaped: its field name or a segment of its declared path. */
+    private boolean secretSetting(Field field) {
+        boolean secret = isSecretShapedFieldName(field.getName());
+        for (String key : keys(field)) { secret |= isSecretShapedFieldName(key); }
+        return secret;
+    }
+
+    /** Whether a value of {@code field} at {@code leaf} is secret: the setting or a real key down to it is secret-shaped. */
+    private boolean secretPath(Field field, List<String> leaf) {
+        boolean secret = secretSetting(field);
+        for (String key : leaf) { secret |= isSecretShapedFieldName(key); }
+        return secret;
     }
 
     /**
@@ -706,11 +740,150 @@ public abstract class AbstractConfigEntity {
                 throw new IllegalArgumentException("The map keys " + leaf + " of '" + entryPath + "' in " + configFilePath
                         + " reach inside an entry that is not a map; name the entry itself");
             }
+            Object mine = plainValue(field, true);
+            leaf = spelledLeaf(field, leaf, mine);
             List<String> path = new ArrayList<>(keys(field)); path.addAll(leaf);
-            ModuleChange change = new ModuleChange(field, leaf, path, plainValue(field, true), acknowledgedRaw.get(field));
+            ModuleChange change = new ModuleChange(field, leaf, path, mine, acknowledgedRaw.get(field));
             change.presence = required;
             writeOperatorChanges(Collections.singletonList(change));
         }
+    }
+
+    /**
+     * The keys of an operator's map-entry write, spelled as the module's map and the file spell them (#673, case 52). At
+     * a map level declared with a non-text key type ({@code Integer}, {@code Long}, {@code Boolean}, ...), a key the
+     * module's plain map there does not hold as given is read through that key type and replaced by the one key of the
+     * module's map that reads back to the same key, else by the one such key of the value last read from the file, so
+     * {@code "1"} reaches the entry the file spells {@code '01'}. Text that does not convert, or that no key reads back
+     * to, is kept as given; levels keyed by {@code String} or {@code Object} are not changed. A setting with its own legacy
+     * {@link ConfigEntry#parser()} owns its keys: they are kept as given (PR #687 local Codex run 2).
+     *
+     * @throws ConfigWriteRefusedException if several keys at one level read back to the same key; nothing is written
+     */
+    private List<String> spelledLeaf(Field field, List<String> leaf, Object mine) throws ConfigWriteRefusedException {
+        if (!registryConverts(field)) { return leaf; }
+        RawEntry read = acknowledgedRaw.get(field);
+        Object moduleLevel = mine;
+        Object fileLevel = read == null || !read.present ? null : read.value;
+        Type type = declaredType(field);
+        List<String> spelled = new ArrayList<>(leaf.size());
+        for (String key : leaf) {
+            String text = key;
+            Type keyType = ConversionTypes.argument(type, Map.class, 0);
+            boolean held = moduleLevel instanceof Map && ((Map<?, ?>) moduleLevel).containsKey(key);
+            if (!held && GenericConverters.bindsKeyText(keyType)) {
+                text = spelledKey(field, spelled, key, keyType, moduleLevel, fileLevel);
+            }
+            spelled.add(text);
+            moduleLevel = moduleLevel instanceof Map ? ((Map<?, ?>) moduleLevel).get(text) : null;
+            fileLevel = fileLevel instanceof Map ? ((Map<?, ?>) fileLevel).get(text) : null;
+            type = mapValueType(type);
+        }
+        return spelled;
+    }
+
+    /** One key of {@link #spelledLeaf}: {@code above} holds the keys already resolved, outermost first. */
+    private String spelledKey(Field field, List<String> above, String key, Type keyType, Object moduleLevel, Object fileLevel)
+            throws ConfigWriteRefusedException {
+        List<String> location = new ArrayList<>(keys(field)); location.addAll(above); location.add(key);
+        Object typed = readKey(key, keyType, location);
+        if (typed == null) { return key; }
+        List<String> matches = keysReadingBack(moduleLevel, typed, keyType, location);
+        if (matches.isEmpty()) { matches = keysReadingBack(fileLevel, typed, keyType, location); }
+        if (several(matches)) {
+            List<String> leaf = new ArrayList<>(above); leaf.add(matches.get(0));
+            throw refused(severalSpellingsReason(field, Collections.singletonList(leaf)));
+        }
+        return matches.isEmpty() ? key : matches.get(0);
+    }
+
+    /** The keys of {@code level}, when it is a map, that read back through {@code keyType} to {@code typed}, in map order. */
+    private List<String> keysReadingBack(Object level, Object typed, Type keyType, List<String> location) {
+        List<String> found = new ArrayList<>();
+        if (!(level instanceof Map)) { return found; }
+        for (Object candidate : ((Map<?, ?>) level).keySet()) {
+            String text = String.valueOf(candidate);
+            if (typed.equals(readKey(text, keyType, location))) { found.add(text); }
+        }
+        return found;
+    }
+
+    /**
+     * {@code text} read as a map key of {@code keyType} on the loader's read path, or {@code null} when it does not
+     * convert. A probe: nothing is logged or recorded.
+     */
+    private Object readKey(String text, Type keyType, List<String> location) {
+        try {
+            ConversionResult<Object> key = registry().fromPlainResult(text, keyType, configFilePath, location);
+            return key.failures().isEmpty() ? key.value() : null;
+        } catch (ConversionException | RuntimeException unusable) {
+            return null;
+        }
+    }
+
+    private static boolean several(List<?> values) { return values.size() > 1; }
+
+    /**
+     * The refusal text for typed map keys the file writes in several spellings, such as {@code 1:} and {@code '01':}
+     * (#673, case 52): the setting and each key (its first spelling) through {@link #describeKey}, never a value or the
+     * other spellings.
+     */
+    private String severalSpellingsReason(Field field, List<List<String>> leaves) {
+        List<String> named = new ArrayList<>(leaves.size());
+        for (List<String> leaf : leaves) { named.add(describeKey(field, leaf)); }
+        return "setting " + describeKey(field, Collections.<String>emptyList()) + " holds the map key "
+                + String.join(", ", named) + " in several spellings; delete all but one of them, then reload";
+    }
+
+    /**
+     * Every typed map key that {@code read} holds for {@code field} in several spellings, relative to the setting and
+     * ending in its first spelling in file order (#673, case 52). Decided from the file's keys alone through the
+     * converter's file-key ambiguity scan - the same key index the writer binds keys with - so a key the module removed
+     * or never held still counts. A setting with its own legacy {@link ConfigEntry#parser()} has none: its parser, not
+     * the default key converter, decides which file keys are one key (PR #687 local Codex run 2).
+     */
+    private List<List<String>> severalSpellings(ConfigDocument read, Field field) {
+        if (!registryConverts(field)) { return Collections.emptyList(); }
+        List<String> location = keysIn(read, field);
+        if (!read.contains(location)) { return Collections.emptyList(); }
+        List<List<String>> leaves = new ArrayList<>();
+        int setting = keys(field).size();
+        for (List<String> path : registry().ambiguousFileKeys(declaredType(field), read.get(location), configFilePath, keys(field))) {
+            leaves.add(new ArrayList<>(path.subList(setting, path.size())));
+        }
+        return leaves;
+    }
+
+    /**
+     * Whether the converter registry converts {@code field}, as {@code toPlainResult} decides: an explicit non-default
+     * legacy {@link ConfigEntry#parser()} keeps conversion ownership, so no default typed-key spelling rule applies to it.
+     */
+    // Explicit legacy parsers remain supported; the comparison names the deprecated default parser class.
+    @SuppressWarnings("removal")
+    private static boolean registryConverts(Field field) {
+        ConfigEntry entry = field.getAnnotation(ConfigEntry.class);
+        return entry == null || entry.parser() == com.ultikits.ultitools.interfaces.impl.pasers.DefaultConfigParser.class;
+    }
+
+    /** An operator write of a setting whose typed map keys {@code read} holds in several spellings is refused. */
+    private void refuseSeveralSpellings(ConfigDocument read, Field field) throws ConfigWriteRefusedException {
+        List<List<String>> ambiguous = severalSpellings(read, field);
+        if (!ambiguous.isEmpty()) { throw refused(severalSpellingsReason(field, ambiguous)); }
+    }
+
+    /**
+     * The save rule for a setting whose typed map keys {@code read} holds in several spellings: none of its changed
+     * {@code leaves} is written, and one warning names them with the reason, never a value.
+     *
+     * @return whether the setting was reported and must not be written
+     */
+    private boolean reportedSeveralSpellings(ConfigDocument read, Field field, List<List<String>> leaves) {
+        List<List<String>> ambiguous = severalSpellings(read, field);
+        if (ambiguous.isEmpty()) { return false; }
+        List<String> named = new ArrayList<>(leaves.size());
+        for (List<String> leaf : leaves) { named.add(describeKey(field, leaf)); }
+        warnNotWritten(named, severalSpellingsReason(field, ambiguous));
+        return true;
     }
 
     private void requireOperatorWriteThread(String operation) {
@@ -763,6 +936,7 @@ public abstract class AbstractConfigEntity {
             // Written on the line the file holds the setting on - a flat dotted key stays flat - and refused when the file
             // now holds it twice, since writing one form would leave the other (#612).
             if (heldTwice(read, change.field)) { throw refused(heldTwiceReason(change.field) + "; delete one of them, then reload"); }
+            refuseSeveralSpellings(read, change.field);
             if (change.present && read.readings(fieldPath(change.field)).isEmpty() && insertKeysIn(read, change.field) == null) {
                 // Inserted below the section the file holds, never into a second form of it (#614). Only a change that
                 // writes a value inserts; removing from a setting the file no longer holds writes nothing (Codex run 1).
@@ -1031,11 +1205,26 @@ public abstract class AbstractConfigEntity {
 
     private Object plainValue(Field field) { return plainValue(field, false); }
 
+    /**
+     * The plain value of {@code field} as the module holds it, spelled like the file this entity last read or wrote: the
+     * raw acknowledgement is passed as the file value, so a typed map key the file spells {@code '01'}, {@code 1.0} or
+     * in upper case keeps that text (#673, case 52). Every save, operator write, panel edit, unsaved-entry check and
+     * reload's in-memory side therefore names the operator's own key, which is the document's key identity.
+     */
     private Object plainValue(Field field, boolean writing) {
+        RawEntry read = acknowledgedRaw.get(field);
+        return plainValue(field, writing, read == null || !read.present ? null : read.value);
+    }
+
+    /**
+     * @param fileValue the plain value the file holds at the setting, whose typed map keys name the text each key is
+     *                  written under; {@code null} for canonical key text (a setting the file does not hold)
+     */
+    private Object plainValue(Field field, boolean writing, Object fileValue) {
         field.setAccessible(true);
         try {
             ConversionResult<Object> result = registry().toPlainResult(ReflectionUtil.getFieldValue(this, field),
-                    declaredType(field), configFilePath, keys(field), field.getAnnotation(ConfigEntry.class));
+                    declaredType(field), configFilePath, keys(field), field.getAnnotation(ConfigEntry.class), fileValue);
             if (writing && !result.failures().isEmpty()) {
                 List<String> locations = new ArrayList<>();
                 for (ConversionFailure failure : result.failures()) {
@@ -1064,7 +1253,8 @@ public abstract class AbstractConfigEntity {
 
     private void captureDefaults() {
         if (!defaultsCaptured) {
-            declaredDefaults.putAll(currentPlain(configEntryFields()));
+            // Canonical key text: the defaults belong to no file.
+            for (Field field : configEntryFields()) { declaredDefaults.put(field, plainValue(field, false, null)); }
             for (Field field : configEntryFields()) {
                 Object javaDefault = ReflectionUtil.getFieldValue(this, field);
                 declaredDefaultLengths.put(field, isEmptyContainer(javaDefault) ? 0 : getValueLength(javaDefault));
@@ -1611,11 +1801,12 @@ public abstract class AbstractConfigEntity {
                 }
             }
             useDeclaredDefaultIfEmpty(field, raw);
-            Object theirs = plainValue(field);
+            // Spelled like the file just read: the raw acknowledgement is refreshed only at the end of this load.
+            Object theirs = plainValue(field, false, raw);
             baseline.put(field, theirs);
             if (!initialize && savedSnapshot != null && savedSnapshot.containsKey(field)) {
                 Object merged = mergeReload(savedSnapshot.get(field), mine.get(field), theirs, declaredType(field),
-                        fieldPath(field), isSecretShapedFieldName(field.getName()), conflicts);
+                        field, new ArrayList<>(), conflicts);
                 try {
                     Object value = registry().fromPlainResult(merged, declaredType(field), configFilePath,
                             keys(field), field.getAnnotation(ConfigEntry.class)).value();
@@ -1630,7 +1821,8 @@ public abstract class AbstractConfigEntity {
         Map<Field, Object> inserted = new LinkedHashMap<>();
         if (initialize) {
             for (Field field : missing) {
-                Object value = plainValue(field, true);
+                // The file does not hold the setting: its keys are inserted in their canonical text.
+                Object value = plainValue(field, true, null);
                 inserted.put(field, value); baseline.put(field, value);
             }
         }
@@ -1892,9 +2084,14 @@ public abstract class AbstractConfigEntity {
      * such as a Bukkit {@code Location} or {@code Vector}, a typed map's value that is not a map - is one value: the
      * module's, the file's, or on a conflict the file's whole, never a value mixed from both (17-65 review round 2 R2-01,
      * the same rule as the save's {@link #changedLeaves}). A conflict over a composite value or a list names the key only.
+     * <p>
+     * The recursion carries the setting and the real keys down to the value. A conflict's key is displayed through
+     * {@link #describeKey}, so a key below a secret-shaped field name, declared path segment or map key is never named,
+     * and whether the discarded value is redacted is decided from the real keys (#673, case 54). The merged map keeps the
+     * real keys.
      */
     @SuppressWarnings("PMD.NPathComplexity") // The recursive three-way merge explicitly distinguishes absence, order and secret-valued conflicts.
-    private Object mergeReload(Object base, Object mine, Object theirs, Type declared, String path, boolean secret,
+    private Object mergeReload(Object base, Object mine, Object theirs, Type declared, Field field, List<String> leaf,
             List<String> conflicts) {
         if (orderedEquals(mine, base)) { return theirs; }
         if (orderedEquals(theirs, base) || orderedEquals(mine, theirs)) { return mine; }
@@ -1904,10 +2101,10 @@ public abstract class AbstractConfigEntity {
             Set<Object> keys = new java.util.LinkedHashSet<>(); keys.addAll(t.keySet()); keys.addAll(m.keySet()); keys.addAll(b.keySet());
             Map<String, Object> merged = new LinkedHashMap<>();
             for (Object key : keys) {
+                List<String> child = new ArrayList<>(leaf); child.add(String.valueOf(key));
                 Object value = mergeReload(b.containsKey(key) ? b.get(key) : ABSENT_RELOAD_VALUE,
                         m.containsKey(key) ? m.get(key) : ABSENT_RELOAD_VALUE,
-                        t.containsKey(key) ? t.get(key) : ABSENT_RELOAD_VALUE, valueType,
-                        path + "." + key, secret || isSecretShapedFieldName(String.valueOf(key)), conflicts);
+                        t.containsKey(key) ? t.get(key) : ABSENT_RELOAD_VALUE, valueType, field, child, conflicts);
                 if (value != ABSENT_RELOAD_VALUE) { merged.put(String.valueOf(key), value); }
             }
             return merged;
@@ -1915,12 +2112,12 @@ public abstract class AbstractConfigEntity {
         if (mine instanceof Map || mine instanceof List) {
             // A composite value or a list is replaced whole; its contents are not listed (they may hold anything;
             // 17-65 review round 3 R3-I3).
-            conflicts.add("reload conflict at '" + path + "': discarded the in-memory value; file wins");
+            conflicts.add("reload conflict at " + describeKey(field, leaf) + ": discarded the in-memory value; file wins");
             return theirs;
         }
-        String value = secret || isSecretShapedFieldName(path) || containsSecret(mine) ? "<redacted>"
+        String value = secretPath(field, leaf) || containsSecret(mine) ? "<redacted>"
                 : mine == ABSENT_RELOAD_VALUE ? "<absent>" : String.valueOf(mine);
-        conflicts.add("reload conflict at '" + path + "': discarded in-memory value " + value + "; file wins");
+        conflicts.add("reload conflict at " + describeKey(field, leaf) + ": discarded in-memory value " + value + "; file wins");
         return theirs;
     }
 
@@ -2267,7 +2464,10 @@ public abstract class AbstractConfigEntity {
      * @param touchedFieldsOut  populated, in application order, with every field this call applied
      * @param previousValuesOut populated in the same order with each field's pre-call value
      * @throws ConfigurationException with {@link com.ultikits.ultitools.exceptions.ErrorCode#CONFIG_VALIDATION_FAILED}
-     *                                 if the post-update field state violates a constraint
+     *                                 if the post-update field state violates a constraint. A refusal of panel paths
+     *                                 names each path through the display rule of {@link #describeKey} - never a key
+     *                                 below a secret-shaped one, never a value - because the message is logged and
+     *                                 returned to the panel (#673, case 54)
      */
     @SuppressWarnings("PMD.NPathComplexity") // Resolve every panel owner and validate every candidate before publishing any field.
     private Map<Field, List<List<String>>> applyAndValidate(JsonObject jsonObject, List<Field> touchedFieldsOut, List<Object> previousValuesOut) {
@@ -2294,16 +2494,18 @@ public abstract class AbstractConfigEntity {
                     owner = field;
                 }
             }
-            if (owner == null) { refused.add("'" + path + "': no declared entry"); continue; }
+            if (owner == null) { refused.add(describeUndeclared(path) + ": no declared entry"); continue; }
             if (path.equals(fieldPath(owner))) {
                 proposed.put(owner, raw); leaves.remove(owner); whole.add(owner); continue;
             }
             Object source = document == null ? null : document.get(keysIn(document, owner));
             RawEntry lastRead = acknowledgedRaw.get(owner);
             List<List<String>> matches = new ArrayList<>();
-            matchMapPaths(source, path.substring(fieldPath(owner).length() + 1), new ArrayList<>(), matches);
+            String rest = path.substring(fieldPath(owner).length() + 1);
+            matchMapPaths(source, rest, new ArrayList<>(), matches);
             if (matches.size() != 1) {
-                refused.add("'" + path + "': " + (matches.isEmpty() ? "not found" : "ambiguous " + matches));
+                refused.add(describeKey(owner, dottedKeys(rest)) + ": "
+                        + (matches.isEmpty() ? "not found" : "ambiguous " + describeReadings(owner, matches)));
                 continue;
             }
             List<String> match = matches.get(0);
@@ -2317,7 +2519,10 @@ public abstract class AbstractConfigEntity {
                 // The unit is built from the whole value as last read, and that value becomes a precondition checked on
                 // the file at write time (route change, R3-01): an edit made on disk since is refused, never rebuilt over.
                 boolean readHolds = lastRead != null && lastRead.present && (unit.isEmpty() || mapContains(lastRead.value, unit));
-                if (!readHolds) { refused.add("'" + path + "': the file changed since it was read; reload first"); continue; }
+                if (!readHolds) {
+                    refused.add(describeKey(owner, match) + ": the file changed since it was read; reload first");
+                    continue;
+                }
                 Object readUnit = unit.isEmpty() ? lastRead.value : mapLeaf(lastRead.value, unit);
                 compositeReads.computeIfAbsent(owner, ignored -> new LinkedHashMap<>())
                         .putIfAbsent(unit, new RawEntry(true, readUnit));
@@ -2331,8 +2536,8 @@ public abstract class AbstractConfigEntity {
                     continue;
                 }
                 Object tree = proposed.containsKey(owner) ? proposed.get(owner) : plainValue(owner);
-                if (!(tree instanceof Map)) { refused.add("'" + path + "': not a map entry"); continue; }
-                if (!parentInMemory(tree, unit)) { refused.add("'" + path + "': not found in memory"); continue; }
+                if (!(tree instanceof Map)) { refused.add(describeKey(owner, match) + ": not a map entry"); continue; }
+                if (!parentInMemory(tree, unit)) { refused.add(describeKey(owner, match) + ": not found in memory"); continue; }
                 List<List<String>> touched = leaves.get(owner);
                 Object shown = whole.contains(owner) || touched != null && touched.contains(unit) ? mapLeaf(tree, unit)
                         : readUnit;
@@ -2344,9 +2549,9 @@ public abstract class AbstractConfigEntity {
                 continue;
             }
             Object tree = proposed.containsKey(owner) ? proposed.get(owner) : plainValue(owner);
-            if (!(tree instanceof Map)) { refused.add("'" + path + "': not a map entry"); continue; }
+            if (!(tree instanceof Map)) { refused.add(describeKey(owner, match) + ": not a map entry"); continue; }
             // A group the module removed in memory (unsaved) is not there to edit: refused, never a runtime error (R4-I3).
-            if (!parentInMemory(tree, match)) { refused.add("'" + path + "': not found in memory"); continue; }
+            if (!parentInMemory(tree, match)) { refused.add(describeKey(owner, match) + ": not found in memory"); continue; }
             replaceMapLeaf(tree, match, raw);
             proposed.put(owner, tree);
             if (!whole.contains(owner)) { leaves.computeIfAbsent(owner, ignored -> new ArrayList<>()).add(match); }
@@ -2372,14 +2577,14 @@ public abstract class AbstractConfigEntity {
                         configFilePath, keys(field), field.getAnnotation(ConfigEntry.class));
                 if (!result.failures().isEmpty()) {
                     for (ConversionFailure failure : result.failures()) {
-                        refused.add("'" + String.join(".", failure.path()) + "': invalid panel value for "
+                        refused.add(describeFailure(field, failure.path()) + ": invalid panel value for "
                                 + typeName(failure.declaredType()));
                     }
                 } else {
                     converted.put(field, result.value());
                 }
             } catch (ConversionException failure) {
-                refused.add("'" + String.join(".", failure.path()) + "': invalid panel value for "
+                refused.add(describeFailure(field, failure.path()) + ": invalid panel value for "
                         + typeName(failure.declaredType()));
             }
         }
@@ -2392,6 +2597,39 @@ public abstract class AbstractConfigEntity {
         validateFields();
         validateBindingRanges(touchedFieldsOut);
         return leaves;
+    }
+
+    /**
+     * How a refusal names a panel path no declared setting owns: the rule of {@link #displayKeys} over its dotted
+     * segments, so everything below the first secret-shaped segment is redacted (#673).
+     */
+    private String describeUndeclared(String path) {
+        return "'" + String.join(".", displayKeys(false, dottedKeys(path))) + "'";
+    }
+
+    /**
+     * The dotted segments of a panel path whose real keys are not known, for display only: a whole key holding a dot is
+     * split, which can only redact more, never less (no secret-shaped word contains a dot).
+     */
+    private static List<String> dottedKeys(String path) { return Arrays.asList(path.split("\\.", -1)); }
+
+    /** Every reading of an ambiguous panel path, as the real keys of {@code owner}'s map displayed by {@link #displayKeys}. */
+    private List<List<String>> describeReadings(Field owner, List<List<String>> readings) {
+        List<List<String>> shown = new ArrayList<>(readings.size());
+        for (List<String> reading : readings) { shown.add(displayKeys(secretSetting(owner), reading)); }
+        return shown;
+    }
+
+    /**
+     * How a refusal names the path of a conversion failure of {@code field}: through {@link #describeKey} with the keys
+     * below the setting's declared keys; a path that does not start with them is displayed whole by the same rule.
+     */
+    private String describeFailure(Field field, List<String> path) {
+        List<String> declared = keys(field);
+        if (path.size() >= declared.size() && path.subList(0, declared.size()).equals(declared)) {
+            return describeKey(field, path.subList(declared.size(), path.size()));
+        }
+        return "'" + String.join(".", displayKeys(secretSetting(field), path)) + "'";
     }
 
     /** Whether the map holding the last key of {@code path} exists in {@code tree} (the module's value in memory). */

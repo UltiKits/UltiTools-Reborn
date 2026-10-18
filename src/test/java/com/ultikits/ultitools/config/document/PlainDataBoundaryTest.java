@@ -10,6 +10,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -18,6 +19,7 @@ import java.util.stream.Stream;
 
 import org.bukkit.Location;
 import org.bukkit.inventory.ItemStack;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -115,6 +117,74 @@ class PlainDataBoundaryTest {
                     .isInstanceOf(IllegalArgumentException.class);
             assertThat(document.contains(path("rejected"))).isFalse();
         }
+    }
+
+    /**
+     * #673: every value the document can read compares equal to its defensive copy, so a retained YAML value never
+     * makes the write gate believe an unrelated write changed it. Driven by the same inventory as the isolation test.
+     */
+    @ParameterizedTest(name = "copy equality: {0}")
+    @MethodSource("readCopyInventory")
+    void everyReadableValueEqualsItsCopy(String shape, String yaml) throws Exception {
+        Assumptions.assumeFalse(shape.startsWith("cycle-"), "copy() refuses a cycle by design; it never reaches the gate");
+        ConfigDocument document = ConfigDocument.parse(yaml);
+
+        assertThat(PlainData.plainEquals(document.toPlain(), document.toPlain())).isTrue();
+        assertThat(PlainData.plainEquals(document.get(path("v")), document.get(path("v")))).isTrue();
+    }
+
+    @Test
+    @DisplayName("sets and pair arrays read from a file compare by content, member to member in both directions")
+    void equalContentSetsAndPairsCompareEqual() throws Exception {
+        assertThat(PlainData.plainEquals(set(bytes("ab")), set(bytes("ab")))).isTrue();
+        assertThat(PlainData.plainEquals(set(bytes("ab"), bytes("cd")), set(bytes("cd"), bytes("ab")))).isTrue();
+        assertThat(PlainData.plainEquals(new Object[] {"a", bytes("ab")}, new Object[] {"a", bytes("ab")})).isTrue();
+        assertThat(PlainData.plainEquals(new Object[] {"a", 1}, new Object[] {"a", 1L})).isTrue();
+        ConfigDocument pairs = ConfigDocument.parse("v: !!pairs [{a: [1]}, {a: !!binary YWI=}]\n");
+        assertThat(PlainData.plainEquals(pairs.get(path("v")), pairs.get(path("v")))).isTrue();
+    }
+
+    @Test
+    @DisplayName("content that differs stays unequal: binaries, pair members, set members, and a binary against text or numbers")
+    void differentContentStaysUnequal() throws Exception {
+        assertUnequal(bytes("ab"), bytes("ac"));
+        assertUnequal(bytes("ab"), bytes("abc"));
+        assertUnequal(bytes("ab"), "ab");
+        assertUnequal(bytes("ab"), Arrays.asList(97, 98));
+        assertUnequal(ConfigDocument.parse("v: !!binary YWI=\n").get(path("v")),
+                ConfigDocument.parse("v: !!binary Y2Q=\n").get(path("v")));
+        assertUnequal(ConfigDocument.parse("v: !!pairs [{a: 1}]\n").get(path("v")),
+                ConfigDocument.parse("v: !!pairs [{a: 2}]\n").get(path("v")));
+        assertUnequal(ConfigDocument.parse("v: !!pairs [{a: !!binary YWI=}]\n").get(path("v")),
+                ConfigDocument.parse("v: !!pairs [{a: !!binary Y2Q=}]\n").get(path("v")));
+        assertUnequal(new Object[] {"a", 1}, new Object[] {"a", 1, null});
+        assertUnequal(new Object[] {"a", 1}, Arrays.asList("a", 1));
+        assertUnequal(ConfigDocument.parse("v: !!set {a: null}\n").get(path("v")),
+                ConfigDocument.parse("v: !!set {b: null}\n").get(path("v")));
+        assertUnequal(set(bytes("ab")), set(bytes("cd")));
+        // Two equal binaries are two members of a set; one-way matching would wrongly accept this pair.
+        assertUnequal(set(bytes("ab"), bytes("ab")), set(bytes("ab"), bytes("cd")));
+        assertUnequal(set(bytes("ab")), set(bytes("ab"), bytes("cd")));
+    }
+
+    private static void assertUnequal(Object a, Object b) {
+        assertThat(PlainData.plainEquals(a, b)).as("%s vs %s", describe(a), describe(b)).isFalse();
+        assertThat(PlainData.plainEquals(b, a)).as("%s vs %s", describe(b), describe(a)).isFalse();
+    }
+
+    private static String describe(Object value) {
+        if (value instanceof byte[]) {
+            return "byte" + Arrays.toString((byte[]) value);
+        }
+        return value instanceof Object[] ? Arrays.deepToString((Object[]) value) : String.valueOf(value);
+    }
+
+    private static byte[] bytes(String text) {
+        return text.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    private static java.util.Set<Object> set(Object... members) {
+        return new LinkedHashSet<>(Arrays.asList(members));
     }
 
     private static void collectMutable(Object value, java.util.Set<Object> result) {

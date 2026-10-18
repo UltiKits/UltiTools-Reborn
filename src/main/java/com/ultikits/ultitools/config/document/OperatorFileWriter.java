@@ -371,6 +371,22 @@ public final class OperatorFileWriter {
      * replacement, and replaces it only while it still holds exactly the bytes the write was verified against (an edit
      * saved while the content was being staged or while other files were being prepared is seen and kept: review round
      * 1 IN-01, plan 17-65); a file the gate read absent is created exclusively, never replacing one that appeared.
+     * <p>
+     * A commit ends in one of three states, and {@link #restore()} acts only on bytes the write still owns in that state
+     * (#673: a failed commit grants no permission to bypass the file-ownership check):
+     * <ul>
+     *   <li><b>published</b> - the target was replaced or created; the file holds this write's bytes until someone else
+     *       writes it.</li>
+     *   <li><b>unpublished</b> - nothing was replaced: the file changed or appeared before the commit, or the commit failed
+     *       with any failure other than {@link AtomicConfigWriter.RestoreFailedException}. {@link AtomicConfigWriter}
+     *       then leaves the target holding exactly what it held (a failed move, a failure before the target was opened,
+     *       a failed in-place write that was put back from its backup) and a failed creation creates nothing, so no byte
+     *       of this write is on disk and the file belongs to whoever writes it next - an operator's save included.</li>
+     *   <li><b>not put back</b> - the in-place write failed after the target was opened and putting it back failed too
+     *       ({@link AtomicConfigWriter.RestoreFailedException}): the target may hold part of this write, its backup is
+     *       kept and one SEVERE names both. Only the operator decides what the file should hold; nothing here writes or
+     *       deletes it again.</li>
+     * </ul>
      */
     public static final class Staged {
 
@@ -385,10 +401,14 @@ public final class OperatorFileWriter {
         private final String readText;
         private final AtomicConfigWriter.StagedWrite temporary;
         private boolean finished;
-        /** Whether this write replaced or created the target. */
+        /** Whether this write replaced or created the target (the published state). */
         private boolean published;
-        /** Whether the replacement itself failed part-way, so the target may hold neither the old nor the new text. */
-        private boolean commitFailed;
+        /**
+         * Whether the commit failed with {@link AtomicConfigWriter.RestoreFailedException}: the target may hold part of
+         * this write and its backup is kept (the not-put-back state). Set only from that exception; every other failure
+         * leaves the write unpublished with no byte of it on disk.
+         */
+        private boolean notPutBack;
 
         private Staged(Path file, Path absolute, OwnedPaths owned, List<String> keys, String rendered,
                 ConfigDocument candidate, String read, String readText, AtomicConfigWriter.StagedWrite temporary) {
@@ -455,6 +475,10 @@ public final class OperatorFileWriter {
          * (or, for a file the gate read absent, while no file exists there); otherwise the staged file is released and
          * the result is {@link Outcome#FILE_CHANGED}, logged once. A write that needed no staging returns its settled
          * result. A staged write is committed at most once.
+         * <p>
+         * The exception {@link AtomicConfigWriter} throws decides the state a failed commit leaves (class description):
+         * a {@link AtomicConfigWriter.RestoreFailedException} records that the target was not put back; any other failure
+         * leaves the write unpublished. The failure is rethrown unchanged either way.
          *
          * @return the outcome: {@link Outcome#WRITTEN} when published
          * @throws IOException if the replacement or the creation fails (the target is then as
@@ -473,20 +497,19 @@ public final class OperatorFileWriter {
                 try {
                     byte[] now = readOrNull(file);
                     if (creating && now == null) {
-                        commitFailed = true;
                         temporary.commitAsNewFile();
-                        commitFailed = false;
                         published = true;
                     } else if (!creating && now != null && ConfigDocument.sha256(now).equals(read)) {
-                        commitFailed = true;
                         temporary.commit();
-                        commitFailed = false;
                         published = true;
                     }
                 } catch (FileAlreadyExistsException appeared) {
-                    commitFailed = false;
                     // A file appeared at the target after the re-read: it is left as it is, and this is reported below.
                     LOGGER.fine("Config creation lost the race to an existing file at " + absolute);
+                } catch (AtomicConfigWriter.RestoreFailedException failedPutBack) {
+                    // The only failure after which bytes of this write may remain in the target (#622).
+                    notPutBack = true;
+                    throw failedPutBack;
                 } finally {
                     if (!published) {
                         temporary.discard();
@@ -501,27 +524,37 @@ public final class OperatorFileWriter {
         }
 
         /**
-         * Undoes this write after its batch failed: puts back exactly the text the write was verified against (or removes
-         * the file it created), through the same last-moment check as the commit - only while the file still holds exactly
-         * what this write put there, or when this write's own replacement failed part-way. A file that changed after this
-         * write replaced it - an operator's save - is kept as it is, and one WARNING names it (17-65 review round 1
-         * R65-I3). Does nothing when this write did not touch the file.
+         * Undoes this write after its batch failed, acting only on bytes the write still owns (class description, #673):
+         * <ul>
+         *   <li>unpublished - nothing is read, written or deleted: no byte of this write is on disk, so whatever the file
+         *       holds now, an operator's save made while the batch was failing included, is kept;</li>
+         *   <li>not put back - the file is read under the lock and never written or deleted: the SEVERE the failed
+         *       put-back logged, the kept backup and the entity's "changed since it was read" protection until a reload
+         *       stand, and the operator decides what the file holds;</li>
+         *   <li>published - the text the write was verified against is put back (or the file it created removed) through
+         *       the same last-moment check as the commit, only while the file still holds exactly what this write put
+         *       there. A file that changed after this write replaced it - an operator's save - is kept as it is, and one
+         *       WARNING names it (17-65 review round 1 R65-I3).</li>
+         * </ul>
          *
-         * @return whether the file now holds what it held before this write (also when nothing needed undoing)
-         * @throws IOException if putting the text back fails
+         * @return whether the file now holds what it held before this write (also when nothing needed undoing); after a
+         *         failed put-back, {@code true} only when the file holds exactly those bytes again
+         * @throws IOException if reading the file or putting the text back fails
          */
         public boolean restore() throws IOException {
-            if (!published && !commitFailed) {
+            if (!published && !notPutBack) {
                 return true;
             }
             synchronized (AtomicConfigWriter.WRITE_LOAD_LOCK) {
                 byte[] now = readOrNull(file);
                 String nowFingerprint = now == null ? ABSENT : ConfigDocument.sha256(now);
-                if (nowFingerprint.equals(read)) {
-                    return true;
+                boolean holdsRead = nowFingerprint.equals(read);
+                if (holdsRead || notPutBack) {
+                    // After a failed put-back nothing is written or deleted again; the result only reports what it holds.
+                    return holdsRead;
                 }
                 String writtenFingerprint = ConfigDocument.sha256(rendered.getBytes(StandardCharsets.UTF_8));
-                if (!commitFailed && !nowFingerprint.equals(writtenFingerprint)) {
+                if (!nowFingerprint.equals(writtenFingerprint)) {
                     LOGGER.warning("Configuration file " + absolute + " was not restored after a failed write: it changed"
                             + " after this write replaced it, so it is kept as it is now. Keys this write had changed: "
                             + String.join(", ", keys.isEmpty() ? describe(owned.values(), owned.comments()) : keys) + ".");
@@ -533,7 +566,6 @@ public final class OperatorFileWriter {
                     AtomicConfigWriter.write(file, readText);
                 }
                 published = false;
-                commitFailed = false;
                 return true;
             }
         }
