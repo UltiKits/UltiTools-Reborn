@@ -204,22 +204,36 @@ class SimpleTempListenerRegistrationLockTest {
         assertThat(failure.get()).isNull();
 
         Set<?> registered = registrationSet();
-        for (int i = 0; i < listenerCount; i++) {
+        assertAsyncSideUnregistered(unregisteredSide, asyncDelivered, registered);
+        assertRegisteredSideKept(registeredSide, registered);
+        assertRepeatedRegisterDeliversOnce(registeredSide, syncDelivered);
+    }
+
+    private void assertAsyncSideUnregistered(List<SimpleTempListener<AsyncProbeEvent>> unregisteredSide,
+                                             AtomicInteger[] asyncDelivered, Set<?> registered) {
+        for (int i = 0; i < unregisteredSide.size(); i++) {
             SimpleTempListener<AsyncProbeEvent> listener = unregisteredSide.get(i);
             assertThat(asyncDelivered[i].get()).as("async listener %d delivered once", i).isEqualTo(1);
             assertThat(registered.contains(listener)).as("async listener %d marker cleared", i).isFalse();
             assertThat(isRegisteredWithBukkit(listener, AsyncProbeEvent.getHandlerList()))
                     .as("async listener %d unregistered from Bukkit", i).isFalse();
         }
-        for (int i = 0; i < listenerCount; i++) {
+    }
+
+    private static void assertRegisteredSideKept(List<SimpleTempListener<SyncProbeEvent>> registeredSide,
+                                                 Set<?> registered) {
+        for (int i = 0; i < registeredSide.size(); i++) {
             assertThat(registered.contains(registeredSide.get(i))).as("listener %d marker kept", i).isTrue();
         }
+    }
 
+    private void assertRepeatedRegisterDeliversOnce(List<SimpleTempListener<SyncProbeEvent>> registeredSide,
+                                                    AtomicInteger[] syncDelivered) {
         for (SimpleTempListener<SyncProbeEvent> listener : registeredSide) {
             listener.register();
         }
         server.getPluginManager().callEvent(new SyncProbeEvent(0));
-        for (int i = 0; i < listenerCount; i++) {
+        for (int i = 0; i < registeredSide.size(); i++) {
             assertThat(syncDelivered[i].get())
                     .as("a repeated register() on listener %d must not add a second delivery", i)
                     .isEqualTo(1);
@@ -374,6 +388,7 @@ class SimpleTempListenerRegistrationLockTest {
         return false;
     }
 
+    @SuppressWarnings("PMD.CompareObjectsWithEquals") // deliberate identity: is this exact instance registered
     private static boolean isRegisteredWithBukkit(Object listener, HandlerList handlers) {
         for (RegisteredListener registeredListener : handlers.getRegisteredListeners()) {
             if (registeredListener.getListener() == listener) {

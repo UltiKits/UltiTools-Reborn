@@ -92,7 +92,6 @@ class PluginManagerUnloadHookCheckedFailureTest {
 
     private ServerMock server;
     private SimpleCommandMap realCommandMap;
-    private SimplePluginManager realPluginManager;
     private ListenerManager listenerManager;
     private CommandManager commandManager;
     private EventBus eventBus;
@@ -162,7 +161,7 @@ class PluginManagerUnloadHookCheckedFailureTest {
         server = MockBukkit.mock();
         PluginMock loaderSource = MockBukkit.createMockPlugin();
         realCommandMap = new SimpleCommandMap(server, new HashMap<>());
-        realPluginManager = new SimplePluginManager(server, realCommandMap);
+        SimplePluginManager realPluginManager = new SimplePluginManager(server, realCommandMap);
         listenerManager = new ListenerManager();
         commandManager = new CommandManager();
         eventBus = new EventBus();

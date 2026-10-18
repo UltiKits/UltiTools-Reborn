@@ -696,6 +696,8 @@ class PluginDependencyResolverTest {
             assertEquals(4095, subsets);
         }
 
+        // Deliberately one exhaustive oracle-versus-resolver comparison per subset; splitting it would hide the pairing.
+        @SuppressWarnings("PMD.NPathComplexity")
         private void checkSubset(List<Class<? extends UltiToolsPlugin>> subset) throws Exception {
             Set<String> names = new HashSet<>();
             for (Class<? extends UltiToolsPlugin> pluginClass : subset) {

@@ -70,8 +70,10 @@ import com.ultikits.ultitools.manager.ModuleApiLevels;
  * ({@link #recordDeferredRemoval(String, List)}), and the next start deletes it before any module
  * loads, if it is still that file (#518). Only a file confirmed to be the recorded one is deleted; one
  * confirmed to be a different file is left alone and its entry dropped; one whose content cannot be
- * read at that start stays recorded, unchanged, for the next start to try again -- a transient read
- * failure never cancels an uninstall the operator asked for.
+ * read at that start stays recorded, unchanged, for the next start to try again -- a failure to read
+ * the file's content never cancels an uninstall the operator asked for. (The size and modification-time
+ * checks use {@code File.length()} and {@code File.lastModified()}, which report 0 on an I/O error, so a
+ * failure to stat the file is not covered by this guarantee.)
  *
  * <p><b>Where the records live.</b> Under the server root, beside the credential store
  * ({@link #transactionsFolder(File)}), not under {@code plugins/}: the panel's file interface can
