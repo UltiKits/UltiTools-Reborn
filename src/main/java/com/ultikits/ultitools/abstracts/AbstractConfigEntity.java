@@ -365,6 +365,9 @@ public abstract class AbstractConfigEntity {
                 savedSnapshot.put(field, mine);
                 continue;
             }
+            // A typed map key the file now holds in several spellings cannot be mapped to one entry: no change of the
+            // setting is written, whatever the module's value holds (#673, case 52).
+            if (reportedSeveralSpellings(read, field, leaves)) { continue; }
             // The setting is written where the file holds it (a flat dotted key stays flat); one now written twice is not
             // the value the module started from and is not written (#612).
             boolean twice = heldTwice(read, field);
@@ -787,7 +790,7 @@ public abstract class AbstractConfigEntity {
         if (matches.isEmpty()) { matches = keysReadingBack(fileLevel, typed, keyType, at); }
         if (several(matches)) {
             List<String> leaf = new ArrayList<>(above); leaf.add(matches.get(0));
-            throw refused(severalSpellingsReason(field, leaf));
+            throw refused(severalSpellingsReason(field, Collections.singletonList(leaf)));
         }
         return matches.isEmpty() ? key : matches.get(0);
     }
@@ -819,12 +822,53 @@ public abstract class AbstractConfigEntity {
     private static boolean several(List<?> values) { return values.size() > 1; }
 
     /**
-     * The refusal text for a typed map key the file writes in several spellings, such as {@code 1:} and {@code '01':}
-     * (#673, case 52): the setting and the key through {@link #describeKey}, never a value.
+     * The refusal text for typed map keys the file writes in several spellings, such as {@code 1:} and {@code '01':}
+     * (#673, case 52): the setting and each key (its first spelling) through {@link #describeKey}, never a value or the
+     * other spellings.
      */
-    private String severalSpellingsReason(Field field, List<String> leaf) {
+    private String severalSpellingsReason(Field field, List<List<String>> leaves) {
+        List<String> named = new ArrayList<>(leaves.size());
+        for (List<String> leaf : leaves) { named.add(describeKey(field, leaf)); }
         return "setting " + describeKey(field, Collections.<String>emptyList()) + " holds the map key "
-                + describeKey(field, leaf) + " in several spellings; delete all but one of them, then reload";
+                + String.join(", ", named) + " in several spellings; delete all but one of them, then reload";
+    }
+
+    /**
+     * Every typed map key that {@code read} holds for {@code field} in several spellings, relative to the setting and
+     * ending in its first spelling in file order (#673, case 52). Decided from the file's keys alone through the
+     * converter's file-key ambiguity scan - the same key index the writer binds keys with - so a key the module removed
+     * or never held still counts.
+     */
+    private List<List<String>> severalSpellings(ConfigDocument read, Field field) {
+        List<String> at = keysIn(read, field);
+        if (!read.contains(at)) { return Collections.emptyList(); }
+        List<List<String>> leaves = new ArrayList<>();
+        int setting = keys(field).size();
+        for (List<String> path : registry().ambiguousFileKeys(declaredType(field), read.get(at), configFilePath, keys(field))) {
+            leaves.add(new ArrayList<>(path.subList(setting, path.size())));
+        }
+        return leaves;
+    }
+
+    /** An operator write of a setting whose typed map keys {@code read} holds in several spellings is refused. */
+    private void refuseSeveralSpellings(ConfigDocument read, Field field) throws ConfigWriteRefusedException {
+        List<List<String>> ambiguous = severalSpellings(read, field);
+        if (!ambiguous.isEmpty()) { throw refused(severalSpellingsReason(field, ambiguous)); }
+    }
+
+    /**
+     * The save rule for a setting whose typed map keys {@code read} holds in several spellings: none of its changed
+     * {@code leaves} is written, and one warning names them with the reason, never a value.
+     *
+     * @return whether the setting was reported and must not be written
+     */
+    private boolean reportedSeveralSpellings(ConfigDocument read, Field field, List<List<String>> leaves) {
+        List<List<String>> ambiguous = severalSpellings(read, field);
+        if (ambiguous.isEmpty()) { return false; }
+        List<String> named = new ArrayList<>(leaves.size());
+        for (List<String> leaf : leaves) { named.add(describeKey(field, leaf)); }
+        warnNotWritten(named, severalSpellingsReason(field, ambiguous));
+        return true;
     }
 
     private void requireOperatorWriteThread(String operation) {
@@ -877,6 +921,7 @@ public abstract class AbstractConfigEntity {
             // Written on the line the file holds the setting on - a flat dotted key stays flat - and refused when the file
             // now holds it twice, since writing one form would leave the other (#612).
             if (heldTwice(read, change.field)) { throw refused(heldTwiceReason(change.field) + "; delete one of them, then reload"); }
+            refuseSeveralSpellings(read, change.field);
             if (change.present && read.readings(fieldPath(change.field)).isEmpty() && insertKeysIn(read, change.field) == null) {
                 // Inserted below the section the file holds, never into a second form of it (#614). Only a change that
                 // writes a value inserts; removing from a setting the file no longer holds writes nothing (Codex run 1).
