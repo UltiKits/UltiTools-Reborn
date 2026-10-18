@@ -197,6 +197,44 @@ class PluginInitiationUtilsConfigUpdateTest {
                     return panelMessage(null, WHOLE_CONTENT, requestId);
             }
         }
+
+        /** Whether the governing switch, and only it, admits this target. */
+        boolean allowedBy(boolean fileWrite, boolean serverProperties) {
+            return governing == Capability.FILE_WRITE ? fileWrite : serverProperties;
+        }
+
+        /** Expected handleServerProperties(get) calls. */
+        long expectedGets(boolean allowed) {
+            return allowed && this == SERVER_PROPERTIES_GET ? 1L : 0L;
+        }
+
+        /** Expected applySetAll calls. */
+        long expectedSetAlls(boolean allowed) {
+            return allowed && this == SERVER_PROPERTIES_WRITE ? 1L : 0L;
+        }
+
+        /** Expected config-writer calls. */
+        long expectedConfigWrites(boolean allowed) {
+            return allowed && governing == Capability.FILE_WRITE ? 1L : 0L;
+        }
+    }
+
+    private static RemoteActionLog.Verdict verdictFor(boolean allowed) {
+        return allowed ? RemoteActionLog.Verdict.ALLOWED : RemoteActionLog.Verdict.DENIED;
+    }
+
+    private static int expectedDenials(boolean allowed) {
+        return allowed ? 0 : 1;
+    }
+
+    /** The single refusal names {@code expected}, its config key and the request's requestId. */
+    private static void assertRefusalNames(Capability expected, String requestId, List<JsonObject> denials) {
+        JsonObject refusal = denials.get(0).getAsJsonObject("data");
+        assertThat(refusal.get("capability").getAsString()).as("capability: capability_denied names it")
+                .isEqualTo(expected.name());
+        assertThat(refusal.get("configKey").getAsString()).as("capability: capability_denied config key")
+                .isEqualTo(expected.getConfigPath());
+        assertThat(refusal.get("requestId").getAsString()).as("refusal echoes requestId").isEqualTo(requestId);
     }
 
     static Stream<Arguments> switchesByTarget() {
@@ -277,7 +315,7 @@ class PluginInitiationUtilsConfigUpdateTest {
                         emptyList(), emptyList(), emptyList(), emptyList()));
         String requestId = "req-matrix-" + target.name();
         Capability expected = target.governing;
-        boolean allowed = expected == Capability.FILE_WRITE ? fileWrite : serverProperties;
+        boolean allowed = target.allowedBy(fileWrite, serverProperties);
 
         PluginInitiationUtils.handleInboundMessage(updateConfigMessage(target.data(requestId)));
 
@@ -290,29 +328,25 @@ class PluginInitiationUtilsConfigUpdateTest {
 
         SoftAssertions routingAndVerdict = new SoftAssertions();
         routingAndVerdict.assertThat(gets).as("routing: server_properties get calls")
-                .isEqualTo(allowed && target == UpdateTarget.SERVER_PROPERTIES_GET ? 1L : 0L);
+                .isEqualTo(target.expectedGets(allowed));
         routingAndVerdict.assertThat(setAlls).as("routing: applySetAll calls")
-                .isEqualTo(allowed && target == UpdateTarget.SERVER_PROPERTIES_WRITE ? 1L : 0L);
+                .isEqualTo(target.expectedSetAlls(allowed));
         routingAndVerdict.assertThat(configWrites).as("routing: config writer calls")
-                .isEqualTo(allowed && expected == Capability.FILE_WRITE ? 1L : 0L);
+                .isEqualTo(target.expectedConfigWrites(allowed));
         routingAndVerdict.assertThat(eventBusReads > 0).as("routing: PanelMessageEvent publish consulted")
                 .isEqualTo(allowed);
         routingAndVerdict.assertThat(verdicts).as("verdict: gate-owned entries").hasSize(1);
         routingAndVerdict.assertThat(verdicts).extracting(RemoteActionLog.Entry::getVerdict)
                 .as("verdict: kind")
-                .containsExactly(allowed ? RemoteActionLog.Verdict.ALLOWED : RemoteActionLog.Verdict.DENIED);
-        routingAndVerdict.assertThat(denials).as("verdict: capability_denied messages").hasSize(allowed ? 0 : 1);
+                .containsExactly(verdictFor(allowed));
+        routingAndVerdict.assertThat(denials).as("verdict: capability_denied messages")
+                .hasSize(expectedDenials(allowed));
         routingAndVerdict.assertAll();
 
         assertThat(verdicts.get(0).getCapability()).as("capability: verdict entry names the governing switch")
                 .isEqualTo(expected.name());
         if (!allowed) {
-            JsonObject refusal = denials.get(0).getAsJsonObject("data");
-            assertThat(refusal.get("capability").getAsString()).as("capability: capability_denied names it")
-                    .isEqualTo(expected.name());
-            assertThat(refusal.get("configKey").getAsString()).as("capability: capability_denied config key")
-                    .isEqualTo(expected.getConfigPath());
-            assertThat(refusal.get("requestId").getAsString()).as("refusal echoes requestId").isEqualTo(requestId);
+            assertRefusalNames(expected, requestId, denials);
         }
     }
 
