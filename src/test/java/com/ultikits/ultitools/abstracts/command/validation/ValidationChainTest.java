@@ -522,4 +522,175 @@ class ValidationChainTest {
             assertSame(chain, chain.clear());
         }
     }
+
+    /**
+     * Records refusal-hook calls; passes by default. Declared at the outer level, not inside the
+     * nested test class, because tests compile with -source 1.8 (case 49 sweep).
+     */
+    static class RecordingValidator implements CommandValidator {
+        private final int order;
+        final java.util.concurrent.atomic.AtomicInteger refusals = new java.util.concurrent.atomic.AtomicInteger();
+        RuntimeException lastThrown;
+
+        RecordingValidator(int order) {
+            this.order = order;
+        }
+
+        @Override
+        public ValidationResult validate(CommandContext context) {
+            return ValidationResult.success();
+        }
+
+        @Override
+        public int getOrder() {
+            return order;
+        }
+
+        @Override
+        public void onRefused(CommandContext context) {
+            refusals.incrementAndGet();
+        }
+    }
+
+    /** Passes, then throws from its refusal hook after counting the call. */
+    static final class ThrowingHookRecordingValidator extends RecordingValidator {
+        ThrowingHookRecordingValidator(int order) {
+            super(order);
+        }
+
+        @Override
+        public void onRefused(CommandContext context) {
+            super.onRefused(context);
+            lastThrown = new IllegalStateException("hook failed");
+            throw lastThrown;
+        }
+    }
+
+    /** Throws from its applicability check. */
+    static final class ThrowingApplicabilityRecordingValidator extends RecordingValidator {
+        ThrowingApplicabilityRecordingValidator(int order) {
+            super(order);
+        }
+
+        @Override
+        public boolean shouldValidate(CommandContext context) {
+            lastThrown = new IllegalStateException("applicability failed");
+            throw lastThrown;
+        }
+    }
+
+    /** Throws from validate. */
+    static final class ThrowingValidateRecordingValidator extends RecordingValidator {
+        ThrowingValidateRecordingValidator(int order) {
+            super(order);
+        }
+
+        @Override
+        public ValidationResult validate(CommandContext context) {
+            lastThrown = new IllegalStateException("validate failed");
+            throw lastThrown;
+        }
+    }
+
+    /** Refuses by returning a failure, without throwing. */
+    static final class FailingRecordingValidator extends RecordingValidator {
+        FailingRecordingValidator(int order) {
+            super(order);
+        }
+
+        @Override
+        public ValidationResult validate(CommandContext context) {
+            return ValidationResult.failure("refused");
+        }
+    }
+
+    @Nested
+    @DisplayName("Refusal on exception (case 49)")
+    class RefusalOnExceptionTests {
+
+        @Test
+        @DisplayName("validate: an applicability exception notifies only the validators that passed")
+        void validateNotifiesOnlyPassedValidatorsWhenApplicabilityThrows() {
+            RecordingValidator passed = new RecordingValidator(100);
+            ThrowingApplicabilityRecordingValidator throwing = new ThrowingApplicabilityRecordingValidator(200);
+            RecordingValidator later = new RecordingValidator(300);
+            ValidatorChain chain = ValidatorChain.builder().add(passed).add(throwing).add(later).build();
+
+            IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                    () -> chain.validate(playerContext));
+
+            assertSame(throwing.lastThrown, thrown);
+            assertEquals(1, passed.refusals.get(), "the validator that passed hears of the refusal once");
+            assertEquals(0, throwing.refusals.get(), "the throwing validator never passed");
+            assertEquals(0, later.refusals.get(), "a later validator never ran");
+        }
+
+        @Test
+        @DisplayName("validateAll: an applicability exception notifies only the validators that passed")
+        void validateAllNotifiesPassedValidatorsWhenApplicabilityThrows() {
+            RecordingValidator passed = new RecordingValidator(100);
+            ThrowingApplicabilityRecordingValidator throwing = new ThrowingApplicabilityRecordingValidator(200);
+            RecordingValidator later = new RecordingValidator(300);
+            ValidatorChain chain = ValidatorChain.builder().add(passed).add(throwing).add(later).build();
+
+            IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                    () -> chain.validateAll(playerContext));
+
+            assertSame(throwing.lastThrown, thrown);
+            assertEquals(1, passed.refusals.get(), "the validator that passed hears of the refusal once");
+            assertEquals(0, throwing.refusals.get(), "the throwing validator never passed");
+            assertEquals(0, later.refusals.get(), "a later validator never ran");
+        }
+
+        @Test
+        @DisplayName("validateAll: a validate exception notifies only the validators that passed")
+        void validateAllNotifiesPassedValidatorsWhenValidateThrows() {
+            RecordingValidator passed = new RecordingValidator(100);
+            ThrowingValidateRecordingValidator throwing = new ThrowingValidateRecordingValidator(200);
+            RecordingValidator later = new RecordingValidator(300);
+            ValidatorChain chain = ValidatorChain.builder().add(passed).add(throwing).add(later).build();
+
+            IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                    () -> chain.validateAll(playerContext));
+
+            assertSame(throwing.lastThrown, thrown);
+            assertEquals(1, passed.refusals.get(), "the validator that passed hears of the refusal once");
+            assertEquals(0, throwing.refusals.get(), "the throwing validator never passed");
+            assertEquals(0, later.refusals.get(), "a later validator never ran");
+        }
+
+        @Test
+        @DisplayName("validateAll: the original exception survives and a failing refusal hook is suppressed on it")
+        void validateAllKeepsTheOriginalExceptionAndSuppressesHookFailures() {
+            ThrowingHookRecordingValidator throwingHook = new ThrowingHookRecordingValidator(100);
+            RecordingValidator passed = new RecordingValidator(150);
+            ThrowingValidateRecordingValidator throwing = new ThrowingValidateRecordingValidator(200);
+            ValidatorChain chain = ValidatorChain.builder().add(throwingHook).add(passed).add(throwing).build();
+
+            IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                    () -> chain.validateAll(playerContext));
+
+            assertSame(throwing.lastThrown, thrown, "the original exception propagates");
+            assertEquals(1, thrown.getSuppressed().length, "the failing refusal hook is suppressed on it");
+            assertSame(throwingHook.lastThrown, thrown.getSuppressed()[0]);
+            assertEquals(1, passed.refusals.get(), "a failing hook does not keep a later hook from running");
+        }
+
+        @Test
+        @DisplayName("control: validateAll returning failures calls no refusal hook; the caller owns refusal")
+        void validateAllReturningFailureCallsNoRefusalHook() {
+            RecordingValidator first = new RecordingValidator(100);
+            FailingRecordingValidator failing = new FailingRecordingValidator(200);
+            RecordingValidator last = new RecordingValidator(300);
+            ValidatorChain chain = ValidatorChain.builder().add(first).add(failing).add(last).build();
+
+            ValidatorChain.ChainValidationResult result = chain.validateAll(playerContext);
+
+            assertFalse(result.isValid());
+            assertEquals(java.util.Collections.singletonList(failing), result.getAllFailedValidators());
+            assertEquals(java.util.Arrays.asList(first, last), result.getPassedValidators());
+            assertEquals(0, first.refusals.get() + failing.refusals.get() + last.refusals.get(),
+                    "no refusal hook runs for a returned result");
+        }
+    }
 }

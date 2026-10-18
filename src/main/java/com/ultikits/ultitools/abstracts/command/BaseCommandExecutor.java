@@ -1,12 +1,16 @@
 package com.ultikits.ultitools.abstracts.command;
 
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
@@ -38,7 +42,6 @@ import com.ultikits.ultitools.abstracts.data.AuditableDataEntity;
 import com.ultikits.ultitools.annotations.PreDestroy;
 import com.ultikits.ultitools.annotations.command.AsyncCommand;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
-import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdParam;
 import com.ultikits.ultitools.annotations.command.CmdSender;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
@@ -62,6 +65,15 @@ import lombok.Getter;
  * {@link #onCommand}: help short-circuit, immutable {@link CommandContext} construction, scored
  * method matching via {@link #matchMethod}, parameter parsing, the validator chain, an
  * argument-count check, then invocation. Subclasses MUST implement {@link #handleHelp}.
+ * <p>
+ * <b>Validator release at unload (case 48, @since 6.3.0).</b> {@code CooldownValidator} and
+ * {@code UsageLockValidator} register themselves with {@link PlayerCacheManager} at their first
+ * dispatch. When this executor is torn down (module unload), the framework validators of the
+ * chain it dispatches through -- and its two field validators -- are released (unregistered, and
+ * a lock validator's locks cleared) unless another loaded executor that has dispatched still uses
+ * them; the last such executor's unload releases them, in whatever order the executors unload. A
+ * sharer that had not dispatched yet holds no state through them and simply registers them again
+ * on its first dispatch.
  *
  * @author wisdomme
  * @version 2.0.0
@@ -93,9 +105,28 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     private final UsageLockValidator lockValidator;
     
     private final TypeParserRegistry parserRegistry;
+
+    /**
+     * Executors that have dispatched at least once and have not been torn down (case 48): the
+     * sharers an unloading executor must not release a validator from under. Held weakly so the
+     * registry never keeps a module's executor -- or its class loader -- reachable; an entry
+     * joins at the executor's first dispatch and leaves at its teardown, which also prunes
+     * cleared references. Guarded by {@link #DISPATCHED_EXECUTORS_LOCK}.
+     */
+    private static final List<WeakReference<BaseCommandExecutor>> DISPATCHED_EXECUTORS = new ArrayList<>();
+
+    private static final Object DISPATCHED_EXECUTORS_LOCK = new Object();
+
+    /** Whether this executor is in {@link #DISPATCHED_EXECUTORS}; written under its lock. */
+    private volatile boolean dispatchedExecutorMember;
     
     /**
      * Creates a new command executor with default validators.
+     * <p>
+     * The chain's framework validators are released at this executor's unload unless another
+     * loaded executor that has dispatched still uses them (one built over {@code
+     * getValidatorChain()}, for example); a sharer that had not dispatched simply registers them
+     * again on its first dispatch (case 48).
      */
     public BaseCommandExecutor() {
         this.parserRegistry = TypeParserRegistry.getInstance();
@@ -118,6 +149,13 @@ public abstract class BaseCommandExecutor implements TabExecutor {
      * {@code PluginManager.validateCommandExecutorContract}). There is no opt-out: Phase 3 D-08's
      * module-granularity isolation is the accepted escape hatch -- only this module fails to
      * load, every other module still starts.
+     * <p>
+     * At this executor's unload, the {@code CooldownValidator}/{@code UsageLockValidator}
+     * instances in {@code validatorChain} are released -- unregistered from {@link
+     * PlayerCacheManager}, a lock validator's locks cleared -- unless another loaded executor
+     * that has dispatched still uses them, as when several executors or modules share one chain.
+     * A sharer that had not dispatched simply registers them again on its first dispatch
+     * (case 48).
      *
      * @param validatorChain the custom validator chain
      */
@@ -164,25 +202,44 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     }
 
     /**
-     * Releases {@link #cooldownValidator}/{@link #lockValidator} from {@link
-     * PlayerCacheManager} tracking and bulk-clears {@link UsageLockValidator}'s locks when this
-     * executor is torn down (module unload).
+     * Releases the self-registering validators this executor dispatched through from {@link
+     * PlayerCacheManager} tracking and bulk-clears every {@link UsageLockValidator}'s locks when
+     * this executor is torn down (module unload).
+     * <p>
+     * The validators released are those of the chain this executor dispatches through -- a chain
+     * passed to {@link #BaseCommandExecutor(ValidatorChain)} or returned by an overridden {@link
+     * #createDefaultValidatorChain()} -- together with {@link #cooldownValidator}/{@link
+     * #lockValidator}, taken as one identity set (case 48). Before, only the two fields were
+     * released; a custom chain that did not contain them left its own validators, which register
+     * themselves with {@link PlayerCacheManager} at their first dispatch, strongly held there after
+     * the module unloaded -- one more per module update, and a module's own validator subclass
+     * pinned its old class loader. Only {@link CooldownValidator} and {@link UsageLockValidator}
+     * (and their subclasses) register themselves, so only they are released.
+     * <p>
+     * A candidate that another loaded executor still uses is left untouched: still registered,
+     * its locks held, its cooldowns enforced and its quit cleanup running. "Still uses" means an
+     * executor that has dispatched at least once, has not been torn down, is still reachable and
+     * whose current chain contains the candidate by identity ({@link #DISPATCHED_EXECUTORS}).
+     * The last such executor's unload releases it. Release goes through each validator's
+     * {@code releasePlayerCacheRegistration()}, which also re-arms its lazy registration, so a
+     * sharer that had not dispatched yet -- or a later executor over the same chain -- registers
+     * it again on its next dispatch.
      * <p>
      * Reached through the framework's EXISTING {@code @PreDestroy} container lifecycle --
      * {@code PluginManager.unregister(plugin)} already calls {@code plugin.getContext().close()},
      * which invokes every singleton bean's {@code @PreDestroy} methods -- rather than a second,
-     * purpose-built unload hook (GEN-08, D-03). {@link #cooldownValidator}/{@link #lockValidator}
-     * are registered with {@link PlayerCacheManager} SEPARATELY from this executor bean itself
-     * (their sweepable state lives on them, not on this class), so the pre-existing per-bean
-     * {@code playerCacheManager.unregisterBean(bean)} loop already in {@code
-     * PluginManager.unregister(...)} -- which only ever sees the beans a plugin's own container
-     * constructed -- never reaches them on its own; this hook is what does.
+     * purpose-built unload hook (GEN-08, D-03). These validators are registered with {@link
+     * PlayerCacheManager} SEPARATELY from this executor bean itself (their sweepable state lives
+     * on them, not on this class), so the pre-existing per-bean {@code
+     * playerCacheManager.unregisterBean(bean)} loop already in {@code PluginManager.unregister(...)}
+     * -- which only ever sees the beans a plugin's own container constructed -- never reaches them
+     * on its own; this hook is what does.
      * <p>
      * {@link UsageLockValidator#clearAllLocks()} has no per-player analogue and, unlike {@link
      * UsageLockValidator#clearPlayerLocks(java.util.UUID)}/{@link
      * CooldownValidator#clearCooldowns(java.util.UUID)}, no quit-path call site either (GEN-08)
-     * -- module unload is the correct point to bulk-release whatever this specific executor
-     * instance's locks still held at teardown.
+     * -- module unload is the correct point to bulk-release whatever locks a released lock
+     * validator still held at teardown.
      *
      * @since 6.3.0
      */
@@ -192,28 +249,93 @@ public abstract class BaseCommandExecutor implements TabExecutor {
     @PreDestroy
     @SuppressWarnings("PMD.UnusedPrivateMethod")
     private void unregisterValidatorsFromPlayerCache() {
-        PlayerCacheManager.tryUnregister(cooldownValidator);
-        PlayerCacheManager.tryUnregister(lockValidator);
-        lockValidator.clearAllLocks();
+        List<BaseCommandExecutor> otherActive = leaveDispatchedExecutors(this);
+        // Identity, not equals: a module's own validator subclass may define equals, and two
+        // distinct instances must each be released.
+        Set<CommandValidator> candidates = Collections.newSetFromMap(new IdentityHashMap<>());
+        if (validatorChain != null) {
+            candidates.addAll(validatorChain.getValidators());
+        }
+        candidates.add(cooldownValidator);
+        candidates.add(lockValidator);
+        for (CommandValidator candidate : candidates) {
+            boolean selfRegistering = candidate instanceof CooldownValidator
+                    || candidate instanceof UsageLockValidator;
+            if (!selfRegistering || isUsedByAnotherExecutor(candidate, otherActive)) {
+                continue;
+            }
+            if (candidate instanceof CooldownValidator) {
+                ((CooldownValidator) candidate).releasePlayerCacheRegistration();
+            } else {
+                UsageLockValidator lock = (UsageLockValidator) candidate;
+                lock.releasePlayerCacheRegistration();
+                lock.clearAllLocks();
+            }
+        }
+    }
+
+    /**
+     * Records this executor in {@link #DISPATCHED_EXECUTORS} at its first dispatch, so an unloading
+     * executor sharing a validator with it leaves that validator registered (case 48).
+     */
+    private void joinDispatchedExecutors() {
+        if (dispatchedExecutorMember) {
+            return;
+        }
+        synchronized (DISPATCHED_EXECUTORS_LOCK) {
+            if (!dispatchedExecutorMember) {
+                DISPATCHED_EXECUTORS.add(new WeakReference<>(this));
+                dispatchedExecutorMember = true;
+            }
+        }
+    }
+
+    /**
+     * Removes {@code leaving} and every cleared reference from {@link #DISPATCHED_EXECUTORS} and
+     * returns the executors that remain. The lock is released before any caller reads another
+     * executor's chain.
+     */
+    @SuppressWarnings("PMD.CompareObjectsWithEquals") // registry membership is by identity; an executor may define equals
+    private static List<BaseCommandExecutor> leaveDispatchedExecutors(BaseCommandExecutor leaving) {
+        List<BaseCommandExecutor> remaining = new ArrayList<>();
+        synchronized (DISPATCHED_EXECUTORS_LOCK) {
+            Iterator<WeakReference<BaseCommandExecutor>> it = DISPATCHED_EXECUTORS.iterator();
+            while (it.hasNext()) {
+                BaseCommandExecutor executor = it.next().get();
+                if (executor == null || executor == leaving) {
+                    it.remove();
+                } else {
+                    remaining.add(executor);
+                }
+            }
+            leaving.dispatchedExecutorMember = false;
+        }
+        return remaining;
+    }
+
+    /** Whether one of {@code others} still dispatches through {@code validator} (the same instance). */
+    @SuppressWarnings("PMD.CompareObjectsWithEquals") // sharing means the same validator instance; a validator may define equals
+    private static boolean isUsedByAnotherExecutor(CommandValidator validator, List<BaseCommandExecutor> others) {
+        for (BaseCommandExecutor other : others) {
+            ValidatorChain chain = other.getValidatorChain();
+            if (chain == null) {
+                continue;
+            }
+            for (CommandValidator used : chain.getValidators()) {
+                if (used == validator) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**
      * Scans methods for command mappings.
      */
     private void scanCommandMappings() {
-        // Walk the hierarchy: on an AOP proxy, getDeclaredMethods() returns only the intercepted
-        // overrides, so scanning it directly would drop every other @CmdMapping on the class and
-        // silently disable those subcommands. See issue #190.
-        // getAllMethods() lists subclass overrides before the methods they hide, so the first
-        // insertion for a given format is always the most specific one. putIfAbsent (rather than
-        // put) keeps that first entry: if a subclass declares its own @CmdMapping method reusing a
-        // parent's format string, the subclass's method wins, matching normal override semantics.
-        for (Method method : ReflectionUtil.getAllMethods(this.getClass())) {
-            if (method.isAnnotationPresent(CmdMapping.class)) {
-                CmdMapping mapping = method.getAnnotation(CmdMapping.class);
-                mappings.putIfAbsent(mapping.format(), method);
-            }
-        }
+        // The discovery rule lives in ReflectionUtil.getEffectiveCommandMappings; see its javadoc.
+        mappings.putAll(ReflectionUtil.getEffectiveCommandMappings(this.getClass()));
     }
     
     /**
@@ -275,7 +397,9 @@ public abstract class BaseCommandExecutor implements TabExecutor {
         Map<String, String[]> parsedParams = parseParameters(args, format);
         context = context.withParsedParams(parsedParams);
         
-        // Validate
+        // Validate. From its first dispatch on, this executor counts as a user of its chain's
+        // validators, so another executor's unload leaves them registered (case 48).
+        joinDispatchedExecutors();
         ValidatorChain.ChainValidationResult validationResult = validatorChain.validate(context);
         if (!validationResult.isValid()) {
             String errorMsg = validationResult.getErrorMessage();

@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import com.ultikits.ultitools.abstracts.command.validation.CmdTargetComposition.Transition;
+import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.annotations.command.CmdTarget.CmdTargetType;
 
@@ -32,6 +33,7 @@ class CmdTargetCompositionTest {
     private static class NoClassLevelAnnotationFixture {
         @CmdTarget(CmdTargetType.PLAYER)
         public void restrictedToPlayer() {
+            // fixture mapping: body intentionally empty
         }
     }
 
@@ -39,6 +41,7 @@ class CmdTargetCompositionTest {
     private static class WideningFixture {
         @CmdTarget(CmdTargetType.BOTH)
         public void widensToBoth() {
+            // fixture mapping: body intentionally empty
         }
     }
 
@@ -46,6 +49,7 @@ class CmdTargetCompositionTest {
     private static class LateralFixture {
         @CmdTarget(CmdTargetType.CONSOLE)
         public void switchesToConsole() {
+            // fixture mapping: body intentionally empty
         }
     }
 
@@ -53,10 +57,12 @@ class CmdTargetCompositionTest {
     private static class TwoOffendingMethodsFixture {
         @CmdTarget(CmdTargetType.BOTH)
         public void widensToBoth() {
+            // fixture mapping: body intentionally empty
         }
 
         @CmdTarget(CmdTargetType.CONSOLE)
         public void switchesToConsole() {
+            // fixture mapping: body intentionally empty
         }
     }
 
@@ -64,6 +70,70 @@ class CmdTargetCompositionTest {
     private static class LegalFixture {
         @CmdTarget(CmdTargetType.CONSOLE)
         public void identical() {
+            // fixture mapping: body intentionally empty
+        }
+    }
+
+    // ========== Fixtures for inherited mappings (case 57) ==========
+    // Declared here, not inside the @Nested class that uses them: tests compile with -source 1.8,
+    // where an inner class cannot declare static nested classes. Methods are public so the
+    // override rule needs no package reasoning.
+
+    /** No class-level target; declares two mappings with method-level targets and one non-mapping. */
+    private static class BothMappingBase {
+        @CmdMapping(format = "all")
+        @CmdTarget(CmdTargetType.BOTH)
+        public void all() {
+            // fixture mapping: body intentionally empty
+        }
+
+        @CmdMapping(format = "players")
+        @CmdTarget(CmdTargetType.PLAYER)
+        public void playersOnly() {
+            // fixture mapping: body intentionally empty
+        }
+
+        @CmdTarget(CmdTargetType.BOTH)
+        public void helperWithTarget() {
+            // fixture mapping: body intentionally empty
+        }
+    }
+
+    /** CONSOLE class inheriting a BOTH mapping (widening) and a PLAYER mapping (lateral). */
+    @CmdTarget(CmdTargetType.CONSOLE)
+    private static class ConsoleInheritor extends BothMappingBase {
+    }
+
+    /** No class-level target: both inherited mappings are narrowings or identical. */
+    private static class BothInheritor extends BothMappingBase {
+    }
+
+    /** Overrides all() keeping @CmdMapping but not @CmdTarget, and playersOnly() with neither. */
+    @CmdTarget(CmdTargetType.CONSOLE)
+    private static class OverridingConsoleInheritor extends BothMappingBase {
+        @Override
+        @CmdMapping(format = "all")
+        public void all() {
+            // fixture mapping: body intentionally empty
+        }
+
+        @Override
+        public void playersOnly() {
+            // fixture mapping: body intentionally empty
+        }
+    }
+
+    /** Declares its own mappings under the base's formats, so the base's mappings are shadowed. */
+    @CmdTarget(CmdTargetType.CONSOLE)
+    private static class ShadowingConsoleInheritor extends BothMappingBase {
+        @CmdMapping(format = "all")
+        public void own() {
+            // fixture mapping: body intentionally empty
+        }
+
+        @CmdMapping(format = "players")
+        public void own2() {
+            // fixture mapping: body intentionally empty
         }
     }
 
@@ -131,6 +201,7 @@ class CmdTargetCompositionTest {
 
         private class SilentMethodFixture {
             public void silent() {
+                // fixture mapping: body intentionally empty
             }
         }
     }
@@ -181,6 +252,65 @@ class CmdTargetCompositionTest {
         @DisplayName("A fully legal class (identical class/method values) yields no violations")
         void legalClassYieldsNoViolations() {
             List<String> violations = CmdTargetComposition.check(LegalFixture.class);
+            assertTrue(violations.isEmpty(), violations.toString());
+        }
+    }
+
+    @Nested
+    @DisplayName("check(Class<?>) on inherited mappings (case 57)")
+    class InheritedMappingTests {
+
+        private String violationFor(List<String> violations, String methodName) {
+            for (String violation : violations) {
+                if (violation.contains("#" + methodName)) {
+                    return violation;
+                }
+            }
+            throw new AssertionError("no violation names #" + methodName + ": " + violations);
+        }
+
+        @Test
+        @DisplayName("an inherited BOTH mapping (widening) and PLAYER mapping (lateral) under a CONSOLE class are refused")
+        void inheritedWideningAndLateralAreRefused() {
+            List<String> violations = CmdTargetComposition.check(ConsoleInheritor.class);
+
+            assertEquals(2, violations.size(), violations.toString());
+            assertTrue(violationFor(violations, "all").contains(Transition.WIDENING.name()), violations.toString());
+            assertTrue(violationFor(violations, "playersOnly").contains(Transition.LATERAL.name()),
+                    violations.toString());
+        }
+
+        @Test
+        @DisplayName("each inherited violation names the checked class, the method and the declaring class")
+        void violationNamesTheDeclaringClass() {
+            List<String> violations = CmdTargetComposition.check(ConsoleInheritor.class);
+
+            assertEquals(2, violations.size(), violations.toString());
+            for (String methodName : new String[]{"all", "playersOnly"}) {
+                String violation = violationFor(violations, methodName);
+                assertTrue(violation.contains(ConsoleInheritor.class.getName()), violation);
+                assertTrue(violation.contains(BothMappingBase.class.getName()), violation);
+            }
+        }
+
+        @Test
+        @DisplayName("control: an unannotated class inheriting the same mappings has no violation")
+        void inheritedNarrowingIsLegal() {
+            List<String> violations = CmdTargetComposition.check(BothInheritor.class);
+            assertTrue(violations.isEmpty(), violations.toString());
+        }
+
+        @Test
+        @DisplayName("control: an override without @CmdTarget follows the class level; one without @CmdMapping is not a mapping")
+        void overrideWithoutTargetFollowsTheClassLevel() {
+            List<String> violations = CmdTargetComposition.check(OverridingConsoleInheritor.class);
+            assertTrue(violations.isEmpty(), violations.toString());
+        }
+
+        @Test
+        @DisplayName("control: mappings the class declares under the same formats shadow the base's")
+        void shadowedFormatsAreNotChecked() {
+            List<String> violations = CmdTargetComposition.check(ShadowingConsoleInheritor.class);
             assertTrue(violations.isEmpty(), violations.toString());
         }
     }

@@ -2138,6 +2138,50 @@ Each corrects behaviour that contradicted the documentation or left state held b
   `Error`，其后的 bean 仍会被清理。十五个 UltiKits 模块都没有使用 `saveBeforeRemove`。没有签名变化。见 `FEATURES.md` 中的
   `ultitools.runtime.player-cache-quit`。
 
+- **Known limitations of command validators, inherited `@CmdTarget` and tab completion (6.3.0),
+  documented rather than defended.** Each needs an unusual combination of conditions or code that
+  steps outside the module container; none changes a verdict in normal use. A module author's
+  remedy is given with each.
+  - **Executors that share one custom validator chain.** An executor releases the
+    `@CmdCD` and `@UsageLimit` validators it dispatched through when its module unloads, and leaves a
+    validator alone while another loaded executor that has dispatched still has it in its chain (a
+    chain passed to `super(chain)`, or one instance returned from `createDefaultValidatorChain()` by
+    several executors). An executor counts as a user from its first dispatch on. If that first-ever
+    dispatch runs off the main thread (a command run from another thread)
+    at the same moment another sharing executor's module unloads, the unload can release the
+    shared lock validator, clearing its locks, while that first command is still running. **Do not
+    share one custom validator chain instance across executors of different modules;** give each
+    executor its own chain. The validators an executor owns itself are always released correctly.
+  - **A shared validator is unregistered when the last sharing executor is torn down.** Until then
+    it stays registered with the player-cache manager. An executor the module container never tears
+    down - one built with `new` and registered by hand, outside the container - keeps a shared
+    validator registered until that executor is garbage collected. The effect is a delayed
+    unregister, never a wrong verdict. **Let the module container own its executors.**
+  - **The inherited `@CmdTarget` check reads the whole superclass chain at scan time.** The load
+    check for a method-level `@CmdTarget` that widens or switches the class-level value now covers
+    command mappings inherited from base classes, not only methods the class declares. It reads each
+    superclass's methods during the component scan, so a base class with a method whose signature
+    names a class that is missing at run time (an absent optional dependency) now fails the scan
+    with `NoClassDefFoundError`; before, the same failure came when the executor was constructed.
+    The framework has no `@ConditionalOnClass`-style annotation for this. **Keep classes that need
+    an optional dependency out of command base classes** - or keep that dependency's types out of
+    their method signatures - and load them only when the dependency is present.
+  - **Later-argument tab completion offers each literal once, but not across sources.** For an
+    argument after the first, a literal token several matching formats share (`alpha enable` and
+    `alpha enable <target>`) is offered once. A `@CmdParam(suggest = ...)` completer's candidates are
+    appended as it returns them, so a completer that returns the same string as a literal already
+    offered can still show it twice. **Do not return a subcommand literal from a parameter
+    completer.**
+
+  中文补充：命令校验器、继承的 `@CmdTarget` 与补全的已知限制（6.3.0，写入文档，不改代码）。(1) 多个执行器共用同一个自定义
+  校验器链（`super(chain)`，或几个执行器从 `createDefaultValidatorChain()` 返回同一个实例）时，若某个执行器首次分发发生在主线程之外，
+  且恰在另一个共用它的模块卸载的同一时刻，卸载可能释放共享的锁校验器，而那条命令仍在执行。请勿在不同模块的执行器之间共用同一个
+  自定义链，每个执行器使用自己的链。(2) 共享校验器在最后一个共用它的执行器被销毁前一直登记在玩家缓存管理器中；不由模块容器
+  销毁的执行器（用 `new` 创建并手动注册）会让它保留到该执行器被垃圾回收，只是注销延后，不会产生错误的判定。请让容器持有执行器。
+  (3) 继承的 `@CmdTarget` 检查在组件扫描时读取整条父类链：父类中某个方法签名引用了运行时缺失的类（缺失的可选依赖）时，扫描阶段就会
+  抛出 `NoClassDefFoundError`，而不是等到执行器构造。请不要把需要可选依赖的类放进命令基类，或让依赖的类型不出现在其方法签名中。
+  (4) 后续参数的补全会对字面量去重，但参数补全器返回与已提供字面量相同的字符串时，仍可能出现两次；请勿从参数补全器返回子命令字面量。
+
 ### Panel log stream and panel reply changes (6.3.0) that need no migration period
 
 Each corrects a declared behaviour the stream did not deliver. The panel protocol changes only additively: a

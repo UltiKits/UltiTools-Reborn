@@ -33,6 +33,10 @@ public interface CommandValidator {
 
     /**
      * Checks if this validator should be applied to the given context.
+     * <p>
+     * An exception thrown here refuses the dispatch like one thrown from
+     * {@link #validate(CommandContext)}: the validators that already passed receive
+     * {@link #onRefused(CommandContext)}, and the exception propagates unchanged (as of 6.3.0).
      *
      * @param context the command context
      * @return true if this validator should be applied
@@ -80,9 +84,10 @@ public interface CommandValidator {
     /**
      * Invoked once, instead of {@link #onComplete(CommandContext, boolean)}, for each validator
      * whose {@link #validate(CommandContext)} succeeded when the dispatch is then refused before
-     * the mapped method runs: by a validator later in the chain, by the argument-count check, or
-     * because a parameter could not be parsed. Validators are invoked in chain order. Never invoked
-     * for a validator that did not run or that refused.
+     * the mapped method runs: by a validator later in the chain, by an exception from a later
+     * validator's {@link #shouldValidate(CommandContext)} or {@link #validate(CommandContext)}, by
+     * the argument-count check, or because a parameter could not be parsed. Validators are invoked
+     * in chain order. Never invoked for a validator that did not run or that refused.
      * <p>
      * A validator that acquires something in {@code validate} -- {@code UsageLockValidator} takes
      * its lock there -- releases it here; the mapped method never ran, so effects that belong to an

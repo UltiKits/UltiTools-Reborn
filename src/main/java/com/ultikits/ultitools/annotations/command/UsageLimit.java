@@ -38,12 +38,12 @@ import java.lang.annotation.Target;
  * exists for this refusal: Phase 3 D-08's module-granularity isolation is the accepted escape
  * hatch -- the offending module alone fails to load, every other module still starts.
  * <p>
- * As of 6.3.0 this annotation may also be applied at the class level, for the load-time check
- * above. That is the ONLY thing class-level placement does: {@code UsageLockValidator} itself
- * still reads {@code @UsageLimit} per {@code @CmdMapping} method, not from the declaring class, so
- * a class-level annotation with no annotated mapping method loads successfully (once
- * {@code UsageLockValidator} is present) but locks nothing -- disclosed here rather than silently
- * accepted. Put the annotation on the mapping method itself to actually enforce a lock.
+ * As of 6.3.0 this annotation may also be applied at the class level, and it is enforced there:
+ * {@code UsageLockValidator} resolves the annotation per {@code @CmdMapping} method as the
+ * method's own annotation, then the concrete executor class's, then the class that declared the
+ * mapping in source -- also when the executor is an AOP proxy. A class-level placement therefore
+ * locks every mapping of that class that carries no {@code @UsageLimit} of its own; a
+ * method-level annotation governs its own mapping instead.
  *
  * @see <a href="https://dev.ultikits.com/en/guide/essentials/cmd-executor.html#execution-lock">@UsageLimit</a>
  */
