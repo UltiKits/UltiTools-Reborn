@@ -75,7 +75,10 @@ public class ListenerManager {
     }
 
     /**
-     * Unregister all listeners in the UltiTools plugin class base package.
+     * Unregisters from Bukkit every listener this framework registered for {@code plugin}, then stops
+     * tracking {@code plugin}: once its listeners are released, this manager no longer references the
+     * module or its listener objects, so an unloaded module is not kept reachable by it. A later
+     * registration for the same instance starts a new list.
      *
      * @param plugin UltiTools plugin instance
      */
@@ -85,6 +88,9 @@ public class ListenerManager {
         for (Listener listener : listeners) {
             unregister(listener);
         }
+        // Dropped only after every listener was released: if one release throws, the entry stays and a
+        // later call can still release the rest.
+        listenerListMap.remove(plugin);
     }
 
     /**
