@@ -2012,6 +2012,18 @@ This section governs the third kind.
 
   中文补充：**框架无法检查的约束注解会让模块在加载时被拒绝**（自 6.3.0 起，#631，维护者 2026-10-06 决定）。6.3.0 之前这类声明什么也不做、也没有任何提示：用在非数字上的 `@Range`、非文本上的 `@Pattern`、映射或数组上的 `@Size`、数字/布尔/枚举/值类型上的 `@Size` 与 `@NotEmpty`。现在，对本身就是 `@ConfigEntry` 设置的字段，按其声明类型判断；声明类型若能容纳注解可检查的值（`Object`、`Serializable`、`Comparable`、`CharSequence`、`Number` 或其他被检查种类的父类型），则不算约束错误，加载时绑定的值照常检查；这些类型中只有 `Object` 无需转换器即可绑定，其余类型需要模块转换器（`@ConfigConverterFor`），否则模块会以 `no config converter for ...` 被拒绝；绑定的值若是注解无法读取的种类（`@Range` 下 `Object` 设置里的文本，`@Pattern`、`@Size` 或 `@NotEmpty` 下的数字），按该注解的普通违规处理：启动时拒绝加载，`/ul reload` 时拒绝重载并保留运行中的值（6.3.0 之前会静默通过）；这类字段的规则如下：`@Size` 统计映射的条目数和数组长度（违规时与其他 `@Size` 违规一样拒绝模块）；对 `@NotEmpty`、`@Size`、`@Pattern` 而言，文本指 `String` 或 `char`。只有永远不可能容纳可检查值的声明类型才算声明错误：这类声明会在加载时、读取配置文件之前拒绝模块，一条消息写明每个字段、注解和原因：`@Range` 只检查数字；`@Pattern` 只检查文本；`@Size` 与 `@NotEmpty` 只适用于文本、列表、集合、映射和数组（`List<Integer>` 上的 `@Range` 就属于这种错误：它不适用于列表本身）。配置类中不是 `@ConfigEntry` 设置的字段上的约束同样会被拒绝。**约束注解只对本身就是配置类 `@ConfigEntry` 设置的字段生效。** 值类型的字段、嵌套类的字段，以及转换器产生的任何对象上的注解（例如 `Map<String, Item>` 设置中 `Item` 类字段上的 `@NotEmpty`）既不检查也不报告；框架不会深入值类型（#633，按维护者 2026-10-06 的决定关闭）。请在模块的转换器中校验这些字段（在那里跳过或拒绝该条目）。第一方模块：UltiRecipe 在 `RecipeConfig.OutputItem`（其 `recipes` 设置中的值）上声明了 `@NotEmpty` 和 `@Range`，它们不会被检查（模块自行检查），模块照常加载；它面向 6.3.0 的构建保留了这两个注解，但它们在那里不起作用。没有第一方模块会被这些声明检查拒绝。
 
+- **Declarative GUI: one frame runs only the work queued when it starts** (as of v6.3.0). Before 6.3.0 a
+  frame kept running until its queue was empty, so a widget whose `State.initState` called `setState` and then
+  threw kept the server thread rebuilding that page inside a single frame and never returned. Now a rebuild
+  requested during a frame runs on the next one. **Known limitation:** such a broken page is still retried once
+  per tick for as long as it is open, and each failure is logged. Fix the widget: a `State` must not throw from
+  `initState`; catch the failure there and render an error state instead.
+
+  中文补充：**声明式 GUI：每一帧只执行该帧开始时已排队的任务**（自 6.3.0 起）。6.3.0 之前一帧会一直执行到队列清空，
+  因此某个组件的 `State.initState` 先调用 `setState` 再抛出异常时，服务器主线程会在同一帧里反复重建该页面、永不返回。
+  现在帧内请求的重建在下一帧执行。**已知限制：**这样的坏页面只要还开着，仍会每个 tick 重试一次，每次失败都会记录日志。
+  请修复该组件：`State` 不应从 `initState` 抛出异常，应在其中捕获失败并渲染错误状态。
+
 ### Behavioral changes that do need one
 
 - A documented default value flipping.
