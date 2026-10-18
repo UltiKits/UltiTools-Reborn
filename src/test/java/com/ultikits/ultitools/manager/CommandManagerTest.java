@@ -6,32 +6,42 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
+import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandMap;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.PluginCommand;
+import org.bukkit.command.SimpleCommandMap;
 import org.bukkit.plugin.Plugin;
+import org.bukkit.plugin.PluginDescriptionFile;
+import org.bukkit.plugin.SimplePluginManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
@@ -39,6 +49,7 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdSender;
+import com.ultikits.ultitools.api.ExternalPluginAdapter;
 import com.ultikits.ultitools.context.AutowireFactory;
 import com.ultikits.ultitools.context.SimpleContainer;
 
@@ -1779,6 +1790,130 @@ class CommandManagerTest {
             commandManager.registerAll(mockPlugin);
             
             // Assert - 所有命令被跳过，没有异常
+        }
+    }
+
+    /**
+     * Binds an already-registered instance under a second name through the protected
+     * {@code addSingleton}, exactly as {@code ComponentScanner.processBeanMethod} binds the alias
+     * names of a {@code @Bean(name = {primary, alias})} product.
+     */
+    static class AliasingContainer extends SimpleContainer {
+        void bindAlias(String alias, Object instance) {
+            addSingleton(alias, instance);
+        }
+    }
+
+    /**
+     * C50, registration half: {@code registerAll} enumerates bean <em>names</em>, so one executor
+     * bound under two names reached Bukkit's command map twice. Bukkit registration is observed
+     * on a spied real {@link SimpleCommandMap} behind a real {@link SimplePluginManager}, the
+     * same pair {@code CommandManagerKnownCommandsCleanupTest} uses, because MockBukkit's own
+     * plugin manager is not a {@code SimplePluginManager}.
+     */
+    @Nested
+    @DisplayName("C50: registerAll registers an aliased executor instance once")
+    class AliasedInstanceRegistrationTests {
+
+        private SimpleCommandMap commandMap;
+        private SimplePluginManager pluginManager;
+
+        @BeforeEach
+        void setUpCommandMap() {
+            // Republish the UltiTools mock with a description: registerCommandDirect reads its
+            // name as the fallback prefix. All stubbing happens before publication (issue #250).
+            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
+                when(ultiTools.getLogger()).thenReturn(mockLogger);
+                when(ultiTools.getDescription()).thenReturn(
+                        new PluginDescriptionFile("ultitools", "1.0", "com.ultikits.ultitools.UltiTools"));
+            });
+            commandMap = spy(new SimpleCommandMap(server, new HashMap<>()));
+            pluginManager = new SimplePluginManager(server, commandMap);
+        }
+
+        private int bukkitRegistrationsOf(CommandExecutor executor) {
+            return (int) org.mockito.Mockito.mockingDetails(commandMap).getInvocations().stream()
+                    .filter(invocation -> "register".equals(invocation.getMethod().getName())
+                            && invocation.getArguments().length == 2
+                            && invocation.getArguments()[1] instanceof PluginCommand
+                            && ((PluginCommand) invocation.getArguments()[1]).getExecutor() == executor)
+                    .count();
+        }
+
+        private ExternalPluginAdapter externalAdapter(SimpleContainer context) {
+            ExternalPluginAdapter adapter = mock(ExternalPluginAdapter.class);
+            when(adapter.getContext()).thenReturn(context);
+            when(adapter.getPluginName()).thenReturn("ExternalPlugin");
+            return adapter;
+        }
+
+        @Test
+        @DisplayName("module registerAll: one executor under two names reaches Bukkit once")
+        void aliasedExecutorRegisteredOnceForModule() {
+            TestCommandExecutor executor = new TestCommandExecutor();
+            AliasingContainer context = new AliasingContainer();
+            context.registerSingleton("aliasedCommand", executor);
+            context.bindAlias("aliasedCommandAlias", executor);
+            when(mockPlugin.getContext()).thenReturn(context);
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                bukkit.when(Bukkit::getPluginManager).thenReturn(pluginManager);
+                bukkit.when(Bukkit::getLogger).thenReturn(mockLogger);
+
+                commandManager.registerAll(mockPlugin);
+            }
+
+            assertThat(bukkitRegistrationsOf(executor))
+                    .as("an alias is another name for the same executor; Bukkit must see it once")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("external registerAllExternal: one executor under two names reaches Bukkit once")
+        void aliasedExecutorRegisteredOnceForExternalPlugin() {
+            TestCommandExecutor executor = new TestCommandExecutor();
+            AliasingContainer context = new AliasingContainer();
+            context.registerSingleton("aliasedCommand", executor);
+            context.bindAlias("aliasedCommandAlias", executor);
+            ExternalPluginAdapter adapter = externalAdapter(context);
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                bukkit.when(Bukkit::getPluginManager).thenReturn(pluginManager);
+                bukkit.when(Bukkit::getLogger).thenReturn(mockLogger);
+
+                commandManager.registerAllExternal(adapter);
+            }
+
+            assertThat(bukkitRegistrationsOf(executor))
+                    .as("an alias is another name for the same executor; Bukkit must see it once")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("two distinct executor instances under two names are both registered")
+        void distinctExecutorsAreBothRegistered() {
+            TestCommandExecutor first = new TestCommandExecutor();
+            TestCommandExecutor second = new TestCommandExecutor();
+            ManualRegisterCommandExecutor manual = new ManualRegisterCommandExecutor();
+            AliasingContainer context = new AliasingContainer();
+            context.registerSingleton("firstCommand", first);
+            context.registerSingleton("secondCommand", second);
+            context.registerSingleton("manualCommand", manual);
+            when(mockPlugin.getContext()).thenReturn(context);
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                bukkit.when(Bukkit::getPluginManager).thenReturn(pluginManager);
+                bukkit.when(Bukkit::getLogger).thenReturn(mockLogger);
+
+                commandManager.registerAll(mockPlugin);
+            }
+
+            assertThat(bukkitRegistrationsOf(first)).isEqualTo(1);
+            assertThat(bukkitRegistrationsOf(second)).isEqualTo(1);
+            assertThat(bukkitRegistrationsOf(manual))
+                    .as("manualRegister = true still keeps an executor out of registerAll")
+                    .isZero();
+            verify(commandMap, times(2)).register(eq("ultitools"), argThat(c -> c instanceof PluginCommand));
         }
     }
 }

@@ -2,7 +2,13 @@ package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.same;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
@@ -16,7 +22,11 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
+import org.bukkit.Bukkit;
+import org.bukkit.Server;
 import org.bukkit.event.Listener;
+import org.bukkit.plugin.Plugin;
+import org.bukkit.plugin.PluginManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -24,9 +34,11 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.EventListener;
+import com.ultikits.ultitools.api.ExternalPluginAdapter;
 import com.ultikits.ultitools.context.AutowireFactory;
 import com.ultikits.ultitools.context.SimpleContainer;
 
@@ -397,6 +409,100 @@ class ListenerManagerTest {
 
             assertThat(map.get(mockPlugin)).containsExactly(listener1);
             assertThat(map.get(plugin2)).containsExactly(listener2);
+        }
+    }
+
+    /**
+     * Binds an already-registered instance under a second name through the protected
+     * {@code addSingleton}, exactly as {@code ComponentScanner.processBeanMethod} binds the alias
+     * names of a {@code @Bean(name = {primary, alias})} product.
+     */
+    static class AliasingContainer extends SimpleContainer {
+        void bindAlias(String alias, Object instance) {
+            addSingleton(alias, instance);
+        }
+    }
+
+    /**
+     * C50, registration half: {@code registerAll} enumerates bean <em>names</em>, so one listener
+     * bound under two names reached Bukkit's {@code registerEvents} twice, and every handler on it
+     * then fired twice per event.
+     */
+    @Nested
+    @DisplayName("C50: registerAll registers an aliased listener instance once")
+    class AliasedInstanceRegistrationTests {
+
+        private PluginManager bukkitPluginManager;
+
+        private void runWithBukkitPluginManager(Runnable action) {
+            bukkitPluginManager = mock(PluginManager.class);
+            Server server = mock(Server.class);
+            when(server.getPluginManager()).thenReturn(bukkitPluginManager);
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                bukkit.when(Bukkit::getServer).thenReturn(server);
+                action.run();
+            }
+        }
+
+        private ExternalPluginAdapter externalAdapter(SimpleContainer context) {
+            ExternalPluginAdapter adapter = mock(ExternalPluginAdapter.class);
+            when(adapter.getContext()).thenReturn(context);
+            when(adapter.getPluginName()).thenReturn("ExternalPlugin");
+            return adapter;
+        }
+
+        @Test
+        @DisplayName("module registerAll: one listener under two names reaches registerEvents once")
+        void aliasedListenerRegisteredOnceForModule() {
+            TestListener listener = new TestListener();
+            AliasingContainer context = new AliasingContainer();
+            context.registerSingleton("aliasedListener", listener);
+            context.bindAlias("aliasedListenerAlias", listener);
+            when(mockPlugin.getContext()).thenReturn(context);
+
+            runWithBukkitPluginManager(() -> listenerManager.registerAll(mockPlugin));
+
+            verify(bukkitPluginManager, times(1)).registerEvents(same(listener), any(Plugin.class));
+        }
+
+        @Test
+        @DisplayName("external registerAllExternal: one listener under two names reaches registerEvents once")
+        void aliasedListenerRegisteredOnceForExternalPlugin() throws Exception {
+            TestListener listener = new TestListener();
+            AliasingContainer context = new AliasingContainer();
+            context.registerSingleton("aliasedListener", listener);
+            context.bindAlias("aliasedListenerAlias", listener);
+            ExternalPluginAdapter adapter = externalAdapter(context);
+
+            runWithBukkitPluginManager(() -> listenerManager.registerAllExternal(adapter));
+
+            verify(bukkitPluginManager, times(1)).registerEvents(same(listener), any(Plugin.class));
+            Field mapField = ListenerManager.class.getDeclaredField("externalListenerMap");
+            mapField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Map<String, List<Listener>> map = (Map<String, List<Listener>>) mapField.get(listenerManager);
+            assertThat(map.get("ExternalPlugin"))
+                    .as("the external tracking list must hold the instance once, so unload releases it once")
+                    .containsExactly(listener);
+        }
+
+        @Test
+        @DisplayName("two distinct listener instances under two names are both registered")
+        void distinctListenersAreBothRegistered() {
+            TestListener first = new TestListener();
+            TestListener second = new TestListener();
+            ManualRegisterListener manual = new ManualRegisterListener();
+            AliasingContainer context = new AliasingContainer();
+            context.registerSingleton("firstListener", first);
+            context.registerSingleton("secondListener", second);
+            context.registerSingleton("manualListener", manual);
+            when(mockPlugin.getContext()).thenReturn(context);
+
+            runWithBukkitPluginManager(() -> listenerManager.registerAll(mockPlugin));
+
+            verify(bukkitPluginManager, times(1)).registerEvents(same(first), any(Plugin.class));
+            verify(bukkitPluginManager, times(1)).registerEvents(same(second), any(Plugin.class));
+            verify(bukkitPluginManager, never()).registerEvents(same(manual), any(Plugin.class));
         }
     }
 }
