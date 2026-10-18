@@ -332,6 +332,14 @@ class LocalizedTest {
             assertThat(Localized.scanLangResources(classes.toURI().toURL())).containsExactly("en", "zh");
         }
 
+        @Test
+        @DisplayName("#676 case 26: a code source that is not a usable file URI yields an empty list instead of throwing")
+        void codeSourceThatIsNotAUriReturnsWithoutThrowing() throws IOException {
+            URL authorityBearing = new URL("file://fileserver/share/module.jar");
+
+            assertThat(Localized.scanLangResources(authorityBearing)).isEmpty();
+        }
+
         private void writeEntry(JarOutputStream out, String name, String content) throws IOException {
             out.putNextEntry(new JarEntry(name));
             out.write(content.getBytes(StandardCharsets.UTF_8));
