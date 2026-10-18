@@ -106,6 +106,13 @@ public final class ValidatorChain {
      * Validates the context through all validators in the chain.
      * Stops at the first failure.
      *
+     * <p>A runtime exception thrown from a validator's {@link CommandValidator#shouldValidate} or
+     * {@link CommandValidator#validate} refuses the dispatch: every validator that already passed
+     * receives {@link CommandValidator#onRefused} once, in chain order, and then the original
+     * exception propagates unchanged, with any exception a refusal hook threw attached to it as
+     * suppressed. The throwing validator itself, and every validator after it, receives nothing
+     * (#568 for {@code validate}; case 49 for {@code shouldValidate}).
+     *
      * @param context the command context to validate
      * @return the result of the validation
      */
@@ -116,17 +123,18 @@ public final class ValidatorChain {
         List<CommandValidator> passedValidators = new ArrayList<>();
 
         for (CommandValidator validator : validators) {
-            if (!isApplicable(validator, context)) {
-                continue;
-            }
-
             CommandValidator.ValidationResult result;
             try {
+                if (!isApplicable(validator, context)) {
+                    continue;
+                }
                 result = validator.validate(context);
             } catch (RuntimeException e) {
                 // #568: a validator that throws refuses the dispatch as surely as one that returns a
                 // failure, so the validators that already passed -- a UsageLockValidator that took
-                // its lock -- must hear of it before the exception leaves the chain.
+                // its lock -- must hear of it before the exception leaves the chain. The applicability
+                // check sits inside the same boundary: an exception from shouldValidate leaks the
+                // lock just the same (case 49).
                 notifyRefused(context, passedValidators, e);
                 throw e;
             }
