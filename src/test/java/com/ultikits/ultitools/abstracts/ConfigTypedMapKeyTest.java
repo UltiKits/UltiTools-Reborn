@@ -27,6 +27,7 @@ import org.mockito.Mockito;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.config.ConfigEntryPresenceException;
+import com.ultikits.ultitools.config.ConfigWriteRefusedException;
 import com.ultikits.ultitools.config.EntryPresence;
 import com.ultikits.ultitools.manager.ConfigManager;
 
@@ -162,6 +163,33 @@ class ConfigTypedMapKeyTest {
         Map<UUID, String> owners = new LinkedHashMap<>();
 
         UuidKeyConfig(String configFilePath) {
+            super(configFilePath);
+        }
+    }
+
+    /** One typed key, 1, written twice: as {@code 1} and as {@code '01'}; a secret-shaped map holds the same. */
+    private static final String AMBIGUOUS = "# synthetic ambiguous-key fixture\n"
+            + "limits:\n"
+            + "  1: alpha-value\n"
+            + "  '01': beta-value\n"
+            + "tokens:\n"
+            + "  1: gamma-value\n"
+            + "  '01': delta-value\n"
+            + "other: kept\n";
+
+    @SuppressWarnings("unused") // read reflectively by the binder and by the assertions below
+    @ConfigEntity(PATH)
+    static class AmbiguousKeyConfig extends AbstractConfigEntity {
+        @ConfigEntry(path = "limits")
+        Map<Integer, String> limits = new LinkedHashMap<>();
+
+        @ConfigEntry(path = "tokens")
+        Map<Integer, String> tokens = new LinkedHashMap<>();
+
+        @ConfigEntry(path = "other")
+        String other = "default";
+
+        AmbiguousKeyConfig(String configFilePath) {
             super(configFilePath);
         }
     }
@@ -498,6 +526,127 @@ class ConfigTypedMapKeyTest {
         }
 
         assertThat(text()).isEqualTo("owners:\n  " + key + ": renamed-owner\n");
+    }
+
+    @Test
+    @DisplayName("a key held as 1 and '01' loads with the warning, and save, operator writes and panel edits are refused")
+    void ambiguousSpellingRefusesEveryWrite() throws IOException {
+        put(AMBIGUOUS);
+        AmbiguousKeyConfig config = new AmbiguousKeyConfig(PATH);
+        ConfigManager manager = new ConfigManager();
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            assertThatCode(() -> manager.register(plugin, config)).doesNotThrowAnyException();
+            assertThat(warnings.messages()).as("the existing collision warning").anySatisfy(
+                    message -> assertThat(message).contains("limits"));
+        }
+        assertThat(config.limits).containsExactlyEntriesOf(Collections.singletonMap(1, "alpha-value"));
+
+        config.limits.put(1, "changed-value");
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            config.save();
+            assertThat(warnings.messages()).as("one warning names the setting and the reason").singleElement()
+                    .satisfies(message -> assertThat(message).contains("'limits'", "several spellings")
+                            .doesNotContain("alpha-value", "beta-value", "changed-value"));
+        }
+        assertThat(text()).isEqualTo(AMBIGUOUS);
+
+        assertThatThrownBy(() -> config.saveOperatorChange("limits")).isInstanceOf(ConfigWriteRefusedException.class)
+                .hasMessageContaining("several spellings").hasMessageContaining("'limits'");
+        assertThat(text()).isEqualTo(AMBIGUOUS);
+        assertThatThrownBy(() -> config.saveOperatorMapEntry("limits", "1")).isInstanceOf(ConfigWriteRefusedException.class)
+                .hasMessageContaining("several spellings").hasMessageNotContaining("changed-value");
+        assertThat(text()).isEqualTo(AMBIGUOUS);
+        assertThatThrownBy(() -> manager.loadFromJson(PATH, "{\"limits.1\":\"panel-value\"}"))
+                .isInstanceOf(ConfigWriteRefusedException.class).hasMessageContaining("several spellings")
+                .hasMessageNotContaining("panel-value");
+        assertThat(text()).isEqualTo(AMBIGUOUS);
+    }
+
+    @Test
+    @DisplayName("removing key 1 while the file holds it as 1 and '01' writes nothing and is reported once")
+    void ambiguousSpellingRefusesRemoval() throws IOException {
+        put(AMBIGUOUS);
+        AmbiguousKeyConfig config = new AmbiguousKeyConfig(PATH);
+        assertThatCode(() -> config.init(plugin)).doesNotThrowAnyException();
+
+        config.limits.remove(1);
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            config.save();
+            assertThat(warnings.messages()).as("one warning names the setting and the reason").singleElement()
+                    .satisfies(message -> assertThat(message).contains("'limits'", "several spellings"));
+        }
+
+        assertThat(text()).isEqualTo(AMBIGUOUS);
+    }
+
+    @Test
+    @DisplayName("the ambiguity is found from the file's keys: an emptied module map is still refused")
+    void ambiguityFromFileKeysOnly() throws IOException {
+        put(AMBIGUOUS);
+        AmbiguousKeyConfig config = new AmbiguousKeyConfig(PATH);
+        assertThatCode(() -> config.init(plugin)).doesNotThrowAnyException();
+
+        config.limits.clear();
+        assertThatThrownBy(() -> config.saveOperatorChange("limits")).isInstanceOf(ConfigWriteRefusedException.class)
+                .hasMessageContaining("several spellings");
+
+        assertThat(text()).isEqualTo(AMBIGUOUS);
+    }
+
+    @Test
+    @DisplayName("the refusal for a secret-shaped map shows its key as <redacted>")
+    void ambiguousSecretMapRedactsKey() throws IOException {
+        put(AMBIGUOUS);
+        AmbiguousKeyConfig config = new AmbiguousKeyConfig(PATH);
+        assertThatCode(() -> config.init(plugin)).doesNotThrowAnyException();
+
+        config.tokens.put(1, "changed-value");
+        assertThatThrownBy(() -> config.saveOperatorChange("tokens")).isInstanceOf(ConfigWriteRefusedException.class)
+                .hasMessageContaining("several spellings").hasMessageContaining("'tokens.<redacted>'")
+                .hasMessageNotContaining("tokens.1").hasMessageNotContaining("tokens.01")
+                .hasMessageNotContaining("gamma-value").hasMessageNotContaining("changed-value");
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            config.save();
+            assertThat(warnings.messages()).singleElement().satisfies(message -> assertThat(message)
+                    .contains("'tokens.<redacted>'", "several spellings").doesNotContain("tokens.1", "tokens.01"));
+        }
+
+        assertThat(text()).isEqualTo(AMBIGUOUS);
+    }
+
+    @Test
+    @DisplayName("control: in the same file a change to another setting is written normally")
+    void unrelatedSettingsStillWrite() throws IOException {
+        put(AMBIGUOUS);
+        AmbiguousKeyConfig config = new AmbiguousKeyConfig(PATH);
+        assertThatCode(() -> config.init(plugin)).doesNotThrowAnyException();
+
+        config.other = "changed";
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            config.save();
+            assertThat(warnings.messages()).as("no warning").isEmpty();
+        }
+
+        assertThat(text()).isEqualTo(AMBIGUOUS.replace("other: kept\n", "other: changed\n"));
+    }
+
+    @Test
+    @DisplayName("control: once the operator deletes one spelling and reloads, the write succeeds")
+    void afterOperatorFixWritesResume() throws IOException {
+        put(AMBIGUOUS);
+        AmbiguousKeyConfig config = new AmbiguousKeyConfig(PATH);
+        assertThatCode(() -> config.init(plugin)).doesNotThrowAnyException();
+        String fixed = AMBIGUOUS.replace("  '01': beta-value\n", "");
+        put(fixed);
+        assertThatCode(config::reload).doesNotThrowAnyException();
+
+        config.limits.put(1, "changed-value");
+        try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {
+            config.save();
+            assertThat(warnings.messages()).as("no warning").isEmpty();
+        }
+
+        assertThat(text()).isEqualTo(fixed.replace("  1: alpha-value\n", "  1: changed-value\n"));
     }
 
     private SpelledKeyConfig initialized() {
