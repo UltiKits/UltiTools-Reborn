@@ -393,14 +393,44 @@ public final class ConverterRegistry {
      * @throws ConversionException on conversion failure
      */
     @ApiStatus.Internal
-    @SuppressWarnings("removal")
     public ConversionResult<Object> toPlainResult(Object value, Type type, String file, List<String> path, ConfigEntry entry)
             throws ConversionException {
+        return toPlainResult(value, type, file, path, entry, null);
+    }
+
+    /**
+     * Internal write-planning bridge that also takes the plain value the file holds at {@code path}.
+     * @param value Java value
+     * @param type declared type
+     * @param file configuration file
+     * @param path whole keys
+     * @param entry annotation, or null for registry conversion
+     * @param fileValue the plain value the file holds at {@code path}, or {@code null} when unknown
+     * @return plain value and collected nested omissions
+     * @throws ConversionException on conversion failure
+     */
+    @ApiStatus.Internal
+    @SuppressWarnings("removal")
+    public ConversionResult<Object> toPlainResult(Object value, Type type, String file, List<String> path, ConfigEntry entry,
+                                                  Object fileValue) throws ConversionException {
         List<ConversionFailure> failures = new ArrayList<>();
         Context ctx = new Context(this, file, path, type, failures);
         Object plain = entry == null || entry.parser() == DefaultConfigParser.class
                 ? write(value, ctx) : invokeWrite(new LegacyParserAdapter(entry.parser()), value, ctx);
         return new ConversionResult<>(plain, failures);
+    }
+
+    /**
+     * File-key ambiguity scan.
+     * @param type declared type
+     * @param fileValue the plain value the file holds at {@code path}
+     * @param file configuration file
+     * @param path whole keys
+     * @return the located path of every typed key two or more file keys read back to
+     */
+    @ApiStatus.Internal
+    public List<List<String>> ambiguousFileKeys(Type type, Object fileValue, String file, List<String> path) {
+        return Collections.emptyList();
     }
 
     /**
