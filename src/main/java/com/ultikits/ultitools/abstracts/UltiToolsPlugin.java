@@ -2376,14 +2376,17 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * (D-01). The default body does nothing; override this method, not
      * {@link #unregisterSelf()}, to add cleanup work.
      * <p>
-     * If this hook throws, {@link #unregisterSelf()} still unregisters this module's own
-     * commands and listeners before the exception propagates (WR-01,
-     * 16-REVIEW-lifecycle.md) -- a throwing hook is surfaced to the caller, not swallowed,
-     * but it cannot skip the framework's own cleanup the way an unguarded {@code super}
-     * call could. If a cleanup step also fails, that failure does not replace this hook's own
-     * exception: it is attached to it via {@link Throwable#addSuppressed} instead, so the
-     * module author's own failure is always the one that propagates and is never silently lost
-     * behind a secondary framework failure (Codex review on #457, issue #484).
+     * This hook may throw anything: an unchecked exception, an {@link Error}, or a checked
+     * exception it does not declare (Lombok {@code @SneakyThrows}, or a rethrow helper). Whatever
+     * it throws, {@link #unregisterSelf()} still unregisters this module's own commands and
+     * listeners before the exception propagates (WR-01, 16-REVIEW-lifecycle.md) -- a throwing
+     * hook is surfaced to the caller, not swallowed, but it cannot skip the framework's own
+     * cleanup the way an unguarded {@code super} call could. The exception reaches the caller
+     * unchanged: the same instance, of the same type, never wrapped. If a cleanup step also
+     * fails, that failure does not replace this hook's own exception: it is attached to it via
+     * {@link Throwable#addSuppressed} instead, so the module author's own failure is always the
+     * one that propagates and is never silently lost behind a secondary framework failure (Codex
+     * review on #457, issue #484).
      */
     // The empty body IS the design: it is what keeps every existing module unaffected --
     // a module with no unload work needs no override at all (PMD.UncommentedEmptyMethodBody,
@@ -2392,6 +2395,16 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     protected void onUnregister() {
     }
 
+    /**
+     * Unloads this module's own registrations: runs {@link #onUnregister()}, then unregisters this
+     * module's commands, then its listeners. {@code final}, so a module cannot skip either cleanup step.
+     * <p>
+     * Every step runs whatever an earlier step threw, including a checked exception the hook does not
+     * declare. When a step failed, the first failure, in that order, is rethrown afterwards as the same
+     * instance and type, never wrapped; every later failure is attached to it via
+     * {@link Throwable#addSuppressed}. A checked exception therefore reaches the caller although this
+     * method declares none.
+     */
     @Override
     public final void unregisterSelf() {
         // Every step below runs regardless of an earlier step's failure (Codex review on #457:
@@ -2411,6 +2424,10 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             throw (RuntimeException) failure;
         } else if (failure instanceof Error) {
             throw (Error) failure;
+        } else if (failure != null) {
+            // A checked exception the hook threw without declaring it: rethrown as itself, not wrapped,
+            // so the caller sees the hook's own exception -- as performReload() does for onReload().
+            rethrowUnchanged(failure);
         }
     }
 
@@ -2418,12 +2435,15 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * Runs one {@link #unregisterSelf()} cleanup step, collecting any failure onto {@code
      * previousFailure} instead of letting it replace or be replaced by another step's failure.
      * <p>
-     * {@code step} can only throw an unchecked exception -- {@link #onUnregister()},
-     * {@code CommandManager#unregisterAll}, and {@code ListenerManager#unregisterAll} all
-     * declare no checked exceptions -- so catching {@code RuntimeException | Error} here covers
-     * every real case without the width of catching {@link Throwable} (this is a deliberate
-     * cleanup barrier, not a broad catch: {@code unregisterSelf()} always runs every remaining
-     * step and always rethrows exactly one collected failure, per its own javadoc).
+     * {@link #onUnregister()}, {@code CommandManager#unregisterAll} and {@code
+     * ListenerManager#unregisterAll} declare no checked exceptions, but module code can still throw
+     * one without declaring it (Lombok {@code @SneakyThrows}, or a rethrow helper). Catching only
+     * {@code RuntimeException | Error} let such an exception escape this barrier and skip every
+     * later step, leaving the module's commands and listeners registered after its unload. So this
+     * catches {@code Exception | Error}: every {@link Throwable} a step can really throw (this is a
+     * deliberate cleanup barrier, not a broad catch: {@code unregisterSelf()} always runs every
+     * remaining step and always rethrows exactly one collected failure unchanged, per its own
+     * javadoc).
      *
      * @param previousFailure the failure already collected from an earlier step, or {@code null}
      *                        if every earlier step (if any) succeeded
@@ -2432,17 +2452,32 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      *     via {@link Throwable#addSuppressed}; or, if {@code previousFailure} was {@code null},
      *     {@code step}'s own failure, or {@code null} if {@code step} completed normally
      */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException") // deliberate cleanup barrier -- see javadoc above
+    // Deliberate cleanup barrier, also for checked exceptions a step throws without declaring them -- see javadoc above.
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private static Throwable runUnregisterStep(Throwable previousFailure, Runnable step) {
         try {
             step.run();
-        } catch (RuntimeException | Error e) {
+        } catch (Exception | Error e) {
             if (previousFailure == null) {
                 return e;
             }
             previousFailure.addSuppressed(e);
         }
         return previousFailure;
+    }
+
+    /**
+     * Throws {@code failure} itself -- the same instance, of its own type, unwrapped -- although it may
+     * be a checked exception this method's callers do not declare. {@link #unregisterSelf()} uses it to
+     * hand a hook's undeclared checked exception to its caller unchanged.
+     *
+     * @param failure the collected failure to rethrow
+     * @param <T>     inferred as an unchecked type at the call site, so no {@code throws} clause is needed
+     * @throws T always: {@code failure}
+     */
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void rethrowUnchanged(Throwable failure) throws T {
+        throw (T) failure;
     }
 
     /**
