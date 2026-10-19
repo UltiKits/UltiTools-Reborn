@@ -50,8 +50,30 @@ public interface TransactionManager {
      * Commits the current transaction.
      * <p>
      * Commits all changes made during the transaction and releases the connection.
+     * <p>
+     * What a failed commit means depends on the implementation:
+     * <ul>
+     *   <li>For the JDBC implementation used by SQLite and MySQL
+     *       ({@code DataSourceTransactionManager}), a
+     *       {@link com.ultikits.ultitools.exceptions.DataAccessException} ({@code TRANSACTION_FAILED})
+     *       raised because {@link Connection#commit()} failed leaves the outcome unknown: the
+     *       database may have applied the commit before the failure reached the framework.</li>
+     *   <li>For the JSON implementation ({@code JsonTransactionManager}), a failed commit commits
+     *       nothing, as its {@code commit()} javadoc states.</li>
+     *   <li>On every implementation, an
+     *       {@link com.ultikits.ultitools.exceptions.UnexpectedRollbackException} means the
+     *       transaction had been marked rollback-only and was rolled back: none of its writes was
+     *       stored.</li>
+     * </ul>
+     * Implementations do not retry the commit. A caller that must not apply a write twice re-reads
+     * the data, or makes the write conditional ({@code DataOperator#updateIf}), before trying again
+     * after an unknown outcome.
      *
-     * @throws com.ultikits.ultitools.exceptions.DataAccessException if commit fails
+     * @throws com.ultikits.ultitools.exceptions.DataAccessException if commit fails; on SQLite and
+     *         MySQL, when {@link Connection#commit()} failed, whether the database stored the
+     *         transaction is unknown
+     * @throws com.ultikits.ultitools.exceptions.UnexpectedRollbackException if the transaction had
+     *         been marked rollback-only; it was rolled back instead of committed
      */
     void commit();
 

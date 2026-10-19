@@ -252,6 +252,14 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
      * back. A call that joins an active transaction keeps that transaction's isolation: inside a
      * {@code @Transactional} method at the default isolation, JSON reads take no table lock.
      * <p>
+     * When the commit itself fails: on SQLite and MySQL, the exception does not tell whether the
+     * database stored the transaction (the outcome is unknown; see
+     * {@link TransactionManager#commit()}), and nothing is retried, so code that must not apply a
+     * write twice re-reads the data, or uses {@link #updateIf}, before trying again. On JSON a
+     * failed commit commits nothing. An
+     * {@link com.ultikits.ultitools.exceptions.UnexpectedRollbackException} from the commit means
+     * the transaction was rolled back, none of its writes stored, on every backend.
+     * <p>
      * This default implementation, used only by a third-party operator that does not override
      * it, runs the action directly without a transaction.
      *
@@ -267,7 +275,8 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
     /**
      * Execute operations within a transaction (void variant), with the same guarantees as
      * {@link #transaction(Callable)} on every shipped backend, including the JSON backend's table
-     * lock at the first read of a transaction this method begins.
+     * lock at the first read of a transaction this method begins. The same commit outcomes apply:
+     * see {@link #transaction(Callable)}.
      * <p>
      * This default implementation, used only by a third-party operator that does not override
      * it, runs the action directly without a transaction.
