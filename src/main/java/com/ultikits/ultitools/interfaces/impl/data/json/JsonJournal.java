@@ -66,8 +66,12 @@ import com.ultikits.ultitools.exceptions.ErrorCode;
  * Directory forces are best effort: supported on Linux, not on Windows; a failure is logged once
  * at {@code FINE} and never fails the operation.
  * <p>
- * This class is not thread-safe beyond {@link #nextSequence()}; its caller serializes record
- * writes, checkpoints and recovery of one identity.
+ * <b>Threads.</b> {@link #nextSequence()} may be called from any thread. Several
+ * {@link #writeRecord(long, Kind, List)} calls may run at once if their sequence numbers differ:
+ * each touches only its own two record file names. A checkpoint may run alongside them, because it
+ * deletes only records numbered at or below its own number, which its caller has captured; the
+ * caller runs one checkpoint at a time. {@link #recover()} runs alone, before the identity is
+ * used.
  *
  * @since 6.3.0
  */
