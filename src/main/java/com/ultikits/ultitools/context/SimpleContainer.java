@@ -534,12 +534,17 @@ public class SimpleContainer {
      *       while two distinct objects stay two even if {@code equals()}. Its priority is read
      *       off its own class, so a proxied bean's priority is read correctly: ProxyFactory
      *       copies the target's annotations onto the generated subclass.</li>
-     *   <li>Each bean definition assignable to {@code type} whose name has no singleton
-     *       instance yet, with the priority of its definition's bean class. Deterministically
+     *   <li>Each bean definition assignable to {@code type} whose name the singleton pass did not
+     *       see, with the priority of its definition's bean class. Deterministically
      *       unresolvable definitions are deliberately <em>not</em> filtered out (07-23): for a
      *       sole poisoned implementor, filtering would turn its original error into a null
      *       resolution and an uncaught failure for a different bean.</li>
      * </ul>
+     * The definition pass skips only the names the singleton pass collected, never a name that has
+     * a singleton by the time the definition pass reads it: another thread may create a candidate
+     * between the two passes, and skipping it by the live map would leave it in neither pass, so
+     * the lookup would return {@code null} or settle on a lower-priority candidate. Such a candidate
+     * is described by its new instance (once by identity, as above), and the winner is unchanged.
      * The sort is stable, so candidates of equal priority keep the order above.
      *
      * @param type the requested type
@@ -548,8 +553,10 @@ public class SimpleContainer {
     private List<ByTypeCandidate> describeCandidates(Class<?> type) {
         List<ByTypeCandidate> candidates = new ArrayList<>();
         Map<Object, Boolean> seenByIdentity = new IdentityHashMap<>();
+        Set<String> namesWithSingleton = new HashSet<>();
         for (Map.Entry<String, Object> entry : singletonObjects.entrySet()) {
             Object instance = entry.getValue();
+            namesWithSingleton.add(entry.getKey());
             if (type.isInstance(instance) && seenByIdentity.put(instance, Boolean.TRUE) == null) {
                 Class<?> instanceClass = instance.getClass();
                 candidates.add(new ByTypeCandidate(entry.getKey(), instance, instanceClass,
@@ -558,9 +565,18 @@ public class SimpleContainer {
         }
         for (Map.Entry<String, BeanDefinition> entry : beanDefinitions.entrySet()) {
             Class<?> beanClass = entry.getValue().getBeanClass();
-            if (type.isAssignableFrom(beanClass) && !singletonObjects.containsKey(entry.getKey())) {
+            if (!type.isAssignableFrom(beanClass) || namesWithSingleton.contains(entry.getKey())) {
+                continue;
+            }
+            Object appeared = singletonObjects.get(entry.getKey());
+            if (appeared == null) {
                 candidates.add(new ByTypeCandidate(entry.getKey(), null, beanClass,
                         getServicePriority(beanClass)));
+            } else if (type.isInstance(appeared) && seenByIdentity.put(appeared, Boolean.TRUE) == null) {
+                // Created by another thread after the singleton pass: described by its instance.
+                Class<?> instanceClass = appeared.getClass();
+                candidates.add(new ByTypeCandidate(entry.getKey(), appeared, instanceClass,
+                        getServicePriority(instanceClass)));
             }
         }
         candidates.sort((a, b) -> Integer.compare(b.priority, a.priority)); // descending
