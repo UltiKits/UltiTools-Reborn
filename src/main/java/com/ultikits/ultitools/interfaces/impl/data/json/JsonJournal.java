@@ -63,13 +63,26 @@ import com.ultikits.ultitools.exceptions.ErrorCode;
  * <p>
  * <b>Recovery</b> deletes temporary records and files, applies the committed records in ascending
  * order, forces the touched table directories, then deletes the applied records in ascending
- * order. Every record carries full after-images and every entity file is replaced atomically, so a
- * recovery interrupted at any step and run again ends at the same files. A damaged committed
- * record stops recovery before any file changes; it is never deleted, skipped or applied.
+ * order, forcing the journal directory after each deletion. Every record carries full after-images
+ * and every entity file is replaced atomically, so a recovery interrupted at any step and run again
+ * ends at the same files. A damaged committed record stops recovery before any file changes; it is
+ * never deleted, skipped or applied.
  * <p>
  * <b>Checkpoint</b> writes its own record first, the entity files only after that record is
- * committed, then deletes every record at or below its number in ascending order, its own last,
- * so no interruption lets a replay bring an older value back over a newer one.
+ * committed, then deletes every record below its number, forces the journal directory, and only
+ * then deletes its own record, so no interruption lets a replay bring an older value back over a
+ * newer one.
+ * <p>
+ * <b>Why deletions are forced one step at a time.</b> Deleting in ascending order is not enough
+ * on its own: a file system may make a later unlink durable before an earlier one, so after a
+ * power loss an older record could survive while the record that supersedes it is gone, and replay
+ * would bring the older values back. The journal therefore forces the journal directory, as a
+ * barrier, before it deletes a record whose absence would expose an older one: before the
+ * checkpoint's own record, which supersedes every record below it, and, in recovery, before each
+ * next record, because a recovered record supersedes only the keys it carries. PostgreSQL keeps the
+ * same order: it removes old WAL segments only after the checkpoint that supersedes them is
+ * durable, and its {@code durable_unlink} (fd.c) fsyncs the parent directory after an unlink
+ * because the unlink alone is not durable.
  * <p>
  * <b>Directory forces.</b> After a rename or a deletion the journal forces the directory that holds
  * it, so the change survives a power loss. A directory the journal creates (the journal directory,
@@ -317,8 +330,9 @@ final class JsonJournal {
      * Brings the identity's table files to the state of its committed records: empties the
      * journal's {@code tmp/} directory and deletes temporary records, verifies <b>every</b>
      * committed record, applies them in ascending order through the entity-file writer, then
-     * deletes the applied records in ascending order and forces the journal directory if it
-     * deleted any. A missing journal directory is an empty journal; nothing is created. A real
+     * deletes the applied records in ascending order, forcing the journal directory after each one
+     * it actually deleted, so the records left on disk after any power loss are always a suffix of
+     * the applied ones and replay to the same files. A missing journal directory is an empty journal; nothing is created. A real
      * failure to force a table directory stops recovery before any applied record is deleted.
      * <p>
      * A damaged committed record (question 8 option A of 20.4-DECISIONS.md) makes recovery throw
@@ -344,38 +358,40 @@ final class JsonJournal {
             }
         }
         fire(RECOVERY_RECORDS_APPLIED);
-        boolean deleted = false;
         for (int i = 0; i < records.size(); i++) {
-            deleted |= Files.deleteIfExists(records.get(i).file());
+            if (Files.deleteIfExists(records.get(i).file())) {
+                requireDirectoryForced(directory, "An applied journal record is deleted but the deletion may not be"
+                        + " on disk; recovery stops before deleting the next one, reports a failure and runs again at"
+                        + " the next request.");
+            }
             if (i < records.size() - 1) {
                 fire(RECOVERY_BETWEEN_DELETIONS);
             }
-        }
-        if (deleted) {
-            requireDirectoryForced(directory, "The applied journal records are deleted but the deletion may not be"
-                    + " on disk; recovery reports a failure and runs again at the next request.");
         }
     }
 
     /**
      * Writes a checkpoint, in this order: commits checkpoint record {@code sequence} (K) holding
      * every entry's after-image; only after K's rename, writes the entity files and deletes the
-     * files of deleted entries, then forces the touched table directories; finally deletes every
-     * record, committed or temporary, numbered at or below K, in ascending order, K last. Records
-     * above K are left alone.
+     * files of deleted entries, then forces the touched table directories; then deletes every
+     * record, committed or temporary, numbered below K (and a temporary K, if any), in ascending
+     * order, forces the journal directory, and only then deletes K and forces the journal
+     * directory again. Records above K are left alone.
      * <p>
      * Why this order: replay applies records in ascending order and the last record touching a
      * key decides its value. An entity file on disk before K is committed could be overwritten by
      * an older surviving record at replay; deleting K before an older record could leave that
-     * older record without K. With this order, every interruption leaves records whose replay
-     * ends with K's values once K is renamed, and the older values before it.
+     * older record without K, and a file system may make K's unlink durable before an older one's
+     * unless a directory force separates them. With this order, every interruption, power loss
+     * included, leaves records whose replay ends with K's values once K is renamed, and the older
+     * values before it.
      * <p>
      * Truncation deletes records by number without reading them. The caller guarantees that every
      * record numbered below K is already reflected in {@code entries} or in the table files.
      * <p>
      * A real failure to force a directory stops the checkpoint where it happens: after K's rename
-     * no entity file is written, after the table directories no record is deleted, and after the
-     * truncation the failure is still reported. The caller keeps its entries pending, and the next
+     * no entity file is written, after the table directories no record is deleted, after the older
+     * records' deletion K is kept, and after K's deletion the failure is still reported. The caller keeps its entries pending, and the next
      * checkpoint writes them again.
      *
      * @param sequence K, from {@link #nextSequence()}
@@ -386,17 +402,34 @@ final class JsonJournal {
     void checkpoint(long sequence, List<Entry> entries) throws IOException {
         writeRecord(sequence, Kind.CHECKPOINT, entries);
         writeEntityFiles(PHASE_CHECKPOINT, entries);
-        List<RecordFile> truncated = new ArrayList<>();
+        List<RecordFile> older = new ArrayList<>();
+        RecordFile own = null;
         for (RecordFile file : listRecordFiles()) {
-            if (file.sequence <= sequence) {
-                truncated.add(file);
+            if (file.sequence < sequence || (file.sequence == sequence && file.temporary)) {
+                older.add(file);
+            } else if (file.sequence == sequence) {
+                own = file;
             }
         }
-        for (int i = 0; i < truncated.size(); i++) {
-            Files.deleteIfExists(truncated.get(i).path);
-            if (i < truncated.size() - 1) {
+        boolean deletedOlder = false;
+        for (int i = 0; i < older.size(); i++) {
+            deletedOlder |= Files.deleteIfExists(older.get(i).path);
+            if (i < older.size() - 1) {
                 fire(CHECKPOINT_BETWEEN_TRUNCATIONS);
             }
+        }
+        if (own != null) {
+            // The barrier: K supersedes every record below it, so its deletion is issued only once
+            // theirs are on disk (see the class javadoc).
+            if (deletedOlder) {
+                requireDirectoryForced(directory, "The checkpoint's older records are deleted but the deletion may not"
+                        + " be on disk; the checkpoint keeps its own record and reports a failure, the changed entries"
+                        + " stay pending and the next flush writes them again.");
+            }
+            if (!older.isEmpty()) {
+                fire(CHECKPOINT_BETWEEN_TRUNCATIONS);
+            }
+            Files.deleteIfExists(own.path);
         }
         requireDirectoryForced(directory, "The checkpoint's records are deleted but the deletion may not be on disk;"
                 + " the flush reports a failure, the changed entries stay pending and the next flush writes them"
