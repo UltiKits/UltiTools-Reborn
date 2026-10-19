@@ -1052,6 +1052,146 @@ class JsonTransactionLockingTest {
         assertThat(rows.getById("x").getName()).as("the failed plain write was not applied").isEqualTo("a");
     }
 
+    // ===== An expired deadline marks the transaction rollback-only (Spring's checkTransactionTimeout) =====
+
+    @Test
+    @DisplayName("A write refused because the transaction's deadline has passed, caught by the caller, marks the "
+            + "transaction rollback-only: its commit rolls back everything and throws UnexpectedRollbackException")
+    void caughtDeadlineRefusalOfAWriteMarksTheTransactionRollbackOnly() {
+        RuntimeException caught = null;
+        RuntimeException commitFailure = null;
+        manager.begin();
+        try {
+            rows.insert(new LockRow("before", "written before the deadline"));
+            manager.currentTransaction().setDeadlineNanos(System.nanoTime() - 1L);
+            try {
+                rows.insert(new LockRow("after", "refused"));
+            } catch (DataAccessException e) {
+                caught = e;
+            }
+            try {
+                manager.commit();
+            } catch (RuntimeException e) {
+                commitFailure = e;
+            }
+        } finally {
+            rollbackIfStillActive();
+        }
+
+        assertThat(caught).as("the write after the deadline is refused").hasMessageContaining("deadline passed");
+        assertThat(commitFailure).as("catching the refusal does not save the transaction")
+                .isInstanceOf(UnexpectedRollbackException.class);
+        assertThat(rows.getById("before")).as("the write before the deadline is rolled back").isNull();
+        assertThat(rows.getById("after")).isNull();
+        assertThat(manager.hasActiveTransaction()).as("no context left").isFalse();
+    }
+
+    @Test
+    @DisplayName("A read refused because the transaction's deadline has passed, caught by the caller, marks the "
+            + "transaction rollback-only")
+    void caughtDeadlineRefusalOfAReadMarksTheTransactionRollbackOnly() {
+        RuntimeException caught = null;
+        RuntimeException commitFailure = null;
+        manager.begin();
+        try {
+            rows.insert(new LockRow("before", "written before the deadline"));
+            manager.currentTransaction().setDeadlineNanos(System.nanoTime() - 1L);
+            try {
+                rows.getById("before");
+            } catch (DataAccessException e) {
+                caught = e;
+            }
+            try {
+                manager.commit();
+            } catch (RuntimeException e) {
+                commitFailure = e;
+            }
+        } finally {
+            rollbackIfStillActive();
+        }
+
+        assertThat(caught).as("the read after the deadline is refused").hasMessageContaining("deadline passed");
+        assertThat(commitFailure).isInstanceOf(UnexpectedRollbackException.class);
+        assertThat(rows.getById("before")).as("the transaction's write is rolled back").isNull();
+    }
+
+    @Test
+    @DisplayName("@Transactional(timeout = 1): a write refused after the deadline and caught in the method body still "
+            + "rolls the transaction back with UnexpectedRollbackException")
+    void transactionalMethodCatchingADeadlineRefusalRollsBack() throws Exception {
+        CatchingBean bean = catchingBean();
+
+        Throwable thrown = catchThrowable(() -> bean.timedWriteWaitThenCatchRefusal("e-first", "e-second"));
+
+        assertThat(bean.caught.get()).as("the body caught the deadline refusal").hasMessageContaining("deadline passed");
+        assertThat(thrown).as("the method's commit rolls back").isInstanceOf(UnexpectedRollbackException.class);
+        assertThat(rows.getById("e-first")).as("the write before the deadline is rolled back").isNull();
+        assertThat(rows.getById("e-second")).isNull();
+        assertThat(manager.hasActiveTransaction()).as("no context left on the thread").isFalse();
+    }
+
+    // ===== Statement-level refusals do not mark the transaction (JSON = JDBC) =====
+
+    @Test
+    @DisplayName("An insert refused for an id that cannot name its file, caught by the caller, leaves the transaction "
+            + "committable")
+    void caughtInvalidIdRefusalLeavesTheTransactionCommittable() {
+        assertCaughtRefusalLeavesTheTransactionCommittable(() -> rows.insert(new LockRow("a/b", "refused")));
+    }
+
+    @Test
+    @DisplayName("An update refused for a null id, caught by the caller, leaves the transaction committable")
+    void caughtNullIdRefusalLeavesTheTransactionCommittable() {
+        assertCaughtRefusalLeavesTheTransactionCommittable(() -> rows.update(new LockRow(null, "refused")));
+    }
+
+    @Test
+    @DisplayName("A delete refused for having no condition, caught by the caller, leaves the transaction committable")
+    void caughtConditionlessDeleteRefusalLeavesTheTransactionCommittable() {
+        assertCaughtRefusalLeavesTheTransactionCommittable(() -> rows.del());
+    }
+
+    @Test
+    @DisplayName("An updateIf refused for an unknown column, caught by the caller, leaves the transaction committable")
+    void caughtUpdateIfConditionRefusalLeavesTheTransactionCommittable() {
+        assertCaughtRefusalLeavesTheTransactionCommittable(() -> rows.updateIf(new LockRow("kept-1", "refused"),
+                WhereCondition.builder().column("no_such_column").value("x").build()));
+    }
+
+    @Test
+    @DisplayName("An update refused for a value that is not serialisable, caught by the caller, leaves the transaction "
+            + "committable")
+    void caughtUnserialisableValueRefusalLeavesTheTransactionCommittable() {
+        assertCaughtRefusalLeavesTheTransactionCommittable(() -> rows.update("name", new Object(), "kept-1"));
+    }
+
+    /**
+     * Inside one transaction: a write, the refused call (caught), another write, commit. The
+     * refusal is a statement-level caller error, as a failed statement inside a MySQL or SQLite
+     * transaction is: the commit succeeds and both writes stay.
+     */
+    private void assertCaughtRefusalLeavesTheTransactionCommittable(Runnable refused) {
+        RuntimeException caught = null;
+        manager.begin();
+        try {
+            rows.insert(new LockRow("kept-1", "before the refusal"));
+            try {
+                refused.run();
+            } catch (DataAccessException e) {
+                caught = e;
+            }
+            rows.insert(new LockRow("kept-2", "after the refusal"));
+            manager.commit();
+        } finally {
+            rollbackIfStillActive();
+        }
+
+        assertThat(caught).as("the call is refused").isNotNull();
+        assertThat(rows.getById("kept-1")).as("the write before the refusal commits").isNotNull();
+        assertThat(rows.getById("kept-2")).as("the write after the refusal commits").isNotNull();
+        assertThat(manager.hasActiveTransaction()).isFalse();
+    }
+
     // ===== Helpers =====
 
     /**
@@ -1275,6 +1415,22 @@ class JsonTransactionLockingTest {
             rows.insert(new LockRow(rowId, "row"));
             try {
                 others.insert(new LockOther(otherId, "other"));
+            } catch (DataAccessException e) {
+                caught.set(e);
+            }
+        }
+
+        /** Writes, lets the one-second deadline pass, then catches the refusal of a second write. */
+        @Transactional(timeout = 1)
+        public void timedWriteWaitThenCatchRefusal(String first, String second) {
+            rows.insert(new LockRow(first, "before the deadline"));
+            try {
+                new CountDownLatch(1).await(1500, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            try {
+                rows.insert(new LockRow(second, "after the deadline"));
             } catch (DataAccessException e) {
                 caught.set(e);
             }
