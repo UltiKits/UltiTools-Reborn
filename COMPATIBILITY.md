@@ -2576,8 +2576,10 @@ one `@Table`, one folder of `<id>.json` files.
   an id was written to a sub-path and read back as a corrupt entry.
 - **A damaged journal record.** If a committed journal record is found damaged at start-up, that plugin's JSON
   data stays closed: its data operations fail with an error naming the file, until the server operator moves the
-  file out of the journal folder. The next data request for that plugin then runs recovery again, without a
-  restart. The framework never deletes, skips or applies the damaged record. Other plugins are not affected.
+  file out of the journal folder. The framework never deletes, skips or applies the damaged record. Other plugins
+  are not affected. A module that obtains its data operators while it loads, as every shipped module does, is
+  refused at that start, so after moving the file aside, restart the server. Only a plugin that first requests
+  its data after it has loaded runs recovery again at its next request, without a restart.
 
 **Plain writes.** A JSON write outside a transaction is still held in memory and written at the next background
 flush; it may now wait for a transaction's table lock. The flush is now a per-plugin checkpoint: it writes only
@@ -2599,6 +2601,9 @@ the failure is thrown out of the scheduled flush task and appears in the server 
   above).
 - A joined `@Transactional` method's accepted failure marks the whole transaction rollback-only (see above and the
   linked subsection).
+- Map each `@Table` value to one entity class. Two entity classes of one plugin that declare the same `@Table`
+  value get two separate caches and two table locks that do not exclude each other, as in 6.2.5, so their writes
+  are not ordered against each other and the guarantees above do not hold between them.
 - A hidden `.ultitools-journal` folder sits beside each plugin's JSON tables. In a server it is
   `plugins/UltiTools/data/<plugin name>/.ultitools-journal`; for a plain Bukkit plugin that uses the External
   Plugin API it is `<that plugin's data folder>/data/.ultitools-journal`; for an operator built directly over a
@@ -2628,7 +2633,8 @@ the failure is thrown out of the scheduled flush task and appears in the server 
 - After a crash, start the server once before you edit any JSON data file by hand: the start replays the journal
   and would overwrite the edit.
 - A damaged newest journal record after a power cut usually means the disk or its controller did not honour
-  flush requests. The plugin's JSON data stays closed until you move the named file out of the journal folder.
+  flush requests. The plugin's JSON data stays closed until you move the named file out of the journal folder
+  and restart the server.
 - One entity file that keeps failing to move (for example, a file another program keeps locked) stops every flush
   of that plugin from emptying the journal: records accumulate, start-up recovery takes longer, and each failed
   flush is reported in the server log. Journal deletions are not retried on Windows; a held file fails that flush
@@ -2685,7 +2691,9 @@ the failure is thrown out of the scheduled flush task and appears in the server 
 - **实体 id。** 无法作为 `<id>.json` 文件名的 id（空串，或含 `/`、`\`、NUL）在 `insert` 时被拒绝，抛出 `DataAccessException`
   （`DATA_ENTITY_INVALID`），事务内外都一样。6.2.5 会把这样的 id 写进子路径，读回时成为损坏的条目。
 - **日志记录损坏。** 启动时若发现已提交的日志记录损坏，该插件的 JSON 数据保持关闭：数据操作会失败，错误信息指明该文件，直到服主把该文件
-  移出日志文件夹；之后该插件的下一次数据请求会再次执行恢复，无需重启。框架不会删除、跳过或应用损坏的记录，其他插件不受影响。
+  移出日志文件夹。框架不会删除、跳过或应用损坏的记录，其他插件不受影响。在加载时就获取数据操作器的模块（所有官方模块都是如此）
+  会在那次启动时被拒绝加载，所以把文件移走后需要重启服务器；只有在加载完成之后才首次请求数据的插件，会在下一次请求时再次执行恢复，
+  无需重启。
 
 **普通写入。** 事务外的 JSON 写入仍先放在内存里、在下一次后台刷新时写盘，现在可能要等待事务的表锁。后台刷新现在是按插件进行的检查点：
 只写上次检查点之后改动的条目，作为跨该插件所有表的一个整体崩溃原子地写入，然后清空日志。刷新失败时，改动的条目保持待写状态，下次刷新再写；
@@ -2700,6 +2708,8 @@ the failure is thrown out of the scheduled flush task and appears in the server 
 - “先读后写”的代码使用 `updateIf` 或 `REPEATABLE_READ`（见上）；默认隔离级别下它可能丢失更新。
 - 同一线程上的 `REQUIRES_NEW` 或 `NOT_SUPPORTED` 方法不会等待其调用方的表锁（见上）。
 - 加入方方法被规则认可的失败会把整个事务标记为仅回滚（见上与下一小节）。
+- 一个 `@Table` 值只对应一个实体类。同一插件的两个实体类若声明了相同的 `@Table` 值，会得到两份独立的缓存和两把互不排斥的表锁
+  （与 6.2.5 相同），它们的写入彼此没有先后保证，上述各项保证在它们之间都不成立。
 - 每个插件的 JSON 表旁边多了一个隐藏的 `.ultitools-journal` 文件夹。服务器中是 `plugins/UltiTools/data/<插件名>/.ultitools-journal`；
   使用外部插件 API 的普通 Bukkit 插件是 `<该插件数据文件夹>/data/.ultitools-journal`；直接基于表文件夹构造的操作器是与该文件夹并列的
   `<表文件夹>.ultitools-journal`。遍历插件数据文件夹的模块必须跳过它。
@@ -2718,7 +2728,8 @@ the failure is thrown out of the scheduled flush task and appears in the server 
 - 备份时把 `.ultitools-journal` 文件夹与各表文件夹一起备份，或者在服务器停止时备份。`cp dir/*` 这类复制会跳过以点开头的文件夹。
 - 永远不要删除 `.ultitools-journal`，崩溃之后也不要：里面保存着尚未写入表文件的提交。
 - 崩溃之后，手工编辑任何 JSON 数据文件之前先启动一次服务器：启动会重放日志，并会覆盖你的编辑。
-- 断电后发现最新的日志记录损坏，通常说明磁盘或其控制器没有遵守刷盘请求。该插件的 JSON 数据会保持关闭，直到你把指明的文件移出日志文件夹。
+- 断电后发现最新的日志记录损坏，通常说明磁盘或其控制器没有遵守刷盘请求。该插件的 JSON 数据会保持关闭，直到你把指明的文件移出日志文件夹
+  并重启服务器。
 - 某个实体文件持续无法移动（例如被其他程序一直锁着）会使该插件的每次刷新都无法清空日志：记录不断累积，启动恢复变慢，每次失败的刷新都会出现在
   服务器日志里。日志的删除在 Windows 上不会重试，被占用的文件会使那次刷新失败，下一次刷新再试。
 - 已知限制：若某文件系统允许服务器打开目录却拒绝强制其落盘，该插件的每次刷新都会失败，日志不断增长，重启后在恢复成功之前该插件的数据保持关闭。
