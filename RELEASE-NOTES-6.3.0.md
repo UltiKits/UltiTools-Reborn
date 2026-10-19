@@ -16,12 +16,24 @@ move, but what they now actually do did.
 ## Breaking: removed APIs
 
 A downstream module JAR **compiled against 6.2.5 and not recompiled** either continues to load and
-run unaffected, or fails in exactly one of the ways this section and
-[`COMPATIBILITY.md`](COMPATIBILITY.md) describe: one `SEVERE` summary at module scan naming the
-module and the skipped class, with the rest of the module unaffected. Full per-symbol reasoning,
-replacements, and the exact downstream failure shape for every entry below live in
-[`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md); the generated, cumulative
-list of every deprecated/announced/removed member is
+run unaffected, or fails in one of two ways:
+
+- A class that references a removed API is skipped at module scan, with one `SEVERE` summary naming
+  the module and the skipped class; the rest of that module loads.
+- A main class that overrides `unregisterSelf()` or `reloadSelf()`, both `final` in 6.3.0, fails
+  with `IncompatibleClassChangeError` when it is loaded, and the whole module is refused at load:
+  one `SEVERE` line names the module JAR and says it was built against an older UltiTools-API
+  version. Any other module that names it in `@PluginDependency(depends = ...)` is then refused, as
+  for any missing hard dependency; every other module still loads.
+
+To fix the second case, a module author moves the override's work to `onUnregister()` or
+`onReload()`, removes every `super.unregisterSelf()` and `super.reloadSelf()` call, deletes an
+override that only logs, and recompiles against 6.3.0; see
+[Third occurrence: 6.2.5 → 6.3.0, a MINOR](COMPATIBILITY.md#third-occurrence-625--630-a-minor) in
+`COMPATIBILITY.md`. A server operator installs a release of the module built for 6.3.0. Full
+per-symbol reasoning, replacements, and the exact downstream failure shape for every entry below
+live in [`compatibility/records/6.3.0.md`](compatibility/records/6.3.0.md); the generated,
+cumulative list of every deprecated/announced/removed member is
 [`compatibility/DEPRECATIONS.md`](compatibility/DEPRECATIONS.md).
 
 ### `AbstractCommandExecutor` — the one removal with real downstream users

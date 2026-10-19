@@ -128,6 +128,43 @@ class PluginManagerDependencyOrderTest {
         @Override protected void onUnregister() { /* nothing to release: this fixture owns no state */ }
     }
 
+    public static class OrderPluginB extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override protected void onUnregister() { /* nothing to release: this fixture owns no state */ }
+    }
+
+    // Refused for its missing hard dependency; its loadBefore on OrderPluginB is ordering only.
+    @PluginDependency(depends = {"OrderMissingModule"}, loadBefore = {"OrderPluginB"})
+    public static class OrderMissingDepLoadBeforeB extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override protected void onUnregister() { /* nothing to release: this fixture owns no state */ }
+    }
+
+    // Only optionally uses the refused module above, so it must still load.
+    @PluginDependency(softDepends = {"OrderMissingDepLoadBeforeB"})
+    public static class OrderSoftDependsOnRefused extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override protected void onUnregister() { /* nothing to release: this fixture owns no state */ }
+    }
+
+    @Test
+    @DisplayName("a missing hard dependency keeps the optional and ordering dependents of the "
+            + "refused module in the load list")
+    void missingHardDependencyKeepsOptionalAndOrderingDependents() throws Exception {
+        List<Class<? extends UltiToolsPlugin>> input = new ArrayList<>();
+        input.add(OrderMissingDepLoadBeforeB.class);
+        input.add(OrderSoftDependsOnRefused.class);
+        input.add(OrderPluginB.class);
+        input.add(OrderPluginA.class);
+
+        List<Class<? extends UltiToolsPlugin>> result = invokeSort(input);
+
+        // Exactly the declaring module is left out; the loadBefore target, the optional
+        // dependent and the unrelated module are all loaded.
+        assertThat(result).containsExactlyInAnyOrder(
+            OrderPluginB.class, OrderSoftDependsOnRefused.class, OrderPluginA.class);
+    }
+
     @Test
     @DisplayName("一个依赖环只拒绝其成员，未受影响的模块仍出现在返回列表中")
     void cycleRefusesOnlyAffectedModulesWhileUnrelatedModuleSurvives() throws Exception {
@@ -173,6 +210,59 @@ class PluginManagerDependencyOrderTest {
         String severe = allSevereMessagesJoined();
         assertThat(severe).contains("OrderModuleWithMissingDep");
         assertThat(severe).contains("OrderMissingModule");
+    }
+
+    @Test
+    @DisplayName("a pure missing dependency logs exactly the three baseline lines and no Not "
+            + "loaded line")
+    void pureMissingDependencyConsoleOutputIsUnchanged() throws Exception {
+        List<Class<? extends UltiToolsPlugin>> input = new ArrayList<>();
+        input.add(OrderModuleWithMissingDep.class);
+        input.add(OrderPluginA.class);
+
+        List<Class<? extends UltiToolsPlugin>> result = invokeSort(input);
+
+        assertThat(result).containsExactly(OrderPluginA.class);
+        assertThat(severeMessagesInOrder()).containsExactly(
+            "[UltiTools-API] A required plugin dependency is missing.",
+            "[UltiTools-API] Plugin 'OrderModuleWithMissingDep' requires dependency "
+                + "'OrderMissingModule' which is not available",
+            "[UltiTools-API] The declaring module and its dependents are excluded from this "
+                + "load; every other module still loads. Set "
+                + "-Dultitools.useLegacyPluginLoading=true to restore the old unsorted load "
+                + "order instead (not recommended: modules may fail to initialize in an "
+                + "unpredictable order).");
+    }
+
+    @Test
+    @DisplayName("a missing dependency plus an independent cycle logs the missing dependency, "
+            + "each loop and every module not loaded")
+    void missingDependencyAndIndependentCycleAreBothLogged() throws Exception {
+        List<Class<? extends UltiToolsPlugin>> input = new ArrayList<>();
+        input.add(OrderModuleWithMissingDep.class);
+        input.add(OrderCircularA.class);
+        input.add(OrderCircularB.class);
+        input.add(OrderPluginA.class);
+
+        List<Class<? extends UltiToolsPlugin>> result = invokeSort(input);
+
+        assertThat(result).containsExactly(OrderPluginA.class);
+        assertThat(severeMessagesInOrder()).containsExactly(
+            "[UltiTools-API] A required plugin dependency is missing.",
+            "[UltiTools-API] Plugin 'OrderModuleWithMissingDep' requires dependency "
+                + "'OrderMissingModule' which is not available. Circular dependency detected "
+                + "among plugins: [OrderCircularA, OrderCircularB]",
+            "[UltiTools-API] Circular dependency detected among plugins.",
+            "[UltiTools-API]   Loop: OrderCircularA -> OrderCircularB -> OrderCircularA",
+            "[UltiTools-API]   Please have the author of 'OrderCircularA' fix the circular "
+                + "dependency.",
+            "[UltiTools-API] The declaring module, its dependents, the cycle members and every "
+                + "module ordered after them are excluded from this load; every other module "
+                + "still loads. Set -Dultitools.useLegacyPluginLoading=true to restore the old "
+                + "unsorted load order instead (not recommended: modules may fail to initialize "
+                + "in an unpredictable order).",
+            "[UltiTools-API] Not loaded: OrderCircularA, OrderCircularB, "
+                + "OrderModuleWithMissingDep.");
     }
 
     @Test

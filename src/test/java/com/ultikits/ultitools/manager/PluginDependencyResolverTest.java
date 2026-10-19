@@ -18,8 +18,10 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
@@ -130,7 +132,7 @@ class PluginDependencyResolverTest {
                 new URL[]{jar.toURI().toURL()},
                 Thread.currentThread().getContextClassLoader(),
                 fixtureClass.getName());
-        // The class name is not attacker-controllable: every one of this helper's nine call
+        // The class name is not attacker-controllable: every one of this helper's call
         // sites passes a compile-time class literal (JarModuleTarget.class and friends), so
         // fixtureClass.getName() is resolved by javac, never from input. The loader is the
         // test's own jar-backed ChildFirstClassLoader built two lines above.
@@ -237,6 +239,22 @@ class PluginDependencyResolverTest {
     // Depends on a plugin that itself has a missing hard dependency.
     @PluginDependency(depends = {"PluginWithMissingDep"})
     public static class PluginDependsOnMissingDepPlugin extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override protected void onUnregister() { /* no-op fixture: nothing to release */ }
+    }
+
+    // Refused for its own missing hard dependency, and also orders itself before PluginB. The
+    // loadBefore entry is an ordering edge only, so PluginB must not be refused with it.
+    @PluginDependency(depends = {"MissingPlugin"}, loadBefore = {"PluginB"})
+    public static class PluginWithMissingDepLoadBeforeB extends UltiToolsPlugin {
+        @Override public boolean registerSelf() { return true; }
+        @Override protected void onUnregister() { /* no-op fixture: nothing to release */ }
+    }
+
+    // Only optionally uses a module that is refused for a missing hard dependency, so it must
+    // still load.
+    @PluginDependency(softDepends = {"PluginWithMissingDep"})
+    public static class PluginSoftDependsOnMissingDepPlugin extends UltiToolsPlugin {
         @Override public boolean registerSelf() { return true; }
         @Override protected void onUnregister() { /* no-op fixture: nothing to release */ }
     }
@@ -520,6 +538,116 @@ class PluginDependencyResolverTest {
         }
 
         @Test
+        @DisplayName("missing-dependency refusal follows only depends edges; optional and ordering "
+                + "dependents survive and stay ordered")
+        void missingDependencyRefusalFollowsOnlyHardEdges() throws Exception {
+            Class<? extends UltiToolsPlugin> loadAfterRefused = loadJarBackedFixture(
+                "loadafter-refused.jar", JarModuleWithLoadAfter.class,
+                "name: LoadAfterModule\nloadAfter:\n  - PluginWithMissingDep\n");
+            List<Class<? extends UltiToolsPlugin>> plugins = Arrays.asList(
+                PluginWithMissingDep.class,
+                PluginWithMissingDepLoadBeforeB.class,
+                PluginDependsOnMissingDepPlugin.class,
+                PluginSoftDependsOnMissingDepPlugin.class,
+                PluginB.class,
+                loadAfterRefused,
+                PluginLoadBeforeC.class,
+                PluginC.class,
+                PluginA.class,
+                PluginSoftDependsOnA.class
+            );
+
+            MissingDependencyException ex = assertThrows(MissingDependencyException.class,
+                () -> resolver.resolve(plugins));
+
+            List<Class<? extends UltiToolsPlugin>> prefix = ex.getSortedPrefix();
+            // Only the two declaring modules and their one hard dependent are refused.
+            assertEquals(
+                new HashSet<>(Arrays.asList(
+                    "PluginWithMissingDep", "PluginWithMissingDepLoadBeforeB",
+                    "PluginDependsOnMissingDepPlugin")),
+                ex.getRefusedPlugins(),
+                "refusal for a missing hard dependency must spread only along depends edges");
+            // The optional dependent, the loadBefore target and the plugin.yml loadAfter module
+            // all load.
+            assertTrue(prefix.contains(PluginSoftDependsOnMissingDepPlugin.class), prefix.toString());
+            assertTrue(prefix.contains(PluginB.class), prefix.toString());
+            assertTrue(prefix.contains(loadAfterRefused), prefix.toString());
+            assertEquals(7, prefix.size(), prefix.toString());
+            // Surviving modules keep every ordering constraint among themselves.
+            assertTrue(prefix.indexOf(PluginLoadBeforeC.class) < prefix.indexOf(PluginC.class),
+                prefix.toString());
+            assertTrue(prefix.indexOf(PluginA.class) < prefix.indexOf(PluginSoftDependsOnA.class),
+                prefix.toString());
+        }
+
+        @Test
+        @DisplayName("a missing dependency plus an independent cycle form a complete partition "
+                + "and the message names both")
+        void missingDependencyAndIndependentCycleFormACompletePartition() {
+            List<Class<? extends UltiToolsPlugin>> plugins = Arrays.asList(
+                PluginWithMissingDep.class, CircularA.class, CircularB.class,
+                PluginDependsOnCircularA.class, PluginC.class
+            );
+
+            MissingDependencyException ex = assertThrows(MissingDependencyException.class,
+                () -> resolver.resolve(plugins));
+
+            Set<String> prefixNames = new HashSet<>();
+            for (Class<? extends UltiToolsPlugin> pluginClass : ex.getSortedPrefix()) {
+                prefixNames.add(pluginClass.getSimpleName());
+            }
+            Set<String> refused = ex.getRefusedPlugins();
+            Set<String> overlap = new HashSet<>(prefixNames);
+            overlap.retainAll(refused);
+            Set<String> union = new HashSet<>(prefixNames);
+            union.addAll(refused);
+
+            assertTrue(overlap.isEmpty(), "prefix and refused set must be disjoint: " + overlap);
+            assertEquals(
+                new HashSet<>(Arrays.asList("PluginWithMissingDep", "CircularA", "CircularB",
+                    "PluginDependsOnCircularA", "PluginC")),
+                union,
+                "every input module must be either in the sorted prefix or refused");
+            assertEquals(
+                new HashSet<>(Arrays.asList("PluginWithMissingDep", "CircularA", "CircularB",
+                    "PluginDependsOnCircularA")),
+                refused);
+            assertTrue(ex.getMessage().contains("MissingPlugin"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("CircularA"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("CircularB"), ex.getMessage());
+
+            // The independent cycle is carried structurally, not only in the message.
+            assertEquals(1, ex.getCyclePaths().size(), ex.getCyclePaths().toString());
+            List<String> path = ex.getCyclePaths().get(0);
+            assertEquals(path.get(0), path.get(path.size() - 1));
+            assertEquals(new HashSet<>(Arrays.asList("CircularA", "CircularB")), new HashSet<>(path));
+        }
+
+        @Test
+        @DisplayName("a missing-dependency exception built without cycle paths reports an empty, "
+                + "non-null list")
+        void missingDependencyExceptionWithoutCyclePathsHasEmptyList() {
+            MissingDependencyException threeArgument = new MissingDependencyException(
+                "message", Collections.emptyList(), Collections.singleton("PluginWithMissingDep"));
+            MissingDependencyException oneArgument = new MissingDependencyException("message");
+
+            assertNotNull(threeArgument.getCyclePaths());
+            assertTrue(threeArgument.getCyclePaths().isEmpty());
+            assertNotNull(oneArgument.getCyclePaths());
+            assertTrue(oneArgument.getCyclePaths().isEmpty());
+        }
+
+        @Test
+        @DisplayName("a pure missing dependency carries no cycle paths")
+        void pureMissingDependencyCarriesNoCyclePaths() {
+            MissingDependencyException ex = assertThrows(MissingDependencyException.class,
+                () -> resolver.resolve(Arrays.asList(PluginWithMissingDep.class, PluginA.class)));
+
+            assertTrue(ex.getCyclePaths().isEmpty(), ex.getCyclePaths().toString());
+        }
+
+        @Test
         @DisplayName("no cycle and no missing dependency: neither exception is constructed")
         void noFailureMeansUnchangedBehaviour() throws Exception {
             List<Class<? extends UltiToolsPlugin>> plugins = Arrays.asList(
@@ -530,6 +658,160 @@ class PluginDependencyResolverTest {
 
             assertEquals(3, result.size());
             assertTrue(result.containsAll(plugins));
+        }
+    }
+
+    /**
+     * Exhaustive property over every non-empty subset of a fixed pool of annotation-only
+     * fixtures (#676 cases 31 and 32). The expected refused set comes from an oracle written
+     * from the contract, not from resolver internals: refusal for a missing hard dependency
+     * follows declared {@code depends} edges only, then every survivor a plain topological sort
+     * over all declared ordering edges cannot place is refused as well.
+     */
+    @Nested
+    @DisplayName("Mixed-Graph Partition Property Tests")
+    class MixedGraphPartitionPropertyTests {
+
+        private final List<Class<? extends UltiToolsPlugin>> pool = Arrays.asList(
+            PluginA.class, PluginB.class, PluginC.class, PluginDependsOnA.class,
+            PluginSoftDependsOnA.class, PluginLoadBeforeC.class, PluginWithMissingDep.class,
+            PluginDependsOnMissingDepPlugin.class, PluginWithMissingDepLoadBeforeB.class,
+            PluginSoftDependsOnMissingDepPlugin.class, CircularA.class, CircularB.class
+        );
+
+        @Test
+        @DisplayName("every subset of the fixture pool yields a complete, ordered partition")
+        void everySubsetOfTheFixturePoolYieldsACompleteOrderedPartition() throws Exception {
+            int subsets = 0;
+            for (int mask = 1; mask < (1 << pool.size()); mask++) {
+                List<Class<? extends UltiToolsPlugin>> subset = new ArrayList<>();
+                for (int i = 0; i < pool.size(); i++) {
+                    if ((mask & (1 << i)) != 0) {
+                        subset.add(pool.get(i));
+                    }
+                }
+                checkSubset(subset);
+                subsets++;
+            }
+            assertEquals(4095, subsets);
+        }
+
+        // Deliberately one exhaustive oracle-versus-resolver comparison per subset; splitting it would hide the pairing.
+        @SuppressWarnings("PMD.NPathComplexity")
+        private void checkSubset(List<Class<? extends UltiToolsPlugin>> subset) throws Exception {
+            Set<String> names = new HashSet<>();
+            for (Class<? extends UltiToolsPlugin> pluginClass : subset) {
+                names.add(pluginClass.getSimpleName());
+            }
+
+            // Oracle edges from the annotations: hard (dependency -> dependent, present targets
+            // only) and ordering (first must load before second, every present edge kind).
+            Map<String, Set<String>> hardEdges = new HashMap<>();
+            List<String[]> orderEdges = new ArrayList<>();
+            Set<String> missingDeclarers = new HashSet<>();
+            for (Class<? extends UltiToolsPlugin> pluginClass : subset) {
+                String name = pluginClass.getSimpleName();
+                PluginDependency dep = pluginClass.getAnnotation(PluginDependency.class);
+                if (dep == null) {
+                    continue;
+                }
+                for (String target : dep.depends()) {
+                    if (names.contains(target)) {
+                        hardEdges.computeIfAbsent(target, k -> new HashSet<>()).add(name);
+                        orderEdges.add(new String[]{target, name});
+                    } else {
+                        missingDeclarers.add(name);
+                    }
+                }
+                for (String target : dep.softDepends()) {
+                    if (names.contains(target)) {
+                        orderEdges.add(new String[]{target, name});
+                    }
+                }
+                for (String target : dep.loadBefore()) {
+                    if (names.contains(target)) {
+                        orderEdges.add(new String[]{name, target});
+                    }
+                }
+            }
+
+            Set<String> expectedRefused = new HashSet<>(missingDeclarers);
+            List<String> work = new ArrayList<>(missingDeclarers);
+            while (!work.isEmpty()) {
+                String current = work.remove(work.size() - 1);
+                for (String dependent : hardEdges.getOrDefault(current, Collections.emptySet())) {
+                    if (expectedRefused.add(dependent)) {
+                        work.add(dependent);
+                    }
+                }
+            }
+            Set<String> survivors = new HashSet<>(names);
+            survivors.removeAll(expectedRefused);
+            Set<String> placed = new HashSet<>();
+            boolean progress = true;
+            while (progress) {
+                progress = false;
+                for (String candidate : survivors) {
+                    if (placed.contains(candidate)) {
+                        continue;
+                    }
+                    boolean ready = true;
+                    for (String[] edge : orderEdges) {
+                        if (edge[1].equals(candidate) && survivors.contains(edge[0])
+                                && !placed.contains(edge[0])) {
+                            ready = false;
+                            break;
+                        }
+                    }
+                    if (ready) {
+                        placed.add(candidate);
+                        progress = true;
+                    }
+                }
+            }
+            Set<String> unplaced = new HashSet<>(survivors);
+            unplaced.removeAll(placed);
+            expectedRefused.addAll(unplaced);
+
+            List<Class<? extends UltiToolsPlugin>> prefix;
+            Set<String> refused;
+            try {
+                prefix = resolver.resolve(subset);
+                refused = Collections.emptySet();
+            } catch (MissingDependencyException ex) {
+                assertFalse(missingDeclarers.isEmpty(), "missing thrown without one: " + names);
+                assertEquals(unplaced.isEmpty(), ex.getCyclePaths().isEmpty(),
+                    "cycle paths must be present exactly when a cycle blocks survivors: " + names);
+                prefix = ex.getSortedPrefix();
+                refused = ex.getRefusedPlugins();
+            } catch (CircularDependencyException ex) {
+                assertTrue(missingDeclarers.isEmpty(), "cycle thrown over a missing one: " + names);
+                prefix = ex.getSortedPrefix();
+                refused = ex.getRefusedPlugins();
+            }
+
+            List<String> prefixNames = new ArrayList<>();
+            for (Class<? extends UltiToolsPlugin> pluginClass : prefix) {
+                prefixNames.add(pluginClass.getSimpleName());
+            }
+            Set<String> overlap = new HashSet<>(prefixNames);
+            overlap.retainAll(refused);
+            Set<String> union = new HashSet<>(prefixNames);
+            union.addAll(refused);
+
+            assertEquals(prefixNames.size(), new HashSet<>(prefixNames).size(),
+                "prefix lists a module twice: " + prefixNames);
+            assertTrue(overlap.isEmpty(), "prefix and refused overlap " + overlap + " for " + names);
+            assertEquals(names, union, "partition does not cover the subset " + names);
+            assertEquals(expectedRefused, new HashSet<>(refused), "refused set for " + names);
+            for (String[] edge : orderEdges) {
+                int before = prefixNames.indexOf(edge[0]);
+                int after = prefixNames.indexOf(edge[1]);
+                if (before >= 0 && after >= 0) {
+                    assertTrue(before < after, edge[0] + " must load before " + edge[1]
+                        + " in " + prefixNames);
+                }
+            }
         }
     }
 

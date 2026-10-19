@@ -1298,6 +1298,46 @@ public class PluginInstallUtils {
     }
 
     /**
+     * The uninstall could not delete these JARs now and could not record their deletion for the next
+     * start either (#518). Attached, suppressed, to the {@code FileSystemException} that names the
+     * JARs still on disk, with the record failure as its cause.
+     *
+     * <p>Deliberately not a {@code FileSystemException}: every {@code FileSystemException} in an
+     * uninstall's failure names a module JAR still on disk, which is what lets a caller walking the
+     * chain tell the operator which files to delete by hand. The record failure names a transaction
+     * record, its folder or a temporary file under the server root's {@code .ultikits} folder,
+     * beside the credential store -- none of them a module JAR, and none for the operator to delete.
+     * An explicit type, like {@link UndeterminedEntriesException}, is what keeps it apart.
+     */
+    @ApiStatus.Internal
+    public static final class RemovalNotRecordedException extends IOException {
+        private static final long serialVersionUID = 1L;
+
+        private final String reason;
+
+        private RemovalNotRecordedException(Throwable recordFailure, String reason) {
+            super("the deletion could not be recorded for the next start either (" + reason + ")", recordFailure);
+            this.reason = reason;
+        }
+
+        /**
+         * @param recordFailure what writing the record threw; kept as the cause
+         * @return the carrier for it
+         */
+        public static RemovalNotRecordedException of(Throwable recordFailure) {
+            java.util.Objects.requireNonNull(recordFailure, "recordFailure");
+            String message = recordFailure.getMessage();
+            String reason = recordFailure.getClass().getSimpleName() + (message == null ? "" : ": " + message);
+            return new RemovalNotRecordedException(recordFailure, reason);
+        }
+
+        /** @return why the deletion could not be recorded: the record failure's type and message */
+        public String getReason() {
+            return reason;
+        }
+    }
+
+    /**
      * Attaches the undetermined entries to a failure on its way out, when there are any.
      *
      * @param failure the failure leaving the uninstall
@@ -1405,7 +1445,10 @@ public class PluginInstallUtils {
      * @throws java.nio.file.AccessDeniedException when the modules folder exists but could not be
      *     listed, so nothing can be concluded about what it holds
      * @throws java.nio.file.FileSystemException when an entry identified as this module's could not
-     *     be deleted, naming every one still on disk
+     *     be deleted, naming every one still on disk: every {@code FileSystemException} in the failure,
+     *     including those attached as suppressed, names a module JAR still on disk. When the deletion
+     *     could not be recorded for the next start either, that failure travels attached as a
+     *     {@link RemovalNotRecordedException}, which is not a {@code FileSystemException}
      * @throws java.nio.file.NoSuchFileException when a loaded module was unloaded but nothing in
      *     the folder could be identified as its JAR, which is not a spelling mistake
      * @throws IllegalStateException when the module's own unload threw. The module is still removed
@@ -2057,12 +2100,16 @@ public class PluginInstallUtils {
      * module loads (#518). On Windows the shared module class loader keeps every module JAR open
      * while the server runs, so "delete it by hand" is an instruction the operator cannot follow;
      * the record is what makes the uninstall complete. Only when the record itself cannot be
-     * written does the original failure leave as it was, with the record failure attached.
+     * written does the original failure leave as it was, with the record failure attached inside a
+     * {@link RemovalNotRecordedException}: every {@code FileSystemException} in the failure still
+     * names a module JAR still on disk, never a record or temporary file under {@code .ultikits}.
      *
      * @param identity      the resolved identity
      * @param jars          the JARs the uninstall tried to delete
      * @param deleteFailure what the deletion threw
-     * @return the failure to report: {@link RemovalDeferredException} when the deletion was recorded
+     * @return the failure to report: {@link RemovalDeferredException} when the deletion was recorded;
+     *     otherwise {@code deleteFailure}, with a {@link RemovalNotRecordedException} attached when
+     *     the record could not be written
      */
     @SuppressWarnings("PMD.AvoidCatchingGenericException") // a record that cannot be written leaves the original failure
     private static java.nio.file.FileSystemException deferOrFail(ModuleIdentity identity, List<File> jars,
@@ -2085,7 +2132,7 @@ public class PluginInstallUtils {
         } catch (IOException | RuntimeException recordFailure) {
             LOGGER.log(Level.WARNING, "Uninstalling module " + identity.requested
                     + ": the deletion could not be recorded for the next start either", recordFailure);
-            deleteFailure.addSuppressed(recordFailure);
+            deleteFailure.addSuppressed(RemovalNotRecordedException.of(recordFailure));
             return deleteFailure;
         }
         LOGGER.warning("Uninstalling module " + identity.requested + ": " + absolutePathsOf(remaining)

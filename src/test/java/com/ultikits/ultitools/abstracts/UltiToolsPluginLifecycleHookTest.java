@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.abstracts;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -432,6 +433,72 @@ class UltiToolsPluginLifecycleHookTest {
 
         assertThat(thrown).isSameAs(commandFailure);
         assertThat(thrown.getSuppressed()).containsExactly(listenerFailure);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable failure) throws T {
+        throw (T) failure;
+    }
+
+    @Test
+    @DisplayName("onUnregister() throwing a checked exception it does not declare still unregisters commands and "
+            + "listeners, and that same exception propagates")
+    void undeclaredCheckedHookFailure_stillUnregistersCommandsAndListeners() {
+        UltiToolsPlugin plugin = mock(FixturePlugin.class);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        IOException hookFailure = new IOException("hook could not flush its state");
+        // Lombok @SneakyThrows, or any rethrow helper, lets a hook throw a checked exception its
+        // signature does not declare; Mockito's doThrow refuses that shape, so the hook throws it itself.
+        doAnswer(invocation -> {
+            sneakyThrow(hookFailure);
+            return null;
+        }).when(plugin).onUnregister();
+
+        Throwable thrown = catchThrowable(plugin::unregisterSelf);
+
+        verify(mockCommandManager, times(1)).unregisterAll(plugin);
+        verify(mockListenerManager, times(1)).unregisterAll(plugin);
+        assertThat(thrown).isSameAs(hookFailure);
+    }
+
+    @Test
+    @DisplayName("hook throws an undeclared checked exception AND command cleanup throws -- the hook's own "
+            + "exception propagates with the command-cleanup failure suppressed on it, and listener cleanup still ran")
+    void undeclaredCheckedHookFailurePropagatesWithLaterCleanupFailureSuppressed() {
+        UltiToolsPlugin plugin = mock(FixturePlugin.class);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        IOException hookFailure = new IOException("hook could not flush its state");
+        RuntimeException commandFailure = new RuntimeException("command cleanup failed");
+        doAnswer(invocation -> {
+            sneakyThrow(hookFailure);
+            return null;
+        }).when(plugin).onUnregister();
+        doThrow(commandFailure).when(mockCommandManager).unregisterAll(plugin);
+
+        Throwable thrown = catchThrowable(plugin::unregisterSelf);
+
+        assertThat(thrown).isSameAs(hookFailure);
+        assertThat(thrown.getSuppressed()).containsExactly(commandFailure);
+        verify(mockListenerManager, times(1)).unregisterAll(plugin);
+    }
+
+    @Test
+    @DisplayName("hook succeeds but command cleanup throws an undeclared checked exception -- listener cleanup "
+            + "still runs and that same exception propagates")
+    void undeclaredCheckedCleanupFailureAfterSuccessfulHookPropagatesUnchanged() {
+        UltiToolsPlugin plugin = mock(FixturePlugin.class);
+        doCallRealMethod().when(plugin).unregisterSelf();
+        Exception commandFailure = new Exception("command cleanup failed with a checked exception");
+        doAnswer(invocation -> {
+            sneakyThrow(commandFailure);
+            return null;
+        }).when(mockCommandManager).unregisterAll(plugin);
+
+        Throwable thrown = catchThrowable(plugin::unregisterSelf);
+
+        verify(mockListenerManager, times(1)).unregisterAll(plugin);
+        assertThat(thrown).isSameAs(commandFailure);
+        assertThat(thrown.getSuppressed()).isEmpty();
     }
 
     @Test

@@ -22,6 +22,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -29,6 +30,7 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.mockito.Mockito;
 
 import com.google.gson.JsonParseException;
 
@@ -100,6 +102,63 @@ class CustomLanguageFileTest {
         assertThat(plugin.i18n("greeting")).isEqualTo("你好");
         assertThat(plugin.i18n("farewell")).isEqualTo("再见");
         verify(fixture.logger(), never()).warning(anyString());
+    }
+
+    /**
+     * Replaces the default fixture with one whose module jar lives under {@code tempDir/folderName}, so the
+     * module's code-source URL carries percent escapes (a space always; a non-ASCII character in the gated
+     * variant), as on a server installed under such a path (#676 case 26).
+     */
+    private void reinstallUnder(String folderName) throws IOException {
+        fixture.close();
+        File installDir = new File(tempDir, folderName);
+        Files.createDirectories(installDir.toPath());
+        fixture = BootLanguageFixture.create(installDir);
+        fixture.jarEntry("lang/en.yml", EN).jarEntry("lang/zh.yml", ZH);
+    }
+
+    private void assumeUtf8FileNames() {
+        Assumptions.assumeTrue("UTF-8".equalsIgnoreCase(System.getProperty("sun.jnu.encoding")),
+                "the host's file-name encoding is not UTF-8, so a non-ASCII folder name is not portable here");
+    }
+
+    @Test
+    @DisplayName("#676 case 26: a module installed under a path with a space still falls back from zh-myserver to its official zh")
+    void moduleUnderEscapedInstallPathUsesItsOfficialBase() throws Exception {
+        reinstallUnder("server install");
+        fixture.language("zh-myserver");
+
+        UltiToolsPlugin plugin = start();
+
+        assertThat(plugin.i18n("greeting")).isEqualTo("你好");
+        assertThat(plugin.i18n("farewell")).isEqualTo("再见");
+    }
+
+    @Test
+    @DisplayName("#676 case 26: the same under a path with a space and a non-ASCII character (UTF-8 file names only)")
+    void moduleUnderNonAsciiInstallPathUsesItsOfficialBase() throws Exception {
+        assumeUtf8FileNames();
+        reinstallUnder("server install 服务器");
+        fixture.language("zh-myserver");
+
+        UltiToolsPlugin plugin = start();
+
+        assertThat(plugin.i18n("greeting")).isEqualTo("你好");
+        assertThat(plugin.i18n("farewell")).isEqualTo("再见");
+    }
+
+    @Test
+    @DisplayName("#676 case 26 sibling: a module installed under a path with a space still extracts its bundled res/ files, without the extraction failure line")
+    void moduleUnderEscapedInstallPathExtractsItsBundledResources() throws Exception {
+        reinstallUnder("server install");
+        fixture.jarEntry("res/notes.txt", "bundled notes\n");
+
+        start();
+
+        assertThat(BootLanguageFixture.bytesOf(fixture.disk("res/notes.txt"))).isEqualTo(utf8("bundled notes\n"));
+        assertThat(Mockito.mockingDetails(fixture.logger()).getInvocations())
+                .noneMatch(call -> Arrays.stream(call.getArguments())
+                        .anyMatch(argument -> String.valueOf(argument).contains("Failed to save resources from jar")));
     }
 
     @Test

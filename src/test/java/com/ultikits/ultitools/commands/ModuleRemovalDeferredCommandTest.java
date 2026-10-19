@@ -78,4 +78,33 @@ class ModuleRemovalDeferredCommandTest {
         // A deferred deletion is an uninstall that went ahead: the cancelled update is reported too.
         assertThat(all).contains("已取消模块 Demo 已暂存、尚未应用的更新（版本 1.1）");
     }
+
+    @Test
+    @DisplayName("ultitools.upm.uninstall.deferred-unrecorded: a deletion that could not be recorded either lists only the JAR to delete, and the record failure on its own line")
+    void unrecordedDeletion_replyListsTheJarAndTheRecordFailureSeparately() {
+        java.nio.file.FileSystemException deleteFailure = new java.nio.file.FileSystemException(
+                "/srv/plugins/UltiTools/plugins/demo-1.0.jar", null, "Access denied");
+        deleteFailure.addSuppressed(PluginInstallUtils.RemovalNotRecordedException.of(
+                new java.nio.file.AccessDeniedException("/srv/.ultikits/upm-transactions")));
+        utils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("Demo"), anyList())).thenThrow(deleteFailure);
+
+        executor.uninstallPlugin(sender, "Demo");
+
+        List<String> deleteByHand = new ArrayList<>();
+        List<String> notRecorded = new ArrayList<>();
+        for (String message : messages) {
+            if (message.contains("请手动删除")) {
+                deleteByHand.add(message);
+            }
+            if (message.contains("这次删除也未能记录到下次启动")) {
+                notRecorded.add(message);
+            }
+        }
+        assertThat(deleteByHand).hasSize(1);
+        assertThat(deleteByHand.get(0)).contains("/srv/plugins/UltiTools/plugins/demo-1.0.jar")
+                .doesNotContain(".ultikits");
+        assertThat(notRecorded).hasSize(1);
+        assertThat(notRecorded.get(0)).contains("AccessDeniedException: /srv/.ultikits/upm-transactions")
+                .doesNotContain("请手动删除");
+    }
 }

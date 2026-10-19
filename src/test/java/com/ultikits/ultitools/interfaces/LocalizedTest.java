@@ -25,6 +25,7 @@ import java.util.jar.JarOutputStream;
 import org.bukkit.command.Command;
 import org.bukkit.entity.Player;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -264,6 +265,79 @@ class LocalizedTest {
         void missingLangDirectoryReturnsEmptyList() {
             File missing = new File(tempDir, "does-not-exist");
             assertThat(Localized.scanLangDirectory(missing)).isEmpty();
+        }
+
+        /*
+         * #676 case 26: a code source under a folder whose name needs percent escapes. The space alone
+         * makes File.toURI().toURL() escape the path; the non-ASCII variants run only where file names
+         * are UTF-8, so another host skips them instead of failing.
+         */
+
+        private File shippingJarUnder(String folderName) throws IOException {
+            File folder = new File(tempDir, folderName);
+            Files.createDirectories(folder.toPath());
+            File jar = new File(folder, "module.jar");
+            try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(jar.toPath()))) {
+                writeEntry(out, "lang/en.json", "{}");
+                writeEntry(out, "lang/zh.json", "{}");
+            }
+            return jar;
+        }
+
+        private File shippingDirectoryUnder(String folderName) throws IOException {
+            File classes = new File(tempDir, folderName);
+            File langDir = new File(classes, "lang");
+            Files.createDirectories(langDir.toPath());
+            Files.write(new File(langDir, "en.json").toPath(), "{}".getBytes(StandardCharsets.UTF_8));
+            Files.write(new File(langDir, "zh.json").toPath(), "{}".getBytes(StandardCharsets.UTF_8));
+            return classes;
+        }
+
+        private void assumeUtf8FileNames() {
+            Assumptions.assumeTrue("UTF-8".equalsIgnoreCase(System.getProperty("sun.jnu.encoding")),
+                    "the host's file-name encoding is not UTF-8, so a non-ASCII folder name is not portable here");
+        }
+
+        @Test
+        @DisplayName("#676 case 26: a JAR code source under a path with a space reports the languages it ships")
+        void escapedJarCodeSourceEnumeratesShippedLanguages() throws IOException {
+            File jar = shippingJarUnder("server install");
+
+            assertThat(Localized.scanLangResources(jar.toURI().toURL())).containsExactly("en", "zh");
+        }
+
+        @Test
+        @DisplayName("#676 case 26: an exploded-directory code source under a path with a space reports its languages")
+        void escapedDirectoryCodeSourceEnumeratesShippedLanguages() throws IOException {
+            File classes = shippingDirectoryUnder("exploded classes");
+
+            assertThat(Localized.scanLangResources(classes.toURI().toURL())).containsExactly("en", "zh");
+        }
+
+        @Test
+        @DisplayName("#676 case 26: the JAR case under a path with a space and a non-ASCII character (UTF-8 file names only)")
+        void nonAsciiJarCodeSourceEnumeratesShippedLanguages() throws IOException {
+            assumeUtf8FileNames();
+            File jar = shippingJarUnder("server install 服务器");
+
+            assertThat(Localized.scanLangResources(jar.toURI().toURL())).containsExactly("en", "zh");
+        }
+
+        @Test
+        @DisplayName("#676 case 26: the directory case under a path with a space and a non-ASCII character (UTF-8 file names only)")
+        void nonAsciiDirectoryCodeSourceEnumeratesShippedLanguages() throws IOException {
+            assumeUtf8FileNames();
+            File classes = shippingDirectoryUnder("exploded classes 服务器");
+
+            assertThat(Localized.scanLangResources(classes.toURI().toURL())).containsExactly("en", "zh");
+        }
+
+        @Test
+        @DisplayName("#676 case 26: a code source that is not a usable file URI yields an empty list instead of throwing")
+        void codeSourceThatIsNotAUriReturnsWithoutThrowing() throws IOException {
+            URL authorityBearing = new URL("file://fileserver/share/module.jar");
+
+            assertThat(Localized.scanLangResources(authorityBearing)).isEmpty();
         }
 
         private void writeEntry(JarOutputStream out, String name, String content) throws IOException {

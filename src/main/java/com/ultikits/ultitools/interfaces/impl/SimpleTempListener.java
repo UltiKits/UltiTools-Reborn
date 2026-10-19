@@ -33,9 +33,19 @@ public class SimpleTempListener<E extends Event> implements TempListener {
      * call on the same instance is a no-op instead of a silent duplicate Bukkit registration.
      * Static (not an instance field) so it does not change {@code @AllArgsConstructor}'s generated
      * signature. Weak keys so a listener that is simply dropped (never unregistered) does not leak.
+     *
+     * <p>Thread contract: the set is shared by every temporary listener and is touched from any
+     * thread that calls {@link #register()} and from any event thread whose handler returns
+     * {@code true}, which is an asynchronous thread for events such as
+     * {@code AsyncPlayerChatEvent}. It is therefore wrapped with
+     * {@link Collections#synchronizedSet(Set)}, so every {@code add} and {@code remove}
+     * synchronizes on this set's own monitor. That lock is held only for the set operation and
+     * never across a Bukkit call ({@code registerEvent} or {@code HandlerList.unregisterAll}):
+     * synchronous dispatch runs handlers, which may call {@link #unregister()}, under Bukkit's own
+     * synchronization, and spanning both locks would invite a lock-order inversion.
      */
     private static final Set<SimpleTempListener<?>> REGISTERED =
-            Collections.newSetFromMap(new WeakHashMap<>());
+            Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
 
     /**
      * Hand-written rather than Lombok-generated so it can carry its own javadoc.
@@ -115,6 +125,14 @@ public class SimpleTempListener<E extends Event> implements TempListener {
     // asserts an effectively-impossible internal state: registerEvent only fires this callback
     // for the exact eventClass this listener registered (or a subclass), so the cast can only
     // fail if Bukkit's own dispatch contract is violated. See 08-GATE05-TRIAGE.md.
+    /**
+     * Register the listener with Bukkit. A second call on an instance that is still registered is
+     * a no-op.
+     *
+     * <p>May be called on any thread. Distinct listeners may be registered and unregistered
+     * concurrently from different threads; one instance must not be registered on one thread
+     * while it is being unregistered on another.
+     */
     @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
     public void register() {
         if (eventClass == null) {
@@ -158,6 +176,11 @@ public class SimpleTempListener<E extends Event> implements TempListener {
     /**
      * Unregister the listener and clear its registration tracking so a later {@link #register()}
      * call on the same instance actually re-registers.
+     *
+     * <p>May be called on any thread, including an asynchronous event thread when the handler
+     * returns {@code true}. The registration marker is cleared under the shared set's lock first;
+     * Bukkit's handler cleanup then runs outside that lock. The same-instance restriction of
+     * {@link #register()} applies.
      */
     @Override
     public void unregister() {

@@ -5,7 +5,10 @@ import java.nio.file.FileSystemException;
 import java.nio.file.NoSuchFileException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 
 import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
@@ -397,7 +400,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
 
     /** Collects the undetermined entries a failure carries, wherever in its suppressed chain they sit. */
     private static void collectUndetermined(Throwable failure, List<String> files) {
-        collectUndetermined(failure, files, java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()));
+        collectUndetermined(failure, files, Collections.newSetFromMap(new IdentityHashMap<>()));
     }
 
     /**
@@ -411,7 +414,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
      * @param files   the paths collected so far
      * @param seen    the throwables already visited, by identity
      */
-    private static void collectUndetermined(Throwable failure, List<String> files, java.util.Set<Throwable> seen) {
+    private static void collectUndetermined(Throwable failure, List<String> files, Set<Throwable> seen) {
         if (!seen.add(failure)) {
             return;
         }
@@ -426,6 +429,12 @@ public class PluginInstallCommands extends BaseCommandExecutor {
     /**
      * Names every jar the uninstall could not delete. Each one loads the module again at the next
      * start, so an instruction that names only the first is one the operator cannot act on (#501).
+     *
+     * <p>When the deletion could not be recorded for the next start either, that is said on a line of
+     * its own, with its reason and no instruction to delete anything: the record failure travels as a
+     * {@link PluginInstallUtils.RemovalNotRecordedException}, not a {@code FileSystemException}, so
+     * the file it names -- a transaction record or temporary file under the server root's
+     * {@code .ultikits} folder -- is never listed among the module JARs to delete.
      */
     private static void sendUndeletedJars(CommandSender sender, FileSystemException failure) {
         List<String> files = new ArrayList<>();
@@ -437,29 +446,63 @@ public class PluginInstallCommands extends BaseCommandExecutor {
                 files.isEmpty()
                         ? modulesFolderPath()
                         : String.join(", ", files)));
+        PluginInstallUtils.RemovalNotRecordedException notRecorded = notRecordedIn(failure,
+                Collections.newSetFromMap(new IdentityHashMap<>()));
+        if (notRecorded != null) {
+            sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
+                    "这次删除也未能记录到下次启动（%s），因此下次启动不会删除它们。"), notRecorded.getReason()));
+        }
+    }
+
+    /**
+     * The record failure a failure carries, wherever in its suppressed chain it sits; {@code null}
+     * when there is none. Remembers what it has walked, for the same reason
+     * {@link #collectUndetermined(Throwable, List, Set)} does.
+     *
+     * @param failure the failure to walk
+     * @param seen    the throwables already visited, by identity
+     * @return the carrier, or {@code null}
+     */
+    private static PluginInstallUtils.RemovalNotRecordedException notRecordedIn(Throwable failure,
+                                                                              Set<Throwable> seen) {
+        if (!seen.add(failure)) {
+            return null;
+        }
+        if (failure instanceof PluginInstallUtils.RemovalNotRecordedException) {
+            return (PluginInstallUtils.RemovalNotRecordedException) failure;
+        }
+        for (Throwable suppressed : failure.getSuppressed()) {
+            PluginInstallUtils.RemovalNotRecordedException found = notRecordedIn(suppressed, seen);
+            if (found != null) {
+                return found;
+            }
+        }
+        return null;
     }
 
     /**
      * Collects the file named by {@code failure} and by every {@code FileSystemException} attached
-     * to it, at any depth -- a file the operator is not told about is one they leave behind.
+     * to it, at any depth -- a file the operator is not told about is one they leave behind. A
+     * record failure is not one of them: it travels as a
+     * {@link PluginInstallUtils.RemovalNotRecordedException}, which this walk skips by type.
      *
      * @param failure the failure to walk
      * @param files   the names collected so far, in the order they were found
      */
     private static void collectNamedFiles(FileSystemException failure, List<String> files) {
-        collectNamedFiles(failure, files, java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()));
+        collectNamedFiles(failure, files, Collections.newSetFromMap(new IdentityHashMap<>()));
     }
 
     /**
      * {@link #collectNamedFiles(FileSystemException, List)}, remembering what it has already walked,
-     * for the same reason {@link #collectUndetermined(Throwable, List, java.util.Set)} does.
+     * for the same reason {@link #collectUndetermined(Throwable, List, Set)} does.
      *
      * @param failure the failure to walk
      * @param files   the paths collected so far
      * @param seen    the throwables already visited, by identity
      */
     private static void collectNamedFiles(FileSystemException failure, List<String> files,
-                                          java.util.Set<Throwable> seen) {
+                                          Set<Throwable> seen) {
         if (!seen.add(failure) || failure instanceof PluginInstallUtils.UndeterminedEntriesException) {
             return;
         }
@@ -759,7 +802,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         if (value == null) {
             return null;
         }
-        String normalized = value.trim().toLowerCase(java.util.Locale.ROOT);
+        String normalized = value.trim().toLowerCase(Locale.ROOT);
         return normalized.isEmpty() ? null : normalized;
     }
 
