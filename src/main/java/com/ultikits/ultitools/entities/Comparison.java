@@ -21,10 +21,15 @@ public enum Comparison {
      * The stored value is greater than the value.
      * <p>
      * On a {@code byte}, {@code short}, {@code int}, {@code long}, {@code float} or {@code double}
-     * field, or its wrapper, the two are compared as numbers of that type. On SQLite this holds also
-     * in a column left on the default {@code VARCHAR(255)} type, with 64-bit integer precision. On
-     * MySQL such a default text column is compared the way MySQL compares text with a number, in
-     * double precision, so whole numbers beyond plus or minus 9,007,199,254,740,992 (2^53) compare
+     * field, or its wrapper, the two are compared as numbers of that type. Pass the value as a number
+     * of that type (for example {@code 10}, not {@code "10"}): a text value is not converted, and
+     * MySQL compares it with a default text column as text, so {@code "10"} sorts below {@code "2"}.
+     * On SQLite the comparison holds also in a column left on the default {@code VARCHAR(255)} type,
+     * with 64-bit integer precision, and compares a stored value the way it reads back: a
+     * {@code float} such as {@code 0.1f} is neither greater nor less than the same value, and a
+     * {@code double} that needs 16 or 17 significant digits is stored and compared with 15. On MySQL
+     * such a default text column is compared the way MySQL compares text with a number, in double
+     * precision, so whole numbers beyond plus or minus 9,007,199,254,740,992 (2^53) compare
      * approximately; declare the column with a numeric {@code type} (for example {@code BIGINT}) for
      * exact results there. On JSON the values are compared as {@code double}, also approximate beyond
      * plus or minus 9,007,199,254,740,992. A field of any other type is compared as the database
@@ -33,18 +38,20 @@ public enum Comparison {
     GREATER,
     /**
      * The stored value is less than the value. It follows the same rules as {@link #GREATER}: typed
-     * numeric comparison on numeric fields (on SQLite also in default text columns, with 64-bit
-     * integer precision; on MySQL default text columns and on JSON in double precision, approximate
-     * beyond plus or minus 9,007,199,254,740,992), and the database's text comparison otherwise.
+     * numeric comparison on numeric fields, for a value passed as a number of the field's type (on
+     * SQLite also in default text columns, with 64-bit integer precision and as the stored value reads
+     * back; on MySQL default text columns and on JSON in double precision, approximate beyond plus or
+     * minus 9,007,199,254,740,992), and the database's text comparison otherwise.
      */
     LESS,
     /**
      * The stored text contains the value.
      * <p>
-     * The value is matched literally as text, on SQLite, MySQL and JSON alike: every character,
-     * including percent, underscore, exclamation mark and backslash, stands for itself. Letter case
-     * follows the backend: case-insensitive on SQLite and on MySQL's default collation, case-sensitive
-     * on JSON.
+     * The value is matched literally as text, on SQLite, MySQL and JSON alike: percent, underscore,
+     * exclamation mark and backslash are ordinary characters, not wildcards or escapes. Letter case and
+     * accents follow the backend: SQLite ignores the case of ASCII letters only; MySQL compares under
+     * the {@code utf8mb3_general_ci} collation of the tables the framework creates, which ignores case
+     * and accents, so {@code e} matches <code>&eacute;</code>; JSON compares exactly.
      */
     INCLUDE,
     /**

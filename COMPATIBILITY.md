@@ -1846,12 +1846,18 @@ This section governs the third kind.
   6.2.5's SQLite and MySQL operators ignored the comparison and matched every condition by
   equality; JSON already applied it. As of 6.3.0, `getAll`, `exist`, `page`, `del` and `updateIf`
   apply it on every backend with the meanings below, and no table is changed. `INCLUDE`,
-  `STARTSWITH` and `ENDSWITH` match the value literally, as text: every character, including `%`,
-  `_`, `!` and `\`, stands for itself, on SQLite, MySQL and JSON alike. Letter case follows the
-  backend: case-insensitive on SQLite and on MySQL's default collation, case-sensitive on JSON.
+  `STARTSWITH` and `ENDSWITH` match the value literally, as text, on SQLite, MySQL and JSON alike:
+  `%`, `_`, `!` and `\` are ordinary characters, not wildcards or escapes. Letter case and accents
+  follow the backend: SQLite ignores the case of ASCII letters only; MySQL compares under the
+  `utf8mb3_general_ci` collation of the tables the framework creates (`DEFAULT CHARSET=utf8`), which
+  ignores case and accents, so `e` matches `é`; JSON compares exactly.
   `GREATER` and `LESS` on a `byte`, `short`, `int`, `long`, `float` or `double` field (or its
-  wrapper) compare numbers of that type. On SQLite that holds also in a column left on the default
-  `VARCHAR(255)` type, with 64-bit integer precision. On MySQL such a default text column is
+  wrapper) compare numbers of that type. Pass the value as a number of that type (`10`, not
+  `"10"`): a text value is not converted, and MySQL compares it with a default text column as text,
+  so `"10"` sorts below `"2"`. On SQLite the typed comparison holds also in a column left on the
+  default `VARCHAR(255)` type, with 64-bit integer precision, and a stored value is compared the way
+  it reads back: a `float` such as `0.1f`, which SQLite keeps there as the 15 significant digits
+  `0.100000001490116`, is neither greater nor less than `0.1f`. On MySQL such a default text column is
   compared the way MySQL compares text with a number, in double precision, so whole numbers beyond
   ±9,007,199,254,740,992 (2^53) compare approximately there; declare the column with a numeric
   `type` (for example `@Column(value = "stamp", type = "BIGINT")`) where exact results matter. On
@@ -1864,15 +1870,25 @@ This section governs the third kind.
   the fifteen modules' `master` and UltiTools-External-Example (2026-10-19), no `src/main` code uses
   `INCLUDE`, `STARTSWITH`, `ENDSWITH`, `GREATER`, `LESS`, the `comparison(...)` builder method,
   `getLike` or `LikeType` (13 files there use `WhereCondition`, all with the default `EQUAL`), so no
-  shipped module changes behaviour. See `ultitools.storage.where-comparisons` in `FEATURES.md`.
+  shipped module changes behaviour. Known limitations, documented rather than changed: on SQLite a
+  `double` that needs 16 or 17 significant digits (`1/3.0`) is stored in a default column with 15
+  (`0.333333333333333`) and reads back and compares as that value, so `LESS 1/3.0` selects a row
+  written as `1/3.0`, where JSON, which keeps every digit, does not; declare the column
+  `type = "DOUBLE"` to keep every digit. A numeric field's column that holds non-numeric text,
+  written by hand or by another program, compares on SQLite as its leading number (`'abc'` as 0,
+  `'12abc'` as 12), while JSON compares that row as text. See `ultitools.storage.where-comparisons`
+  in `FEATURES.md`.
 
   中文补充：`EQUAL` 以外的 `WhereCondition` 比较方式现在在 SQLite 和 MySQL 上生效（#675）。6.2.5 的 SQLite 与 MySQL
   实现忽略比较方式，所有条件都按相等匹配；JSON 本来就会应用它。自 6.3.0 起，`getAll`、`exist`、`page`、`del` 和
-  `updateIf` 在所有后端按以下含义应用比较方式，且不改动任何表。`INCLUDE`、`STARTSWITH` 和 `ENDSWITH` 把值作为文本字面匹配：
-  包括 `%`、`_`、`!` 和 `\` 在内的每个字符都只代表它自己，SQLite、MySQL 和 JSON 一致。字母大小写取决于后端：
-  SQLite 和 MySQL 默认排序规则下不区分大小写，JSON 区分。`GREATER` 和 `LESS` 用于 `byte`、`short`、`int`、`long`、
-  `float` 或 `double` 字段（或其包装类型）时，按该类型的数值比较。在 SQLite 上，列保持默认 `VARCHAR(255)` 类型时同样如此，
-  整数保持 64 位精度。在 MySQL 上，这种默认文本列按 MySQL 比较文本与数字的方式以双精度比较，超出
+  `updateIf` 在所有后端按以下含义应用比较方式，且不改动任何表。`INCLUDE`、`STARTSWITH` 和 `ENDSWITH` 把值作为文本字面匹配，
+  SQLite、MySQL 和 JSON 一致：`%`、`_`、`!` 和 `\` 都是普通字符，不是通配符或转义符。字母大小写和重音取决于后端：
+  SQLite 只忽略 ASCII 字母的大小写；MySQL 按框架建表时使用的 `utf8mb3_general_ci` 排序规则（`DEFAULT CHARSET=utf8`）比较，
+  它同时忽略大小写和重音，因此 `e` 能匹配 `é`；JSON 精确比较。`GREATER` 和 `LESS` 用于 `byte`、`short`、`int`、`long`、
+  `float` 或 `double` 字段（或其包装类型）时，按该类型的数值比较。请以该类型的数字传值（`10`，而不是 `"10"`）：文本值不会被转换，
+  MySQL 会把它与默认文本列按文本比较，于是 `"10"` 排在 `"2"` 之前。在 SQLite 上，列保持默认 `VARCHAR(255)` 类型时同样按类型比较，
+  整数保持 64 位精度，所存的值按读回时的值比较：`0.1f` 这样的 `float` 在该列中保存为 15 位有效数字 `0.100000001490116`，
+  它既不大于也不小于 `0.1f`。在 MySQL 上，这种默认文本列按 MySQL 比较文本与数字的方式以双精度比较，超出
   ±9,007,199,254,740,992（2^53）的整数在那里只是近似比较；需要精确结果时，请为该列声明数值 `type`（例如
   `@Column(value = "stamp", type = "BIGINT")`）。在 JSON 上按 `double` 比较，超出 ±9,007,199,254,740,992 时同样是近似的。
   其他类型的字段按数据库比较所存文本的方式比较。本周期较早的 6.3.0 快照把 `%` 和 `_` 当作通配符，并在 SQLite
@@ -1881,7 +1897,10 @@ This section governs the third kind.
   `COUNT(*)` 报告为 `Integer`），现在能正常返回结果。在十五个模块的 `master` 与 UltiTools-External-Example 上测得
   （2026-10-19）：`src/main` 中没有代码使用 `INCLUDE`、`STARTSWITH`、`ENDSWITH`、`GREATER`、`LESS`、`comparison(...)`
   构建方法、`getLike` 或 `LikeType`（其中 13 个文件使用 `WhereCondition`，都用默认的 `EQUAL`），因此没有已发布模块的行为发生变化。
-  见 `FEATURES.md` 中的 `ultitools.storage.where-comparisons`。
+  已知限制（只写文档，不改代码）：在 SQLite 上，需要 16 或 17 位有效数字的 `double`（如 `1/3.0`）在默认列中只保存 15 位
+  （`0.333333333333333`），读回和比较都按这个值，因此 `LESS 1/3.0` 会选中写入时为 `1/3.0` 的行，而保留全部数字的 JSON 不会；
+  要保留全部数字，请把该列声明为 `type = "DOUBLE"`。数值字段的列中若有手工或其他程序写入的非数字文本，在 SQLite 上按其开头的数字比较
+  （`'abc'` 为 0，`'12abc'` 为 12），JSON 则对该行按文本比较。见 `FEATURES.md` 中的 `ultitools.storage.where-comparisons`。
 
 - `PluginManager#getPluginList()` returning an unmodifiable snapshot, and
   `PluginManager#unregister(UltiToolsPlugin)` delisting the module (#507). `getPluginList()` used to return the manager's live internal `ArrayList`, which callers had
