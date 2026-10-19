@@ -3,14 +3,17 @@ package com.ultikits.ultitools.interfaces.impl.data.json;
 import static com.ultikits.ultitools.interfaces.impl.data.json.JsonJournalTest.commitName;
 import static com.ultikits.ultitools.interfaces.impl.data.json.JsonJournalTest.entity;
 import static com.ultikits.ultitools.interfaces.impl.data.json.JsonJournalTest.journalAt;
+import static com.ultikits.ultitools.interfaces.impl.data.json.JsonJournalTest.journalDir;
 import static com.ultikits.ultitools.interfaces.impl.data.json.JsonJournalTest.read;
 import static com.ultikits.ultitools.interfaces.impl.data.json.JsonJournalTest.recordNames;
+import static com.ultikits.ultitools.interfaces.impl.data.json.JsonJournalTest.tableFiles;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.CopyOption;
@@ -20,10 +23,13 @@ import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -32,7 +38,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Server;
@@ -48,6 +57,7 @@ import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.impl.data.json.JsonJournal.Entry;
 import com.ultikits.ultitools.interfaces.impl.data.json.JsonJournal.Kind;
+import com.ultikits.ultitools.interfaces.impl.data.json.JsonJournalTest.CapturingHandler;
 import com.ultikits.ultitools.interfaces.impl.data.json.JsonJournalTest.JournalEntity;
 import com.ultikits.ultitools.manager.JsonTransactionManager;
 
@@ -306,7 +316,304 @@ class JsonJournalFileFailureTest {
         }
     }
 
+    // ===== Directory force classification (question 10 A, P3) =====
+
+    @Nested
+    @DisplayName("A directory that cannot be opened is skipped; any other directory-force failure is a WARNING that never lets records go")
+    class DirectoryForceFailureTests {
+
+        @Test
+        @DisplayName("Characterization: a directory that cannot be opened (access denied, unsupported) is skipped, logged once at FINE")
+        void aDirectoryThatCannotBeOpenedIsSkipped() throws Exception {
+            List<JsonJournal.DirectoryForcer> forcers = Arrays.asList(
+                    directory -> {
+                        throw new AccessDeniedException(directory.toString(), null, "simulated: cannot open");
+                    },
+                    directory -> {
+                        throw new UnsupportedOperationException("simulated: cannot open a directory");
+                    });
+            int index = 0;
+            for (JsonJournal.DirectoryForcer forcer : forcers) {
+                Path root = tempDir.resolve("cannot-open-" + index++);
+                AtomicInteger calls = new AtomicInteger();
+                JsonJournal.installDirectoryForcer(directory -> {
+                    calls.incrementAndGet();
+                    forcer.force(directory);
+                });
+                JsonJournal journal = journalAt(root);
+
+                try (JournalLog log = JournalLog.capture()) {
+                    assertThat(catchThrowable(() -> journal.writeRecord(1L, Kind.COMMIT, oneUser("a", 1))))
+                            .as("commit").isNull();
+                    assertThat(catchThrowable(() -> journal.checkpoint(2L, oneUser("a", 2))))
+                            .as("checkpoint").isNull();
+                    journal.writeRecord(3L, Kind.COMMIT, oneUser("a", 3));
+                    assertThat(catchThrowable(journal::recover)).as("recovery").isNull();
+
+                    assertThat(calls.get()).as("directory forces attempted").isGreaterThan(1);
+                    assertThat(log.withThrown(Level.FINE)).as("FINE records with the failure").hasSize(1);
+                    assertThat(log.atOrAbove(Level.WARNING)).as("WARNING records").isEmpty();
+                }
+                assertThat(read(root.resolve(USERS).resolve("a.json"))).isEqualTo(entity("a", 3));
+                assertThat(recordNames(root)).isEmpty();
+            }
+        }
+
+        @Test
+        @DisplayName("A commit whose journal-directory force fails after the rename still commits, with one WARNING")
+        void aCommitWhoseJournalForceFailsStillCommits() throws Exception {
+            Path root = tempDir.resolve("tables");
+            IOException diskError = new IOException("simulated disk error");
+            JsonJournal.installDirectoryForcer(failingFor(journalDir(root), diskError));
+            JsonJournal journal = journalAt(root);
+
+            try (JournalLog log = JournalLog.capture()) {
+                Throwable thrown = catchThrowable(() -> journal.writeRecord(1L, Kind.COMMIT, oneUser("c", 1)));
+
+                assertThat(thrown).as("writeRecord(COMMIT) returns").isNull();
+                assertThat(recordNames(root)).containsExactly(commitName(1));
+                assertOneWarning(log, journalDir(root), diskError);
+            }
+
+            Path table = tableDirectory("commit-force");
+            SimpleJsonDataOperator<JournalEntity> operator = operatorOver(table);
+            IOException managerDiskError = new IOException("simulated disk error under the manager");
+            JsonJournal.installDirectoryForcer(failingFor(siblingJournal(table), managerDiskError));
+            JsonTransactionManager manager = operator.transactionManager();
+            try (JournalLog log = JournalLog.capture()) {
+                Throwable thrown = catchThrowable(() -> {
+                    manager.begin();
+                    operator.insert(journalEntity("c1", 5));
+                    manager.commit();
+                });
+                if (thrown != null && manager.hasActiveTransaction()) {
+                    manager.rollback();
+                }
+
+                assertThat(thrown).as("commit() returns").isNull();
+                assertThat(valueSeenByAnotherThread(operator, "c1")).as("another thread reads it").isEqualTo(5);
+                assertOneWarning(log, siblingJournal(table), managerDiskError);
+            }
+            JsonJournal.resetDirectoryForcer();
+            SimpleJsonDataOperator<JournalEntity> reopened = operatorOver(table);
+            assertThat(reopened.getById("c1")).as("present after a reopen").isNotNull();
+            assertThat(reopened.getById("c1").getValue()).isEqualTo(5);
+        }
+
+        @Test
+        @DisplayName("A checkpoint whose record's directory force fails stops before any entity file; flush keeps its dirty marks")
+        void aCheckpointStopsWhenItsRecordsDirectoryForceFails() throws Exception {
+            Path root = tempDir.resolve("tables");
+            JsonJournal journal = journalAt(root);
+            journal.writeRecord(1L, Kind.COMMIT, oneUser("x", 1));
+            Map<String, String> before = tableFiles(root);
+            failJournalForceFromStep(journalDir(root), "checkpoint.renamed");
+
+            Throwable thrown = catchThrowable(() -> journal.checkpoint(2L, oneUser("x", 2)));
+
+            assertThat(thrown).as("the checkpoint fails").isInstanceOf(IOException.class);
+            assertThat(tableFiles(root)).as("no entity file of the checkpoint").isEqualTo(before);
+            assertThat(recordNames(root)).as("every record at or below K").containsExactly(commitName(1), commitName(2));
+
+            JsonJournal.resetStepHook();
+            JsonJournal.resetDirectoryForcer();
+            Path table = tableDirectory("checkpoint-record");
+            SimpleJsonDataOperator<JournalEntity> operator = operatorOver(table);
+            operator.insert(journalEntity("x", 3));
+            failJournalForceFromStep(siblingJournal(table), "checkpoint.renamed");
+
+            assertPersistenceFailure(catchThrowable(operator::flush));
+            assertThat(dirtyKeys(operator)).as("the dirty marks stay").containsExactly("x");
+            assertThat(table.resolve("x.json")).as("no entity file").doesNotExist();
+
+            JsonJournal.resetStepHook();
+            JsonJournal.resetDirectoryForcer();
+            operator.flush();
+            assertThat(table.resolve("x.json")).as("the next flush writes it").exists();
+            assertThat(JsonJournalTest.names(siblingJournal(table)).stream()
+                    .filter(name -> name.endsWith(JsonJournal.COMMITTED_SUFFIX) || name.endsWith(JsonJournal.TEMPORARY_SUFFIX))
+                    .collect(Collectors.toList())).as("no record at or below the new number").isEmpty();
+            assertThat(dirtyKeys(operator)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("A checkpoint whose table-directory force fails writes its files but deletes no record; the next flush truncates")
+        void aCheckpointStopsBeforeTruncatingWhenATableDirectoryForceFails() throws Exception {
+            Path root = tempDir.resolve("tables");
+            JsonJournal journal = journalAt(root);
+            journal.writeRecord(1L, Kind.COMMIT, oneUser("x", 1));
+            JsonJournal.installDirectoryForcer(failingFor(root.resolve(USERS), new IOException("simulated disk error")));
+
+            Throwable thrown = catchThrowable(() -> journal.checkpoint(2L, oneUser("x", 2)));
+
+            assertThat(thrown).as("the checkpoint fails").isInstanceOf(IOException.class);
+            assertThat(read(root.resolve(USERS).resolve("x.json"))).as("entity file written").isEqualTo(entity("x", 2));
+            assertThat(recordNames(root)).as("no record deleted").containsExactly(commitName(1), commitName(2));
+
+            JsonJournal.resetDirectoryForcer();
+            Path table = tableDirectory("checkpoint-table");
+            SimpleJsonDataOperator<JournalEntity> operator = operatorOver(table);
+            operator.transaction(() -> operator.insert(journalEntity("t", 1)));
+            operator.insert(journalEntity("u", 2));
+            JsonJournal.installDirectoryForcer(failingFor(table, new IOException("simulated disk error")));
+
+            assertPersistenceFailure(catchThrowable(operator::flush));
+            assertThat(committedRecords(table)).as("no record deleted").hasSize(2);
+            assertThat(dirtyKeys(operator)).as("the dirty marks stay").containsExactlyInAnyOrder("t", "u");
+
+            JsonJournal.resetDirectoryForcer();
+            operator.flush();
+            assertThat(committedRecords(table)).as("the next flush truncates").isEmpty();
+            assertThat(dirtyKeys(operator)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("A checkpoint whose journal-directory force fails after its truncation still reports failure")
+        void aCheckpointReportsAFailedForceAfterItsTruncation() throws Exception {
+            Path root = tempDir.resolve("tables");
+            JsonJournal journal = journalAt(root);
+            journal.writeRecord(1L, Kind.COMMIT, oneUser("x", 1));
+            failJournalForceFromStep(journalDir(root), "checkpoint.betweenTruncations");
+
+            Throwable thrown = catchThrowable(() -> journal.checkpoint(2L, oneUser("x", 2)));
+
+            assertThat(thrown).as("the checkpoint fails").isInstanceOf(IOException.class);
+            assertThat(read(root.resolve(USERS).resolve("x.json"))).isEqualTo(entity("x", 2));
+
+            JsonJournal.resetStepHook();
+            JsonJournal.resetDirectoryForcer();
+            Path table = tableDirectory("checkpoint-truncated");
+            SimpleJsonDataOperator<JournalEntity> operator = operatorOver(table);
+            operator.transaction(() -> operator.insert(journalEntity("a", 1)));
+            operator.insert(journalEntity("b", 2));
+            failJournalForceFromStep(siblingJournal(table), "checkpoint.betweenTruncations");
+
+            assertPersistenceFailure(catchThrowable(operator::flush));
+            assertThat(dirtyKeys(operator)).as("the dirty marks stay").containsExactlyInAnyOrder("a", "b");
+
+            JsonJournal.resetStepHook();
+            JsonJournal.resetDirectoryForcer();
+            assertThat(catchThrowable(operator::flush)).as("the next flush completes").isNull();
+            assertThat(dirtyKeys(operator)).isEmpty();
+            assertThat(table.resolve("a.json")).exists();
+            assertThat(table.resolve("b.json")).exists();
+        }
+
+        @Test
+        @DisplayName("A recovery whose table-directory force fails deletes no applied record and keeps the identity closed")
+        void recoveryStopsBeforeDeletingAppliedRecords() throws Exception {
+            Path root = tempDir.resolve("tables");
+            JsonJournal journal = journalAt(root);
+            journal.writeRecord(1L, Kind.COMMIT, oneUser("x", 1));
+            journal.writeRecord(2L, Kind.COMMIT, oneUser("y", 2));
+            JsonJournal.installDirectoryForcer(failingFor(root.resolve(USERS), new IOException("simulated disk error")));
+
+            Throwable thrown = catchThrowable(() -> journalAt(root).recover());
+
+            assertThat(thrown).as("recovery fails").isInstanceOf(IOException.class);
+            assertThat(read(root.resolve(USERS).resolve("x.json"))).isEqualTo(entity("x", 1));
+            assertThat(read(root.resolve(USERS).resolve("y.json"))).isEqualTo(entity("y", 2));
+            assertThat(recordNames(root)).as("every committed record").containsExactly(commitName(1), commitName(2));
+
+            JsonJournal.resetDirectoryForcer();
+            Path table = tableDirectory("recovery");
+            SimpleJsonDataOperator<JournalEntity> writer = operatorOver(table);
+            writer.transaction(() -> writer.insert(journalEntity("r", 9)));
+            assertThat(committedRecords(table)).hasSize(1);
+
+            JsonIdentity identity = JsonIdentity.forStandaloneTable(table.toString());
+            JsonTransactionManager manager = new JsonTransactionManager(identity);
+            JsonJournal.installDirectoryForcer(failingFor(table, new IOException("simulated disk error")));
+
+            assertPersistenceFailure(catchThrowable(() -> operatorOver(table, manager)));
+            assertThat(committedRecords(table)).as("the applied record is kept").hasSize(1);
+            assertPersistenceFailure(catchThrowable(() -> operatorOver(table, manager)));
+
+            JsonJournal.resetDirectoryForcer();
+            SimpleJsonDataOperator<JournalEntity> reader = operatorOver(table, manager);
+            assertThat(committedRecords(table)).as("a later request completes recovery").isEmpty();
+            assertThat(reader.getById("r")).isNotNull();
+            assertThat(reader.getById("r").getValue()).isEqualTo(9);
+        }
+
+        @Test
+        @DisplayName("A recovery that deletes no committed record forces no directory")
+        void aRecoveryThatDeletesNothingForcesNothing() throws Exception {
+            Path root = tempDir.resolve("tables");
+            Path journalDirectory = Files.createDirectories(journalDir(root).resolve(JsonJournal.TEMP_DIRECTORY_NAME))
+                    .getParent();
+            Files.write(journalDirectory.resolve(JsonJournal.recordFileName(5L, JsonJournal.TEMPORARY_SUFFIX)),
+                    "partial".getBytes(StandardCharsets.UTF_8));
+            Files.write(journalDirectory.resolve(JsonJournal.TEMP_DIRECTORY_NAME).resolve("entity-left.part"),
+                    "partial".getBytes(StandardCharsets.UTF_8));
+            List<Path> forced = new CopyOnWriteArrayList<>();
+            JsonJournal.installDirectoryForcer(forced::add);
+
+            journalAt(root).recover();
+
+            assertThat(forced).as("directories forced").isEmpty();
+            assertThat(recordNames(root)).as("the temporary record is deleted").isEmpty();
+        }
+    }
+
     // ===== Fixtures and helpers =====
+
+    /** A forcer that throws {@code failure} for {@code failing} and forces nothing else. */
+    private static JsonJournal.DirectoryForcer failingFor(Path failing, IOException failure) {
+        return directory -> {
+            if (failing.equals(directory)) {
+                throw failure;
+            }
+        };
+    }
+
+    /** From the named journal step on, the force of {@code journalDirectory} fails with an I/O error. */
+    private static void failJournalForceFromStep(Path journalDirectory, String step) {
+        AtomicBoolean failing = new AtomicBoolean();
+        JsonJournal.installStepHook(name -> {
+            if (name.equals(step)) {
+                failing.set(true);
+            }
+        });
+        JsonJournal.installDirectoryForcer(directory -> {
+            if (failing.get() && journalDirectory.equals(directory)) {
+                throw new IOException("simulated disk error from " + step);
+            }
+        });
+    }
+
+    private static void assertOneWarning(JournalLog log, Path directory, IOException failure) {
+        List<LogRecord> warnings = log.atOrAbove(Level.WARNING);
+        assertThat(warnings).as("WARNING records").hasSize(1);
+        assertThat(warnings.get(0).getMessage()).as("the WARNING names the directory")
+                .contains(directory.toAbsolutePath().toString());
+        assertThat(warnings.get(0).getThrown()).as("the WARNING carries the failure").isSameAs(failure);
+    }
+
+    private static void assertPersistenceFailure(Throwable thrown) {
+        assertThat(thrown).isInstanceOf(DataAccessException.class);
+        assertThat(((DataAccessException) thrown).getErrorCode()).isEqualTo(ErrorCode.DATA_PERSISTENCE_FAILED);
+    }
+
+    /** The keys a checkpoint of {@code operator} would capture now. */
+    private static List<Object> dirtyKeys(SimpleJsonDataOperator<?> operator) {
+        List<JsonIdentity.Captured> captured = new ArrayList<>();
+        operator.captureDirty(captured);
+        List<Object> keys = new ArrayList<>();
+        for (JsonIdentity.Captured each : captured) {
+            keys.add(each.key);
+        }
+        return keys;
+    }
+
+    /** A directly constructed operator's sibling journal directory. */
+    private static Path siblingJournal(Path table) {
+        return table.resolveSibling(table.getFileName() + JsonJournal.DIRECTORY_NAME);
+    }
+
+    private static SimpleJsonDataOperator<JournalEntity> operatorOver(Path table, JsonTransactionManager manager) {
+        return new SimpleJsonDataOperator<>(table.toString(), JournalEntity.class, manager, new JsonLockTable());
+    }
 
     /** A table directory one level below {@code @TempDir}; its operator's journal is its sibling. */
     private Path tableDirectory(String name) throws IOException {
@@ -319,8 +626,7 @@ class JsonJournalFileFailureTest {
 
     /** The committed records of a directly constructed operator's sibling journal. */
     private static List<String> committedRecords(Path table) throws IOException {
-        Path journal = table.resolveSibling(table.getFileName() + JsonJournal.DIRECTORY_NAME);
-        List<String> names = JsonJournalTest.names(journal);
+        List<String> names = JsonJournalTest.names(siblingJournal(table));
         names.removeIf(name -> !name.endsWith(JsonJournal.COMMITTED_SUFFIX));
         return names;
     }
@@ -366,6 +672,38 @@ class JsonJournalFileFailureTest {
     private static Supplier<IOException> sharingViolation() {
         return () -> new FileSystemException("simulated", null,
                 "The process cannot access the file because it is being used by another process");
+    }
+
+    /** Captures every record JsonJournal's logger publishes, at FINE and above, while open. */
+    static final class JournalLog implements AutoCloseable {
+        private final Logger logger = Logger.getLogger(JsonJournal.class.getName());
+        private final Level previousLevel = logger.getLevel();
+        private final List<LogRecord> records = new CopyOnWriteArrayList<>();
+        private final CapturingHandler handler = new CapturingHandler(records);
+
+        static JournalLog capture() {
+            JournalLog log = new JournalLog();
+            log.logger.addHandler(log.handler);
+            log.logger.setLevel(Level.FINE);
+            return log;
+        }
+
+        /** Records at {@code level} that carry a throwable. */
+        List<LogRecord> withThrown(Level level) {
+            return records.stream().filter(record -> record.getLevel().equals(level) && record.getThrown() != null)
+                    .collect(Collectors.toList());
+        }
+
+        List<LogRecord> atOrAbove(Level level) {
+            return records.stream().filter(record -> record.getLevel().intValue() >= level.intValue())
+                    .collect(Collectors.toList());
+        }
+
+        @Override
+        public void close() {
+            logger.removeHandler(handler);
+            logger.setLevel(previousLevel);
+        }
     }
 
     /**

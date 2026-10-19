@@ -8,6 +8,7 @@ import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AccessDeniedException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -451,13 +452,13 @@ class JsonJournalTest {
     }
 
     @Test
-    @DisplayName("A directory force that fails is logged once at FINE and is not fatal")
-    void directoryForceFailureIsBestEffort() throws Exception {
+    @DisplayName("A directory that cannot be opened for a force is logged once at FINE and is not fatal")
+    void directoryThatCannotBeOpenedIsLoggedOnceAtFine() throws Exception {
         Path root = tempDir.resolve("root");
         AtomicInteger attempts = new AtomicInteger();
         JsonJournal.installDirectoryForcer(directory -> {
             attempts.incrementAndGet();
-            throw new IOException("directory force unsupported");
+            throw new AccessDeniedException(directory.toString(), null, "directory force unsupported");
         });
         Logger logger = Logger.getLogger(JsonJournal.class.getName());
         Level previousLevel = logger.getLevel();
@@ -477,8 +478,8 @@ class JsonJournalTest {
         }
         assertThat(attempts.get()).isGreaterThan(1);
         List<LogRecord> forceFailures = logged.stream()
-                .filter(record -> record.getThrown() != null
-                        && "directory force unsupported".equals(record.getThrown().getMessage()))
+                .filter(record -> record.getThrown() instanceof AccessDeniedException
+                        && "directory force unsupported".equals(((AccessDeniedException) record.getThrown()).getReason()))
                 .collect(Collectors.toList());
         assertThat(forceFailures).hasSize(1);
         assertThat(forceFailures.get(0).getLevel()).isEqualTo(Level.FINE);
