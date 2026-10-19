@@ -1,0 +1,851 @@
+package com.ultikits.ultitools.interfaces.impl.data.json;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockingDetails;
+import static org.mockito.Mockito.when;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+import org.bukkit.Bukkit;
+import org.bukkit.Server;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
+
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
+import com.ultikits.ultitools.exceptions.DataAccessException;
+import com.ultikits.ultitools.interfaces.impl.data.json.JsonJournal.Entry;
+import com.ultikits.ultitools.interfaces.impl.data.json.JsonJournal.Kind;
+import com.ultikits.ultitools.interfaces.impl.data.json.JsonJournal.Record;
+
+/**
+ * The JSON redo journal in isolation: record format and sequence numbers, the commit point, the
+ * entity-file writer and its temporary files, recovery, and an interruption at every journal step
+ * (20.4-RESEARCH.md sections 12.7 and 12.9).
+ * <p>
+ * A crash is simulated by a step hook that throws {@link SimulatedCrash} at a named step while the
+ * journal call runs on a dedicated thread; the test then drops that journal object and runs
+ * recovery through a new one over the same directories. No process is killed.
+ */
+@Timeout(60)
+class JsonJournalTest {
+
+    private static final String USERS = "users";
+    private static final String ORDERS = "orders";
+
+    @TempDir
+    Path tempDir;
+
+    @BeforeAll
+    static void setUpBukkit() {
+        if (Bukkit.getServer() == null) {
+            Server mockServer = mock(Server.class);
+            Logger mockLogger = mock(Logger.class);
+            when(mockServer.getLogger()).thenReturn(mockLogger);
+            Bukkit.setServer(mockServer);
+        }
+    }
+
+    @AfterEach
+    void resetSeams() {
+        JsonJournal.resetStepHook();
+        JsonJournal.resetDirectoryForcer();
+    }
+
+    // ===== Record format and sequence numbers =====
+
+    @Test
+    @DisplayName("A record is one JSON line followed by the SHA-256 of that line, named by its zero-padded number")
+    void recordFormatIsJsonLineThenSha256() throws Exception {
+        Path root = tempDir.resolve("root");
+        JsonJournal journal = journalAt(root);
+
+        journal.writeRecord(42L, Kind.COMMIT, Arrays.asList(
+                Entry.put(USERS, "a", entity("a", 1)),
+                Entry.delete(ORDERS, "o1")));
+
+        Path committed = journalDir(root).resolve(String.format("%019d.commit", 42L));
+        assertThat(committed).as("the committed record file").exists();
+        assertThat(recordNames(root)).containsExactly(String.format("%019d.commit", 42L));
+
+        String text = new String(Files.readAllBytes(committed), StandardCharsets.UTF_8);
+        assertThat(text).endsWith("\n");
+        String[] lines = text.substring(0, text.length() - 1).split("\n", -1);
+        assertThat(lines).hasSize(2);
+        assertThat(lines[1]).isEqualTo(sha256Hex(lines[0]));
+
+        JsonObject record = JsonParser.parseString(lines[0]).getAsJsonObject();
+        assertThat(record.get("format").getAsInt()).isEqualTo(1);
+        assertThat(record.get("sequence").getAsLong()).isEqualTo(42L);
+        assertThat(record.get("kind").getAsString()).isEqualTo("commit");
+        JsonArray entries = record.getAsJsonArray("entries");
+        assertThat(entries).hasSize(2);
+        JsonObject put = entries.get(0).getAsJsonObject();
+        assertThat(put.get("table").getAsString()).isEqualTo(USERS);
+        assertThat(put.get("key").getAsString()).isEqualTo("a");
+        assertThat(put.get("op").getAsString()).isEqualTo("put");
+        assertThat(put.get("afterImage").getAsString()).isEqualTo(entity("a", 1));
+        JsonObject delete = entries.get(1).getAsJsonObject();
+        assertThat(delete.get("table").getAsString()).isEqualTo(ORDERS);
+        assertThat(delete.get("key").getAsString()).isEqualTo("o1");
+        assertThat(delete.get("op").getAsString()).isEqualTo("delete");
+        assertThat(delete.has("afterImage")).isFalse();
+    }
+
+    @Test
+    @DisplayName("Sequence numbers increase and are seeded from the highest record number on disk plus one")
+    void sequenceNumbersIncreaseAndSurviveReopen() throws Exception {
+        Path root = tempDir.resolve("root");
+        JsonJournal fresh = journalAt(root);
+        assertThat(fresh.nextSequence()).isEqualTo(1L);
+        assertThat(fresh.nextSequence()).isEqualTo(2L);
+        assertThat(journalDir(root)).as("allocating a number creates nothing").doesNotExist();
+
+        fresh.writeRecord(7L, Kind.COMMIT, Collections.singletonList(Entry.put(USERS, "a", entity("a", 1))));
+        assertThat(journalAt(root).nextSequence()).isEqualTo(8L);
+
+        Files.write(journalDir(root).resolve(String.format("%019d.tmp", 12L)), new byte[] {'x'});
+        JsonJournal reopened = journalAt(root);
+        assertThat(reopened.nextSequence()).isEqualTo(13L);
+        assertThat(reopened.nextSequence()).isEqualTo(14L);
+    }
+
+    @Test
+    @DisplayName("A missing journal directory is an empty journal: recovery creates nothing, the first record creates it")
+    void missingJournalDirectoryIsAnEmptyJournal() throws Exception {
+        Path root = tempDir.resolve("root");
+        Files.createDirectories(root.resolve(USERS));
+        JsonJournal journal = journalAt(root);
+
+        journal.recover();
+        assertThat(journalDir(root)).doesNotExist();
+        assertThat(journal.listCommitted()).isEmpty();
+
+        journal.writeRecord(1L, Kind.COMMIT, Collections.singletonList(Entry.put(USERS, "a", entity("a", 1))));
+        assertThat(journalDir(root)).isDirectory();
+        assertThat(recordNames(root)).containsExactly(String.format("%019d.commit", 1L));
+    }
+
+    @Test
+    @DisplayName("Entry table names and keys cannot leave their table directory")
+    void entryNamesStayInsideTheirTableDirectory() {
+        assertThatThrownBy(() -> Entry.put(USERS, "../escape", entity("x", 1)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Entry.put(USERS, "nested/key", entity("x", 1)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Entry.delete(USERS, "back\\slash"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Entry.put("..", "k", entity("x", 1)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Entry.put("a/b", "k", entity("x", 1)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Entry.delete("", "k"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Entry.delete(USERS, ""))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("Record steps carry the record's kind and the rename is the commit point")
+    void recordStepsFollowTheRecordKind() throws Exception {
+        Path root = tempDir.resolve("root");
+        JsonJournal journal = journalAt(root);
+        String temporary = String.format("%019d.tmp", 1L);
+        String committed = String.format("%019d.commit", 1L);
+        List<String> steps = new CopyOnWriteArrayList<>();
+        Map<String, List<String>> namesAtStep = new TreeMap<>();
+        JsonJournal.installStepHook(step -> {
+            steps.add(step);
+            namesAtStep.put(step, recordNames(root));
+        });
+
+        journal.writeRecord(1L, Kind.COMMIT, Collections.singletonList(Entry.put(USERS, "a", entity("a", 1))));
+        journal.writeRecord(2L, Kind.CHECKPOINT, Collections.singletonList(Entry.put(USERS, "a", entity("a", 2))));
+
+        assertThat(steps).containsExactly(
+                "commit.recordWritten", "commit.recordForced", "commit.renamed", "commit.directoryForced",
+                "checkpoint.recordWritten", "checkpoint.recordForced", "checkpoint.renamed",
+                "checkpoint.directoryForced");
+        assertThat(namesAtStep.get("commit.recordWritten")).containsExactly(temporary);
+        assertThat(namesAtStep.get("commit.recordForced")).containsExactly(temporary);
+        assertThat(namesAtStep.get("commit.renamed")).containsExactly(committed);
+        assertThat(namesAtStep.get("commit.directoryForced")).containsExactly(committed);
+    }
+
+    @Test
+    @DisplayName("Committed records list in ascending order, verified, and round-trip their content")
+    void recordContentRoundTrips() throws Exception {
+        Path root = tempDir.resolve("root");
+        JsonJournal journal = journalAt(root);
+        String awkward = "{\n  \"id\": \"abc\",\n  \"text\": \"quote \\\" newline \\n tab \\t \\u00e9\"\n}";
+        List<Entry> first = Arrays.asList(Entry.put(USERS, "abc", awkward), Entry.put(USERS, 42, entity("42", 4)));
+        List<Entry> second = Collections.singletonList(Entry.delete(ORDERS, "o1"));
+        List<Entry> third = Collections.singletonList(Entry.put(ORDERS, "o2", entity("o2", 7)));
+
+        journal.writeRecord(3L, Kind.COMMIT, third);
+        journal.writeRecord(1L, Kind.COMMIT, first);
+        journal.writeRecord(2L, Kind.CHECKPOINT, second);
+
+        List<Record> records = journalAt(root).listCommitted();
+        assertThat(records).extracting(Record::sequence).containsExactly(1L, 2L, 3L);
+        assertThat(records).extracting(Record::kind).containsExactly(Kind.COMMIT, Kind.CHECKPOINT, Kind.COMMIT);
+        assertThat(records.get(0).entries()).containsExactlyElementsOf(first);
+        assertThat(records.get(0).entries().get(1).key()).isEqualTo("42");
+        assertThat(records.get(1).entries()).containsExactlyElementsOf(second);
+        assertThat(records.get(1).entries().get(0).isDelete()).isTrue();
+        assertThat(records.get(2).entries()).containsExactlyElementsOf(third);
+
+        Files.createDirectories(root.resolve(ORDERS));
+        Files.write(root.resolve(ORDERS).resolve("o1.json"), entity("o1", 0).getBytes(StandardCharsets.UTF_8));
+        journalAt(root).recover();
+        assertThat(read(root.resolve(USERS).resolve("abc.json"))).isEqualTo(awkward);
+        assertThat(read(root.resolve(USERS).resolve("42.json"))).isEqualTo(entity("42", 4));
+        assertThat(root.resolve(ORDERS).resolve("o1.json")).doesNotExist();
+        assertThat(read(root.resolve(ORDERS).resolve("o2.json"))).isEqualTo(entity("o2", 7));
+    }
+
+    @Test
+    @DisplayName("listCommitted refuses a record whose checksum does not match, naming the file")
+    void listCommittedVerifiesChecksums() throws Exception {
+        Path root = tempDir.resolve("root");
+        JsonJournal journal = journalAt(root);
+        journal.writeRecord(1L, Kind.COMMIT, Collections.singletonList(Entry.put(USERS, "a", entity("a", 1))));
+        journal.writeRecord(2L, Kind.COMMIT, Collections.singletonList(Entry.put(USERS, "a", entity("a", 2))));
+        assertThat(journal.listCommitted()).hasSize(2);
+
+        Path second = journalDir(root).resolve(String.format("%019d.commit", 2L));
+        tamperFirstLine(second);
+
+        assertThatThrownBy(() -> journalAt(root).listCommitted())
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining(second.getFileName().toString());
+    }
+
+    // ===== Interruption while writing a record =====
+
+    @Test
+    @DisplayName("An interruption before the rename leaves no committed record; recovery deletes the temporary one")
+    void interruptionBeforeTheRenameLeavesNoCommittedRecord() throws Exception {
+        for (String step : Arrays.asList("commit.recordWritten", "commit.recordForced")) {
+            Path root = tempDir.resolve("before-" + step);
+            Files.createDirectories(root.resolve(USERS));
+            JsonJournal journal = journalAt(root);
+            JsonJournal.installStepHook(crashAt(step, 1));
+
+            Throwable thrown = runOnOwnThread(() -> journal.writeRecord(1L, Kind.COMMIT, twoTableEntries()));
+            JsonJournal.resetStepHook();
+
+            assertCrashedAt(thrown, step, 1);
+            assertThat(recordNames(root)).as(step).containsExactly(String.format("%019d.tmp", 1L));
+
+            JsonJournal reopened = journalAt(root);
+            assertThat(reopened.listCommitted()).as(step).isEmpty();
+            reopened.recover();
+            assertThat(recordNames(root)).as(step).isEmpty();
+            assertThat(tableFiles(root)).as(step).isEmpty();
+        }
+    }
+
+    @Test
+    @DisplayName("An interruption after the rename leaves a committed record that recovery applies")
+    void interruptionAfterTheRenameAppliesTheRecord() throws Exception {
+        for (String step : Arrays.asList("commit.renamed", "commit.directoryForced")) {
+            Path root = tempDir.resolve("after-" + step);
+            JsonJournal journal = journalAt(root);
+            JsonJournal.installStepHook(crashAt(step, 1));
+
+            Throwable thrown = runOnOwnThread(() -> journal.writeRecord(1L, Kind.COMMIT, twoTableEntries()));
+            JsonJournal.resetStepHook();
+
+            assertCrashedAt(thrown, step, 1);
+            assertThat(recordNames(root)).as(step).containsExactly(String.format("%019d.commit", 1L));
+
+            journalAt(root).recover();
+            assertThat(recordNames(root)).as(step).isEmpty();
+            assertThat(tableFiles(root)).as(step).isEqualTo(twoTableFiles());
+        }
+    }
+
+    @Test
+    @DisplayName("A record touching two tables is applied to both, or, interrupted before its rename, to neither")
+    void twoTableRecordAppliesToBothOrNeither() throws Exception {
+        Path neither = tempDir.resolve("neither");
+        JsonJournal first = journalAt(neither);
+        JsonJournal.installStepHook(crashAt("commit.recordForced", 1));
+        assertCrashedAt(runOnOwnThread(() -> first.writeRecord(1L, Kind.COMMIT, twoTableEntries())),
+                "commit.recordForced", 1);
+        JsonJournal.resetStepHook();
+        journalAt(neither).recover();
+        assertThat(tableFiles(neither)).isEmpty();
+
+        Path both = tempDir.resolve("both");
+        JsonJournal second = journalAt(both);
+        JsonJournal.installStepHook(crashAt("commit.renamed", 1));
+        assertCrashedAt(runOnOwnThread(() -> second.writeRecord(1L, Kind.COMMIT, twoTableEntries())),
+                "commit.renamed", 1);
+        JsonJournal.resetStepHook();
+        journalAt(both).recover();
+        assertThat(tableFiles(both)).isEqualTo(twoTableFiles());
+    }
+
+    @Test
+    @DisplayName("An IOException while writing a record deletes the temporary record and propagates")
+    void ioFailureWhileWritingARecordDeletesTheTemporaryRecord() throws Exception {
+        for (String step : Arrays.asList("commit.recordWritten", "commit.recordForced")) {
+            Path root = tempDir.resolve("io-" + step);
+            JsonJournal journal = journalAt(root);
+            IOException failure = new IOException("simulated disk failure at " + step);
+            JsonJournal.installStepHook(name -> {
+                if (name.equals(step)) {
+                    throw failure;
+                }
+            });
+
+            assertThatThrownBy(() -> journal.writeRecord(1L, Kind.COMMIT, twoTableEntries()))
+                    .as(step)
+                    .isSameAs(failure);
+            JsonJournal.resetStepHook();
+            assertThat(recordNames(root)).as(step).isEmpty();
+            assertThat(journal.listCommitted()).as(step).isEmpty();
+        }
+    }
+
+    // ===== Entity-file writer and temporary files =====
+
+    @Test
+    @DisplayName("Entity files are written in the journal's tmp directory and moved into place; deletes remove the file")
+    void entityFilesPassThroughTheJournalTmpDirectory() throws Exception {
+        Path root = tempDir.resolve("root");
+        Files.createDirectories(root.resolve(USERS));
+        Files.write(root.resolve(USERS).resolve("old.json"), entity("old", 0).getBytes(StandardCharsets.UTF_8));
+        JsonJournal journal = journalAt(root);
+        journal.writeRecord(1L, Kind.COMMIT, Arrays.asList(
+                Entry.put(USERS, "a", entity("a", 1)),
+                Entry.delete(USERS, "old"),
+                Entry.put(ORDERS, "o1", entity("o1", 1))));
+
+        List<String> steps = new CopyOnWriteArrayList<>();
+        List<List<String>> tmpAtTempWritten = new CopyOnWriteArrayList<>();
+        List<Map<String, String>> tablesAtTempWritten = new CopyOnWriteArrayList<>();
+        JsonJournal.installStepHook(step -> {
+            steps.add(step);
+            if (step.equals("recovery.entityTempWritten")) {
+                tmpAtTempWritten.add(names(journalDir(root).resolve("tmp")));
+                tablesAtTempWritten.add(tableFiles(root));
+            }
+        });
+
+        journalAt(root).recover();
+
+        assertThat(steps).containsExactly(
+                "recovery.tempsDeleted",
+                "recovery.entityTempWritten",
+                "recovery.betweenEntityFiles",
+                "recovery.betweenEntityFiles",
+                "recovery.entityTempWritten",
+                "recovery.tableDirsForced",
+                "recovery.recordsApplied");
+        assertThat(tmpAtTempWritten).hasSize(2);
+        assertThat(tmpAtTempWritten).allSatisfy(names -> assertThat(names).hasSize(1));
+        assertThat(tablesAtTempWritten.get(0)).containsOnlyKeys("users/old.json");
+        assertThat(tablesAtTempWritten.get(1)).containsOnlyKeys("users/a.json");
+        assertThat(names(journalDir(root).resolve("tmp"))).isEmpty();
+        Map<String, String> expected = new TreeMap<>();
+        expected.put("users/a.json", entity("a", 1));
+        expected.put("orders/o1.json", entity("o1", 1));
+        assertThat(tableFiles(root)).isEqualTo(expected);
+    }
+
+    @Test
+    @DisplayName("No temporary file enters a table directory; an operator built mid-crash loads only the old entities")
+    void temporaryFilesNeverEnterATableDirectory() throws Exception {
+        Path root = tempDir.resolve("root");
+        Path users = root.resolve(USERS);
+        Files.createDirectories(users);
+        Files.write(users.resolve("a.json"), entity("a", 0).getBytes(StandardCharsets.UTF_8));
+        JsonJournal journal = journalAt(root);
+        journal.writeRecord(1L, Kind.COMMIT, Arrays.asList(
+                Entry.put(USERS, "b", entity("b", 1)),
+                Entry.put(USERS, "a", entity("a", 1))));
+        Map<String, String> before = tableFiles(root);
+
+        JsonJournal.installStepHook(crashAt("recovery.entityTempWritten", 1));
+        JsonJournal crashing = journalAt(root);
+        assertCrashedAt(runOnOwnThread(crashing::recover), "recovery.entityTempWritten", 1);
+        JsonJournal.resetStepHook();
+
+        assertThat(names(journalDir(root).resolve("tmp"))).hasSize(1);
+        assertThat(tableFiles(root)).isEqualTo(before);
+        assertThat(names(users)).containsExactly("a.json");
+
+        long severeBefore = severeBukkitLogCount();
+        SimpleJsonDataOperator<JournalEntity> operator =
+                new SimpleJsonDataOperator<>(users.toString(), JournalEntity.class);
+        assertThat(severeBukkitLogCount()).as("no corrupt-entry log").isEqualTo(severeBefore);
+        assertThat(operator.getAll()).extracting(JournalEntity::getId).containsExactly("a");
+        assertThat(operator.getAll()).extracting(JournalEntity::getValue).containsExactly(0);
+
+        List<String> steps = new CopyOnWriteArrayList<>();
+        AtomicReference<List<String>> tmpAfterFirstStep = new AtomicReference<>();
+        JsonJournal.installStepHook(step -> {
+            if (steps.isEmpty()) {
+                tmpAfterFirstStep.set(names(journalDir(root).resolve("tmp")));
+            }
+            steps.add(step);
+        });
+        journalAt(root).recover();
+
+        assertThat(steps.get(0)).isEqualTo("recovery.tempsDeleted");
+        assertThat(tmpAfterFirstStep.get()).isEmpty();
+        assertThat(names(journalDir(root).resolve("tmp"))).isEmpty();
+        Map<String, String> expected = new TreeMap<>();
+        expected.put("users/a.json", entity("a", 1));
+        expected.put("users/b.json", entity("b", 1));
+        assertThat(tableFiles(root)).isEqualTo(expected);
+    }
+
+    @Test
+    @DisplayName("Recovery forces the journal directory and every touched table directory")
+    void touchedDirectoriesAreForced() throws Exception {
+        Path root = tempDir.resolve("root");
+        List<Path> forced = new CopyOnWriteArrayList<>();
+        JsonJournal.installDirectoryForcer(forced::add);
+        JsonJournal journal = journalAt(root);
+
+        journal.writeRecord(1L, Kind.COMMIT, twoTableEntries());
+        assertThat(forced).contains(journalDir(root));
+
+        forced.clear();
+        journalAt(root).recover();
+        assertThat(forced).contains(root.resolve(USERS), root.resolve(ORDERS), journalDir(root));
+    }
+
+    @Test
+    @DisplayName("A directory force that fails is logged once at FINE and is not fatal")
+    void directoryForceFailureIsBestEffort() throws Exception {
+        Path root = tempDir.resolve("root");
+        AtomicInteger attempts = new AtomicInteger();
+        JsonJournal.installDirectoryForcer(directory -> {
+            attempts.incrementAndGet();
+            throw new IOException("directory force unsupported");
+        });
+        Logger logger = Logger.getLogger(JsonJournal.class.getName());
+        Level previousLevel = logger.getLevel();
+        List<LogRecord> logged = new CopyOnWriteArrayList<>();
+        Handler handler = new CapturingHandler(logged);
+        logger.addHandler(handler);
+        logger.setLevel(Level.FINE);
+        try {
+            JsonJournal journal = journalAt(root);
+            journal.writeRecord(1L, Kind.COMMIT, twoTableEntries());
+            assertThat(recordNames(root)).containsExactly(String.format("%019d.commit", 1L));
+            journal.recover();
+            assertThat(tableFiles(root)).isEqualTo(twoTableFiles());
+        } finally {
+            logger.removeHandler(handler);
+            logger.setLevel(previousLevel);
+        }
+        assertThat(attempts.get()).isGreaterThan(1);
+        List<LogRecord> forceFailures = logged.stream()
+                .filter(record -> record.getThrown() != null
+                        && "directory force unsupported".equals(record.getThrown().getMessage()))
+                .collect(Collectors.toList());
+        assertThat(forceFailures).hasSize(1);
+        assertThat(forceFailures.get(0).getLevel()).isEqualTo(Level.FINE);
+    }
+
+    // ===== Recovery =====
+
+    @Test
+    @DisplayName("Recovery applies committed records in ascending order, then deletes them in ascending order")
+    void recoverAppliesAndDeletesInAscendingOrder() throws Exception {
+        Path root = tempDir.resolve("root");
+        JsonJournal journal = journalAt(root);
+        journal.writeRecord(3L, Kind.COMMIT, Collections.singletonList(Entry.put(USERS, "x", entity("x", 3))));
+        journal.writeRecord(1L, Kind.COMMIT, Collections.singletonList(Entry.put(USERS, "x", entity("x", 1))));
+        journal.writeRecord(2L, Kind.COMMIT, Collections.singletonList(Entry.put(USERS, "x", entity("x", 2))));
+
+        List<String> valueAtBetweenRecords = new CopyOnWriteArrayList<>();
+        List<List<String>> recordsAtStep = new CopyOnWriteArrayList<>();
+        JsonJournal.installStepHook(step -> {
+            if (step.equals("recovery.betweenRecords")) {
+                valueAtBetweenRecords.add(read(root.resolve(USERS).resolve("x.json")));
+            }
+            if (step.equals("recovery.recordsApplied") || step.equals("recovery.betweenDeletions")) {
+                recordsAtStep.add(recordNames(root));
+            }
+        });
+
+        journalAt(root).recover();
+
+        assertThat(valueAtBetweenRecords).containsExactly(entity("x", 1), entity("x", 2));
+        assertThat(recordsAtStep).containsExactly(
+                Arrays.asList(commitName(1), commitName(2), commitName(3)),
+                Arrays.asList(commitName(2), commitName(3)),
+                Collections.singletonList(commitName(3)));
+        assertThat(recordNames(root)).isEmpty();
+        assertThat(read(root.resolve(USERS).resolve("x.json"))).isEqualTo(entity("x", 3));
+    }
+
+    @Test
+    @DisplayName("A second recovery after a completed one changes no file")
+    void recoverTwiceIsIdempotent() throws Exception {
+        Path root = tempDir.resolve("root");
+        seedRecoveryScenario(root);
+
+        journalAt(root).recover();
+        Map<String, String> afterFirst = allFiles(root);
+        Map<String, FileTime> timesAfterFirst = modificationTimes(root);
+        assertThat(tableFiles(root)).isEqualTo(expectedRecoveredTables());
+
+        journalAt(root).recover();
+        assertThat(allFiles(root)).isEqualTo(afterFirst);
+        assertThat(modificationTimes(root)).isEqualTo(timesAfterFirst);
+    }
+
+    @Test
+    @DisplayName("A recovery interrupted at any of its steps, run again, ends at the files of an uninterrupted run")
+    void interruptedRecoveryRecoversAgain() throws Exception {
+        Path control = tempDir.resolve("control");
+        seedRecoveryScenario(control);
+        journalAt(control).recover();
+        Map<String, String> controlFiles = allFiles(control);
+        assertThat(tableFiles(control)).isEqualTo(expectedRecoveredTables());
+
+        List<Object[]> cases = Arrays.asList(
+                new Object[] {"recovery.tempsDeleted", 1},
+                new Object[] {"recovery.entityTempWritten", 1},
+                new Object[] {"recovery.entityTempWritten", 3},
+                new Object[] {"recovery.betweenEntityFiles", 1},
+                new Object[] {"recovery.betweenEntityFiles", 2},
+                new Object[] {"recovery.tableDirsForced", 1},
+                new Object[] {"recovery.tableDirsForced", 3},
+                new Object[] {"recovery.betweenRecords", 1},
+                new Object[] {"recovery.betweenRecords", 2},
+                new Object[] {"recovery.recordsApplied", 1},
+                new Object[] {"recovery.betweenDeletions", 1},
+                new Object[] {"recovery.betweenDeletions", 2});
+        int index = 0;
+        for (Object[] crashCase : cases) {
+            String step = (String) crashCase[0];
+            int occurrence = (Integer) crashCase[1];
+            Path root = tempDir.resolve("case-" + index++);
+            seedRecoveryScenario(root);
+
+            JsonJournal.installStepHook(crashAt(step, occurrence));
+            JsonJournal crashing = journalAt(root);
+            assertCrashedAt(runOnOwnThread(crashing::recover), step, occurrence);
+            JsonJournal.resetStepHook();
+
+            journalAt(root).recover();
+            assertThat(allFiles(root)).as(step + "#" + occurrence).isEqualTo(controlFiles);
+        }
+    }
+
+    // ===== Scenario and assertion helpers =====
+
+    /**
+     * Pre-existing users/b and users/keep, then three committed records: (1) put users/a = 1 and
+     * users/b = 1; (2) put orders/o1 = 1 and delete users/b; (3) put users/a = 3.
+     */
+    private static void seedRecoveryScenario(Path root) throws IOException {
+        Path users = root.resolve(USERS);
+        Files.createDirectories(users);
+        Files.write(users.resolve("b.json"), entity("b", 0).getBytes(StandardCharsets.UTF_8));
+        Files.write(users.resolve("keep.json"), entity("keep", 0).getBytes(StandardCharsets.UTF_8));
+        JsonJournal journal = journalAt(root);
+        journal.writeRecord(1L, Kind.COMMIT, Arrays.asList(
+                Entry.put(USERS, "a", entity("a", 1)),
+                Entry.put(USERS, "b", entity("b", 1))));
+        journal.writeRecord(2L, Kind.COMMIT, Arrays.asList(
+                Entry.put(ORDERS, "o1", entity("o1", 1)),
+                Entry.delete(USERS, "b")));
+        journal.writeRecord(3L, Kind.COMMIT, Collections.singletonList(Entry.put(USERS, "a", entity("a", 3))));
+    }
+
+    private static Map<String, String> expectedRecoveredTables() {
+        Map<String, String> expected = new TreeMap<>();
+        expected.put("orders/o1.json", entity("o1", 1));
+        expected.put("users/a.json", entity("a", 3));
+        expected.put("users/keep.json", entity("keep", 0));
+        return expected;
+    }
+
+    private static List<Entry> twoTableEntries() {
+        return Arrays.asList(Entry.put(USERS, "u1", entity("u1", 1)), Entry.put(ORDERS, "o1", entity("o1", 1)));
+    }
+
+    private static Map<String, String> twoTableFiles() {
+        Map<String, String> expected = new TreeMap<>();
+        expected.put("orders/o1.json", entity("o1", 1));
+        expected.put("users/u1.json", entity("u1", 1));
+        return expected;
+    }
+
+    static JsonJournal journalAt(Path root) {
+        return new JsonJournal(root, journalDir(root));
+    }
+
+    static Path journalDir(Path root) {
+        return root.resolve(JsonJournal.DIRECTORY_NAME);
+    }
+
+    static String entity(String id, int value) {
+        return "{\"id\":\"" + id + "\",\"value\":" + value + "}";
+    }
+
+    static String commitName(long sequence) {
+        return String.format("%019d.commit", sequence);
+    }
+
+    static JsonJournal.StepHook crashAt(String step, int occurrence) {
+        AtomicInteger seen = new AtomicInteger();
+        return name -> {
+            if (name.equals(step) && seen.incrementAndGet() == occurrence) {
+                throw new SimulatedCrash(step + "#" + occurrence);
+            }
+        };
+    }
+
+    static void assertCrashedAt(Throwable thrown, String step, int occurrence) {
+        assertThat(thrown).as("the simulated crash at " + step + "#" + occurrence)
+                .isInstanceOf(SimulatedCrash.class)
+                .hasMessage(step + "#" + occurrence);
+    }
+
+    /**
+     * Runs a journal call on its own thread, as a crashing server thread would, and returns what it
+     * threw ({@code null} if nothing).
+     */
+    // PMD.AvoidCatchingThrowable: the simulated crash is an Error; the helper hands it back to the
+    // test, which asserts on it.
+    @SuppressWarnings("PMD.AvoidCatchingThrowable")
+    static Throwable runOnOwnThread(JournalCall call) throws InterruptedException {
+        AtomicReference<Throwable> thrown = new AtomicReference<>();
+        Thread thread = new Thread(() -> {
+            try {
+                call.run();
+            } catch (Throwable failure) {
+                thrown.set(failure);
+            }
+        }, "json-journal-crash");
+        thread.setDaemon(true);
+        thread.start();
+        thread.join(10_000L);
+        assertThat(thread.isAlive()).as("the journal call finished").isFalse();
+        return thrown.get();
+    }
+
+    static List<String> recordNames(Path root) throws IOException {
+        Path directory = journalDir(root);
+        List<String> names = new ArrayList<>();
+        for (String name : names(directory)) {
+            if (name.endsWith(".commit") || name.endsWith(".tmp")) {
+                names.add(name);
+            }
+        }
+        return names;
+    }
+
+    static List<String> names(Path directory) throws IOException {
+        List<String> names = new ArrayList<>();
+        if (!Files.isDirectory(directory)) {
+            return names;
+        }
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(directory)) {
+            for (Path path : stream) {
+                names.add(path.getFileName().toString());
+            }
+        }
+        Collections.sort(names);
+        return names;
+    }
+
+    /** Every regular file under the identity root except the journal's, by relative path. */
+    static Map<String, String> tableFiles(Path root) throws IOException {
+        Map<String, String> files = allFiles(root);
+        files.keySet().removeIf(name -> name.startsWith(JsonJournal.DIRECTORY_NAME + "/"));
+        return files;
+    }
+
+    /** Every regular file under the identity root, journal included, by relative path. */
+    static Map<String, String> allFiles(Path root) throws IOException {
+        Map<String, String> files = new TreeMap<>();
+        if (!Files.isDirectory(root)) {
+            return files;
+        }
+        try (Stream<Path> walk = Files.walk(root)) {
+            for (Path path : walk.filter(Files::isRegularFile).collect(Collectors.toList())) {
+                files.put(root.relativize(path).toString().replace('\\', '/'), read(path));
+            }
+        }
+        return files;
+    }
+
+    static Map<String, FileTime> modificationTimes(Path root) throws IOException {
+        Map<String, FileTime> times = new TreeMap<>();
+        try (Stream<Path> walk = Files.walk(root)) {
+            for (Path path : walk.filter(Files::isRegularFile).collect(Collectors.toList())) {
+                times.put(root.relativize(path).toString(), Files.getLastModifiedTime(path));
+            }
+        }
+        return times;
+    }
+
+    static String read(Path file) throws IOException {
+        return new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
+    }
+
+    /** Changes one character of a record's first line, leaving its checksum line as it was. */
+    static void tamperFirstLine(Path record) throws IOException {
+        byte[] bytes = Files.readAllBytes(record);
+        int index = new String(bytes, StandardCharsets.UTF_8).indexOf("\"value\\\":");
+        assertThat(index).as("tamper target in " + record).isGreaterThan(0);
+        int digit = index + "\"value\\\":".length();
+        bytes[digit] = (byte) (bytes[digit] == '9' ? '8' : '9');
+        Files.write(record, bytes);
+    }
+
+    static String sha256Hex(String line) throws NoSuchAlgorithmException {
+        byte[] digest = MessageDigest.getInstance("SHA-256").digest(line.getBytes(StandardCharsets.UTF_8));
+        StringBuilder hex = new StringBuilder(digest.length * 2);
+        for (byte b : digest) {
+            hex.append(String.format("%02x", b & 0xff));
+        }
+        return hex.toString();
+    }
+
+    /** SEVERE entries Bukkit's logger has received so far (the operator logs a corrupt file there). */
+    static long severeBukkitLogCount() {
+        Logger logger = Bukkit.getLogger();
+        if (mockingDetails(logger).isMock()) {
+            return mockingDetails(logger).getInvocations().stream()
+                    .filter(invocation -> invocation.getMethod().getName().equals("log")
+                            && invocation.getArguments().length > 0
+                            && Level.SEVERE.equals(invocation.getArguments()[0]))
+                    .count();
+        }
+        return SevereCounter.attachedTo(logger).count();
+    }
+
+    /** A journal call that may throw. */
+    interface JournalCall {
+        void run() throws Exception;
+    }
+
+    /** The test-only Error a step hook throws to simulate a crash. */
+    static final class SimulatedCrash extends Error {
+        private static final long serialVersionUID = 1L;
+
+        SimulatedCrash(String message) {
+            super(message);
+        }
+    }
+
+    /** Collects every record a logger publishes. */
+    static final class CapturingHandler extends Handler {
+        private final List<LogRecord> records;
+
+        CapturingHandler(List<LogRecord> records) {
+            this.records = records;
+            setLevel(Level.ALL);
+        }
+
+        @Override
+        public void publish(LogRecord record) {
+            records.add(record);
+        }
+
+        @Override
+        public void flush() {
+            // nothing buffered
+        }
+
+        @Override
+        public void close() {
+            // nothing to release
+        }
+    }
+
+    /** Counts SEVERE records on a real (non-mock) Bukkit logger, attached once per logger. */
+    static final class SevereCounter extends Handler {
+        private static final Map<Logger, SevereCounter> ATTACHED = new java.util.IdentityHashMap<>();
+        private final AtomicInteger severe = new AtomicInteger();
+
+        static synchronized SevereCounter attachedTo(Logger logger) {
+            return ATTACHED.computeIfAbsent(logger, l -> {
+                SevereCounter counter = new SevereCounter();
+                l.addHandler(counter);
+                return counter;
+            });
+        }
+
+        long count() {
+            return severe.get();
+        }
+
+        @Override
+        public void publish(LogRecord record) {
+            if (Level.SEVERE.equals(record.getLevel())) {
+                severe.incrementAndGet();
+            }
+        }
+
+        @Override
+        public void flush() {
+            // nothing buffered
+        }
+
+        @Override
+        public void close() {
+            // nothing to release
+        }
+    }
+
+    /** A minimal JSON entity for the operator constructed over a table directory. */
+    public static class JournalEntity extends BaseDataEntity<String> {
+        private int value;
+
+        public JournalEntity() {
+            // for Gson
+        }
+
+        public int getValue() {
+            return value;
+        }
+
+        public void setValue(int value) {
+            this.value = value;
+        }
+    }
+}
