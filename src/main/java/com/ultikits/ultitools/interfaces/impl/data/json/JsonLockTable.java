@@ -32,9 +32,10 @@ import com.ultikits.ultitools.exceptions.ErrorCode;
  * <b>Deadlocks.</b> Before it registers, a requester follows the wait-for chain from the table's
  * owner (the owner, the table that owner waits for, that table's owner, and so on). A chain that
  * leads back to the requester means its wait would close a cycle: the request fails at once with a
- * {@link DataAccessException} naming the deadlock, without registering, and its caller's failure
- * path rolls its transaction back, which releases its locks so the other side can go on. No global
- * lock order is needed, which matters because module code touches tables in any order.
+ * {@link DataAccessException} naming the deadlock, without registering. Its transaction is marked
+ * rollback-only ({@link JsonTransaction}) and releases its locks when it ends, so the other side
+ * can go on. No global lock order is needed, which matters because module code touches tables in
+ * any order.
  * <p>
  * <b>One monitor.</b> Every owner, hold count and waiter registration is guarded by one lock and
  * changed only while holding it, and every wait is on that lock's one condition. The cycle check

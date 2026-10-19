@@ -54,6 +54,16 @@ import com.ultikits.ultitools.manager.JsonTransactionManager;
  *       bound).</li>
  * </ul>
  * <p>
+ * <b>A failed lock wait marks the transaction rollback-only</b> (question 7 A of the Phase 20.4
+ * decisions). A write, or a {@code REPEATABLE_READ}/{@code SERIALIZABLE} read, whose table lock
+ * cannot be obtained -- the wait reached its bound or the transaction's deadline, it would close a
+ * cycle, or the thread was interrupted -- marks this transaction rollback-only before the
+ * {@link DataAccessException} reaches the caller. Catching the exception does not save the
+ * transaction: its outermost commit discards every staged write and throws
+ * {@code UnexpectedRollbackException}. The mark is the manager's own rollback-only flag, the one a
+ * failed nested scope sets. The transaction keeps the table locks it already holds until it ends,
+ * like any other open transaction; the failed request itself holds nothing.
+ * <p>
  * Staged values are detached copies: no object the caller holds is reachable from an overlay.
  * An instance is confined to the thread whose {@link JsonTransactionManager} context holds it
  * (suspended contexts included), so it needs no synchronisation of its own.
@@ -165,7 +175,8 @@ public final class JsonTransaction {
      * Called before a read of {@code operator} takes the visibility read side: checks the deadline
      * and, at {@code REPEATABLE_READ} or {@code SERIALIZABLE}, takes the table's write lock.
      *
-     * @throws DataAccessException if the deadline has passed, or the lock wait fails
+     * @throws DataAccessException if the deadline has passed, or the lock wait fails; a failed lock
+     *         wait first marks this transaction rollback-only
      */
     void beforeRead(SimpleJsonDataOperator<?> operator) {
         checkDeadline(operator);
@@ -181,8 +192,9 @@ public final class JsonTransaction {
      * it.
      *
      * @throws DataAccessException if the transaction is read-only, the deadline has passed, or the
-     *         lock wait fails (deadlock or lock-wait timeout); the caller's failure path then rolls
-     *         this transaction back, which releases every lock it holds
+     *         lock wait fails (deadlock or lock-wait timeout); a failed lock wait first marks this
+     *         transaction rollback-only, so catching the exception does not save it, and its locks
+     *         are released when it ends
      */
     void beforeWrite(SimpleJsonDataOperator<?> operator) {
         if (readOnly) {
@@ -201,7 +213,11 @@ public final class JsonTransaction {
         }
     }
 
-    /** Takes {@code operator}'s table lock unless this transaction holds it, waiting at most until the sooner bound. */
+    /**
+     * Takes {@code operator}'s table lock unless this transaction holds it, waiting at most until
+     * the sooner bound. A wait that fails marks this transaction rollback-only before the
+     * exception propagates.
+     */
     private void lock(SimpleJsonDataOperator<?> operator) {
         if (heldLocks.containsKey(operator)) {
             return;
@@ -211,8 +227,26 @@ public final class JsonTransaction {
         if (deadlineNanos != null && deadlineNanos - deadline < 0L) {
             deadline = deadlineNanos;
         }
-        table.acquire(operator, deadline);
+        try {
+            table.acquire(operator, deadline);
+        } catch (DataAccessException failedWait) {
+            markRollbackOnly();
+            throw failedWait;
+        }
         heldLocks.put(operator, table);
+    }
+
+    /**
+     * Marks this transaction rollback-only through the manager's own mechanism, the way
+     * {@code TransactionInterceptor} records a failed participant: the failed request joins the
+     * transaction as one more scope and rolls that scope back, and a rollback at a nested depth
+     * sets the manager's rollback-only flag (D-08) without ending the transaction or releasing its
+     * locks. Called only from {@link #beforeRead} and {@link #beforeWrite}, which an operator calls
+     * on its manager's current transaction, so the manager's active context is this transaction's.
+     */
+    private void markRollbackOnly() {
+        manager.begin();
+        manager.rollback();
     }
 
     /** Whether this transaction has staged any write for {@code operator}. */

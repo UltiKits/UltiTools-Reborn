@@ -56,7 +56,11 @@ import com.ultikits.ultitools.interfaces.impl.data.json.JsonTransaction;
  *       (after the apply) or {@link #rollback()}; a write outside a transaction holds it for the
  *       call. Another writer of the table waits for it, at most 5 seconds (less if its own
  *       transaction's timeout ends sooner), then fails with a {@code DataAccessException}; a wait
- *       that would close a cycle of transactions waiting for each other fails at once. Dirty
+ *       that would close a cycle of transactions waiting for each other fails at once. Either
+ *       failure marks the waiting transaction rollback-only, as a failed nested scope does, so
+ *       catching the exception does not save it: its outer {@link #commit()} discards the staged
+ *       writes and throws {@link UnexpectedRollbackException}. A write outside a transaction just
+ *       fails. Dirty
  *       writes and blind overwrites therefore cannot interleave with an open transaction. At the
  *       default isolation reads take no table lock, so a read-modify-write can still lose an
  *       update: compute a write from a read with {@code updateIf}, or use {@code REPEATABLE_READ}
@@ -193,7 +197,8 @@ public class JsonTransactionManager implements TransactionManager {
         }
 
         // D-08: an inner rollback() at a depth this commit() has now unwound to may have marked
-        // the context rollback-only instead of tearing it down. At depth 1 that marker must be
+        // the context rollback-only instead of tearing it down; a failed table-lock wait marks it
+        // the same way (JsonTransaction#lock, question 7 A). At depth 1 that marker must be
         // honoured with a real rollback, not silently overridden by a commit the caller never
         // asked to happen after all -- exactly the same reasoning as
         // DataSourceTransactionManager#commit().
@@ -201,11 +206,12 @@ public class JsonTransactionManager implements TransactionManager {
             try {
                 ctx.transaction.rollback();
                 LOGGER.fine("JSON transaction rolled back for " + identity
-                        + " (was marked rollback-only by a nested scope)");
+                        + " (was marked rollback-only by a failed nested scope or a failed table-lock wait)");
             } finally {
                 contextHolder.remove();
             }
-            throw UnexpectedRollbackException.markedBy("a nested transaction scope in " + identity);
+            throw UnexpectedRollbackException.markedBy(
+                    "a failed nested transaction scope or a failed table-lock wait in " + identity);
         }
 
         try {
