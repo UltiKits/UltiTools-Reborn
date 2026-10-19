@@ -24,7 +24,9 @@ import com.ultikits.ultitools.exceptions.ErrorCode;
  * <p>
  * <b>Waiting.</b> A request for a table another thread owns registers the caller as waiting for
  * that table and waits until the table is free or the caller's deadline has passed; past the
- * deadline it fails with a {@link DataAccessException} naming the lock-wait timeout. The caller
+ * deadline it fails with a {@link DataAccessException} naming the lock-wait timeout, also when it
+ * wakes after the deadline to find the table free: the deadline is checked before every attempt
+ * that follows the registration. The caller
  * chooses the deadline: the default bound (5 seconds, question 7 option A of the Phase 20.4
  * decisions) from the time of the request, or the transaction's own timeout deadline if that comes
  * sooner.
@@ -111,10 +113,15 @@ final class JsonLockTable {
             waitsFor.put(caller, table);
             try {
                 stepHook.onStep(STEP_WAITER_REGISTERED);
-                while (!tryTake(table, caller)) {
+                // The deadline is checked before every take, so a waiter woken after it, by a
+                // signal or late scheduling, fails even if the table has just become free.
+                while (true) {
                     long remaining = deadlineNanos - System.nanoTime();
                     if (remaining <= 0L) {
                         throw lockWaitTimeout(table, start);
+                    }
+                    if (tryTake(table, caller)) {
+                        return;
                     }
                     released.awaitNanos(remaining);
                 }
