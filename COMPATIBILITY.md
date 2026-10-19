@@ -2588,21 +2588,27 @@ one `@Table`, one folder of `<id>.json` files.
   inside and outside transactions, with a `DataAccessException` (`DATA_ENTITY_INVALID`) that names the id, if the id:
   - is empty, or contains `/`, `\`, NUL or another control character (U+0000 to U+001F, U+007F);
   - is `.` or `..`, or ends in a dot or a space;
-  - is a Windows device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, `LPT1` to `LPT9`, in any letter case),
-    with or without an extension: `con.txt` is refused too, because the part before the first dot is checked;
+  - is a Windows device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, `LPT1` to `LPT9`, and `COM` or `LPT`
+    followed by a superscript `¹`, `²` or `³`, in any letter case), with or without an extension: `con.txt` is
+    refused too, because the part before the first dot is checked;
   - makes a file name `<id>.json` longer than 255 bytes in UTF-8;
-  - names a file the server's own file system cannot name. On Windows that is an id containing `<`, `>`, `:`, `"`,
-    `|`, `?` or `*`. Linux accepts these, so UltiRemoteBag's `<player uuid>:<page>` ids keep working there.
+  - names a file the server's own file system cannot name, or one its path rules read as something other than the
+    file `<id>.json` in the table folder. On Windows that is an id containing `<`, `>`, `:`, `"`, `|`, `?` or `*`,
+    including an id that starts with a letter and a colon, such as `c:foo` or `p:<uuid>`: Windows reads that as a
+    drive prefix, so the file would be another id's file or lie outside the data folder. Linux accepts these
+    characters, so UltiRemoteBag's `<player uuid>:<page>` ids keep working there.
 
   Every rule but the last holds on every operating system; the last is the file system's own. A refused insert
   does not mark its transaction rollback-only. An `insert` of an id that already has an entry changes nothing and
   is never refused, and a file that already exists is never renamed or rewritten because of these rules: it keeps
-  loading, and updates and deletes of its id keep working. In 6.2.5 an id with `/` or `\` was written to a
-  sub-path and read back as a corrupt entry, and on Windows an id with `:` was accepted and then failed every
-  flush. If a flush meets an id the file system cannot name, it fails with an error naming the table and the id
-  and writes nothing; if a start-up recovery meets one in a journal record (a record copied from Linux to
-  Windows, for example), it refuses that plugin's JSON data with an error naming the record, the table and the id,
-  changes no file, and is handled like a damaged record (see the next item).
+  loading, and reads, updates and deletes of its id keep working. Deleting an existing id these rules refuse and
+  inserting it again, also inside one transaction, counts as creating a new id and is refused: replace such an
+  entry with `update`. In 6.2.5 an id with `/` or `\` was written to a sub-path and read back as a corrupt entry,
+  and on Windows an id with `:` was accepted and then failed every flush. If a flush meets an id the file system
+  cannot name, it fails with an error naming the table and the id and writes nothing; if a start-up recovery meets
+  one in a journal record (a record copied from Linux to Windows, for example), it refuses that plugin's JSON data
+  with an error naming the record, the table and the id, changes no file, and is handled like a damaged record
+  (see the next item).
 - **A damaged journal record.** If a committed journal record is found damaged at start-up, that plugin's JSON
   data stays closed: its data operations fail with an error naming the file, until the server operator moves the
   file out of the journal folder. The framework never deletes, skips or applies the damaged record. Other plugins
@@ -2632,9 +2638,14 @@ the failure is thrown out of the scheduled flush task and appears in the server 
   above).
 - A joined `@Transactional` method's accepted failure marks the whole transaction rollback-only (see above and the
   linked subsection).
-- Use ids made of lowercase letters, digits, `-` and `_`; a UUID string always works. On Windows, ids containing
-  `<`, `>`, `:`, `"`, `|`, `?` or `*` are refused at insert. Two ids that differ only in letter case name the
-  same file on a case-insensitive file system (Windows, and macOS by default) and overwrite each other there.
+- A UUID string always works as an id. Lowercase letters, digits, `-` and `_` are safe characters, but an id made
+  of them is still refused if it is a Windows device name (`con`, `nul`, `aux`, `prn`, `com1` to `com9`, `lpt1` to
+  `lpt9`, with or without an extension), on every operating system. Do not key entities by player names: `Con` and
+  `Nul` are valid player names. On Windows, ids containing `<`, `>`, `:`, `"`, `|`, `?` or `*` are refused at
+  insert. An existing id these rules refuse keeps working for reads, `update` and delete, but deleting it and
+  inserting it again is refused; replace such an entry with `update`. Two ids that differ only in letter case
+  name the same file on a case-insensitive file system (Windows, and macOS by default) and overwrite each other
+  there.
 - Map each `@Table` value to one entity class. Two entity classes of one plugin that declare the same `@Table`
   value get two separate caches and two table locks that do not exclude each other, as in 6.2.5, so their writes
   are not ordered against each other and the guarantees above do not hold between them.
@@ -2738,14 +2749,17 @@ the failure is thrown out of the scheduled flush task and appears in the server 
   `DataAccessException`（`DATA_ENTITY_INVALID`）予以拒绝，事务内外都一样：
   - 为空串，或含 `/`、`\`、NUL 或其他控制字符（U+0000 至 U+001F、U+007F）；
   - 是 `.` 或 `..`，或以点或空格结尾；
-  - 是 Windows 设备名（`CON`、`PRN`、`AUX`、`NUL`、`COM1` 至 `COM9`、`LPT1` 至 `LPT9`，不分大小写），无论带不带扩展名：
-    `con.txt` 也会被拒绝，因为检查的是第一个点之前的部分；
+  - 是 Windows 设备名（`CON`、`PRN`、`AUX`、`NUL`、`COM1` 至 `COM9`、`LPT1` 至 `LPT9`，以及 `COM` 或 `LPT` 后跟上标
+    `¹`、`²` 或 `³`，不分大小写），无论带不带扩展名：`con.txt` 也会被拒绝，因为检查的是第一个点之前的部分；
   - 使文件名 `<id>.json` 的 UTF-8 长度超过 255 字节；
-  - 指向服务器自身文件系统无法命名的文件。在 Windows 上即含 `<`、`>`、`:`、`"`、`|`、`?` 或 `*` 的 id；Linux 接受这些字符，所以
-    UltiRemoteBag 的 `<玩家 uuid>:<页码>` id 在 Linux 上照常可用。
+  - 指向服务器自身文件系统无法命名的文件，或其路径规则会把它解读为表文件夹中 `<id>.json` 以外的文件。在 Windows 上即含 `<`、`>`、
+    `:`、`"`、`|`、`?` 或 `*` 的 id，包括以一个字母加冒号开头的 id（如 `c:foo` 或 `p:<uuid>`）：Windows 会把它当作盘符前缀，
+    文件会变成另一个 id 的文件或落到数据文件夹之外。Linux 接受这些字符，所以 UltiRemoteBag 的 `<玩家 uuid>:<页码>` id 在 Linux 上
+    照常可用。
 
   除最后一条由文件系统自己决定外，其余规则在所有操作系统上都一样。被拒绝的插入不会把事务标记为只能回滚。插入一个已有条目的 id
-  不做任何改动，也永远不会被拒绝；已存在的文件也绝不会因这些规则被改名或重写：它照常加载，对该 id 的更新和删除照常可用。6.2.5 会把
+  不做任何改动，也永远不会被拒绝；已存在的文件也绝不会因这些规则被改名或重写：它照常加载，对该 id 的读取、更新和删除照常可用。删除一个
+  这些规则会拒绝的已有 id 后再插入它（在同一个事务中也一样）算作创建新 id，会被拒绝：要替换这样的条目，请用 `update`。6.2.5 会把
   含 `/` 或 `\` 的 id 写进子路径，读回时成为损坏的条目；在 Windows 上含 `:` 的 id 会被接受，之后每次刷新都失败。刷新若遇到文件系统
   无法命名的 id，会以指明表和 id 的错误失败，且不写入任何东西；启动恢复若在日志记录中遇到这样的 id（例如从 Linux 复制到 Windows 的
   记录），会以指明该记录、表和 id 的错误拒绝打开该插件的 JSON 数据，不改动任何文件，处理方式与损坏的记录相同（见下一条）。
@@ -2769,8 +2783,11 @@ the failure is thrown out of the scheduled flush task and appears in the server 
   `DataOperator#transaction(...)` 中不会。
 - 同一线程上的 `REQUIRES_NEW` 或 `NOT_SUPPORTED` 方法不会等待其调用方的表锁（见上）。
 - 加入方方法被规则认可的失败会把整个事务标记为仅回滚（见上与下一小节）。
-- id 请只用小写字母、数字、`-` 和 `_`；UUID 字符串总是可用。在 Windows 上，含 `<`、`>`、`:`、`"`、`|`、`?` 或 `*` 的 id 会在插入时
-  被拒绝。只有大小写不同的两个 id，在不区分大小写的文件系统（Windows，以及默认设置的 macOS）上指向同一个文件，会互相覆盖。
+- UUID 字符串作为 id 总是可用。小写字母、数字、`-` 和 `_` 是安全的字符，但由它们组成的 id 若是 Windows 设备名（`con`、`nul`、`aux`、
+  `prn`、`com1` 至 `com9`、`lpt1` 至 `lpt9`，无论带不带扩展名），在所有操作系统上仍会被拒绝。不要用玩家名作为实体 id：`Con` 和
+  `Nul` 都是合法的玩家名。在 Windows 上，含 `<`、`>`、`:`、`"`、`|`、`?` 或 `*` 的 id 会在插入时被拒绝。这些规则会拒绝的已有 id
+  仍可读取、`update` 和删除，但删除后再插入会被拒绝；要替换这样的条目，请用 `update`。只有大小写不同的两个 id，在不区分
+  大小写的文件系统（Windows，以及默认设置的 macOS）上指向同一个文件，会互相覆盖。
 - 一个 `@Table` 值只对应一个实体类。同一插件的两个实体类若声明了相同的 `@Table` 值，会得到两份独立的缓存和两把互不排斥的表锁
   （与 6.2.5 相同），它们的写入彼此没有先后保证，上述各项保证在它们之间都不成立。
 - 每个插件的 JSON 表旁边多了一个隐藏的 `.ultitools-journal` 文件夹。服务器中是 `plugins/UltiTools/data/<插件名>/.ultitools-journal`；
