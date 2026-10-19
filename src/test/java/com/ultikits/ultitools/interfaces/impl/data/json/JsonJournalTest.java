@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -139,6 +140,33 @@ class JsonJournalTest {
         JsonJournal reopened = journalAt(root);
         assertThat(reopened.nextSequence()).isEqualTo(13L);
         assertThat(reopened.nextSequence()).isEqualTo(14L);
+    }
+
+    @Test
+    @DisplayName("Record names use ASCII digits under any default locale, so numbering and recovery still find them")
+    void recordNamesUseAsciiDigitsUnderAnyDefaultLocale() throws Exception {
+        Path root = tempDir.resolve("root");
+        Locale previousDefault = Locale.getDefault();
+        Locale previousFormat = Locale.getDefault(Locale.Category.FORMAT);
+        Locale previousDisplay = Locale.getDefault(Locale.Category.DISPLAY);
+        // Egyptian Arabic formats numbers with Arabic-Indic digits by default.
+        Locale.setDefault(Locale.forLanguageTag("ar-EG"));
+        try {
+            JsonJournal journal = journalAt(root);
+            journal.writeRecord(42L, Kind.COMMIT, Collections.singletonList(Entry.put(USERS, "x", entity("x", 1))));
+
+            assertThat(recordNames(root)).as("the committed record's file name")
+                    .containsExactly("0000000000000000042.commit");
+            assertThat(journalAt(root).nextSequence()).as("numbering after a reopen").isEqualTo(43L);
+            journalAt(root).recover();
+            assertThat(read(root.resolve(USERS).resolve("x.json"))).as("the record is applied at recovery")
+                    .isEqualTo(entity("x", 1));
+            assertThat(recordNames(root)).as("the applied record is deleted").isEmpty();
+        } finally {
+            Locale.setDefault(previousDefault);
+            Locale.setDefault(Locale.Category.FORMAT, previousFormat);
+            Locale.setDefault(Locale.Category.DISPLAY, previousDisplay);
+        }
     }
 
     @Test
@@ -759,6 +787,85 @@ class JsonJournalTest {
             journalAt(root).recover();
             assertThat(read(root.resolve(USERS).resolve("x.json"))).isEqualTo(entity("x", 4));
         }
+    }
+
+    /*
+     * Deletion durability order. A power loss keeps what the last force of the journal directory
+     * made durable, plus any subset of the unlinks issued after it: the file system may persist
+     * them out of order. So a record's deletion is only safe to issue once the last force has
+     * already removed every record its absence would expose. Each force below records the journal
+     * directory's listing; "the force before the deletion" is the last listing that still holds
+     * the record.
+     */
+
+    @Test
+    @DisplayName("Truncation deletes checkpoint K only after the deletions of the records below it are forced to disk")
+    void truncationForcesOlderDeletionsBeforeDeletingK() throws Exception {
+        Path root = tempDir.resolve("root");
+        JsonJournal journal = journalAt(root);
+        for (long sequence = 1L; sequence <= 3L; sequence++) {
+            journal.writeRecord(sequence, Kind.COMMIT,
+                    Collections.singletonList(Entry.put(USERS, "x", entity("x", (int) sequence))));
+        }
+        List<List<String>> forcedListings = recordJournalForces(root);
+
+        journal.checkpoint(4L, Collections.singletonList(Entry.put(USERS, "x", entity("x", 4))));
+
+        int firstWithoutK = firstListingWithout(forcedListings, commitName(4));
+        assertThat(firstWithoutK).as("forced listings %s", forcedListings).isGreaterThan(0);
+        assertThat(forcedListings.get(firstWithoutK - 1))
+                .as("the last forced listing before K's deletion, of %s", forcedListings)
+                .containsExactly(commitName(4));
+        assertThat(recordNames(root)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Recovery deletes each applied record only after the deletions of the records below it are forced")
+    void recoveryForcesEachDeletionBeforeTheNext() throws Exception {
+        Path root = tempDir.resolve("root");
+        JsonJournal journal = journalAt(root);
+        for (long sequence = 1L; sequence <= 3L; sequence++) {
+            journal.writeRecord(sequence, Kind.COMMIT,
+                    Collections.singletonList(Entry.put(USERS, "x", entity("x", (int) sequence))));
+        }
+        List<List<String>> forcedListings = recordJournalForces(root);
+        forcedListings.add(recordNames(root));
+
+        journalAt(root).recover();
+
+        for (long sequence = 2L; sequence <= 3L; sequence++) {
+            int firstWithout = firstListingWithout(forcedListings, commitName(sequence));
+            assertThat(firstWithout).as("forced listings %s", forcedListings).isGreaterThan(0);
+            for (long older = 1L; older < sequence; older++) {
+                assertThat(forcedListings.get(firstWithout - 1))
+                        .as("the last forced listing before record %d's deletion, of %s", sequence, forcedListings)
+                        .doesNotContain(commitName(older));
+            }
+        }
+        assertThat(recordNames(root)).isEmpty();
+        assertThat(read(root.resolve(USERS).resolve("x.json"))).isEqualTo(entity("x", 3));
+    }
+
+    /** Records the journal directory's record names at every force of that directory, from now on. */
+    private static List<List<String>> recordJournalForces(Path root) {
+        List<List<String>> listings = new CopyOnWriteArrayList<>();
+        Path journalDirectory = journalDir(root);
+        JsonJournal.installDirectoryForcer(directory -> {
+            if (journalDirectory.equals(directory)) {
+                listings.add(recordNames(root));
+            }
+        });
+        return listings;
+    }
+
+    /** The index of the first listing without {@code name}, or -1. */
+    private static int firstListingWithout(List<List<String>> listings, String name) {
+        for (int i = 0; i < listings.size(); i++) {
+            if (!listings.get(i).contains(name)) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     // ===== Damaged committed record (question 8 option A) =====

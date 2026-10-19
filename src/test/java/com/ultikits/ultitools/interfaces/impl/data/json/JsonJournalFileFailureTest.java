@@ -556,6 +556,84 @@ class JsonJournalFileFailureTest {
         }
     }
 
+    // ===== Directories the journal creates (review round 1) =====
+
+    @Nested
+    @DisplayName("A directory the journal creates is forced into its parent before anything relies on it")
+    class NewDirectoryTests {
+
+        @Test
+        @DisplayName("The first commit forces every directory it created into its parent, journal directory included")
+        void aNewJournalDirectoryIsForcedIntoItsParent() throws Exception {
+            Path fresh = tempDir.resolve("fresh");
+            Path root = fresh.resolve("tables");
+            List<Path> forced = new CopyOnWriteArrayList<>();
+            JsonJournal.installDirectoryForcer(forced::add);
+
+            journalAt(root).writeRecord(1L, Kind.COMMIT, oneUser("a", 1));
+
+            assertThat(forced).as("directories forced by the first commit")
+                    .contains(tempDir, fresh, root, journalDir(root));
+        }
+
+        @Test
+        @DisplayName("A table directory a checkpoint or a recovery creates is forced into the identity root before the journal is truncated")
+        void aNewTableDirectoryIsForcedBeforeTheJournalIsTruncated() throws Exception {
+            Path root = tempDir.resolve("tables");
+            JsonJournal journal = journalAt(root);
+            journal.writeRecord(1L, Kind.COMMIT, oneUser("x", 1));
+            List<String> events = new CopyOnWriteArrayList<>();
+            JsonJournal.installDirectoryForcer(directory -> events.add("force " + directory));
+            JsonJournal.installStepHook(step -> events.add("step " + step));
+
+            journal.checkpoint(2L, oneUser("x", 2));
+
+            assertThat(events).as("checkpoint events").contains("force " + root);
+            assertThat(events.indexOf("force " + root)).as("checkpoint events %s", events)
+                    .isLessThan(events.indexOf("step checkpoint.tableDirsForced"));
+
+            Path recovered = tempDir.resolve("recovered");
+            journalAt(recovered).writeRecord(1L, Kind.COMMIT, oneUser("y", 1));
+            events.clear();
+
+            journalAt(recovered).recover();
+
+            assertThat(events).as("recovery events").contains("force " + recovered);
+            assertThat(events.indexOf("force " + recovered)).as("recovery events %s", events)
+                    .isLessThan(events.indexOf("step recovery.tableDirsForced"));
+            assertThat(read(recovered.resolve(USERS).resolve("y.json"))).isEqualTo(entity("y", 1));
+        }
+
+        @Test
+        @DisplayName("A failed parent force after a commit is one WARNING; the next checkpoint repeats it and fails until it succeeds")
+        void aFailedParentForceAfterACommitIsRepeatedByTheNextCheckpoint() throws Exception {
+            Path root = tempDir.resolve("tables");
+            IOException diskError = new IOException("simulated disk error in the parent");
+            JsonJournal.installDirectoryForcer(failingFor(root, diskError));
+            JsonJournal journal = journalAt(root);
+
+            try (JournalLog log = JournalLog.capture()) {
+                Throwable thrown = catchThrowable(() -> journal.writeRecord(1L, Kind.COMMIT, oneUser("c", 1)));
+
+                assertThat(thrown).as("writeRecord(COMMIT) returns").isNull();
+                assertThat(recordNames(root)).containsExactly(commitName(1));
+                assertOneWarning(log, root, diskError);
+            }
+
+            Throwable failed = catchThrowable(() -> journal.checkpoint(2L, oneUser("c", 2)));
+            assertThat(failed).as("the checkpoint fails while the parent force fails").isInstanceOf(IOException.class);
+            assertThat(tableFiles(root)).as("no entity file of the failed checkpoint").isEmpty();
+
+            List<Path> forced = new CopyOnWriteArrayList<>();
+            JsonJournal.installDirectoryForcer(forced::add);
+            journal.checkpoint(3L, oneUser("c", 3));
+
+            assertThat(forced).as("the next checkpoint forces the parent again").contains(root);
+            assertThat(read(root.resolve(USERS).resolve("c.json"))).isEqualTo(entity("c", 3));
+            assertThat(recordNames(root)).isEmpty();
+        }
+    }
+
     // ===== Fixtures and helpers =====
 
     /** A forcer that throws {@code failure} for {@code failing} and forces nothing else. */
