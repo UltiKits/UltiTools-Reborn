@@ -1857,7 +1857,12 @@ This section governs the third kind.
   so `"10"` sorts below `"2"`. On SQLite the typed comparison holds also in a column left on the
   default `VARCHAR(255)` type, with 64-bit integer precision, and a stored value is compared the way
   it reads back: a `float` such as `0.1f`, which SQLite keeps there as the 15 significant digits
-  `0.100000001490116`, is neither greater nor less than `0.1f`. On MySQL such a default text column is
+  `0.100000001490116`, is neither greater nor less than `0.1f`. That read-back comparison applies to a value
+  that is a finite number; an infinite value, a number beyond the range of a `double` and any text are
+  compared as they are bound, so `GREATER Float.POSITIVE_INFINITY` matches no row, and a NaN value
+  matches no row. JSON does not support an infinite or NaN value: Gson cannot write it as JSON, so a
+  condition holding one throws `IllegalArgumentException` when it is evaluated, under any comparison.
+  On MySQL such a default text column is
   compared the way MySQL compares text with a number, in double precision, so whole numbers beyond
   ±9,007,199,254,740,992 (2^53) compare approximately there; declare the column with a numeric
   `type` (for example `@Column(value = "stamp", type = "BIGINT")`) where exact results matter. On
@@ -1874,7 +1879,11 @@ This section governs the third kind.
   `double` that needs 16 or 17 significant digits (`1/3.0`) is stored in a default column with 15
   (`0.333333333333333`) and reads back and compares as that value, so `LESS 1/3.0` selects a row
   written as `1/3.0`, where JSON, which keeps every digit, does not; declare the column
-  `type = "DOUBLE"` to keep every digit. A numeric field's column that holds non-numeric text,
+  `type = "DOUBLE"` to keep every digit. On SQLite a `double` value that agrees with a stored `float`
+  to 15 significant digits but differs after them (`Math.nextDown((double) 0.1f)`) compares as equal
+  to it, so `GREATER` that value does not select the row holding `0.1f`; this holds in a default
+  column and also in a column declared `REAL`, which earlier 6.3.0 snapshots compared exactly. Pass a
+  `float` value for a `float` field. A numeric field's column that holds non-numeric text,
   written by hand or by another program, compares on SQLite as its leading number (`'abc'` as 0,
   `'12abc'` as 12), while JSON compares that row as text. See `ultitools.storage.where-comparisons`
   in `FEATURES.md`.
@@ -1888,7 +1897,9 @@ This section governs the third kind.
   `float` 或 `double` 字段（或其包装类型）时，按该类型的数值比较。请以该类型的数字传值（`10`，而不是 `"10"`）：文本值不会被转换，
   MySQL 会把它与默认文本列按文本比较，于是 `"10"` 排在 `"2"` 之前。在 SQLite 上，列保持默认 `VARCHAR(255)` 类型时同样按类型比较，
   整数保持 64 位精度，所存的值按读回时的值比较：`0.1f` 这样的 `float` 在该列中保存为 15 位有效数字 `0.100000001490116`，
-  它既不大于也不小于 `0.1f`。在 MySQL 上，这种默认文本列按 MySQL 比较文本与数字的方式以双精度比较，超出
+  它既不大于也不小于 `0.1f`。这种按读回值的比较只适用于有限数字的值；无穷大、超出 `double` 范围的数字以及任何文本都按绑定时的值比较，
+  因此 `GREATER Float.POSITIVE_INFINITY` 不匹配任何行，NaN 值也不匹配任何行。JSON 不支持无穷大或 NaN 值：Gson 无法把它写成 JSON，
+  因此含有这种值的条件在求值时会抛出 `IllegalArgumentException`，任何比较方式都如此。在 MySQL 上，这种默认文本列按 MySQL 比较文本与数字的方式以双精度比较，超出
   ±9,007,199,254,740,992（2^53）的整数在那里只是近似比较；需要精确结果时，请为该列声明数值 `type`（例如
   `@Column(value = "stamp", type = "BIGINT")`）。在 JSON 上按 `double` 比较，超出 ±9,007,199,254,740,992 时同样是近似的。
   其他类型的字段按数据库比较所存文本的方式比较。本周期较早的 6.3.0 快照把 `%` 和 `_` 当作通配符，并在 SQLite
@@ -1899,7 +1910,9 @@ This section governs the third kind.
   构建方法、`getLike` 或 `LikeType`（其中 13 个文件使用 `WhereCondition`，都用默认的 `EQUAL`），因此没有已发布模块的行为发生变化。
   已知限制（只写文档，不改代码）：在 SQLite 上，需要 16 或 17 位有效数字的 `double`（如 `1/3.0`）在默认列中只保存 15 位
   （`0.333333333333333`），读回和比较都按这个值，因此 `LESS 1/3.0` 会选中写入时为 `1/3.0` 的行，而保留全部数字的 JSON 不会；
-  要保留全部数字，请把该列声明为 `type = "DOUBLE"`。数值字段的列中若有手工或其他程序写入的非数字文本，在 SQLite 上按其开头的数字比较
+  要保留全部数字，请把该列声明为 `type = "DOUBLE"`。在 SQLite 上，与所存 `float` 前 15 位有效数字相同、之后才不同的 `double` 值
+  （`Math.nextDown((double) 0.1f)`）会被视为与它相等，因此 `GREATER` 该值不会选中保存 `0.1f` 的行；默认列如此，声明为 `REAL`
+  的列也如此，而本周期较早的 6.3.0 快照在 `REAL` 列上是精确比较的。对 `float` 字段请传 `float` 值。数值字段的列中若有手工或其他程序写入的非数字文本，在 SQLite 上按其开头的数字比较
   （`'abc'` 为 0，`'12abc'` 为 12），JSON 则对该行按文本比较。见 `FEATURES.md` 中的 `ultitools.storage.where-comparisons`。
 
 - `PluginManager#getPluginList()` returning an unmodifiable snapshot, and
